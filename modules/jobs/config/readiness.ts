@@ -29,6 +29,10 @@ export type ReadinessBand = 'none' | 'building' | 'practiced' | 'strong-evidence
 
 export interface ReadinessSnapshot {
   band: ReadinessBand
+  /** Distinct sessions among COUNTED rows — NOT the application's total
+   *  practice count. Stale-JD/stale-epoch sessions contribute no counted
+   *  evidence and therefore never unlock the sessions≥3 gate
+   *  (Codex #538 round 2). */
   sessions: number
   practicedCount: number
   mustHaveTotal: number
@@ -55,7 +59,6 @@ export function computeReadiness(
   rows: EvidenceRowLike[],
   parse: CurrentParseLike,
   currentEpoch: string,
-  totalSessions: number,
   now = new Date()
 ): ReadinessSnapshot {
   const mustHaves = new Set(parse.mustHaveIds)
@@ -68,6 +71,10 @@ export function computeReadiness(
       r.answerScore >= ANSWER_SCORE_FLOOR &&
       mustHaves.has(r.requirementId)
   )
+  // The sessions gate counts sessions that produced COUNTED evidence —
+  // two stale-JD sessions plus one current one is ONE session of current
+  // evidence, not three (Codex #538 round 2).
+  const sessions = new Set(counted.map((r) => r.sessionId)).size
 
   // Best row per requirement (repeat coverage never multi-counts — R28):
   // best = highest strengthWeight × answerScore.
@@ -96,7 +103,7 @@ export function computeReadiness(
   const coverage = mustHaveTotal === 0 ? 0 : practicedCount / mustHaveTotal
 
   let band: ReadinessBand = counted.length === 0 ? 'none' : 'building'
-  if (counted.length > 0 && totalSessions >= 3 && coverage >= 0.4 && quality >= 50) {
+  if (counted.length > 0 && sessions >= 3 && coverage >= 0.4 && quality >= 50) {
     band = 'practiced'
     if (coverage >= 0.7 && quality >= 70 && strongCoverage >= 0.4 && mustHaveTotal >= SMALL_N_MUST_HAVES) {
       band = 'strong-evidence'
@@ -108,7 +115,7 @@ export function computeReadiness(
 
   return {
     band,
-    sessions: totalSessions,
+    sessions,
     practicedCount,
     mustHaveTotal,
     quality,

@@ -15,28 +15,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const {
   mockSessionFindById, mockAppFindById, mockAppFindOne, mockAppUpdateOne, mockPostingFindById,
   mockEvidenceDeleteMany, mockEvidenceInsertMany, mockEvidenceFind, mockEvidenceExists,
-  mockCompletion, mockInngestSend, mockSessionFind, mockSessionUpdateOne,
+  mockCompletion, mockInngestSend, mockSessionFind, mockSessionUpdateOne, mockResolveModel,
+  mockSessionExists,
 } = vi.hoisted(() => ({
   mockSessionFindById: vi.fn(), mockAppFindById: vi.fn(), mockAppFindOne: vi.fn(), mockAppUpdateOne: vi.fn(),
   mockPostingFindById: vi.fn(), mockEvidenceDeleteMany: vi.fn(), mockEvidenceInsertMany: vi.fn(),
   mockEvidenceFind: vi.fn(), mockEvidenceExists: vi.fn(), mockCompletion: vi.fn(), mockInngestSend: vi.fn(),
-  mockSessionFind: vi.fn(), mockSessionUpdateOne: vi.fn(),
+  mockSessionFind: vi.fn(), mockSessionUpdateOne: vi.fn(), mockResolveModel: vi.fn(),
+  mockSessionExists: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend, createFunction: vi.fn(() => ({})) } }))
-vi.mock('@shared/services/modelRouter', () => ({ completion: mockCompletion }))
+vi.mock('@shared/services/modelRouter', () => ({ completion: mockCompletion, resolveModel: mockResolveModel }))
 vi.mock('@shared/db/models', () => ({
-  InterviewSession: { findById: mockSessionFindById, find: mockSessionFind, updateOne: mockSessionUpdateOne },
+  InterviewSession: { findById: mockSessionFindById, find: mockSessionFind, updateOne: mockSessionUpdateOne, exists: mockSessionExists },
   JobApplication: { findById: mockAppFindById, findOne: mockAppFindOne, updateOne: mockAppUpdateOne },
   JobPosting: { findById: mockPostingFindById },
   JobPracticeEvidence: { deleteMany: mockEvidenceDeleteMany, insertMany: mockEvidenceInsertMany, find: mockEvidenceFind, exists: mockEvidenceExists },
 }))
 
-import { runEvidenceAttributionHandler, runEvidenceReconcileHandler, buildAttributionPrompt, currentScoringEpoch } from '../jobs/evidenceAttributionJob'
+import { runEvidenceAttributionHandler, runEvidenceReconcileHandler, buildAttributionPrompt } from '../jobs/evidenceAttributionJob'
 import { xrayHashOf } from '../services/xrayService'
-import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
+
+/** What the mocked resolveModel returns — the epoch every row must carry. */
+const RESOLVED_MODEL = 'gpt-5.6-luna'
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 const selectLean = (v: unknown) => ({ select: () => ({ lean: () => Promise.resolve(v) }) })
@@ -71,12 +75,14 @@ beforeEach(() => {
   mockEvidenceDeleteMany.mockResolvedValue({})
   mockEvidenceInsertMany.mockResolvedValue({})
   mockEvidenceFind.mockReturnValue(selectLean([
-    { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: currentScoringEpoch(), sessionId: 'sess1' },
-    { requirementId: 'req-pay', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: currentScoringEpoch(), sessionId: 'sess1' },
+    { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL, sessionId: 'sess1' },
+    { requirementId: 'req-pay', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL, sessionId: 'sess1' },
   ]))
   mockAppUpdateOne.mockResolvedValue({})
   mockSessionUpdateOne.mockResolvedValue({})
   mockEvidenceExists.mockResolvedValue(null)
+  mockResolveModel.mockResolvedValue({ model: RESOLVED_MODEL })
+  mockSessionExists.mockResolvedValue({ _id: 'sess1' })
 })
 
 describe('runEvidenceAttributionHandler', () => {
@@ -87,13 +93,13 @@ describe('runEvidenceAttributionHandler', () => {
     expect(mockEvidenceDeleteMany).toHaveBeenCalledWith({ sessionId: 'sess1', xrayHash: HASH })
     const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
     expect(docs.map((d) => d.requirementId).sort()).toEqual(['req-node', 'req-pay'])
-    // Codex #538 P1: live evaluations carry NO modelUsed — rows are
-    // epoch-stamped with the attribution-time slot model, and the same
-    // value feeds the snapshot filter (else readiness pins at zero).
-    expect(docs[0]).toMatchObject({
-      strength: 'strong', answerScore: 80,
-      scoringEpoch: TASK_SLOT_DEFAULTS['interview.evaluate-answer'].model,
-    })
+    // Codex #538 P1+r2: live evaluations carry NO modelUsed — rows are
+    // epoch-stamped with the RESOLVED evaluate-answer model at attribution
+    // time (resolveModel honors CMS overrides; hardcoded defaults do not),
+    // and the same value feeds the snapshot filter (else readiness pins
+    // at zero).
+    expect(mockResolveModel).toHaveBeenCalledWith('interview.evaluate-answer')
+    expect(docs[0]).toMatchObject({ strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL })
     expect(docs[0].scoringEpoch).not.toBe('unknown')
     // Snapshot written with computed band fields.
     const snap = mockAppUpdateOne.mock.calls[0][1].$set.readiness
@@ -127,6 +133,20 @@ describe('runEvidenceAttributionHandler', () => {
     const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
     expect(docs).toHaveLength(1)
     expect(docs[0]).toMatchObject({ requirementId: 'req-node', strength: 'strong', answerScore: 60 })
+  })
+
+  it('a CMS ModelConfig override flows into the epoch — resolved model, never the hardcoded default (Codex #538 r2)', async () => {
+    mockResolveModel.mockResolvedValue({ model: 'cms-override-model' })
+    mockEvidenceFind.mockReturnValue(selectLean([
+      { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: 'cms-override-model', sessionId: 'sess1' },
+    ]))
+    const r = await runEvidenceAttributionHandler(EVENT, step)
+    expect(r.outcome).toBe('attributed')
+    const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(docs.every((d) => d.scoringEpoch === 'cms-override-model')).toBe(true)
+    const snap = mockAppUpdateOne.mock.calls[0][1].$set.readiness
+    expect(snap.scoringEpoch).toBe('cms-override-model')
+    expect(snap.practicedCount).toBe(1)
   })
 
   it('JD-version mismatch = counted skip, never cross-version attribution', async () => {
@@ -170,6 +190,16 @@ describe('runEvidenceAttributionHandler', () => {
       { _id: 'sess1' },
       { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
     )
+  })
+
+  it('delete-race guard: session GDPR-deleted between attribute and persist → abort, resurrect nothing', async () => {
+    mockSessionExists.mockResolvedValue(null)
+    const r = await runEvidenceAttributionHandler(EVENT, step)
+    expect(r.rows).toBe(0)
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled() // snapshot the delete unset stays unset
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 
   it('unparseable output (throw path) does NOT stamp processed — retries and the sweep stay armed', async () => {

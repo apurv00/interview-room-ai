@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession, JobApplication, JobPosting, JobPracticeEvidence } from '@shared/db/models'
-import { completion } from '@shared/services/modelRouter'
+import { completion, resolveModel } from '@shared/services/modelRouter'
 import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 import { logger } from '@shared/logger'
 import { xrayHashOf } from '../services/xrayService'
@@ -36,9 +36,20 @@ interface StepRunner {
  * seconds after the session persists, so this equals the judge model
  * except inside a model-cutover window (bounded mislabel, acceptable
  * for R1's purpose: detecting stale-epoch evidence after a cutover).
+ *
+ * RESOLVED, not hardcoded (Codex #538 round 2): an active CMS ModelConfig
+ * row overrides TASK_SLOT_DEFAULTS for the actual evaluator, so the epoch
+ * must go through the same resolveModel() path completion() uses — else a
+ * CMS cutover would never make older evidence stale. Config is cached
+ * in-memory (60s), so this is cheap per persist. Known bounded window:
+ * on a cold process with empty config cache, resolveModel falls back to
+ * defaults (it never throws) — under an active CMS override that run
+ * stamps+filters with the default epoch (internally consistent, heals on
+ * the next attribution). Accepted; prod has no CMS ModelConfig doc today.
  */
-export function currentScoringEpoch(): string {
-  return TASK_SLOT_DEFAULTS['interview.evaluate-answer'].model
+export async function currentScoringEpoch(): Promise<string> {
+  const resolved = await resolveModel('interview.evaluate-answer')
+  return resolved.model
 }
 
 const ATTRIBUTION_SCHEMA = z.object({
@@ -65,7 +76,6 @@ interface LoadedInputs {
   mustHaves: Array<{ id: string; requirement: string }>
   xrayHash: string
   applicationId: string
-  totalSessions: number
 }
 
 export function buildAttributionPrompt(
@@ -113,11 +123,11 @@ export async function runEvidenceAttributionHandler(
 
   const inputs = await step.run('load-inputs', async (): Promise<LoadedInputs> => {
     const none = (outcome: LoadedInputs['outcome']): LoadedInputs => ({
-      outcome, answers: [], mustHaves: [], xrayHash: '', applicationId, totalSessions: 0,
+      outcome, answers: [], mustHaves: [], xrayHash: '', applicationId,
     })
     const [session, application, posting] = await Promise.all([
       InterviewSession.findById(sessionId).select('config evaluations userId').lean(),
-      JobApplication.findById(applicationId).select('practiceSessionIds userId').lean(),
+      JobApplication.findById(applicationId).select('userId').lean(),
       JobPosting.findById(jobPostingId).select('parsedJD parsedJDHash').lean(),
     ])
     if (!session || !application) return none('missing-context')
@@ -163,7 +173,6 @@ export async function runEvidenceAttributionHandler(
       mustHaves,
       xrayHash: sessionHash,
       applicationId,
-      totalSessions: application.practiceSessionIds?.length ?? 0,
     }
   })
   if (inputs.outcome !== 'ok') {
@@ -196,7 +205,16 @@ export async function runEvidenceAttributionHandler(
   })
 
   const rows = await step.run('persist', async () => {
-    const epoch = currentScoringEpoch()
+    // Delete-race guard: if the user GDPR-deleted this session between
+    // llm-attribute and persist (a window Inngest backoff can stretch to
+    // minutes), inserting would RESURRECT evidence the cascade removed
+    // and re-write the snapshot the delete just unset. Abort untouched.
+    const sessionAlive = await InterviewSession.exists({ _id: sessionId })
+    if (!sessionAlive) {
+      logger.warn({ sessionId }, 'session deleted mid-attribution — persist aborted')
+      return 0
+    }
+    const epoch = await currentScoringEpoch()
     const mustHaveIds = new Set(inputs.mustHaves.map((m) => m.id))
     const byIndex = new Map(inputs.answers.map((a) => [a.index, a]))
     // Two answers may evidence the SAME requirement; the unique index
@@ -231,7 +249,7 @@ export async function runEvidenceAttributionHandler(
       }
     }
     const docs = Array.from(bestByReq.values()).map((b) => b.doc)
-    const app = await JobApplication.findById(applicationId).select('userId practiceSessionIds').lean()
+    const app = await JobApplication.findById(applicationId).select('userId').lean()
     if (!app) return 0
     // Replace semantics per (session, hash): stale rows out, new set in —
     // the unique index makes duplicate delivery inert.
@@ -254,8 +272,7 @@ export async function runEvidenceAttributionHandler(
     const snapshot = computeReadiness(
       allRows.map((r) => ({ ...r, sessionId: String(r.sessionId) })) as unknown as EvidenceRowLike[],
       { xrayHash: inputs.xrayHash, mustHaveIds: inputs.mustHaves.map((m) => m.id) },
-      epoch,
-      app.practiceSessionIds?.length ?? 0
+      epoch
     )
     await JobApplication.updateOne({ _id: applicationId }, { $set: { readiness: snapshot } })
     // Zero stored rows (all 'none' / belt-dropped) is still PROCESSED —

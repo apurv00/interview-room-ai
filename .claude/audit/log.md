@@ -3572,3 +3572,17 @@ durable record; ids are best-effort pointers.
 - **P2 pre-insert collapse**: two answers evidencing the same requirement built duplicate unique-key docs; ordered:false + the 11000 catch could silently drop the STRONGER row. Fix: best strengthWeight×answerScore per requirement before insert (STRENGTH_WEIGHT now exported from readiness.ts — same rule as band math).
 - **P2 terminal processed marker**: zero-evidence sessions store no rows, so the sweep's rows-exist check re-emitted + re-billed them daily for 7 days. Fix: attribution.evidenceProcessedAt stamped at every terminal outcome (declared on the strict subdoc — undeclared dot-path $set is silently stripped); sweep filters on the stamp; rows-exist kept as legacy net; throw paths deliberately unstamped so retries/net stay armed.
 - Verified: modules/jobs 353 passed | 1 skipped; full clean-env vitest 5694 passed | 17 skipped; tsc/lint/build/module-size clean. +3 regression vectors.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 ~01:45 IST — PR #538 Codex round 2 (3 P2s) + adversarial-verify findings
+- **Resolved epoch**: currentScoringEpoch now awaits resolveModel('interview.evaluate-answer') — a CMS ModelConfig override reaches the epoch; hardcoded TASK_SLOT_DEFAULTS would silently mix scoring epochs across a CMS cutover. Cold-cache fallback window documented (internally consistent, heals next attribution).
+- **Counted-sessions gate**: computeReadiness derives sessions = distinct sessionId among COUNTED rows (totalSessions param removed) — two stale-JD sessions + one current can no longer unlock Practiced. Spec §2 amended; vectors reworked with session spreads + a dedicated stale-sessions vector.
+- **GDPR snapshot clear**: deleteInterviewSession collects distinct applicationIds from evidence rows BEFORE the cascade, then $unsets JobApplication.readiness — a band derived from deleted answers dies with the answers. Absent snapshot = "no claims" (shared/** cannot reach band math; rebuild on next attribution).
+- **Adversarial verify (own agent) surfaced 2 more, both fixed**: (1) deleted session stayed in practiceSessionIds — the "n/3 sessions" ticker sold deleted evidence; now $pulled. (2) delete-vs-persist race could resurrect evidence rows + snapshot for a GDPR-deleted session; persist now aborts on a session-alive check before any mutation. Plus doc scrub: READINESS.md mismatch=skip (no v1 second parse) + computeReadiness signature.
+- Verified: modules/jobs+accountDeletion 367 passed | 1 skipped; full clean-env vitest 5700 passed | 17 skipped; tsc/lint/build/module-size clean. +6 regression vectors.
