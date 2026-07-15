@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewSession, PathwayPlan, ServedProblem, JobApplication, ProductEvent } from '@shared/db/models'
+import { User, InterviewSession, PathwayPlan, ServedProblem, JobApplication, ProductEvent, JobsEmailSend } from '@shared/db/models'
 import { UserCompetencyState } from '@shared/db/models/UserCompetencyState'
 import { WeaknessCluster } from '@shared/db/models/WeaknessCluster'
 import { SessionSummary } from '@shared/db/models/SessionSummary'
@@ -119,6 +119,35 @@ export async function generateDataExport(userId: string): Promise<Record<string,
   if (!user) {
     throw new Error('User not found')
   }
+
+  // Jobs email send history (EMAILS.md ledger) — personal data: which
+  // emails we sent this user and when. Cursor-paginated to exhaustion like
+  // every other per-user collection here — a GDPR export must never
+  // silently truncate (Codex #531; cap-exempt E0/E2 make the row count
+  // unbounded over a user's lifetime).
+  interface LeanEmailSend {
+    _id: mongoose.Types.ObjectId
+    stream: string
+    dedupeKey: string
+    sentAt?: Date
+    createdAt: Date
+  }
+  const jobsEmailSendRows: LeanEmailSend[] = []
+  let emailCursor: mongoose.Types.ObjectId | null = null
+  for (;;) {
+    const batch = (await JobsEmailSend.find({
+      userId: uid,
+      ...(emailCursor ? { _id: { $lt: emailCursor } } : {}),
+    })
+      .select('stream dedupeKey sentAt createdAt')
+      .sort({ _id: -1 })
+      .limit(2000)
+      .lean()) as unknown as LeanEmailSend[]
+    jobsEmailSendRows.push(...batch)
+    if (batch.length < 2000) break
+    emailCursor = batch[batch.length - 1]._id
+  }
+  const jobsEmailSends = jobsEmailSendRows.map(({ stream, dedupeKey, sentAt, createdAt }) => ({ stream, dedupeKey, sentAt, createdAt }))
 
   return {
     exportedAt: new Date().toISOString(),
@@ -254,6 +283,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       createdAt: a.createdAt,
     })),
 
+    jobsEmailSends,
     productEvents: productEvents.map((e) => ({
       name: e.name,
       jobPostingId: e.jobPostingId?.toString(),

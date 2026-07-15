@@ -176,6 +176,15 @@ export interface IUser extends Document {
     digest: boolean
     reminders: boolean
     frequency: 'daily' | 'weekly'
+    /** Jobs email wave (EMAILS.md §3). Coarse toggles for the settings UI;
+     *  unsubscribedStreams is what unsubscribe links write — closed enum
+     *  e0..e4 plus the explicit 'all' marker (never a fan-out). Absent
+     *  fields mean default-true: send queries filter with { $ne: false }. */
+    jobs?: {
+      nudges: boolean
+      digest: boolean
+      unsubscribedStreams: string[]
+    }
   }
 
   interviewCount: number
@@ -366,6 +375,11 @@ const UserSchema = new Schema<IUser>(
       digest: { type: Boolean, default: true },
       reminders: { type: Boolean, default: true },
       frequency: { type: String, enum: ['daily', 'weekly'], default: 'weekly' },
+      jobs: {
+        nudges: { type: Boolean, default: true },
+        digest: { type: Boolean, default: true },
+        unsubscribedStreams: { type: [{ type: String, enum: ['e0', 'e1', 'e2', 'e3', 'e4', 'all'] }], default: [] },
+      },
     },
 
     interviewCount: { type: Number, default: 0 },

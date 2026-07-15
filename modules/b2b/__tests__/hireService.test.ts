@@ -95,7 +95,7 @@ import {
 describe('hireService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockSendEmail.mockResolvedValue(true)
+    mockSendEmail.mockResolvedValue({ ok: true, id: "re-1" })
   })
 
   describe('role predicates', () => {

@@ -206,11 +206,12 @@ export async function sendInactivityNudge(userId: string, email: string, name: s
 </body>
 </html>`
 
-  return sendEmail({
+  const res = await sendEmail({
     to: email,
     subject: 'Time for a quick practice session?',
     html,
   })
+  return res.ok
 }
 
 /**
@@ -270,7 +271,7 @@ export async function processEmailBatch(): Promise<{ sent: number; errors: numbe
             subject: content.subject,
             html: content.html,
           })
-          if (success) sent++
+          if (success.ok) sent++
           else errors++
         }
       } catch {

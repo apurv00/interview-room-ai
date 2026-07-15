@@ -49,8 +49,7 @@ import {
   ServedProblem,
   JobApplication,
   ProductEvent,
-  LessonEngagement,
-} from '@shared/db/models'
+  LessonEngagement, JobsEmailSend } from '@shared/db/models'
 
 // ─── Per-session delete ───────────────────────────────────────────────────────
 
@@ -228,6 +227,7 @@ export async function deleteUserAccount(
     ['ServedProblem', ServedProblem.deleteMany({ userId: userObjectId })],
     ['JobApplication', JobApplication.deleteMany({ userId: userObjectId })],
     ['ProductEvent', ProductEvent.deleteMany({ userId: userObjectId })],
+    ['JobsEmailSend', JobsEmailSend.deleteMany({ userId: userObjectId })],
     // Pre-existing gap surfaced by the Wave-1b GDPR completeness tripwire:
     // per-user lesson engagement rows survived account deletion.
     ['LessonEngagement', LessonEngagement.deleteMany({ userId: userObjectId })],
