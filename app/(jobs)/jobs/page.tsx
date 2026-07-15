@@ -156,7 +156,7 @@ function JobsFeed() {
 
       {domain && (
         <div className="mt-4 flex items-center gap-2 text-sm">
-          <span className="rounded-full border border-blue-300 bg-blue-50 px-3 py-1 text-blue-800 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
+          <span className="rounded-full border border-blue-300 bg-blue-50 px-3 py-1 text-blue-800">
             Showing {domain} jobs
           </span>
           <Link href="/jobs" className="text-xs text-blue-600 hover:underline">Clear filter</Link>
@@ -164,18 +164,18 @@ function JobsFeed() {
       )}
 
       {target ? (
-        <div className="mt-4 flex items-center justify-between rounded-xl border p-3">
+        <div className="mt-4 flex items-center justify-between rounded-xl border border-slate-200 p-3 bg-white">
           <p className="text-sm">{revealLine}</p>
           <Link href="/jobs/start" className="shrink-0 text-xs text-blue-600 hover:underline">Edit target</Link>
         </div>
       ) : (
-        <div className="mt-4 rounded-xl border border-dashed p-4">
+        <div className="mt-4 rounded-xl border border-slate-200 border-dashed p-4 bg-white">
           <p className="text-sm font-medium">Attach your resume — we&apos;ll sort these for you.</p>
           <div className="mt-3 flex gap-3">
             <Link href="/jobs/start" className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
               Attach or build
             </Link>
-            <Link href="/jobs/start" className="rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800">
+            <Link href="/jobs/start" className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
               Answer 3 questions
             </Link>
           </div>
@@ -191,40 +191,40 @@ function JobsFeed() {
           onChange={(e) => setCityInput(e.target.value)}
           placeholder="City (any location — remote always included)"
           aria-label="Filter by city"
-          className="w-64 rounded-lg border px-3 py-1.5 text-sm dark:bg-gray-900"
+          className="w-64 rounded-lg border border-slate-200 px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400"
         />
-        <button type="submit" className="rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800">
+        <button type="submit" className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
           Filter
         </button>
       </form>
 
       {quickWins && quickWins.count >= 2 && !winsDismissed && (
-        <div className="mt-4 flex items-start justify-between rounded-xl border p-3 text-sm">
+        <div className="mt-4 flex items-start justify-between rounded-xl border border-slate-200 p-3 text-sm bg-white">
           <p>
             Resume: <span className="font-medium">{quickWins.count} quick wins</span> — small fixes, better matches.{' '}
             <Link href={`/resume/builder${quickWins.resumeId ? `?id=${quickWins.resumeId}` : ''}`} className="text-blue-600 underline">Fix in builder</Link>
           </p>
-          <button onClick={dismissWins} aria-label="Dismiss" className="ml-3 text-gray-500 hover:text-gray-700">✕</button>
+          <button onClick={dismissWins} aria-label="Dismiss" className="ml-3 text-slate-500 hover:text-slate-600">✕</button>
         </div>
       )}
 
       {capNotice && (
-        <div className="mt-4 flex items-start justify-between rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950">
+        <div className="mt-4 flex items-start justify-between rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
           <p>
             Your resume library is full (3/3), so we didn&apos;t save this one — your feed is still
             sorted by it. <Link href="/resume" className="underline">Manage resumes</Link>
           </p>
-          <button onClick={dismissCapNotice} aria-label="Dismiss" className="ml-3 text-gray-500 hover:text-gray-700">✕</button>
+          <button onClick={dismissCapNotice} aria-label="Dismiss" className="ml-3 text-slate-600 hover:text-slate-600">✕</button>
         </div>
       )}
 
       {error && <p className="mt-8 text-sm text-red-600">The feed hit a snag — refresh to retry.</p>}
-      {!data && !error && <p className="mt-8 text-sm text-gray-500">Loading jobs…</p>}
+      {!data && !error && <p className="mt-8 text-sm text-slate-500">Loading jobs…</p>}
 
       {data && data.cards.length === 0 && (
-        <div className="mt-8 rounded-xl border border-dashed p-6">
+        <div className="mt-8 rounded-xl border border-slate-200 border-dashed p-6 bg-white">
           <p className="font-medium">Your feed is warming up.</p>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+          <p className="mt-1 text-sm text-slate-500">
             Fresh postings are being gathered
             {domain ? ` — nothing live in ${domain} right now` : ''}
             {city ? ` — nothing live for “${city}” yet (remote roles appear here too)` : ''}. Check back soon.
@@ -237,13 +237,13 @@ function JobsFeed() {
           <li key={c.id}>
             <Link
               href={`/jobs/${c.id}`}
-              className="block rounded-xl border p-4 transition hover:border-blue-400 hover:shadow-sm"
+              className="block rounded-xl border p-4 transition hover:border-blue-400 hover:shadow-sm bg-white"
             >
               <div className="flex items-baseline justify-between gap-3">
                 <span className="font-medium">{c.title}</span>
-                {daysAgo(c.postedAt) && <span className="shrink-0 text-xs text-gray-500">{daysAgo(c.postedAt)}</span>}
+                {daysAgo(c.postedAt) && <span className="shrink-0 text-xs text-slate-500">{daysAgo(c.postedAt)}</span>}
               </div>
-              <div className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+              <div className="mt-1 text-sm text-slate-500">
                 {c.company}
                 {c.locations[0] ? ` · ${c.locations[0]}` : ''}
                 {c.isRemote ? ' · Remote' : ''}
@@ -251,14 +251,14 @@ function JobsFeed() {
               </div>
               <div className="mt-2 flex gap-2 text-xs">
                 {c.applyTier && TIER_BADGE[c.applyTier] && (
-                  <span className="rounded-full border px-2 py-0.5 text-gray-600 dark:text-gray-400">{TIER_BADGE[c.applyTier]}</span>
+                  <span className="rounded-full border border-slate-200 px-2 py-0.5 text-slate-500 bg-white">{TIER_BADGE[c.applyTier]}</span>
                 )}
                 {c.matchedSkills?.length ? (
-                  <span className="rounded-full border border-blue-300 px-2 py-0.5 text-blue-700 dark:border-blue-800 dark:text-blue-300">
+                  <span className="rounded-full border border-blue-300 px-2 py-0.5 text-blue-700 bg-white">
                     Matches your resume: {c.matchedSkills.slice(0, 2).join(', ')}
                   </span>
                 ) : (
-                  <span className="rounded-full border px-2 py-0.5 text-gray-500">Looks relevant · title &amp; location match</span>
+                  <span className="rounded-full border border-slate-200 px-2 py-0.5 text-slate-500 bg-white">Looks relevant · title &amp; location match</span>
                 )}
               </div>
             </Link>
@@ -271,15 +271,15 @@ function JobsFeed() {
           <button
             disabled={page <= 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="rounded-lg border px-3 py-1.5 text-sm disabled:opacity-40"
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm disabled:opacity-40 bg-white"
           >
             ← Previous
           </button>
-          <span className="text-xs text-gray-500">Page {page}</span>
+          <span className="text-xs text-slate-500">Page {page}</span>
           <button
             disabled={!data.hasMore}
             onClick={() => setPage((p) => p + 1)}
-            className="rounded-lg border px-3 py-1.5 text-sm disabled:opacity-40"
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm disabled:opacity-40 bg-white"
           >
             Next →
           </button>
@@ -293,7 +293,7 @@ export default function JobsPage() {
   // Suspense required because JobsFeed uses useSearchParams (?domain= from
   // the press surfaces) — repo pattern: lobby, tailor, drill pages.
   return (
-    <Suspense fallback={<main className="mx-auto max-w-3xl px-4 py-10"><p className="mt-8 text-sm text-gray-500">Loading jobs…</p></main>}>
+    <Suspense fallback={<main className="mx-auto max-w-3xl px-4 py-10"><p className="mt-8 text-sm text-slate-500">Loading jobs…</p></main>}>
       <JobsFeed />
     </Suspense>
   )

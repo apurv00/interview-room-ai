@@ -48,16 +48,16 @@ export default function JobsCountLink({
 
   if (variant === 'feedback') {
     return (
-      <Link href={href} className="mt-2 inline-block rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm text-blue-800 hover:border-blue-400 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
+      <Link href={href} className="mt-2 inline-block rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm text-blue-800 hover:border-blue-400">
         {count} live {what} are hiring right now. Browse →
       </Link>
     )
   }
   if (variant === 'pathway') {
     return (
-      <div className="rounded-xl border p-4">
+      <div className="rounded-xl border border-slate-200 p-4 bg-white">
         <h3 className="text-sm font-semibold">{state.filtered ? 'Jobs matching your prep' : 'Live jobs on the feed'}</h3>
-        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+        <p className="mt-1 text-sm text-slate-500">
           {count} live {what} on the feed right now.
         </p>
         <Link href={href} className="mt-2 inline-block text-sm font-medium text-blue-600 hover:underline">
