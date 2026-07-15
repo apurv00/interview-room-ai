@@ -159,6 +159,42 @@ describe('apna fetch', () => {
     expect(fetched.some((u) => u.includes('job/newest'))).toBe(false)
   })
 
+  it('a transient detail failure (5xx/timeout) FAILS the fetch so the cursor never passes an unfetched URL; 404 = permanent-gone skip (Codex #536)', async () => {
+    const mk = (detailBehavior: (u: string) => Response | Promise<Response>) => async (url: unknown) => {
+      const u = String(url)
+      if (u === INDEX) return { ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/job-listing-sitemap.xml</loc></sitemapindex>' } as Response
+      if (/job-listing-sitemap\.xml$/.test(u)) return { ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/active-job-listings-1.xml</loc></sitemapindex>' } as Response
+      if (/active-job-listings-1\.xml$/.test(u)) return { ok: true, status: 200, text: async () => `<urlset>
+        <url><loc>https://apna.co/job/good</loc><lastmod>2026-07-14T00:00:00Z</lastmod></url>
+        <url><loc>https://apna.co/job/flaky</loc><lastmod>2026-07-15T00:00:00Z</lastmod></url>
+       </urlset>` } as Response
+      return detailBehavior(u)
+    }
+    const target = {
+      kind: 'sitemap' as const,
+      shardUrl: 'https://apna.co/api/sitemap-index.xml#active',
+      slugFilter: { metros: [''], domainPatterns: [], maxDetailFetches: 5 },
+      cursorBucket: 'apna:active',
+    }
+    // 5xx on one detail → whole fetch FAILS (cursor must not advance).
+    vi.mocked(fetch).mockImplementation(mk((u) =>
+      /job\/flaky/.test(u)
+        ? ({ ok: false, status: 503, text: async () => '' } as Response)
+        : ({ ok: true, status: 200, text: async () => pageFor('Long enough description. '.repeat(30)) } as Response)))
+    const failed = await apnaAdapter.fetch(target)
+    expect(failed.ok).toBe(false)
+    expect(failed.raw.length).toBeGreaterThan(0) // partial rows still returned, just no clean exit
+
+    // 404 on the same URL → permanently gone: fetch stays OK, row skipped.
+    vi.mocked(fetch).mockImplementation(mk((u) =>
+      /job\/flaky/.test(u)
+        ? ({ ok: false, status: 404, text: async () => '' } as Response)
+        : ({ ok: true, status: 200, text: async () => pageFor('Long enough description. '.repeat(30)) } as Response)))
+    const gone = await apnaAdapter.fetch(target)
+    expect(gone.ok).toBe(true)
+    expect(gone.raw).toHaveLength(1)
+  })
+
   it('a sitemap index that stops naming the job sitemap = FAILED fetch (schema drift, Codex #536)', async () => {
     vi.mocked(fetch).mockImplementation(async () =>
       ({ ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/other.xml</loc></sitemapindex>' }) as Response)

@@ -27,6 +27,13 @@ const UA = { 'User-Agent': 'InterviewPrepGuruBot/1.0 (+https://www.interviewprep
 const SITEMAP_INDEX = 'https://apna.co/api/sitemap-index.xml'
 const DETAIL_DELAY_MS = 400
 const JD_FLOOR_CHARS = 400
+/** Worst-case step budget (Codex #536): details×timeout + shards×timeout
+ *  must clear the 300s Inngest route maxDuration with headroom —
+ *  12×8s + 4×15s + index/shard-idx ≈ 192s. Throughput is deliberately
+ *  slow; politeness and step-safety beat speed. */
+const MAX_DETAILS_PER_TARGET = 12
+const DETAIL_TIMEOUT_MS = 8000
+const SHARDS_PER_TARGET = 4
 
 async function getText(url: string, timeoutMs = 15000): Promise<{ ok: boolean; status: number; text: string }> {
   try {
@@ -111,13 +118,13 @@ export const apnaAdapter: JobSourceAdapter = {
       {
         kind: 'sitemap' as const,
         shardUrl: `${SITEMAP_INDEX}#external`,
-        slugFilter: { metros: [newestIso('apna:external') ?? ''], domainPatterns: [], maxDetailFetches: 40 },
+        slugFilter: { metros: [newestIso('apna:external') ?? ''], domainPatterns: [], maxDetailFetches: MAX_DETAILS_PER_TARGET },
         cursorBucket: 'apna:external',
       },
       {
         kind: 'sitemap' as const,
         shardUrl: `${SITEMAP_INDEX}#active`,
-        slugFilter: { metros: [newestIso('apna:active') ?? ''], maxDetailFetches: 40, domainPatterns: [] },
+        slugFilter: { metros: [newestIso('apna:active') ?? ''], maxDetailFetches: MAX_DETAILS_PER_TARGET, domainPatterns: [] },
         cursorBucket: 'apna:active',
       },
     ]
@@ -156,7 +163,7 @@ export const apnaAdapter: JobSourceAdapter = {
     // Entries WITHOUT lastmod sort last: they cannot be watermarked, so
     // they only consume cap after the dated backlog drains.
     const all: Array<{ loc: string; lastmod: string | null }> = []
-    for (const shard of shards.slice(0, 6)) {
+    for (const shard of shards.slice(0, SHARDS_PER_TARGET)) {
       const res = await getText(shard); attempts++
       if (!res.ok) continue
       for (const e of extractUrlEntries(res.text)) {
@@ -172,8 +179,9 @@ export const apnaAdapter: JobSourceAdapter = {
     const candidates = all.slice(0, cap)
 
     const raw: ApnaRaw[] = []
+    let transientFailures = 0
     for (const c of candidates) {
-      const page = await getText(c.loc, 12000); attempts++
+      const page = await getText(c.loc, DETAIL_TIMEOUT_MS); attempts++
       if (page.ok) {
         const jsonld = extractJobPostingJsonLd(page.text)
         // Policy floor (fetch-level, like the board adapter's India scope):
@@ -183,9 +191,20 @@ export const apnaAdapter: JobSourceAdapter = {
         if (!jsonld || desc.length >= JD_FLOOR_CHARS) {
           raw.push({ url: c.loc, jsonld })
         }
+      } else if (page.status === 404 || page.status === 410) {
+        // Permanently gone: nothing to ingest — safe for the cursor to
+        // pass (the sitemap sheds dead URLs on its own).
+      } else {
+        // Timeout/5xx = TRANSIENT (Codex #536): if we advanced the cursor
+        // past this URL it would never be retried. Count it and fail the
+        // fetch below so processTarget skips the cursor commit — the whole
+        // batch re-fetches next run (merge-idempotent), completeness
+        // beats quota (the #528 rule).
+        transientFailures++
       }
       await sleep(DETAIL_DELAY_MS)
     }
+    if (transientFailures > 0) return { ok: false, status: 0, raw, attempts }
     return { ok: true, status: 200, raw, attempts }
   },
 
