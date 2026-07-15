@@ -13,6 +13,11 @@ export interface IJobIngestCursor extends Document {
   lastPage: number
   lastWindow?: string
   lastRunAt?: Date
+  /** Last pagination of this bucket ended on a failed page (Codex #528 P1):
+   *  the next run must distrust the known-rate cutoff — rows it already
+   *  stored from the partial run would otherwise read as "window exhausted"
+   *  before the failed pages are ever retried. Cleared on a full clean exit. */
+  windowIncomplete?: boolean
   createdAt: Date
   updatedAt: Date
 }
@@ -25,6 +30,7 @@ const JobIngestCursorSchema = new Schema<IJobIngestCursor>(
     lastPage: { type: Number, default: 0 },
     lastWindow: { type: String },
     lastRunAt: { type: Date },
+    windowIncomplete: { type: Boolean },
   },
   { timestamps: true }
 )

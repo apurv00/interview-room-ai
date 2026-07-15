@@ -40,6 +40,8 @@ vi.mock('../adapters/atsBoardAdapter', async (importOriginal) => {
 })
 
 import { runIngestSchedulerHandler, runSourceSyncHandler, runBoardProbeHandler } from '../jobs/ingestJobs'
+import { jsearchAdapter } from '../adapters/jsearchAdapter'
+import { JobPosting } from '@shared/db/models'
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 
@@ -186,10 +188,73 @@ describe('runSourceSyncHandler', () => {
     expect(r).toMatchObject({ cycleWritten: true })
     // Rows from page 1 WERE ingested (no data loss)...
     expect(mockCycleCreate.mock.calls[0][0].fetched).toBeGreaterThan(0)
-    // ...but no cursor advanced anywhere: every bucket died on page 2.
-    expect(mockCursorBulkWrite).not.toHaveBeenCalled()
+    // ...but no cursor ADVANCED anywhere: every bucket died on page 2 —
+    // the only writes are the durable windowIncomplete flags (#528 P1),
+    // never a newestPostedAt move.
+    const allOps = mockCursorBulkWrite.mock.calls.flatMap((c) => c[0])
+    expect(allOps.length).toBeGreaterThan(0)
+    for (const op of allOps) {
+      expect(op.updateOne.update.$max).toBeUndefined()
+      expect(op.updateOne.update.$set.windowIncomplete).toBe(true)
+    }
     // And the run reads sick, not healthy (httpErrors on every bucket).
     expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health).toBe('degraded')
+  })
+
+  it('a windowIncomplete bucket distrusts the known-rate cutoff — the failed page is retried before the cursor moves (Codex #528 P1)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    // Real bucket ids from the real matrix (only fetch is mocked).
+    const targets = jsearchAdapter.buildTargets({ sourceId: 'jsearch', enabled: true }, [])
+    const retryBucket = (targets[0] as { bucketId: string }).bucketId
+    const trustedBucket = (targets[1] as { bucketId: string }).bucketId
+    // Prior run stored page 1 of retryBucket then died on page 2 → its
+    // cursor row carries the durable flag and NO newestPostedAt.
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([{ bucket: retryBucket, windowIncomplete: true }]) })
+    // Every incoming row is ALREADY STORED (the partial run's writes):
+    // Tier-1 sourceKey lookup returns a refreshable doc → refreshed++ →
+    // knownRate = 1 ≥ cutoff on every page-1.
+    ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockImplementation((q: Record<string, unknown>) =>
+      q?.['provenance.sourceKey']
+        ? Promise.resolve({
+            status: 'open',
+            provenance: [{ sourceKey: q['provenance.sourceKey'], lastSeenAt: new Date(0) }],
+            jdLength: 100000, locationKeys: [], locations: [],
+            save: async () => ({}),
+          })
+        : Promise.resolve(null)
+    )
+    const fullPage = (bucket: string, page: number, n: number) => Array.from({ length: n }, (_, k) => ({
+      job_id: `id-${bucket}-p${page}-${k}`, job_title: 'Backend Developer', employer_name: `Acme ${k}`,
+      job_city: 'Pune', job_description: 'Build APIs. '.repeat(50),
+      job_posted_at_datetime_utc: '2026-07-12T00:00:00Z', job_apply_link: `https://careers.acme.com/${page}/${k}`,
+    }))
+    mockAdapterFetch.mockImplementation(async (t: { bucketId?: string; page?: number }) => ({
+      ok: true, status: 200, attempts: 1,
+      // Page 1 full everywhere; page 2 (reached only by distrusted buckets)
+      // is non-full → full clean exit.
+      raw: fullPage(t.bucketId ?? 'b', t.page ?? 1, (t.page ?? 1) === 1 ? 10 : 1),
+    }))
+    try {
+      const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+      expect(r).toMatchObject({ cycleWritten: true })
+      const pagesFor = (b: string) => mockAdapterFetch.mock.calls.filter((c) => c[0].bucketId === b).map((c) => c[0].page)
+      // The flagged bucket paginated PAST the all-known page 1 (cutoff
+      // distrusted) and retried page 2; a trusted bucket stopped at page 1.
+      expect(pagesFor(retryBucket)).toContain(2)
+      expect(pagesFor(trustedBucket)).toEqual([1])
+      // Its window completed cleanly → cursor advanced AND flag cleared.
+      const ops = mockCursorBulkWrite.mock.calls.flatMap((c) => c[0])
+      const retryOp = ops.find((o) => o.updateOne.filter.bucket === retryBucket)
+      expect(retryOp.updateOne.update.$max.newestPostedAt).toBeInstanceOf(Date)
+      expect(retryOp.updateOne.update.$set.windowIncomplete).toBe(false)
+      // Trusted buckets keep the steady-state economics: cutoff exit at
+      // page 1 still advances their cursor.
+      const trustedOp = ops.find((o) => o.updateOne.filter.bucket === trustedBucket)
+      expect(trustedOp.updateOne.update.$max.newestPostedAt).toBeInstanceOf(Date)
+    } finally {
+      ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(null)
+    }
   })
 
   it('a garbage postedAt never reaches the cursor write — finalize still succeeds', async () => {
