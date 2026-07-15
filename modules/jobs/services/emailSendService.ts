@@ -1,3 +1,4 @@
+import mongoose from 'mongoose'
 import { JobsEmailSend, User } from '@shared/db/models'
 import { sendEmail } from '@shared/services/emailService'
 import { mintActionToken } from '@shared/services/signedActionToken'
@@ -137,4 +138,104 @@ export async function sendTransactional(input: TransactionalSendInput): Promise<
     if ((err as { code?: number }).code !== 11000) throw err
   }
   return { outcome: 'failed-alerted' }
+}
+
+// ── Solicitation discipline (EMAILS.md §2): reserve-FIRST ───────────────────
+
+export type SolicitationStream = 'e1' | 'e4'
+
+export interface SolicitationSendInput {
+  userId: string
+  stream: SolicitationStream
+  /** One reservation per application — a batched email passes several. */
+  dedupeKeys: string[]
+  to: string
+  subject: string
+  html: string
+  /** The coarse settings toggle this stream rides (EMAILS.md §3) — re-read
+   *  with the suppression list at send time (Codex #533). */
+  coarseToggle: 'nudges' | 'digest'
+}
+
+export type SolicitationSendOutcome =
+  | { outcome: 'sent'; resendId?: string; reserved: string[] }
+  | { outcome: 'all-reserved' }
+  | { outcome: 'suppressed' }
+  | { outcome: 'send-failed' }
+
+/**
+ * Reserve-first: ledger rows are inserted BEFORE the send. A duplicate key
+ * means that application's slot is burned (sent or reserved earlier) — it
+ * drops out; if every key was already reserved there is nothing to send.
+ * A send failure leaves the reservations UNSTAMPED: dashboard-surfaced,
+ * never auto-retried — losing a nudge is acceptable, double-sending is not.
+ */
+export async function sendSolicitation(input: SolicitationSendInput): Promise<SolicitationSendOutcome> {
+  const reserved: string[] = []
+  for (const dedupeKey of input.dedupeKeys) {
+    try {
+      await JobsEmailSend.create({ userId: input.userId, stream: input.stream, dedupeKey })
+      reserved.push(dedupeKey)
+    } catch (err) {
+      if ((err as { code?: number }).code !== 11000) throw err
+    }
+  }
+  if (reserved.length === 0) return { outcome: 'all-reserved' }
+
+  // Final suppression re-check between reservation and delivery (Codex
+  // #533, mirroring the transactional R24 check): an in-window one-click
+  // unsubscribe wins. Releasing the unsent reservations un-burns the keys
+  // — the next sweep's upstream suppression filter keeps them silent.
+  const user = await User.findById(input.userId).select('emailPreferences.jobs').lean()
+  const jobsPrefs = user?.emailPreferences?.jobs as { nudges?: boolean; digest?: boolean; unsubscribedStreams?: string[] } | undefined
+  if (
+    isSuppressed(jobsPrefs?.unsubscribedStreams, input.stream) ||
+    jobsPrefs?.[input.coarseToggle] === false
+  ) {
+    await JobsEmailSend.deleteMany({
+      userId: input.userId,
+      stream: input.stream,
+      dedupeKey: { $in: reserved },
+      sentAt: { $exists: false },
+    })
+    return { outcome: 'suppressed' }
+  }
+
+  const res = await sendEmail({
+    to: input.to,
+    subject: input.subject,
+    html: input.html,
+    headers: oneClickHeaders(input.userId, input.stream),
+  })
+  if (!res.ok) {
+    logger.error(
+      { userId: input.userId, stream: input.stream, reserved },
+      'solicitation email send failed — reservations left unstamped (dashboard-surfaced, no auto-retry)'
+    )
+    return { outcome: 'send-failed' }
+  }
+  await JobsEmailSend.updateMany(
+    { userId: input.userId, stream: input.stream, dedupeKey: { $in: reserved } },
+    { $set: { sentAt: new Date(), resendId: res.id } }
+  )
+  return { outcome: 'sent', resendId: res.id, reserved }
+}
+
+/** Rolling 7-day solicitation count for the weekly cap (e0/e2 exempt).
+ *  Counts EMAILS, not ledger rows (Codex #533): a batched E1 stamps one
+ *  row per application sharing a single resendId — one email = one cap
+ *  unit. Rows group on resendId (sentAt fallback for id-less providers). */
+export async function solicitationSentLast7d(userId: string, now = new Date()): Promise<number> {
+  const groups: Array<{ n: number }> = await JobsEmailSend.aggregate([
+    {
+      $match: {
+        userId: new mongoose.Types.ObjectId(userId),
+        stream: { $in: ['e1', 'e3', 'e4'] },
+        sentAt: { $gte: new Date(now.getTime() - 7 * 86_400_000) },
+      },
+    },
+    { $group: { _id: { $ifNull: ['$resendId', '$sentAt'] } } },
+    { $count: 'n' },
+  ])
+  return groups[0]?.n ?? 0
 }

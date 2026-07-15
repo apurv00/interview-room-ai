@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const {
   mockGetConfig, mockSendEmail, mockSendFindOne, mockSendCreate, mockSendCount,
   mockUserFindById, mockAppFindOne, mockAppFind, mockAppExists, mockPostingFindById,
-  mockSessionExists, mockInngestSend, mockLoggerError,
+  mockSessionExists, mockInngestSend, mockLoggerError, mockSendUpdateMany, mockAppUpdateMany, mockSendAggregate, mockSendDeleteMany,
 } = vi.hoisted(() => ({
   mockGetConfig: vi.fn(),
   mockSendEmail: vi.fn(),
@@ -24,6 +24,10 @@ const {
   mockPostingFindById: vi.fn(),
   mockSessionExists: vi.fn(),
   mockInngestSend: vi.fn(),
+  mockSendUpdateMany: vi.fn(),
+  mockAppUpdateMany: vi.fn(),
+  mockSendAggregate: vi.fn(),
+  mockSendDeleteMany: vi.fn(),
   mockLoggerError: vi.fn(),
 }))
 
@@ -38,9 +42,9 @@ vi.mock('@shared/services/signedActionToken', () => ({
 }))
 vi.mock('@shared/db/models', () => ({
   JobsEmailConfig: { getConfig: mockGetConfig },
-  JobsEmailSend: { findOne: mockSendFindOne, create: mockSendCreate, countDocuments: mockSendCount },
+  JobsEmailSend: { findOne: mockSendFindOne, create: mockSendCreate, countDocuments: mockSendCount, updateMany: mockSendUpdateMany, aggregate: mockSendAggregate, deleteMany: mockSendDeleteMany },
   User: { findById: mockUserFindById },
-  JobApplication: { findOne: mockAppFindOne, find: mockAppFind, exists: mockAppExists },
+  JobApplication: { findOne: mockAppFindOne, find: mockAppFind, exists: mockAppExists, updateMany: mockAppUpdateMany },
   JobPosting: { findById: mockPostingFindById },
   InterviewSession: { exists: mockSessionExists },
   ProductEvent: { create: vi.fn().mockResolvedValue({}) },
@@ -70,6 +74,10 @@ beforeEach(() => {
   mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } } }))
   mockPostingFindById.mockReturnValue(selectLean({ title: 'Backend Engineer', company: 'Acme' }))
   mockSessionExists.mockResolvedValue(null)
+  mockSendUpdateMany.mockResolvedValue({})
+  mockAppUpdateMany.mockResolvedValue({})
+  mockSendAggregate.mockResolvedValue([])
+  mockSendDeleteMany.mockResolvedValue({})
 })
 
 // ── Timing math (pure) ───────────────────────────────────────────────────────
@@ -283,7 +291,7 @@ describe('runEmailSweepHandler', () => {
 
   it('switch OFF and quiet hours both skip the whole sweep', async () => {
     mockGetConfig.mockResolvedValue({ e2Enabled: false })
-    expect(await runEmailSweepHandler(step)).toEqual({ skipped: 'e2-disabled' })
+    expect(await runEmailSweepHandler(step)).toEqual({ skipped: 'all-streams-disabled' })
     mockGetConfig.mockResolvedValue({ e2Enabled: true })
     vi.setSystemTime(new Date('2026-07-21T17:00:00Z')) // 22:30 IST
     expect(await runEmailSweepHandler(step)).toEqual({ skipped: 'quiet-hours' })
@@ -292,7 +300,7 @@ describe('runEmailSweepHandler', () => {
   it('sends a due exact-date T-1 reminder with the date-bound dedupeKey', async () => {
     mockAppFind.mockImplementation(findChain([appRow()]))
     const r = await runEmailSweepHandler(step)
-    expect(r).toEqual({ e2Sent: 1 })
+    expect(r).toMatchObject({ e2Sent: 1 })
     expect(mockSendCreate.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-22')
   })
 
@@ -304,14 +312,14 @@ describe('runEmailSweepHandler', () => {
 
   it('not-yet-due candidates are filtered (send instant in the future)', async () => {
     mockAppFind.mockImplementation(findChain([appRow({ interviewDate: new Date('2026-07-25T00:00:00Z') })]))
-    expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
   it('per-application ceiling: 3 prior reminders → no more, ever (R19)', async () => {
     mockAppFind.mockImplementation(findChain([appRow()]))
     mockSendCount.mockResolvedValue(3)
-    expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
@@ -336,7 +344,7 @@ describe('runEmailSweepHandler', () => {
     mockAppFind.mockImplementation(findChain([stale]))
     // Ledger row present → common case: sent yesterday, nothing to do.
     mockSendFindOne.mockReturnValue(lean({ dedupeKey: 'app1:2026-07-21', sentAt: new Date() }))
-    expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
     expect(mockLoggerError).not.toHaveBeenCalled()
 
@@ -345,7 +353,7 @@ describe('runEmailSweepHandler', () => {
     mockGetConfig.mockResolvedValue({ e2Enabled: true })
     mockSendFindOne.mockReturnValue(lean(null))
     mockAppFind.mockImplementation(findChain([stale]))
-    expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({ applicationId: 'app1' }),
@@ -360,5 +368,204 @@ describe('runEmailSweepHandler', () => {
     const html = mockSendEmail.mock.calls[0][0].html as string
     expect(html).not.toContain('practice=1') // no warm-up CTA
     expect(html).toContain('prep=1')
+  })
+})
+
+// ── Solicitation sweep: E1 + E4 (PR-C) ──────────────────────────────────────
+
+describe('runEmailSweepHandler — solicitation E1/E4', () => {
+  const NOW = new Date('2026-07-21T04:00:00Z') // 09:30 IST Tuesday
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+    mockGetConfig.mockResolvedValue({ e0Enabled: false, e1Enabled: true, e2Enabled: false, e3Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+    mockPostingFindById.mockReturnValue(selectLean({ status: 'open' }))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  const daysAgo = (d: number) => new Date(NOW.getTime() - d * 86_400_000)
+  const e1Row = (id: string, over: Record<string, unknown> = {}) => ({
+    _id: id, userId: '507f1f77bcf86cd799439011', jobPostingId: `j-${id}`,
+    appliedAt: daysAgo(15),
+    statusHistory: [{ status: 'applied', at: daysAgo(15), source: 'user' }],
+    outcome: {}, practiceSessionIds: ['s1'],
+    jobSnapshot: { title: 'Backend Engineer', company: `Acme-${id}` },
+    ...over,
+  })
+  const e4Row = (id: string, over: Record<string, unknown> = {}) => ({
+    _id: id, userId: '507f1f77bcf86cd799439011', jobPostingId: `j-${id}`,
+    statusHistory: [{ status: 'apply_clicked', at: daysAgo(5), source: 'system' }],
+    outcome: {}, practiceSessionIds: [],
+    jobSnapshot: { title: 'Backend Engineer', company: `Acme-${id}` },
+    ...over,
+  })
+  // Two paginate calls (E1 then E4), each cursor-terminated by a short page.
+  const feed = (e1Rows: unknown[], e4Rows: unknown[]) => {
+    let call = 0
+    mockAppFind.mockImplementation(() => ({
+      select: () => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve(call++ === 0 ? e1Rows : e4Rows) }) }) }),
+    }))
+  }
+
+  it('E1: one due application → one email with three one-tap action URLs; the shared ask budget is consumed', async () => {
+    feed([e1Row('a1')], [])
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e1Sent: 1, e4Sent: 0 })
+    const html = mockSendEmail.mock.calls[0][0].html as string
+    expect(html).toContain('/api/jobs/email-action?token=')
+    // Reserve-first: the ledger row was created BEFORE the send.
+    expect(mockSendCreate.mock.invocationCallOrder[0]).toBeLessThan(mockSendEmail.mock.invocationCallOrder[0])
+    // Shared response-ask ledger consumed (R4).
+    expect(mockAppUpdateMany).toHaveBeenCalledWith(
+      { _id: { $in: ['a1'] } },
+      { $set: { 'outcome.lastAskedAt': expect.any(Date) }, $inc: { 'outcome.askCount': 1 } }
+    )
+  })
+
+  it('E1 batching: three due applications collapse into ONE email consuming ONE cap slot (R2)', async () => {
+    feed([e1Row('a1'), e1Row('a2'), e1Row('a3')], [])
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e1Sent: 1 })
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    expect(mockSendEmail.mock.calls[0][0].subject).toContain('3 applications')
+  })
+
+  it('E1 defers when the in-app nudge asked within 7 days (shared ledger, R4)', async () => {
+    feed([e1Row('a1', { outcome: { lastAskedAt: daysAgo(2) } })], [])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e1Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('E1 skips rows the user touched within 14 days', async () => {
+    feed([e1Row('a1', { statusHistory: [{ status: 'applied', at: daysAgo(15), source: 'user' }, { status: 'ghosted', at: daysAgo(2), source: 'user' }] })], [])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e1Sent: 0 })
+  })
+
+  it('weekly cap: 3 solicitation sends in the last 7d → everything drops, never queues', async () => {
+    mockSendAggregate.mockResolvedValue([{ n: 3 }]) // solicitationSentLast7d: 3 distinct EMAILS
+    feed([e1Row('a1')], [e4Row('b1')])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e1Sent: 0, e4Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('priority: with one cap slot left, E1 sends and E4 drops', async () => {
+    mockSendAggregate.mockResolvedValue([{ n: 2 }]) // 2 emails this week → remaining 1
+    feed([e1Row('a1')], [e4Row('b1')])
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e1Sent: 1, e4Sent: 0 })
+  })
+
+  it('E4: honored E0 consumes it; closed posting skips it', async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    // honored E0: the e0-prefix ledger lookup returns a stamped row
+    mockSendFindOne.mockImplementation((q: { stream?: string }) =>
+      lean(q.stream === 'e0' ? { sentAt: new Date() } : null))
+    feed([e4Row('b1')], []) // e1 disabled → E4's paginate is the FIRST find call
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+
+    // closed posting
+    vi.clearAllMocks()
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+    mockSendFindOne.mockReturnValue(lean(null))
+    mockSendCount.mockResolvedValue(0)
+    mockSendUpdateMany.mockResolvedValue({})
+    mockSendCreate.mockResolvedValue({})
+    mockPostingFindById.mockReturnValue(selectLean({ status: 'closed' }))
+    feed([e4Row('b1')], [])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('the cap counts EMAILS, not ledger rows: the pipeline groups on resendId (Codex #533)', async () => {
+    feed([e1Row('a1')], [])
+    await runEmailSweepHandler(step)
+    const pipeline = mockSendAggregate.mock.calls[0][0]
+    const group = pipeline.find((st: Record<string, unknown>) => st.$group) as { $group: { _id: unknown } }
+    expect(group.$group._id).toEqual({ $ifNull: ['$resendId', '$sentAt'] })
+  })
+
+  it('an in-window unsubscribe between reservation and send releases the reservation and blocks delivery (Codex #533)', async () => {
+    feed([e1Row('a1')], [])
+    // Sweep pre-check sees a clean user; the send-time re-check sees the
+    // one-click unsubscribe that landed in between.
+    mockUserFindById
+      .mockReturnValueOnce(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+      .mockReturnValueOnce(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: ['e1'] } } }))
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e1Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendDeleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ stream: 'e1', sentAt: { $exists: false } })
+    )
+  })
+
+  it("E4 copy never claims 'applied' for an apply_clicked row (Codex #533 — machine-fact honesty in the inbox)", async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    feed([e4Row('b1')], []) // e1 disabled → E4 paginates first; intent is apply_clicked
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e4Sent: 1 })
+    const { subject, html } = mockSendEmail.mock.calls[0][0] as { subject: string; html: string }
+    expect(subject).not.toMatch(/your .* application/i)
+    expect(html).not.toContain('You applied')
+    expect(html).toContain('You opened the apply page')
+    expect(html).toContain('you clicked apply on')
+  })
+
+  it('a nudges toggle flipped mid-window releases the reservation before delivery (Codex #533)', async () => {
+    feed([e1Row('a1')], [])
+    mockUserFindById
+      .mockReturnValueOnce(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+      .mockReturnValueOnce(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: false, unsubscribedStreams: [] } } }))
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e1Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendDeleteMany).toHaveBeenCalled()
+  })
+
+  it('clicked-then-confirmed rows key off the LATEST entry: fresh confirmations wait, aged ones get applied copy (Codex #533)', async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    // Clicked 5d ago but CONFIRMED yesterday → age anchors on the
+    // confirmation (1d) → not yet due.
+    feed([e4Row('b1', {
+      status: 'applied',
+      statusHistory: [
+        { status: 'apply_clicked', at: daysAgo(5), source: 'system' },
+        { status: 'applied', at: daysAgo(1), source: 'user' },
+      ],
+    })], [])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+
+    // Clicked 8d ago, confirmed 4d ago → due, with APPLIED copy.
+    vi.clearAllMocks()
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+    mockPostingFindById.mockReturnValue(selectLean({ status: 'open' }))
+    mockSendFindOne.mockReturnValue(lean(null))
+    mockSendCreate.mockResolvedValue({})
+    mockSendUpdateMany.mockResolvedValue({})
+    mockSendAggregate.mockResolvedValue([])
+    mockSendEmail.mockResolvedValue({ ok: true, id: 're-1' })
+    feed([e4Row('b2', {
+      status: 'applied',
+      statusHistory: [
+        { status: 'apply_clicked', at: daysAgo(8), source: 'system' },
+        { status: 'applied', at: daysAgo(4), source: 'user' },
+      ],
+    })], [])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 1 })
+    const html = mockSendEmail.mock.calls[0][0].html as string
+    expect(html).toContain('You applied')
+    expect(html).not.toContain('You opened the apply page')
+  })
+
+  it('coarse nudges=false silences both solicitation streams', async () => {
+    mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: false, unsubscribedStreams: [] } } }))
+    feed([e1Row('a1')], [e4Row('b1')])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e1Sent: 0, e4Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
   })
 })
