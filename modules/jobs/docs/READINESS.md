@@ -71,8 +71,12 @@ unique index { sessionId, requirementId, xrayHash }   // real, DB-level
   delete path removes the session's evidence rows [R26]. After persist,
   the worker recomputes and **denormalizes a readiness snapshot onto
   JobApplication**: `readiness: {band, sessions, practicedCount,
-  mustHaveTotal, xrayHash, scoringEpoch, at}` [R22] — every consumer reads
-  the snapshot; nothing recomputes bands per-request.
+  mustHaveTotal, quality, strongCoverage, xrayHash, scoringEpoch, at}`
+  [R22] — every consumer reads the snapshot; nothing recomputes bands
+  per-request. `quality` and `strongCoverage` are IN the snapshot (Codex
+  #537): the blocked-state copy ("quality below the bar") and the
+  segmented dashboard read them, and without them consumers would be
+  forced into per-request recomputation or coverage-only mis-explanations.
 
 **Calibration gate before anything renders** [R10]: a ~30-item golden set
 (hand-labeled (answer, requirement) → strength triples from the founder's
@@ -90,8 +94,12 @@ bumps shared maxFiles with the paired ADR [R27].
 
 - Rows counted only when: `xrayHash` = the posting's current
   `parsedJDHash` [R2], `answerScore ≥ 40` [R0], `scoringEpoch` = current
-  [R8], and `requirementId ∈ current parse's id set` (intersection, never
-  raw distinct count [R11]).
+  [R8], and `requirementId ∈ current parse's MUST-HAVE id set` — the
+  numerator's universe must equal the denominator's (Codex #537): a
+  nice-to-have id inflating practicedCount against a must-have total is a
+  silent over-claim. Belt at persist too: the worker rejects any returned
+  id outside the must-have set it was given (intersection, never raw
+  distinct count [R11]).
 - `practicedCount` = distinct counted requirement ids;
   `mustHaveTotal` = current parse's must-have count.
 - `quality` = mean over practiced requirements of (best row per
