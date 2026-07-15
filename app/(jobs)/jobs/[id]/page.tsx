@@ -430,7 +430,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 onClick={onPracticeClick}
                 className="rounded-lg border border-blue-400 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50"
               >
-                🎙 Practice for this job · 15 min
+                🎙 Practice for this job · 20 min
               </button>
             )}
             <button

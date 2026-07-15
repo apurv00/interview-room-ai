@@ -17,7 +17,7 @@ STRANGER ─► /jobs feed ─► UPLOAD RESUME ─► confirm bar ─► ranked
                             3 questions)                             ┌── VERDICT chip ──┐
                                                                      ▼                  ▼
                                                               APPLY (link-out,    PREP (JD-seeded
-                                                              5-tier ladder)      15-min mock)
+                                                              5-tier ladder)      20-min mock)
                                                                      │                  │
                                                          "Did you apply?" sheet   evidence tick
                                                                      │             ("2/3 on this job")
