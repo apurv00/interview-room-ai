@@ -70,7 +70,8 @@ interface LoadedInputs {
     | 'no-jd'
     | 'jd-version-mismatch'
     | 'no-scorable-answers'
-    | 'no-parse'
+    | 'no-parse' // TRANSIENT: X-ray parse not cached yet — never stamped
+    | 'no-must-haves' // terminal: parse exists but lists zero must-haves
     | 'missing-context'
   answers: Array<{ index: number; question: string; answer: string; answerScore: number }>
   mustHaves: Array<{ id: string; requirement: string }>
@@ -126,12 +127,18 @@ export async function runEvidenceAttributionHandler(
       outcome, answers: [], mustHaves: [], xrayHash: '', applicationId,
     })
     const [session, application, posting] = await Promise.all([
-      InterviewSession.findById(sessionId).select('config evaluations userId').lean(),
+      InterviewSession.findById(sessionId).select('config evaluations userId jobDescription').lean(),
       JobApplication.findById(applicationId).select('userId').lean(),
       JobPosting.findById(jobPostingId).select('parsedJD parsedJDHash').lean(),
     ])
     if (!session || !application) return none('missing-context')
-    const jd = (session.config as { jobDescription?: string } | undefined)?.jobDescription
+    // The JD lives TOP-LEVEL on InterviewSession — /api/interviews mirrors
+    // it out of config because the strict config subdoc strips undeclared
+    // keys (Codex #538 r3 P1: reading config.jobDescription meant every
+    // live session landed no-jd). Config read kept as a legacy fallback.
+    const jd =
+      (session as { jobDescription?: string }).jobDescription ??
+      (session.config as { jobDescription?: string } | undefined)?.jobDescription
     if (!jd) return none('no-jd')
     // Missing evaluations at rail-fire time is a persist race — throw so
     // Inngest retries with backoff (bounded by the function's retry cap).
@@ -149,7 +156,10 @@ export async function runEvidenceAttributionHandler(
     const mustHaves = requirements
       .filter((r) => r.importance === 'must-have' && r.id && r.requirement)
       .map((r) => ({ id: String(r.id), requirement: String(r.requirement).slice(0, 300) }))
-    if (mustHaves.length === 0) return none('no-parse')
+    // Parse exists but lists no must-haves: terminal (first-write-wins
+    // cache — the parse will not change under this hash), unlike the
+    // transient missing-parse case above.
+    if (mustHaves.length === 0) return none('no-must-haves')
 
     // Scorable answers only (panel R13): failed/truncated excluded;
     // answerScore = round(mean of the 4 universal dims), recomputed here.
@@ -177,10 +187,16 @@ export async function runEvidenceAttributionHandler(
   })
   if (inputs.outcome !== 'ok') {
     logger.info({ sessionId, outcome: inputs.outcome }, 'evidence attribution skipped')
-    // Counted skips are TERMINAL — mark processed so the daily sweep never
-    // re-emits (and re-bills) them (Codex #538). Throw paths deliberately
-    // do NOT stamp: Inngest retries are the path, the sweep is the net.
-    await step.run('mark-processed', () => markEvidenceProcessed(sessionId))
+    // Terminal skips are stamped so the daily sweep never re-emits them
+    // (Codex #538). 'no-parse' stays UNSTAMPED — the posting's X-ray
+    // parse lands whenever the detail page fetches /xray, so the sweep
+    // must be able to retry it within its 7-day window (Codex #538 r3);
+    // all skips exit before the LLM step, so re-emits cost no model spend.
+    // Throw paths never stamp: Inngest retries are the path, the sweep
+    // is the net.
+    if (inputs.outcome !== 'no-parse') {
+      await step.run('mark-processed', () => markEvidenceProcessed(sessionId))
+    }
     return { outcome: inputs.outcome }
   }
 

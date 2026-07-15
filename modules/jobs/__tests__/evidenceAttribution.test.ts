@@ -68,7 +68,10 @@ const parsedJD = {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockSessionFindById.mockReturnValue(selectLean({ config: { jobDescription: JD }, evaluations: [evaluation()], userId: 'u1' }))
+  // Live persisted shape (Codex #538 r3 P1): the JD is mirrored to the
+  // TOP-LEVEL field by /api/interviews; the strict config subdoc strips
+  // it. Every test therefore pins the top-level read.
+  mockSessionFindById.mockReturnValue(selectLean({ jobDescription: JD, config: {}, evaluations: [evaluation()], userId: 'u1' }))
   mockAppFindById.mockReturnValue(selectLean({ practiceSessionIds: ['sess1', 's0', 'sx'], userId: 'u1' }))
   mockPostingFindById.mockReturnValue(selectLean({ parsedJD, parsedJDHash: HASH }))
   mockCompletion.mockResolvedValue({ text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay","req-nice","invented-id"],"strength":"strong"}]}' })
@@ -115,7 +118,8 @@ describe('runEvidenceAttributionHandler', () => {
 
   it('same requirement evidenced by two answers collapses to the BEST row before insert (Codex #538)', async () => {
     mockSessionFindById.mockReturnValue(selectLean({
-      config: { jobDescription: JD },
+      jobDescription: JD,
+      config: {},
       evaluations: [
         evaluation(), // index 0 → answerScore 80
         evaluation({ relevance: 60, structure: 60, specificity: 60, ownership: 60 }), // index 1 → 60
@@ -164,7 +168,8 @@ describe('runEvidenceAttributionHandler', () => {
 
   it('failed/truncated evaluations are excluded; all-excluded = no-scorable-answers, zero LLM spend', async () => {
     mockSessionFindById.mockReturnValue(selectLean({
-      config: { jobDescription: JD },
+      jobDescription: JD,
+      config: {},
       evaluations: [evaluation({ status: 'failed' }), evaluation({ status: 'truncated' })],
       userId: 'u1',
     }))
@@ -174,8 +179,48 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it('missing evaluations throws (persist race → Inngest retry), never fabricates', async () => {
-    mockSessionFindById.mockReturnValue(selectLean({ config: { jobDescription: JD }, evaluations: [], userId: 'u1' }))
+    mockSessionFindById.mockReturnValue(selectLean({ jobDescription: JD, config: {}, evaluations: [], userId: 'u1' }))
     await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow('not yet persisted')
+  })
+
+  it('the session query PROJECTS the top-level jobDescription (mocks return full docs — only this pins the select)', async () => {
+    let selectArg = ''
+    mockSessionFindById.mockReturnValue({
+      select: (s: string) => {
+        selectArg = s
+        return { lean: () => Promise.resolve({ jobDescription: JD, config: {}, evaluations: [evaluation()], userId: 'u1' }) }
+      },
+    })
+    await runEvidenceAttributionHandler(EVENT, step)
+    expect(selectArg).toContain('jobDescription')
+  })
+
+  it('legacy config-carried JD still attributes via the fallback read', async () => {
+    mockSessionFindById.mockReturnValue(selectLean({ config: { jobDescription: JD }, evaluations: [evaluation()], userId: 'u1' }))
+    const r = await runEvidenceAttributionHandler(EVENT, step)
+    expect(r.outcome).toBe('attributed')
+  })
+
+  it("transient 'no-parse' (X-ray not cached yet) is NEVER stamped — the sweep must retry it (Codex #538 r3)", async () => {
+    mockPostingFindById.mockReturnValue(selectLean({ parsedJD: null, parsedJDHash: null }))
+    const r = await runEvidenceAttributionHandler(EVENT, step)
+    expect(r.outcome).toBe('no-parse')
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it("parse with zero must-haves = terminal 'no-must-haves', stamped", async () => {
+    mockPostingFindById.mockReturnValue(selectLean({
+      parsedJD: { requirements: [{ id: 'req-nice', requirement: 'GraphQL', importance: 'nice-to-have' }] },
+      parsedJDHash: HASH,
+    }))
+    const r = await runEvidenceAttributionHandler(EVENT, step)
+    expect(r.outcome).toBe('no-must-haves')
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).toHaveBeenCalledWith(
+      { _id: 'sess1' },
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+    )
   })
 
   it("'none' strength verdicts are never stored — and zero-evidence is still PROCESSED (Codex #538)", async () => {

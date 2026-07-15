@@ -3586,3 +3586,15 @@ durable record; ids are best-effort pointers.
 - **GDPR snapshot clear**: deleteInterviewSession collects distinct applicationIds from evidence rows BEFORE the cascade, then $unsets JobApplication.readiness — a band derived from deleted answers dies with the answers. Absent snapshot = "no claims" (shared/** cannot reach band math; rebuild on next attribution).
 - **Adversarial verify (own agent) surfaced 2 more, both fixed**: (1) deleted session stayed in practiceSessionIds — the "n/3 sessions" ticker sold deleted evidence; now $pulled. (2) delete-vs-persist race could resurrect evidence rows + snapshot for a GDPR-deleted session; persist now aborts on a session-alive check before any mutation. Plus doc scrub: READINESS.md mismatch=skip (no v1 second parse) + computeReadiness signature.
 - Verified: modules/jobs+accountDeletion 367 passed | 1 skipped; full clean-env vitest 5700 passed | 17 skipped; tsc/lint/build/module-size clean. +6 regression vectors.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 ~02:10 IST — PR #538 Codex round 3 (P1 + P2, both fixed)
+- **P1 top-level JD read**: the worker read session.config.jobDescription, but /api/interviews mirrors the JD to the TOP-LEVEL InterviewSession field precisely because the strict config subdoc strips undeclared keys — so every live jobs session would land 'no-jd', get stamped processed, and be permanently unattributable (third dead-on-arrival catch on this PR: epoch, and now JD sourcing). Fix: select + read top-level jobDescription, config kept as legacy fallback, plus a PROJECTION-guard test (mocks return full docs, so only an explicit select assertion pins the projection).
+- **P2 transient no-parse**: posting X-ray parse not cached yet (detail page fetches /xray progressively; practice can start first) was stamped terminal — never retried after the parse lands. Fix: 'no-parse' stays UNSTAMPED so the sweep retries within its 7-day window (all skips are pre-LLM, so re-emits cost no model spend); zero-must-haves split into its own terminal 'no-must-haves' outcome (first-write-wins cache means that parse never changes).
+- Verified: modules/jobs + accountDeletion 371 passed | 1 skipped; full clean-env vitest 5704 passed | 17 skipped; tsc/lint/build/module-size clean. +4 regression vectors.
