@@ -300,6 +300,28 @@ describe('unstop adapter', () => {
     expect(String(mockFetchJSON.mock.calls[0][0])).toContain('page=7')
   })
 
+  it('rawPageSize reports the UNFILTERED count so a mostly-closed full page still pages onward (Codex #536)', async () => {
+    mockFetchJSON.mockResolvedValue({
+      ok: true, status: 200,
+      data: { data: { data: [
+        ...Array.from({ length: 11 }, (_, k) => item({ id: 100 + k, regn_open: false })),
+        ...Array.from({ length: 4 }, (_, k) => item({ id: 200 + k })),
+      ] } },
+    })
+    const res = await unstopAdapter.fetch(target)
+    expect(res.raw).toHaveLength(4)          // policy-filtered
+    expect(res.rawPageSize).toBe(15)          // pagination judges THIS
+  })
+
+  it('continuation: a persisted lastPage resumes at lastPage+1; absence starts at page 1 (Codex #536)', () => {
+    const fresh = unstopAdapter.buildTargets({ sourceId: 'unstop', enabled: true }, [])
+    expect(fresh[0]).toMatchObject({ page: 1 })
+    const resumed = unstopAdapter.buildTargets({ sourceId: 'unstop', enabled: true }, [
+      { bucket: 'unstop:feed', newestPostedAt: undefined, lastPage: 12 },
+    ])
+    expect(resumed[0]).toMatchObject({ page: 13, cursorBucket: 'unstop:feed' })
+  })
+
   it('regn_open is authoritative: explicit false never enters even with stale remain_days; absence falls back (Codex #536)', async () => {
     mockFetchJSON.mockResolvedValue({
       ok: true, status: 200,

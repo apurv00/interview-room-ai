@@ -68,6 +68,9 @@ export interface ChunkOutcome {
   httpErrors: number
   saw429: boolean
   newestByBucket: Record<string, string>
+  /** Feed continuation: cursorKey → next-run start offset (0 = reset).
+   *  Cap-exits persist the reached page; exhaustion exits reset. */
+  feedContinuation: Record<string, number>
   /** Buckets whose pagination ended on a failed page — their cursor must
    *  not advance AND the next run must distrust the known-rate cutoff for
    *  them (Codex #528 P1). */
@@ -86,6 +89,7 @@ function accumulate(into: ChunkOutcome, from: ChunkOutcome): void {
   into.saw429 = into.saw429 || from.saw429
   into.seenSourceKeys.push(...from.seenSourceKeys)
   Object.assign(into.newestByBucket, from.newestByBucket)
+  Object.assign(into.feedContinuation, from.feedContinuation)
   into.incompleteBuckets.push(...from.incompleteBuckets)
   const c = into.counters
   const f = from.counters
@@ -153,7 +157,7 @@ async function processTarget(
       initVerdictPending,
     })
     accumulate(outcome, {
-      counters, seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [],
+      counters, seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [], feedContinuation: {},
     })
     for (const n of normalized) {
       if (n.externalId) outcome.seenSourceKeys.push(`${sourceId}:${n.externalId}`)
@@ -182,12 +186,19 @@ async function processTarget(
     const paginable = t.kind === 'bucket' || t.kind === 'feed'
     const pageSize = t.kind === 'feed' ? t.perPage : FULL_PAGE_SIZE
     const maxPages = t.kind === 'feed' ? MAX_PAGES_PER_FEED : MAX_PAGES_PER_BUCKET
-    const pageFull = res.raw.length >= pageSize
+    const pageFull = (res.rawPageSize ?? res.raw.length) >= pageSize
     // distrustKnown (Codex #528 P1): after an incomplete window, "already
     // known" is evidence of the PARTIAL run's stores, not of exhaustion —
     // the cutoff is disabled until one full clean pass rebuilds trust.
     const cutoffHit = !distrustKnown && knownRate >= KNOWN_RATE_PAGINATION_CUTOFF
+    const capExit = paginable && pageFull && !cutoffHit && page >= maxPages
     if (!paginable || !pageFull || cutoffHit || page >= maxPages) {
+      // Feed continuation (Codex #536): a cap-exit is NOT exhaustion —
+      // persist the reached page so the next run resumes at page+1;
+      // exhaustion exits (non-full / cutoff) reset the offset to 0.
+      if (t.kind === 'feed' && cursorKey) {
+        outcome.feedContinuation[cursorKey] = capExit ? page : 0
+      }
       // Clean exit: every page this window owed us was fetched — the
       // cursor may now advance (bucket targets key on bucketId; sitemap/
       // feed targets on their explicit cursorBucket).
@@ -206,9 +217,19 @@ async function processTarget(
 function cursorCheckpointOps(
   sourceId: string,
   newestByBucket: ChunkOutcome['newestByBucket'],
-  incompleteBuckets: ChunkOutcome['incompleteBuckets'] = []
+  incompleteBuckets: ChunkOutcome['incompleteBuckets'] = [],
+  feedContinuation: ChunkOutcome['feedContinuation'] = {}
 ) {
   return [
+    // Feed continuation offsets (Codex #536): cap-exit persists the
+    // reached page; exhaustion resets to 0.
+    ...Object.entries(feedContinuation).map(([bucket, lastPage]) => ({
+      updateOne: {
+        filter: { sourceId, bucket },
+        update: { $set: { lastPage, lastRunAt: new Date() } },
+        upsert: true,
+      },
+    })),
     // Completed buckets advance and clear the incompleteness flag — one
     // full clean pass rebuilds trust in the known-rate cutoff.
     ...Object.entries(newestByBucket).map(([bucket, newest]) => ({
@@ -330,20 +351,21 @@ export async function runSourceSyncHandler(
   const cursors = await JobIngestCursor.find({ sourceId }).lean()
   const targets = adapter.buildTargets(
     { sourceId: config.sourceId, enabled: config.enabled, slug: config.slug, atsKind: config.atsKind, displayName: config.displayName },
-    cursors.map((c) => ({ bucket: c.bucket, newestPostedAt: c.newestPostedAt }))
+    cursors.map((c) => ({ bucket: c.bucket, newestPostedAt: c.newestPostedAt, lastPage: c.lastPage }))
   )
   // Buckets whose last window ended on a failed page (#528 P1): their rows
   // are partially stored, so "already known" cannot mean "window exhausted"
   // — the known-rate cutoff is disabled for them until a full clean pass.
   const distrust = new Set(cursors.filter((c) => c.windowIncomplete).map((c) => c.bucket))
 
-  const total: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [] }
+  const total: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [], feedContinuation: {} }
   for (let i = 0; i < targets.length; i += BUCKETS_PER_CHUNK) {
     const chunk = targets.slice(i, i + BUCKETS_PER_CHUNK)
     const outcome = await step.run(`fetch-chunk-${Math.floor(i / BUCKETS_PER_CHUNK)}`, async () => {
-      const o: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [] }
+      const o: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [], feedContinuation: {} }
       for (const target of chunk) {
-        const distrustKnown = target.kind === 'bucket' && distrust.has(target.bucketId)
+        const distrustKey = target.kind === 'bucket' ? target.bucketId : 'cursorBucket' in target ? target.cursorBucket : undefined
+        const distrustKnown = !!distrustKey && distrust.has(distrustKey)
         await processTarget(adapter, sourceId, target, o, delayMs, initVerdictPending, distrustKnown)
         if (delayMs) await sleep(delayMs)
       }
@@ -354,7 +376,7 @@ export async function runSourceSyncHandler(
       // checkpointing per chunk is replay-safe, and buildTargets re-reads
       // cursors on each resume — a bucket completed ONCE keeps its narrowed
       // window across run deaths and hourly re-dispatches.
-      const ops = cursorCheckpointOps(sourceId, o.newestByBucket, o.incompleteBuckets)
+      const ops = cursorCheckpointOps(sourceId, o.newestByBucket, o.incompleteBuckets, o.feedContinuation)
       if (ops.length) await JobIngestCursor.bulkWrite(ops)
       return o
     })
@@ -365,7 +387,7 @@ export async function runSourceSyncHandler(
     // Cursors: re-assert the accumulated high-water marks and incompleteness
     // flags (monotonic $max / idempotent $set — a no-op where the per-chunk
     // checkpoints already landed).
-    const ops = cursorCheckpointOps(sourceId, total.newestByBucket, total.incompleteBuckets)
+    const ops = cursorCheckpointOps(sourceId, total.newestByBucket, total.incompleteBuckets, total.feedContinuation)
     if (ops.length) await JobIngestCursor.bulkWrite(ops)
 
     // Health (§4.4 thresholds): drift >50% = QUARANTINED (provider schema is

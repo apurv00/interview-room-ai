@@ -57,17 +57,22 @@ export const unstopAdapter: JobSourceAdapter = {
   sourceId: 'unstop',
   kind: 'public-api',
 
-  buildTargets() {
+  buildTargets(_config, cursors) {
     // ONE continuing target (Codex #536): the pipeline pages it like a
     // bucket — full-page + known-rate cutoff + per-run page cap — so the
     // backlog beyond the newest pages drains across runs instead of
     // re-reading the same head forever. Merge-by-sourceKey keeps re-read
     // pages idempotent; the incomplete/distrust machinery applies via
     // cursorBucket.
+    // Continuation (Codex #536): a cap-exit persists lastPage on the
+    // cursor; the next run resumes at lastPage+1 until an exhaustion exit
+    // (non-full page / cutoff) resets it to 0 — deep backlogs drain across
+    // runs instead of re-sweeping the same head.
+    const cont = cursors.find((c) => c.bucket === 'unstop:feed')?.lastPage ?? 0
     return [{
       kind: 'feed' as const,
       feedId: 'unstop:jobs',
-      page: 1,
+      page: cont + 1,
       perPage: PER_PAGE,
       cursorBucket: 'unstop:feed',
     }]
@@ -94,7 +99,9 @@ export const unstopAdapter: JobSourceAdapter = {
       it.regn_open === true || it.regn_open === 1 ||
       (it.regn_open == null && (it.regnRequirements?.remain_days ?? 0) > 0)
     )
-    return { ok: true, status: res.status, raw: open, attempts: 1 }
+    // rawPageSize = the UNFILTERED count (Codex #536): a physically-full
+    // page of mostly-closed rows must still page onward.
+    return { ok: true, status: res.status, raw: open, rawPageSize: items.length, attempts: 1 }
   },
 
   normalize(rawIn: unknown, _target: FetchTarget): NormalizedJob | null {

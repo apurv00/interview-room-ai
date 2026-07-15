@@ -23,6 +23,9 @@ export interface FetchResult {
   raw: unknown[]
   /** True when a 200 carried an error-shaped/unparseable envelope. */
   bodyError?: boolean
+  /** UNFILTERED page size (Codex #536): pagination fullness must be judged
+   *  before policy filters (e.g. closed-registration rows) shrink raw. */
+  rawPageSize?: number
   /** Physical request count (RapidAPI bills attempts — metered, not logical calls). */
   attempts: number
 }
@@ -52,7 +55,7 @@ export interface NormalizedJob {
 export interface JobSourceAdapter {
   readonly sourceId: string
   readonly kind: IJobSourceConfig['kind']
-  buildTargets(config: Pick<IJobSourceConfig, 'sourceId' | 'enabled'> & Partial<Pick<IJobSourceConfig, 'slug' | 'atsKind' | 'displayName'>>, cursors: Array<Pick<IJobIngestCursor, 'bucket' | 'newestPostedAt'>>): FetchTarget[]
+  buildTargets(config: Pick<IJobSourceConfig, 'sourceId' | 'enabled'> & Partial<Pick<IJobSourceConfig, 'slug' | 'atsKind' | 'displayName'>>, cursors: Array<Pick<IJobIngestCursor, 'bucket' | 'newestPostedAt' | 'lastPage'>>): FetchTarget[]
   fetch(target: FetchTarget): Promise<FetchResult>
   normalize(raw: unknown, target: FetchTarget): NormalizedJob | null
   classifyApplyUrl(url: string): ApplyTier
