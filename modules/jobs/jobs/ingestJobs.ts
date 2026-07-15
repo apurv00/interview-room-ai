@@ -103,6 +103,13 @@ async function processTarget(
   initVerdictPending = false
 ): Promise<void> {
   let page = 1
+  // Cursor mark accumulates LOCALLY and commits to the outcome only on a
+  // clean exit (Codex on #528): a bucket whose later page fails must not
+  // advance its cursor — page 1 already ingested fine, but the narrowed
+  // window on the next run would permanently skip the failed pages' rows.
+  // An unadvanced cursor just re-fetches the same window; the merge layer
+  // makes that idempotent. Completeness beats quota.
+  let newestSeen: string | undefined
   for (;;) {
     const t: FetchTarget = target.kind === 'bucket' ? { ...target, page } : target
     const res = await adapter.fetch(t)
@@ -142,8 +149,7 @@ async function processTarget(
         if (!n.postedAt) continue
         const ts = new Date(n.postedAt).getTime()
         if (Number.isNaN(ts)) continue
-        const cur = outcome.newestByBucket[t.bucketId]
-        if (!cur || ts > new Date(cur).getTime()) outcome.newestByBucket[t.bucketId] = n.postedAt
+        if (!newestSeen || ts > new Date(newestSeen).getTime()) newestSeen = n.postedAt
       }
     }
 
@@ -152,7 +158,12 @@ async function processTarget(
     // the freshness window is exhausted.
     const knownRate = counters.processed > 0 ? (counters.merged + counters.refreshed) / counters.processed : 1
     const pageFull = res.raw.length >= FULL_PAGE_SIZE
-    if (t.kind !== 'bucket' || !pageFull || knownRate >= KNOWN_RATE_PAGINATION_CUTOFF || page >= MAX_PAGES_PER_BUCKET) return
+    if (t.kind !== 'bucket' || !pageFull || knownRate >= KNOWN_RATE_PAGINATION_CUTOFF || page >= MAX_PAGES_PER_BUCKET) {
+      // Clean exit: every page this window owed us was fetched — the
+      // cursor may now advance.
+      if (t.kind === 'bucket' && newestSeen) outcome.newestByBucket[t.bucketId] = newestSeen
+      return
+    }
     page++
     if (delayMs) await sleep(delayMs)
   }

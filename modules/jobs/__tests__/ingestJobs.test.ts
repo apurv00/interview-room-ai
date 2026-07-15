@@ -165,6 +165,33 @@ describe('runSourceSyncHandler', () => {
     expect(mockCycleCreate).not.toHaveBeenCalled() // finalize genuinely never ran
   })
 
+  it('a partially-fetched bucket never advances its cursor (Codex #528) — failed later pages stay in the window', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    // Page 1: FULL page (10 fresh rows) → pagination continues; page 2: 500.
+    // The bucket ingested page 1 but is INCOMPLETE — advancing its cursor
+    // would shrink the next run's window past the rows page 2 owed us.
+    const fullPage = (bucket: string) => Array.from({ length: 10 }, (_, k) => ({
+      job_id: `id-${bucket}-${k}`, job_title: 'Backend Developer', employer_name: `Acme ${bucket} ${k}`,
+      job_city: 'Pune', job_description: 'Build APIs. '.repeat(50),
+      job_posted_at_datetime_utc: '2026-07-12T00:00:00Z', job_apply_link: `https://careers.acme.com/${k}`,
+    }))
+    mockAdapterFetch.mockImplementation(async (t: { bucketId?: string; page?: number }) =>
+      (t.page ?? 1) === 1
+        ? { ok: true, status: 200, attempts: 1, raw: fullPage(t.bucketId ?? 'b') }
+        : { ok: false, status: 500, attempts: 1, raw: [] }
+    )
+    const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    expect(r).toMatchObject({ cycleWritten: true })
+    // Rows from page 1 WERE ingested (no data loss)...
+    expect(mockCycleCreate.mock.calls[0][0].fetched).toBeGreaterThan(0)
+    // ...but no cursor advanced anywhere: every bucket died on page 2.
+    expect(mockCursorBulkWrite).not.toHaveBeenCalled()
+    // And the run reads sick, not healthy (httpErrors on every bucket).
+    expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health).toBe('degraded')
+  })
+
   it('a garbage postedAt never reaches the cursor write — finalize still succeeds', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
