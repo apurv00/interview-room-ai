@@ -286,7 +286,7 @@ export async function createInvite(
   const safeInviteLink = escapeHtml(inviteLink)
 
   // Send invite email to the candidate (fire-and-forget — don't block on email failure)
-  const emailSent = await sendEmail({
+  const emailSendResult = await sendEmail({
     to: candidateEmail.toLowerCase(),
     subject: `You've been invited to an interview — ${role} (${interviewType})`,
     html: `
@@ -306,14 +306,14 @@ export async function createInvite(
         </p>
       </div>
     `,
-  }).catch(() => false)
+  }).catch(() => ({ ok: false }))
 
   return {
     success: true,
     sessionId: interviewSession._id.toString(),
     inviteLink,
     candidateEmail,
-    emailSent,
+    emailSent: emailSendResult.ok,
   }
 }
 

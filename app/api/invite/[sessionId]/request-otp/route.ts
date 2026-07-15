@@ -125,7 +125,7 @@ export async function POST(
     orgName,
     expiryMinutes: OTP_EXPIRY_MINUTES,
   })
-  await sendEmail({ to: body.email.toLowerCase(), subject, html }).catch(() => false)
+  await sendEmail({ to: body.email.toLowerCase(), subject, html }).catch(() => ({ ok: false }))
 
   return GENERIC_OK
 }

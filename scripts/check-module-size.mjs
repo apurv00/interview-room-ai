@@ -103,7 +103,11 @@ const BUDGETS = {
   // shared/fetchJSONWithRetry.ts (adapter helper). 137 + 7 = 144, +1
   // headroom = 145. LOC well under budget (~15k/25k) — model files, not
   // logic sprawl. See docs/adr/0016-shared-budget-bump-jobs-models.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 145 },
+  // Bumped maxFiles 145 → 148 on 2026-07-15 (email wave PR-A): adds THREE
+  // counted files — JobsEmailSend + JobsEmailConfig models and the
+  // signedActionToken helper (EMAILS.md §6). See
+  // docs/adr/0017-shared-budget-bump-jobs-email-infra.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 148 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])

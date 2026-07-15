@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewSession, PathwayPlan, ServedProblem, JobApplication, ProductEvent } from '@shared/db/models'
+import { User, InterviewSession, PathwayPlan, ServedProblem, JobApplication, ProductEvent, JobsEmailSend } from '@shared/db/models'
 import { UserCompetencyState } from '@shared/db/models/UserCompetencyState'
 import { WeaknessCluster } from '@shared/db/models/WeaknessCluster'
 import { SessionSummary } from '@shared/db/models/SessionSummary'
@@ -119,6 +119,15 @@ export async function generateDataExport(userId: string): Promise<Record<string,
   if (!user) {
     throw new Error('User not found')
   }
+
+  // Jobs email send history (EMAILS.md ledger) — personal data: which
+  // emails we sent this user and when. Small per user (hard budgets), so a
+  // single bounded read suffices.
+  const jobsEmailSends = await JobsEmailSend.find({ userId: uid })
+    .select('stream dedupeKey sentAt createdAt -_id')
+    .sort({ createdAt: -1 })
+    .limit(1000)
+    .lean()
 
   return {
     exportedAt: new Date().toISOString(),
@@ -254,6 +263,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       createdAt: a.createdAt,
     })),
 
+    jobsEmailSends,
     productEvents: productEvents.map((e) => ({
       name: e.name,
       jobPostingId: e.jobPostingId?.toString(),
