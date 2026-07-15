@@ -571,6 +571,7 @@ export default function MarketingHomepage() {
               { step: '3', title: 'Live AI coaching', desc: 'Voice conversation with an AI that watches your face, listens to your voice, and scores your answers. Real-time nudges. 20+ roles across 6 fields.', icon: <Mic className="w-5 h-5 text-blue-600" />, iconBg: 'bg-blue-50 border-blue-100', href: CTA_SENTINEL, label: 'Try Free', core: true },
               { step: '4', title: 'Replay the truth', desc: 'Synchronized video + transcript + signal timeline. See the exact second you lost confidence.', icon: <MonitorPlay className="w-5 h-5 text-emerald-600" />, iconBg: 'bg-emerald-50 border-emerald-100', href: CTA_SENTINEL, label: 'View Replays' },
               { step: '5', title: 'Track and repeat', desc: 'Session comparison. Score trends. Competency tracking showing which skills improve and which decay.', icon: <RotateCcw className="w-5 h-5 text-teal-600" />, iconBg: 'bg-teal-50 border-teal-100', href: '/learn/progress', label: 'Progress' },
+              { step: '6', title: 'Land the job', desc: 'A live feed of real openings sorted to your resume. Practice for a specific job, apply with your tailored resume, and track every application to the offer.', icon: <FileText className="w-5 h-5 text-indigo-600" />, iconBg: 'bg-indigo-50 border-indigo-100', href: '/jobs', label: 'Browse Jobs' },
             ] as JourneyStep[]).map((s, i) => {
               const isCta = s.href === CTA_SENTINEL
               const Wrapper: React.ElementType = isCta ? 'button' : Link
