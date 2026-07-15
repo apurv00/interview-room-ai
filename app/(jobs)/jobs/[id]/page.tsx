@@ -445,7 +445,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   yet' must not hide the buttons forever (Codex on #525). */}
               {!detail.application.interviewDate && (
                 <div className="mt-2">
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-slate-600">
                     {detail.application.interviewDateConfidence === 'unknown' ? 'Know the date now?' : 'When is it?'}
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -460,7 +460,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   const plan = buildPrepPlan(detail.application.interviewDate ? new Date(detail.application.interviewDate) : null)
                   return (
                     <div className="mt-2">
-                      <p className="text-xs text-slate-500">{plan.headline}</p>
+                      <p className="text-xs text-slate-600">{plan.headline}</p>
                       <ul className="mt-2 space-y-1.5">
                         {plan.sessions.map((sess) => (
                           <li key={sess.label} className="flex items-center justify-between gap-2">
@@ -475,7 +475,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   )
                 })()
               )}
-              <p className="mt-2 text-xs text-slate-500">
+              <p className="mt-2 text-xs text-slate-600">
                 Evidence toward readiness on this job: {detail.application.practiceCount}/3 sessions
               </p>
             </div>
@@ -486,7 +486,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 never disabled. */
             <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
               <span className="font-medium">Apply now — prep while you wait.</span>
-              <span className="ml-2 text-xs text-slate-500">
+              <span className="ml-2 text-xs text-slate-600">
                 Evidence toward readiness on this job: {detail.application?.practiceCount ?? 0}/3 sessions
               </span>
             </div>

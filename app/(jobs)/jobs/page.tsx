@@ -214,7 +214,7 @@ function JobsFeed() {
             Your resume library is full (3/3), so we didn&apos;t save this one — your feed is still
             sorted by it. <Link href="/resume" className="underline">Manage resumes</Link>
           </p>
-          <button onClick={dismissCapNotice} aria-label="Dismiss" className="ml-3 text-slate-500 hover:text-slate-600">✕</button>
+          <button onClick={dismissCapNotice} aria-label="Dismiss" className="ml-3 text-slate-600 hover:text-slate-600">✕</button>
         </div>
       )}
 
