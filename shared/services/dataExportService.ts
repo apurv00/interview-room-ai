@@ -121,13 +121,33 @@ export async function generateDataExport(userId: string): Promise<Record<string,
   }
 
   // Jobs email send history (EMAILS.md ledger) — personal data: which
-  // emails we sent this user and when. Small per user (hard budgets), so a
-  // single bounded read suffices.
-  const jobsEmailSends = await JobsEmailSend.find({ userId: uid })
-    .select('stream dedupeKey sentAt createdAt -_id')
-    .sort({ createdAt: -1 })
-    .limit(1000)
-    .lean()
+  // emails we sent this user and when. Cursor-paginated to exhaustion like
+  // every other per-user collection here — a GDPR export must never
+  // silently truncate (Codex #531; cap-exempt E0/E2 make the row count
+  // unbounded over a user's lifetime).
+  interface LeanEmailSend {
+    _id: mongoose.Types.ObjectId
+    stream: string
+    dedupeKey: string
+    sentAt?: Date
+    createdAt: Date
+  }
+  const jobsEmailSendRows: LeanEmailSend[] = []
+  let emailCursor: mongoose.Types.ObjectId | null = null
+  for (;;) {
+    const batch = (await JobsEmailSend.find({
+      userId: uid,
+      ...(emailCursor ? { _id: { $lt: emailCursor } } : {}),
+    })
+      .select('stream dedupeKey sentAt createdAt')
+      .sort({ _id: -1 })
+      .limit(2000)
+      .lean()) as unknown as LeanEmailSend[]
+    jobsEmailSendRows.push(...batch)
+    if (batch.length < 2000) break
+    emailCursor = batch[batch.length - 1]._id
+  }
+  const jobsEmailSends = jobsEmailSendRows.map(({ stream, dedupeKey, sentAt, createdAt }) => ({ stream, dedupeKey, sentAt, createdAt }))
 
   return {
     exportedAt: new Date().toISOString(),
