@@ -133,7 +133,9 @@ export const apnaAdapter: JobSourceAdapter = {
     const idx = await getText(SITEMAP_INDEX); attempts++
     if (!idx.ok) return { ok: false, status: idx.status, raw: [], attempts }
     const jobIndex = extractLocs(idx.text).find((u) => /job-listing-sitemap\.xml/.test(u))
-    if (!jobIndex) return { ok: true, status: 200, raw: [], bodyError: true, attempts }
+    // Schema drift (index no longer names the job sitemap) = FAILED fetch —
+    // health must degrade, never a clean zero-row sync (Codex #536).
+    if (!jobIndex) return { ok: false, status: 200, raw: [], bodyError: true, attempts }
 
     const shardIdx = await getText(jobIndex); attempts++
     if (!shardIdx.ok) return { ok: false, status: shardIdx.status, raw: [], attempts }
@@ -141,30 +143,33 @@ export const apnaAdapter: JobSourceAdapter = {
     const shards = allShards.filter((u) =>
       wantExternal ? /external-job-listings/.test(u) : /active-job-listings/.test(u)
     )
-    if (!shards.length) return { ok: true, status: 200, raw: [], attempts }
+    if (!shards.length) return { ok: false, status: 200, raw: [], bodyError: true, attempts }
 
-    // Collect candidate URLs newer than the cursor, interleaved across
-    // shards so one shard never starves the rest, capped for the step
-    // budget (~cap × (fetch + delay) must stay < 60s).
-    const perShard: Array<Array<{ loc: string; lastmod: string | null }>> = []
+    // Collect candidate URLs newer than the cursor and drain them
+    // OLDEST-FIRST (Codex #536): the pipeline's watermark advances to the
+    // newest ingested postedAt, so fetching the newest candidates first
+    // would strand every older un-fetched URL behind the cursor forever.
+    // Oldest-first means the watermark only ever passes exhaustively
+    // covered ground; the un-fetched (newer) remainder stays > cursor and
+    // drains on later runs. lastmod ≥ datePosted, so any skew re-includes
+    // already-fetched rows (merge-idempotent) — the safe direction.
+    // Entries WITHOUT lastmod sort last: they cannot be watermarked, so
+    // they only consume cap after the dated backlog drains.
+    const all: Array<{ loc: string; lastmod: string | null }> = []
     for (const shard of shards.slice(0, 6)) {
       const res = await getText(shard); attempts++
       if (!res.ok) continue
-      perShard.push(
-        extractUrlEntries(res.text).filter(
-          (e) => /apna\.co\/job/.test(e.loc) && (!sinceIso || !e.lastmod || e.lastmod > sinceIso)
-        )
-      )
+      for (const e of extractUrlEntries(res.text)) {
+        if (/apna\.co\/job/.test(e.loc) && (!sinceIso || !e.lastmod || e.lastmod > sinceIso)) all.push(e)
+      }
       await sleep(150)
     }
-    const candidates: Array<{ loc: string; lastmod: string | null }> = []
-    for (let i = 0; candidates.length < cap; i++) {
-      let added = false
-      for (const list of perShard) {
-        if (i < list.length && candidates.length < cap) { candidates.push(list[i]); added = true }
-      }
-      if (!added) break
-    }
+    all.sort((x, y) => {
+      if (x.lastmod === null) return y.lastmod === null ? 0 : 1
+      if (y.lastmod === null) return -1
+      return x.lastmod < y.lastmod ? -1 : x.lastmod > y.lastmod ? 1 : 0
+    })
+    const candidates = all.slice(0, cap)
 
     const raw: ApnaRaw[] = []
     for (const c of candidates) {

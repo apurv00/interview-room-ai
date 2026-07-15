@@ -125,6 +125,48 @@ describe('apna fetch', () => {
     expect(ua['User-Agent']).toContain('interviewprep.guru/jobs-bot')
   })
 
+  it('backlog beyond the cap drains OLDEST-first so the cursor never strands unfetched URLs (Codex #536)', async () => {
+    vi.mocked(fetch).mockImplementation(async (url: unknown) => {
+      const u = String(url)
+      const body =
+        u === INDEX
+          ? '<sitemapindex><loc>https://apna.co/job-listing-sitemap.xml</loc></sitemapindex>'
+          : /job-listing-sitemap\.xml$/.test(u)
+            ? '<sitemapindex><loc>https://apna.co/active-job-listings-1.xml</loc></sitemapindex>'
+            : /active-job-listings-1\.xml$/.test(u)
+              ? `<urlset>
+                  <url><loc>https://apna.co/job/newest</loc><lastmod>2026-07-15T00:00:00Z</lastmod></url>
+                  <url><loc>https://apna.co/job/middle</loc><lastmod>2026-07-13T00:00:00Z</lastmod></url>
+                  <url><loc>https://apna.co/job/oldest</loc><lastmod>2026-07-12T00:00:00Z</lastmod></url>
+                 </urlset>`
+              : pageFor('Long enough description. '.repeat(30))
+      return { ok: true, status: 200, text: async () => body } as Response
+    })
+    // Cap of 2: the two OLDEST must be fetched; the newest stays for the
+    // next run (it remains above the advancing watermark).
+    const target = {
+      kind: 'sitemap' as const,
+      shardUrl: 'https://apna.co/api/sitemap-index.xml#active',
+      slugFilter: { metros: [''], domainPatterns: [], maxDetailFetches: 2 },
+      cursorBucket: 'apna:active',
+    }
+    const res = await apnaAdapter.fetch(target)
+    expect(res.ok).toBe(true)
+    expect(res.raw).toHaveLength(2)
+    const fetched = vi.mocked(fetch).mock.calls.map((c) => String(c[0]))
+    expect(fetched.some((u) => u.includes('job/oldest'))).toBe(true)
+    expect(fetched.some((u) => u.includes('job/middle'))).toBe(true)
+    expect(fetched.some((u) => u.includes('job/newest'))).toBe(false)
+  })
+
+  it('a sitemap index that stops naming the job sitemap = FAILED fetch (schema drift, Codex #536)', async () => {
+    vi.mocked(fetch).mockImplementation(async () =>
+      ({ ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/other.xml</loc></sitemapindex>' }) as Response)
+    const [, activeTarget] = apnaAdapter.buildTargets({ sourceId: 'apna', enabled: true }, [])
+    const res = await apnaAdapter.fetch(activeTarget)
+    expect(res).toMatchObject({ ok: false, bodyError: true, raw: [] })
+  })
+
   it('sub-400-char stubs are dropped at fetch as POLICY (never reach normalize/drift)', async () => {
     vi.mocked(fetch).mockImplementation(async (url: unknown) => {
       const u = String(url)
@@ -195,9 +237,9 @@ describe('unstop adapter', () => {
     expect(unstopAdapter.normalize(item({ organisation: null }), target)).toBeNull()
   })
 
-  it('error-shaped envelope = bodyError, not a crash', async () => {
+  it('error-shaped envelope = FAILED fetch — health must degrade, never a clean zero-row sync (Codex #536)', async () => {
     mockFetchJSON.mockResolvedValue({ ok: true, status: 200, data: { nope: true } })
     const res = await unstopAdapter.fetch(target)
-    expect(res).toMatchObject({ ok: true, bodyError: true, raw: [] })
+    expect(res).toMatchObject({ ok: false, bodyError: true, raw: [] })
   })
 })

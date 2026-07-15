@@ -78,7 +78,9 @@ export const unstopAdapter: JobSourceAdapter = {
     )
     if (!res.ok) return { ok: false, status: res.status, raw: [], attempts: 1 }
     const items = itemsOf(res.data as UnstopEnvelope)
-    if (!items) return { ok: true, status: res.status, raw: [], bodyError: true, attempts: 1 }
+    // Unexpected envelope = schema drift = FAILED fetch (Codex #536): the
+    // health machine must degrade, never record a clean zero-row sync.
+    if (!items) return { ok: false, status: res.status, raw: [], bodyError: true, attempts: 1 }
     // Policy: only OPEN registrations enter (never advertise a closed path).
     const open = items.filter((it) => it.regn_open === true || it.regn_open === 1 || (it.regnRequirements?.remain_days ?? 0) > 0)
     return { ok: true, status: res.status, raw: open, attempts: 1 }
