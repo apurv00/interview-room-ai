@@ -25,18 +25,25 @@ export async function GET() {
   if (denied) return NextResponse.json({ error: 'platform_admin required' }, { status: denied.status })
 
   await connectDB()
-  const [config, counts, unstamped] = await Promise.all([
+  const [config, counts, staleSolicitation, unstampedTransactional] = await Promise.all([
     JobsEmailConfig.getConfig(),
     JobsEmailSend.aggregate([
       { $match: { sentAt: { $exists: true } } },
       { $group: { _id: '$stream', n: { $sum: 1 } } },
     ]),
-    // Reserved-but-unsent solicitation rows older than 24h (EMAILS.md §2:
-    // dashboard-surfaced, never auto-retried) + unstamped transactional
-    // rows (alert-now class).
+    // Reserved-but-unsent SOLICITATION rows older than 24h (EMAILS.md §2:
+    // dashboard-surfaced, never auto-retried; losing a nudge is acceptable).
     JobsEmailSend.countDocuments({
+      stream: { $in: ['e1', 'e3', 'e4'] },
       sentAt: { $exists: false },
       createdAt: { $lt: new Date(Date.now() - 24 * 3600_000) },
+    }),
+    // Unstamped TRANSACTIONAL rows are the alert-NOW class (Codex #531):
+    // an E0/E2 without sentAt is a failed time-critical send whose 24h
+    // recovery window is burning — no age cutoff.
+    JobsEmailSend.countDocuments({
+      stream: { $in: ['e0', 'e2'] },
+      sentAt: { $exists: false },
     }),
   ])
   return NextResponse.json({
@@ -44,7 +51,8 @@ export async function GET() {
     sentByStream: Object.fromEntries(
       JOBS_EMAIL_STREAMS.map((s) => [s, (counts as Array<{ _id: string; n: number }>).find((c) => c._id === s)?.n ?? 0])
     ),
-    staleReservations: unstamped,
+    staleReservations: staleSolicitation,
+    unstampedTransactional,
   })
 }
 

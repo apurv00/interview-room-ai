@@ -61,13 +61,22 @@ describe('/api/cms/jobs-ingest/email', () => {
     expect((await PATCH(new Request('http://x', { method: 'PATCH', body: '{}' }))).status).toBe(403)
   })
 
-  it('GET returns config + per-stream sent counts + stale reservations', async () => {
+  it('GET returns config, per-stream counts, and SPLIT unsent metrics — transactional alerts at any age (Codex #531)', async () => {
     asAdmin()
+    mockCount.mockResolvedValueOnce(1).mockResolvedValueOnce(2)
     const res = await GET()
     const body = await res.json()
     expect(body.config.e2Enabled).toBe(false)
     expect(body.sentByStream).toEqual({ e0: 0, e1: 0, e2: 4, e3: 0, e4: 0 })
-    expect(body.staleReservations).toBe(0)
+    expect(body.staleReservations).toBe(1)
+    expect(body.unstampedTransactional).toBe(2)
+    // Solicitation query carries the 24h cutoff; transactional query has NO
+    // age filter — its rows are failed time-critical sends.
+    const [solicitationQ, transactionalQ] = mockCount.mock.calls.map((c) => c[0])
+    expect(solicitationQ.stream).toEqual({ $in: ['e1', 'e3', 'e4'] })
+    expect(solicitationQ.createdAt).toBeDefined()
+    expect(transactionalQ.stream).toEqual({ $in: ['e0', 'e2'] })
+    expect(transactionalQ.createdAt).toBeUndefined()
   })
 
   it('PATCH strict allowlist: unknown keys and wrong types are 400, never silently dropped', async () => {
