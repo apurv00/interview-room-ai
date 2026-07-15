@@ -107,7 +107,14 @@ const BUDGETS = {
   // counted files — JobsEmailSend + JobsEmailConfig models and the
   // signedActionToken helper (EMAILS.md §6). See
   // docs/adr/0017-shared-budget-bump-jobs-email-infra.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 148 },
+  // Bumped maxFiles 148 → 149 on 2026-07-16 (readiness PR-R1): adds ONE
+  // counted file — the JobPracticeEvidence model (own collection so the
+  // replace-not-duplicate unique index is real). See
+  // docs/adr/0018-readiness-wave-budgets.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 149 },
+  // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
+  // generous tripwire per this file's philosophy. Same ADR as above.
+  'modules/jobs':      { maxLOC: 14_000, maxFiles: 70 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])

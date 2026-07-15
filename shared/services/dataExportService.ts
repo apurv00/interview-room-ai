@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewSession, PathwayPlan, ServedProblem, JobApplication, ProductEvent, JobsEmailSend } from '@shared/db/models'
+import { User, InterviewSession, PathwayPlan, ServedProblem, JobApplication, ProductEvent, JobsEmailSend, JobPracticeEvidence } from '@shared/db/models'
 import { UserCompetencyState } from '@shared/db/models/UserCompetencyState'
 import { WeaknessCluster } from '@shared/db/models/WeaknessCluster'
 import { SessionSummary } from '@shared/db/models/SessionSummary'
@@ -149,6 +149,26 @@ export async function generateDataExport(userId: string): Promise<Record<string,
   }
   const jobsEmailSends = jobsEmailSendRows.map(({ stream, dedupeKey, sentAt, createdAt }) => ({ stream, dedupeKey, sentAt, createdAt }))
 
+  // Readiness evidence (READINESS.md §1) — cursor-paginated to exhaustion
+  // like every per-user collection here.
+  interface LeanEvidence { _id: mongoose.Types.ObjectId; requirementId: string; xrayHash: string; strength: string; answerScore: number; scoringEpoch: string; at: Date; sessionId: mongoose.Types.ObjectId; jobPostingId: mongoose.Types.ObjectId }
+  const practiceEvidenceRows: LeanEvidence[] = []
+  let evidenceCursor: mongoose.Types.ObjectId | null = null
+  for (;;) {
+    const batch = (await JobPracticeEvidence.find({
+      userId: uid,
+      ...(evidenceCursor ? { _id: { $lt: evidenceCursor } } : {}),
+    })
+      .select('requirementId xrayHash strength answerScore scoringEpoch at sessionId jobPostingId')
+      .sort({ _id: -1 })
+      .limit(2000)
+      .lean()) as unknown as LeanEvidence[]
+    practiceEvidenceRows.push(...batch)
+    if (batch.length < 2000) break
+    evidenceCursor = batch[batch.length - 1]._id
+  }
+  const jobPracticeEvidence = practiceEvidenceRows.map(({ _id, ...rest }) => rest)
+
   return {
     exportedAt: new Date().toISOString(),
     exportVersion: '1.0',
@@ -284,6 +304,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     })),
 
     jobsEmailSends,
+    jobPracticeEvidence,
     productEvents: productEvents.map((e) => ({
       name: e.name,
       jobPostingId: e.jobPostingId?.toString(),

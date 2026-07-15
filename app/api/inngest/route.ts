@@ -10,6 +10,7 @@ import { jobsIngestSchedulerJob, jobsSourceSyncJob, jobsBoardProbeJob } from '@j
 import { jobsEvaluatePostingsJob, jobsVerdictSweeperJob } from '@jobs/jobs/evaluatePostingsJob'
 import { jobsAtsCheckJob } from '@jobs/jobs/atsCheckJob'
 import { jobsEmailE0Job, jobsEmailSweepJob } from '@jobs/jobs/emailJobs'
+import { jobsEvidenceAttributionJob, jobsEvidenceReconcileJob } from '@jobs/jobs/evidenceAttributionJob'
 
 /**
  * Inngest handler route — entry point for all background jobs.
@@ -34,5 +35,5 @@ export const dynamic = 'force-dynamic'
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [analysisJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsBoardProbeJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob, jobsAtsCheckJob, jobsEmailE0Job, jobsEmailSweepJob],
+  functions: [analysisJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsBoardProbeJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob, jobsAtsCheckJob, jobsEmailE0Job, jobsEmailSweepJob, jobsEvidenceAttributionJob, jobsEvidenceReconcileJob],
 })

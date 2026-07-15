@@ -142,6 +142,7 @@ export { JobIngestCycle } from './JobIngestCycle'
 export type { IJobIngestCycle } from './JobIngestCycle'
 export { JobsVerdictConfig, JOBS_VERDICT_DEFAULTS } from './JobsVerdictConfig'
 export { JobsEmailSend, JOBS_EMAIL_STREAMS, type JobsEmailStream, type IJobsEmailSend } from './JobsEmailSend'
+export { JobPracticeEvidence, type IJobPracticeEvidence } from './JobPracticeEvidence'
 export { JobsEmailConfig, JOBS_EMAIL_DEFAULTS, type JobsEmailConfigValues, type IJobsEmailConfig } from './JobsEmailConfig'
 export type { IJobsVerdictConfig, JobsVerdictConfigValues } from './JobsVerdictConfig'
 

@@ -49,7 +49,7 @@ import {
   ServedProblem,
   JobApplication,
   ProductEvent,
-  LessonEngagement, JobsEmailSend } from '@shared/db/models'
+  LessonEngagement, JobsEmailSend, JobPracticeEvidence } from '@shared/db/models'
 
 // ─── Per-session delete ───────────────────────────────────────────────────────
 
@@ -127,6 +127,10 @@ export async function deleteInterviewSession(
   await Promise.all([
     MultimodalAnalysis.deleteOne({ sessionId }),
     SessionSummary.deleteOne({ sessionId }),
+    // Readiness evidence rows are session-scoped personal data
+    // (READINESS.md §1, panel R26); the application's denormalized
+    // snapshot degrades at the next attribution write.
+    JobPracticeEvidence.deleteMany({ sessionId }),
     InterviewSession.deleteOne({ _id: sessionId }),
   ])
 
@@ -228,6 +232,7 @@ export async function deleteUserAccount(
     ['JobApplication', JobApplication.deleteMany({ userId: userObjectId })],
     ['ProductEvent', ProductEvent.deleteMany({ userId: userObjectId })],
     ['JobsEmailSend', JobsEmailSend.deleteMany({ userId: userObjectId })],
+    ['JobPracticeEvidence', JobPracticeEvidence.deleteMany({ userId: userObjectId })],
     // Pre-existing gap surfaced by the Wave-1b GDPR completeness tripwire:
     // per-user lesson engagement rows survived account deletion.
     ['LessonEngagement', LessonEngagement.deleteMany({ userId: userObjectId })],

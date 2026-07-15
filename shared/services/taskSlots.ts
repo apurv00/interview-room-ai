@@ -48,6 +48,7 @@ export const TASK_SLOTS = [
   'interview.turn-router',
   // Jobs — async posting verdict (INGESTION §4.5 layer 2)
   'jobs.evaluate-posting',
+  'jobs.evidence-attribution',
 ] as const
 
 export type TaskSlot = (typeof TASK_SLOTS)[number]
@@ -130,4 +131,8 @@ export const TASK_SLOT_DEFAULTS: Record<
   // judgment=high tier policy); NO fallbackModel: verdict epochs must stay
   // homogeneous, degradation = verdict stays pending (INGESTION §4.5).
   'jobs.evaluate-posting':               { model: 'gpt-5.6-luna', maxTokens: 800, provider: 'openai', reasoningEffort: 'low' },
+  // Readiness wave (READINESS.md §1): classification, sized for the
+  // 30-answer worst case (the G.3 truncation lesson). Deploy gate: verify
+  // no CMS ModelConfig row overrides this (#487 lesson).
+  'jobs.evidence-attribution':           { model: 'gpt-5.6-luna', maxTokens: 1400, provider: 'openai', reasoningEffort: 'low' },
 }

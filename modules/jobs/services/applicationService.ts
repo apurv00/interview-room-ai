@@ -1,6 +1,7 @@
 import { gunzipSync } from 'zlib'
 import { JobApplication, JobPosting, InterviewSession, ProductEvent } from '@shared/db/models'
 import { logger } from '@shared/logger'
+import { inngest } from '@shared/services/inngest'
 import { xrayHashOf } from './xrayService'
 
 /**
@@ -224,9 +225,25 @@ export async function recordPracticeEvidence(
     { $addToSet: { practiceSessionIds: session._id } },
     { new: true }
   )
-    .select('practiceSessionIds')
+    .select('practiceSessionIds jobPostingId')
     .lean()
   if (!app) return { recorded: false } // practiced without saving and no click row — nothing to attach to
+  // Readiness attribution (READINESS.md §1): THIS is the emit site — the
+  // rail fires for every scored session, but only a recorded jobs
+  // attribution mints evidence work. Awaited (cheap) so the reconciliation
+  // sweep is a net, not the primary path; failure never breaks the feedback flow.
+  try {
+    await inngest.send({
+      name: 'jobs/evidence.attribute',
+      data: {
+        sessionId: String(session._id),
+        applicationId: String(app._id),
+        jobPostingId: String(app.jobPostingId),
+      },
+    })
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'evidence.attribute emit failed — reconciliation sweep will recover')
+  }
   return { recorded: true, evidenceCount: Math.min(3, app.practiceSessionIds?.length ?? 0) }
 }
 

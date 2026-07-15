@@ -61,6 +61,7 @@ vi.mock('@shared/db/models', () => {
     JobApplication: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     ProductEvent: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     JobsEmailSend: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    JobPracticeEvidence: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     LessonEngagement: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     SessionSummary: {
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
