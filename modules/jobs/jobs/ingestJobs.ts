@@ -205,7 +205,10 @@ async function processTarget(
     // distrustKnown (Codex #528 P1): after an incomplete window, "already
     // known" is evidence of the PARTIAL run's stores, not of exhaustion —
     // the cutoff is disabled until one full clean pass rebuilds trust.
-    const cutoffHit = !distrustKnown && knownRate >= KNOWN_RATE_PAGINATION_CUTOFF
+    // The cutoff is evidence of reaching KNOWN ground — a page with zero
+    // processed rows (all policy-filtered, e.g. every registration closed)
+    // is no such evidence and must keep paging (Codex #536).
+    const cutoffHit = !distrustKnown && counters.processed > 0 && knownRate >= KNOWN_RATE_PAGINATION_CUTOFF
     const pagesFetched = page - startPage + 1
     const capExit = paginable && pageFull && !cutoffHit && pagesFetched >= maxPages
     if (!paginable || !pageFull || cutoffHit || pagesFetched >= maxPages) {
@@ -381,7 +384,14 @@ export async function runSourceSyncHandler(
       const o: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [], feedContinuation: {} }
       for (const target of chunk) {
         const distrustKey = target.kind === 'bucket' ? target.bucketId : 'cursorBucket' in target ? target.cursorBucket : undefined
-        const distrustKnown = !!distrustKey && distrust.has(distrustKey)
+        // Continuation runs (feed resuming past page 1) also distrust the
+        // cutoff (Codex #536): on a newest-first feed, front-insertions
+        // shift the backlog deeper, so a resumed page may land on
+        // already-known rows — the cutoff would reset the drain before it
+        // reaches the shifted backlog. Cap + non-full-page remain the
+        // exits; known pages are merge-idempotent.
+        const isContinuation = target.kind === 'feed' && target.page > 1
+        const distrustKnown = (!!distrustKey && distrust.has(distrustKey)) || isContinuation
         await processTarget(adapter, sourceId, target, o, delayMs, initVerdictPending, distrustKnown)
         if (delayMs) await sleep(delayMs)
       }

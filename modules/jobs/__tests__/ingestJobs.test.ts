@@ -103,6 +103,18 @@ describe('runIngestSchedulerHandler', () => {
 })
 
 describe('runSourceSyncHandler — feed continuation', () => {
+  it('a physically-full page with ZERO open rows keeps paging — policy filtering is not exhaustion (Codex #536)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, raw: [], rawPageSize: 15, attempts: 1 }) // full page, all closed
+      .mockResolvedValueOnce({ ok: true, status: 200, raw: [], rawPageSize: 2, attempts: 1 })  // short page = true end
+    await runSourceSyncHandler({ data: { sourceId: 'unstop' } }, step, { interRequestDelayMs: 0 })
+    expect(mockAdapterFetch).toHaveBeenCalledTimes(2)
+    expect(mockAdapterFetch.mock.calls[1][0]).toMatchObject({ page: 2 })
+  })
+
   it('resumes unstop at the persisted lastPage+1 — the continuation offset is never stomped (Codex #536)', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })

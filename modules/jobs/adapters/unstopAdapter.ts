@@ -92,12 +92,13 @@ export const unstopAdapter: JobSourceAdapter = {
     // health machine must degrade, never record a clean zero-row sync.
     if (!items) return { ok: false, status: res.status, raw: [], bodyError: true, attempts: 1 }
     // Policy: only OPEN registrations enter (never advertise a closed path).
-    // regn_open is AUTHORITATIVE when present (probe mapping): an explicit
-    // false/0 is a closed path no matter what remain_days says; the
-    // remain_days fallback applies only when regn_open is absent.
+    // regn_open is AUTHORITATIVE when present; when ABSENT the probe's
+    // exact fallback is status === 'LIVE' (Codex #536 — remain_days can be
+    // stale in both directions: live rows without it were dropped, dead
+    // rows with leftovers entered).
     const open = items.filter((it) =>
       it.regn_open === true || it.regn_open === 1 ||
-      (it.regn_open == null && (it.regnRequirements?.remain_days ?? 0) > 0)
+      (it.regn_open == null && it.status === 'LIVE')
     )
     // rawPageSize = the UNFILTERED count (Codex #536): a physically-full
     // page of mostly-closed rows must still page onward.

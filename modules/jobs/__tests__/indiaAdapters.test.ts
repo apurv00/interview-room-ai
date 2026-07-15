@@ -357,9 +357,9 @@ describe('unstop adapter', () => {
     mockFetchJSON.mockResolvedValue({
       ok: true, status: 200,
       data: { data: { data: [
-        item({ id: 1, regn_open: false, regnRequirements: { remain_days: 9 } }), // closed, stale remain_days
-        item({ id: 2, regn_open: undefined, regnRequirements: { remain_days: 5 } }), // absent → fallback admits
-        item({ id: 3, regn_open: undefined, regnRequirements: { remain_days: 0 } }), // absent + expired → out
+        item({ id: 1, regn_open: false, status: 'LIVE' }), // explicit false wins over LIVE
+        item({ id: 2, regn_open: undefined, status: 'LIVE' }), // absent → LIVE fallback admits (probe mapping)
+        item({ id: 3, regn_open: undefined, status: 'CLOSED', regnRequirements: { remain_days: 9 } }), // absent + non-LIVE: stale remain_days never admits
       ] } },
     })
     const res = await unstopAdapter.fetch(target)
