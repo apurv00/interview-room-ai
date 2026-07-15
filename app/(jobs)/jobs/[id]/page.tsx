@@ -196,6 +196,25 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     }
   }
 
+  // ?practice=1 (Codex #532): the E0/E2 emails' CTAs promise "tap → the
+  // session starts". Auto-start ONCE when the detail is loaded, authed,
+  // and the role is resolvable — otherwise the page still shows Start
+  // front and center; the link degrades to the detail page, never breaks.
+  const autoPracticeFired = useRef(false)
+  useEffect(() => {
+    if (autoPracticeFired.current || !detail || detail.gated) return
+    try {
+      if (new URLSearchParams(window.location.search).get('practice') !== '1') return
+    } catch {
+      return
+    }
+    const role = interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain
+    if (!role) return // domain-less posting: leave the user on the Start button
+    autoPracticeFired.current = true
+    onPractice()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail, xray])
+
   function onPractice() {
     if (!detail || detail.gated) return
     // Resolve through the domain metadata: jobs-only slugs (hr) map to

@@ -268,6 +268,12 @@ describe('runEmailSweepHandler', () => {
     expect(mockSendCreate.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-22')
   })
 
+  it("candidate query is scoped to status 'interview_scheduled' — a corrected row's stale date never reminds (Codex #532)", async () => {
+    mockAppFind.mockReturnValue(findChain([appRow()]))
+    await runEmailSweepHandler(step)
+    expect(mockAppFind.mock.calls[0][0].status).toBe('interview_scheduled')
+  })
+
   it('not-yet-due candidates are filtered (send instant in the future)', async () => {
     mockAppFind.mockReturnValue(findChain([appRow({ interviewDate: new Date('2026-07-25T00:00:00Z') })]))
     expect(await runEmailSweepHandler(step)).toEqual({ e2Sent: 0 })

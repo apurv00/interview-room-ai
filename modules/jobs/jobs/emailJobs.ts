@@ -109,6 +109,10 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
   // send instant (T-1 and Monday-of-week both fall inside).
   const candidates = await step.run('find-due-e2', async () => {
     const rows = await JobApplication.find({
+      // Only rows STILL scheduled (Codex #532): a stale interviewDate on a
+      // row the user corrected to rejected/withdrawn/ghosted must never
+      // mint a reminder for a dead interview.
+      status: 'interview_scheduled',
       interviewDate: {
         $gte: new Date(now.getTime() - 2 * 86_400_000),
         $lte: new Date(now.getTime() + 8 * 86_400_000),
