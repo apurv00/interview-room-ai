@@ -525,6 +525,43 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     expect(mockSendDeleteMany).toHaveBeenCalled()
   })
 
+  it('clicked-then-confirmed rows key off the LATEST entry: fresh confirmations wait, aged ones get applied copy (Codex #533)', async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    // Clicked 5d ago but CONFIRMED yesterday → age anchors on the
+    // confirmation (1d) → not yet due.
+    feed([e4Row('b1', {
+      status: 'applied',
+      statusHistory: [
+        { status: 'apply_clicked', at: daysAgo(5), source: 'system' },
+        { status: 'applied', at: daysAgo(1), source: 'user' },
+      ],
+    })], [])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+
+    // Clicked 8d ago, confirmed 4d ago → due, with APPLIED copy.
+    vi.clearAllMocks()
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+    mockPostingFindById.mockReturnValue(selectLean({ status: 'open' }))
+    mockSendFindOne.mockReturnValue(lean(null))
+    mockSendCreate.mockResolvedValue({})
+    mockSendUpdateMany.mockResolvedValue({})
+    mockSendAggregate.mockResolvedValue([])
+    mockSendEmail.mockResolvedValue({ ok: true, id: 're-1' })
+    feed([e4Row('b2', {
+      status: 'applied',
+      statusHistory: [
+        { status: 'apply_clicked', at: daysAgo(8), source: 'system' },
+        { status: 'applied', at: daysAgo(4), source: 'user' },
+      ],
+    })], [])
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 1 })
+    const html = mockSendEmail.mock.calls[0][0].html as string
+    expect(html).toContain('You applied')
+    expect(html).not.toContain('You opened the apply page')
+  })
+
   it('coarse nudges=false silences both solicitation streams', async () => {
     mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: false, unsubscribedStreams: [] } } }))
     feed([e1Row('a1')], [e4Row('b1')])

@@ -278,7 +278,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
       const e1: SolicitationCandidate[] = []
       const e4: SolicitationCandidate[] = []
       type LeanRow = {
-        _id: unknown; userId: unknown; jobPostingId: unknown; appliedAt?: Date
+        _id: unknown; userId: unknown; jobPostingId: unknown; appliedAt?: Date; status?: string
         statusHistory?: Array<{ status: string; at?: Date; source?: string }>
         outcome?: { lastAskedAt?: Date }
         practiceSessionIds?: unknown[]
@@ -297,7 +297,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
         let cursor: string | null = null
         for (;;) {
           const batch: LeanRow[] = await JobApplication.find({ ...filter, ...(cursor ? { _id: { $gt: cursor } } : {}) })
-            .select('_id userId jobPostingId appliedAt statusHistory outcome practiceSessionIds jobSnapshot')
+            .select('_id userId jobPostingId appliedAt status statusHistory outcome practiceSessionIds jobSnapshot')
             .sort({ _id: 1 })
             .limit(200)
             .lean<LeanRow[]>()
@@ -339,11 +339,16 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             practiceSessionIds: { $size: 0 },
           },
           (r) => {
-            const intent = (r.statusHistory ?? []).find((h) => (h.status === 'apply_clicked' || h.status === 'applied') && h.at)
-            if (!intent?.at) return
-            const age = istCalendarDaysBetween(new Date(intent.at), now)
+            // LATEST relevant entry (Codex #533): a clicked-then-confirmed
+            // row must key age off the confirmation, not the older click —
+            // and intent comes from the CURRENT status (applied never
+            // downgrades to click copy).
+            const relevant = (r.statusHistory ?? []).filter((h) => (h.status === 'apply_clicked' || h.status === 'applied') && h.at)
+            if (!relevant.length) return
+            const latest = relevant.reduce((x, y) => (new Date(x.at!) > new Date(y.at!) ? x : y))
+            const age = istCalendarDaysBetween(new Date(latest.at!), now)
             if (age < 3 || age > 14) return
-            e4.push(toCandidate(r, new Date(intent.at), intent.status === 'applied' ? 'applied' : 'clicked'))
+            e4.push(toCandidate(r, new Date(latest.at!), r.status === 'applied' ? 'applied' : 'clicked'))
           }
         )
       }
