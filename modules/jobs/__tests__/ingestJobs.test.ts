@@ -34,6 +34,10 @@ vi.mock('../adapters/jsearchAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/jsearchAdapter')>()
   return { jsearchAdapter: { ...real.jsearchAdapter, fetch: mockAdapterFetch } }
 })
+vi.mock('../adapters/unstopAdapter', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../adapters/unstopAdapter')>()
+  return { unstopAdapter: { ...real.unstopAdapter, fetch: mockAdapterFetch } }
+})
 vi.mock('../adapters/atsBoardAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/atsBoardAdapter')>()
   return { atsBoardAdapter: { ...real.atsBoardAdapter, fetch: mockAdapterFetch } }
@@ -77,16 +81,47 @@ describe('runIngestSchedulerHandler', () => {
     // invents an active source
     const seed = mockSourceUpdateOne.mock.calls[0]
     expect(seed[1].$setOnInsert.enabled).toBe(false)
+    // India-native sources seed next (§6 items 5/6), also DISABLED — the
+    // founder's ToS read gates their enable (DECISIONS #9).
+    const apnaSeed = mockSourceUpdateOne.mock.calls[1]
+    expect(apnaSeed[0]).toEqual({ sourceId: 'apna' })
+    expect(apnaSeed[1].$setOnInsert).toMatchObject({ kind: 'sitemap-jsonld', enabled: false })
+    const unstopSeed = mockSourceUpdateOne.mock.calls[2]
+    expect(unstopSeed[0]).toEqual({ sourceId: 'unstop' })
+    expect(unstopSeed[1].$setOnInsert).toMatchObject({ kind: 'public-api', enabled: false })
     // board seeds carry displayName on insert; a guarded second update
     // backfills ONLY absent values so ops edits are never stomped
-    const boardSeed = mockSourceUpdateOne.mock.calls[1]
+    const boardSeed = mockSourceUpdateOne.mock.calls[3]
     expect(boardSeed[1].$setOnInsert.displayName).toBeTruthy()
     expect(boardSeed[1].$setOnInsert.enabled).toBe(false)
-    const backfill = mockSourceUpdateOne.mock.calls[2]
+    const backfill = mockSourceUpdateOne.mock.calls[4]
     expect(backfill[0].displayName).toEqual({ $in: [null, ''] })
     expect(backfill[1].$set.displayName).toBeTruthy()
     expect(backfill[2]?.upsert).toBeUndefined()
     expect(mockSend).toHaveBeenCalledWith({ name: 'jobs/source.sync', data: { sourceId: 'due-source' } })
+  })
+})
+
+describe('runSourceSyncHandler — feed continuation', () => {
+  it('a physically-full page with ZERO open rows keeps paging — policy filtering is not exhaustion (Codex #536)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, raw: [], rawPageSize: 15, attempts: 1 }) // full page, all closed
+      .mockResolvedValueOnce({ ok: true, status: 200, raw: [], rawPageSize: 2, attempts: 1 })  // short page = true end
+    await runSourceSyncHandler({ data: { sourceId: 'unstop' } }, step, { interRequestDelayMs: 0 })
+    expect(mockAdapterFetch).toHaveBeenCalledTimes(2)
+    expect(mockAdapterFetch.mock.calls[1][0]).toMatchObject({ page: 2 })
+  })
+
+  it('resumes unstop at the persisted lastPage+1 — the continuation offset is never stomped (Codex #536)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([{ bucket: 'unstop:feed', lastPage: 12 }]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, raw: [], rawPageSize: 0, attempts: 1 })
+    await runSourceSyncHandler({ data: { sourceId: 'unstop' } }, step, { interRequestDelayMs: 0 })
+    expect(mockAdapterFetch.mock.calls[0][0]).toMatchObject({ kind: 'feed', page: 13 })
   })
 })
 

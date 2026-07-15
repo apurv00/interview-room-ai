@@ -12,8 +12,8 @@ import type { ApplyTier } from '../config/spamRules'
 export type FetchTarget =
   | { kind: 'bucket'; bucketId: string; query: string; datePostedWindow: 'day' | '3days' | 'week'; page: number }
   | { kind: 'board'; boardId: string; slug: string; atsKind: 'greenhouse' | 'lever' | 'smartrecruiters' | 'ashby' | 'workable' | 'bamboohr'; displayName?: string }
-  | { kind: 'sitemap'; shardUrl: string; slugFilter: { metros: string[]; domainPatterns: RegExp[]; maxDetailFetches: number } }
-  | { kind: 'feed'; feedId: string; page: number; perPage: number }
+  | { kind: 'sitemap'; shardUrl: string; slugFilter: { metros: string[]; domainPatterns: RegExp[]; maxDetailFetches: number }; cursorBucket?: string }
+  | { kind: 'feed'; feedId: string; page: number; perPage: number; cursorBucket?: string }
 
 export interface FetchResult {
   ok: boolean
@@ -23,6 +23,14 @@ export interface FetchResult {
   raw: unknown[]
   /** True when a 200 carried an error-shaped/unparseable envelope. */
   bodyError?: boolean
+  /** UNFILTERED page size (Codex #536): pagination fullness must be judged
+   *  before policy filters (e.g. closed-registration rows) shrink raw. */
+  rawPageSize?: number
+  /** Adapter-owned cursor value for this batch, in the SAME units the
+   *  adapter filters by (apna: max sitemap lastmod among fetched
+   *  candidates). When present it replaces postedAt-derived accumulation —
+   *  cursor and filter must share units or the drain livelocks. */
+  watermark?: string
   /** Physical request count (RapidAPI bills attempts — metered, not logical calls). */
   attempts: number
 }
@@ -52,7 +60,7 @@ export interface NormalizedJob {
 export interface JobSourceAdapter {
   readonly sourceId: string
   readonly kind: IJobSourceConfig['kind']
-  buildTargets(config: Pick<IJobSourceConfig, 'sourceId' | 'enabled'> & Partial<Pick<IJobSourceConfig, 'slug' | 'atsKind' | 'displayName'>>, cursors: Array<Pick<IJobIngestCursor, 'bucket' | 'newestPostedAt'>>): FetchTarget[]
+  buildTargets(config: Pick<IJobSourceConfig, 'sourceId' | 'enabled'> & Partial<Pick<IJobSourceConfig, 'slug' | 'atsKind' | 'displayName'>>, cursors: Array<Pick<IJobIngestCursor, 'bucket' | 'newestPostedAt' | 'lastPage'>>): FetchTarget[]
   fetch(target: FetchTarget): Promise<FetchResult>
   normalize(raw: unknown, target: FetchTarget): NormalizedJob | null
   classifyApplyUrl(url: string): ApplyTier
