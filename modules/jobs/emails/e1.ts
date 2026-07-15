@@ -72,8 +72,8 @@ export interface E4Input {
 export function buildE4Email(input: E4Input): { subject: string; html: string } {
   const applied = input.intent === 'applied'
   const subject = applied
-    ? `A 15-minute mock for your ${input.company} application`
-    : `A 15-minute mock for the ${input.company} role you opened`
+    ? `A 20-minute mock for your ${input.company} application`
+    : `A 20-minute mock for the ${input.company} role you opened`
   const opener = applied
     ? `You applied to <strong>${escapeHtml(input.jobTitle)}</strong> at
     <strong>${escapeHtml(input.company)}</strong>`
@@ -83,7 +83,7 @@ export function buildE4Email(input: E4Input): { subject: string; html: string } 
   <h1 style="font-size:20px;margin:0 0 12px;">Prep before they call 🎯</h1>
   <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 20px;">
     ${opener} — if this turns into an interview, it usually comes fast. A
-    voice mock built from this exact posting takes 15 minutes and counts as
+    voice mock built from this exact posting takes 20 minutes and counts as
     evidence toward your readiness.
   </p>
   ${ctaButton(input.practiceUrl, 'Take the practice session')}`
