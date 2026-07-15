@@ -3598,3 +3598,15 @@ durable record; ids are best-effort pointers.
 - **P1 top-level JD read**: the worker read session.config.jobDescription, but /api/interviews mirrors the JD to the TOP-LEVEL InterviewSession field precisely because the strict config subdoc strips undeclared keys — so every live jobs session would land 'no-jd', get stamped processed, and be permanently unattributable (third dead-on-arrival catch on this PR: epoch, and now JD sourcing). Fix: select + read top-level jobDescription, config kept as legacy fallback, plus a PROJECTION-guard test (mocks return full docs, so only an explicit select assertion pins the projection).
 - **P2 transient no-parse**: posting X-ray parse not cached yet (detail page fetches /xray progressively; practice can start first) was stamped terminal — never retried after the parse lands. Fix: 'no-parse' stays UNSTAMPED so the sweep retries within its 7-day window (all skips are pre-LLM, so re-emits cost no model spend); zero-must-haves split into its own terminal 'no-must-haves' outcome (first-write-wins cache means that parse never changes).
 - Verified: modules/jobs + accountDeletion 371 passed | 1 skipped; full clean-env vitest 5704 passed | 17 skipped; tsc/lint/build/module-size clean. +4 regression vectors.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 ~02:25 IST — PR #538 Codex round 4 (2 P2s, both fixed)
+- **Truncated-but-parseable attribution**: a max-tokens-truncated response can close its JSON array early and parse VALID with the tail answers missing (the schema cannot require one entry per answer) — partial evidence would persist and the stamp would make the undercount permanent. Fix: res.truncated at the base budget → retry at the bumped budget; still truncated → throw (nothing persisted, nothing stamped; Inngest retries + sweep net stay armed).
+- **Stale-cache mismatch retryable**: posting.parsedJDHash != sessionHash also fires when the posting cache is simply STALE (session practiced the UPDATED JD before /xray reparsed) — stamping made that valid practice permanently unattributable. Fix: 'jd-version-mismatch' joins 'no-parse' as an UNSTAMPED transient skip — sweep retries within its 7-day window; genuine old-JD sessions age out naturally. Pre-LLM, so retries cost no model spend. Spec §1 amended.
+- Verified: modules/jobs + accountDeletion 373 passed | 1 skipped; full clean-env vitest 5706 passed | 17 skipped; tsc/lint/build/module-size clean. +2 regression vectors, 1 reworked.

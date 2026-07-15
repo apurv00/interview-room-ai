@@ -153,17 +153,42 @@ describe('runEvidenceAttributionHandler', () => {
     expect(snap.practicedCount).toBe(1)
   })
 
-  it('JD-version mismatch = counted skip, never cross-version attribution', async () => {
+  it('JD-version mismatch = counted skip, never cross-version attribution — and NEVER stamped (stale cache heals, Codex #538 r4)', async () => {
     mockPostingFindById.mockReturnValue(selectLean({ parsedJD, parsedJDHash: 'different-hash' }))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('jd-version-mismatch')
     expect(mockCompletion).not.toHaveBeenCalled()
     expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
-    // Counted skips are terminal — stamped so the sweep never re-emits.
-    expect(mockSessionUpdateOne).toHaveBeenCalledWith(
-      { _id: 'sess1' },
-      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
-    )
+    // A session practiced against the UPDATED JD looks mismatched until
+    // /xray reparses the posting — the sweep must be able to retry it.
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('truncated-but-parseable output retries at the bumped budget instead of persisting a partial tail (Codex #538 r4)', async () => {
+    mockCompletion
+      .mockResolvedValueOnce({
+        text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}',
+        truncated: true, // valid JSON, but the tail answers are missing
+      })
+      .mockResolvedValueOnce({
+        text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay"],"strength":"strong"}]}',
+      })
+    const r = await runEvidenceAttributionHandler(EVENT, step)
+    expect(r.outcome).toBe('attributed')
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
+    const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(docs.map((d) => d.requirementId).sort()).toEqual(['req-node', 'req-pay'])
+  })
+
+  it('still truncated after the bumped retry → throws, nothing persisted, nothing stamped', async () => {
+    mockCompletion.mockResolvedValue({
+      text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}',
+      truncated: true,
+    })
+    await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow('truncated after bumped retry')
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 
   it('failed/truncated evaluations are excluded; all-excluded = no-scorable-answers, zero LLM spend', async () => {

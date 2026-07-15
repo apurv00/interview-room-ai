@@ -68,7 +68,7 @@ interface LoadedInputs {
   outcome:
     | 'ok'
     | 'no-jd'
-    | 'jd-version-mismatch'
+    | 'jd-version-mismatch' // TRANSIENT: posting cache may be stale — never stamped
     | 'no-scorable-answers'
     | 'no-parse' // TRANSIENT: X-ray parse not cached yet — never stamped
     | 'no-must-haves' // terminal: parse exists but lists zero must-haves
@@ -188,13 +188,18 @@ export async function runEvidenceAttributionHandler(
   if (inputs.outcome !== 'ok') {
     logger.info({ sessionId, outcome: inputs.outcome }, 'evidence attribution skipped')
     // Terminal skips are stamped so the daily sweep never re-emits them
-    // (Codex #538). 'no-parse' stays UNSTAMPED — the posting's X-ray
-    // parse lands whenever the detail page fetches /xray, so the sweep
-    // must be able to retry it within its 7-day window (Codex #538 r3);
-    // all skips exit before the LLM step, so re-emits cost no model spend.
+    // (Codex #538). Two outcomes stay UNSTAMPED so the sweep can retry
+    // them within its 7-day window (all skips exit before the LLM step,
+    // so re-emits cost no model spend):
+    // - 'no-parse': the X-ray parse lands whenever the detail page
+    //   fetches /xray (r3);
+    // - 'jd-version-mismatch': the posting cache may simply be STALE —
+    //   a session practiced against the UPDATED JD looks mismatched
+    //   until /xray reparses, after which the hashes align (r4). Genuine
+    //   old-JD sessions churn the sweep for at most 7 days, then age out.
     // Throw paths never stamp: Inngest retries are the path, the sweep
     // is the net.
-    if (inputs.outcome !== 'no-parse') {
+    if (inputs.outcome !== 'no-parse' && inputs.outcome !== 'jd-version-mismatch') {
       await step.run('mark-processed', () => markEvidenceProcessed(sessionId))
     }
     return { outcome: inputs.outcome }
@@ -210,6 +215,15 @@ export async function runEvidenceAttributionHandler(
         messages: [{ role: 'user', content: prompt }],
         ...(bump ? { maxTokens: TASK_SLOT_DEFAULTS['jobs.evidence-attribution'].maxTokens + bump } : {}),
       })
+      // A truncated response can still parse as VALID JSON with the tail
+      // answers silently missing (the schema cannot require one entry per
+      // answer) — accepting it would permanently undercount readiness for
+      // this session (Codex #538 r4). Retry at the bumped budget; still
+      // truncated → throw (Inngest retries, the sweep is the net).
+      if (res.truncated) {
+        if (bump) throw new Error('attribution truncated after bumped retry')
+        continue
+      }
       try {
         const jsonText = res.text.slice(res.text.indexOf('{'), res.text.lastIndexOf('}') + 1)
         return ATTRIBUTION_SCHEMA.parse(JSON.parse(jsonText))

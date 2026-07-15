@@ -39,11 +39,13 @@ re-bill the LLM [R25]: `load-inputs` → `llm-attribute` → `persist`.
 - *JD-version binding* [R23]: hash the SESSION's own `jobDescription`
   (`xrayHashOf` — the same value the repo already stores as `jdHash`;
   never `bodyHashOf` [R16]). If it equals the posting's `parsedJDHash`,
-  attribute against the cached parse; else the run is a terminal counted
-  skip (`jd-version-mismatch`) — **never attribute across JD versions**,
-  and v1 never makes a second parse call (parsing the session's own JD
-  copy is a deferred v1.1 option, shipped behavior wins over this spec's
-  earlier draft).
+  attribute against the cached parse; else the run is a counted skip
+  (`jd-version-mismatch`) — **never attribute across JD versions**, and
+  v1 never makes a second parse call (parsing the session's own JD copy
+  is a deferred v1.1 option, shipped behavior wins over this spec's
+  earlier draft). Mismatch skips stay RETRYABLE within the sweep window
+  (Codex #538 r4): the posting cache may simply be stale — a session
+  practiced against the updated JD aligns once `/xray` reparses.
 - *Parse stability* [R11]: the X-ray parse cache becomes first-write-wins
   per hash (`updateOne({_id, parsedJDHash: {$ne: hash}}, ...)`) so a
   same-hash re-parse can never replace the requirement ids evidence binds
