@@ -138,3 +138,70 @@ export async function sendTransactional(input: TransactionalSendInput): Promise<
   }
   return { outcome: 'failed-alerted' }
 }
+
+// ── Solicitation discipline (EMAILS.md §2): reserve-FIRST ───────────────────
+
+export type SolicitationStream = 'e1' | 'e4'
+
+export interface SolicitationSendInput {
+  userId: string
+  stream: SolicitationStream
+  /** One reservation per application — a batched email passes several. */
+  dedupeKeys: string[]
+  to: string
+  subject: string
+  html: string
+}
+
+export type SolicitationSendOutcome =
+  | { outcome: 'sent'; resendId?: string; reserved: string[] }
+  | { outcome: 'all-reserved' }
+  | { outcome: 'send-failed' }
+
+/**
+ * Reserve-first: ledger rows are inserted BEFORE the send. A duplicate key
+ * means that application's slot is burned (sent or reserved earlier) — it
+ * drops out; if every key was already reserved there is nothing to send.
+ * A send failure leaves the reservations UNSTAMPED: dashboard-surfaced,
+ * never auto-retried — losing a nudge is acceptable, double-sending is not.
+ */
+export async function sendSolicitation(input: SolicitationSendInput): Promise<SolicitationSendOutcome> {
+  const reserved: string[] = []
+  for (const dedupeKey of input.dedupeKeys) {
+    try {
+      await JobsEmailSend.create({ userId: input.userId, stream: input.stream, dedupeKey })
+      reserved.push(dedupeKey)
+    } catch (err) {
+      if ((err as { code?: number }).code !== 11000) throw err
+    }
+  }
+  if (reserved.length === 0) return { outcome: 'all-reserved' }
+
+  const res = await sendEmail({
+    to: input.to,
+    subject: input.subject,
+    html: input.html,
+    headers: oneClickHeaders(input.userId, input.stream),
+  })
+  if (!res.ok) {
+    logger.error(
+      { userId: input.userId, stream: input.stream, reserved },
+      'solicitation email send failed — reservations left unstamped (dashboard-surfaced, no auto-retry)'
+    )
+    return { outcome: 'send-failed' }
+  }
+  await JobsEmailSend.updateMany(
+    { userId: input.userId, stream: input.stream, dedupeKey: { $in: reserved } },
+    { $set: { sentAt: new Date(), resendId: res.id } }
+  )
+  return { outcome: 'sent', resendId: res.id, reserved }
+}
+
+/** Rolling 7-day solicitation count for the weekly cap (e0/e2 exempt). */
+export async function solicitationSentLast7d(userId: string, now = new Date()): Promise<number> {
+  return JobsEmailSend.countDocuments({
+    userId,
+    stream: { $in: ['e1', 'e3', 'e4'] },
+    sentAt: { $gte: new Date(now.getTime() - 7 * 86_400_000) },
+  })
+}
