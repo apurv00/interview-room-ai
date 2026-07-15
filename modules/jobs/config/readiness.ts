@@ -47,7 +47,9 @@ export const ANSWER_SCORE_FLOOR = 40
  *  unreliable — bands cap at Practiced. */
 export const SMALL_N_MUST_HAVES = 4
 
-const STRENGTH_WEIGHT: Record<'strong' | 'partial', number> = { strong: 1.0, partial: 0.5 }
+/** Exported so the attribution worker's best-row-per-requirement collapse
+ *  (pre-insert dedup, Codex #538) uses the SAME rule as band math. */
+export const STRENGTH_WEIGHT: Record<'strong' | 'partial', number> = { strong: 1.0, partial: 0.5 }
 
 export function computeReadiness(
   rows: EvidenceRowLike[],

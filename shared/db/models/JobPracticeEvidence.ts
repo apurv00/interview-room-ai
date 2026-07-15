@@ -27,8 +27,10 @@ export interface IJobPracticeEvidence extends Document {
   strength: 'strong' | 'partial'
   /** round(mean of the 4 universal dims), recomputed by the worker. */
   answerScore: number
-  /** The evaluation's judge model (AnswerEvaluation.modelUsed) — bands
-   *  count only current-epoch rows (panel finding R8). */
+  /** The evaluate-answer slot's model at ATTRIBUTION time — bands count
+   *  only current-epoch rows (panel finding R8). Not read per-evaluation:
+   *  AnswerEvaluation never persists its judge model (Codex #538 P1);
+   *  see currentScoringEpoch in evidenceAttributionJob. */
   scoringEpoch: string
   at: Date
   createdAt: Date

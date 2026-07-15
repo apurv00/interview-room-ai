@@ -6,17 +6,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * counted skip, never cross-version); the must-have belt drops foreign
  * ids; 'none' never stored; replace semantics per (session, hash);
  * snapshot denormalized after persist; emit fires only on recorded:true.
+ * Codex #538 round 1: epoch = attribution-time slot model (live evals
+ * never persist modelUsed); best-row-per-requirement collapse before
+ * insert; terminal outcomes stamp evidenceProcessedAt so the sweep never
+ * re-bills processed zero-evidence sessions (throw paths stay unstamped).
  */
 
 const {
   mockSessionFindById, mockAppFindById, mockAppFindOne, mockAppUpdateOne, mockPostingFindById,
   mockEvidenceDeleteMany, mockEvidenceInsertMany, mockEvidenceFind, mockEvidenceExists,
-  mockCompletion, mockInngestSend, mockSessionFind,
+  mockCompletion, mockInngestSend, mockSessionFind, mockSessionUpdateOne,
 } = vi.hoisted(() => ({
   mockSessionFindById: vi.fn(), mockAppFindById: vi.fn(), mockAppFindOne: vi.fn(), mockAppUpdateOne: vi.fn(),
   mockPostingFindById: vi.fn(), mockEvidenceDeleteMany: vi.fn(), mockEvidenceInsertMany: vi.fn(),
   mockEvidenceFind: vi.fn(), mockEvidenceExists: vi.fn(), mockCompletion: vi.fn(), mockInngestSend: vi.fn(),
-  mockSessionFind: vi.fn(),
+  mockSessionFind: vi.fn(), mockSessionUpdateOne: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
@@ -24,14 +28,15 @@ vi.mock('@shared/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend, createFunction: vi.fn(() => ({})) } }))
 vi.mock('@shared/services/modelRouter', () => ({ completion: mockCompletion }))
 vi.mock('@shared/db/models', () => ({
-  InterviewSession: { findById: mockSessionFindById, find: mockSessionFind },
+  InterviewSession: { findById: mockSessionFindById, find: mockSessionFind, updateOne: mockSessionUpdateOne },
   JobApplication: { findById: mockAppFindById, findOne: mockAppFindOne, updateOne: mockAppUpdateOne },
   JobPosting: { findById: mockPostingFindById },
   JobPracticeEvidence: { deleteMany: mockEvidenceDeleteMany, insertMany: mockEvidenceInsertMany, find: mockEvidenceFind, exists: mockEvidenceExists },
 }))
 
-import { runEvidenceAttributionHandler, buildAttributionPrompt } from '../jobs/evidenceAttributionJob'
+import { runEvidenceAttributionHandler, runEvidenceReconcileHandler, buildAttributionPrompt, currentScoringEpoch } from '../jobs/evidenceAttributionJob'
 import { xrayHashOf } from '../services/xrayService'
+import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 const selectLean = (v: unknown) => ({ select: () => ({ lean: () => Promise.resolve(v) }) })
@@ -40,11 +45,14 @@ const JD = 'We need a backend engineer with Node.js, MongoDB, and payment-system
 const HASH = xrayHashOf(JD)
 const EVENT = { data: { sessionId: 'sess1', applicationId: 'app1', jobPostingId: 'job1' } }
 
+// NOTE: no modelUsed field — live AnswerEvaluations never persist their
+// judge model (evaluate-answer stamps it on trackUsage only, Codex #538 P1).
+// The fixture MUST match that shape so the epoch fix stays honest.
 const evaluation = (over: Record<string, unknown> = {}) => ({
   questionIndex: 0, question: 'Tell me about a payment system you built.',
   answer: 'I built UPI autopay serving 2M users with Node and Mongo.',
   relevance: 80, structure: 70, specificity: 90, ownership: 80,
-  modelUsed: 'gpt-5.6-luna', status: 'ok', ...over,
+  status: 'ok', ...over,
 })
 const parsedJD = {
   requirements: [
@@ -63,10 +71,12 @@ beforeEach(() => {
   mockEvidenceDeleteMany.mockResolvedValue({})
   mockEvidenceInsertMany.mockResolvedValue({})
   mockEvidenceFind.mockReturnValue(selectLean([
-    { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: 'gpt-5.6-luna', sessionId: 'sess1' },
-    { requirementId: 'req-pay', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: 'gpt-5.6-luna', sessionId: 'sess1' },
+    { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: currentScoringEpoch(), sessionId: 'sess1' },
+    { requirementId: 'req-pay', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: currentScoringEpoch(), sessionId: 'sess1' },
   ]))
   mockAppUpdateOne.mockResolvedValue({})
+  mockSessionUpdateOne.mockResolvedValue({})
+  mockEvidenceExists.mockResolvedValue(null)
 })
 
 describe('runEvidenceAttributionHandler', () => {
@@ -77,12 +87,46 @@ describe('runEvidenceAttributionHandler', () => {
     expect(mockEvidenceDeleteMany).toHaveBeenCalledWith({ sessionId: 'sess1', xrayHash: HASH })
     const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
     expect(docs.map((d) => d.requirementId).sort()).toEqual(['req-node', 'req-pay'])
-    expect(docs[0]).toMatchObject({ strength: 'strong', answerScore: 80, scoringEpoch: 'gpt-5.6-luna' })
+    // Codex #538 P1: live evaluations carry NO modelUsed — rows are
+    // epoch-stamped with the attribution-time slot model, and the same
+    // value feeds the snapshot filter (else readiness pins at zero).
+    expect(docs[0]).toMatchObject({
+      strength: 'strong', answerScore: 80,
+      scoringEpoch: TASK_SLOT_DEFAULTS['interview.evaluate-answer'].model,
+    })
+    expect(docs[0].scoringEpoch).not.toBe('unknown')
     // Snapshot written with computed band fields.
     const snap = mockAppUpdateOne.mock.calls[0][1].$set.readiness
     expect(snap).toMatchObject({ practicedCount: 2, mustHaveTotal: 2, xrayHash: HASH })
     expect(typeof snap.quality).toBe('number')
     expect(typeof snap.strongCoverage).toBe('number')
+    // Terminal outcome → processed marker stamped (Codex #538).
+    expect(mockSessionUpdateOne).toHaveBeenCalledWith(
+      { _id: 'sess1' },
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+    )
+  })
+
+  it('same requirement evidenced by two answers collapses to the BEST row before insert (Codex #538)', async () => {
+    mockSessionFindById.mockReturnValue(selectLean({
+      config: { jobDescription: JD },
+      evaluations: [
+        evaluation(), // index 0 → answerScore 80
+        evaluation({ relevance: 60, structure: 60, specificity: 60, ownership: 60 }), // index 1 → 60
+      ],
+      userId: 'u1',
+    }))
+    // partial×80 = 40 loses to strong×60 = 60 — insertMany must see ONE
+    // req-node row (the unique index would otherwise silently drop
+    // whichever duplicate arrived second, possibly the stronger one).
+    mockCompletion.mockResolvedValue({
+      text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"partial"},{"answerIndex":1,"requirementIds":["req-node"],"strength":"strong"}]}',
+    })
+    const r = await runEvidenceAttributionHandler(EVENT, step)
+    expect(r.rows).toBe(1)
+    const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(docs).toHaveLength(1)
+    expect(docs[0]).toMatchObject({ requirementId: 'req-node', strength: 'strong', answerScore: 60 })
   })
 
   it('JD-version mismatch = counted skip, never cross-version attribution', async () => {
@@ -91,6 +135,11 @@ describe('runEvidenceAttributionHandler', () => {
     expect(r.outcome).toBe('jd-version-mismatch')
     expect(mockCompletion).not.toHaveBeenCalled()
     expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    // Counted skips are terminal — stamped so the sweep never re-emits.
+    expect(mockSessionUpdateOne).toHaveBeenCalledWith(
+      { _id: 'sess1' },
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+    )
   })
 
   it('failed/truncated evaluations are excluded; all-excluded = no-scorable-answers, zero LLM spend', async () => {
@@ -109,11 +158,26 @@ describe('runEvidenceAttributionHandler', () => {
     await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow('not yet persisted')
   })
 
-  it("'none' strength verdicts are never stored", async () => {
+  it("'none' strength verdicts are never stored — and zero-evidence is still PROCESSED (Codex #538)", async () => {
     mockCompletion.mockResolvedValue({ text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"none"}]}' })
+    mockEvidenceFind.mockReturnValue(selectLean([]))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.rows).toBe(0)
     expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    // Without this stamp the daily sweep would re-emit (and re-bill the
+    // LLM for) this fully-processed session every day for a week.
+    expect(mockSessionUpdateOne).toHaveBeenCalledWith(
+      { _id: 'sess1' },
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+    )
+  })
+
+  it('unparseable output (throw path) does NOT stamp processed — retries and the sweep stay armed', async () => {
+    mockCompletion
+      .mockResolvedValueOnce({ text: 'garbage' })
+      .mockResolvedValueOnce({ text: 'garbage' })
+    await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow()
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 
   it('unparseable LLM output retries once at a bumped budget, then throws (never fabricated)', async () => {
@@ -127,11 +191,42 @@ describe('runEvidenceAttributionHandler', () => {
 
   it('prompt carries the boundary-tagged sections and never leaks ids it was not given', () => {
     const prompt = buildAttributionPrompt(
-      [{ index: 0, question: 'Q', answer: 'A', answerScore: 70, scoringEpoch: 'e' }],
+      [{ index: 0, question: 'Q', answer: 'A', answerScore: 70 }],
       [{ id: 'req-1', requirement: 'Node.js' }]
     )
     expect(prompt).toContain('<job_must_have_requirements>')
     expect(prompt).toContain('<interview_answers>')
     expect(prompt).toContain('Never invent ids')
+  })
+})
+
+describe('runEvidenceReconcileHandler', () => {
+  it('sweep chases only UNstamped sessions (query filter) and keeps the legacy rows-exist net', async () => {
+    mockSessionFind.mockReturnValue({
+      select: () => ({
+        limit: () => ({
+          lean: () => Promise.resolve([
+            { _id: 'sA', attribution: { source: 'jobs', jobId: 'j1', applicationId: 'appA' }, userId: 'u1' },
+            { _id: 'sB', attribution: { source: 'jobs', jobId: 'j2' }, userId: 'u1' },
+          ]),
+        }),
+      }),
+    })
+    // sB: evidence rows already exist (pre-stamp legacy) → skipped.
+    mockEvidenceExists.mockImplementation(({ sessionId }: { sessionId: string }) =>
+      Promise.resolve(sessionId === 'sB' ? { _id: 'x' } : null)
+    )
+    mockAppFindOne.mockReturnValue(selectLean({ _id: 'appA', jobPostingId: 'jpA' }))
+    const r = await runEvidenceReconcileHandler(step)
+    expect(r.reEmitted).toBe(1)
+    // The Codex #538 guard: processed-but-zero-evidence sessions are
+    // excluded at the QUERY, so they can never be re-emitted/re-billed.
+    const filter = mockSessionFind.mock.calls[0][0] as Record<string, unknown>
+    expect(filter['attribution.evidenceProcessedAt']).toEqual({ $exists: false })
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
+    expect(mockInngestSend).toHaveBeenCalledWith({
+      name: 'jobs/evidence.attribute',
+      data: { sessionId: 'sA', applicationId: 'appA', jobPostingId: 'jpA' },
+    })
   })
 })

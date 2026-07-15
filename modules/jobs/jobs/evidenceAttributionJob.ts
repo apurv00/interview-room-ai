@@ -6,7 +6,7 @@ import { completion } from '@shared/services/modelRouter'
 import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 import { logger } from '@shared/logger'
 import { xrayHashOf } from '../services/xrayService'
-import { computeReadiness, type EvidenceRowLike } from '../config/readiness'
+import { computeReadiness, STRENGTH_WEIGHT, type EvidenceRowLike } from '../config/readiness'
 
 /**
  * Per-answer → must-have attribution worker (READINESS.md §1, PR-R1).
@@ -23,6 +23,22 @@ import { computeReadiness, type EvidenceRowLike } from '../config/readiness'
 
 interface StepRunner {
   run: <T>(name: string, fn: () => Promise<T> | T) => Promise<T>
+}
+
+/**
+ * Scoring epoch (panel R8). AnswerEvaluation does NOT persist its judge
+ * model — /api/evaluate-answer stamps `result.model` onto trackUsage only
+ * (Codex #538 P1), so per-row `modelUsed` would be 'unknown' for every
+ * live session and the snapshot's epoch filter would zero readiness
+ * forever. Instead, rows are epoch-stamped with the evaluate-answer
+ * slot's model AT ATTRIBUTION TIME, and the snapshot filter reads the
+ * SAME expression — writer and reader cannot disagree. Attribution fires
+ * seconds after the session persists, so this equals the judge model
+ * except inside a model-cutover window (bounded mislabel, acceptable
+ * for R1's purpose: detecting stale-epoch evidence after a cutover).
+ */
+export function currentScoringEpoch(): string {
+  return TASK_SLOT_DEFAULTS['interview.evaluate-answer'].model
 }
 
 const ATTRIBUTION_SCHEMA = z.object({
@@ -45,7 +61,7 @@ interface LoadedInputs {
     | 'no-scorable-answers'
     | 'no-parse'
     | 'missing-context'
-  answers: Array<{ index: number; question: string; answer: string; answerScore: number; scoringEpoch: string }>
+  answers: Array<{ index: number; question: string; answer: string; answerScore: number }>
   mustHaves: Array<{ id: string; requirement: string }>
   xrayHash: string
   applicationId: string
@@ -75,6 +91,17 @@ ${reqLines}
 <interview_answers>
 ${ansLines}
 </interview_answers>`
+}
+
+/** Terminal-outcome marker (Codex #538): row existence cannot signal
+ *  "processed" — a session whose answers all came back 'none' stores zero
+ *  rows yet is fully processed, and the sweep would re-emit (re-billing
+ *  the LLM) every day for a week. Session missing = no-op update. */
+async function markEvidenceProcessed(sessionId: string): Promise<void> {
+  await InterviewSession.updateOne(
+    { _id: sessionId },
+    { $set: { 'attribution.evidenceProcessedAt': new Date() } }
+  )
 }
 
 export async function runEvidenceAttributionHandler(
@@ -115,8 +142,8 @@ export async function runEvidenceAttributionHandler(
     if (mustHaves.length === 0) return none('no-parse')
 
     // Scorable answers only (panel R13): failed/truncated excluded;
-    // answerScore = round(mean of the 4 universal dims), recomputed here;
-    // epoch = the evaluation's judge model.
+    // answerScore = round(mean of the 4 universal dims), recomputed here.
+    // Epoch is NOT read per-row — see currentScoringEpoch (Codex #538 P1).
     const answers = evals
       .map((e, i) => ({ e, i }))
       .filter(({ e }) => (e.status ?? 'ok') === 'ok' && typeof e.answer === 'string' && (e.answer as string).trim())
@@ -127,7 +154,6 @@ export async function runEvidenceAttributionHandler(
         answerScore: Math.round(
           ((Number(e.relevance) || 0) + (Number(e.structure) || 0) + (Number(e.specificity) || 0) + (Number(e.ownership) || 0)) / 4
         ),
-        scoringEpoch: typeof e.modelUsed === 'string' && e.modelUsed ? e.modelUsed : 'unknown',
       }))
     if (answers.length === 0) return none('no-scorable-answers')
 
@@ -142,6 +168,10 @@ export async function runEvidenceAttributionHandler(
   })
   if (inputs.outcome !== 'ok') {
     logger.info({ sessionId, outcome: inputs.outcome }, 'evidence attribution skipped')
+    // Counted skips are TERMINAL — mark processed so the daily sweep never
+    // re-emits (and re-bills) them (Codex #538). Throw paths deliberately
+    // do NOT stamp: Inngest retries are the path, the sweep is the net.
+    await step.run('mark-processed', () => markEvidenceProcessed(sessionId))
     return { outcome: inputs.outcome }
   }
 
@@ -166,9 +196,15 @@ export async function runEvidenceAttributionHandler(
   })
 
   const rows = await step.run('persist', async () => {
+    const epoch = currentScoringEpoch()
     const mustHaveIds = new Set(inputs.mustHaves.map((m) => m.id))
     const byIndex = new Map(inputs.answers.map((a) => [a.index, a]))
-    const docs: Array<Record<string, unknown>> = []
+    // Two answers may evidence the SAME requirement; the unique index
+    // {sessionId, requirementId, xrayHash} would then reject whichever
+    // duplicate insertMany hits second — possibly the stronger one
+    // (Codex #538). Collapse to the best row per requirement here, the
+    // same best = strengthWeight × answerScore rule computeReadiness uses.
+    const bestByReq = new Map<string, { doc: Record<string, unknown>; score: number }>()
     for (const att of verdicts.attributions) {
       if (att.strength === 'none') continue
       const answer = byIndex.get(att.answerIndex)
@@ -177,17 +213,24 @@ export async function runEvidenceAttributionHandler(
         // The must-have belt (Codex #537): ids outside the given set are
         // dropped — the numerator's universe equals the denominator's.
         if (!mustHaveIds.has(reqId)) continue
-        docs.push({
-          sessionId, applicationId, jobPostingId,
-          requirementId: reqId,
-          xrayHash: inputs.xrayHash,
-          strength: att.strength,
-          answerScore: answer.answerScore,
-          scoringEpoch: answer.scoringEpoch,
-          at: new Date(),
+        const score = STRENGTH_WEIGHT[att.strength] * answer.answerScore
+        const prev = bestByReq.get(reqId)
+        if (prev && prev.score >= score) continue
+        bestByReq.set(reqId, {
+          score,
+          doc: {
+            sessionId, applicationId, jobPostingId,
+            requirementId: reqId,
+            xrayHash: inputs.xrayHash,
+            strength: att.strength,
+            answerScore: answer.answerScore,
+            scoringEpoch: epoch,
+            at: new Date(),
+          },
         })
       }
     }
+    const docs = Array.from(bestByReq.values()).map((b) => b.doc)
     const app = await JobApplication.findById(applicationId).select('userId practiceSessionIds').lean()
     if (!app) return 0
     // Replace semantics per (session, hash): stale rows out, new set in —
@@ -203,17 +246,21 @@ export async function runEvidenceAttributionHandler(
     }
 
     // Denormalize the readiness snapshot (panel R22) — consumers never
-    // recompute. Epoch filter = the evaluate-answer slot's current model.
+    // recompute. Epoch filter = the SAME epoch the rows above were
+    // stamped with (currentScoringEpoch — single source, Codex #538 P1).
     const allRows = await JobPracticeEvidence.find({ applicationId })
       .select('requirementId xrayHash strength answerScore scoringEpoch sessionId')
       .lean()
     const snapshot = computeReadiness(
       allRows.map((r) => ({ ...r, sessionId: String(r.sessionId) })) as unknown as EvidenceRowLike[],
       { xrayHash: inputs.xrayHash, mustHaveIds: inputs.mustHaves.map((m) => m.id) },
-      TASK_SLOT_DEFAULTS['interview.evaluate-answer'].model,
+      epoch,
       app.practiceSessionIds?.length ?? 0
     )
     await JobApplication.updateOne({ _id: applicationId }, { $set: { readiness: snapshot } })
+    // Zero stored rows (all 'none' / belt-dropped) is still PROCESSED —
+    // without the marker the sweep re-emits and re-bills daily (Codex #538).
+    await markEvidenceProcessed(sessionId)
     return docs.length
   })
 
@@ -228,6 +275,9 @@ export async function runEvidenceReconcileHandler(step: StepRunner): Promise<{ r
   const candidates = await step.run('find-missing', async () => {
     const sessions = await InterviewSession.find({
       'attribution.source': 'jobs',
+      // Processed sessions (including zero-evidence outcomes) are stamped
+      // by the worker — the sweep only chases UNstamped ones (Codex #538).
+      'attribution.evidenceProcessedAt': { $exists: false },
       createdAt: { $gte: new Date(Date.now() - 7 * 86_400_000) },
       'evaluations.0': { $exists: true },
     })
@@ -238,6 +288,8 @@ export async function runEvidenceReconcileHandler(step: StepRunner): Promise<{ r
     for (const s of sessions) {
       const attr = s.attribution as { jobId?: string; applicationId?: string } | undefined
       if (!attr?.jobId) continue
+      // Legacy net: rows attributed before the stamp existed have no
+      // evidenceProcessedAt — their evidence rows still mark them done.
       const has = await JobPracticeEvidence.exists({ sessionId: s._id })
       if (has) continue
       const app = attr.applicationId
