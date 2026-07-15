@@ -4,6 +4,8 @@ import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle, JobsVerdi
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
+import { apnaAdapter } from '../adapters/apnaAdapter'
+import { unstopAdapter } from '../adapters/unstopAdapter'
 import { atsBoardAdapter } from '../adapters/atsBoardAdapter'
 import { BOARD_REGISTRY } from '../config/boardRegistry'
 import type { FetchTarget, JobSourceAdapter, NormalizedJob } from '../adapters/types'
@@ -31,6 +33,8 @@ import { ingestBatch, makeRedisRepostCounter, type IngestCounters } from '../ser
 
 const ADAPTERS: Record<string, JobSourceAdapter> = {
   jsearch: jsearchAdapter,
+  apna: apnaAdapter,
+  unstop: unstopAdapter,
 }
 
 /** Adapter resolution: aggregator ids map directly; every ats-board config
@@ -155,7 +159,8 @@ async function processTarget(
     // finalize AFTER rows are ingested, and the step then retries forever
     // on the same bad value (Codex on #511). Compare numerically: mixed
     // date formats make string comparison meaningless.
-    if (t.kind === 'bucket') {
+    const cursorKey = t.kind === 'bucket' ? t.bucketId : 'cursorBucket' in t ? t.cursorBucket : undefined
+    if (cursorKey) {
       for (const n of normalized) {
         if (!n.postedAt) continue
         const ts = new Date(n.postedAt).getTime()
@@ -175,8 +180,9 @@ async function processTarget(
     const cutoffHit = !distrustKnown && knownRate >= KNOWN_RATE_PAGINATION_CUTOFF
     if (t.kind !== 'bucket' || !pageFull || cutoffHit || page >= MAX_PAGES_PER_BUCKET) {
       // Clean exit: every page this window owed us was fetched — the
-      // cursor may now advance.
-      if (t.kind === 'bucket' && newestSeen) outcome.newestByBucket[t.bucketId] = newestSeen
+      // cursor may now advance (bucket targets key on bucketId; sitemap/
+      // feed targets on their explicit cursorBucket).
+      if (cursorKey && newestSeen) outcome.newestByBucket[cursorKey] = newestSeen
       return
     }
     page++
@@ -229,6 +235,18 @@ export async function runIngestSchedulerHandler(step: StepRunner): Promise<{ dis
     await JobSourceConfig.updateOne(
       { sourceId: 'jsearch' },
       { $setOnInsert: { sourceId: 'jsearch', kind: 'aggregator-api', enabled: false, health: 'active', cadenceMinutes: 1440 } },
+      { upsert: true }
+    )
+    // India-native sources (§6 items 5/6): seeded DISABLED — the founder's
+    // ToS read (legal layer 2) gates the enable, per DECISIONS #9.
+    await JobSourceConfig.updateOne(
+      { sourceId: 'apna' },
+      { $setOnInsert: { sourceId: 'apna', kind: 'sitemap-jsonld', enabled: false, health: 'active', cadenceMinutes: 1440 } },
+      { upsert: true }
+    )
+    await JobSourceConfig.updateOne(
+      { sourceId: 'unstop' },
+      { $setOnInsert: { sourceId: 'unstop', kind: 'public-api', enabled: false, health: 'active', cadenceMinutes: 1440 } },
       { upsert: true }
     )
     // ATS boards (§1 build-now): seeded DISABLED, 6h cadence per §4.4.

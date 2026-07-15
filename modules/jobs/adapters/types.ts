@@ -12,8 +12,8 @@ import type { ApplyTier } from '../config/spamRules'
 export type FetchTarget =
   | { kind: 'bucket'; bucketId: string; query: string; datePostedWindow: 'day' | '3days' | 'week'; page: number }
   | { kind: 'board'; boardId: string; slug: string; atsKind: 'greenhouse' | 'lever' | 'smartrecruiters' | 'ashby' | 'workable' | 'bamboohr'; displayName?: string }
-  | { kind: 'sitemap'; shardUrl: string; slugFilter: { metros: string[]; domainPatterns: RegExp[]; maxDetailFetches: number } }
-  | { kind: 'feed'; feedId: string; page: number; perPage: number }
+  | { kind: 'sitemap'; shardUrl: string; slugFilter: { metros: string[]; domainPatterns: RegExp[]; maxDetailFetches: number }; cursorBucket?: string }
+  | { kind: 'feed'; feedId: string; page: number; perPage: number; cursorBucket?: string }
 
 export interface FetchResult {
   ok: boolean
