@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User, SessionSummary, UserBadge, DailyChallengeAttempt } from '@shared/db/models'
 import { sendEmail } from '@shared/services/emailService'
+import { mintActionToken } from '@shared/services/signedActionToken'
 import { aiLogger as logger } from '@shared/logger'
 import type { IUser } from '@shared/db/models'
 import { getXpSummary } from './xpService'
@@ -167,7 +168,7 @@ export async function buildDigestContent(userId: string): Promise<{
     </a>
 
     <p style="font-size: 11px; color: #8b98a5; margin-top: 32px;">
-      <a href="${APP_URL}/api/learn/unsubscribe?userId=${userId}&type=digest" style="color: #8b98a5; text-decoration: underline;">Unsubscribe from digest emails</a>
+      <a href="${APP_URL}/api/learn/unsubscribe?token=${encodeURIComponent(mintActionToken({ typ: 'unsub', uid: userId, action: 'learn-digest', expDays: 365 }))}" style="color: #8b98a5; text-decoration: underline;">Unsubscribe from digest emails</a>
     </p>
   </div>
 </body>
@@ -200,7 +201,7 @@ export async function sendInactivityNudge(userId: string, email: string, name: s
     </a>
 
     <p style="font-size: 11px; color: #8b98a5; margin-top: 32px;">
-      <a href="${APP_URL}/api/learn/unsubscribe?userId=${userId}&type=reminders" style="color: #8b98a5; text-decoration: underline;">Unsubscribe from reminders</a>
+      <a href="${APP_URL}/api/learn/unsubscribe?token=${encodeURIComponent(mintActionToken({ typ: 'unsub', uid: userId, action: 'learn-reminders', expDays: 365 }))}" style="color: #8b98a5; text-decoration: underline;">Unsubscribe from reminders</a>
     </p>
   </div>
 </body>
