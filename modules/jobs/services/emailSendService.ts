@@ -152,6 +152,9 @@ export interface SolicitationSendInput {
   to: string
   subject: string
   html: string
+  /** The coarse settings toggle this stream rides (EMAILS.md §3) — re-read
+   *  with the suppression list at send time (Codex #533). */
+  coarseToggle: 'nudges' | 'digest'
 }
 
 export type SolicitationSendOutcome =
@@ -183,8 +186,12 @@ export async function sendSolicitation(input: SolicitationSendInput): Promise<So
   // #533, mirroring the transactional R24 check): an in-window one-click
   // unsubscribe wins. Releasing the unsent reservations un-burns the keys
   // — the next sweep's upstream suppression filter keeps them silent.
-  const user = await User.findById(input.userId).select('emailPreferences.jobs.unsubscribedStreams').lean()
-  if (isSuppressed(user?.emailPreferences?.jobs?.unsubscribedStreams, input.stream)) {
+  const user = await User.findById(input.userId).select('emailPreferences.jobs').lean()
+  const jobsPrefs = user?.emailPreferences?.jobs as { nudges?: boolean; digest?: boolean; unsubscribedStreams?: string[] } | undefined
+  if (
+    isSuppressed(jobsPrefs?.unsubscribedStreams, input.stream) ||
+    jobsPrefs?.[input.coarseToggle] === false
+  ) {
     await JobsEmailSend.deleteMany({
       userId: input.userId,
       stream: input.stream,

@@ -461,8 +461,9 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     // honored E0: the e0-prefix ledger lookup returns a stamped row
     mockSendFindOne.mockImplementation((q: { stream?: string }) =>
       lean(q.stream === 'e0' ? { sentAt: new Date() } : null))
-    feed([], [e4Row('b1')])
+    feed([e4Row('b1')], []) // e1 disabled → E4's paginate is the FIRST find call
     expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
 
     // closed posting
     vi.clearAllMocks()
@@ -473,7 +474,7 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     mockSendUpdateMany.mockResolvedValue({})
     mockSendCreate.mockResolvedValue({})
     mockPostingFindById.mockReturnValue(selectLean({ status: 'closed' }))
-    feed([], [e4Row('b1')])
+    feed([e4Row('b1')], [])
     expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
@@ -499,6 +500,29 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     expect(mockSendDeleteMany).toHaveBeenCalledWith(
       expect.objectContaining({ stream: 'e1', sentAt: { $exists: false } })
     )
+  })
+
+  it("E4 copy never claims 'applied' for an apply_clicked row (Codex #533 — machine-fact honesty in the inbox)", async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    feed([e4Row('b1')], []) // e1 disabled → E4 paginates first; intent is apply_clicked
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e4Sent: 1 })
+    const { subject, html } = mockSendEmail.mock.calls[0][0] as { subject: string; html: string }
+    expect(subject).not.toMatch(/your .* application/i)
+    expect(html).not.toContain('You applied')
+    expect(html).toContain('You opened the apply page')
+    expect(html).toContain('you clicked apply on')
+  })
+
+  it('a nudges toggle flipped mid-window releases the reservation before delivery (Codex #533)', async () => {
+    feed([e1Row('a1')], [])
+    mockUserFindById
+      .mockReturnValueOnce(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+      .mockReturnValueOnce(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: false, unsubscribedStreams: [] } } }))
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e1Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendDeleteMany).toHaveBeenCalled()
   })
 
   it('coarse nudges=false silences both solicitation streams', async () => {

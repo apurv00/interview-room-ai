@@ -272,6 +272,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
     type SolicitationCandidate = {
       applicationId: string; userId: string; jobPostingId: string
       company: string; jobTitle: string; appliedAgoDays: number
+      intent: 'clicked' | 'applied'
     }
     const work = await step.run('find-due-solicitation', async () => {
       const e1: SolicitationCandidate[] = []
@@ -283,13 +284,14 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
         practiceSessionIds?: unknown[]
         jobSnapshot?: { title?: string; company?: string }
       }
-      const toCandidate = (r: LeanRow, intentAt: Date): SolicitationCandidate => ({
+      const toCandidate = (r: LeanRow, intentAt: Date, intent: 'clicked' | 'applied' = 'applied'): SolicitationCandidate => ({
         applicationId: String(r._id),
         userId: String(r.userId),
         jobPostingId: String(r.jobPostingId),
         company: r.jobSnapshot?.company ?? 'the company',
         jobTitle: r.jobSnapshot?.title ?? 'this role',
         appliedAgoDays: Math.max(0, istCalendarDaysBetween(intentAt, now)),
+        intent,
       })
       const paginate = async (filter: Record<string, unknown>, onRow: (r: LeanRow) => void) => {
         let cursor: string | null = null
@@ -341,7 +343,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             if (!intent?.at) return
             const age = istCalendarDaysBetween(new Date(intent.at), now)
             if (age < 3 || age > 14) return
-            e4.push(toCandidate(r, new Date(intent.at)))
+            e4.push(toCandidate(r, new Date(intent.at), intent.status === 'applied' ? 'applied' : 'clicked'))
           }
         )
       }
@@ -409,7 +411,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
                 })
                 const res = await sendSolicitation({
                   userId, stream: 'e1', dedupeKeys: group.map((c) => c.applicationId),
-                  to: user.email, subject, html,
+                  to: user.email, subject, html, coarseToggle: 'nudges',
                 })
                 if (res.outcome === 'sent') {
                   remaining--
@@ -443,14 +445,19 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
                   company: c.company,
                   jobTitle: c.jobTitle,
                   practiceUrl: `${APP_URL}/jobs/${c.jobPostingId}?practice=1`,
+                  intent: c.intent,
+                  // The why-line states the TRUE trigger fact (EMAILS.md §5):
+                  // a click is a click, never an application (Codex #533).
                   footer: {
-                    whyLine: `you applied to ${c.jobTitle} at ${c.company} and haven't practiced for it yet`,
+                    whyLine: c.intent === 'applied'
+                      ? `you applied to ${c.jobTitle} at ${c.company} and haven't practiced for it yet`
+                      : `you clicked apply on ${c.jobTitle} at ${c.company} and haven't practiced for it yet`,
                     ...footerUrls,
                   },
                 })
                 const res = await sendSolicitation({
                   userId, stream: 'e4', dedupeKeys: [c.applicationId],
-                  to: user.email, subject, html,
+                  to: user.email, subject, html, coarseToggle: 'nudges',
                 })
                 if (res.outcome === 'sent') {
                   remaining--

@@ -57,23 +57,34 @@ export function buildE1Email(input: E1Input): { subject: string; html: string } 
   return { subject, html: renderShell(body, input.footer) }
 }
 
-/** E4 — deferred practice (EMAILS.md §1, solicitation). Apply-intent-gated. */
+/** E4 — deferred practice (EMAILS.md §1, solicitation). Apply-intent-gated.
+ *  `intent` branches the copy (Codex #533): an apply_clicked row is an
+ *  UNCONFIRMED click — the email must never assert 'you applied' (the
+ *  machine-fact vs user-claim rule extends into the inbox). */
 export interface E4Input {
   company: string
   jobTitle: string
   practiceUrl: string
+  intent: 'clicked' | 'applied'
   footer: EmailFooterInput
 }
 
 export function buildE4Email(input: E4Input): { subject: string; html: string } {
-  const subject = `A 15-minute mock for your ${input.company} application`
+  const applied = input.intent === 'applied'
+  const subject = applied
+    ? `A 15-minute mock for your ${input.company} application`
+    : `A 15-minute mock for the ${input.company} role you opened`
+  const opener = applied
+    ? `You applied to <strong>${escapeHtml(input.jobTitle)}</strong> at
+    <strong>${escapeHtml(input.company)}</strong>`
+    : `You opened the apply page for <strong>${escapeHtml(input.jobTitle)}</strong> at
+    <strong>${escapeHtml(input.company)}</strong>`
   const body = `
   <h1 style="font-size:20px;margin:0 0 12px;">Prep before they call 🎯</h1>
   <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 20px;">
-    You applied to <strong>${escapeHtml(input.jobTitle)}</strong> at
-    <strong>${escapeHtml(input.company)}</strong> — if they respond, the
-    interview usually comes fast. A voice mock built from this exact posting
-    takes 15 minutes and counts as evidence toward your readiness.
+    ${opener} — if this turns into an interview, it usually comes fast. A
+    voice mock built from this exact posting takes 15 minutes and counts as
+    evidence toward your readiness.
   </p>
   ${ctaButton(input.practiceUrl, 'Take the practice session')}`
   return { subject, html: renderShell(body, input.footer) }
