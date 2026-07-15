@@ -77,7 +77,12 @@ export function e2SendInstant(
   const weekEnd = istInstant(iv.y, iv.m, iv.d - daysSinceMonday + 7, 0)
   if (now.getTime() >= weekEnd.getTime()) return null // week over — never [R14]
   if (now.getTime() <= monday.getTime()) return monday
-  // Late-set: next 09:00 IST slot from now.
+  // Late-armed (Monday 09:00 already passed): the due instant must be
+  // STABLE across hourly sweeps (Codex #532 — 'next 09:00 from now' moves
+  // with every derivation, so the sweep's at<=now filter chased a forever-
+  // future instant and week reminders never fired). Most recent 09:00 IST
+  // ≤ now: the first in-window sweep sends promptly — R14's 'next
+  // quiet-hours-valid slot' — and the ledger dedupes every later sweep.
   const p = istParts(now)
-  return p.hour < 9 ? istInstant(p.y, p.m, p.d, 9) : istInstant(p.y, p.m, p.d + 1, 9)
+  return p.hour >= 9 ? istInstant(p.y, p.m, p.d, 9) : istInstant(p.y, p.m, p.d - 1, 9)
 }

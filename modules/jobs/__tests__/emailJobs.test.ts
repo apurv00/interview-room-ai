@@ -100,14 +100,25 @@ describe('emailTiming (IST, fixed offset)', () => {
     expect(e2SendInstant(interview, 'exact', new Date('2026-07-23T00:00:00Z'))).toBeNull()
   })
 
-  it('e2SendInstant week: Monday 09:00 IST; late-set → next 09:00 slot; week over → never', () => {
+  it('e2SendInstant week: Monday 09:00 IST; late-armed → STABLE most-recent 09:00 (Codex #532); week over → never', () => {
     const interview = new Date('2026-07-23T00:00:00Z') // Thursday IST
     // Armed the prior week → Monday Jul 20 09:00 IST (03:30 UTC)
     expect(e2SendInstant(interview, 'week', new Date('2026-07-18T00:00:00Z'))!.toISOString()).toBe('2026-07-20T03:30:00.000Z')
-    // Set Wednesday 14:00 IST → next 09:00 IST slot = Thursday
-    expect(e2SendInstant(interview, 'week', new Date('2026-07-22T08:30:00Z'))!.toISOString()).toBe('2026-07-23T03:30:00.000Z')
+    // Monday passed, derived Wednesday 14:00 IST → most recent 09:00 =
+    // Wednesday 03:30Z — ALREADY DUE, so the next in-window sweep sends.
+    expect(e2SendInstant(interview, 'week', new Date('2026-07-22T08:30:00Z'))!.toISOString()).toBe('2026-07-22T03:30:00.000Z')
+    // Tuesday 03:00 IST (hour<9) → most recent 09:00 = Monday 03:30Z.
+    expect(e2SendInstant(interview, 'week', new Date('2026-07-20T21:30:00Z'))!.toISOString()).toBe('2026-07-20T03:30:00.000Z')
     // Week has passed → null
     expect(e2SendInstant(interview, 'week', new Date('2026-07-27T00:00:00Z'))).toBeNull()
+  })
+
+  it('the week due instant does NOT move between hourly sweeps — reminders actually fire (Codex #532)', () => {
+    const interview = new Date('2026-07-23T00:00:00Z') // Thursday IST
+    const sweep1 = e2SendInstant(interview, 'week', new Date('2026-07-21T04:05:00Z'))! // Tue 09:35 IST
+    const sweep2 = e2SendInstant(interview, 'week', new Date('2026-07-21T05:05:00Z'))! // Tue 10:35 IST
+    expect(sweep1.toISOString()).toBe(sweep2.toISOString())
+    expect(sweep1.getTime()).toBeLessThanOrEqual(new Date('2026-07-21T04:05:00Z').getTime())
   })
 
   it('istCalendarDaysBetween counts IST calendar days', () => {
