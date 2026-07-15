@@ -34,6 +34,10 @@ vi.mock('../adapters/jsearchAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/jsearchAdapter')>()
   return { jsearchAdapter: { ...real.jsearchAdapter, fetch: mockAdapterFetch } }
 })
+vi.mock('../adapters/unstopAdapter', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../adapters/unstopAdapter')>()
+  return { unstopAdapter: { ...real.unstopAdapter, fetch: mockAdapterFetch } }
+})
 vi.mock('../adapters/atsBoardAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/atsBoardAdapter')>()
   return { atsBoardAdapter: { ...real.atsBoardAdapter, fetch: mockAdapterFetch } }
@@ -95,6 +99,17 @@ describe('runIngestSchedulerHandler', () => {
     expect(backfill[1].$set.displayName).toBeTruthy()
     expect(backfill[2]?.upsert).toBeUndefined()
     expect(mockSend).toHaveBeenCalledWith({ name: 'jobs/source.sync', data: { sourceId: 'due-source' } })
+  })
+})
+
+describe('runSourceSyncHandler — feed continuation', () => {
+  it('resumes unstop at the persisted lastPage+1 — the continuation offset is never stomped (Codex #536)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([{ bucket: 'unstop:feed', lastPage: 12 }]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, raw: [], rawPageSize: 0, attempts: 1 })
+    await runSourceSyncHandler({ data: { sourceId: 'unstop' } }, step, { interRequestDelayMs: 0 })
+    expect(mockAdapterFetch.mock.calls[0][0]).toMatchObject({ kind: 'feed', page: 13 })
   })
 })
 

@@ -184,6 +184,8 @@ export const apnaAdapter: JobSourceAdapter = {
 
     const raw: ApnaRaw[] = []
     let transientFailures = 0
+    let failStatus = 0
+    let watermark: string | null = null
     for (const c of candidates) {
       const page = await getText(c.loc, DETAIL_TIMEOUT_MS); attempts++
       if (page.ok) {
@@ -203,13 +205,22 @@ export const apnaAdapter: JobSourceAdapter = {
         // past this URL it would never be retried. Count it and fail the
         // fetch below so processTarget skips the cursor commit — the whole
         // batch re-fetches next run (merge-idempotent), completeness
-        // beats quota (the #528 rule).
+        // beats quota (the #528 rule). 429 wins the reported status so the
+        // health machine sees the rate limit (saw429 → degraded).
         transientFailures++
+        if (page.status === 429 || failStatus === 0) failStatus = page.status
+      }
+      if (page.ok || page.status === 404 || page.status === 410) {
+        // Watermark in FILTER units (Codex #536): max lastmod among COVERED
+        // candidates — fetched or permanently gone both count (a dead
+        // oldest URL must not pin the watermark forever). postedAt lags
+        // lastmod on updated postings and would livelock the drain.
+        if (c.lastmod && (!watermark || c.lastmod > watermark)) watermark = c.lastmod
       }
       await sleep(DETAIL_DELAY_MS)
     }
-    if (transientFailures > 0) return { ok: false, status: 0, raw, attempts }
-    return { ok: true, status: 200, raw, attempts }
+    if (transientFailures > 0) return { ok: false, status: failStatus, raw, attempts }
+    return { ok: true, status: 200, raw, watermark: watermark ?? undefined, attempts }
   },
 
   normalize(rawIn: unknown, _target: FetchTarget): NormalizedJob | null {

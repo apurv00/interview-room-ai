@@ -195,6 +195,37 @@ describe('apna fetch', () => {
     expect(gone.raw).toHaveLength(1)
   })
 
+  it('the fetch reports a lastmod WATERMARK (filter units) covering fetched AND permanently-gone URLs; 429 propagates (Codex #536)', async () => {
+    const mk = (flakyStatus: number) => async (url: unknown) => {
+      const u = String(url)
+      if (u === INDEX) return { ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/job-listing-sitemap.xml</loc></sitemapindex>' } as Response
+      if (/job-listing-sitemap\.xml$/.test(u)) return { ok: true, status: 200, text: async () => '<sitemapindex><loc>https://apna.co/active-job-listings-1.xml</loc></sitemapindex>' } as Response
+      if (/active-job-listings-1\.xml$/.test(u)) return { ok: true, status: 200, text: async () => `<urlset>
+        <url><loc>https://apna.co/job/a</loc><lastmod>2026-07-12T00:00:00Z</lastmod></url>
+        <url><loc>https://apna.co/job/gone</loc><lastmod>2026-07-13T00:00:00Z</lastmod></url>
+        <url><loc>https://apna.co/job/b</loc><lastmod>2026-07-14T00:00:00Z</lastmod></url>
+       </urlset>` } as Response
+      if (/job\/gone/.test(u)) return { ok: false, status: flakyStatus, text: async () => '' } as Response
+      return { ok: true, status: 200, text: async () => pageFor('Long enough description. '.repeat(30)) } as Response
+    }
+    const target = {
+      kind: 'sitemap' as const,
+      shardUrl: 'https://apna.co/api/sitemap-index.xml#active',
+      slugFilter: { metros: [''], domainPatterns: [], maxDetailFetches: 5 },
+      cursorBucket: 'apna:active',
+    }
+    // 404 on the middle URL: covered ground — watermark reaches the newest.
+    vi.mocked(fetch).mockImplementation(mk(404))
+    const ok = await apnaAdapter.fetch(target)
+    expect(ok.ok).toBe(true)
+    expect(ok.watermark).toBe('2026-07-14T00:00:00Z')
+    // 429 on the same URL: fetch FAILS and the status carries the rate limit.
+    vi.mocked(fetch).mockImplementation(mk(429))
+    const limited = await apnaAdapter.fetch(target)
+    expect(limited.ok).toBe(false)
+    expect(limited.status).toBe(429)
+  })
+
   it('a failed SHARD fetch fails the whole target — its URLs must never fall behind the cursor (Codex #536)', async () => {
     vi.mocked(fetch).mockImplementation(async (url: unknown) => {
       const u = String(url)

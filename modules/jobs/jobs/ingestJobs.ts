@@ -120,7 +120,12 @@ async function processTarget(
   initVerdictPending = false,
   distrustKnown = false
 ): Promise<void> {
-  let page = 1
+  // Honor the target's own starting page (Codex #536 — the continuation
+  // offset buildTargets resumes from was being stomped by this local
+  // counter). Buckets always start at 1; the cap bounds the COUNT of
+  // pages fetched this run, never the absolute page number.
+  const startPage = (target.kind === 'bucket' || target.kind === 'feed') && typeof target.page === 'number' && target.page > 0 ? target.page : 1
+  let page = startPage
   // Cursor mark accumulates LOCALLY and commits to the outcome only on a
   // clean exit (Codex on #528): a bucket whose later page fails must not
   // advance its cursor — page 1 already ingested fine, but the narrowed
@@ -171,11 +176,21 @@ async function processTarget(
     // date formats make string comparison meaningless.
     const cursorKey = t.kind === 'bucket' ? t.bucketId : 'cursorBucket' in t ? t.cursorBucket : undefined
     if (cursorKey) {
-      for (const n of normalized) {
-        if (!n.postedAt) continue
-        const ts = new Date(n.postedAt).getTime()
-        if (Number.isNaN(ts)) continue
-        if (!newestSeen || ts > new Date(newestSeen).getTime()) newestSeen = n.postedAt
+      if (res.watermark) {
+        // Adapter-owned watermark (Codex #536): apna filters candidates by
+        // sitemap lastmod, so the cursor MUST be in lastmod units —
+        // postedAt (datePosted) lags lastmod on updated postings, and a
+        // postedAt cursor keeps the same fetched prefix > cursor forever,
+        // starving later entries.
+        const ts = new Date(res.watermark).getTime()
+        if (!Number.isNaN(ts) && (!newestSeen || ts > new Date(newestSeen).getTime())) newestSeen = res.watermark
+      } else {
+        for (const n of normalized) {
+          if (!n.postedAt) continue
+          const ts = new Date(n.postedAt).getTime()
+          if (Number.isNaN(ts)) continue
+          if (!newestSeen || ts > new Date(newestSeen).getTime()) newestSeen = n.postedAt
+        }
       }
     }
 
@@ -191,8 +206,9 @@ async function processTarget(
     // known" is evidence of the PARTIAL run's stores, not of exhaustion —
     // the cutoff is disabled until one full clean pass rebuilds trust.
     const cutoffHit = !distrustKnown && knownRate >= KNOWN_RATE_PAGINATION_CUTOFF
-    const capExit = paginable && pageFull && !cutoffHit && page >= maxPages
-    if (!paginable || !pageFull || cutoffHit || page >= maxPages) {
+    const pagesFetched = page - startPage + 1
+    const capExit = paginable && pageFull && !cutoffHit && pagesFetched >= maxPages
+    if (!paginable || !pageFull || cutoffHit || pagesFetched >= maxPages) {
       // Feed continuation (Codex #536): a cap-exit is NOT exhaustion —
       // persist the reached page so the next run resumes at page+1;
       // exhaustion exits (non-full / cutoff) reset the offset to 0.

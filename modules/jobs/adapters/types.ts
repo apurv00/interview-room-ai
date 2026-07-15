@@ -26,6 +26,11 @@ export interface FetchResult {
   /** UNFILTERED page size (Codex #536): pagination fullness must be judged
    *  before policy filters (e.g. closed-registration rows) shrink raw. */
   rawPageSize?: number
+  /** Adapter-owned cursor value for this batch, in the SAME units the
+   *  adapter filters by (apna: max sitemap lastmod among fetched
+   *  candidates). When present it replaces postedAt-derived accumulation —
+   *  cursor and filter must share units or the drain livelocks. */
+  watermark?: string
   /** Physical request count (RapidAPI bills attempts — metered, not logical calls). */
   attempts: number
 }
