@@ -134,6 +134,37 @@ describe('runSourceSyncHandler', () => {
     expect(health).toBe('active')
   })
 
+  it('cursors checkpoint per chunk — durable even when the run dies before finalize (prod first-fill, 2026-07-15)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockImplementation(async (t: { bucketId?: string }) => ({
+      ok: true, status: 200, attempts: 1,
+      raw: [{
+        job_id: `id-${t.bucketId}`, job_title: 'Backend Developer', employer_name: `Acme ${t.bucketId}`,
+        job_city: 'Pune', job_description: 'Build APIs. '.repeat(50),
+        job_posted_at_datetime_utc: '2026-07-12T00:00:00Z', job_apply_link: 'https://careers.acme.com/1',
+      }],
+    }))
+    // Simulate the platform killing the invocation before finalize (the
+    // 300s maxDuration guillotine): chunk steps run, finalize never does.
+    const dyingStep = {
+      run: <T,>(name: string, fn: () => Promise<T> | T): Promise<T> => {
+        if (name === 'finalize') throw new Error('invocation killed')
+        return Promise.resolve(fn())
+      },
+    }
+    await expect(runSourceSyncHandler(EVENT, dyingStep, { interRequestDelayMs: 0 })).rejects.toThrow('invocation killed')
+    // The chunk-level checkpoints already landed: monotonic $max upserts,
+    // so the next re-dispatch reads narrowed windows instead of refetching
+    // the whole corpus on billed quota.
+    expect(mockCursorBulkWrite).toHaveBeenCalled()
+    const op = mockCursorBulkWrite.mock.calls[0][0][0].updateOne
+    expect(op.update.$max.newestPostedAt).toBeInstanceOf(Date)
+    expect(op.upsert).toBe(true)
+    expect(mockCycleCreate).not.toHaveBeenCalled() // finalize genuinely never ran
+  })
+
   it('a garbage postedAt never reaches the cursor write — finalize still succeeds', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })

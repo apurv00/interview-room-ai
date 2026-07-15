@@ -158,6 +158,20 @@ async function processTarget(
   }
 }
 
+/** Monotonic cursor upserts (Codex on #511): $max means a reordered page or
+ *  an older overlapping run finalizing late can never move a cursor
+ *  backwards — that would widen future windows and re-fetch stale pages on
+ *  billed quota. Shared by the per-chunk checkpoint and finalize. */
+function cursorCheckpointOps(sourceId: string, newestByBucket: ChunkOutcome['newestByBucket']) {
+  return Object.entries(newestByBucket).map(([bucket, newest]) => ({
+    updateOne: {
+      filter: { sourceId, bucket },
+      update: { $max: { newestPostedAt: new Date(newest) }, $set: { lastRunAt: new Date() } },
+      upsert: true,
+    },
+  }))
+}
+
 // ── Pure handlers (unit-testable with a step mock) ──────────────────────────
 
 export async function runIngestSchedulerHandler(step: StepRunner): Promise<{ dispatched: number } | { skipped: true }> {
@@ -258,24 +272,24 @@ export async function runSourceSyncHandler(
         await processTarget(adapter, sourceId, target, o, delayMs, initVerdictPending)
         if (delayMs) await sleep(delayMs)
       }
+      // Durable checkpoint (prod first-fill incident, 2026-07-15): a
+      // full-corpus run can outlive the platform's invocation ceiling, and
+      // with cursors persisted only in finalize every retry re-fetched all
+      // buckets from scratch on billed quota. $max is monotonic, so
+      // checkpointing per chunk is replay-safe, and buildTargets re-reads
+      // cursors on each resume — a bucket completed ONCE keeps its narrowed
+      // window across run deaths and hourly re-dispatches.
+      const ops = cursorCheckpointOps(sourceId, o.newestByBucket)
+      if (ops.length) await JobIngestCursor.bulkWrite(ops)
       return o
     })
     accumulate(total, outcome)
   }
 
   await step.run('finalize', async () => {
-    // Cursors: newest postedAt per bucket (upsert).
-    const ops = Object.entries(total.newestByBucket).map(([bucket, newest]) => ({
-      updateOne: {
-        filter: { sourceId, bucket },
-        // $max keeps the cursor MONOTONIC (Codex on #511): a reordered page
-        // or an older overlapping run finalizing late must never move the
-        // cursor backwards — that would widen future windows and re-fetch
-        // stale pages on billed quota.
-        update: { $max: { newestPostedAt: new Date(newest) }, $set: { lastRunAt: new Date() } },
-        upsert: true,
-      },
-    }))
+    // Cursors: re-assert the accumulated high-water marks (monotonic $max —
+    // a no-op where the per-chunk checkpoints already landed).
+    const ops = cursorCheckpointOps(sourceId, total.newestByBucket)
     if (ops.length) await JobIngestCursor.bulkWrite(ops)
 
     // Health (§4.4 thresholds): drift >50% = QUARANTINED (provider schema is
