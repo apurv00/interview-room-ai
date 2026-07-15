@@ -51,10 +51,19 @@ when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
      acceptable; double-sending is not.
    - *Transactional streams (E0/E2)*: send-first with a **Resend
      idempotency key = the dedupeKey**, then record. Provider-side
-     idempotency makes send-then-record double-safe, and a crash can't
-     burn the dedupe key on an unsent time-critical mail [R15]. Same-run
-     bounded retry (2 attempts); an E2 still unsent alerts immediately
-     (log level error + dashboard), not after 24h [R6].
+     idempotency makes send-then-record double-safe within Resend's
+     window, and a crash can't burn the dedupe key on an unsent
+     time-critical mail [R15]. Same-run bounded retry (2 attempts); an E2
+     still unsent alerts immediately (log level error + dashboard), not
+     after 24h [R6]. **The provider window is 24h (Resend docs) — so ALL
+     automatic re-attempts (step retries, sweep re-derivation, run
+     replays) are permitted only within 24h of the first attempt; beyond
+     it, a missing ledger row must NEVER auto-send — it surfaces as an
+     alert and a human decides** (Codex #530). E2's due-window makes this
+     natural (T-1 → interview date, never re-derived after the date
+     passes); E0's dedupeKey embeds the request hour, bounding it the
+     same way. Manual dashboard kicks check the ledger first and refuse
+     past-window sends.
    - *Ordering*: any content-dependent skip (E3's zero-content rule) is
      decided BEFORE reservation — a skipped digest is not a false alarm
      [R32].
@@ -78,12 +87,18 @@ when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
 - `User.emailPreferences.jobs = { nudges: boolean, digest: boolean,
   unsubscribedStreams: string[] }` [R5][R27]. Coarse toggles for settings
   UI (E1/E4 ride `nudges`, E3 rides `digest`); the suppression list is what
-  unsubscribe links write (`e1`…`e4`, or all four for `all-jobs`).
-  Two-layer semantics: a send requires its coarse toggle ≠ false AND its
-  stream not suppressed. **E2's "setting a date is the request" overrides
+  unsubscribe links write. **Entries are the closed enum `e0`…`e4` plus the
+  explicit marker `all` — the all-jobs link writes `all` itself, never a
+  fan-out to per-stream entries** (a fan-out loses the global-intent fact
+  and leaves streams without their own entry, E0 included, nothing to
+  check — Codex #530). Send gate: stream id ∉ list AND `all` ∉ list.
+  Two-layer semantics: a send requires its coarse toggle ≠ false AND the
+  suppression gate. **E2's "setting a date is the request" overrides
   `nudges=false` but NEVER a suppression entry — one-click unsubscribe is
   absolute (RFC 8058 compliance and basic respect)** [R5][R24]. E0 bypasses
-  toggles (it is a direct request) but still honors `all-jobs` suppression.
+  toggles (it is a direct request) but honors the same suppression gate
+  (`e0` or `all`); the request UI shows "email is off for your account"
+  instead of silently accepting a request it won't honor.
 - **Two unsubscribe paths** [R17]:
   - `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
     headers point at a dedicated endpoint that commits suppression
