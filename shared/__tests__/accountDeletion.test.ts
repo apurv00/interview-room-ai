@@ -20,6 +20,8 @@ const mockSessionDeleteOne = vi.fn()
 const mockSessionFind = vi.fn()
 const mockUserDeleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 })
 const mockServedProblemUpdateOne = vi.fn().mockResolvedValue({ acknowledged: true })
+const mockEvidenceDistinct = vi.fn()
+const mockJobAppUpdateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 })
 vi.mock('@shared/db/models/InterviewSession', () => ({
   InterviewSession: {
     findById: (...args: unknown[]) => mockSessionFindById(...args),
@@ -58,9 +60,16 @@ vi.mock('@shared/db/models', () => {
     PathwayPlan: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     WizardSession: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     StreakDay: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
-    JobApplication: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    JobApplication: {
+      deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+      updateMany: (...args: unknown[]) => mockJobAppUpdateMany(...args),
+    },
     ProductEvent: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     JobsEmailSend: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    JobPracticeEvidence: {
+      deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+      distinct: (...args: unknown[]) => mockEvidenceDistinct(...args),
+    },
     LessonEngagement: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     SessionSummary: {
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
@@ -97,6 +106,7 @@ describe('accountDeletion – R2 key coverage', () => {
     vi.clearAllMocks()
     mockDeleteFromR2.mockResolvedValue(undefined)
     mockSessionDeleteOne.mockResolvedValue({ deletedCount: 1 })
+    mockEvidenceDistinct.mockResolvedValue([])
   })
 
   it('deletes audioRecordingR2Key and screenRecordingR2Key when present', async () => {
@@ -166,6 +176,48 @@ describe('accountDeletion – R2 key coverage', () => {
     await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
 
     expect(mockServedProblemUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('clears the readiness snapshot on applications fed by the deleted session (Codex #538 r2)', async () => {
+    mockSessionFindById.mockResolvedValue({
+      _id: 'sess-5',
+      userId: { toString: () => 'user-1' },
+    })
+    // A band derived from deleted answers must not survive the delete —
+    // absent snapshot = "no claims"; next attribution write rebuilds it.
+    mockEvidenceDistinct.mockResolvedValue(['app-1', 'app-2'])
+
+    await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+
+    expect(mockEvidenceDistinct).toHaveBeenCalledWith('applicationId', { sessionId: expect.anything() })
+    expect(mockJobAppUpdateMany).toHaveBeenCalledWith(
+      { _id: { $in: ['app-1', 'app-2'] } },
+      { $unset: { readiness: 1 } }
+    )
+  })
+
+  it('pulls the deleted session from the practiceSessionIds ticker — "n/3 sessions" sells evidence, not attendance', async () => {
+    const userId = { toString: () => 'user-1' }
+    mockSessionFindById.mockResolvedValue({ _id: 'sess-7', userId })
+
+    await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+
+    expect(mockJobAppUpdateMany).toHaveBeenCalledWith(
+      { userId, practiceSessionIds: '507f1f77bcf86cd799439011' },
+      { $pull: { practiceSessionIds: '507f1f77bcf86cd799439011' } }
+    )
+  })
+
+  it('sessions with no evidence rows never clear snapshots (only the ticker pull runs)', async () => {
+    mockSessionFindById.mockResolvedValue({
+      _id: 'sess-6',
+      userId: { toString: () => 'user-1' },
+    })
+
+    await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+
+    const unsetCalls = mockJobAppUpdateMany.mock.calls.filter((c) => c[1] && '$unset' in (c[1] as object))
+    expect(unsetCalls).toHaveLength(0)
   })
 })
 

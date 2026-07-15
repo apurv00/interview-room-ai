@@ -39,8 +39,13 @@ re-bill the LLM [R25]: `load-inputs` → `llm-attribute` → `persist`.
 - *JD-version binding* [R23]: hash the SESSION's own `jobDescription`
   (`xrayHashOf` — the same value the repo already stores as `jdHash`;
   never `bodyHashOf` [R16]). If it equals the posting's `parsedJDHash`,
-  attribute against the cached parse; else parse the session's own JD copy
-  (one bounded extra call) — **never attribute across JD versions**.
+  attribute against the cached parse; else the run is a counted skip
+  (`jd-version-mismatch`) — **never attribute across JD versions**, and
+  v1 never makes a second parse call (parsing the session's own JD copy
+  is a deferred v1.1 option, shipped behavior wins over this spec's
+  earlier draft). Mismatch skips stay RETRYABLE within the sweep window
+  (Codex #538 r4): the posting cache may simply be stale — a session
+  practiced against the updated JD aligns once `/xray` reparses.
 - *Parse stability* [R11]: the X-ray parse cache becomes first-write-wins
   per hash (`updateOne({_id, parsedJDHash: {$ne: hash}}, ...)`) so a
   same-hash re-parse can never replace the requirement ids evidence binds
@@ -68,7 +73,11 @@ unique index { sessionId, requirementId, xrayHash }   // real, DB-level
 
   (ServedProblem precedent — array subdocs cannot carry unique indexes.)
   GDPR: cascade + export + completeness-test entries, AND the per-session
-  delete path removes the session's evidence rows [R26]. After persist,
+  delete path removes the session's evidence rows [R26] and **$unsets the
+  affected applications' readiness snapshots** (Codex #538 r2: a band
+  derived from deleted answers must not survive; shared/** cannot reach
+  the band math, and an absent snapshot = "no claims" — the safe
+  direction; the next attribution write rebuilds it). After persist,
   the worker recomputes and **denormalizes a readiness snapshot onto
   JobApplication**: `readiness: {band, sessions, practicedCount,
   mustHaveTotal, quality, strongCoverage, xrayHash, scoringEpoch, at}`
@@ -83,18 +92,21 @@ unique index { sessionId, requirementId, xrayHash }   // real, DB-level
 own prod sessions) with an agreement floor; re-run on any slot model
 change. PR-R2 does not ship until it passes.
 
-**Cost**: one bounded call per scored jobs session (+ at most one JD
-parse on version mismatch); never per-user×job. Module budgets: PR-R1
+**Cost**: one bounded call per scored jobs session (version mismatch =
+terminal counted skip, no second parse in v1); never per-user×job. Module budgets: PR-R1
 adds a `modules/jobs` budget row + ADR, and the new shared model file
 bumps shared maxFiles with the paired ADR [R27].
 
 ## 2. PR-R2 — Bands (deterministic, computed at evidence-write time)
 
-`computeReadiness(evidenceRows, currentParse)` — pure, zero LLM:
+`computeReadiness(evidenceRows, currentParse, currentEpoch)` — pure, zero LLM:
 
 - Rows counted only when: `xrayHash` = the posting's current
   `parsedJDHash` [R2], `answerScore ≥ 40` [R0], `scoringEpoch` = current
-  [R8], and `requirementId ∈ current parse's MUST-HAVE id set` — the
+  [R8] (epoch = `resolveModel('interview.evaluate-answer').model` at
+  attribution time — the RESOLVED model, honoring CMS overrides, since
+  AnswerEvaluation never persists its judge model; Codex #538 r1+r2),
+  and `requirementId ∈ current parse's MUST-HAVE id set` — the
   numerator's universe must equal the denominator's (Codex #537): a
   nice-to-have id inflating practicedCount against a must-have total is a
   silent over-claim. Belt at persist too: the worker rejects any returned
@@ -102,6 +114,10 @@ bumps shared maxFiles with the paired ADR [R27].
   distinct count [R11]).
 - `practicedCount` = distinct counted requirement ids;
   `mustHaveTotal` = current parse's must-have count.
+- `sessions` = distinct sessions among COUNTED rows — NOT the
+  application's total practice count. Two stale-JD sessions plus one
+  current one is ONE session of current evidence, not three; stale
+  sessions can never unlock the sessions ≥ 3 gate (Codex #538 r2).
 - `quality` = mean over practiced requirements of (best row per
   requirement: strengthWeight × answerScore), strong = 1.0, partial = 0.5
   — **strength MULTIPLIES; the all-partial-72 case scores 36, not 72**

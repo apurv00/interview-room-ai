@@ -110,6 +110,11 @@ export interface IInterviewSession extends Document {
     source: 'jobs'
     jobId: string
     applicationId?: string
+    /** Stamped by the evidence-attribution worker at every TERMINAL
+     *  outcome — including zero-evidence ones, which store no rows. The
+     *  reconciliation sweep only re-emits unstamped sessions (Codex #538:
+     *  row existence alone re-billed processed zero-evidence sessions). */
+    evidenceProcessedAt?: Date
   }
 
   // Research donation — candidate opted in to contribute this session's
@@ -276,6 +281,9 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
           source: { type: String, enum: ['jobs'], required: true },
           jobId: { type: String, required: true, maxlength: 64 },
           applicationId: { type: String, maxlength: 64 },
+          // Strict subdoc: without this declaration the worker's dot-path
+          // $set would be silently stripped and the sweep would loop.
+          evidenceProcessedAt: { type: Date },
         },
         { _id: false }
       ),

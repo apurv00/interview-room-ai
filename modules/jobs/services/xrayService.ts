@@ -70,7 +70,13 @@ export async function getOrParseXray(jobPostingId: string): Promise<XrayResult |
   // real JD always carries at least one requirement or theme.
   const isFallback = extracted.requirements.length === 0 && extracted.keyThemes.length === 0
   if (!isFallback) {
-    await JobPosting.updateOne({ _id: jobPostingId }, { $set: { parsedJD: extracted, parsedJDHash: hash } })
+    // FIRST-WRITE-WINS per hash (READINESS.md §1, panel R11): evidence
+    // rows bind to this parse's requirement ids — a same-hash re-parse
+    // (cache-miss race) must never replace the ids they point at.
+    await JobPosting.updateOne(
+      { _id: jobPostingId, parsedJDHash: { $ne: hash } },
+      { $set: { parsedJD: extracted, parsedJDHash: hash } }
+    )
   }
   return { parsed: extracted, cached: false }
 }

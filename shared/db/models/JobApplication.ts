@@ -84,6 +84,20 @@ export interface IJobApplication extends Document {
   notes?: string
   brokenLinkReports: Array<{ url: string; reportedAt: Date }>
   practiceSessionIds: mongoose.Types.ObjectId[]
+  /** Denormalized readiness snapshot (READINESS.md §1 — recomputed by the
+   *  attribution worker at evidence-write time; consumers NEVER recompute
+   *  per-request). Absent until the first attribution lands. */
+  readiness?: {
+    band: 'none' | 'building' | 'practiced' | 'strong-evidence'
+    sessions: number
+    practicedCount: number
+    mustHaveTotal: number
+    quality: number
+    strongCoverage: number
+    xrayHash: string
+    scoringEpoch: string
+    at: Date
+  }
   ghostSuggestedAt?: Date
   createdAt: Date
   updatedAt: Date
@@ -174,6 +188,23 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       default: [],
     },
     practiceSessionIds: { type: [Schema.Types.ObjectId], ref: 'InterviewSession', default: [] },
+    readiness: {
+      type: new Schema(
+        {
+          band: { type: String, enum: ['none', 'building', 'practiced', 'strong-evidence'], required: true },
+          sessions: { type: Number, required: true, min: 0 },
+          practicedCount: { type: Number, required: true, min: 0 },
+          mustHaveTotal: { type: Number, required: true, min: 0 },
+          quality: { type: Number, required: true, min: 0, max: 100 },
+          strongCoverage: { type: Number, required: true, min: 0, max: 1 },
+          xrayHash: { type: String, required: true },
+          scoringEpoch: { type: String, required: true },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
     ghostSuggestedAt: { type: Date },
   },
   { timestamps: true }

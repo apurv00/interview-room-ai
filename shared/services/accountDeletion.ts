@@ -49,7 +49,7 @@ import {
   ServedProblem,
   JobApplication,
   ProductEvent,
-  LessonEngagement, JobsEmailSend } from '@shared/db/models'
+  LessonEngagement, JobsEmailSend, JobPracticeEvidence } from '@shared/db/models'
 
 // ─── Per-session delete ───────────────────────────────────────────────────────
 
@@ -123,12 +123,38 @@ export async function deleteInterviewSession(
     }
   }
 
+  // Readiness evidence rows are session-scoped personal data
+  // (READINESS.md §1, panel R26). Capture which applications they fed
+  // BEFORE deleting so their denormalized snapshots can be cleared —
+  // otherwise a band derived from deleted answers survives indefinitely
+  // if the user never practices that job again (Codex #538 round 2).
+  const readinessAppIds = await JobPracticeEvidence.distinct('applicationId', { sessionId })
+
   // Cascade DB deletes for documents tied to this single session.
   await Promise.all([
     MultimodalAnalysis.deleteOne({ sessionId }),
     SessionSummary.deleteOne({ sessionId }),
+    JobPracticeEvidence.deleteMany({ sessionId }),
     InterviewSession.deleteOne({ _id: sessionId }),
   ])
+
+  // Clear (never recompute here — shared/** cannot reach modules/jobs
+  // band math) the affected snapshots. Absent snapshot = "no claims",
+  // which is the safe direction; the next attribution write rebuilds it
+  // from the surviving rows.
+  if (readinessAppIds.length > 0) {
+    await JobApplication.updateMany(
+      { _id: { $in: readinessAppIds } },
+      { $unset: { readiness: 1 } }
+    )
+  }
+  // The deleted session must also leave the applications' session ticker
+  // — "n/3 sessions" sells readiness evidence, not attendance, and a
+  // GDPR-deleted session must not stay referenced anywhere.
+  await JobApplication.updateMany(
+    { userId: session.userId, practiceSessionIds: sessionId },
+    { $pull: { practiceSessionIds: sessionId } }
+  )
 
   logger.info(
     { sessionId, userId, r2KeysDeleted, r2KeysFailed },
@@ -228,6 +254,7 @@ export async function deleteUserAccount(
     ['JobApplication', JobApplication.deleteMany({ userId: userObjectId })],
     ['ProductEvent', ProductEvent.deleteMany({ userId: userObjectId })],
     ['JobsEmailSend', JobsEmailSend.deleteMany({ userId: userObjectId })],
+    ['JobPracticeEvidence', JobPracticeEvidence.deleteMany({ userId: userObjectId })],
     // Pre-existing gap surfaced by the Wave-1b GDPR completeness tripwire:
     // per-user lesson engagement rows survived account deletion.
     ['LessonEngagement', LessonEngagement.deleteMany({ userId: userObjectId })],
