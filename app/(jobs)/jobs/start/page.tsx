@@ -160,33 +160,33 @@ export default function JobsStartPage() {
 
   return (
     <main className="mx-auto max-w-xl px-4 py-10">
-      <Link href="/jobs" className="text-sm text-gray-500 hover:underline">← Jobs</Link>
+      <Link href="/jobs" className="text-sm text-slate-500 hover:underline">← Jobs</Link>
       <h1 className="mt-3 text-2xl font-semibold">Sort the feed for you</h1>
 
       {door === 'chooser' && (
         <div className="mt-6 space-y-3">
           {importDoor && (
-            <button onClick={importBase} className="block w-full rounded-xl border border-blue-300 p-4 text-left hover:border-blue-500 dark:border-blue-800">
+            <button onClick={importBase} className="block w-full rounded-xl border border-blue-300 p-4 text-left hover:border-blue-500 bg-white">
               <span className="font-medium">Use my saved resume</span>
-              <span className="mt-0.5 block text-sm text-gray-500">{importDoor.name}</span>
+              <span className="mt-0.5 block text-sm text-slate-500">{importDoor.name}</span>
             </button>
           )}
-          <button onClick={() => setDoor('paste')} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400">
+          <button onClick={() => setDoor('paste')} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
             <span className="font-medium">Paste your resume text</span>
-            <span className="mt-0.5 block text-sm text-gray-500">Fastest — copy everything, paste here.</span>
+            <span className="mt-0.5 block text-sm text-slate-500">Fastest — copy everything, paste here.</span>
           </button>
-          <button onClick={() => fileRef.current?.click()} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400">
+          <button onClick={() => fileRef.current?.click()} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
             <span className="font-medium">Upload a .txt file</span>
-            <span className="mt-0.5 block text-sm text-gray-500">Plain-text export of your resume.</span>
+            <span className="mt-0.5 block text-sm text-slate-500">Plain-text export of your resume.</span>
           </button>
           <input ref={fileRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
-          <Link href="/resume/builder?return=/jobs/start" className="block w-full rounded-xl border p-4 text-left hover:border-blue-400">
+          <Link href="/resume/builder?return=/jobs/start" className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
             <span className="font-medium">No resume yet? Build one</span>
-            <span className="mt-0.5 block text-sm text-gray-500">You&apos;ll need one on Naukri anyway — 10 minutes in the builder.</span>
+            <span className="mt-0.5 block text-sm text-slate-500">You&apos;ll need one on Naukri anyway — 10 minutes in the builder.</span>
           </Link>
-          <button onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400">
+          <button onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
             <span className="font-medium">Just ask me 3 questions</span>
-            <span className="mt-0.5 block text-sm text-gray-500">Role, city, done.</span>
+            <span className="mt-0.5 block text-sm text-slate-500">Role, city, done.</span>
           </button>
         </div>
       )}
@@ -198,7 +198,7 @@ export default function JobsStartPage() {
             onChange={(e) => setPasteText(e.target.value)}
             rows={12}
             placeholder="Paste your full resume text here…"
-            className="w-full rounded-xl border p-3 text-sm dark:bg-gray-900"
+            className="w-full rounded-xl border border-slate-200 p-3 text-sm bg-white text-slate-900 placeholder-slate-400"
           />
           <div className="mt-3 flex gap-3">
             <button
@@ -208,7 +208,7 @@ export default function JobsStartPage() {
             >
               {busy ? 'Reading your resume…' : 'Continue'}
             </button>
-            <button onClick={() => setDoor('chooser')} className="rounded-lg border px-4 py-2 text-sm">Back</button>
+            <button onClick={() => setDoor('chooser')} className="rounded-lg border border-slate-200 px-4 py-2 text-sm bg-white text-slate-900 placeholder-slate-400">Back</button>
           </div>
         </div>
       )}
@@ -217,42 +217,42 @@ export default function JobsStartPage() {
         <div className="mt-6 space-y-4">
           <label className="block">
             <span className="text-sm font-medium">What role are you looking for?</span>
-            <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="e.g. Backend Engineer, Sales Executive" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm dark:bg-gray-900" />
+            <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="e.g. Backend Engineer, Sales Executive" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
           </label>
           <label className="block">
             <span className="text-sm font-medium">Which city? (anywhere works — remote is always included)</span>
-            <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="e.g. Pune" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm dark:bg-gray-900" />
+            <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="e.g. Pune" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
           </label>
           <div className="flex gap-3">
             <button disabled={!role.trim()} onClick={confirmTarget} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
               Show my jobs
             </button>
-            <button onClick={() => setDoor('chooser')} className="rounded-lg border px-4 py-2 text-sm">Back</button>
+            <button onClick={() => setDoor('chooser')} className="rounded-lg border border-slate-200 px-4 py-2 text-sm bg-white text-slate-900 placeholder-slate-400">Back</button>
           </div>
         </div>
       )}
 
       {door === 'confirm' && (
         <div className="mt-6">
-          <p className="text-sm text-gray-600 dark:text-gray-400">
+          <p className="text-sm text-slate-500">
             Got it{detectedName ? `, ${detectedName.split(' ')[0]}` : ''}. Here&apos;s what we read — confirm your target and we&apos;ll sort the feed.
           </p>
           {skills.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {skills.slice(0, 10).map((s) => (
-                <span key={s} className="rounded-full border px-2 py-0.5 text-xs text-gray-600 dark:text-gray-400">{s}</span>
+                <span key={s} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 bg-white">{s}</span>
               ))}
-              {skills.length > 10 && <span className="text-xs text-gray-400">+{skills.length - 10} more</span>}
+              {skills.length > 10 && <span className="text-xs text-slate-400">+{skills.length - 10} more</span>}
             </div>
           )}
           <label className="mt-5 block">
             <span className="text-sm font-medium">Role you&apos;re targeting</span>
-            <span className="ml-2 text-xs text-gray-500">(your resume is your past — this is where you&apos;re headed)</span>
-            <input value={role} onChange={(e) => setRole(e.target.value)} className="mt-1 w-full rounded-lg border px-3 py-2 text-sm dark:bg-gray-900" />
+            <span className="ml-2 text-xs text-slate-500">(your resume is your past — this is where you&apos;re headed)</span>
+            <input value={role} onChange={(e) => setRole(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
           </label>
           <label className="mt-3 block">
             <span className="text-sm font-medium">City</span>
-            <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="Any location — remote always included" className="mt-1 w-full rounded-lg border px-3 py-2 text-sm dark:bg-gray-900" />
+            <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="Any location — remote always included" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
           </label>
           <button onClick={confirmTarget} className="mt-5 rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700">
             Show my jobs →

@@ -342,16 +342,16 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       </main>
     )
   }
-  if (!detail) return <main className="mx-auto max-w-3xl px-4 py-16 text-sm text-gray-500">Loading…</main>
+  if (!detail) return <main className="mx-auto max-w-3xl px-4 py-16 text-sm text-slate-500">Loading…</main>
 
   const primary = detail.applyOptions?.[0]
   const alternates = (detail.applyOptions ?? []).slice(1)
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
-      <Link href="/jobs" className="text-sm text-gray-500 hover:underline">← All jobs</Link>
+      <Link href="/jobs" className="text-sm text-slate-500 hover:underline">← All jobs</Link>
       <h1 className="mt-3 text-2xl font-semibold">{detail.title}</h1>
-      <p className="mt-1 text-gray-600 dark:text-gray-400">
+      <p className="mt-1 text-slate-500">
         {detail.company}
         {detail.locations[0] ? ` · ${detail.locations[0]}` : ''}
         {detail.isRemote ? ' · Remote' : ''}
@@ -363,7 +363,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           {/* blurred stand-in — real content never reaches the anon client */}
           <div aria-hidden className="select-none space-y-2 blur-sm">
             {['w-5/6', 'w-full', 'w-4/6', 'w-full', 'w-3/6', 'w-5/6', 'w-2/3'].map((w, i) => (
-              <div key={i} className={`h-3 rounded bg-gray-300 dark:bg-gray-700 ${w}`} />
+              <div key={i} className={`h-3 rounded bg-slate-300 ${w}`} />
             ))}
           </div>
           <div className="absolute inset-0 flex items-center justify-center">
@@ -386,7 +386,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 >
                   Apply ↗
                 </button>
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-1 text-xs text-slate-500">
                   {(TIER_SUBTITLE[primary.tier] ?? (() => ''))(detail.company, primary.viaSite)}
                 </p>
               </div>
@@ -394,7 +394,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             {(interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain) && (
               <button
                 onClick={onPracticeClick}
-                className="rounded-lg border border-blue-400 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-950"
+                className="rounded-lg border border-blue-400 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50"
               >
                 🎙 Practice for this job · 15 min
               </button>
@@ -402,7 +402,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             <button
               onClick={onSave}
               disabled={saved}
-              className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-60 dark:hover:bg-gray-800"
+              className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-60"
             >
               {saved ? 'Saved ✓' : 'Save'}
             </button>
@@ -411,16 +411,16 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 href={primary.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-gray-500 hover:underline"
+                className="text-xs text-slate-500 hover:underline"
               >
                 View full posting ↗
               </a>
             )}
           </div>
           {alternates.length > 0 && (
-            <p className="mt-2 text-xs text-gray-500">
+            <p className="mt-2 text-xs text-slate-500">
               Also available: {alternates.map((o, i) => (
-                <button key={i} onClick={() => onApply(o)} className="underline decoration-dotted hover:text-gray-700 dark:hover:text-gray-300">
+                <button key={i} onClick={() => onApply(o)} className="underline decoration-dotted hover:text-slate-600">
                   {o.viaSite ?? o.tier}{i < alternates.length - 1 ? ', ' : ''}
                 </button>
               ))}
@@ -428,29 +428,29 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           )}
 
           {inference === 'asking' && (
-            <div className="mt-4 rounded-lg border border-blue-300 bg-blue-50 p-3 text-sm dark:border-blue-800 dark:bg-blue-950">
+            <div className="mt-4 rounded-lg border border-blue-300 bg-blue-50 p-3 text-sm">
               <p className="font-medium">Prepping for a real interview at {detail.company}?</p>
               <div className="mt-2 flex gap-2">
                 <button onClick={() => answerInference(true)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white">Yes — it&apos;s scheduled</button>
-                <button onClick={() => answerInference(false)} className="rounded-lg border px-3 py-1 text-xs">Just practicing</button>
+                <button onClick={() => answerInference(false)} className="rounded-lg border border-slate-200 px-3 py-1 text-xs bg-white">Just practicing</button>
               </div>
             </div>
           )}
 
           {detail.application?.status === 'interview_scheduled' ? (
             /* §4c hero swap: the chip yields to the PREP PLAN panel. */
-            <div className="mt-5 rounded-lg border border-blue-300 bg-blue-50 p-4 text-sm dark:border-blue-800 dark:bg-blue-950">
+            <div className="mt-5 rounded-lg border border-blue-300 bg-blue-50 p-4 text-sm">
               <p className="font-medium">🎙 You got the interview. Let&apos;s make sure you&apos;re ready.</p>
               {/* Capture stays reachable until a real date exists — 'Not sure
                   yet' must not hide the buttons forever (Codex on #525). */}
               {!detail.application.interviewDate && (
                 <div className="mt-2">
-                  <p className="text-xs text-gray-600 dark:text-gray-400">
+                  <p className="text-xs text-slate-500">
                     {detail.application.interviewDateConfidence === 'unknown' ? 'Know the date now?' : 'When is it?'}
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {[['tomorrow', 'Tomorrow'], ['this-week', 'This week'], ['next-week', 'Next week'], ...(detail.application.interviewDateConfidence === 'unknown' ? [] : [['not-sure', 'Not sure yet']])].map(([c, l]) => (
-                      <button key={c} onClick={() => captureDate(c)} className="rounded-full border px-2.5 py-1 text-xs hover:bg-white dark:hover:bg-gray-900">{l}</button>
+                      <button key={c} onClick={() => captureDate(c)} className="rounded-full border border-slate-200 px-2.5 py-1 text-xs hover:bg-white">{l}</button>
                     ))}
                   </div>
                 </div>
@@ -460,7 +460,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   const plan = buildPrepPlan(detail.application.interviewDate ? new Date(detail.application.interviewDate) : null)
                   return (
                     <div className="mt-2">
-                      <p className="text-xs text-gray-600 dark:text-gray-400">{plan.headline}</p>
+                      <p className="text-xs text-slate-500">{plan.headline}</p>
                       <ul className="mt-2 space-y-1.5">
                         {plan.sessions.map((sess) => (
                           <li key={sess.label} className="flex items-center justify-between gap-2">
@@ -475,7 +475,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   )
                 })()
               )}
-              <p className="mt-2 text-xs text-gray-500">
+              <p className="mt-2 text-xs text-slate-500">
                 Evidence toward readiness on this job: {detail.application.practiceCount}/3 sessions
               </p>
             </div>
@@ -484,9 +484,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 yet). Rules 2/4 arrive with readiness bands; rule 3 stays behind
                 its DB row (DECISIONS #19). "Not ready" is banned copy; Apply is
                 never disabled. */
-            <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-900 dark:bg-blue-950">
+            <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
               <span className="font-medium">Apply now — prep while you wait.</span>
-              <span className="ml-2 text-xs text-gray-600 dark:text-gray-400">
+              <span className="ml-2 text-xs text-slate-500">
                 Evidence toward readiness on this job: {detail.application?.practiceCount ?? 0}/3 sessions
               </span>
             </div>
@@ -494,10 +494,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
           <section className="mt-6" aria-label="ATS check">
             {detail.application?.ats.state === 'done' ? (
-              <div className="rounded-lg border p-3 text-sm">
+              <div className="rounded-lg border border-slate-200 p-3 text-sm bg-white">
                 <span className="font-medium">ATS match: {detail.application.ats.score}/100</span>
                 {(detail.application.ats.missingKeywords?.length ?? 0) > 0 && (
-                  <span className="ml-2 text-xs text-gray-600 dark:text-gray-400">
+                  <span className="ml-2 text-xs text-slate-500">
                     Missing: {detail.application.ats.missingKeywords!.join(', ')}
                   </span>
                 )}
@@ -506,35 +506,35 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 <button onClick={onAtsCheck} className="ml-3 text-xs text-blue-600 hover:underline">Re-check</button>
               </div>
             ) : detail.application?.ats.state === 'pending' || atsBusy ? (
-              <p className="text-sm text-gray-500">Checking your resume against this JD (~1 min)…</p>
+              <p className="text-sm text-slate-500">Checking your resume against this JD (~1 min)…</p>
             ) : detail.application ? (
-              <button onClick={onAtsCheck} className="rounded-lg border px-3 py-1.5 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800">
+              <button onClick={onAtsCheck} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
                 Check my resume against this JD
               </button>
             ) : (
-              <p className="text-xs text-gray-500">Save this job to unlock the ATS check.</p>
+              <p className="text-xs text-slate-500">Save this job to unlock the ATS check.</p>
             )}
-            {atsHint && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{atsHint}</p>}
+            {atsHint && <p className="mt-1 text-xs text-amber-700">{atsHint}</p>}
           </section>
 
           <section className="mt-8" aria-label="Interview X-ray">
             <h2 className="text-lg font-medium">Interview X-ray</h2>
-            <p className="mt-0.5 text-xs text-gray-500">What this JD says the interview will probe.</p>
-            {xrayState === 'loading' && <p className="mt-3 text-sm text-gray-500">Reading the JD…</p>}
-            {xrayState === 'failed' && <p className="mt-3 text-sm text-gray-500">X-ray unavailable for this posting.</p>}
+            <p className="mt-0.5 text-xs text-slate-500">What this JD says the interview will probe.</p>
+            {xrayState === 'loading' && <p className="mt-3 text-sm text-slate-500">Reading the JD…</p>}
+            {xrayState === 'failed' && <p className="mt-3 text-sm text-slate-500">X-ray unavailable for this posting.</p>}
             {xrayState === 'ready' && xray && (
               <div className="mt-3 space-y-4">
                 {xray.keyThemes.length > 0 && (
                   <div className="flex flex-wrap gap-2">
                     {xray.keyThemes.map((t) => (
-                      <span key={t} className="rounded-full border px-2 py-0.5 text-xs text-gray-600 dark:text-gray-400">{t}</span>
+                      <span key={t} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 bg-white">{t}</span>
                     ))}
                   </div>
                 )}
                 {xray.requirements.filter((r) => r.importance === 'must-have').length > 0 && (
                   <div>
                     <h3 className="text-sm font-medium">Must-haves</h3>
-                    <ul className="mt-1 list-inside list-disc space-y-1 text-sm text-gray-700 dark:text-gray-300">
+                    <ul className="mt-1 list-inside list-disc space-y-1 text-sm text-slate-600">
                       {xray.requirements.filter((r) => r.importance === 'must-have').map((r) => (
                         <li key={r.id}>{r.requirement}</li>
                       ))}
@@ -543,10 +543,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 )}
                 {xray.requirements.filter((r) => r.importance === 'nice-to-have').length > 0 && (
                   <details>
-                    <summary className="cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-400">
+                    <summary className="cursor-pointer text-sm font-medium text-slate-500">
                       Nice-to-haves ({xray.requirements.filter((r) => r.importance === 'nice-to-have').length})
                     </summary>
-                    <ul className="mt-1 list-inside list-disc space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                    <ul className="mt-1 list-inside list-disc space-y-1 text-sm text-slate-500">
                       {xray.requirements.filter((r) => r.importance === 'nice-to-have').map((r) => (
                         <li key={r.id}>{r.requirement}</li>
                       ))}
@@ -557,7 +557,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             )}
           </section>
 
-          <section className="prose prose-sm mt-8 max-w-none whitespace-pre-wrap text-sm leading-relaxed dark:prose-invert">
+          <section className="prose prose-sm mt-8 max-w-none whitespace-pre-wrap text-sm leading-relaxed">
             {detail.jd || 'The source didn’t provide a full description — use the posting link above.'}
           </section>
         </>
@@ -565,7 +565,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
       {sheet && (
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
-          <div className="rounded-xl border bg-white p-4 shadow-lg dark:bg-gray-900">
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
             <p className="font-medium">
               {sheet.kind === 'quick' ? 'That was quick — did the link work?' : `Did you apply to ${detail.company}?`}
             </p>
@@ -577,11 +577,11 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               )}
               <button
                 onClick={() => { setSheet(null); setSheetDone('No rush — want an edge first? Tailor your resume for this job (~15s).') }}
-                className="rounded-lg border px-3 py-1.5 text-sm"
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm bg-white"
               >
                 {sheet.kind === 'quick' ? 'It worked — still applying' : 'Not yet'}
               </button>
-              <button onClick={sheetBrokenLink} className="rounded-lg border border-amber-400 px-3 py-1.5 text-sm text-amber-700 dark:text-amber-400">
+              <button onClick={sheetBrokenLink} className="rounded-lg border border-amber-400 px-3 py-1.5 text-sm text-amber-700 bg-white">
                 ⚠ Link didn&apos;t work
               </button>
             </div>
@@ -590,9 +590,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       )}
       {sheetDone && (
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
-          <div className="flex items-start justify-between rounded-xl border bg-white p-3 text-sm shadow-lg dark:bg-gray-900">
+          <div className="flex items-start justify-between rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg">
             <p>{sheetDone}{sheetDone.includes('Tailor') && <> <Link href="/resume/tailor" className="text-blue-600 underline">Open tailor</Link></>}</p>
-            <button onClick={() => setSheetDone(null)} aria-label="Dismiss" className="ml-3 text-gray-500 hover:text-gray-700">✕</button>
+            <button onClick={() => setSheetDone(null)} aria-label="Dismiss" className="ml-3 text-slate-500 hover:text-slate-600">✕</button>
           </div>
         </div>
       )}

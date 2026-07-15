@@ -154,74 +154,74 @@ export default function TrackerPage() {
       </div>
 
       {view?.confirmCard && (
-        <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-900 dark:bg-blue-950">
+        <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm">
           <p className="font-medium">You clicked {view.confirmCard.company} {view.confirmCard.clickedAgoHours >= 24 ? 'yesterday' : 'earlier'} — did you apply?</p>
           <div className="mt-2 flex gap-2">
             <button onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, true)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white">✓ Yes, applied</button>
-            <button onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, false)} className="rounded-lg border px-3 py-1 text-xs">Not yet</button>
+            <button onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, false)} className="rounded-lg border border-slate-200 px-3 py-1 text-xs bg-white">Not yet</button>
           </div>
         </div>
       )}
 
       {error === 'load' && <p className="mt-8 text-sm text-red-600">Couldn&apos;t load the tracker — refresh to retry.</p>}
-      {!view && !error && <p className="mt-8 text-sm text-gray-500">Loading…</p>}
+      {!view && !error && <p className="mt-8 text-sm text-slate-500">Loading…</p>}
 
       {view && view.groups.length === 0 && (
-        <div className="mt-8 rounded-xl border border-dashed p-6">
+        <div className="mt-8 rounded-xl border border-slate-200 border-dashed p-6 bg-white">
           <p className="font-medium">Nothing tracked yet.</p>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">Save or apply to a job and it lands here automatically.</p>
+          <p className="mt-1 text-sm text-slate-500">Save or apply to a job and it lands here automatically.</p>
         </div>
       )}
 
       {view?.groups.map((g) => (
         <section key={g.status} className="mt-8" aria-label={STATUS_LABEL[g.status] ?? g.status}>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
             {STATUS_LABEL[g.status] ?? g.status} · {g.count}
           </h2>
           <ul className="mt-2 space-y-2">
             {g.rows.map((r) => (
-              <li key={r.jobPostingId} className="rounded-xl border p-3">
+              <li key={r.jobPostingId} className="rounded-xl border border-slate-200 p-3 bg-white">
                 <div className="flex items-baseline justify-between gap-2">
                   <Link href={`/jobs/${r.jobPostingId}`} className="font-medium hover:underline">{r.title}</Link>
-                  <span className="shrink-0 text-xs text-gray-500">{r.daysInStatus}d</span>
+                  <span className="shrink-0 text-xs text-slate-500">{r.daysInStatus}d</span>
                 </div>
-                <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
+                <p className="mt-0.5 text-sm text-slate-500">
                   {r.company}{r.location ? ` · ${r.location}` : ''} · Evidence {r.practiceCount}/3
                 </p>
-                {r.nudge === 'waiting' && <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">Still waiting on {r.company}? Keep prepping — evidence carries to similar jobs.</p>}
+                {r.nudge === 'waiting' && <p className="mt-1 text-xs text-amber-700">Still waiting on {r.company}? Keep prepping — evidence carries to similar jobs.</p>}
                 {r.nudge === 'ghost-prompt' && (
-                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                  <p className="mt-1 text-xs text-amber-700">
                     3 weeks quiet. <button onClick={() => transition(r.jobPostingId, r.status, 'ghosted')} className="underline">Mark “No response”?</button>
                   </p>
                 )}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {(CHIP_TARGETS[r.status] ?? []).map((to) => (
-                    <button key={to} onClick={() => transition(r.jobPostingId, r.status, to)} className="rounded-full border px-2 py-0.5 text-xs hover:bg-gray-50 dark:hover:bg-gray-800">
+                    <button key={to} onClick={() => transition(r.jobPostingId, r.status, to)} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs hover:bg-slate-50">
                       → {STATUS_LABEL[to] ?? to}
                     </button>
                   ))}
-                  <button onClick={() => { setNotesFor(r.jobPostingId); setNotesDraft(r.notes ?? '') }} className="rounded-full border px-2 py-0.5 text-xs text-gray-500">
+                  <button onClick={() => { setNotesFor(r.jobPostingId); setNotesDraft(r.notes ?? '') }} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 bg-white">
                     {r.notes ? 'Edit note' : 'Add note'}
                   </button>
-                  <Link href={`/jobs/${r.jobPostingId}`} className="rounded-full border px-2 py-0.5 text-xs text-blue-600">View</Link>
+                  <Link href={`/jobs/${r.jobPostingId}`} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-blue-600 bg-white">View</Link>
                 </div>
                 {dateSheetFor === r.jobPostingId && r.status === 'interview_scheduled' && (
-                  <div className="mt-2 rounded-lg border border-blue-300 bg-blue-50 p-2 text-xs dark:border-blue-800 dark:bg-blue-950">
+                  <div className="mt-2 rounded-lg border border-blue-300 bg-blue-50 p-2 text-xs">
                     <p className="font-medium">🎙 You got the interview. When is it?</p>
                     <div className="mt-1.5 flex flex-wrap gap-1.5">
                       {[['tomorrow', 'Tomorrow'], ['this-week', 'This week'], ['next-week', 'Next week'], ['not-sure', 'Not sure yet']].map(([c, l]) => (
-                        <button key={c} onClick={() => captureDate(r.jobPostingId, c)} className="rounded-full border px-2 py-0.5 hover:bg-white dark:hover:bg-gray-900">{l}</button>
+                        <button key={c} onClick={() => captureDate(r.jobPostingId, c)} className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-white">{l}</button>
                       ))}
                     </div>
                   </div>
                 )}
-                {r.notes && notesFor !== r.jobPostingId && <p className="mt-2 whitespace-pre-wrap text-xs text-gray-500">{r.notes}</p>}
+                {r.notes && notesFor !== r.jobPostingId && <p className="mt-2 whitespace-pre-wrap text-xs text-slate-500">{r.notes}</p>}
                 {notesFor === r.jobPostingId && (
                   <div className="mt-2">
-                    <textarea value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} rows={3} className="w-full rounded-lg border p-2 text-sm dark:bg-gray-900" />
+                    <textarea value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} rows={3} className="w-full rounded-lg border border-slate-200 p-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
                     <div className="mt-1 flex gap-2">
                       <button onClick={() => saveNotes(r.jobPostingId)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white">Save note</button>
-                      <button onClick={() => setNotesFor(null)} className="rounded-lg border px-3 py-1 text-xs">Cancel</button>
+                      <button onClick={() => setNotesFor(null)} className="rounded-lg border border-slate-200 px-3 py-1 text-xs bg-white">Cancel</button>
                     </div>
                   </div>
                 )}
@@ -233,7 +233,7 @@ export default function TrackerPage() {
 
       {undo && (
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
-          <div className="flex items-center justify-between rounded-xl border bg-white p-3 text-sm shadow-lg dark:bg-gray-900">
+          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg">
             <span>{undo.label}</span>
             <button onClick={undoLast} className="ml-3 font-medium text-blue-600 hover:underline">Undo</button>
           </div>
