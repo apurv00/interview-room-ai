@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const {
   mockGetConfig, mockSendEmail, mockSendFindOne, mockSendCreate, mockSendCount,
   mockUserFindById, mockAppFindOne, mockAppFind, mockAppExists, mockPostingFindById,
-  mockSessionExists, mockInngestSend, mockLoggerError, mockSendUpdateMany, mockAppUpdateMany,
+  mockSessionExists, mockInngestSend, mockLoggerError, mockSendUpdateMany, mockAppUpdateMany, mockSendAggregate, mockSendDeleteMany,
 } = vi.hoisted(() => ({
   mockGetConfig: vi.fn(),
   mockSendEmail: vi.fn(),
@@ -26,6 +26,8 @@ const {
   mockInngestSend: vi.fn(),
   mockSendUpdateMany: vi.fn(),
   mockAppUpdateMany: vi.fn(),
+  mockSendAggregate: vi.fn(),
+  mockSendDeleteMany: vi.fn(),
   mockLoggerError: vi.fn(),
 }))
 
@@ -40,7 +42,7 @@ vi.mock('@shared/services/signedActionToken', () => ({
 }))
 vi.mock('@shared/db/models', () => ({
   JobsEmailConfig: { getConfig: mockGetConfig },
-  JobsEmailSend: { findOne: mockSendFindOne, create: mockSendCreate, countDocuments: mockSendCount, updateMany: mockSendUpdateMany },
+  JobsEmailSend: { findOne: mockSendFindOne, create: mockSendCreate, countDocuments: mockSendCount, updateMany: mockSendUpdateMany, aggregate: mockSendAggregate, deleteMany: mockSendDeleteMany },
   User: { findById: mockUserFindById },
   JobApplication: { findOne: mockAppFindOne, find: mockAppFind, exists: mockAppExists, updateMany: mockAppUpdateMany },
   JobPosting: { findById: mockPostingFindById },
@@ -74,6 +76,8 @@ beforeEach(() => {
   mockSessionExists.mockResolvedValue(null)
   mockSendUpdateMany.mockResolvedValue({})
   mockAppUpdateMany.mockResolvedValue({})
+  mockSendAggregate.mockResolvedValue([])
+  mockSendDeleteMany.mockResolvedValue({})
 })
 
 // ── Timing math (pure) ───────────────────────────────────────────────────────
@@ -382,7 +386,7 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
 
   const daysAgo = (d: number) => new Date(NOW.getTime() - d * 86_400_000)
   const e1Row = (id: string, over: Record<string, unknown> = {}) => ({
-    _id: id, userId: 'u1', jobPostingId: `j-${id}`,
+    _id: id, userId: '507f1f77bcf86cd799439011', jobPostingId: `j-${id}`,
     appliedAt: daysAgo(15),
     statusHistory: [{ status: 'applied', at: daysAgo(15), source: 'user' }],
     outcome: {}, practiceSessionIds: ['s1'],
@@ -390,7 +394,7 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     ...over,
   })
   const e4Row = (id: string, over: Record<string, unknown> = {}) => ({
-    _id: id, userId: 'u1', jobPostingId: `j-${id}`,
+    _id: id, userId: '507f1f77bcf86cd799439011', jobPostingId: `j-${id}`,
     statusHistory: [{ status: 'apply_clicked', at: daysAgo(5), source: 'system' }],
     outcome: {}, practiceSessionIds: [],
     jobSnapshot: { title: 'Backend Engineer', company: `Acme-${id}` },
@@ -439,15 +443,14 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
   })
 
   it('weekly cap: 3 solicitation sends in the last 7d → everything drops, never queues', async () => {
-    mockSendCount.mockResolvedValue(3) // solicitationSentLast7d
+    mockSendAggregate.mockResolvedValue([{ n: 3 }]) // solicitationSentLast7d: 3 distinct EMAILS
     feed([e1Row('a1')], [e4Row('b1')])
     expect(await runEmailSweepHandler(step)).toMatchObject({ e1Sent: 0, e4Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
   it('priority: with one cap slot left, E1 sends and E4 drops', async () => {
-    mockSendCount.mockImplementation((q: Record<string, unknown>) =>
-      Promise.resolve((q as { sentAt?: unknown }).sentAt ? 2 : 0)) // 7d count = 2 → remaining 1
+    mockSendAggregate.mockResolvedValue([{ n: 2 }]) // 2 emails this week → remaining 1
     feed([e1Row('a1')], [e4Row('b1')])
     const r = await runEmailSweepHandler(step)
     expect(r).toMatchObject({ e1Sent: 1, e4Sent: 0 })
@@ -473,6 +476,29 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     feed([], [e4Row('b1')])
     expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('the cap counts EMAILS, not ledger rows: the pipeline groups on resendId (Codex #533)', async () => {
+    feed([e1Row('a1')], [])
+    await runEmailSweepHandler(step)
+    const pipeline = mockSendAggregate.mock.calls[0][0]
+    const group = pipeline.find((st: Record<string, unknown>) => st.$group) as { $group: { _id: unknown } }
+    expect(group.$group._id).toEqual({ $ifNull: ['$resendId', '$sentAt'] })
+  })
+
+  it('an in-window unsubscribe between reservation and send releases the reservation and blocks delivery (Codex #533)', async () => {
+    feed([e1Row('a1')], [])
+    // Sweep pre-check sees a clean user; the send-time re-check sees the
+    // one-click unsubscribe that landed in between.
+    mockUserFindById
+      .mockReturnValueOnce(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+      .mockReturnValueOnce(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: ['e1'] } } }))
+    const r = await runEmailSweepHandler(step)
+    expect(r).toMatchObject({ e1Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendDeleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ stream: 'e1', sentAt: { $exists: false } })
+    )
   })
 
   it('coarse nudges=false silences both solicitation streams', async () => {
