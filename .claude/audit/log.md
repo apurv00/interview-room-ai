@@ -3735,3 +3735,42 @@ durable record; ids are best-effort pointers.
 ## 2026-07-16 — #542 Codex round 1 (1 P2, fixed)
 - The standalone liquidity probe carries its own APPLY_DOMAIN_BLOCKLIST copy by documented design ('every gate pattern lands in both') — adding the suffix only in spamRules left the probe's dual-report counting rows production ingest drops, skewing reconciliation. Fix: 'up.railway.app' added to the probe copy with a lockstep note; verified live via import (spam host + fresh subdomain blocked, legit host passes).
 - Verified: qualityGate 30 passed; full clean-env vitest 5744 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 ~13:15 — apply-link validation layer (founder directive; ruling #22)
+- Founder: reactive host-blocking is whack-a-mole — "check the apply link if it is valid or not". Built the general liveness layer: linkCheckService classifier ported from the probe's G4 rot policy (dead = 404/410/NXDOMAIN/ECONNREFUSED/expiry-200; bot-blocks/5xx/timeouts = unverifiable NEVER dead — false-positive safety is the design center), SSRF-guarded; two-strike close (≥20h apart, hourly re-checks must NOT reset the clock — caught+pinned), all-URLs-dead posting semantics (one alive rung = alive); hourly Inngest sweep (:40, cap 150, per-URL pacing, crowd-reported rows FIRST, then never-checked oldest-first, then 14d-stale alive rows), status-guarded close 'dead-apply-link', link-check telemetry cycle rows. DECISIONS ruling #22 records the hierarchy (link validation = general layer; LLM verdict = content; blocklist = observed-abuse floor; manual revocation = triage only).
+- POST-MERGE OP: Inngest re-sync PUT required (19→20 functions).
+- Verified: linkCheck suite 11 passed; modules/jobs 395 passed | 1 skipped; full clean-env vitest 5755 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 1 (2 P1 + 1 P2, all fixed)
+- P1 restrike bucket: the picker never revisited 'dead' rows — strike-1 postings fell out of every sweep and NOTHING could ever close (the exact spam path). New priority-2 bucket: dead rows past the 20h window, oldest lastDeadAt first. Pinned: 4-bucket pull shape + restrike filter.
+- P1 redirect SSRF: auto-follow validated only the ORIGINAL URL — a public host 302ing to 169.254.169.254/127.0.0.1 would fetch a private target. Manual redirect loop (cap 5 hops): every Location re-passes isCheckableUrl; uncheckable hop / no-location / loop = unverifiable. Pinned: private hop NEVER fetched; legit chain still resolves (301→404=dead); loop=unverifiable.
+- P2 URL-replacement reopen: dead-apply-link was non-reopenable and the sweep only picks open rows — a provider shipping a REPLACED live URL left the row hidden forever. mergeIntoDoc now reopens + resets applyCheck ONLY when the apply URL actually changed (same-URL spam re-uploads stay closed). Pinned both directions.
+- Verified: linkCheck+ingest 45 passed; full clean-env vitest 5760 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 2 (2 P1 + 2 P2, all fixed) + rebuild on post-#542 main
+- P1 DNS-rebind SSRF: the literal-IP guard is bypassable by a HOSTNAME whose A record points at 169.254.169.254 — resolvesToPublicAddress now resolves every hostname (original + every redirect hop) and rejects if ANY answer is private/link-local/v4-mapped-private; NXDOMAIN fails open so fetch surfaces ENOTFOUND as the dead signal. TOCTOU rebinding documented out of scope. Pinned: private-A never fetched, mixed answers poison, mapped-v6, NXDOMAIN still dead.
+- P1 chunk math: 25 postings × (12s+0.4s) ≈ 310s > maxDuration 300 — a slow-host chunk would be killed and retried whole. CHUNK 5 + MAX_URLS_PER_POSTING 3 (worst ≈ 186s) + truncation honesty: 'dead' only when EVERY url was checked (an unchecked rung could be the live one → unverifiable).
+- P2 append-path reopen: aggregators rotate externalIds — a NEW source key adding a usable URL now reopens dead-apply-link closures too (the URL-change branch alone missed it).
+- P2 unverifiable restrike: a timeout/bot-block on a pending restrike kept deadStreak but overwrote status → row fell out of the pick pool forever. Status stays 'dead' on unverifiable when previously dead. Pinned.
+- Branch rebuilt on post-#542 main (audit-log tail). Verified: linkCheck+ingest 47 passed; full clean-env vitest 5762 passed | 17 skipped; tsc/lint/build/module-size clean.

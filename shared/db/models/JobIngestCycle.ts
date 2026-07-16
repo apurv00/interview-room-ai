@@ -10,7 +10,7 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
  */
 export interface IJobIngestCycle extends Document {
   _id: mongoose.Types.ObjectId
-  kind: 'sync' | 'llm-verdict'
+  kind: 'sync' | 'llm-verdict' | 'link-check'
   sourceId?: string
   startedAt: Date
   finishedAt?: Date
@@ -31,6 +31,14 @@ export interface IJobIngestCycle extends Document {
   stubRate?: number
   healthTransitions?: string[]
   // llm-verdict counters (ruling #16)
+  // link-check counters (ruling #22)
+  linkCheck?: {
+    checked: number
+    dead: number
+    alive: number
+    unverifiable: number
+    closedNow: number
+  }
   llm?: {
     requested: number
     scored: number
@@ -56,7 +64,7 @@ const TELEMETRY_TTL_DAYS = 30
 
 const JobIngestCycleSchema = new Schema<IJobIngestCycle>(
   {
-    kind: { type: String, enum: ['sync', 'llm-verdict'], required: true },
+    kind: { type: String, enum: ['sync', 'llm-verdict', 'link-check'], required: true },
     sourceId: { type: String },
     startedAt: { type: Date, required: true },
     finishedAt: { type: Date },
@@ -75,6 +83,7 @@ const JobIngestCycleSchema = new Schema<IJobIngestCycle>(
     stubRate: { type: Number },
     healthTransitions: { type: [String], default: undefined },
     llm: { type: Schema.Types.Mixed },
+    linkCheck: { type: Schema.Types.Mixed },
     expiresAt: {
       type: Date,
       default: () => new Date(Date.now() + TELEMETRY_TTL_DAYS * 24 * 60 * 60 * 1000),

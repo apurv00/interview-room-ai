@@ -201,10 +201,33 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
         // nobody reported (Codex on #522 round-3).
         existing.brokenReportCount = undefined
         verdictInputsChanged = true
+        // A REPLACED apply URL is fresh liveness evidence (Codex #543): a
+        // dead-apply-link closure was earned by the OLD link — reopen and
+        // let the sweep re-verify from scratch. Same-URL refreshes stay
+        // closed (spam re-uploads must not resurrect themselves).
+        if (doc.status === 'closed' && doc.closedReason === 'dead-apply-link') {
+          doc.status = 'open'
+          doc.closedReason = undefined
+          doc.closedAt = undefined
+          doc.purgeAt = undefined
+          doc.applyCheck = undefined
+        }
       }
       if (p.job.viaSite) existing.viaSite = p.job.viaSite
     } else {
       const url = bestApplyUrl(p.usableUrls)
+      // A NEW source key contributing a usable URL is the same fresh
+      // liveness evidence as a replaced one (Codex #543 round 2:
+      // aggregators rotate externalIds — the append path must reopen
+      // dead-apply-link closures too, or the fresh live URL is never
+      // re-evaluated).
+      if (url && doc.status === 'closed' && doc.closedReason === 'dead-apply-link') {
+        doc.status = 'open'
+        doc.closedReason = undefined
+        doc.closedAt = undefined
+        doc.purgeAt = undefined
+        doc.applyCheck = undefined
+      }
       doc.provenance.push({
         sourceId,
         externalId: p.job.externalId as string,

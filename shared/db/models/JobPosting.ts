@@ -103,7 +103,15 @@ export interface IJobPosting extends Document {
   llmVerdict?: IJobLlmVerdict
   // Lifecycle
   status: 'open' | 'closed'
-  closedReason?: 'board-poll-miss' | 'valid-through-expired' | 'aged-out' | 'llm-verdict' | 'source-revoked'
+  closedReason?: 'board-poll-miss' | 'valid-through-expired' | 'aged-out' | 'llm-verdict' | 'source-revoked' | 'dead-apply-link'
+  /** Apply-link liveness (ruling #22): machine-checked by the hourly
+   *  link-check sweep; two dead strikes ≥20h apart close the posting. */
+  applyCheck?: {
+    status: 'dead' | 'alive' | 'unverifiable'
+    deadStreak: number
+    lastCheckedAt: Date
+    lastDeadAt?: Date
+  }
   postedAt?: Date
   validThrough?: Date
   closedAt?: Date
@@ -200,7 +208,18 @@ const JobPostingSchema = new Schema<IJobPosting>(
     },
     llmVerdict: { type: LlmVerdictSchema },
     status: { type: String, enum: ['open', 'closed'], default: 'open' },
-    closedReason: { type: String, enum: ['board-poll-miss', 'valid-through-expired', 'aged-out', 'llm-verdict', 'source-revoked'] },
+    closedReason: { type: String, enum: ['board-poll-miss', 'valid-through-expired', 'aged-out', 'llm-verdict', 'source-revoked', 'dead-apply-link'] },
+    applyCheck: {
+      type: new Schema(
+        {
+          status: { type: String, enum: ['dead', 'alive', 'unverifiable'], required: true },
+          deadStreak: { type: Number, default: 0 },
+          lastCheckedAt: { type: Date, required: true },
+          lastDeadAt: { type: Date },
+        },
+        { _id: false }
+      ),
+    },
     postedAt: { type: Date },
     validThrough: { type: Date },
     closedAt: { type: Date },
