@@ -720,6 +720,57 @@ async function applySkillTruncationForPdf(
   }
 }
 
+// Launch flags for an explicitly configured system Chromium (CHROMIUM_PATH:
+// Docker runner stage, local dev). --disable-dev-shm-usage is required in
+// containers, where the default 64MB /dev/shm is too small for Chromium.
+const SYSTEM_CHROMIUM_ARGS = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--hide-scrollbars',
+]
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const loadSparticuzChromium = () => require('@sparticuz/chromium')
+
+// Exported for tests. CHROMIUM_PATH must take precedence over
+// @sparticuz/chromium rather than act as its error fallback: sparticuz ships
+// x86_64-only binaries, but on arm64 its module require()s and extracts
+// without error — the mismatch only surfaces as ENOEXEC inside
+// puppeteer.launch(), where a catch around executablePath() can never see it.
+export async function resolveChromiumLaunch(
+  env: NodeJS.ProcessEnv = process.env,
+  loadSparticuz: () => unknown = loadSparticuzChromium,
+): Promise<{ executablePath: string; args: string[] }> {
+  if (env.CHROMIUM_PATH) {
+    return { executablePath: env.CHROMIUM_PATH, args: SYSTEM_CHROMIUM_ARGS }
+  }
+
+  // @sparticuz/chromium v110+ extracts a brotli-compressed Chromium at runtime.
+  // For this to work on Vercel/Lambda, the package must be in
+  // next.config.js → experimental.serverComponentsExternalPackages so webpack
+  // leaves the archive intact. We also MUST pass chromium.args (the ~22 flags
+  // tuned for serverless single-process execution); passing only --no-sandbox
+  // causes the browser to crash or fail to spawn. Failures propagate: on
+  // serverless a sparticuz error means its binary wasn't bundled, and the
+  // route must log the real stack instead of pointing puppeteer at a path
+  // that doesn't exist, which produced opaque "Browser was not found" 500s.
+  const chromiumMod = loadSparticuz() as {
+    default?: unknown
+    args?: string[]
+    executablePath?: () => Promise<string>
+  }
+  const chromium = (chromiumMod.default ?? chromiumMod) as {
+    args?: string[]
+    executablePath: () => Promise<string>
+  }
+  const args =
+    Array.isArray(chromium.args) && chromium.args.length > 0
+      ? [...chromium.args, '--hide-scrollbars', '--disable-web-security']
+      : ['--no-sandbox', '--disable-setuid-sandbox']
+  return { executablePath: await chromium.executablePath(), args }
+}
+
 async function renderPdfFromHtml(
   html: string,
   options?: RenderPdfOptions,
@@ -729,39 +780,7 @@ async function renderPdfFromHtml(
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const puppeteer = require('puppeteer-core')
 
-  // @sparticuz/chromium v110+ extracts a brotli-compressed Chromium at runtime.
-  // For this to work on Vercel/Lambda, the package must be in
-  // next.config.js → experimental.serverComponentsExternalPackages so webpack
-  // leaves the archive intact. We also MUST pass chromium.args (the ~22 flags
-  // tuned for serverless single-process execution); passing only --no-sandbox
-  // causes the browser to crash or fail to spawn.
-  let launchArgs: string[] = ['--no-sandbox', '--disable-setuid-sandbox']
-  let executablePath: string
-
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const chromiumMod = require('@sparticuz/chromium')
-    const chromium = chromiumMod.default ?? chromiumMod
-    if (Array.isArray(chromium.args) && chromium.args.length > 0) {
-      launchArgs = [
-        ...chromium.args,
-        '--hide-scrollbars',
-        '--disable-web-security',
-      ]
-    }
-    executablePath = await chromium.executablePath()
-  } catch (err) {
-    // Only fall back to a system Chromium when one is EXPLICITLY configured
-    // (local dev via CHROMIUM_PATH). On serverless, @sparticuz/chromium failing
-    // means its binary wasn't bundled — re-throw so the route logs the real
-    // stack instead of pointing puppeteer at a path that doesn't exist, which
-    // produced opaque "Browser was not found" 500s on every export.
-    if (process.env.CHROMIUM_PATH) {
-      executablePath = process.env.CHROMIUM_PATH
-    } else {
-      throw err
-    }
-  }
+  const { executablePath, args: launchArgs } = await resolveChromiumLaunch()
 
   const browser = await puppeteer.launch({
     args: launchArgs,
