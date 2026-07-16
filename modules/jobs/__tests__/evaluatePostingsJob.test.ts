@@ -245,6 +245,16 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(skips).toMatchObject({ ineligible: 1, 'attempts-cap': 1 })
   })
 
+  it('Codex #545: a sweeper-level budget denial writes a diagnosable skip cycle row', async () => {
+    resetAll()
+    mockRedis.get.mockImplementation((k: string) => Promise.resolve(k === 'jobs:llm:degraded' ? '1' : null))
+    const r = await runVerdictSweeperHandler(step)
+    expect(r).toMatchObject({ skipped: 'circuit-breaker-degraded' })
+    const row = mockCycleCreate.mock.calls.at(-1)![0]
+    expect(row.kind).toBe('llm-verdict')
+    expect(row.llm.skips).toMatchObject({ 'sweeper:circuit-breaker-degraded': 1 })
+  })
+
   it('circuit breaker: 6 consecutive failures set the degraded flag and stop the run', async () => {
     resetAll()
     const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']

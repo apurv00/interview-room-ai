@@ -359,6 +359,27 @@ export async function runEvaluatePostingsHandler(
   return { evaluated, scored: total.scored, breakerTripped }
 }
 
+/** A sweeper-level denial must leave a diagnosable trace (Codex #545):
+ *  the preflight gate exiting silently is exactly the invisible-stall
+ *  class this PR eliminates for the worker. Best-effort — telemetry
+ *  failure never blocks the return. */
+async function writeSweeperSkipCycle(reason: string): Promise<void> {
+  try {
+    const now = new Date()
+    const counters = emptyLlmCounters()
+    counters.skips[`sweeper:${reason}`] = 1
+    await JobIngestCycle.create({
+      kind: 'llm-verdict',
+      sourceId: 'llm-verdict',
+      startedAt: now,
+      finishedAt: now,
+      llm: counters,
+    })
+  } catch (err) {
+    logger.warn({ err, reason }, 'sweeper skip telemetry write failed')
+  }
+}
+
 export async function runVerdictSweeperHandler(
   step: StepRunner,
   opts: { limit?: number } = {}
@@ -367,9 +388,15 @@ export async function runVerdictSweeperHandler(
   const cfg = await JobsVerdictConfig.getConfig()
   if (!cfg.collectionEnabled) return { skipped: 'collection-disabled' }
   const budget = makeLlmBudget(redis, cfg)
-  if (await budget.isDegraded()) return { skipped: 'circuit-breaker-degraded' }
+  if (await budget.isDegraded()) {
+    await writeSweeperSkipCycle('circuit-breaker-degraded')
+    return { skipped: 'circuit-breaker-degraded' }
+  }
   const gate = await budget.check('__sweeper__', '__sweeper__')
-  if (!gate.allowed) return { skipped: gate.reason ?? 'budget' }
+  if (!gate.allowed) {
+    await writeSweeperSkipCycle(gate.reason ?? 'budget')
+    return { skipped: gate.reason ?? 'budget' }
+  }
   const limit = Math.max(1, Math.floor((opts.limit ?? SWEEP_LIMIT_DEFAULT) / (gate.softening ? 2 : 1)))
 
   // Opted-out sources are excluded IN THE QUERY — a pending row the worker
