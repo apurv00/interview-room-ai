@@ -423,3 +423,51 @@ describe('jdDisplayCompressed — the display twin (PR-C, founder item 7)', () =
     expect((existing as Record<string, unknown>).jdDisplayCompressed).toBeUndefined()
   })
 })
+
+describe('OPEN-row URL replacement clears stale strikes (Codex #543 r5)', () => {
+  it('a strike-1 earned by the OLD url never combines with the NEW url into a close', async () => {
+    reset()
+    const j = job()
+    const openStruck = docStub({
+      status: 'open',
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: 'https://old-dead.example/x', applyTier: 'employer', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 99999,
+      applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: new Date('2026-07-15'), lastDeadAt: new Date('2026-07-15') },
+    })
+    mockFindOne.mockResolvedValueOnce(openStruck)
+    await ingestBatch([j], 'jsearch')
+    expect((openStruck as Record<string, unknown>).applyCheck).toBeUndefined()
+    expect((openStruck as Record<string, unknown>).status).toBe('open')
+  })
+})
+
+describe('dead-apply-link reopen on URL replacement (Codex #543)', () => {
+  it('a source shipping a REPLACED apply URL reopens the closure and resets applyCheck; same-URL refreshes stay closed', async () => {
+    reset()
+    const j = job()
+    const closedSameUrl = docStub({
+      status: 'closed', closedReason: 'dead-apply-link', closedAt: new Date('2026-07-15'),
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: j.applyOptions[0].url, applyTier: 'direct-ats', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 99999,
+      applyCheck: { status: 'dead', deadStreak: 2, lastCheckedAt: new Date('2026-07-15'), lastDeadAt: new Date('2026-07-15') },
+    })
+    mockFindOne.mockResolvedValueOnce(closedSameUrl)
+    await ingestBatch([j], 'jsearch')
+    // Same dead URL re-served → spam re-uploads must NOT resurrect.
+    expect((closedSameUrl as Record<string, unknown>).status).toBe('closed')
+
+    const closedNewUrl = docStub({
+      status: 'closed', closedReason: 'dead-apply-link', closedAt: new Date('2026-07-15'),
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: 'https://old-dead.example/x', applyTier: 'employer', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 99999,
+      applyCheck: { status: 'dead', deadStreak: 2, lastCheckedAt: new Date('2026-07-15'), lastDeadAt: new Date('2026-07-15') },
+    })
+    mockFindOne.mockResolvedValueOnce(closedNewUrl)
+    await ingestBatch([j], 'jsearch')
+    const rec = closedNewUrl as Record<string, unknown>
+    // Fresh liveness evidence → back to the open pool, sweep re-verifies.
+    expect(rec.status).toBe('open')
+    expect(rec.closedReason).toBeUndefined()
+    expect(rec.applyCheck).toBeUndefined()
+  })
+})

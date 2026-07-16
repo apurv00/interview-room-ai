@@ -3735,3 +3735,93 @@ durable record; ids are best-effort pointers.
 ## 2026-07-16 — #542 Codex round 1 (1 P2, fixed)
 - The standalone liquidity probe carries its own APPLY_DOMAIN_BLOCKLIST copy by documented design ('every gate pattern lands in both') — adding the suffix only in spamRules left the probe's dual-report counting rows production ingest drops, skewing reconciliation. Fix: 'up.railway.app' added to the probe copy with a lockstep note; verified live via import (spam host + fresh subdomain blocked, legit host passes).
 - Verified: qualityGate 30 passed; full clean-env vitest 5744 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 ~13:15 — apply-link validation layer (founder directive; ruling #22)
+- Founder: reactive host-blocking is whack-a-mole — "check the apply link if it is valid or not". Built the general liveness layer: linkCheckService classifier ported from the probe's G4 rot policy (dead = 404/410/NXDOMAIN/ECONNREFUSED/expiry-200; bot-blocks/5xx/timeouts = unverifiable NEVER dead — false-positive safety is the design center), SSRF-guarded; two-strike close (≥20h apart, hourly re-checks must NOT reset the clock — caught+pinned), all-URLs-dead posting semantics (one alive rung = alive); hourly Inngest sweep (:40, cap 150, per-URL pacing, crowd-reported rows FIRST, then never-checked oldest-first, then 14d-stale alive rows), status-guarded close 'dead-apply-link', link-check telemetry cycle rows. DECISIONS ruling #22 records the hierarchy (link validation = general layer; LLM verdict = content; blocklist = observed-abuse floor; manual revocation = triage only).
+- POST-MERGE OP: Inngest re-sync PUT required (19→20 functions).
+- Verified: linkCheck suite 11 passed; modules/jobs 395 passed | 1 skipped; full clean-env vitest 5755 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 1 (2 P1 + 1 P2, all fixed)
+- P1 restrike bucket: the picker never revisited 'dead' rows — strike-1 postings fell out of every sweep and NOTHING could ever close (the exact spam path). New priority-2 bucket: dead rows past the 20h window, oldest lastDeadAt first. Pinned: 4-bucket pull shape + restrike filter.
+- P1 redirect SSRF: auto-follow validated only the ORIGINAL URL — a public host 302ing to 169.254.169.254/127.0.0.1 would fetch a private target. Manual redirect loop (cap 5 hops): every Location re-passes isCheckableUrl; uncheckable hop / no-location / loop = unverifiable. Pinned: private hop NEVER fetched; legit chain still resolves (301→404=dead); loop=unverifiable.
+- P2 URL-replacement reopen: dead-apply-link was non-reopenable and the sweep only picks open rows — a provider shipping a REPLACED live URL left the row hidden forever. mergeIntoDoc now reopens + resets applyCheck ONLY when the apply URL actually changed (same-URL spam re-uploads stay closed). Pinned both directions.
+- Verified: linkCheck+ingest 45 passed; full clean-env vitest 5760 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 2 (2 P1 + 2 P2, all fixed) + rebuild on post-#542 main
+- P1 DNS-rebind SSRF: the literal-IP guard is bypassable by a HOSTNAME whose A record points at 169.254.169.254 — resolvesToPublicAddress now resolves every hostname (original + every redirect hop) and rejects if ANY answer is private/link-local/v4-mapped-private; NXDOMAIN fails open so fetch surfaces ENOTFOUND as the dead signal. TOCTOU rebinding documented out of scope. Pinned: private-A never fetched, mixed answers poison, mapped-v6, NXDOMAIN still dead.
+- P1 chunk math: 25 postings × (12s+0.4s) ≈ 310s > maxDuration 300 — a slow-host chunk would be killed and retried whole. CHUNK 5 + MAX_URLS_PER_POSTING 3 (worst ≈ 186s) + truncation honesty: 'dead' only when EVERY url was checked (an unchecked rung could be the live one → unverifiable).
+- P2 append-path reopen: aggregators rotate externalIds — a NEW source key adding a usable URL now reopens dead-apply-link closures too (the URL-change branch alone missed it).
+- P2 unverifiable restrike: a timeout/bot-block on a pending restrike kept deadStreak but overwrote status → row fell out of the pick pool forever. Status stays 'dead' on unverifiable when previously dead. Pinned.
+- Branch rebuilt on post-#542 main (audit-log tail). Verified: linkCheck+ingest 47 passed; full clean-env vitest 5762 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 3 (1 P1 + 2 P2, all fixed)
+- P1 hex-mapped v6: '::ffff:a9fe:a9fe' (= 169.254.169.254) and '::ffff:7f00:1' (= 127.0.0.1) bypassed the dotted-decimal-only mapped-v4 regex — mappedV4Of now decodes dotted, hex, and uncompressed forms before the private check. Pinned incl a hex-mapped PUBLIC address staying allowed.
+- P2 stale-unverifiable requeue: a single transient timeout/bot-block permanently exempted an unreported row from validation (no bucket picked status 'unverifiable'). New 48h requeue bucket (slower than restrike — bot-blocking ATS hosts aren't hammered hourly). Picker now 5 buckets; pinned.
+- P2 uncheckable URLs: stored non-http/malformed apply strings (ingested but never served) blocked all-dead outcomes — the URL set now filters through isCheckableUrl as well as the blocklist.
+- Verified: linkCheck 17 passed; full clean-env vitest 5762 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 4 (2 P2, fixed) + prod incident: STALE INNGEST REGISTRATION
+- P2 purge lifecycle: dead-link closes never set purgeAt — spam rows would linger indefinitely instead of the 7-day closed-row TTL. Now mirrors the board-miss path: unpinned rows get purgeAt +7d; userReferenced rows close but never purge. Pinned.
+- P2 unbounded body read: res.text() buffers the WHOLE response before slicing — an attacker host could stream gigabytes. readCappedText enforces the 100KB cap DURING the stream read then cancels (fallback to text().slice for streamless runtimes/stubs). Pinned (64KB chunks → ≤3 reads + cancel called).
+- PROD: jsearch syncs stopped after the 02:26Z complete cycle AND the verdict sweeper picked 40/scored 0 (no errors, no cost) since ~06:00Z. Re-sync PUT returned modified:true — the registration was STALE after four deploys (#539-#542; Vercel deploys do NOT auto-sync Inngest for this app — known since Jul 15, bit us again). Lesson hardened: EVERY merge that deploys = re-sync PUT, not just function-count changes. Verify next :15/:45 cycles.
+- Verified: linkCheck 19 passed; full clean-env vitest 5764 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 5 (2 P2, fixed)
+- P2 stale strikes across URL replacement on OPEN rows: the applyCheck reset was gated on closedReason — an open strike-1 row getting a replacement URL kept the old strike, and one dead check of the NEW url closed it (evidence mixed across links). applyCheck now clears WHENEVER the stored apply URL changes (both the replace and new-source-key branches): two strikes always mean two strikes against the CURRENT link. Pinned.
+- P2 unbounded DNS preflight: dns.promises.lookup isn't tied to the fetch AbortController — a lame DNS target could stall a step past the envelope. Preflight now races a 4s timeout: timeout = cannot verify publicness = refuse the fetch (unverifiable, never dead); NXDOMAIN still fails open to fetch's ENOTFOUND. Chunk math updated (worst ≈ 246s < 300s). Pinned (hanging resolver bounded at 20ms in test; NXDOMAIN unchanged).
+- Verified: linkCheck+ingest 51 passed; full clean-env vitest 5766 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 6 (2 P2, fixed) + verdict-stall investigation status
+- P2 URL-slot chunk packing: slicing the same first 3 URLs made a 4-URL all-dead spam posting PERMANENTLY unverifiable (truncation downgrade every sweep — evasion by URL count). Chunks now pack by URL budget (15 slots ≈ 246s worst) so EVERY url of a posting is judged in one step; truncation rule removed (nothing truncates). Pinned: 4-URL posting → 4 fetches → closes.
+- P2 optimistic write token: ingestion replacing the URL (and clearing applyCheck) between pick and write could let stale evidence close a fresh-linked row. Every write now carries {applyCheck.lastCheckedAt: <picked state>} (or $exists:false for first checks) — a mid-sweep refresh voids the write; next sweep re-verifies. Pinned.
+- VERDICT STALL (ongoing): worker RUNS (writes requested-40 cycle rows), all 40 reach evaluate(), zero scored/tokens/attempts → evaluate() returns not-ok pre-LLM for every posting. getConfig defaults caps correctly (900/2.5/75); actual spend $0.96/mo. Remaining suspects: per-posting budget gate (reserve-counting may exhaust per-source 500/day via repeated sweeps), stuck degraded flag, or Redis-unreachable fail-closed. NOT visible from outside: worker step outputs / Redis meters. Founder ask: Inngest dashboard → jobs-evaluate-postings → any run today → run OUTPUT (skip counters). Observability gap to fix: worker telemetry doesn't record WHY rows skip — follow-up PR planned (skip-reason counters in the llm cycle block).
+- Verified: linkCheck 22 passed; full clean-env vitest 5768 passed | 17 skipped; tsc/lint/build clean.
