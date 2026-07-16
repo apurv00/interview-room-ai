@@ -20,8 +20,17 @@ import { Inngest } from 'inngest'
  * In production, set INNGEST_EVENT_KEY and INNGEST_SIGNING_KEY. Inngest Cloud
  * auto-syncs the app on the first GET to /api/inngest after deploy.
  */
+// The id IS the app identity in Inngest Cloud: a sync (PUT /api/inngest) from
+// any URL repoints whichever registered app shares this id. Non-prod deploys
+// must therefore set INNGEST_APP_ID (e.g. interview-prep-guru-staging) or
+// their sync hijacks production's registration — this happened for ~6 minutes
+// on 2026-07-17 during the Oracle migration's staging bring-up.
+// `||` not `??`: an empty-string env value (easy to produce in the Coolify UI)
+// must mean "unset", never an app registered under the id "".
+export const INNGEST_APP_ID = process.env.INNGEST_APP_ID || 'interview-prep-guru'
+
 export const inngest = new Inngest({
-  id: 'interview-prep-guru',
+  id: INNGEST_APP_ID,
   name: 'Interview Prep Guru',
 })
 
