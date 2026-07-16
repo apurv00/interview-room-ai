@@ -4,7 +4,10 @@ WORKDIR /app
 # .npmrc carries legacy-peer-deps=true (fecd82d, required since 2026-03):
 # without it npm >=11 hard-fails `npm ci` on the @connectrpc peer-dep shape.
 COPY package.json package-lock.json .npmrc ./
-RUN npm ci
+# --ignore-scripts: the repo's postinstall (scripts/build-resume-css.js) needs
+# the full source tree, which this deps-only stage doesn't have. The builder
+# stage regenerates the CSS via the existing `prebuild` hook of `npm run build`.
+RUN npm ci --ignore-scripts
 
 # Stage 2: Build
 FROM node:24-alpine AS builder
