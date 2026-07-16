@@ -215,6 +215,20 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect((d as Record<string, unknown>).applyOptions).toBeUndefined()
   })
 
+  it('authed detail PREFERS the display twin; legacy rows fall back to the collapsed body (PR-C)', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from('para one para two')),
+      jdDisplayCompressed: gzipSync(Buffer.from('para one\npara two')),
+    })) })
+    const withTwin = await getJobDetail('j1', 'u1')
+    if (!withTwin!.gated) expect(withTwin!.jd).toBe('para one\npara two')
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from('para one para two')),
+    })) })
+    const legacy = await getJobDetail('j1', 'u1')
+    if (!legacy!.gated) expect(legacy!.jd).toBe('para one para two')
+  })
+
   it('authed = full body: gunzipped JD + tier-sorted apply ladder + demotion flags', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
       jdCompressed: gzipSync(Buffer.from('build distributed things')),
@@ -273,6 +287,21 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'saved', practiceSessionIds: [], atsResult: { score: 70, missingKeywords: [], jdHash: xrayHashOf(JD), resumeHash: xrayHashOf('OLD RESUME TEXT'), checkedAt: new Date() } }) }) })
     const d2 = await getJobDetail('j1', 'u1')
     if (!d2!.gated) expect(d2!.application!.ats).toMatchObject({ state: 'done', score: 70 })
+  })
+
+  it('a LEGACY raw resumeHash (pre-whitespace-collapse) still counts as current — no re-run on unchanged content (Codex #541)', async () => {
+    const { gzipSync } = await import('zlib')
+    const { legacyXrayHashOf } = await import('../services/xrayService')
+    const JD = 'Build services with Node.js at scale, and then some more content here.'
+    const RESUME = 'APURV BHISHEK\nProduct Manager\n\n• Shipped payments\n• Led roadmap'
+    const base = doc({ jdCompressed: gzipSync(Buffer.from(JD)) })
+    mockGetBase.mockResolvedValue({ id: 'base-1', name: 'Base', targetRole: 'PM', skills: [] })
+    mockGetResume.mockResolvedValue({ fullText: RESUME })
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(base) })
+    // Stored BEFORE the collapse: raw-bytes hash of newline-bearing text.
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'saved', practiceSessionIds: [], atsResult: { score: 81, missingKeywords: [], jdHash: xrayHashOf(JD), resumeHash: legacyXrayHashOf(RESUME), checkedAt: new Date() } }) }) })
+    const d = await getJobDetail('j1', 'u1')
+    if (!d!.gated) expect(d!.application!.ats).toMatchObject({ state: 'done', score: 81 })
   })
 
   it('a stale-JD atsResult re-opens the check; the current JD stays done (Codex #521)', async () => {

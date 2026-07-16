@@ -152,3 +152,48 @@ describe('normalizeJdBody / bodyHashOf', () => {
     expect(bodyHashOf('hi&nbsp;'.repeat(30))).toBeNull()
   })
 })
+
+describe('displayJdBody vs normalizeJdBody (PR-C, founder item 7)', () => {
+  const HTML = '<div><p>Company&nbsp;Description</p><p>We build things &amp; ship.</p><ul><li>Own the roadmap</li><li>Talk to users</li></ul><br><br><br><p>Apply   now</p></div>'
+
+  it('normalizeJdBody output is BYTE-IDENTICAL to its pre-PR-C behavior — it feeds bodyHashOf, the verdict inputHash, and every xray hash', async () => {
+    const { normalizeJdBody } = await import('../services/qualityGate')
+    // Pinned literal = the exact output of the pre-PR-C implementation.
+    expect(normalizeJdBody(HTML)).toBe('Company Description We build things & ship. Own the roadmap Talk to users Apply now')
+  })
+
+  it('displayJdBody preserves paragraphs and line-per-item lists; collapses spaces only; caps blank runs', async () => {
+    const { displayJdBody } = await import('../services/qualityGate')
+    // NO bullet glyphs: the display shape must collapse back to the exact
+    // canonical text (next vector) so version hashing sees one JD.
+    expect(displayJdBody(HTML)).toBe(
+      'Company Description\nWe build things & ship.\n\nOwn the roadmap\nTalk to users\n\nApply now'
+    )
+  })
+
+  it('displayJdBody equals normalizeJdBody after whitespace collapse — same CONTENT, different shape', async () => {
+    const { displayJdBody, normalizeJdBody } = await import('../services/qualityGate')
+    expect(displayJdBody(HTML).replace(/\s+/g, ' ').trim()).toBe(normalizeJdBody(HTML))
+  })
+})
+
+describe('xrayHashOf whitespace-insensitivity (PR-C — version binding survives the display twin)', () => {
+  it('display-shaped and collapsed forms of the same JD hash IDENTICALLY; different content differs', async () => {
+    const { xrayHashOf } = await import('../services/xrayService')
+    const { displayJdBody, normalizeJdBody } = await import('../services/qualityGate')
+    const HTML = '<p>Node.js engineer.</p><ul><li>MongoDB</li><li>Payments</li></ul>'
+    expect(xrayHashOf(displayJdBody(HTML))).toBe(xrayHashOf(normalizeJdBody(HTML)))
+    expect(xrayHashOf('completely different jd')).not.toBe(xrayHashOf(normalizeJdBody(HTML)))
+    // No-op on already-collapsed inputs = every stored hash stays valid.
+    expect(xrayHashOf('a b c')).toBe(xrayHashOf('  a  b\n c '))
+  })
+})
+
+describe('legacyXrayHashOf (Codex #541 — resume hashes predate the collapse)', () => {
+  it('legacy and current forms agree on collapsed text but differ on newline-bearing text', async () => {
+    const { xrayHashOf, legacyXrayHashOf } = await import('../services/xrayService')
+    expect(legacyXrayHashOf('a b c')).toBe(xrayHashOf('a b c')) // stored JD bodies: identical
+    const resume = 'NAME\nRole\n\nThings I did'
+    expect(legacyXrayHashOf(resume)).not.toBe(xrayHashOf(resume)) // raw resumes: the migration case
+  })
+})

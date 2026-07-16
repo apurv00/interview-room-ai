@@ -357,3 +357,69 @@ describe('llmVerdict pending-init (§4.5 — data switch, byte-identical when of
     expect(mockCreate.mock.calls[0][0].llmVerdict).toEqual({ status: 'pending', attempts: 0 })
   })
 })
+
+describe('jdDisplayCompressed — the display twin (PR-C, founder item 7)', () => {
+  it('a new insert writes BOTH the canonical collapsed body and the display twin', async () => {
+    reset()
+    await ingestBatch([job({ description: '<p>Intro para.</p><ul><li>Do X</li><li>Do Y</li></ul>' })], 'jsearch')
+    const doc = mockCreate.mock.calls[0][0] as Record<string, unknown>
+    const { gunzipSync } = await import('zlib')
+    const canonical = gunzipSync(doc.jdCompressed as Buffer).toString('utf8')
+    const display = gunzipSync(doc.jdDisplayCompressed as Buffer).toString('utf8')
+    expect(canonical).toBe('Intro para. Do X Do Y') // byte-identical pre-PR-C semantics
+    expect(display).toContain('\n') // structure preserved
+    // Same CONTENT: display collapses back to the canonical body exactly.
+    expect(display.replace(/\s+/g, ' ').trim()).toBe(canonical)
+  })
+
+  it('a longer merged JD replaces BOTH bodies (verdict reset already pinned above)', async () => {
+    reset()
+    const existing = docStub({
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 10,
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([job()], 'jsearch')
+    expect((existing as Record<string, unknown>).jdCompressed).toBeDefined()
+    expect((existing as Record<string, unknown>).jdDisplayCompressed).toBeDefined()
+  })
+
+  it('LEGACY HEAL: same body re-ingested on a row without the twin writes ONLY the display artifact — verdict state untouched', async () => {
+    reset()
+    const { gzipSync, gunzipSync } = await import('zlib')
+    const j = job({ description: '<p>Same body.</p><p>Second para.</p>' })
+    // Simulate the pre-PR-C stored state: collapsed body, no display twin.
+    const canonical = 'Same body. Second para.'
+    const priorCompressed = gzipSync(Buffer.from(canonical))
+    const existing = docStub({
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: j.applyOptions[0].url, applyTier: 'direct-ats', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: canonical.length,
+      jdCompressed: priorCompressed,
+      llmVerdict: { status: 'scored', verdict: 'genuine', attempts: 3, verdictInputHash: 'h' },
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([j], 'jsearch')
+    const rec = existing as Record<string, unknown>
+    // jdCompressed untouched (same object), display twin written, verdict intact.
+    expect(rec.jdCompressed).toBe(priorCompressed)
+    expect(rec.jdDisplayCompressed).toBeDefined()
+    expect(gunzipSync(rec.jdDisplayCompressed as Buffer).toString('utf8')).toBe('Same body.\nSecond para.')
+    expect((rec.llmVerdict as Record<string, unknown>).status).toBe('scored')
+    expect((rec.llmVerdict as Record<string, unknown>).attempts).toBe(3)
+  })
+
+  it('a DIFFERENT same-length body does NOT heal (exact-match guard — the twin must correspond to the stored body)', async () => {
+    reset()
+    const { gzipSync } = await import('zlib')
+    const j = job({ description: '<p>Body version B here</p>' })
+    const priorCompressed = gzipSync(Buffer.from('Body version A here!'))
+    const existing = docStub({
+      provenance: [{ sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1', applyUrl: j.applyOptions[0].url, applyTier: 'direct-ats', lastSeenAt: new Date('2026-07-01') }],
+      jdLength: 99999, // incoming shorter → no replace branch
+      jdCompressed: priorCompressed,
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([j], 'jsearch')
+    expect((existing as Record<string, unknown>).jdDisplayCompressed).toBeUndefined()
+  })
+})

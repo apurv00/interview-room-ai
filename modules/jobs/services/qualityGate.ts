@@ -93,6 +93,39 @@ export function normalizeJdBody(description = ''): string {
     .replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * Display-facing JD normalization (founder item 7, 2026-07-16): the stored
+ * body had ALL whitespace collapsed by normalizeJdBody, so the detail
+ * page's pre-wrap renderer had nothing to preserve — a prod pm sample ran
+ * 7,757 chars with ZERO newlines. This variant keeps block structure.
+ *
+ * It exists ALONGSIDE normalizeJdBody, whose output must stay
+ * byte-identical forever: it feeds bodyHashOf (repost fingerprints), the
+ * verdict inputHash, and — via jdCompressed — every xrayHashOf consumer
+ * (parse cache, ATS identity, readiness JD-version binding). The display
+ * body is a SEPARATE stored artifact (jdDisplayCompressed) precisely so
+ * no hash input ever changes.
+ */
+export function displayJdBody(description = ''): string {
+  return description
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    // <li> gets its own LINE, deliberately no bullet glyph: the display
+    // body must collapse back to the EXACT canonical text so
+    // whitespace-insensitive hashing (xrayHashOf) sees one JD version —
+    // an inserted '• ' is content the canonical form lacks and would
+    // split the version hash (pinned by test).
+    // Openers only for <li> — a </li><li> pair must not double-emit.
+    .replace(/<\s*li[^>]*>/gi, '\n')
+    .replace(/<\s*\/\s*(p|div|section|ul|ol|h[1-6]|tr|table|blockquote)\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&(nbsp|#160|#xa0);/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/[^\S\n]+/g, ' ') // collapse spaces/tabs — newlines survive
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n') // cap blank runs at one empty line
+    .trim()
+}
+
 export function classifyJob({ title = '', company = '', description = '', applyUrls = [], validThrough = null }: ClassifyInput): ClassifyResult {
   const drops: DropRule[] = []
   const flags: FlagRule[] = []
