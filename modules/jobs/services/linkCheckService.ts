@@ -120,6 +120,32 @@ export async function resolvesToPublicAddress(url: string, resolveImpl: ResolveI
 
 const MAX_REDIRECT_HOPS = 5
 
+/** Read at most BODY_SNIFF_CAP bytes from the response STREAM, then cancel
+ *  — the cap must bind during the read, not after buffering (Codex #543
+ *  r4). Falls back to text().slice for bodies without a readable stream
+ *  (older runtimes, test stubs). */
+async function readCappedText(res: Response): Promise<string> {
+  const body = (res as { body?: { getReader?: () => { read: () => Promise<{ done: boolean; value?: Uint8Array }>; cancel: () => Promise<void> | void } } }).body
+  const reader = body?.getReader?.()
+  if (!reader) return (await res.text()).slice(0, BODY_SNIFF_CAP)
+  const decoder = new TextDecoder()
+  let out = ''
+  try {
+    while (out.length < BODY_SNIFF_CAP) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) out += decoder.decode(value, { stream: true })
+    }
+  } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      /* already closed */
+    }
+  }
+  return out.slice(0, BODY_SNIFF_CAP)
+}
+
 export async function checkApplyLink(
   url: string,
   fetchImpl: typeof fetch = fetch,
@@ -161,10 +187,12 @@ export async function checkApplyLink(
     if (res.status === 404 || res.status === 410) return 'dead'
     if (BOT_BLOCK_STATUSES.has(res.status) || res.status >= 500) return 'unverifiable'
     if (res.ok) {
-      // Expiry sniff on the first slice of the body only.
+      // Expiry sniff on AT MOST the cap, enforced WHILE reading (Codex
+      // #543 r4): res.text() buffers the entire body first, letting an
+      // attacker-controlled host stream gigabytes into the function.
       let text = ''
       try {
-        text = (await res.text()).slice(0, BODY_SNIFF_CAP)
+        text = await readCappedText(res)
       } catch {
         /* unreadable body — the 200 itself is the signal */
       }

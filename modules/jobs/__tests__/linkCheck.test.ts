@@ -117,6 +117,27 @@ describe('checkApplyLink classifier', () => {
     expect(r.shouldClose).toBe(false)
   })
 
+  it('Codex #543 r4: the body sniff cap binds DURING the read — a huge streaming body is cancelled at the cap', async () => {
+    const chunk = new TextEncoder().encode('x'.repeat(64 * 1024))
+    let reads = 0
+    const cancel = vi.fn()
+    const res = {
+      status: 200, ok: true,
+      body: { getReader: () => ({ read: async () => { reads += 1; return { done: false, value: chunk } }, cancel }) },
+      headers: { get: () => null },
+      text: async () => { throw new Error('text() must not be used when a stream exists') },
+    }
+    const outcome = await checkApplyLink('https://big.example/a', vi.fn().mockResolvedValue(res) as never, pubResolve)
+    expect(outcome).toBe('alive')
+    expect(reads).toBeLessThanOrEqual(3) // 100KB cap / 64KB chunks — never unbounded
+    expect(cancel).toHaveBeenCalled()
+  })
+
+  it('Codex #543 r4: dead-link closes of unpinned rows enter the 7-day purge lifecycle', async () => {
+    // covered in the handler suite below via the purgeAt assertion
+    expect(true).toBe(true)
+  })
+
   it('SSRF guard: private/loopback/non-http targets never reach fetch', async () => {
     const spy = vi.fn()
     for (const u of ['http://localhost/x', 'http://127.0.0.1/x', 'http://10.0.0.5/x', 'http://172.20.1.1/x', 'http://192.168.1.1/x', 'http://169.254.1.1/x', 'ftp://x.example/a', 'javascript:alert(1)']) {
@@ -202,6 +223,8 @@ describe('runLinkCheckHandler', () => {
     const [filter, update] = mockPostingUpdateOne.mock.calls[0]
     expect(filter).toMatchObject({ _id: 'p1', status: 'open' }) // guarded
     expect((update as { $set: Record<string, unknown> }).$set).toMatchObject({ status: 'closed', closedReason: 'dead-apply-link' })
+    // Unpinned rows enter the 7-day purge (Codex #543 r4).
+    expect((update as { $set: Record<string, unknown> }).$set.purgeAt).toBeInstanceOf(Date)
     expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'link-check', linkCheck: expect.objectContaining({ checked: 1, dead: 1, closedNow: 1 }) }))
   })
 

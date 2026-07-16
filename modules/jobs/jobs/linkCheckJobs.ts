@@ -44,9 +44,9 @@ const RECHECK_REPORTED_MS = 24 * 3600 * 1000
 const RECHECK_UNVERIFIABLE_MS = 48 * 3600 * 1000
 const PACING_MS = 400
 
-const PICK_PROJECTION = '_id provenance applyCheck'
+const PICK_PROJECTION = '_id provenance applyCheck userReferenced'
 
-export async function pickPostingsToCheck(now: Date): Promise<Array<{ _id: unknown; provenance?: Array<{ applyUrl?: string; brokenReportCount?: number }>; applyCheck?: Record<string, unknown> }>> {
+export async function pickPostingsToCheck(now: Date): Promise<Array<{ _id: unknown; provenance?: Array<{ applyUrl?: string; brokenReportCount?: number }>; applyCheck?: Record<string, unknown>; userReferenced?: boolean }>> {
   const reported = await JobPosting.find({
     status: 'open',
     'provenance.brokenReportCount': { $gte: 1 },
@@ -167,6 +167,12 @@ export async function runLinkCheckHandler(
           ;(update.$set as Record<string, unknown>).status = 'closed'
           ;(update.$set as Record<string, unknown>).closedReason = 'dead-apply-link'
           ;(update.$set as Record<string, unknown>).closedAt = new Date()
+          // Closed-row lifecycle parity with the board-miss path (Codex
+          // #543 r4): unpinned rows enter the 7-day TTL purge; pinned
+          // (userReferenced) rows close but never purge.
+          if (!doc.userReferenced) {
+            ;(update.$set as Record<string, unknown>).purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
+          }
           counters.closedNow += 1
         }
         // Status-guarded: a posting closed by another sweep mid-run keeps

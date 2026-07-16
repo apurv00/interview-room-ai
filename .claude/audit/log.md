@@ -3787,3 +3787,16 @@ durable record; ids are best-effort pointers.
 - P2 stale-unverifiable requeue: a single transient timeout/bot-block permanently exempted an unreported row from validation (no bucket picked status 'unverifiable'). New 48h requeue bucket (slower than restrike — bot-blocking ATS hosts aren't hammered hourly). Picker now 5 buckets; pinned.
 - P2 uncheckable URLs: stored non-http/malformed apply strings (ingested but never served) blocked all-dead outcomes — the URL set now filters through isCheckableUrl as well as the blocklist.
 - Verified: linkCheck 17 passed; full clean-env vitest 5762 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 4 (2 P2, fixed) + prod incident: STALE INNGEST REGISTRATION
+- P2 purge lifecycle: dead-link closes never set purgeAt — spam rows would linger indefinitely instead of the 7-day closed-row TTL. Now mirrors the board-miss path: unpinned rows get purgeAt +7d; userReferenced rows close but never purge. Pinned.
+- P2 unbounded body read: res.text() buffers the WHOLE response before slicing — an attacker host could stream gigabytes. readCappedText enforces the 100KB cap DURING the stream read then cancels (fallback to text().slice for streamless runtimes/stubs). Pinned (64KB chunks → ≤3 reads + cancel called).
+- PROD: jsearch syncs stopped after the 02:26Z complete cycle AND the verdict sweeper picked 40/scored 0 (no errors, no cost) since ~06:00Z. Re-sync PUT returned modified:true — the registration was STALE after four deploys (#539-#542; Vercel deploys do NOT auto-sync Inngest for this app — known since Jul 15, bit us again). Lesson hardened: EVERY merge that deploys = re-sync PUT, not just function-count changes. Verify next :15/:45 cycles.
+- Verified: linkCheck 19 passed; full clean-env vitest 5764 passed | 17 skipped; tsc/lint/build clean.
