@@ -19,6 +19,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Resume PDF export (puppeteer-core): @sparticuz/chromium is x86_64-only, so
+# arm64 hosts need a system Chromium — CHROMIUM_PATH takes precedence in
+# pdfService. Font packages are required or PDF text renders as empty boxes.
+RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont font-noto \
+ && { command -v chromium-browser >/dev/null 2>&1 || ln -s "$(command -v chromium)" /usr/bin/chromium-browser; }
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
