@@ -88,7 +88,10 @@ function mergeLlmCounters(total: LlmCycleCounters, c: LlmCycleCounters): void {
   total.verdictDistribution.suspicious += c.verdictDistribution.suspicious
   total.verdictDistribution.fraud += c.verdictDistribution.fraud
   for (const [k, v] of Object.entries(c.reasonCodeCounts)) total.reasonCodeCounts[k] = (total.reasonCodeCounts[k] ?? 0) + v
-  for (const [k, v] of Object.entries(c.skips)) total.skips[k] = (total.skips[k] ?? 0) + v
+  // c may be a MEMOIZED pre-deploy step output without `skips` — a run
+  // spanning the deploy/retry boundary must still merge and finish
+  // (Codex #545 round 2).
+  for (const [k, v] of Object.entries(c.skips ?? {})) total.skips[k] = (total.skips[k] ?? 0) + v
   for (const [src, dist] of Object.entries(c.bySource)) {
     const t = total.bySource[src] ?? (total.bySource[src] = {})
     for (const [k, v] of Object.entries(dist)) t[k] = (t[k] ?? 0) + v

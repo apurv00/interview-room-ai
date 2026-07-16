@@ -245,6 +245,26 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(skips).toMatchObject({ ineligible: 1, 'attempts-cap': 1 })
   })
 
+  it('Codex #545 r2: a memoized pre-deploy step output WITHOUT skips still merges (deploy-boundary replay)', async () => {
+    resetAll()
+    // A step runner replaying a persisted old-shape output: strip skips.
+    const replayStep = {
+      run: async <T,>(name: string, fn: () => Promise<T> | T): Promise<T> => {
+        const out = await fn()
+        if (name.startsWith('evaluate-') && out && typeof out === 'object' && 'counters' in (out as object)) {
+          delete ((out as { counters: Record<string, unknown> }).counters as Record<string, unknown>).skips
+        }
+        return out
+      },
+    }
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+    const r = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } }, replayStep, { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never }
+    )
+    expect(r).toMatchObject({ scored: 1 }) // run FINISHES; no throw pre-write-cycle
+    expect(mockCycleCreate).toHaveBeenCalled()
+  })
+
   it('Codex #545: a sweeper-level budget denial writes a diagnosable skip cycle row', async () => {
     resetAll()
     mockRedis.get.mockImplementation((k: string) => Promise.resolve(k === 'jobs:llm:degraded' ? '1' : null))
