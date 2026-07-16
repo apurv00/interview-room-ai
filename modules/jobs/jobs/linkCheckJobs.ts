@@ -2,7 +2,7 @@ import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { JobPosting, JobIngestCycle } from '@shared/db/models'
 import { logger } from '@shared/logger'
-import { checkApplyLink, nextApplyCheckState, MIN_RESTRIKE_MS, type LinkOutcome, type ResolveImpl } from '../services/linkCheckService'
+import { checkApplyLink, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS, type LinkOutcome, type ResolveImpl } from '../services/linkCheckService'
 import { isBlockedApplyUrl } from '../services/qualityGate'
 
 /**
@@ -37,6 +37,11 @@ const CHUNK = 5
 const MAX_URLS_PER_POSTING = 3
 const RECHECK_ALIVE_MS = 14 * 24 * 3600 * 1000
 const RECHECK_REPORTED_MS = 24 * 3600 * 1000
+/** Transient outcomes (timeouts, bot-blocks) re-enter the pool after 48h —
+ *  a single flaky response must not permanently exempt a posting from
+ *  liveness validation (Codex #543 round 3). Slower than the restrike lane
+ *  so bot-blocking ATS hosts are not hammered hourly. */
+const RECHECK_UNVERIFIABLE_MS = 48 * 3600 * 1000
 const PACING_MS = 400
 
 const PICK_PROJECTION = '_id provenance applyCheck'
@@ -75,7 +80,21 @@ export async function pickPostingsToCheck(now: Date): Promise<Array<{ _id: unkno
         .lean()
     : []
   const remaining2 = RUN_CAP - reported.length - restrikes.length - unchecked.length
-  const stale = remaining2 > 0
+  // Transient results re-enter the pool — a lone timeout must not exempt a
+  // row from validation forever (Codex #543 round 3).
+  const staleUnverifiable = remaining2 > 0
+    ? await JobPosting.find({
+        status: 'open',
+        'applyCheck.status': 'unverifiable',
+        'applyCheck.lastCheckedAt': { $lt: new Date(now.getTime() - RECHECK_UNVERIFIABLE_MS) },
+      })
+        .select(PICK_PROJECTION)
+        .sort({ 'applyCheck.lastCheckedAt': 1 })
+        .limit(remaining2)
+        .lean()
+    : []
+  const remaining3 = remaining2 - staleUnverifiable.length
+  const stale = remaining3 > 0
     ? await JobPosting.find({
         status: 'open',
         'applyCheck.status': 'alive',
@@ -83,11 +102,11 @@ export async function pickPostingsToCheck(now: Date): Promise<Array<{ _id: unkno
       })
         .select(PICK_PROJECTION)
         .sort({ 'applyCheck.lastCheckedAt': 1 })
-        .limit(remaining2)
+        .limit(remaining3)
         .lean()
     : []
   const seen = new Set<string>()
-  return [...reported, ...restrikes, ...unchecked, ...stale].filter((d) => {
+  return [...reported, ...restrikes, ...unchecked, ...staleUnverifiable, ...stale].filter((d) => {
     const id = String(d._id)
     if (seen.has(id)) return false
     seen.add(id)
@@ -119,11 +138,15 @@ export async function runLinkCheckHandler(
     const chunk = picked.slice(i, i + CHUNK)
     await step.run(`check-${i / CHUNK}`, async () => {
       for (const doc of chunk) {
+        // Checkable = non-blocklisted AND passes the URL-shape guard —
+        // a stored non-http/malformed string (ingested but never served
+        // by feedService's safe-http filter) must not poison an
+        // otherwise all-dead outcome (Codex #543 round 3).
         const allUrls = Array.from(
           new Set(
             (doc.provenance ?? [])
               .map((p) => p.applyUrl)
-              .filter((u): u is string => !!u && !isBlockedApplyUrl(u))
+              .filter((u): u is string => !!u && !isBlockedApplyUrl(u) && isCheckableUrl(u))
           )
         )
         const urls = allUrls.slice(0, MAX_URLS_PER_POSTING)

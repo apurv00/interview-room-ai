@@ -90,9 +90,18 @@ describe('checkApplyLink classifier', () => {
     const mixedResolve = async () => [{ address: '93.184.216.34' }, { address: '10.0.0.5' }]
     expect(await checkApplyLink('https://mixed.example/a', spy as never, mixedResolve)).toBe('unverifiable')
     expect(spy).not.toHaveBeenCalled()
-    // v4-mapped v6 private is caught too.
+    // v4-mapped v6 private is caught too — dotted AND hex/compressed forms
+    // (Codex #543 r3: '::ffff:a9fe:a9fe' bypassed the dotted-only regex).
     const mappedResolve = async () => [{ address: '::ffff:192.168.1.7' }]
     expect(await resolvesToPublicAddress('https://mapped.example/a', mappedResolve)).toBe(false)
+    const hexMapped = async () => [{ address: '::ffff:a9fe:a9fe' }] // 169.254.169.254
+    expect(await resolvesToPublicAddress('https://hex.example/a', hexMapped)).toBe(false)
+    const hexLoop = async () => [{ address: '::ffff:7f00:1' }] // 127.0.0.1
+    expect(await resolvesToPublicAddress('https://loop.example/a', hexLoop)).toBe(false)
+    const uncompressed = async () => [{ address: '0:0:0:0:0:ffff:a9fe:a9fe' }]
+    expect(await resolvesToPublicAddress('https://unc.example/a', uncompressed)).toBe(false)
+    const hexPublic = async () => [{ address: '::ffff:5db8:d822' }] // 93.184.216.34
+    expect(await resolvesToPublicAddress('https://pub.example/a', hexPublic)).toBe(true)
     // NXDOMAIN fails open — the fetch itself surfaces ENOTFOUND as the dead signal.
     const nxResolve = async () => { throw Object.assign(new Error('nx'), { code: 'ENOTFOUND' }) }
     expect(await checkApplyLink('https://gone.example/a', fetchThrow('ENOTFOUND'), nxResolve as never)).toBe('dead')
@@ -186,7 +195,8 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([doc])) // reported
       .mockReturnValueOnce(chain([])) // restrikes
       .mockReturnValueOnce(chain([])) // unchecked
-      .mockReturnValueOnce(chain([])) // stale
+      .mockReturnValueOnce(chain([])) // stale unverifiable
+      .mockReturnValueOnce(chain([])) // stale alive
     const r = await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve)
     expect(r.closed).toBe(1)
     const [filter, update] = mockPostingUpdateOne.mock.calls[0]
@@ -200,9 +210,13 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([])) // reported
       .mockReturnValueOnce(chain([])) // restrikes
       .mockReturnValueOnce(chain([])) // unchecked
+      .mockReturnValueOnce(chain([])) // stale unverifiable
       .mockReturnValueOnce(chain([])) // stale alive
     await runLinkCheckHandler(step, vi.fn() as never, new Date(), pubResolve)
-    expect(mockPostingFind).toHaveBeenCalledTimes(4)
+    expect(mockPostingFind).toHaveBeenCalledTimes(5)
+    // Codex #543 r3: transient results re-enter the pool.
+    const unvFilter = mockPostingFind.mock.calls[3][0] as Record<string, unknown>
+    expect(unvFilter['applyCheck.status']).toBe('unverifiable')
     const restrikeFilter = mockPostingFind.mock.calls[1][0] as Record<string, unknown>
     expect(restrikeFilter['applyCheck.status']).toBe('dead')
     expect(restrikeFilter['applyCheck.lastDeadAt']).toBeDefined()
@@ -216,7 +230,10 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
     const r = await runLinkCheckHandler(step, spy as never, new Date(), pubResolve)
+    // r3: a malformed stored URL is excluded — outcome derives from checkable rungs only.
+    void r
     expect(spy).not.toHaveBeenCalled()
     expect(r.closed).toBe(0)
     const [, update] = mockPostingUpdateOne.mock.calls[0]

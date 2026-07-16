@@ -3774,3 +3774,16 @@ durable record; ids are best-effort pointers.
 - P2 append-path reopen: aggregators rotate externalIds — a NEW source key adding a usable URL now reopens dead-apply-link closures too (the URL-change branch alone missed it).
 - P2 unverifiable restrike: a timeout/bot-block on a pending restrike kept deadStreak but overwrote status → row fell out of the pick pool forever. Status stays 'dead' on unverifiable when previously dead. Pinned.
 - Branch rebuilt on post-#542 main (audit-log tail). Verified: linkCheck+ingest 47 passed; full clean-env vitest 5762 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 3 (1 P1 + 2 P2, all fixed)
+- P1 hex-mapped v6: '::ffff:a9fe:a9fe' (= 169.254.169.254) and '::ffff:7f00:1' (= 127.0.0.1) bypassed the dotted-decimal-only mapped-v4 regex — mappedV4Of now decodes dotted, hex, and uncompressed forms before the private check. Pinned incl a hex-mapped PUBLIC address staying allowed.
+- P2 stale-unverifiable requeue: a single transient timeout/bot-block permanently exempted an unreported row from validation (no bucket picked status 'unverifiable'). New 48h requeue bucket (slower than restrike — bot-blocking ATS hosts aren't hammered hourly). Picker now 5 buckets; pinned.
+- P2 uncheckable URLs: stored non-http/malformed apply strings (ingested but never served) blocked all-dead outcomes — the URL set now filters through isCheckableUrl as well as the blocklist.
+- Verified: linkCheck 17 passed; full clean-env vitest 5762 passed | 17 skipped; tsc/lint/build clean.

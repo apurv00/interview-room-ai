@@ -60,6 +60,21 @@ function isPrivateV4(ip: string): boolean {
   return a === 0 || a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127)
 }
 
+/** v4-mapped v6 arrives in DOTTED ('::ffff:169.254.169.254') and HEX
+ *  ('::ffff:a9fe:a9fe', '0:0:0:0:0:ffff:a9fe:a9fe') forms — the hex form
+ *  bypassed the dotted-only regex (Codex #543 round 3 P1). */
+function mappedV4Of(lowerV6: string): string | null {
+  const m = lowerV6.match(/^(?:0{1,4}:){0,5}:?:?ffff:(.+)$/)
+  if (!m) return null
+  const tail = m[1]
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(tail)) return tail
+  const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (!hex) return null
+  const hi = parseInt(hex[1], 16)
+  const lo = parseInt(hex[2], 16)
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`
+}
+
 function isPrivateAddress(ip: string): boolean {
   const lower = ip.toLowerCase()
   if (lower.includes(':')) {
@@ -67,8 +82,8 @@ function isPrivateAddress(ip: string): boolean {
     if (lower === '::1' || lower === '::') return true
     if (lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')) return true
     if (lower.startsWith('fc') || lower.startsWith('fd')) return true
-    const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
-    return mapped ? isPrivateV4(mapped[1]) : false
+    const mapped = mappedV4Of(lower)
+    return mapped ? isPrivateV4(mapped) : false
   }
   return isPrivateV4(ip)
 }
