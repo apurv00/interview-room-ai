@@ -3659,3 +3659,24 @@ durable record; ids are best-effort pointers.
 - #539: 'Fullstack Engineer' matched 1/3 tokens vs q 'full stack developer' → normalizeRoleText unifies the full-stack bigram on BOTH comparison sides before tokenizing; vectors for the four fullstack spellings.
 - #540: good PDF extract + failed STRUCTURED parse left the user on the chooser with a paste-instead error but no paste door (paste is no longer primary). parseAndConfirm now reports failure; the upload path drops to the paste fallback on either failure leg. Vector added.
 - Verified: targeted suites 21 passed; full clean-env vitest 5726 passed | 17 skipped; tsc/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — PR-C: JD display formatting, zero hash churn (founder item 7)
+- RCA (reproduced): normalizeJdBody collapses ALL whitespace at ingest — prod pm sample 7,757 chars, ZERO newlines; the detail page's pre-wrap had nothing to preserve. Constraint web mapped BEFORE building: jdCompressed bytes feed bodyHashOf (repost fingerprints), the verdict inputHash (sweeper reads gunzip(jdCompressed)), AND xrayHashOf (parse cache, ATS identity, readiness JD-version binding) — mutating it churns everything.
+- Design: SEPARATE display artifact jdDisplayCompressed (block tags→newlines at ingest; li = line-per-item with deliberately NO bullet glyph — an inserted '• ' is content the canonical form lacks and my own invariant test caught it splitting the version hash). jdCompressed stays byte-identical (pinned by literal-output test). Detail projection prefers the twin, falls back on legacy rows.
+- xrayHashOf made whitespace-insensitive (collapse-before-hash): no-op for every STORED hash (all inputs were already collapsed — pinned), and sessions capturing display-shaped text via the practice hand-off keep hashing equal to the posting's parse (readiness binding survives).
+- Legacy heal: same-body re-ingest (exact normalized match vs gunzipped stored body) writes ONLY the display twin — verdict state + hashes untouched (pinned: scored verdict survives the heal; different same-length body does NOT heal).
+- Verified: qualityGate 28, ingestPipeline 29, feedService 24, modules/jobs 381 passed | 1 skipped; full clean-env vitest 5735 passed | 17 skipped; tsc/lint/build/module-size clean. Stacked on #539 (shared feedService).
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g

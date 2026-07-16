@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import FileDropzone from '@shared/ui/FileDropzone'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { Check, AlertTriangle } from 'lucide-react'
+import { tailoredResumeName } from '@resume/lib/resumeNames'
 
 interface SavedResume {
   id: string
@@ -181,7 +182,9 @@ export default function TailorPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: `${resumeFileName || 'Resume'} (Tailored${companyName ? ` for ${companyName}` : ''})`,
+          // Strip-before-append: re-tailoring a tailored resume was stacking
+          // "(Tailored) (Tailored)" onto the name (founder catch 2026-07-16).
+          name: tailoredResumeName(resumeFileName, companyName),
           targetRole: '',
           targetCompany: companyName || '',
           fullText: result.tailoredResume,
