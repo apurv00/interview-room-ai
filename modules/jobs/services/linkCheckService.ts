@@ -104,15 +104,36 @@ async function defaultResolve(hostname: string): Promise<Array<{ address: string
  *  because we re-reject on the resolved answer. TOCTOU rebinding between
  *  this check and the connect is documented out of scope for a
  *  GET-and-discard liveness probe. */
-export async function resolvesToPublicAddress(url: string, resolveImpl: ResolveImpl = defaultResolve): Promise<boolean> {
+/** DNS preflight budget (Codex #543 round 5): the lookup is NOT tied to
+ *  the fetch AbortController, so a lame DNS target could stall the step
+ *  far past the per-URL budget. Timeout = cannot verify publicness =
+ *  refuse to fetch (unverifiable upstream — never a dead signal). */
+export const DNS_TIMEOUT_MS = 4_000
+
+export async function resolvesToPublicAddress(
+  url: string,
+  resolveImpl: ResolveImpl = defaultResolve,
+  timeoutMs: number = DNS_TIMEOUT_MS
+): Promise<boolean> {
   const host = new URL(url).hostname
   // IP literals were already screened by isCheckableUrl — re-screen anyway.
   if (/^[\d.]+$/.test(host) || host.includes(':')) return !isPrivateAddress(host.replace(/^\[|\]$/g, ''))
   let answers: Array<{ address: string }>
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    answers = await resolveImpl(host)
-  } catch {
-    return true // NXDOMAIN etc. — let fetch surface ENOTFOUND as the dead signal
+    answers = await Promise.race([
+      resolveImpl(host),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error('dns timeout'), { code: 'DNS_TIMEOUT' })), timeoutMs)
+      }),
+    ])
+  } catch (err) {
+    // Timeout = unverifiable target, refuse the fetch. Real resolution
+    // failures (NXDOMAIN) fail OPEN so fetch surfaces ENOTFOUND as the
+    // dead signal.
+    return (err as { code?: string }).code === 'DNS_TIMEOUT' ? false : true
+  } finally {
+    clearTimeout(timer)
   }
   if (!answers.length) return true
   return answers.every((a) => !isPrivateAddress(a.address))

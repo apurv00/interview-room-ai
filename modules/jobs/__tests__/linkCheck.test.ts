@@ -138,6 +138,17 @@ describe('checkApplyLink classifier', () => {
     expect(true).toBe(true)
   })
 
+  it('Codex #543 r5: a STALLED DNS lookup is bounded by the preflight timeout — unverifiable, never a hang, never fetched', async () => {
+    const spy = vi.fn()
+    const hangingResolve = () => new Promise<never>(() => {}) // never settles
+    const ok = await resolvesToPublicAddress('https://lame-dns.example/a', hangingResolve as never, 20)
+    expect(ok).toBe(false) // cannot verify publicness → refuse the fetch
+    expect(spy).not.toHaveBeenCalled()
+    // NXDOMAIN still fails OPEN (fetch owns the ENOTFOUND dead signal).
+    const nx = async () => { throw Object.assign(new Error('nx'), { code: 'ENOTFOUND' }) }
+    expect(await resolvesToPublicAddress('https://gone.example/a', nx as never, 20)).toBe(true)
+  })
+
   it('SSRF guard: private/loopback/non-http targets never reach fetch', async () => {
     const spy = vi.fn()
     for (const u of ['http://localhost/x', 'http://127.0.0.1/x', 'http://10.0.0.5/x', 'http://172.20.1.1/x', 'http://192.168.1.1/x', 'http://169.254.1.1/x', 'ftp://x.example/a', 'javascript:alert(1)']) {

@@ -29,10 +29,10 @@ interface StepRunner {
 }
 
 const RUN_CAP = 150
-// Chunk math vs the route's maxDuration=300 (Codex #543 round 2): worst
-// case per URL = 12s timeout + 0.4s pacing; per posting ≤ MAX_URLS × 12.4s
-// ≈ 37s; per chunk ≤ 5 × 37s ≈ 186s — checkpointed well inside the
-// envelope even when every host times out.
+// Chunk math vs the route's maxDuration=300 (Codex #543 rounds 2+5): worst
+// case per URL = 4s DNS preflight + 12s fetch timeout + 0.4s pacing ≈
+// 16.4s; per posting ≤ MAX_URLS × 16.4s ≈ 50s; per chunk ≤ 5 × 50s ≈ 246s
+// — checkpointed inside the envelope even when every DNS and host stalls.
 const CHUNK = 5
 const MAX_URLS_PER_POSTING = 3
 const RECHECK_ALIVE_MS = 14 * 24 * 3600 * 1000
