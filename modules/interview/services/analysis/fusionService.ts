@@ -139,11 +139,12 @@ The \`coachingTips\` (string array) and \`coachingTipsRich\` (object array) MUST
     lowConfidenceWords,
   )
 
-  // 30s safety timeout to bound the worst case. With maxDuration=60 on the
-  // inline fallback path, anything longer than 30s for fusion alone risks
-  // hitting the function timeout. Failing here lets the client retry cleanly
-  // instead of waiting until Vercel kills the function.
-  const FUSION_TIMEOUT_MS = 30_000
+  // Safety timeout to bound the worst case. On the Inngest path this step is
+  // its own function invocation, so 45s fits Vercel's 60s budget with margin;
+  // the keyless inline fallback only runs where no platform timeout applies
+  // (local/self-host). Sized for gpt-5.6-luna at reasoningEffort 'low' —
+  // 'high' overran even 30s on most runs (prod incident 2026-07-11→17).
+  const FUSION_TIMEOUT_MS = 45_000
   const response = await Promise.race([
     completion({
       taskSlot: 'interview.fusion-analysis',

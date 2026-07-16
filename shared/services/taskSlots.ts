@@ -90,7 +90,10 @@ export const TASK_SLOT_DEFAULTS: Record<
   'interview.code-run':             { model: 'gpt-5.6-luna', maxTokens: 3000, provider: 'openai', reasoningEffort: 'low' },
   'interview.coach-notes':          { model: 'gpt-5.6-luna', maxTokens: 500, provider: 'openai', reasoningEffort: 'none' },
   'interview.jd-extract':           { model: 'gpt-5.6-luna', maxTokens: 2500, provider: 'openai', reasoningEffort: 'low' },
-  'interview.fusion-analysis':      { model: 'gpt-5.6-luna', maxTokens: 3600, provider: 'openai', reasoningEffort: 'high' },
+  // Fusion is structured signal-merging, not judgment: 'high' effort blew the
+  // fusion timeout on most runs (analysis failed in prod 2026-07-11→17) and
+  // its reasoning preamble broke the strict JSON parse. Keep 'low'.
+  'interview.fusion-analysis':      { model: 'gpt-5.6-luna', maxTokens: 3600, provider: 'openai', reasoningEffort: 'low' },
   'resume.enhance-section':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.enhance-bullets':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.generate-full':           { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },

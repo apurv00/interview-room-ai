@@ -2089,6 +2089,9 @@ adapter emits (plain / json_schema / json_object / streaming) BEFORE deploy.
 (none/low/medium/high/xhigh — verified live; 'max' and GPT-5.0's 'minimal' are 400s) and defaults to
 a dynamic medium. Decision: judgment slots run HIGH in code now (`generate-feedback`,
 `evaluation-engine-v2`, `fusion-analysis`, `evaluate-code`, `evaluate-design`); in-interview
+_(2026-07-17 correction: `fusion-analysis` was misclassified — it merges already-computed signals
+into a fixed JSON shape, not judgment, and HIGH overran its 30s caller timeout, failing prod
+analyses for 6 days. Demoted to LOW; incident log in AI_ANALYSIS.md §8.)_
 generation runs medium/low (`generate-question` medium, `evaluate-answer` low — 5s client abort);
 real-time conversational + streaming slots run NONE (`turn-router`, `answer-candidate-question`,
 `coach-notes`, `learn.drill-evaluate` — reasoning precedes the first output/stream token, so there

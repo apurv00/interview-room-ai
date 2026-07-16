@@ -254,3 +254,23 @@ _Related same-branch feedback-page fixes (not the analysis pipeline): heatmap
 header/body column re-alignment (`QuestionHeatmap.tsx`) and weakest-dimension +
 domain-aware per-answer suggestions (`shared/lib/answerSuggestion.ts`, replacing
 the "always STAR" ternary)._
+
+---
+
+**2026-07-17 — Fusion step broken by the GPT-5.6 cutover (prod, 6 days).**
+The 2026-07-11 model cutover put `interview.fusion-analysis` on
+`gpt-5.6-luna` with `reasoningEffort: 'high'` ("judgment slot" tier), against
+`FUSION_TIMEOUT_MS = 30_000` sized in the Haiku era (3–5s calls). High-effort
+reasoning overran the timeout on most runs (`Fusion analysis timed out after
+30000ms`, stepId `run-fusion-enhanced`) and, when it did answer, its reasoning
+preamble broke the strict JSON parse (`Fusion analysis returned no valid
+JSON`). Every prod analysis 2026-07-11→17 failed except two; nobody noticed
+because the feature is quota-gated and low-volume. Found during the Oracle
+migration's staging gate when a test interview accidentally ran on prod.
+Fix: fusion demoted to `reasoningEffort: 'low'` (it merges already-computed
+signals into a fixed JSON shape — extraction, not judgment) and timeout
+resized to 45s (Inngest steps are their own function invocations, so 45s fits
+Vercel's 60s budget; the keyless inline fallback only runs where no platform
+timeout applies). Regression pin: `shared/__tests__/fusionSlotConfig.test.ts`.
+Lesson: any per-slot model/effort change must re-verify the slot's caller-side
+timeouts — they encode the previous model's latency envelope.
