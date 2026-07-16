@@ -41,6 +41,11 @@ COPY --from=builder /app/.next/static ./.next/static
 # Create recording storage directory
 RUN mkdir -p /data/recordings && chown nextjs:nodejs /data/recordings
 
+# Next's runtime caches (image optimizer, ISR) live under .next/cache — the
+# standalone copy is root-owned, so the nextjs user gets EACCES on every
+# cache write without this.
+RUN mkdir -p .next/cache && chown -R nextjs:nodejs .next/cache
+
 USER nextjs
 
 EXPOSE 3000

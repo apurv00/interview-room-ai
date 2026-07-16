@@ -105,6 +105,7 @@
     "react-dom": "^18",
     "recharts": "^3.8.0",
     "resend": "^6.9.3",
+    "sharp": "^0.35.3",
     "stripe": "^20.4.1",
     "tailwind-merge": "^3.5.0",
     "unpdf": "^1.4.0",
