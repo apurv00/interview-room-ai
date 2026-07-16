@@ -97,3 +97,64 @@ export function interviewSlugForDomain(id: string | undefined | null): string | 
   if (!d) return undefined
   return d.interviewSlug ?? 'general'
 }
+
+/**
+ * Target-role → domain derivation (founder RCA 2026-07-16: the feed never
+ * mapped 'Product Management' to the pm domain, so the 25-point domain
+ * boost sat unused and the 400-newest candidate pool starved every
+ * non-fresh domain — 15 of 125 open pm rows even reached scoring). Pure +
+ * client-safe. Token-set match against each domain's `q` with suffix-class
+ * stems so 'Product Management' ≡ 'product manager' — titleJaccard scores
+ * that pair 0.33 and can never clear its 0.5 bar (manager ≠ management).
+ * Unknown roles return undefined: no filter, never a WRONG filter.
+ */
+const ROLE_STEMS: Record<string, string> = {
+  management: 'manager',
+  managerial: 'manager',
+  development: 'developer',
+  engineering: 'engineer',
+  analytics: 'analyst',
+  analysis: 'analyst',
+}
+/** Full-string aliases (normalized) for forms token math can't reach.
+ *  Generic 'software engineer'/'sde' stay UNmapped deliberately — backend
+ *  vs fullstack is a founder call; no filter beats a wrong filter. */
+const ROLE_ALIASES: Record<string, string> = {
+  pm: 'pm',
+  'product owner': 'pm',
+  'ml engineer': 'ml-engineer',
+  'fullstack developer': 'fullstack',
+  fullstack: 'fullstack',
+  qa: 'sdet',
+  'quality assurance': 'sdet',
+  hr: 'hr',
+  'human resources': 'hr',
+}
+
+export function roleToJobsDomain(role: string | undefined | null): JobDomainId | undefined {
+  const norm = (role ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!norm) return undefined
+  const alias = ROLE_ALIASES[norm]
+  if (alias) return alias as JobDomainId
+  const stem = (t: string) => ROLE_STEMS[t] ?? t
+  const roleTokens = new Set(norm.split(' ').map(stem))
+  // Best = most q-tokens matched, then highest matched fraction; a domain
+  // qualifies at ≥2/3 of its q tokens so 'UX Designer' still reaches
+  // 'ui ux designer' but a lone shared token ('manager') reaches nothing.
+  let best: { id: JobDomainId; inter: number; ratio: number } | undefined
+  for (const d of JOB_DOMAINS) {
+    const qTokens = Array.from(new Set(d.q.split(' ').map(stem)))
+    let inter = 0
+    for (const t of qTokens) if (roleTokens.has(t)) inter += 1
+    const ratio = inter / qTokens.length
+    if (inter === 0 || ratio < 2 / 3) continue
+    if (!best || inter > best.inter || (inter === best.inter && ratio > best.ratio)) {
+      best = { id: d.id, inter, ratio }
+    }
+  }
+  return best?.id
+}

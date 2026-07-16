@@ -15,7 +15,7 @@ export {
 export type { ClassifyInput, ClassifyResult, DropRule, FlagRule } from './services/qualityGate'
 export { METROS, METRO_ALIASES } from './config/metros'
 export {
-  JOB_DOMAINS, JOB_DOMAIN_IDS, FRESHER_DOMAINS, FRESHER_DOMAIN_PATTERNS, matchFresherDomain, interviewSlugForDomain,
+  JOB_DOMAINS, JOB_DOMAIN_IDS, FRESHER_DOMAINS, FRESHER_DOMAIN_PATTERNS, matchFresherDomain, interviewSlugForDomain, roleToJobsDomain,
 } from './config/domains'
 export type { JobDomainId } from './config/domains'
 export { APPLY_TIERS, TIER_RANK } from './config/spamRules'

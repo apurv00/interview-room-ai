@@ -68,3 +68,41 @@ describe('interviewSlugForDomain (the hand-off role resolver, Codex #524)', asyn
     expect(interviewSlugForDomain(undefined)).toBeUndefined()
   })
 })
+
+describe('roleToJobsDomain (founder RCA 2026-07-16 — the feed never mapped the target role to a domain)', async () => {
+  const { roleToJobsDomain } = await import('../config/domains')
+
+  it("the founder's exact repro: 'Product Management' reaches pm (titleJaccard scored it 0.33 and never fired)", () => {
+    expect(roleToJobsDomain('Product Management')).toBe('pm')
+    expect(roleToJobsDomain('product manager')).toBe('pm')
+    expect(roleToJobsDomain('Senior Product Manager')).toBe('pm')
+    expect(roleToJobsDomain('Product Owner')).toBe('pm') // alias — token math can't reach it
+  })
+
+  it('specificity: product ANALYST beats pm when both partially match', () => {
+    expect(roleToJobsDomain('Product Analyst')).toBe('product-analyst')
+  })
+
+  it('stems reach the -ing/-ment forms; unknown roles return undefined (no filter beats a wrong filter)', () => {
+    expect(roleToJobsDomain('Backend Development')).toBe('backend')
+    expect(roleToJobsDomain('QA Engineer')).toBe('sdet')
+    expect(roleToJobsDomain('Data Scientist')).toBe('data-science')
+    expect(roleToJobsDomain('UX Designer')).toBe('design') // 2 of 3 q tokens
+    expect(roleToJobsDomain('Astronaut')).toBeUndefined()
+    expect(roleToJobsDomain('Software Engineer')).toBeUndefined() // deliberately unmapped — backend vs fullstack is a founder call
+    expect(roleToJobsDomain('')).toBeUndefined()
+    expect(roleToJobsDomain(undefined)).toBeUndefined()
+  })
+
+  it("a lone shared token never matches: 'Engineering Manager' maps to NO domain, not pm", () => {
+    expect(roleToJobsDomain('Engineering Manager')).toBeUndefined()
+  })
+
+  it('every alias target is a real taxonomy id', async () => {
+    const { JOB_DOMAIN_IDS } = await import('../config/domains')
+    for (const role of ['pm', 'product owner', 'ml engineer', 'fullstack developer', 'qa', 'human resources']) {
+      const id = roleToJobsDomain(role)
+      expect(id && (JOB_DOMAIN_IDS as readonly string[]).includes(id)).toBe(true)
+    }
+  })
+})
