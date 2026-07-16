@@ -80,6 +80,11 @@ export interface IJobPosting extends Document {
   domain?: string
   // Content
   jdCompressed?: Buffer
+  /** Display twin of jdCompressed with block structure preserved
+   *  (newlines/bullets — founder item 7, PR-C). NEVER a hash input:
+   *  bodyHashOf/verdict/xray hashes all read the collapsed jdCompressed.
+   *  Absent on legacy rows — the detail projection falls back. */
+  jdDisplayCompressed?: Buffer
   jdLength: number
   parsedJD?: unknown
   /** Normalized-body hash the parsedJD was computed from — a merged JD
@@ -181,6 +186,7 @@ const JobPostingSchema = new Schema<IJobPosting>(
     salaryText: { type: String, maxlength: 200 },
     domain: { type: String },
     jdCompressed: { type: Buffer },
+    jdDisplayCompressed: { type: Buffer },
     jdLength: { type: Number, default: 0 },
     parsedJD: { type: Schema.Types.Mixed },
     parsedJDHash: { type: String },

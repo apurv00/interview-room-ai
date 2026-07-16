@@ -2,7 +2,7 @@ import { gunzipSync } from 'zlib'
 import { JobPosting, JobApplication, type IJobPosting } from '@shared/db/models'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
 import { titleJaccard } from './identityResolver'
-import { xrayHashOf } from './xrayService'
+import { xrayHashOf, legacyXrayHashOf } from './xrayService'
 import { getBaseResume } from './baseResumeService'
 import { getResume } from '@resume'
 
@@ -297,7 +297,12 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
   const doc = await JobPosting.findById(id).lean()
   if (!doc || doc.status !== 'open') return null
   if (!userId) return { ...shellOf(doc as IJobPosting), gated: true }
-  const buf = doc.jdCompressed as Buffer | undefined
+  // Prefer the display twin (block structure preserved — founder item 7);
+  // legacy rows without it fall back to the collapsed canonical body.
+  // xrayHashOf is whitespace-insensitive, so downstream hashing of this
+  // text (practice hand-off → readiness version binding, ATS identity)
+  // is IDENTICAL for both shapes.
+  const buf = (doc.jdDisplayCompressed ?? doc.jdCompressed) as Buffer | undefined
   let jd = ''
   try {
     jd = buf?.length ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8') : ''
@@ -321,7 +326,14 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     const base = await getBaseResume(userId)
     const full = base ? await getResume(userId, base.id) : null
     const resumeText = (full as { fullText?: string } | null)?.fullText ?? ''
-    if (resumeText) atsCurrent = app.atsResult.resumeHash === xrayHashOf(resumeText)
+    // Dual acceptance (Codex #541): legacy resumeHash values were computed
+    // pre-whitespace-collapse on raw resume text (resumes carry newlines).
+    // Both forms count as current — new writes converge on xrayHashOf.
+    if (resumeText) {
+      atsCurrent =
+        app.atsResult.resumeHash === xrayHashOf(resumeText) ||
+        app.atsResult.resumeHash === legacyXrayHashOf(resumeText)
+    }
   }
   return {
     ...shellOf(doc as IJobPosting),

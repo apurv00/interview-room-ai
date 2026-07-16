@@ -1,7 +1,7 @@
-import { gzipSync } from 'zlib'
+import { gzipSync, gunzipSync } from 'zlib'
 import crypto from 'crypto'
 import { JobPosting, type IJobPosting } from '@shared/db/models'
-import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, bodyHashOf } from './qualityGate'
+import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, displayJdBody, bodyHashOf } from './qualityGate'
 import { companyKey, titleKey, titleTokens, locationKey, fingerprintOf, sourceKeyOf, isConfidentialCompany, titleJaccard, FUZZY_MERGE_JACCARD } from './identityResolver'
 import type { NormalizedJob } from '../adapters/types'
 
@@ -122,6 +122,10 @@ function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedF
     isRemote: p.job.isRemote,
     domain: p.job.domainHint,
     jdCompressed: jdNorm ? gzipSync(Buffer.from(jdNorm)) : undefined,
+    // Display twin (founder item 7): block structure preserved for the
+    // detail page; NEVER a hash input — jdCompressed stays the canonical
+    // collapsed body for bodyHash/verdict/xray.
+    jdDisplayCompressed: jdNorm ? gzipSync(Buffer.from(displayJdBody(p.job.description))) : undefined,
     jdLength: p.jdLen,
     provenance: p.job.externalId
       ? [(() => {
@@ -219,8 +223,23 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
   if (p.jdLen > (doc.jdLength ?? 0)) {
     const jdNorm = normalizeJdBody(p.job.description)
     doc.jdCompressed = gzipSync(Buffer.from(jdNorm))
+    doc.jdDisplayCompressed = gzipSync(Buffer.from(displayJdBody(p.job.description)))
     doc.jdLength = p.jdLen
     verdictInputsChanged = true
+  } else if (!doc.jdDisplayCompressed && doc.jdCompressed && p.job.description) {
+    // Legacy heal (founder item 7): pre-PR-C rows have no display twin.
+    // When the SAME body re-ingests (exact normalized match), write the
+    // display artifact WITHOUT touching jdCompressed — no bodyHash,
+    // verdict-hash, or xray churn (verdictInputsChanged stays false).
+    const jdNorm = normalizeJdBody(p.job.description)
+    let existing = ''
+    try {
+      const buf = doc.jdCompressed as Buffer
+      existing = gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as unknown as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8')
+    } catch { /* corrupt gzip — skip the heal */ }
+    if (jdNorm && jdNorm === existing) {
+      doc.jdDisplayCompressed = gzipSync(Buffer.from(displayJdBody(p.job.description)))
+    }
   }
   // postedAt: earliest non-null (aggregators re-stamp reposts).
   const incoming = validDate(p.job.postedAt) ?? null

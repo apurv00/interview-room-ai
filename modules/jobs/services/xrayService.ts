@@ -28,7 +28,26 @@ import type { IParsedJobDescription } from '@shared/types'
  * covers the full body the parser actually sees.
  */
 export function xrayHashOf(jd: string): string {
-  return createHash('sha1').update(jd).digest('hex').slice(0, 20)
+  // Whitespace-insensitive (PR-C, founder item 7): the display-formatted
+  // JD (jdDisplayCompressed — newlines preserved) and the hash-canonical
+  // collapsed body are the SAME JD version. Every input this hash has
+  // ever stored was already whitespace-collapsed, so the collapse below
+  // is a no-op for all existing parsedJDHash / atsResult.jdHash /
+  // evidence xrayHash values (pinned by test) — while sessions that
+  // capture display-shaped text via the practice hand-off keep hashing
+  // equal to the posting's parse. Version detection is about CONTENT,
+  // not whitespace shape.
+  return createHash('sha1').update(jd.replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 20)
+}
+
+/** The pre-collapse hash form (raw bytes). Stored atsResult.resumeHash
+ *  values predate the whitespace collapse and were computed on RAW resume
+ *  text — resumes carry newlines, unlike stored JD bodies where the
+ *  collapse is a no-op (Codex #541). Comparison sites accept BOTH forms so
+ *  legacy ATS results stay valid; every new WRITE uses xrayHashOf, so the
+ *  corpus converges and this stays comparison-only. */
+export function legacyXrayHashOf(text: string): string {
+  return createHash('sha1').update(text).digest('hex').slice(0, 20)
 }
 
 /** rawText is deliberately ABSENT: persisting the parser's echo of the full

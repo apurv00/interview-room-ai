@@ -6,7 +6,7 @@ import { logger } from '@shared/logger'
 import { checkATS } from '@resume'
 import { getBaseResume } from '../services/baseResumeService'
 import { getResume } from '@resume'
-import { xrayHashOf } from '../services/xrayService'
+import { xrayHashOf, legacyXrayHashOf } from '../services/xrayService'
 
 /**
  * Save-gated per-job ATS check (Wave 3.3, founder decision Q3). The ~35s
@@ -73,7 +73,14 @@ export async function runAtsCheckHandler(
 
     const jdHash = xrayHashOf(jd)
     const resumeHash = xrayHashOf(resumeText)
-    if (app.atsResult && app.atsResult.jdHash === jdHash && app.atsResult.resumeHash === resumeHash) {
+    // Legacy resumeHash acceptance (Codex #541): pre-collapse results were
+    // hashed on raw resume text — both forms count as the same resume so
+    // an unchanged (resume × JD) pair never re-bills the check. JD hashes
+    // need no legacy form: stored JD bodies were always collapsed.
+    const resumeMatches =
+      app.atsResult?.resumeHash === resumeHash ||
+      app.atsResult?.resumeHash === legacyXrayHashOf(resumeText)
+    if (app.atsResult && app.atsResult.jdHash === jdHash && resumeMatches) {
       await clearOwnClaim()
       return { done: true as const, score: app.atsResult.score, cached: true }
     }
