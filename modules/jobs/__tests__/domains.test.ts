@@ -107,6 +107,13 @@ describe('roleToJobsDomain (founder RCA 2026-07-16 — the feed never mapped the
     expect(roleToJobsDomain('Data Engineer')).toBeUndefined()
   })
 
+  it("Codex #539 r2: fullstack ≡ full stack — one-word forms reach the fullstack bucket", () => {
+    expect(roleToJobsDomain('Fullstack Engineer')).toBe('fullstack')
+    expect(roleToJobsDomain('Full-Stack Engineer')).toBe('fullstack')
+    expect(roleToJobsDomain('Fullstack Software Engineer')).toBe('fullstack')
+    expect(roleToJobsDomain('Full Stack Developer')).toBe('fullstack')
+  })
+
   it('every alias target is a real taxonomy id', async () => {
     const { JOB_DOMAIN_IDS } = await import('../config/domains')
     for (const role of ['pm', 'product owner', 'ml engineer', 'fullstack developer', 'qa', 'human resources']) {

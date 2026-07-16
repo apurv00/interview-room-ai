@@ -137,12 +137,21 @@ const ROLE_ALIASES: Record<string, string> = {
   'human resources': 'hr',
 }
 
-export function roleToJobsDomain(role: string | undefined | null): JobDomainId | undefined {
-  const norm = (role ?? '')
+/** Bigram unification BEFORE tokenizing, applied to BOTH sides ('full
+ *  stack developer' ≡ 'Fullstack Engineer' — Codex #539 round 2: the
+ *  one-word form matched 1/3 q tokens and fell to the unpersonalized
+ *  pool). */
+function normalizeRoleText(s: string): string {
+  return s
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\bfull\s?stack\b/g, 'fullstack')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+export function roleToJobsDomain(role: string | undefined | null): JobDomainId | undefined {
+  const norm = normalizeRoleText(role ?? '')
   if (!norm) return undefined
   const alias = ROLE_ALIASES[norm]
   if (alias) return alias as JobDomainId
@@ -153,7 +162,7 @@ export function roleToJobsDomain(role: string | undefined | null): JobDomainId |
   // 'ui ux designer' but a lone shared token ('manager') reaches nothing.
   let best: { id: JobDomainId; inter: number; ratio: number } | undefined
   for (const d of JOB_DOMAINS) {
-    const qTokens = Array.from(new Set(d.q.split(' ').map(stem)))
+    const qTokens = Array.from(new Set(normalizeRoleText(d.q).split(' ').map(stem)))
     let inter = 0
     for (const t of qTokens) if (roleTokens.has(t)) inter += 1
     const ratio = inter / qTokens.length

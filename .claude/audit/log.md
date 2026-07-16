@@ -3647,3 +3647,15 @@ durable record; ids are best-effort pointers.
 ## 2026-07-16 — PR #539 Codex round 1 (1 P2, fixed)
 - engineer ≡ developer title-class unification in ROLE_STEMS: 'Backend Engineer' (the start-flow placeholder itself) scored 1/2 vs q 'backend developer' and fell back to the unpersonalized pool. Both comparison sides stem through the map, so the canonical token is arbitrary. Vectors: Backend/Frontend/DevOps/Mechanical Engineer map; 'Data Engineer' stays undefined (not in taxonomy — no wrong bucket); 'Software Engineer'/'Engineering Manager' deliberate non-mappings preserved.
 - Verified: modules/jobs 371 passed | 1 skipped; full clean-env vitest 5724 passed | 17 skipped; tsc/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — Codex rounds: #539 r2 (fullstack bigram) + #540 r1 (upload dead-end)
+- #539: 'Fullstack Engineer' matched 1/3 tokens vs q 'full stack developer' → normalizeRoleText unifies the full-stack bigram on BOTH comparison sides before tokenizing; vectors for the four fullstack spellings.
+- #540: good PDF extract + failed STRUCTURED parse left the user on the chooser with a paste-instead error but no paste door (paste is no longer primary). parseAndConfirm now reports failure; the upload path drops to the paste fallback on either failure leg. Vector added.
+- Verified: targeted suites 21 passed; full clean-env vitest 5726 passed | 17 skipped; tsc/build clean.
