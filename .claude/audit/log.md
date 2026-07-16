@@ -3724,3 +3724,14 @@ durable record; ids are best-effort pointers.
 - Ops: 305 rows closed non-reopenably (same founder-sanctioned source-revoked action; corpus 3,365 open).
 - Structural: 'up.railway.app' SUFFIX added to APPLY_DOMAIN_BLOCKLIST — classifyJob line ~146 hard-drops any posting whose every apply URL is blocklisted, so future re-uploads (any subdomain) never store. Vectors: exact host + fresh-subdomain blocked + whole-posting drop.
 - Verified: qualityGate+identity+ingest 74 passed; full clean-env vitest 5744 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #542 Codex round 1 (1 P2, fixed)
+- The standalone liquidity probe carries its own APPLY_DOMAIN_BLOCKLIST copy by documented design ('every gate pattern lands in both') — adding the suffix only in spamRules left the probe's dual-report counting rows production ingest drops, skewing reconciliation. Fix: 'up.railway.app' added to the probe copy with a lockstep note; verified live via import (spam host + fresh subdomain blocked, legit host passes).
+- Verified: qualityGate 30 passed; full clean-env vitest 5744 passed | 17 skipped; tsc/lint/build clean.

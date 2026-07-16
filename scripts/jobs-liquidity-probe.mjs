@@ -121,7 +121,10 @@ export function fingerprint(company, title, city, isRemote) {
 // ---------------------------------------------------------------------------
 // whatsapp.com covers api./chat./www. via suffix matching; telegram.me/.org
 // beside t.me; docs.google.com is the Google-Forms vector (same as forms.gle).
-const APPLY_DOMAIN_BLOCKLIST = ['bit.ly', 'forms.gle', 'docs.google.com', 'wa.me', 'whatsapp.com', 't.me', 'telegram.me', 'telegram.org', 'tinyurl.com']
+// up.railway.app: the vacancy-spam flood (2026-07-15/16) — kept in lockstep
+// with modules/jobs/config/spamRules.ts so probe dual-report metrics count
+// what production ingest actually drops (Codex #542).
+const APPLY_DOMAIN_BLOCKLIST = ['bit.ly', 'forms.gle', 'docs.google.com', 'wa.me', 'whatsapp.com', 't.me', 'telegram.me', 'telegram.org', 'tinyurl.com', 'up.railway.app']
 const CONSULTANCY_RE = /\b(consultanc\w*|consultants?|staffing|manpower|placements?|recruitment\s+(services|agency|firm)|hr\s+(services|solutions)|talent\s+(acquisition|solutions)\s+(llp|pvt|private))\b/i
 // §4.5 names TeamLease/Randstad/Quess explicitly — India's largest staffing
 // firms match no generic word-shape. One shared predicate keeps the snapshot
