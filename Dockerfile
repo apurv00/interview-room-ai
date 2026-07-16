@@ -1,7 +1,9 @@
 # Stage 1: Install dependencies
 FROM node:24-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
+# .npmrc carries legacy-peer-deps=true (fecd82d, required since 2026-03):
+# without it npm >=11 hard-fails `npm ci` on the @connectrpc peer-dep shape.
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
 # Stage 2: Build
