@@ -55,6 +55,9 @@ export interface IJobIngestCycle extends Document {
     outputTokens: number
     costUsd: number
     epoch: string
+    /** WHY rows didn't score — ineligible/attempts-cap/opted-out/
+     *  hash-match/superseded/budget:<reason> (2026-07-16 stall lesson). */
+    skips?: Record<string, number>
   }
   expiresAt: Date
   createdAt: Date

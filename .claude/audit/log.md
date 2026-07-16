@@ -3825,3 +3825,21 @@ durable record; ids are best-effort pointers.
 - P2 optimistic write token: ingestion replacing the URL (and clearing applyCheck) between pick and write could let stale evidence close a fresh-linked row. Every write now carries {applyCheck.lastCheckedAt: <picked state>} (or $exists:false for first checks) — a mid-sweep refresh voids the write; next sweep re-verifies. Pinned.
 - VERDICT STALL (ongoing): worker RUNS (writes requested-40 cycle rows), all 40 reach evaluate(), zero scored/tokens/attempts → evaluate() returns not-ok pre-LLM for every posting. getConfig defaults caps correctly (900/2.5/75); actual spend $0.96/mo. Remaining suspects: per-posting budget gate (reserve-counting may exhaust per-source 500/day via repeated sweeps), stuck degraded flag, or Redis-unreachable fail-closed. NOT visible from outside: worker step outputs / Redis meters. Founder ask: Inngest dashboard → jobs-evaluate-postings → any run today → run OUTPUT (skip counters). Observability gap to fix: worker telemetry doesn't record WHY rows skip — follow-up PR planned (skip-reason counters in the llm cycle block).
 - Verified: linkCheck 22 passed; full clean-env vitest 5768 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — verdict skip-reason telemetry (observability PR; incident follow-up)
+- The 2026-07-16 stall (requested-40/scored-0, all other counters zero, 1,882 pending frozen) was undiagnosable from telemetry: budget skips deliberately counted NOTHING and pre-evaluate skips were invisible. Every skip now lands in llm.skips per label (ineligible / attempts-cap / opted-out / hash-match / superseded / budget:<reason>) — the next prod cycle row NAMES the stall cause directly. Budget skips remain non-errors (shadow-exit metric unpolluted).
+- #543 MERGED + Inngest re-synced 19→20 (link-check cron live). Verified: worker suite 20 passed; full clean-env vitest 5769 passed | 17 skipped; tsc/lint/build/module-size clean.

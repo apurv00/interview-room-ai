@@ -222,6 +222,27 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     // and it is NOT an error — throttling must not pollute the shadow-exit metric
     expect(mockCycleCreate.mock.calls.at(-1)![0].llm.errors).toBe(0)
+    // …but it IS visible (2026-07-16 stall: requested-40/scored-0 cycles
+    // were undiagnosable because budget skips counted NOTHING).
+    expect(mockCycleCreate.mock.calls.at(-1)![0].llm.skips).toMatchObject({ 'budget:daily-95pct': 1 })
+  })
+
+  it('skip REASONS are counted per label — the cycle row names why rows did not score', async () => {
+    resetAll()
+    // p-closed = ineligible; p-capped = attempts cap.
+    mockPostingFindById.mockImplementation((id: string) => ({
+      lean: () => Promise.resolve(
+        id === 'p-closed'
+          ? posting({ _id: id, status: 'closed', closedReason: 'source-revoked' })
+          : posting({ _id: id, llmVerdict: { status: 'pending', attempts: 5 } })
+      ),
+    }))
+    await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p-closed', 'p-capped'] } }, step,
+      { evaluateFn: vi.fn() as never }
+    )
+    const skips = mockCycleCreate.mock.calls.at(-1)![0].llm.skips
+    expect(skips).toMatchObject({ ineligible: 1, 'attempts-cap': 1 })
   })
 
   it('circuit breaker: 6 consecutive failures set the degraded flag and stop the run', async () => {

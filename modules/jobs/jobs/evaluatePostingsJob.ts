@@ -56,13 +56,19 @@ interface LlmCycleCounters {
   outputTokens: number
   costUsd: number
   epoch: string
+  /** WHY rows didn't score (2026-07-16 incident: requested-40/scored-0
+   *  cycles with every other counter zero were indistinguishable from
+   *  outside — budget skips were deliberately uncounted and pre-evaluate
+   *  skips invisible). Labels: ineligible / attempts-cap / opted-out /
+   *  hash-match / superseded / budget:<reason>. */
+  skips: Record<string, number>
 }
 
 function emptyLlmCounters(epochModel = expectedVerdictModel()): LlmCycleCounters {
   return {
     requested: 0, scored: 0, cacheHits: 0, errors: 0, timeouts: 0, softClosed: 0,
     verdictDistribution: { genuine: 0, suspicious: 0, fraud: 0 },
-    reasonCodeCounts: {}, bySource: {},
+    reasonCodeCounts: {}, bySource: {}, skips: {},
     llmFlaggedCleanRow: 0, llmClearedFlaggedRow: 0,
     inputTokens: 0, outputTokens: 0, costUsd: 0,
     // The RESOLVED model, not the code default — a CMS cutover must not
@@ -82,6 +88,7 @@ function mergeLlmCounters(total: LlmCycleCounters, c: LlmCycleCounters): void {
   total.verdictDistribution.suspicious += c.verdictDistribution.suspicious
   total.verdictDistribution.fraud += c.verdictDistribution.fraud
   for (const [k, v] of Object.entries(c.reasonCodeCounts)) total.reasonCodeCounts[k] = (total.reasonCodeCounts[k] ?? 0) + v
+  for (const [k, v] of Object.entries(c.skips)) total.skips[k] = (total.skips[k] ?? 0) + v
   for (const [src, dist] of Object.entries(c.bySource)) {
     const t = total.bySource[src] ?? (total.bySource[src] = {})
     for (const [k, v] of Object.entries(dist)) t[k] = (t[k] ?? 0) + v
@@ -149,14 +156,23 @@ export async function runEvaluatePostingsHandler(
         // llm-verdict tombstones stay eligible: §4.3 'a changed body
         // re-verdicts and may reopen' — every OTHER closed reason is out.
         const eligible = doc && (doc.status === 'open' || doc.closedReason === 'llm-verdict')
-        if (!doc || !eligible) continue
+        if (!doc || !eligible) {
+          c.skips['ineligible'] = (c.skips['ineligible'] ?? 0) + 1
+          continue
+        }
         // The attempts cap bounds consecutive FAILURES on one input — a
         // successfully-scored row re-entering for an epoch refresh must not
         // be strangled by its historical failure count (its failure path
         // flips it back to pending, where the cap re-applies).
-        if (doc.llmVerdict?.status === 'pending' && (doc.llmVerdict.attempts ?? 0) >= MAX_ATTEMPTS) continue
+        if (doc.llmVerdict?.status === 'pending' && (doc.llmVerdict.attempts ?? 0) >= MAX_ATTEMPTS) {
+          c.skips['attempts-cap'] = (c.skips['attempts-cap'] ?? 0) + 1
+          continue
+        }
         const sources = (doc.provenance ?? []).map((e) => e.sourceId)
-        if (sources.some((s) => optedOut.has(s))) continue
+        if (sources.some((s) => optedOut.has(s))) {
+          c.skips['opted-out'] = (c.skips['opted-out'] ?? 0) + 1
+          continue
+        }
         const primarySource = sources[0] ?? 'unknown'
         const applyHosts = Array.from(new Set(
           (doc.provenance ?? []).map((e) => (e.applyUrl ? hostOf(e.applyUrl) : '')).filter(Boolean)
@@ -176,7 +192,10 @@ export async function runEvaluatePostingsHandler(
             salaryText: doc.salaryText ?? null,
             epochModel,
           })
-          if (doc.llmVerdict.verdictInputHash === currentHash) continue
+          if (doc.llmVerdict.verdictInputHash === currentHash) {
+            c.skips['hash-match'] = (c.skips['hash-match'] ?? 0) + 1
+            continue
+          }
         }
 
         c.requested++
@@ -264,7 +283,10 @@ export async function runEvaluatePostingsHandler(
             { _id: doc._id, updatedAt: doc.updatedAt },
             unset ? { $set: set, $unset: unset } : { $set: set }
           )
-          if ((res?.matchedCount ?? 1) === 0) continue // superseded mid-flight — not scored
+          if ((res?.matchedCount ?? 1) === 0) {
+            c.skips['superseded'] = (c.skips['superseded'] ?? 0) + 1
+            continue // superseded mid-flight — not scored
+          }
           c.scored++
           if (outcome.cached) c.cacheHits++
           c.verdictDistribution[outcome.verdict.verdict]++
@@ -281,6 +303,11 @@ export async function runEvaluatePostingsHandler(
           // Not the posting's fault — no attempts bump, no breaker count,
           // and NOT an error (it would pollute the shadow-exit 'error <5%'
           // metric during throttling); the backlog gauge shows the queue.
+          // But it must be VISIBLE: the 2026-07-16 stall (requested-40/
+          // scored-0, every other counter zero) was undiagnosable from
+          // telemetry precisely because this branch counted nothing.
+          const label = `budget:${outcome.message ?? 'denied'}`
+          c.skips[label] = (c.skips[label] ?? 0) + 1
         } else {
           fails++
           if (outcome.kind === 'timeout') c.timeouts++
