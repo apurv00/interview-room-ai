@@ -71,6 +71,21 @@ describe('apply-url blocklist and tier ladder', () => {
     expect(isBlockedApplyUrl('https://chat.whatsapp.com/xyz')).toBe(true)
   })
 
+  it("free-app-host suffix blocks the WHOLE subdomain space — the 'vacancy target jobs' flood (2026-07-16) hard-drops at ingest", () => {
+    expect(isBlockedApplyUrl('https://vacancyglobal.up.railway.app/jobs/123')).toBe(true)
+    // A freshly-minted subdomain gets nothing — the suffix is the lever.
+    expect(isBlockedApplyUrl('https://totally-new-name.up.railway.app/apply')).toBe(true)
+    // A posting whose ONLY apply path is the spam host drops entirely.
+    const r = classifyJob({
+      title: 'Senior Product Manager',
+      company: 'vacancy target jobs',
+      description: 'A genuine-looking role with responsibilities and requirements. '.repeat(10),
+      applyUrls: ['https://vacancyglobal.up.railway.app/jobs/123'],
+      validThrough: null,
+    })
+    expect(r.drops).toContain('blocklist-apply-domain')
+  })
+
   it('[Cx-507] trailing DNS root dots cannot bypass the blocklist or tier ladder', () => {
     expect(isBlockedApplyUrl('https://wa.me./919876543210')).toBe(true)
     expect(isBlockedApplyUrl('https://chat.whatsapp.com./xyz')).toBe(true)

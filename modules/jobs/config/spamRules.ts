@@ -12,9 +12,18 @@
 
 // whatsapp.com covers api./chat./www. via suffix matching; telegram.me/.org
 // beside t.me; docs.google.com is the Google-Forms vector (same as forms.gle).
+// up.railway.app = free-app-host subdomain space, observed abuse
+// 2026-07-15/16: 'vacancy target jobs' flooded 405 postings (two waves,
+// both manually revoked) applying via vacancyglobal.up.railway.app — row
+// revocation was whack-a-mole because the spammer re-uploads under fresh
+// external ids and can mint new subdomains in seconds; the SUFFIX is the
+// durable lever (real employers apply via their own domain or an ATS,
+// never a free app host). Add further free-host suffixes on OBSERVED
+// abuse only, never speculatively.
 export const APPLY_DOMAIN_BLOCKLIST = [
   'bit.ly', 'forms.gle', 'docs.google.com', 'wa.me', 'whatsapp.com',
   't.me', 'telegram.me', 'telegram.org', 'tinyurl.com',
+  'up.railway.app',
 ]
 
 export const CONSULTANCY_RE = /\b(consultanc\w*|consultants?|staffing|manpower|placements?|recruitment\s+(services|agency|firm)|hr\s+(services|solutions)|talent\s+(acquisition|solutions)\s+(llp|pvt|private))\b/i
