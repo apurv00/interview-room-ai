@@ -29,12 +29,13 @@ interface StepRunner {
 }
 
 const RUN_CAP = 150
-// Chunk math vs the route's maxDuration=300 (Codex #543 rounds 2+5): worst
-// case per URL = 4s DNS preflight + 12s fetch timeout + 0.4s pacing ≈
-// 16.4s; per posting ≤ MAX_URLS × 16.4s ≈ 50s; per chunk ≤ 5 × 50s ≈ 246s
-// — checkpointed inside the envelope even when every DNS and host stalls.
-const CHUNK = 5
-const MAX_URLS_PER_POSTING = 3
+// Chunk math vs the route's maxDuration=300 (Codex #543 rounds 2/5/6):
+// worst case per URL = 4s DNS preflight + 12s fetch timeout + 0.4s pacing
+// ≈ 16.4s. Chunks are packed by URL COUNT (≤15 URL-slots ≈ 246s worst),
+// NOT by posting count — so a posting with many apply URLs gets EVERY url
+// checked in one step (round 6: always slicing the same first three made
+// 4-URL spam permanently uncloseable) while the envelope still holds.
+const URL_SLOTS_PER_STEP = 15
 const RECHECK_ALIVE_MS = 14 * 24 * 3600 * 1000
 const RECHECK_REPORTED_MS = 24 * 3600 * 1000
 /** Transient outcomes (timeouts, bot-blocks) re-enter the pool after 48h —
@@ -134,34 +135,50 @@ export async function runLinkCheckHandler(
   const picked = await step.run('pick', () => pickPostingsToCheck(now))
   const counters = { checked: 0, dead: 0, alive: 0, unverifiable: 0, closedNow: 0 }
 
-  for (let i = 0; i < picked.length; i += CHUNK) {
-    const chunk = picked.slice(i, i + CHUNK)
-    await step.run(`check-${i / CHUNK}`, async () => {
+  // Checkable = non-blocklisted AND passes the URL-shape guard — a stored
+  // non-http/malformed string (ingested but never served by feedService's
+  // safe-http filter) must not poison an otherwise all-dead outcome
+  // (Codex #543 round 3).
+  const urlsOf = (doc: (typeof picked)[number]) =>
+    Array.from(
+      new Set(
+        (doc.provenance ?? [])
+          .map((p) => p.applyUrl)
+          .filter((u): u is string => !!u && !isBlockedApplyUrl(u) && isCheckableUrl(u))
+      )
+    )
+  // Pack chunks by URL-slot budget so EVERY url of a posting is checked in
+  // one step (round 6) while the timeout envelope holds.
+  const chunks: Array<Array<(typeof picked)[number]>> = []
+  let current: Array<(typeof picked)[number]> = []
+  let slots = 0
+  for (const doc of picked) {
+    const n = Math.max(1, urlsOf(doc).length)
+    if (current.length > 0 && slots + n > URL_SLOTS_PER_STEP) {
+      chunks.push(current)
+      current = []
+      slots = 0
+    }
+    current.push(doc)
+    slots += n
+  }
+  if (current.length) chunks.push(current)
+
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci]
+    await step.run(`check-${ci}`, async () => {
       for (const doc of chunk) {
-        // Checkable = non-blocklisted AND passes the URL-shape guard —
-        // a stored non-http/malformed string (ingested but never served
-        // by feedService's safe-http filter) must not poison an
-        // otherwise all-dead outcome (Codex #543 round 3).
-        const allUrls = Array.from(
-          new Set(
-            (doc.provenance ?? [])
-              .map((p) => p.applyUrl)
-              .filter((u): u is string => !!u && !isBlockedApplyUrl(u) && isCheckableUrl(u))
-          )
-        )
-        const urls = allUrls.slice(0, MAX_URLS_PER_POSTING)
+        const urls = urlsOf(doc)
         const outcomes: LinkOutcome[] = []
         for (const u of urls) {
           outcomes.push(await checkApplyLink(u, fetchImpl, resolveImpl))
           await new Promise((r) => setTimeout(r, PACING_MS))
         }
-        // Truncation honesty: 'dead' may only be judged when EVERY url was
-        // actually checked — an unchecked rung could be the live one.
-        let outcome = postingOutcome(outcomes)
-        if (outcome === 'dead' && allUrls.length > urls.length) outcome = 'unverifiable'
+        const outcome = postingOutcome(outcomes)
         counters.checked += 1
         counters[outcome] += 1
-        const { state, shouldClose } = nextApplyCheckState(doc.applyCheck as never, outcome, new Date())
+        const prev = doc.applyCheck as { lastCheckedAt?: Date } | undefined
+        const { state, shouldClose } = nextApplyCheckState(prev as never, outcome, new Date())
         const update: Record<string, unknown> = { $set: { applyCheck: state } }
         if (shouldClose) {
           ;(update.$set as Record<string, unknown>).status = 'closed'
@@ -175,9 +192,18 @@ export async function runLinkCheckHandler(
           }
           counters.closedNow += 1
         }
-        // Status-guarded: a posting closed by another sweep mid-run keeps
-        // its original closedReason.
-        await JobPosting.updateOne({ _id: doc._id as never, ...(shouldClose ? { status: 'open' } : {}) }, update)
+        // Optimistic token (Codex #543 round 6): if ingestion replaced the
+        // apply URL (and cleared applyCheck) between our pick and this
+        // write, the evidence below was computed against the OLD link —
+        // the filter must miss and the next sweep re-verifies fresh.
+        // Status guard keeps a row closed by another path closed.
+        const token = prev?.lastCheckedAt
+          ? { 'applyCheck.lastCheckedAt': prev.lastCheckedAt }
+          : { applyCheck: { $exists: false } }
+        await JobPosting.updateOne(
+          { _id: doc._id as never, ...token, ...(shouldClose ? { status: 'open' } : {}) } as never,
+          update
+        )
       }
       return chunk.length
     })

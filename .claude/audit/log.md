@@ -3812,3 +3812,16 @@ durable record; ids are best-effort pointers.
 - P2 stale strikes across URL replacement on OPEN rows: the applyCheck reset was gated on closedReason — an open strike-1 row getting a replacement URL kept the old strike, and one dead check of the NEW url closed it (evidence mixed across links). applyCheck now clears WHENEVER the stored apply URL changes (both the replace and new-source-key branches): two strikes always mean two strikes against the CURRENT link. Pinned.
 - P2 unbounded DNS preflight: dns.promises.lookup isn't tied to the fetch AbortController — a lame DNS target could stall a step past the envelope. Preflight now races a 4s timeout: timeout = cannot verify publicness = refuse the fetch (unverifiable, never dead); NXDOMAIN still fails open to fetch's ENOTFOUND. Chunk math updated (worst ≈ 246s < 300s). Pinned (hanging resolver bounded at 20ms in test; NXDOMAIN unchanged).
 - Verified: linkCheck+ingest 51 passed; full clean-env vitest 5766 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #543 Codex round 6 (2 P2, fixed) + verdict-stall investigation status
+- P2 URL-slot chunk packing: slicing the same first 3 URLs made a 4-URL all-dead spam posting PERMANENTLY unverifiable (truncation downgrade every sweep — evasion by URL count). Chunks now pack by URL budget (15 slots ≈ 246s worst) so EVERY url of a posting is judged in one step; truncation rule removed (nothing truncates). Pinned: 4-URL posting → 4 fetches → closes.
+- P2 optimistic write token: ingestion replacing the URL (and clearing applyCheck) between pick and write could let stale evidence close a fresh-linked row. Every write now carries {applyCheck.lastCheckedAt: <picked state>} (or $exists:false for first checks) — a mid-sweep refresh voids the write; next sweep re-verifies. Pinned.
+- VERDICT STALL (ongoing): worker RUNS (writes requested-40 cycle rows), all 40 reach evaluate(), zero scored/tokens/attempts → evaluate() returns not-ok pre-LLM for every posting. getConfig defaults caps correctly (900/2.5/75); actual spend $0.96/mo. Remaining suspects: per-posting budget gate (reserve-counting may exhaust per-source 500/day via repeated sweeps), stuck degraded flag, or Redis-unreachable fail-closed. NOT visible from outside: worker step outputs / Redis meters. Founder ask: Inngest dashboard → jobs-evaluate-postings → any run today → run OUTPUT (skip counters). Observability gap to fix: worker telemetry doesn't record WHY rows skip — follow-up PR planned (skip-reason counters in the llm cycle block).
+- Verified: linkCheck 22 passed; full clean-env vitest 5768 passed | 17 skipped; tsc/lint/build clean.

@@ -256,6 +256,42 @@ describe('runLinkCheckHandler', () => {
     expect(restrikeFilter['applyCheck.lastDeadAt']).toBeDefined()
   })
 
+  it('Codex #543 r6: a 4-URL all-dead posting is judged in ONE step — extra URLs never make it uncloseable', async () => {
+    const doc = {
+      _id: 'p4',
+      provenance: [1, 2, 3, 4].map((i) => ({ applyUrl: `https://dead${i}.example/a` })),
+      applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: new Date(NOW.getTime() - 25 * 3600_000), lastDeadAt: new Date(NOW.getTime() - 25 * 3600_000) },
+    }
+    mockPostingFind
+      .mockReturnValueOnce(chain([doc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    const fetchSpy = vi.fn().mockRejectedValue(Object.assign(new Error('nx'), { cause: { code: 'ENOTFOUND' } }))
+    const r = await runLinkCheckHandler(step, fetchSpy as never, new Date(), pubResolve)
+    expect(fetchSpy).toHaveBeenCalledTimes(4) // ALL urls checked, none sliced away
+    expect(r.closed).toBe(1)
+  })
+
+  it('Codex #543 r6: the close write carries an optimistic token — a mid-sweep URL refresh voids stale evidence', async () => {
+    const prevChecked = new Date(NOW.getTime() - 25 * 3600_000)
+    const doc = {
+      _id: 'p5',
+      provenance: [{ applyUrl: 'https://dead.example/a' }],
+      applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: prevChecked, lastDeadAt: prevChecked },
+    }
+    mockPostingFind
+      .mockReturnValueOnce(chain([doc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve)
+    const [filter] = mockPostingUpdateOne.mock.calls[0]
+    expect((filter as Record<string, unknown>)['applyCheck.lastCheckedAt']).toEqual(prevChecked)
+  })
+
   it('blocklisted URLs are skipped entirely — a blocklist-only posting is unverifiable, never fetched', async () => {
     const spy = vi.fn()
     const doc = { _id: 'p2', provenance: [{ applyUrl: 'https://vacancyglobal.up.railway.app/x' }] }
