@@ -111,8 +111,14 @@ export function interviewSlugForDomain(id: string | undefined | null): string | 
 const ROLE_STEMS: Record<string, string> = {
   management: 'manager',
   managerial: 'manager',
+  // engineer/developer are ONE title class (Codex #539: 'Backend
+  // Engineer' — the start-flow placeholder itself — scored 1/2 against
+  // q 'backend developer' and fell back to the unpersonalized pool).
+  // Both sides of the comparison stem through this map, so the
+  // canonical token choice is arbitrary.
+  engineer: 'developer',
+  engineering: 'developer',
   development: 'developer',
-  engineering: 'engineer',
   analytics: 'analyst',
   analysis: 'analyst',
 }
