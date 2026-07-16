@@ -6,12 +6,15 @@ import Link from 'next/link'
 
 /**
  * /jobs/start — the attach chooser + confirm bar (PRODUCT_FLOW §1 Stage 1,
- * §4a). Doors: paste text / upload .txt / 3 questions (resume-less majority).
- * Anon resume structure lives in sessionStorage ONLY — it dies with the tab;
- * a stranger's PII never persists server-side (the parse API is stateless).
+ * §4a). Doors (founder directive 2026-07-16): saved resume / upload PDF /
+ * build one / target-role question. PASTE IS NOT A PRIMARY DOOR — it is the
+ * inline fallback shown only when the PDF parse fails ("if PDF upload fails
+ * then paste the resume text, nothing else"). PDFs go through the stateless
+ * /api/jobs/parse-pdf (text extraction only — an anon stranger's resume
+ * never persists server-side; sessionStorage dies with the tab).
  * All doors converge on the confirm bar: extracted facts read-only + the
  * EDITABLE "Role you're targeting" (resume = past, target = future).
- * The 3-questions path is marked method:'questions' so the feed never makes
+ * The question path is marked method:'questions' so the feed never makes
  * resume-flavored claims for it.
  */
 
@@ -70,7 +73,10 @@ export default function JobsStartPage() {
       .catch(() => {})
   }, [])
 
-  async function parseAndConfirm(text: string, m: JobsTarget['method']) {
+  /** Returns false on failure so the UPLOAD path can drop the user on the
+   *  paste fallback — with paste gone as a primary door, leaving them on
+   *  the chooser with a "paste instead" error is a dead end (Codex #540). */
+  async function parseAndConfirm(text: string, m: JobsTarget['method']): Promise<boolean> {
     setBusy(true)
     setError(null)
     setMethod(m)
@@ -84,7 +90,7 @@ export default function JobsStartPage() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         setError(body.error ?? 'Could not read that resume — try pasting the text instead.')
-        return
+        return false
       }
       const { resume } = (await res.json()) as { resume: ParsedResume }
       setParsedResume(resume)
@@ -95,22 +101,45 @@ export default function JobsStartPage() {
       setDetectedRole(detected)
       setRole(detected)
       setDoor('confirm')
+      return true
     } catch {
       setError('Something went wrong reading the resume. Paste the text instead?')
+      return false
     } finally {
       setBusy(false)
     }
   }
 
-  function onFile(f: File | undefined) {
+  async function onFile(f: File | undefined) {
     if (!f) return
-    if (!f.name.endsWith('.txt') && f.type !== 'text/plain') {
-      setError('For now, upload a .txt export — or paste the resume text (fastest).')
+    if (f.type !== 'application/pdf' && !/\.pdf$/i.test(f.name)) {
+      setError('Upload a PDF — or paste your resume text below.')
+      setDoor('paste')
       return
     }
-    const reader = new FileReader()
-    reader.onload = () => parseAndConfirm(String(reader.result ?? ''), 'upload')
-    reader.readAsText(f)
+    setBusy(true)
+    setError(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', f)
+      const res = await fetch('/api/jobs/parse-pdf', { method: 'POST', body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.text) {
+        // Founder directive: PDF failure falls back to PASTE, nothing else.
+        setError(data.error ?? 'Could not read that PDF — paste your resume text instead.')
+        setDoor('paste')
+        return
+      }
+      // Structured-parse failure after a good PDF extract is STILL a failed
+      // upload — same fallback: paste, nothing else (Codex #540).
+      const ok = await parseAndConfirm(data.text, 'upload')
+      if (!ok) setDoor('paste')
+    } catch {
+      setError('Could not read that PDF — paste your resume text instead.')
+      setDoor('paste')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function confirmTarget() {
@@ -167,25 +196,21 @@ export default function JobsStartPage() {
       {door === 'chooser' && (
         <div className="mt-6 space-y-3">
           {importDoor && (
-            <button onClick={importBase} className="block w-full rounded-xl border border-blue-300 p-4 text-left hover:border-blue-500 bg-white">
+            <button onClick={importBase} className="block w-full rounded-2xl border border-blue-300 p-4 text-left shadow-sm hover:border-blue-500 bg-white">
               <span className="font-medium">Use my saved resume</span>
               <span className="mt-0.5 block text-sm text-slate-500">{importDoor.name}</span>
             </button>
           )}
-          <button onClick={() => setDoor('paste')} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
-            <span className="font-medium">Paste your resume text</span>
-            <span className="mt-0.5 block text-sm text-slate-500">Fastest — copy everything, paste here.</span>
+          <button disabled={busy} onClick={() => fileRef.current?.click()} className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white disabled:opacity-60">
+            <span className="font-medium">{busy ? 'Reading your PDF…' : 'Upload your resume (PDF)'}</span>
+            <span className="mt-0.5 block text-sm text-slate-500">The one you already send to recruiters.</span>
           </button>
-          <button onClick={() => fileRef.current?.click()} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
-            <span className="font-medium">Upload a .txt file</span>
-            <span className="mt-0.5 block text-sm text-slate-500">Plain-text export of your resume.</span>
-          </button>
-          <input ref={fileRef} type="file" accept=".txt,text/plain" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
-          <Link href="/resume/builder?return=/jobs/start" className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
+          <input ref={fileRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
+          <Link href="/resume/builder?return=/jobs/start" className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white">
             <span className="font-medium">No resume yet? Build one</span>
             <span className="mt-0.5 block text-sm text-slate-500">You&apos;ll need one on Naukri anyway — 10 minutes in the builder.</span>
           </Link>
-          <button onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
+          <button onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white">
             <span className="font-medium">Just tell us your target role</span>
             <span className="mt-0.5 block text-sm text-slate-500">One question — role, done.</span>
           </button>
@@ -194,12 +219,16 @@ export default function JobsStartPage() {
 
       {door === 'paste' && (
         <div className="mt-6">
+          {/* Paste is the PDF-failure fallback, never a primary door
+              (founder directive 2026-07-16). The error above says why
+              the user landed here. */}
+          {error && <p className="mb-3 text-sm text-amber-700">{error}</p>}
           <textarea
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
             rows={12}
             placeholder="Paste your full resume text here…"
-            className="w-full rounded-xl border border-slate-200 p-3 text-sm bg-white text-slate-900 placeholder-slate-400"
+            className="w-full rounded-2xl border border-slate-200 p-3 text-sm shadow-sm bg-white text-slate-900 placeholder-slate-400"
           />
           <div className="mt-3 flex gap-3">
             <button
@@ -209,7 +238,7 @@ export default function JobsStartPage() {
             >
               {busy ? 'Reading your resume…' : 'Continue'}
             </button>
-            <button onClick={() => setDoor('chooser')} className="rounded-lg border border-slate-200 px-4 py-2 text-sm bg-white text-slate-900 placeholder-slate-400">Back</button>
+            <button onClick={() => { setError(null); setDoor('chooser') }} className="rounded-lg border border-slate-200 px-4 py-2 text-sm bg-white text-slate-900 hover:bg-slate-50">Back</button>
           </div>
         </div>
       )}
@@ -224,7 +253,7 @@ export default function JobsStartPage() {
             <button disabled={!role.trim()} onClick={confirmTarget} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
               Show my jobs
             </button>
-            <button onClick={() => setDoor('chooser')} className="rounded-lg border border-slate-200 px-4 py-2 text-sm bg-white text-slate-900 placeholder-slate-400">Back</button>
+            <button onClick={() => setDoor('chooser')} className="rounded-lg border border-slate-200 px-4 py-2 text-sm bg-white text-slate-900 hover:bg-slate-50">Back</button>
           </div>
         </div>
       )}
@@ -253,7 +282,8 @@ export default function JobsStartPage() {
         </div>
       )}
 
-      {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+      {/* The paste door renders the error inline as its lead-in. */}
+      {error && door !== 'paste' && <p className="mt-4 text-sm text-red-600">{error}</p>}
     </main>
   )
 }
