@@ -9,11 +9,36 @@
  * suffix is appended.
  */
 
-const TAILORED_SUFFIX = /\s*\(Tailored[^)]*\)\s*$/
+/** Strip trailing "(Tailored…)" groups by BALANCED-paren scanning, not
+ *  regex: company names may themselves contain parentheses — "Acme
+ *  (India)" made the old `[^)]*` regex stop at the inner ')' and the
+ *  stacking bug survived for exactly those names (Codex #540 round 3).
+ *  Only a trailing group that STARTS with "Tailored" is stripped, so
+ *  odd user-chosen base names keep their own parentheticals. */
+function stripTailoredSuffixes(name: string): string {
+  let s = name.trim()
+  for (;;) {
+    if (!s.endsWith(')')) return s
+    let depth = 0
+    let start = -1
+    for (let i = s.length - 1; i >= 0; i--) {
+      const ch = s[i]
+      if (ch === ')') depth += 1
+      else if (ch === '(') {
+        depth -= 1
+        if (depth === 0) {
+          start = i
+          break
+        }
+      }
+    }
+    if (start < 0) return s // unbalanced — leave the name alone
+    if (!/^Tailored\b/.test(s.slice(start + 1, s.length - 1))) return s
+    s = s.slice(0, start).trim()
+  }
+}
 
 export function tailoredResumeName(baseName: string | undefined | null, companyName?: string): string {
-  let base = (baseName ?? '').trim()
-  while (TAILORED_SUFFIX.test(base)) base = base.replace(TAILORED_SUFFIX, '').trim()
-  if (!base) base = 'Resume'
+  const base = stripTailoredSuffixes(baseName ?? '') || 'Resume'
   return `${base} (Tailored${companyName ? ` for ${companyName}` : ''})`
 }

@@ -29,4 +29,15 @@ describe('tailoredResumeName', () => {
     expect(tailoredResumeName(undefined)).toBe('Resume (Tailored)')
     expect(tailoredResumeName('(Tailored)')).toBe('Resume (Tailored)')
   })
+
+  it('Codex #540 r3: company names WITH parentheses strip cleanly — no re-stacking', () => {
+    expect(tailoredResumeName('X.pdf (Tailored for Acme (India))', 'Acme (India)')).toBe('X.pdf (Tailored for Acme (India))')
+    expect(tailoredResumeName('X.pdf (Tailored for Acme (India))', 'PhonePe')).toBe('X.pdf (Tailored for PhonePe)')
+    expect(tailoredResumeName('X.pdf (Tailored for Acme (India)) (Tailored)', 'Acme (India)')).toBe('X.pdf (Tailored for Acme (India))')
+  })
+
+  it('a user base name with its own parenthetical survives', () => {
+    expect(tailoredResumeName('My (2026) Resume.pdf')).toBe('My (2026) Resume.pdf (Tailored)')
+    expect(tailoredResumeName('My (2026) Resume.pdf (Tailored)')).toBe('My (2026) Resume.pdf (Tailored)')
+  })
 })

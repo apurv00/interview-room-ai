@@ -3692,3 +3692,15 @@ durable record; ids are best-effort pointers.
 - #540: parseDocument now receives the CONSTANT 'resume.pdf' — never file.name. One fix kills both findings: resume filenames carry real names and parseDocument logs the filename (route contract = nothing stored, logs included); and the parser picks by EXTENSION, so a MIME-accepted PDF without .pdf would have thrown despite being valid. New route test pins constant-name + extensionless-PDF + non-PDF-reject.
 - #541: my "no-op on all existing hashes" claim was wrong for RESUME hashes — stored atsResult.resumeHash values were computed on RAW newline-bearing resume text (unlike stored JD bodies, where collapse is a no-op). Fix: legacyXrayHashOf (raw form), dual acceptance at BOTH comparison sites (detail staleness + atsCheckJob superseded-run guard) — legacy results stay valid, no re-billed checks; new writes converge on xrayHashOf. Vectors: legacy-hash-still-done detail vector; legacy≡current on collapsed text, differ on newline text.
 - Verified: touched suites 64 passed; full clean-env vitest 5740 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #540 round 3 (1 P2) + CI fix
+- Codex P2: company names WITH parentheses ('Acme (India)') defeated the [^)]* suffix regex — re-tailoring those names re-stacked. Fix: balanced-paren scanner strips only trailing groups that START with 'Tailored'; user base names keep their own parentheticals ('My (2026) Resume.pdf' survives). Vectors added.
+- CI failure was MY new route test: real Request+FormData construction is Node-version-sensitive (passed local Node, 500'd on the CI runner). Rewritten as a formData()-seam stub — pins the route logic (constant filename, MIME acceptance, rejects, 422) without multipart plumbing; +1 scanned-image 422 vector.
+- Verified: parse-pdf + resumeNames 11 passed; full clean-env vitest 5743 passed | 17 skipped (one known wall-clock flake on first run, clean rerun); tsc/lint/build clean.
