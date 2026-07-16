@@ -46,13 +46,13 @@ describe('tierAScore (deterministic rank — rules only, §serving honesty)', ()
     expect(Number.isFinite(flagged)).toBe(true) // a score, not an exclusion
   })
 
-  it('domain + location matches boost; remote earns the half-bonus only when the city missed', () => {
+  it('domain match boosts; location/city is NOT a rank input (founder directive 2026-07-16, ruling #21)', () => {
     const base = tierAScore(doc() as never, {}, NOW)
     expect(tierAScore(doc() as never, { domain: 'backend' }, NOW)).toBeGreaterThan(base)
-    expect(tierAScore(doc() as never, { locKey: 'bengaluru' }, NOW)).toBeGreaterThan(base)
-    const remoteMiss = tierAScore(doc({ isRemote: true, locationKeys: ['remote-in'] }) as never, { locKey: 'pune', includeRemote: true }, NOW)
-    const cityHit = tierAScore(doc({ locationKeys: ['pune'] }) as never, { locKey: 'pune' }, NOW)
-    expect(cityHit).toBeGreaterThan(remoteMiss)
+    // Same doc, wildly different locations → identical score. City must
+    // never re-enter rank math (the typed-city filter collapsed the feed).
+    expect(tierAScore(doc({ locations: ['Pune'], locationKeys: ['pune'] }) as never, {}, NOW)).toBe(base)
+    expect(tierAScore(doc({ isRemote: true, locationKeys: ['remote-in'] }) as never, {}, NOW)).toBe(base)
   })
 
   it('recency decays linearly to zero at 21 days — stale postings stop earning freshness', () => {
@@ -132,12 +132,45 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
     expect(card.jdCompressed).toBeUndefined()
   })
 
-  it('only open postings are queried; a city filter unions with remote (country-level serving, ruling #17)', async () => {
+  it('only open postings are queried; NO location filter exists in any pull (ruling #21 regression pin)', async () => {
     feedChain([])
-    await getFeed({ city: 'Pune' }, NOW)
+    await getFeed({}, NOW)
     const filter = mockFind.mock.calls[0][0]
     expect(filter.status).toBe('open')
-    expect(filter.$or).toEqual([{ locationKeys: 'pune' }, { isRemote: true }])
+    expect(JSON.stringify(filter)).not.toContain('locationKeys')
+    expect(JSON.stringify(filter)).not.toContain('$or')
+  })
+
+  it('explicit ?domain= (press links) stays a HARD filter — one pull, domain in the query', async () => {
+    feedChain([doc()])
+    await getFeed({ domain: 'backend' }, NOW)
+    expect(mockFind).toHaveBeenCalledTimes(1)
+    expect(mockFind.mock.calls[0][0]).toEqual({ status: 'open', domain: 'backend' })
+  })
+
+  it('derived roleDomain pulls DOMAIN-FIRST plus a mixed tail — the pm rows all reach scoring (founder RCA 2026-07-16)', async () => {
+    feedChain([])
+    await getFeed({ roleDomain: 'pm', targetRole: 'Product Management' }, NOW)
+    expect(mockFind).toHaveBeenCalledTimes(2)
+    expect(mockFind.mock.calls[0][0]).toEqual({ status: 'open', domain: 'pm' })
+    expect(mockFind.mock.calls[1][0]).toEqual({ status: 'open', domain: { $ne: 'pm' } })
+  })
+
+  it('domain CLASS outranks recency: a week-old pm row beats a fresh direct-ats fullstack row for a pm target', async () => {
+    // The two pulls are disjoint in prod ($ne) — mock each separately.
+    const chain = (docs: unknown[]) => ({
+      select: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ lean: () => Promise.resolve(docs) }) }),
+      }),
+    })
+    mockFind.mockClear()
+    mockFind
+      .mockReturnValueOnce(chain([doc({ _id: 'old-pm', domain: 'pm', postedAt: new Date('2026-07-07T12:00:00Z') })]))
+      .mockReturnValueOnce(chain([doc({ _id: 'fresh-fullstack', domain: 'fullstack', postedAt: NOW })]))
+    const feed = await getFeed({ roleDomain: 'pm' }, NOW)
+    expect(feed.cards.map((c) => c.id)).toEqual(['old-pm', 'fresh-fullstack'])
+    expect(feed.total).toBe(2)
+    expect(feed.pageSize).toBe(20)
   })
 
   it('reveal honesty: sharpened counts ONLY cards with real matched skills; cards carry them', async () => {

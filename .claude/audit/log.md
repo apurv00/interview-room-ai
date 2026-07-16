@@ -3610,3 +3610,52 @@ durable record; ids are best-effort pointers.
 - **Truncated-but-parseable attribution**: a max-tokens-truncated response can close its JSON array early and parse VALID with the tail answers missing (the schema cannot require one entry per answer) — partial evidence would persist and the stamp would make the undercount permanent. Fix: res.truncated at the base budget → retry at the bumped budget; still truncated → throw (nothing persisted, nothing stamped; Inngest retries + sweep net stay armed).
 - **Stale-cache mismatch retryable**: posting.parsedJDHash != sessionHash also fires when the posting cache is simply STALE (session practiced the UPDATED JD before /xray reparsed) — stamping made that valid practice permanently unattributable. Fix: 'jd-version-mismatch' joins 'no-parse' as an UNSTAMPED transient skip — sweep retries within its 7-day window; genuine old-JD sessions age out naturally. Pre-LLM, so retries cost no model spend. Spec §1 amended.
 - Verified: modules/jobs + accountDeletion 373 passed | 1 skipped; full clean-env vitest 5706 passed | 17 skipped; tsc/lint/build/module-size clean. +2 regression vectors, 1 reworked.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 ~03:40 IST — PR-B: jobs feed relevance + city eradication (founder work order, RCA-first)
+- RCA reproduced against LIVE prod before any fix: targetRole=Product Management → 2 pm rows in top-10 (≈bare feed); domain=pm → perfect feed; pool starvation measured (CANDIDATE_POOL=400 newest admitted 15/125 open pm rows); titleJaccard('Product Management','Product Manager')=0.33 < 0.5 bar (no stemming) while recency(25) > role bonus(20); skills matched titles only (sharpened:0 in every live call); typed-city hard filter with alias-mismatched keys ('Bangalore'→0 rows keyed 'bengaluru', 'Delhi'→0 vs 'delhi-ncr') collapsed the feed to 354 remote rows.
+- Fixes pin the evidence: roleToJobsDomain (stems + aliases; 'Software Engineer' deliberately unmapped — no filter beats a wrong filter) derived SERVER-side; domain-FIRST candidate pull (all open domain rows reach scoring) + 100-row mixed tail (thin domains never render empty); domain-CLASS-first ordering (in-domain rows outrank every out-of-domain row; recency orders within class); city removed everywhere (FeedQuery/filter/bonus/page box/start question/JobsTarget) with lenient legacy sessionStorage parse; DECISIONS ruling #21 records the directive + evidence (supersedes #17's product clause); pagination shows Page X of Y · N jobs (API now returns pageSize); Tier-A fallback chip 'title & location match' → 'Recently posted' (the old copy claimed a signal that no longer exists — and never fired honestly).
+- Verified: domains+feedService suites 37 passed (incl. founder's exact repro as a vector + domain-class-beats-recency vector + no-location-filter regression pin); modules/jobs + app/(jobs) 373 passed | 1 skipped; full clean-env vitest 5713 passed with 1 known wall-clock flake that passes on rerun; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 ~10:30 UTC-eff — PR-A: /jobs/start doors (PDF-only + paste fallback) + (Tailored) accretion fix (founder items 1/2/6)
+- Doors per founder directive: saved resume / Upload your resume (PDF) / build one / role-only question. Paste REMOVED as a primary — it renders ONLY as the inline fallback when the PDF path fails, carrying the failure reason ('if PDF upload fails then paste the resume text, nothing else').
+- NEW stateless /api/jobs/parse-pdf: PDF→text via the shared documentParser, NOTHING stored (deliberately not /api/documents/upload — that route is auth-gated + persists to R2; the start flow serves anon strangers whose resume must never persist server-side). IP-rate-limited for anon (resume-parse precedent), 10MB cap, scanned-image 422 with actionable copy.
+- (Tailored) accretion (reproduced in the founder's own account: 'Apurv Resume.pdf (Tailored) (Tailored)'): tailoredResumeName() pure helper (modules/resume/lib, client-safe deep-import) strips ALL existing suffixes loop-wise before appending once — idempotent + heals legacy stacked names; tailor save path uses it.
+- Design pass: door cards rounded-2xl shadow-sm border-slate-200 (app card pattern); stray placeholder-slate-400 classes removed from BUTTONS (#529 artifact).
+- Verified: 9 new tests (5 resumeNames vectors incl. founder repro; 4 start-door RTL: no-paste-primary + PDF-only accept + role-only question, non-PDF→fallback, server-fail→fallback-with-reason-and-nothing-else, success→confirm bar via existing text-parse); full clean-env vitest 5723 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — PR #539 Codex round 1 (1 P2, fixed)
+- engineer ≡ developer title-class unification in ROLE_STEMS: 'Backend Engineer' (the start-flow placeholder itself) scored 1/2 vs q 'backend developer' and fell back to the unpersonalized pool. Both comparison sides stem through the map, so the canonical token is arbitrary. Vectors: Backend/Frontend/DevOps/Mechanical Engineer map; 'Data Engineer' stays undefined (not in taxonomy — no wrong bucket); 'Software Engineer'/'Engineering Manager' deliberate non-mappings preserved.
+- Verified: modules/jobs 371 passed | 1 skipped; full clean-env vitest 5724 passed | 17 skipped; tsc/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — Codex rounds: #539 r2 (fullstack bigram) + #540 r1 (upload dead-end)
+- #539: 'Fullstack Engineer' matched 1/3 tokens vs q 'full stack developer' → normalizeRoleText unifies the full-stack bigram on BOTH comparison sides before tokenizing; vectors for the four fullstack spellings.
+- #540: good PDF extract + failed STRUCTURED parse left the user on the chooser with a paste-instead error but no paste door (paste is no longer primary). parseAndConfirm now reports failure; the upload path drops to the paste fallback on either failure leg. Vector added.
+- Verified: targeted suites 21 passed; full clean-env vitest 5726 passed | 17 skipped; tsc/build clean.

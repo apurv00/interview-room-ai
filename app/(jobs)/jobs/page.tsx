@@ -34,13 +34,14 @@ interface FeedCard {
 interface FeedPayload {
   cards: FeedCard[]
   page: number
+  pageSize: number
   hasMore: boolean
+  total: number
   sharpened?: number
 }
 interface JobsTarget {
   method: 'paste' | 'upload' | 'questions' | 'import'
   role: string
-  city: string
   skills: string[]
 }
 
@@ -69,8 +70,6 @@ function JobsFeed() {
 
   const [data, setData] = useState<FeedPayload | null>(null)
   const [page, setPage] = useState(1)
-  const [city, setCity] = useState('')
-  const [cityInput, setCityInput] = useState('')
   const [error, setError] = useState(false)
   const [target, setTarget] = useState<JobsTarget | null>(null)
   const [targetLoaded, setTargetLoaded] = useState(false)
@@ -92,9 +91,9 @@ function JobsFeed() {
     try {
       const raw = sessionStorage.getItem('JOBS_TARGET')
       if (raw) {
-        const t = JSON.parse(raw) as JobsTarget
-        setTarget(t)
-        if (t.city) { setCity(t.city); setCityInput(t.city) }
+        // Legacy blobs may still carry a `city` field — ignored (city is
+        // neither an input nor a rank signal, founder directive 2026-07-16).
+        setTarget(JSON.parse(raw) as JobsTarget)
       }
     } catch { /* private mode / corrupt entry — Tier-A feed */ }
     try { setCapNotice(sessionStorage.getItem('JOBS_CAP_NOTICE') === '1') } catch { /* noop */ }
@@ -121,7 +120,6 @@ function JobsFeed() {
     if (!targetLoaded) return
     const params = new URLSearchParams({ page: String(page) })
     if (domain) params.set('domain', domain)
-    if (city) params.set('city', city)
     if (target?.skills.length) params.set('skills', target.skills.join(','))
     if (target?.role) params.set('targetRole', target.role)
     fetch(`/api/jobs/feed?${params}`)
@@ -134,7 +132,7 @@ function JobsFeed() {
       body: JSON.stringify({ name: 'jobs.feed_viewed', props: { page } }),
       keepalive: true,
     }).catch(() => {})
-  }, [page, domain, city, target, targetLoaded])
+  }, [page, domain, target, targetLoaded])
 
   // Reveal honesty (§4a): name the evidence ONLY when matched skills exist;
   // the 3-questions path never gets resume-flavored copy.
@@ -142,10 +140,12 @@ function JobsFeed() {
   const revealLine = !target
     ? null
     : target.method === 'questions'
-      ? `Sorted by role & location — ${target.role}${target.city ? ` · ${target.city}` : ''}.`
+      ? `Sorted by role — ${target.role}.`
       : (data?.sharpened ?? 0) > 0 && revealSkills.length
         ? `Sorted for you — based on your resume: ${revealSkills.join(', ')}.`
-        : 'Feed refreshed.'
+        : target.role
+          ? `Sorted by your target role — ${target.role}.`
+          : 'Feed refreshed.'
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10" aria-label="Job feed">
@@ -182,22 +182,6 @@ function JobsFeed() {
         </div>
       )}
 
-      <form
-        className="mt-6 flex gap-2"
-        onSubmit={(e) => { e.preventDefault(); setPage(1); setCity(cityInput.trim()) }}
-      >
-        <input
-          value={cityInput}
-          onChange={(e) => setCityInput(e.target.value)}
-          placeholder="City (any location — remote always included)"
-          aria-label="Filter by city"
-          className="w-64 rounded-lg border border-slate-200 px-3 py-1.5 text-sm bg-white text-slate-900 placeholder-slate-400"
-        />
-        <button type="submit" className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
-          Filter
-        </button>
-      </form>
-
       {quickWins && quickWins.count >= 2 && !winsDismissed && (
         <div className="mt-4 flex items-start justify-between rounded-xl border border-slate-200 p-3 text-sm bg-white">
           <p>
@@ -226,8 +210,7 @@ function JobsFeed() {
           <p className="font-medium">Your feed is warming up.</p>
           <p className="mt-1 text-sm text-slate-500">
             Fresh postings are being gathered
-            {domain ? ` — nothing live in ${domain} right now` : ''}
-            {city ? ` — nothing live for “${city}” yet (remote roles appear here too)` : ''}. Check back soon.
+            {domain ? ` — nothing live in ${domain} right now` : ''}. Check back soon.
           </p>
         </div>
       )}
@@ -237,7 +220,7 @@ function JobsFeed() {
           <li key={c.id}>
             <Link
               href={`/jobs/${c.id}`}
-              className="block rounded-xl border p-4 transition hover:border-blue-400 hover:shadow-sm bg-white"
+              className="block rounded-2xl border border-slate-200 p-4 shadow-sm transition hover:border-blue-400 hover:shadow-md bg-white"
             >
               <div className="flex items-baseline justify-between gap-3">
                 <span className="font-medium">{c.title}</span>
@@ -258,7 +241,7 @@ function JobsFeed() {
                     Matches your resume: {c.matchedSkills.slice(0, 2).join(', ')}
                   </span>
                 ) : (
-                  <span className="rounded-full border border-slate-200 px-2 py-0.5 text-slate-500 bg-white">Looks relevant · title &amp; location match</span>
+                  <span className="rounded-full border border-slate-200 px-2 py-0.5 text-slate-500 bg-white">Recently posted</span>
                 )}
               </div>
             </Link>
@@ -275,7 +258,9 @@ function JobsFeed() {
           >
             ← Previous
           </button>
-          <span className="text-xs text-slate-500">Page {page}</span>
+          <span className="text-xs text-slate-500">
+            Page {page} of {Math.max(1, Math.ceil(data.total / (data.pageSize || 20)))} · {data.total} jobs
+          </span>
           <button
             disabled={!data.hasMore}
             onClick={() => setPage((p) => p + 1)}

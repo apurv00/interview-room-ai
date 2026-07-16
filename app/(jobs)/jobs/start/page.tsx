@@ -25,7 +25,6 @@ interface ParsedResume {
 export interface JobsTarget {
   method: 'paste' | 'upload' | 'questions' | 'import'
   role: string
-  city: string
   skills: string[]
 }
 
@@ -57,7 +56,6 @@ export default function JobsStartPage() {
   const [skills, setSkills] = useState<string[]>([])
   const [role, setRole] = useState('')
   const [detectedRole, setDetectedRole] = useState('')
-  const [city, setCity] = useState('')
   // The full parse result + original text — held for the authed base-resume
   // auto-save (preserveFullText). Stays in memory/sessionStorage only.
   const [parsedResume, setParsedResume] = useState<ParsedResume | null>(null)
@@ -116,7 +114,10 @@ export default function JobsStartPage() {
   }
 
   async function confirmTarget() {
-    const target: JobsTarget = { method, role: role.trim(), city: city.trim(), skills }
+    // City is deliberately NOT part of the target (founder directive
+    // 2026-07-16): typed cities hard-collapsed the pool via alias-mismatched
+    // location keys ('Bangalore' matched zero rows keyed 'bengaluru').
+    const target: JobsTarget = { method, role: role.trim(), skills }
     try {
       sessionStorage.setItem('JOBS_TARGET', JSON.stringify(target))
     } catch { /* private mode — the feed just stays Tier-A */ }
@@ -185,8 +186,8 @@ export default function JobsStartPage() {
             <span className="mt-0.5 block text-sm text-slate-500">You&apos;ll need one on Naukri anyway — 10 minutes in the builder.</span>
           </Link>
           <button onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-xl border p-4 text-left hover:border-blue-400 bg-white">
-            <span className="font-medium">Just ask me 3 questions</span>
-            <span className="mt-0.5 block text-sm text-slate-500">Role, city, done.</span>
+            <span className="font-medium">Just tell us your target role</span>
+            <span className="mt-0.5 block text-sm text-slate-500">One question — role, done.</span>
           </button>
         </div>
       )}
@@ -219,10 +220,6 @@ export default function JobsStartPage() {
             <span className="text-sm font-medium">What role are you looking for?</span>
             <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="e.g. Backend Engineer, Sales Executive" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
           </label>
-          <label className="block">
-            <span className="text-sm font-medium">Which city? (anywhere works — remote is always included)</span>
-            <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="e.g. Pune" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
-          </label>
           <div className="flex gap-3">
             <button disabled={!role.trim()} onClick={confirmTarget} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
               Show my jobs
@@ -249,10 +246,6 @@ export default function JobsStartPage() {
             <span className="text-sm font-medium">Role you&apos;re targeting</span>
             <span className="ml-2 text-xs text-slate-500">(your resume is your past — this is where you&apos;re headed)</span>
             <input value={role} onChange={(e) => setRole(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
-          </label>
-          <label className="mt-3 block">
-            <span className="text-sm font-medium">City</span>
-            <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="Any location — remote always included" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
           </label>
           <button onClick={confirmTarget} className="mt-5 rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700">
             Show my jobs →

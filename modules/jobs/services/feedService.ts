@@ -1,7 +1,7 @@
 import { gunzipSync } from 'zlib'
 import { JobPosting, JobApplication, type IJobPosting } from '@shared/db/models'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
-import { locationKey, titleJaccard } from './identityResolver'
+import { titleJaccard } from './identityResolver'
 import { xrayHashOf } from './xrayService'
 import { getBaseResume } from './baseResumeService'
 import { getResume } from '@resume'
@@ -15,10 +15,13 @@ import { getResume } from '@resume'
  *   already `status:'closed'` and excluded by the status filter.
  * - Demotion flags DEMOTE, never hide (ruling #15) — a staffing/short-JD
  *   row sinks, it does not disappear.
- * - Copy vocabulary for this tier is "title & location match" ONLY — no
- *   resume/readiness claims exist at Tier-A (the UI owns the words; this
- *   module owns making them true: rank inputs are title/domain, location,
- *   recency, apply-path quality).
+ * - Copy vocabulary for this tier stays claim-minimal — no resume/readiness
+ *   claims exist at Tier-A (the UI owns the words; this module owns making
+ *   them true: rank inputs are title/domain, recency, apply-path quality).
+ *   City/location is NEITHER an input NOR a rank signal (founder directive
+ *   2026-07-16, supersedes ruling #17's city-as-ranking-signal: typed
+ *   cities hard-collapsed the pool — 'Bangalore' matched zero stored keys
+ *   ('bengaluru') and left only the 354 remote rows).
  *
  * P-2 (founder ruling 2026-07-14): public feed, auth-gated detail — the
  * DETAIL projection is split anon-shell vs authed-full SERVER-SIDE here, so
@@ -29,12 +32,19 @@ const PAGE_SIZE_DEFAULT = 20
 const PAGE_SIZE_MAX = 50
 /** Bounded candidate pull — scored in-app; index {domain, locationKeys, status, postedAt} serves the scan. */
 const CANDIDATE_POOL = 400
+/** When the pull is domain-first (derived roleDomain), a small recent
+ *  cross-domain tail keeps thin domains from rendering an empty feed. */
+const MIXED_TAIL = 100
 
 export interface FeedQuery {
+  /** Explicit ?domain= (press surfaces) — a HARD filter: the link promised
+   *  "N {domain} jobs" and must deliver exactly that pool. */
   domain?: string
-  /** Free-text city — normalized through the same locationKey the pipeline uses. */
-  city?: string
-  includeRemote?: boolean
+  /** Derived from targetRole server-side (roleToJobsDomain) — a SOFT
+   *  domain: pulls domain-first and ranks the domain as a class above
+   *  everything else, but never empties the feed (founder RCA 2026-07-16:
+   *  the 400-newest cross-domain pull admitted 15 of 125 open pm rows). */
+  roleDomain?: string
   page?: number
   pageSize?: number
   /** Tier-B (stateless, PRODUCT_FLOW §1 Stage 1): extracted resume skills
@@ -74,7 +84,6 @@ const TIER_BONUS: Record<ApplyTier, number> = {
   'aggregator-redirect': 3,
 }
 const DOMAIN_MATCH_BONUS = 25
-const LOCATION_MATCH_BONUS = 20
 /** Tier-B: per matched resume skill (cap 3 count) + target-role title affinity. */
 const SKILL_MATCH_BONUS = 8
 const SKILL_MATCH_CAP = 3
@@ -132,16 +141,14 @@ export function matchedSkillsOf(
 }
 
 export function tierAScore(
-  doc: Pick<IJobPosting, 'provenance' | 'flags' | 'confidentialCompany' | 'domain' | 'locationKeys' | 'isRemote' | 'postedAt'>,
-  q: { domain?: string; locKey?: string; includeRemote?: boolean },
+  doc: Pick<IJobPosting, 'provenance' | 'flags' | 'confidentialCompany' | 'domain' | 'isRemote' | 'postedAt'>,
+  q: { domain?: string },
   now: Date
 ): number {
   let score = 0
   const tier = bestApplyTierOf(doc)
   if (tier) score += TIER_BONUS[tier]
   if (q.domain && doc.domain === q.domain) score += DOMAIN_MATCH_BONUS
-  if (q.locKey && (doc.locationKeys ?? []).includes(q.locKey)) score += LOCATION_MATCH_BONUS
-  else if (q.includeRemote && doc.isRemote) score += LOCATION_MATCH_BONUS / 2
   if (doc.postedAt) {
     const ageDays = (now.getTime() - doc.postedAt.getTime()) / 86_400_000
     if (ageDays >= 0 && ageDays < RECENCY_WINDOW_DAYS) {
@@ -160,8 +167,8 @@ export function tierAScore(
  *  (pinned by test) — the 3-questions path gets Tier-A + role filter and no
  *  resume-flavored claims. */
 export function tierBScore(
-  doc: Pick<IJobPosting, 'provenance' | 'flags' | 'confidentialCompany' | 'domain' | 'locationKeys' | 'isRemote' | 'postedAt' | 'title' | 'titleTokens'>,
-  q: { domain?: string; locKey?: string; includeRemote?: boolean; skills?: string[]; targetRole?: string },
+  doc: Pick<IJobPosting, 'provenance' | 'flags' | 'confidentialCompany' | 'domain' | 'isRemote' | 'postedAt' | 'title' | 'titleTokens'>,
+  q: { domain?: string; skills?: string[]; targetRole?: string },
   now: Date
 ): number {
   let score = tierAScore(doc, q, now)
@@ -173,27 +180,45 @@ export function tierBScore(
   return score
 }
 
-export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ cards: FeedCard[]; page: number; hasMore: boolean; total: number; sharpened: number }> {
+export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ cards: FeedCard[]; page: number; pageSize: number; hasMore: boolean; total: number; sharpened: number }> {
   const page = Math.max(1, Math.floor(query.page ?? 1))
   const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(1, Math.floor(query.pageSize ?? PAGE_SIZE_DEFAULT)))
-  const locKey = query.city ? locationKey(query.city) : undefined
 
-  const filter: Record<string, unknown> = { status: 'open' }
-  if (query.domain) filter.domain = query.domain
-  // Location narrows the POOL only when given; remote rows always qualify
-  // (country-level serving per ruling #17 — city is a ranking signal).
-  if (locKey) filter.$or = [{ locationKeys: locKey }, { isRemote: true }]
+  const select = 'title titleTokens company locations isRemote domain postedAt salaryText provenance flags confidentialCompany'
+  const sort = { postedAt: -1 as const, _id: -1 as const }
+  let docs: Awaited<ReturnType<typeof pull>>
+  async function pull(filter: Record<string, unknown>, limit: number) {
+    return JobPosting.find(filter).select(select).sort(sort).limit(limit).lean()
+  }
+  if (!query.domain && query.roleDomain) {
+    // Domain-FIRST pull (founder RCA 2026-07-16): every open row of the
+    // seeker's domain reaches scoring — the newest-across-domains pull
+    // admitted 15 of 125 open pm rows and starved every non-fresh domain.
+    // The mixed tail keeps thin domains from rendering an empty feed.
+    const [domainRows, mixedTail] = await Promise.all([
+      pull({ status: 'open', domain: query.roleDomain }, CANDIDATE_POOL),
+      pull({ status: 'open', domain: { $ne: query.roleDomain } }, MIXED_TAIL),
+    ])
+    docs = [...domainRows, ...mixedTail]
+  } else {
+    const filter: Record<string, unknown> = { status: 'open' }
+    if (query.domain) filter.domain = query.domain
+    docs = await pull(filter, CANDIDATE_POOL)
+  }
 
-  const docs = await JobPosting.find(filter)
-    .select('title titleTokens company locations isRemote domain postedAt salaryText provenance flags confidentialCompany locationKeys')
-    .sort({ postedAt: -1, _id: -1 })
-    .limit(CANDIDATE_POOL)
-    .lean()
-
-  const rankQ = { domain: query.domain, locKey, includeRemote: query.includeRemote ?? true, skills: query.skills, targetRole: query.targetRole }
+  const rankDomain = query.domain ?? query.roleDomain
+  const rankQ = { domain: rankDomain, skills: query.skills, targetRole: query.targetRole }
   const scored = docs
     .map((d) => ({ d, score: tierBScore(d as IJobPosting, rankQ, now), matched: matchedSkillsOf(d as IJobPosting, query.skills) }))
-    .sort((a, b) => b.score - a.score || String(b.d._id).localeCompare(String(a.d._id)))
+    .sort((a, b) => {
+      // Domain CLASS first: when the seeker names a role, in-domain rows
+      // outrank every out-of-domain row — recency/apply-tier order only
+      // WITHIN the class (a fresh fullstack job must not beat a week-old
+      // pm job for a pm target; recency 25 alone outweighed domain 25).
+      const am = rankDomain && a.d.domain === rankDomain ? 1 : 0
+      const bm = rankDomain && b.d.domain === rankDomain ? 1 : 0
+      return bm - am || b.score - a.score || String(b.d._id).localeCompare(String(a.d._id))
+    })
 
   const start = (page - 1) * pageSize
   const slice = scored.slice(start, start + pageSize)
@@ -212,6 +237,7 @@ export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ car
       matchedSkills: matched,
     })),
     page,
+    pageSize,
     hasMore: start + pageSize < scored.length,
     total: scored.length,
     // Reveal honesty (§4a): "sharpened N matches" only when matched-skill
