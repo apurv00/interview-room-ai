@@ -45,7 +45,13 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const result = await parseDocument(buffer, file.name)
+    // Constant name, never file.name (Codex #540 ×2): (1) resume filenames
+    // routinely carry the user's REAL name and parseDocument logs the
+    // filename — the route's contract is "nothing stored", logs included;
+    // (2) parseDocument picks its parser from the EXTENSION, so a
+    // MIME-accepted PDF without a .pdf name would throw
+    // UnsupportedFileTypeError despite being valid.
+    const result = await parseDocument(buffer, 'resume.pdf')
     // Scanned-image signature (same heuristic as /api/documents/upload).
     if (result.wordCount === 0 || result.wordCount < 20) {
       return NextResponse.json(
