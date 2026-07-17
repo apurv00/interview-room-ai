@@ -38,6 +38,17 @@ export const inngest = new Inngest({
  * Strongly-typed event names. Keep in sync with function event triggers.
  */
 export type InngestEvents = {
+  // Feedback enrichment (2026-07-17): full-quality ideal_answers + drills
+  // generated off the request path. reason 'post-feedback' = new interview;
+  // 'drill-backfill' = historical/partial-coverage session hit from a drill
+  // page. Ids only — the job re-reads the session document.
+  'feedback/enrich.requested': {
+    data: {
+      sessionId: string
+      userId: string
+      reason: 'post-feedback' | 'drill-backfill'
+    }
+  }
   'analysis/requested': {
     data: {
       sessionId: string

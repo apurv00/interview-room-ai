@@ -215,9 +215,8 @@ describe('POST /api/generate-feedback — G.3 truncation handling', () => {
     const res = await POST(makeRequest())
     const json = await res.json()
 
-    expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(mockCompletion).toHaveBeenCalledTimes(1) // core only — enrichment is async (2026-07-17)
     expect(mockCompletion.mock.calls[0][0].responseFormat.name).toBe('feedback_core')
-    expect(mockCompletion.mock.calls[1][0].responseFormat.name).toBe('feedback_enrichment')
     expect(json.red_flags).toEqual([])
     expect(json.confidence_level).not.toBe('Low')
   })
@@ -230,7 +229,7 @@ describe('POST /api/generate-feedback — G.3 truncation handling', () => {
     const res = await POST(makeRequest())
     const json = await res.json()
 
-    expect(mockCompletion).toHaveBeenCalledTimes(3)
+    expect(mockCompletion).toHaveBeenCalledTimes(2) // core + repair — enrichment is async (2026-07-17)
     const repairCall = mockCompletion.mock.calls[1][0] as { maxTokens?: number; responseFormat?: { name?: string } }
     // Repair cap raised to match the core cap — a flat 3600 would re-truncate the same large
     // payload at high question counts. See INTERVIEW_FLOW.md §8 (2026-07-01).

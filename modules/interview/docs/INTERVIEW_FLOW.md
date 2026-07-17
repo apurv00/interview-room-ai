@@ -2097,10 +2097,17 @@ ENRICHMENT sub-call reuses the feedback slot and silently inherited HIGH, overru
 bound on every run since the cutover — feedback degraded to core-only (no ideal_answers/drills)
 and burned 18s of the feedback wait. Pinned per-call to LOW (founder call: exemplar quality
 deserves a small deliberation budget; deeper reasoning belongs in an async backfill, never the
-inline wait), bound resized 18s→30s with success-duration logging. Full-slot audit then found a THIRD call
+inline wait), bound resized 18s→30s with success-duration logging — then SUPERSEDED same day by the async
+redesign: enrichment left the request path entirely (feedback/enrich.requested Inngest job,
+enrichFeedbackJob) and runs at reasoningEffort HIGH with a 12k budget sized for the 30-minute
+worst case (10 weak questions + reasoning tokens billed against output). Founder ruling:
+teaching content never trades quality against request latency — there is no caller-side race
+anywhere in the enrichment path anymore. Full-slot audit had also found a THIRD call
 site: the drill-mode JIT ideal-answer backfill (modules/learn/services/idealAnswerBackfill.ts,
 6s interactive cap) — 100% timed out since the cutover, silently downgrading Strong Answer
-Outlines to QuestionInsightStrip; pinned to NONE (user-blocking path). All other effort-carrying
+Outlines to QuestionInsightStrip; that blocking JIT call is now DELETED — a missing outline
+enqueues the same async job (reason 'drill-backfill'), so historical sessions regenerate at the
+same HIGH quality instead of a lesser interactive tier. All other effort-carrying
 slots audited clean (evaluate-answer's 10-15s client bounds comfortably fit its 'low' calls).
 Audit rule: any slot-effort change must enumerate EVERY call site of that slot — sub-calls
 inherit silently.)_

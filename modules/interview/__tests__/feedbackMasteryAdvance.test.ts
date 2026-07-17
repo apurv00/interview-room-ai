@@ -100,6 +100,16 @@ vi.mock('@learn/services/pathwayBadgeWiring', () => ({
   registerPathwayBadgeWiring: (...a: unknown[]) => mockRegisterBadgeWiring(...a),
 }))
 
+vi.mock('@shared/services/inngest', () => ({
+  // Route emits feedback/enrich.requested on the side-effect rail
+  // (2026-07-17 async enrichment); resolve it so THIS suite's failure
+  // assertions stay scoped to the mastery side effect.
+  inngest: {
+    send: vi.fn().mockResolvedValue({ ids: ['evt-1'] }),
+    createFunction: (_cfg: unknown, handler: unknown) => ({ id: 'mock', handler }),
+  },
+}))
+
 import { POST } from '@/app/api/generate-feedback/route'
 
 function evals(count: number) {

@@ -259,6 +259,80 @@ function FeedbackPageInner() {
     },
   })
 
+  // ── Async enrichment watcher (2026-07-17) ───────────────────────────────
+  // ideal_answers + drill_recommendations are generated OFF the request path
+  // by the feedback/enrich.requested Inngest job at full quality (founder
+  // ruling: teaching content never trades quality against request latency).
+  // While the session's enrichmentStatus is pending/running, poll the
+  // session every 4s and swap the sections in when they land. Budget 150s:
+  // 'high'-effort generation on a 30-minute interview (10 weak questions)
+  // can legitimately take ~2 minutes — sized for the long-interview worst
+  // case, not the 10-minute happy path. Mirrors the recording watcher.
+  const [enrichmentPhase, setEnrichmentPhase] = useState<'idle' | 'generating' | 'done' | 'failed'>('idle')
+  useEffect(() => {
+    if (!sessionId || sessionId === 'local' || !feedback) return
+    const hasContent =
+      (feedback.ideal_answers?.length ?? 0) > 0 ||
+      (feedback.drill_recommendations?.length ?? 0) > 0
+    if (hasContent) {
+      setEnrichmentPhase('done')
+      return
+    }
+    let cancelled = false
+    let attempts = 0
+    const MAX_ATTEMPTS = 38 // ~150s at 4s intervals
+    const INTERVAL_MS = 4000
+    setEnrichmentPhase('generating')
+    const timer = setInterval(async () => {
+      if (cancelled) return
+      if (++attempts > MAX_ATTEMPTS) {
+        clearInterval(timer)
+        setEnrichmentPhase('failed')
+        return
+      }
+      try {
+        const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, {
+          credentials: 'include',
+          cache: 'no-store',
+        })
+        if (!res.ok) return
+        const json = (await res.json()) as { feedback?: FeedbackData; enrichmentStatus?: string }
+        const arrived =
+          (json.feedback?.ideal_answers?.length ?? 0) > 0 ||
+          (json.feedback?.drill_recommendations?.length ?? 0) > 0
+        if (arrived && json.feedback) {
+          clearInterval(timer)
+          const landed = json.feedback
+          setFeedback((prev) =>
+            prev
+              ? { ...prev, ideal_answers: landed.ideal_answers, drill_recommendations: landed.drill_recommendations }
+              : landed,
+          )
+          setEnrichmentPhase('done')
+          return
+        }
+        if (json.enrichmentStatus === 'failed') {
+          clearInterval(timer)
+          setEnrichmentPhase('failed')
+          return
+        }
+        if (json.enrichmentStatus === 'succeeded') {
+          // Succeeded with no content = no weak questions to enrich.
+          clearInterval(timer)
+          setEnrichmentPhase('done')
+          return
+        }
+      } catch {
+        // Best-effort poll; next tick retries.
+      }
+    }, INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, feedback === null])
+
   // sideEffectOutcomes.pathwayPlan stays "scheduled" on persisted feedback even after
   // the pathway job finishes; hide the inline banner once polling observes completion.
   const showPathwayPendingBanner =
@@ -1342,7 +1416,9 @@ function FeedbackPageInner() {
     { key: 'questions', label: 'Scores' },
     ...(hasAnalysisSource || analysis ? [{ key: 'analysis' as const, label: 'Multimodal Analysis' }] : []),
     { key: 'overview', label: 'Feedback' },
-    ...(hasLearningContent ? [{ key: 'learning' as const, label: 'Learning' }] : []),
+    ...(hasLearningContent || enrichmentPhase === 'generating'
+      ? [{ key: 'learning' as const, label: 'Learning' }]
+      : []),
   ]
 
   const maxQuestionIndex =
@@ -1707,7 +1783,7 @@ function FeedbackPageInner() {
         )}
 
         {/* Learning tab — closing/action surface (drill traceability, ideal-answer comparison) */}
-        {activeTab === 'learning' && (
+        {activeTab === 'learning' && (hasLearningContent ? (
           <LearningTab
             feedback={feedback}
             data={data}
@@ -1715,7 +1791,18 @@ function FeedbackPageInner() {
             onQuestionClick={handleQuestionRefToScoresTab}
             maxQuestionIndex={maxQuestionIndex}
           />
-        )}
+        ) : (
+          <section className="surface-card-bordered p-6 animate-fade-in" data-testid="enrichment-generating">
+            <p className="text-subheading text-[#0f1419] animate-pulse">
+              Preparing your ideal answers and practice drills…
+            </p>
+            <p className="text-body text-[#71767b] mt-1">
+              We study each answer that needs work and write a strong-answer
+              outline for it. This usually lands within a couple of minutes —
+              you can explore your scores meanwhile; this tab updates itself.
+            </p>
+          </section>
+        ))}
 
         </div>{/* close #tab-content */}
 

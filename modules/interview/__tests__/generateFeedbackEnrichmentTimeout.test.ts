@@ -19,7 +19,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockCompletion, mockTrackUsage, mockWarn, mockError, mockInfo } = vi.hoisted(() => ({
+const { mockCompletion, mockTrackUsage, mockWarn, mockError, mockInfo, mockInngestSend, mockFindByIdAndUpdate } = vi.hoisted(() => ({
+  mockInngestSend: vi.fn().mockResolvedValue({ ids: ['evt-1'] }),
+  mockFindByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
   mockCompletion: vi.fn(),
   mockTrackUsage: vi.fn().mockResolvedValue(undefined),
   mockWarn: vi.fn(),
@@ -54,6 +56,13 @@ vi.mock('@shared/services/modelRouter', () => ({
   completion: mockCompletion,
 }))
 
+vi.mock('@shared/services/inngest', () => ({
+  inngest: {
+    send: (...a: unknown[]) => mockInngestSend(...a),
+    createFunction: (_cfg: unknown, handler: unknown) => ({ id: 'mock', handler }),
+  },
+}))
+
 vi.mock('@shared/services/usageTracking', () => ({
   trackUsage: mockTrackUsage,
 }))
@@ -74,7 +83,7 @@ vi.mock('@shared/db/connection', () => ({
 vi.mock('@shared/db/models', () => ({
   User: { findById: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) },
   InterviewSession: {
-    findByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+    findByIdAndUpdate: (...a: unknown[]) => mockFindByIdAndUpdate(...a),
   },
 }))
 
@@ -224,31 +233,56 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
     vi.useRealTimers()
   })
 
-  it('aggregates enrichment tokens into the api_call_feedback usage record', async () => {
-    mockCompletion
-      .mockResolvedValueOnce(coreResult())
-      .mockResolvedValueOnce(enrichmentResult({ input: 800, output: 600 }))
+  // ── 2026-07-17: enrichment left the request path (async enrichFeedbackJob) ──
+  // The old inline-race cases (token fold-in, weak-question prompt shape,
+  // the 30s hang test) are superseded: prompt-shape/cap coverage lives in
+  // feedbackEnrichment.test.ts; the job's behavior in enrichFeedbackJob.test.ts.
+  // These cases pin the ROUTE side of the async contract.
+
+  it('makes exactly one completion call and ships empty enrichment arrays', async () => {
+    mockCompletion.mockResolvedValueOnce(coreResult())
+
+    const res = await POST(makeRequest())
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(mockCompletion).toHaveBeenCalledTimes(1)
+    expect(json.ideal_answers).toEqual([])
+    expect(json.drill_recommendations).toEqual([])
+  })
+
+  it('emits feedback/enrich.requested (reason post-feedback) after persist', async () => {
+    mockCompletion.mockResolvedValueOnce(coreResult())
 
     const res = await POST(makeRequest())
     expect(res.status).toBe(200)
+    await new Promise((r) => setImmediate(r))
 
-    const feedbackCall = mockTrackUsage.mock.calls.find(
-      (c) => (c[0] as { type: string }).type === 'api_call_feedback',
+    const sendCall = mockInngestSend.mock.calls.find(
+      (c) => (c[0] as { name?: string })?.name === 'feedback/enrich.requested',
     )
-    expect(feedbackCall).toBeDefined()
-    const usage = feedbackCall![0] as { inputTokens: number; outputTokens: number; success: boolean }
-    expect(usage.success).toBe(true)
-    // Core (3000) + enrichment (800) = 3800; core (2500) + enrichment (600) = 3100.
-    expect(usage.inputTokens).toBe(3800)
-    expect(usage.outputTokens).toBe(3100)
+    expect(sendCall).toBeDefined()
+    expect((sendCall![0] as { data: { reason: string; sessionId: string } }).data).toMatchObject({
+      reason: 'post-feedback',
+      sessionId: '507f1f77bcf86cd799439011',
+    })
   })
 
-  it('records only core tokens when enrichment fails (no fabricated billing)', async () => {
-    mockCompletion
-      .mockResolvedValueOnce(coreResult())
-      // Enrichment rejects synchronously — exercises the catch branch
-      // which returns zero usage. trackUsage should reflect core only.
-      .mockRejectedValueOnce(new Error('simulated enrichment failure'))
+  it('persists enrichmentStatus pending atomically with the feedback write', async () => {
+    mockCompletion.mockResolvedValueOnce(coreResult())
+
+    await POST(makeRequest())
+    await new Promise((r) => setImmediate(r))
+
+    const persistCall = mockFindByIdAndUpdate.mock.calls.find(
+      (c) => (c[1] as { feedback?: unknown })?.feedback !== undefined,
+    )
+    expect(persistCall).toBeDefined()
+    expect((persistCall![1] as { enrichmentStatus?: string }).enrichmentStatus).toBe('pending')
+  })
+
+  it('bills only core tokens in api_call_feedback (enrichment bills from the job)', async () => {
+    mockCompletion.mockResolvedValueOnce(coreResult())
 
     const res = await POST(makeRequest())
     expect(res.status).toBe(200)
@@ -263,162 +297,6 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
     expect(usage.outputTokens).toBe(2500)
   })
 
-  // ── 2026-05-19 backfill: all weak questions (avg < 60), not top-3 ──────
-  it('includes every weak question (avg < 60) in the enrichment prompt, capped at 10', async () => {
-    // 6 weak (avg 30, 31, 32, 33, 34, 35) and 2 strong (avg ~85). The
-    // enrichment prompt must reference all 6 weak questionIndexes
-    // (Q1..Q6) but NEITHER of the strong ones (Q7, Q8). Pre-backfill
-    // the prompt only included the top-3 weakest.
-    const evaluations = [
-      // 6 weak
-      ...Array.from({ length: 6 }, (_, i) => ({
-        questionIndex: i,
-        question: `Weak Q${i + 1}?`,
-        answer: `Weak answer ${i + 1}`,
-        relevance: 30 + i,
-        structure: 30 + i,
-        specificity: 30 + i,
-        ownership: 30 + i,
-        probeDecision: { shouldProbe: false },
-      })),
-      // 2 strong — must NOT appear in the enrichment context
-      ...Array.from({ length: 2 }, (_, i) => ({
-        questionIndex: 6 + i,
-        question: `Strong Q${7 + i}?`,
-        answer: `Strong answer ${7 + i}`,
-        relevance: 85,
-        structure: 85,
-        specificity: 85,
-        ownership: 85,
-        probeDecision: { shouldProbe: false },
-      })),
-    ]
-
-    mockCompletion
-      .mockResolvedValueOnce(coreResult())
-      .mockResolvedValueOnce(enrichmentResult({ input: 800, output: 600 }))
-
-    const req = new NextRequest('http://localhost:3000/api/generate-feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
-        transcript: [],
-        evaluations,
-        speechMetrics: [],
-        sessionId: '507f1f77bcf86cd799439011',
-      }),
-    })
-    const res = await POST(req)
-    expect(res.status).toBe(200)
-
-    // The 2nd completion call is the enrichment call (1st is core).
-    const enrichmentCall = mockCompletion.mock.calls[1]
-    const promptContent = (enrichmentCall[0] as {
-      messages: Array<{ content: string }>
-    }).messages[0].content
-
-    // All 6 weak questions present
-    for (let i = 1; i <= 6; i++) {
-      expect(promptContent).toContain(`Q${i} (avg`)
-    }
-    // Neither strong question present
-    expect(promptContent).not.toContain('Q7 (avg')
-    expect(promptContent).not.toContain('Q8 (avg')
-  })
-
-  it('caps the enrichment context at 10 questions even when more are weak', async () => {
-    // 15 weak questions. The cap in weakestQuestionContext (default 10)
-    // protects the enrichment LLM's maxTokens budget when an unusually
-    // bad session has many sub-60 answers.
-    const evaluations = Array.from({ length: 15 }, (_, i) => ({
-      questionIndex: i,
-      question: `Q${i + 1}?`,
-      answer: `Answer ${i + 1}`,
-      relevance: 20 + i, // 20, 21, ..., 34 — all well below 60
-      structure: 20 + i,
-      specificity: 20 + i,
-      ownership: 20 + i,
-      probeDecision: { shouldProbe: false },
-    }))
-
-    mockCompletion
-      .mockResolvedValueOnce(coreResult())
-      .mockResolvedValueOnce(enrichmentResult({ input: 800, output: 600 }))
-
-    const req = new NextRequest('http://localhost:3000/api/generate-feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
-        transcript: [],
-        evaluations,
-        speechMetrics: [],
-        sessionId: '507f1f77bcf86cd799439011',
-      }),
-    })
-    await POST(req)
-
-    const enrichmentCall = mockCompletion.mock.calls[1]
-    const promptContent = (enrichmentCall[0] as {
-      messages: Array<{ content: string }>
-    }).messages[0].content
-
-    // First 10 weak (by ascending score) included…
-    for (let i = 1; i <= 10; i++) {
-      expect(promptContent).toContain(`Q${i} (avg`)
-    }
-    // …11th onward excluded
-    expect(promptContent).not.toContain('Q11 (avg')
-    expect(promptContent).not.toContain('Q15 (avg')
-  })
-
-  it('returns core feedback when enrichment hangs past the timeout (Codex P1)', async () => {
-    // Core resolves immediately; enrichment hangs forever. With the
-    // 30000ms timeout (2026-07-17: bumped from 18s alongside pinning the
-    // enrichment call to reasoningEffort 'none' — see route comment) the
-    // route must still return a non-degraded core response without
-    // waiting for enrichment.
-    mockCompletion.mockImplementation((opts: { responseFormat?: { name?: string } }) => {
-      if (opts.responseFormat?.name === 'feedback_enrichment') {
-        return new Promise(() => {}) // never resolves — simulates a hung provider
-      }
-      return Promise.resolve(coreResult())
-    })
-
-    vi.useFakeTimers()
-    const promise = POST(makeRequest())
-    // Advance past the 30s enrichment timeout deterministically.
-    await vi.advanceTimersByTimeAsync(30_500)
-    vi.useRealTimers()
-
-    const res = await promise
-    expect(res.status).toBe(200)
-    const json = await res.json()
-
-    // Core feedback is intact; enrichment fields are empty (not stuck).
-    // overall_score is the route's blended/clamped value derived from
-    // both the model output (72) and the deterministic formula — assert
-    // it's a plausible number near the model's holistic value rather
-    // than pinning the exact post-blend integer.
-    expect(json.degraded).toBeUndefined()
-    expect(typeof json.overall_score).toBe('number')
-    expect(json.overall_score).toBeGreaterThanOrEqual(60)
-    expect(json.overall_score).toBeLessThanOrEqual(80)
-    expect(Array.isArray(json.ideal_answers)).toBe(true)
-    expect(json.ideal_answers.length).toBe(0)
-    expect(Array.isArray(json.drill_recommendations)).toBe(true)
-    expect(json.drill_recommendations.length).toBe(0)
-
-    // Timeout path emits a warn log so this is observable in prod.
-    const warnedTimeout = mockWarn.mock.calls.some(([ctx]) => {
-      const msg = (ctx as { err?: { message?: string } } | undefined)?.err?.message ?? ''
-      return typeof msg === 'string' && msg.includes('timed out')
-    })
-    expect(warnedTimeout).toBe(true)
-  }, 10_000)
-
-  // ── Codex P2 on 2026-05-12: core + repair token aggregation ──────────────
   it('aggregates core + repair tokens when structured repair fires', async () => {
     // First core completion returns valid JSON shape but missing the
     // required `overall_score` (typeof !== 'number') so requireCoreFeedback
@@ -462,8 +340,7 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
         usedFallback: false,
         truncated: false,
       })
-      // 3. enrichment call
-      .mockResolvedValueOnce(enrichmentResult({ input: 800, output: 600 }))
+      // (no 3rd call — enrichment is async since 2026-07-17)
 
     const res = await POST(makeRequest())
     expect(res.status).toBe(200)
@@ -476,8 +353,8 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
     expect(usage.success).toBe(true)
     // Core (3000 + 2500) + Repair (1200 + 900) + Enrichment (800 + 600)
     // = 5000 in + 4000 out.
-    expect(usage.inputTokens).toBe(5000)
-    expect(usage.outputTokens).toBe(4000)
+    expect(usage.inputTokens).toBe(4200) // core 3000 + repair 1200
+    expect(usage.outputTokens).toBe(3400) // core 2500 + repair 900
   })
 
   // ── Codex P2 on 2026-05-12: deterministic communication metrics ──────────
