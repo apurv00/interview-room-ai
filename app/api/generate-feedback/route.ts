@@ -222,11 +222,15 @@ async function generateOptionalEnrichment(params: {
   try {
     const llmCall = completion({
         taskSlot: 'interview.generate-feedback',
-        // Enrichment is content generation (ideal answers + drills), not
-        // judgment: without this per-call override it inherits the slot's
+        // Enrichment writes teaching content (ideal answers + drills):
+        // without this per-call override it inherits the slot's
         // reasoningEffort 'high', which overran the enrichment timeout on
-        // every run 2026-07-11→17 (same failure class as the fusion slot).
-        reasoningEffort: 'none',
+        // nearly every run 2026-07-11→17 (same failure class as the fusion
+        // slot). 'low' is the founder-chosen tier: a deliberation budget for
+        // exemplar quality that still fits the 30s bound. If deeper
+        // reasoning is ever wanted here, decouple enrichment from the
+        // response path (async backfill) — do NOT widen this inline wait.
+        reasoningEffort: 'low',
         system: `${params.systemPrompt}\n\nGenerate only supplemental coaching enrichment. Keep it concise and schema-conformant.`,
         messages: [{
           role: 'user',
@@ -251,9 +255,10 @@ For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based que
         // 2026-07-11: 7000 → 7800 — the feedback slot runs
         // reasoningEffort:'high' on gpt-5.6-luna and reasoning tokens
         // bill against max_completion_tokens; +800 keeps output headroom.
-        // 2026-07-17: 7800 → 7000 — this call is pinned to 'none' above,
-        // so the reasoning-token headroom is no longer spent from budget.
-        maxTokens: 7000,
+        // 2026-07-17: 7800 → 7500 — pinned to 'low' above, so only a
+        // small reasoning-token headroom is needed on top of the ~7000
+        // content sizing (the old +800 was sized for 'high').
+        maxTokens: 7500,
         responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
       })
     // The losing racer cannot be aborted (providers accept no AbortSignal

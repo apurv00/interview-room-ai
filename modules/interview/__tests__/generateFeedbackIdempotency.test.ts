@@ -536,7 +536,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
 // The GPT-5.6 cutover made the enrichment sub-call inherit the slot's
 // reasoningEffort 'high', overrunning its timeout on every run since
 // 2026-07-11 (feedback silently degraded to core-only). These pins keep the
-// enrichment call on the no-reasoning envelope its timeout is sized for.
+// enrichment call on the founder-chosen 'low' tier its timeout is sized for
+// (deeper reasoning here belongs in an async backfill, not the inline wait).
 describe('POST /api/generate-feedback — enrichment call envelope', () => {
   beforeEach(() => {
     mockAcquire.mockReset()
@@ -544,7 +545,7 @@ describe('POST /api/generate-feedback — enrichment call envelope', () => {
     mockCompletion.mockReset()
   })
 
-  it('runs enrichment at reasoningEffort none with the reverted token budget', async () => {
+  it('runs enrichment at reasoningEffort low with the right-sized token budget', async () => {
     mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
     mockCompletion.mockResolvedValue(happyCompletion)
 
@@ -558,7 +559,7 @@ describe('POST /api/generate-feedback — enrichment call envelope', () => {
     )
     expect(enrichmentCall).toBeDefined()
     const params = enrichmentCall![0] as { reasoningEffort?: string; maxTokens?: number }
-    expect(params.reasoningEffort).toBe('none')
-    expect(params.maxTokens).toBe(7000)
+    expect(params.reasoningEffort).toBe('low')
+    expect(params.maxTokens).toBe(7500)
   })
 })

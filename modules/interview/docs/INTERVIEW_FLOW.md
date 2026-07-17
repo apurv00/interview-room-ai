@@ -2095,8 +2095,9 @@ analyses for 6 days. Restored to NONE + maxTokens 3000, its pre-cutover no-reaso
 incident log in AI_ANALYSIS.md §8. Same-day second find, same class: generate-feedback's
 ENRICHMENT sub-call reuses the feedback slot and silently inherited HIGH, overrunning its 18s
 bound on every run since the cutover — feedback degraded to core-only (no ideal_answers/drills)
-and burned 18s of the feedback wait. Pinned per-call to NONE (content generation, not judgment),
-bound resized 18s→30s with success-duration logging. Audit rule: any slot-effort change must
+and burned 18s of the feedback wait. Pinned per-call to LOW (founder call: exemplar quality
+deserves a small deliberation budget; deeper reasoning belongs in an async backfill, never the
+inline wait), bound resized 18s→30s with success-duration logging. Audit rule: any slot-effort change must
 enumerate EVERY call site of that slot — sub-calls inherit silently.)_
 generation runs medium/low (`generate-question` medium, `evaluate-answer` low — 5s client abort);
 real-time conversational + streaming slots run NONE (`turn-router`, `answer-candidate-question`,
