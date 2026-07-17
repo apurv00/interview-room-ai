@@ -11,7 +11,8 @@ import { TASK_SLOT_DEFAULTS } from '../services/taskSlots'
 // changing this deliberately, re-verify a full analysis run end-to-end and
 // re-size FUSION_TIMEOUT_MS in fusionService.ts to the new model's latency.
 describe('interview.fusion-analysis slot', () => {
-  it('stays on low reasoning effort', () => {
-    expect(TASK_SLOT_DEFAULTS['interview.fusion-analysis']?.reasoningEffort).toBe('low')
+  it('stays on the no-reasoning envelope that FUSION_TIMEOUT_MS is sized for', () => {
+    expect(TASK_SLOT_DEFAULTS['interview.fusion-analysis']?.reasoningEffort).toBe('none')
+    expect(TASK_SLOT_DEFAULTS['interview.fusion-analysis']?.maxTokens).toBe(3000)
   })
 })

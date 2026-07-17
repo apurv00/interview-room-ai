@@ -2091,7 +2091,8 @@ a dynamic medium. Decision: judgment slots run HIGH in code now (`generate-feedb
 `evaluation-engine-v2`, `fusion-analysis`, `evaluate-code`, `evaluate-design`); in-interview
 _(2026-07-17 correction: `fusion-analysis` was misclassified — it merges already-computed signals
 into a fixed JSON shape, not judgment, and HIGH overran its 30s caller timeout, failing prod
-analyses for 6 days. Demoted to LOW; incident log in AI_ANALYSIS.md §8.)_
+analyses for 6 days. Restored to NONE + maxTokens 3000, its pre-cutover no-reasoning envelope;
+incident log in AI_ANALYSIS.md §8.)_
 generation runs medium/low (`generate-question` medium, `evaluate-answer` low — 5s client abort);
 real-time conversational + streaming slots run NONE (`turn-router`, `answer-candidate-question`,
 `coach-notes`, `learn.drill-evaluate` — reasoning precedes the first output/stream token, so there

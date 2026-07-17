@@ -268,10 +268,12 @@ preamble broke the strict JSON parse (`Fusion analysis returned no valid
 JSON`). Every prod analysis 2026-07-11→17 failed except two; nobody noticed
 because the feature is quota-gated and low-volume. Found during the Oracle
 migration's staging gate when a test interview accidentally ran on prod.
-Fix: fusion demoted to `reasoningEffort: 'low'` (it merges already-computed
-signals into a fixed JSON shape — extraction, not judgment) and timeout
-resized to 45s (Inngest steps are their own function invocations, so 45s fits
-Vercel's 60s budget; the keyless inline fallback only runs where no platform
-timeout applies). Regression pin: `shared/__tests__/fusionSlotConfig.test.ts`.
+Fix (final, founder review round): fusion restored to its pre-cutover
+no-reasoning envelope — `reasoningEffort: 'none'` (it never used reasoning on
+gpt-5.4-mini; it merges already-computed signals into a fixed JSON shape),
+`maxTokens` back to 3000 (the 3600 bump existed only as reasoning-token
+headroom), timeout stays 30s (proven contract; re-verify against measured
+Inngest step durations before changing any of the three).
+Regression pin: `shared/__tests__/fusionSlotConfig.test.ts`.
 Lesson: any per-slot model/effort change must re-verify the slot's caller-side
 timeouts — they encode the previous model's latency envelope.

@@ -139,12 +139,12 @@ The \`coachingTips\` (string array) and \`coachingTipsRich\` (object array) MUST
     lowConfidenceWords,
   )
 
-  // Safety timeout to bound the worst case. On the Inngest path this step is
-  // its own function invocation, so 45s fits Vercel's 60s budget with margin;
-  // the keyless inline fallback only runs where no platform timeout applies
-  // (local/self-host). Sized for gpt-5.6-luna at reasoningEffort 'low' —
-  // 'high' overran even 30s on most runs (prod incident 2026-07-11→17).
-  const FUSION_TIMEOUT_MS = 45_000
+  // Safety timeout to bound the worst case, sized for the slot's proven
+  // no-reasoning envelope (reasoningEffort 'none', maxTokens 3000 — the
+  // pre-cutover contract): reasoning tiers broke this in prod 2026-07-11→17
+  // ('high' overran 30s on most runs). If the slot's model/effort/maxTokens
+  // change, re-verify this bound against measured step durations first.
+  const FUSION_TIMEOUT_MS = 30_000
   const response = await Promise.race([
     completion({
       taskSlot: 'interview.fusion-analysis',
