@@ -3,6 +3,7 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { aiLogger } from '@shared/logger'
 import { trackUsage } from '@shared/services/usageTracking'
+import { flushUsageBuffer } from '@shared/services/usageBuffer'
 import type { AuthUser } from '@shared/middleware/withAuth'
 import { getDomainLabel } from '@interview/config/interviewConfig'
 import {
@@ -44,6 +45,8 @@ export interface EnrichFeedbackJobEventData {
   sessionId: string
   userId: string
   reason: 'post-feedback' | 'drill-backfill'
+  /** drill-backfill: guarantee this question is in the generated set. */
+  questionIndex?: number
 }
 
 /** Field names on InterviewSession tracking enrichment lifecycle. */
@@ -57,7 +60,7 @@ export async function runEnrichFeedbackJobHandler(
   event: { data: EnrichFeedbackJobEventData },
   step: EnrichJobStepRunner,
 ): Promise<{ sessionId: string; status: 'completed' | 'skipped'; idealAnswers?: number }> {
-  const { sessionId, userId, reason } = event.data
+  const { sessionId, userId, reason, questionIndex } = event.data
 
   await step.run('mark-running', async () => {
     await connectDB()
@@ -73,11 +76,12 @@ export async function runEnrichFeedbackJobHandler(
   const sessionData = await step.run('fetch-session', async () => {
     await connectDB()
     const doc = await InterviewSession.findOne({ _id: sessionId })
-      .select('config evaluations userId')
+      .select('config evaluations userId feedback.ideal_answers')
       .lean<{
         config?: { role?: string; interviewType?: string }
         evaluations?: EnrichmentEvaluation[]
         userId?: unknown
+        feedback?: { ideal_answers?: Array<Record<string, unknown>> }
       }>()
     if (!doc) {
       throw new Error(`enrichFeedbackJob: session ${sessionId} not found`)
@@ -92,6 +96,7 @@ export async function runEnrichFeedbackJobHandler(
       evaluations: doc.evaluations,
       role: doc.config?.role ?? 'general',
       interviewType: doc.config?.interviewType ?? 'screening',
+      existingIdealAnswers: doc.feedback?.ideal_answers ?? [],
     }
   })
 
@@ -101,6 +106,9 @@ export async function runEnrichFeedbackJobHandler(
       evaluations: sessionData.evaluations,
       domainLabel: getDomainLabel(sessionData.role),
       interviewType: sessionData.interviewType,
+      // Codex P2 (#552): the drilled question must be in the set even when
+      // it ranks outside the weakest-10 cap on long sessions.
+      mustIncludeQuestionIndex: questionIndex,
     })
     const elapsed = Date.now() - startedAt
     aiLogger.info(
@@ -124,8 +132,22 @@ export async function runEnrichFeedbackJobHandler(
       [STATUS_FIELDS.completedAt]: new Date(),
     }
     if (enrichment) {
-      setFields['feedback.ideal_answers'] = enrichment.ideal_answers
-      setFields['feedback.drill_recommendations'] = enrichment.drill_recommendations
+      // Union-merge by questionIndex (new entries win): a wholesale $set
+      // would let a later drill-backfill run DROP entries a previous run
+      // generated for other questions (latent under Codex P2 on #552).
+      const newByIndex = new Map(
+        enrichment.ideal_answers.map((a) => [Number(a.questionIndex ?? -1), a]),
+      )
+      const preserved = sessionData.existingIdealAnswers.filter(
+        (a) => !newByIndex.has(Number(a.questionIndex ?? -1)),
+      )
+      const merged = [...preserved, ...enrichment.ideal_answers].sort(
+        (a, b) => Number(a.questionIndex ?? 0) - Number(b.questionIndex ?? 0),
+      )
+      setFields['feedback.ideal_answers'] = merged
+      if (enrichment.drill_recommendations.length > 0) {
+        setFields['feedback.drill_recommendations'] = enrichment.drill_recommendations
+      }
     }
     await InterviewSession.findByIdAndUpdate(sessionId, { $set: setFields })
   })
@@ -147,6 +169,11 @@ export async function runEnrichFeedbackJobHandler(
         durationMs,
         success: true,
       }).catch(() => {})
+      // Codex P2 (#552): with a sessionId, trackUsage takes the Redis
+      // usage-buffer path, whose only other flusher (the completion PATCH)
+      // has already fired before this job runs — without this flush the
+      // record would sit in Redis until TTL and vanish from analytics.
+      await flushUsageBuffer(sessionId).catch(() => {})
     })
   }
 

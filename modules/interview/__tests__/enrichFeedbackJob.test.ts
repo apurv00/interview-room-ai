@@ -5,11 +5,13 @@ const {
   mockFindOne,
   mockRunEnrichment,
   mockTrackUsage,
+  mockFlushUsage,
 } = vi.hoisted(() => ({
   mockFindByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
   mockFindOne: vi.fn(),
   mockRunEnrichment: vi.fn(),
   mockTrackUsage: vi.fn().mockResolvedValue(undefined),
+  mockFlushUsage: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@shared/services/inngest', () => ({
@@ -30,6 +32,7 @@ vi.mock('@shared/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
 vi.mock('@shared/services/usageTracking', () => ({ trackUsage: mockTrackUsage }))
+vi.mock('@shared/services/usageBuffer', () => ({ flushUsageBuffer: (...a: unknown[]) => mockFlushUsage(...a) }))
 vi.mock('@interview/config/interviewConfig', () => ({ getDomainLabel: (r: string) => `Domain ${r}` }))
 vi.mock('@interview/services/eval/feedbackEnrichment', () => ({
   runFeedbackEnrichment: (...a: unknown[]) => mockRunEnrichment(...a),
@@ -72,6 +75,7 @@ describe('enrichFeedbackJob handler', () => {
     mockFindOne.mockReset()
     mockRunEnrichment.mockReset()
     mockTrackUsage.mockReset().mockResolvedValue(undefined)
+    mockFlushUsage.mockReset().mockResolvedValue(undefined)
   })
 
   it('happy path: running → generation → persists fields + succeeded → bills usage', async () => {
@@ -103,6 +107,56 @@ describe('enrichFeedbackJob handler', () => {
       modelUsed: 'gpt-5.6-luna',
       success: true,
     })
+  })
+
+  it('flushes the usage buffer so the record cannot rot in Redis (Codex P2 #552)', async () => {
+    mockFindOne.mockReturnValue(sessionDoc())
+    mockRunEnrichment.mockResolvedValue(enrichmentResult())
+
+    await runEnrichFeedbackJobHandler(
+      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+      step,
+    )
+
+    expect(mockFlushUsage).toHaveBeenCalledWith(SESSION_ID)
+  })
+
+  it('passes the drilled questionIndex through so the requested question is generated (Codex P2 #552)', async () => {
+    mockFindOne.mockReturnValue(sessionDoc())
+    mockRunEnrichment.mockResolvedValue(enrichmentResult())
+
+    await runEnrichFeedbackJobHandler(
+      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill', questionIndex: 11 } },
+      step,
+    )
+
+    expect(mockRunEnrichment.mock.calls[0][0]).toMatchObject({ mustIncludeQuestionIndex: 11 })
+  })
+
+  it('union-merges ideal_answers by questionIndex — a backfill run never drops existing entries', async () => {
+    mockFindOne.mockReturnValue(
+      sessionDoc({
+        feedback: {
+          ideal_answers: [
+            { questionIndex: 0, strongAnswer: 'Old for Q1.', keyElements: ['keep me'] },
+            { questionIndex: 5, strongAnswer: 'Old for Q6.', keyElements: ['keep me too'] },
+          ],
+        },
+      }),
+    )
+    mockRunEnrichment.mockResolvedValue(enrichmentResult()) // generates indexes 0 and 2
+
+    await runEnrichFeedbackJobHandler(
+      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill' } },
+      step,
+    )
+
+    const persist = mockFindByIdAndUpdate.mock.calls.at(-1)![1] as { $set: Record<string, unknown> }
+    const merged = persist.$set['feedback.ideal_answers'] as Array<{ questionIndex: number; strongAnswer: string }>
+    expect(merged.map((a) => a.questionIndex)).toEqual([0, 2, 5])
+    // index 0: new entry wins; index 5: preserved from the earlier run
+    expect(merged.find((a) => a.questionIndex === 0)!.strongAnswer).toBe('Strong.')
+    expect(merged.find((a) => a.questionIndex === 5)!.strongAnswer).toBe('Old for Q6.')
   })
 
   it('no weak questions (null result): marks succeeded without touching feedback fields', async () => {

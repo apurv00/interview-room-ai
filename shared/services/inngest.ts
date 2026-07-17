@@ -47,6 +47,10 @@ export type InngestEvents = {
       sessionId: string
       userId: string
       reason: 'post-feedback' | 'drill-backfill'
+      /** drill-backfill only: the drilled question MUST be in the generated
+       *  set even when it ranks outside the weakest-10 cap (Codex P2 #552 —
+       *  the 20/30-min case where >10 questions are weak). */
+      questionIndex?: number
     }
   }
   'analysis/requested': {

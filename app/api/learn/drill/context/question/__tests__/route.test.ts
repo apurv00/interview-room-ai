@@ -253,7 +253,7 @@ describe('GET /api/learn/drill/context/question', () => {
     expect(mockInngestSend).toHaveBeenCalledTimes(1)
     expect(mockInngestSend.mock.calls[0][0]).toMatchObject({
       name: 'feedback/enrich.requested',
-      data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill' },
+      data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill', questionIndex: 3 },
     })
     expect(mockUpdateOne).toHaveBeenCalledTimes(1)
     const [, update] = mockUpdateOne.mock.calls[0]

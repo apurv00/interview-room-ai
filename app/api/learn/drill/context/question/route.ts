@@ -116,7 +116,7 @@ export async function GET(req: NextRequest) {
         inngest
           .send({
             name: 'feedback/enrich.requested',
-            data: { sessionId, userId: session.user.id, reason: 'drill-backfill' },
+            data: { sessionId, userId: session.user.id, reason: 'drill-backfill', questionIndex },
           })
           .then(() =>
             InterviewSession.updateOne(

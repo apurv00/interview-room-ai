@@ -60,13 +60,31 @@ function scoreForEvaluation(e: Record<string, unknown>): number {
 export function weakestQuestionContext(
   evaluations: EnrichmentEvaluation[],
   cap = WEAK_QUESTION_CAP,
+  mustIncludeQuestionIndex?: number,
 ): string {
-  return evaluations
+  const weak = evaluations
     .filter((e) => e.status !== 'failed')
     .map((e) => ({ e, score: scoreForEvaluation(e) }))
     .filter(({ score }) => score < 60)
     .sort((a, b) => a.score - b.score || Number(a.e.questionIndex ?? 0) - Number(b.e.questionIndex ?? 0))
-    .slice(0, cap)
+
+  let selected = weak.slice(0, cap)
+  // Codex P2 (#552): a drill-backfill for a question ranked outside the
+  // weakest-`cap` (possible on 20/30-min sessions with >cap weak answers)
+  // must still generate THAT question — the old JIT path did exactly this.
+  // Swap it in for the least-weak selected entry, keeping weakest-first order.
+  if (
+    mustIncludeQuestionIndex !== undefined &&
+    !selected.some(({ e }) => Number(e.questionIndex ?? -1) === mustIncludeQuestionIndex)
+  ) {
+    const required = weak.find(({ e }) => Number(e.questionIndex ?? -1) === mustIncludeQuestionIndex)
+    if (required) {
+      selected = [...selected.slice(0, cap - 1), required]
+        .sort((a, b) => a.score - b.score || Number(a.e.questionIndex ?? 0) - Number(b.e.questionIndex ?? 0))
+    }
+  }
+
+  return selected
     .map(({ e, score }) => {
       const questionIndex = Number(e.questionIndex ?? 0)
       const question = String(e.question ?? '').replace(/\s+/g, ' ').slice(0, 320)
@@ -90,8 +108,13 @@ export async function runFeedbackEnrichment(params: {
   evaluations: EnrichmentEvaluation[]
   domainLabel: string
   interviewType: string
+  mustIncludeQuestionIndex?: number
 }): Promise<EnrichmentResult | null> {
-  const targetContext = weakestQuestionContext(params.evaluations)
+  const targetContext = weakestQuestionContext(
+    params.evaluations,
+    WEAK_QUESTION_CAP,
+    params.mustIncludeQuestionIndex,
+  )
   if (!targetContext) {
     return null
   }

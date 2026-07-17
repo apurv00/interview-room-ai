@@ -116,6 +116,18 @@ describe('weakestQuestionContext', () => {
     expect(ctx).not.toContain('Q21 (avg')
   })
 
+  it('guarantees the drilled question is included even when it ranks outside the cap (Codex P2 #552)', () => {
+    // 12 weak questions, ascending weakness — Q12 (index 11) is the LEAST
+    // weak and would normally be cut by the cap. A drill-backfill for it
+    // must still generate it (the 20/30-min case the old JIT path served).
+    const evals = Array.from({ length: 12 }, (_, i) => weakEval(i, 30 + i))
+    const ctx = weakestQuestionContext(evals, 10, 11)
+    expect(ctx).toContain('Q12 (avg')
+    // Still capped at 10 entries — the least-weak default pick was swapped out.
+    expect(ctx.split('Question:').length - 1).toBe(10)
+    expect(ctx).not.toContain('Q10 (avg')
+  })
+
   it('excludes failed evaluations and returns empty string when nothing is weak', () => {
     expect(weakestQuestionContext([{ ...weakEval(0, 40), status: 'failed' }])).toBe('')
     expect(weakestQuestionContext([weakEval(0, 70)])).toBe('')
