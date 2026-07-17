@@ -259,6 +259,98 @@ function FeedbackPageInner() {
     },
   })
 
+  // ── Async enrichment watcher (2026-07-17) ───────────────────────────────
+  // ideal_answers + drill_recommendations are generated OFF the request path
+  // by the feedback/enrich.requested Inngest job at full quality (founder
+  // ruling: teaching content never trades quality against request latency).
+  // While the session's enrichmentStatus is pending/running, poll the
+  // session every 4s and swap the sections in when they land. Budget 150s:
+  // 'high'-effort generation on a 30-minute interview (10 weak questions)
+  // can legitimately take ~2 minutes — sized for the long-interview worst
+  // case, not the 10-minute happy path. Mirrors the recording watcher.
+  const [enrichmentPhase, setEnrichmentPhase] = useState<'idle' | 'generating' | 'done' | 'failed'>('idle')
+  const [enrichmentStatus, setEnrichmentStatus] = useState<string | null>(null)
+  useEffect(() => {
+    if (!sessionId || sessionId === 'local' || !feedback) return
+    const hasContent =
+      (feedback.ideal_answers?.length ?? 0) > 0 ||
+      (feedback.drill_recommendations?.length ?? 0) > 0
+    if (hasContent) {
+      setEnrichmentPhase('done')
+      return
+    }
+    // Codex P2 (#552): only watch when a job is actually active. Legacy
+    // sessions (no enrichmentStatus) and terminal states must never show
+    // the generating placeholder.
+    if (enrichmentStatus !== 'pending' && enrichmentStatus !== 'running') {
+      setEnrichmentPhase(enrichmentStatus === 'failed' ? 'failed' : 'idle')
+      return
+    }
+    let cancelled = false
+    let attempts = 0
+    const MAX_ATTEMPTS = 38 // ~150s at 4s intervals
+    const INTERVAL_MS = 4000
+    setEnrichmentPhase('generating')
+    const timer = setInterval(async () => {
+      if (cancelled) return
+      if (++attempts > MAX_ATTEMPTS) {
+        clearInterval(timer)
+        setEnrichmentPhase('failed')
+        return
+      }
+      try {
+        const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, {
+          credentials: 'include',
+          cache: 'no-store',
+        })
+        if (!res.ok) return
+        const json = (await res.json()) as { feedback?: FeedbackData; enrichmentStatus?: string }
+        const arrived =
+          (json.feedback?.ideal_answers?.length ?? 0) > 0 ||
+          (json.feedback?.drill_recommendations?.length ?? 0) > 0
+        if (arrived && json.feedback) {
+          clearInterval(timer)
+          const landed = json.feedback
+          setFeedback((prev) =>
+            prev
+              ? { ...prev, ideal_answers: landed.ideal_answers, drill_recommendations: landed.drill_recommendations }
+              : landed,
+          )
+          setEnrichmentPhase('done')
+          return
+        }
+        if (json.enrichmentStatus === 'failed') {
+          clearInterval(timer)
+          setEnrichmentStatus('failed')
+          setEnrichmentPhase('failed')
+          return
+        }
+        if (json.enrichmentStatus === 'succeeded') {
+          // Succeeded with no content = no weak questions to enrich.
+          clearInterval(timer)
+          setEnrichmentStatus('succeeded')
+          setEnrichmentPhase('done')
+          return
+        }
+        if (!json.enrichmentStatus) {
+          // No job was ever enqueued for this session (legacy / edge path) —
+          // stop immediately rather than burning the 150s budget.
+          clearInterval(timer)
+          setEnrichmentStatus(null)
+          setEnrichmentPhase('idle')
+          return
+        }
+      } catch {
+        // Best-effort poll; next tick retries.
+      }
+    }, INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, feedback === null, enrichmentStatus])
+
   // sideEffectOutcomes.pathwayPlan stays "scheduled" on persisted feedback even after
   // the pathway job finishes; hide the inline banner once polling observes completion.
   const showPathwayPendingBanner =
@@ -719,6 +811,11 @@ function FeedbackPageInner() {
 
             if (session.feedback) {
               setFeedback(session.feedback as FeedbackData)
+              // Codex P2 (#552): the watcher must only run for sessions with
+              // an ACTIVE enrichment job — legacy sessions have no
+              // enrichmentStatus and would otherwise show a stuck 150s
+              // placeholder for content that can never arrive.
+              setEnrichmentStatus((session as { enrichmentStatus?: string }).enrichmentStatus ?? null)
               setLoading(false)
               // Recover stuck sessions: if feedback exists but status is not completed, fix it
               if (session.status && session.status !== 'completed') {
@@ -755,6 +852,7 @@ function FeedbackPageInner() {
                   if (pollData.hasRecording) fetchRecordingUrl()
                   if (pollData.feedback) {
                     setFeedback(pollData.feedback as FeedbackData)
+                    setEnrichmentStatus((pollData as { enrichmentStatus?: string }).enrichmentStatus ?? 'pending')
                     setLoading(false)
                     if (pollData.status !== 'completed') {
                       fetchWithRetry(`/api/interviews/${sessionId}`, {
@@ -1008,6 +1106,9 @@ function FeedbackPageInner() {
           : fb.confidence_level?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
       }
       setFeedback(fb as FeedbackData)
+      // Fresh generation: the route persists enrichmentStatus 'pending'
+      // atomically with the feedback write (local sessions never enqueue).
+      if (sessionId && sessionId !== 'local') setEnrichmentStatus('pending')
 
       // Persist feedback + ensure session is marked completed (recovers from stuck in_progress).
       //
@@ -1342,7 +1443,9 @@ function FeedbackPageInner() {
     { key: 'questions', label: 'Scores' },
     ...(hasAnalysisSource || analysis ? [{ key: 'analysis' as const, label: 'Multimodal Analysis' }] : []),
     { key: 'overview', label: 'Feedback' },
-    ...(hasLearningContent ? [{ key: 'learning' as const, label: 'Learning' }] : []),
+    ...(hasLearningContent || enrichmentPhase === 'generating'
+      ? [{ key: 'learning' as const, label: 'Learning' }]
+      : []),
   ]
 
   const maxQuestionIndex =
@@ -1707,7 +1810,7 @@ function FeedbackPageInner() {
         )}
 
         {/* Learning tab — closing/action surface (drill traceability, ideal-answer comparison) */}
-        {activeTab === 'learning' && (
+        {activeTab === 'learning' && (hasLearningContent ? (
           <LearningTab
             feedback={feedback}
             data={data}
@@ -1715,7 +1818,18 @@ function FeedbackPageInner() {
             onQuestionClick={handleQuestionRefToScoresTab}
             maxQuestionIndex={maxQuestionIndex}
           />
-        )}
+        ) : (
+          <section className="surface-card-bordered p-6 animate-fade-in" data-testid="enrichment-generating">
+            <p className="text-subheading text-[#0f1419] animate-pulse">
+              Preparing your ideal answers and practice drills…
+            </p>
+            <p className="text-body text-[#71767b] mt-1">
+              We study each answer that needs work and write a strong-answer
+              outline for it. This usually lands within a couple of minutes —
+              you can explore your scores meanwhile; this tab updates itself.
+            </p>
+          </section>
+        ))}
 
         </div>{/* close #tab-content */}
 

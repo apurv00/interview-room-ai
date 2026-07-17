@@ -159,6 +159,15 @@ export interface IInterviewSession extends Document {
   // succeeded/failed/skipped — so it can show a retry affordance instead
   // of a stuck banner. All fields optional so legacy sessions remain
   // valid; readers treat undefined as "no attempt yet recorded".
+  // ── Feedback enrichment status (2026-07-17, async enrichment) ────────
+  // Lifecycle of the feedback/enrich.requested Inngest job that writes
+  // feedback.ideal_answers + feedback.drill_recommendations at full quality
+  // off the request path. Same design as pathwayGenerationStatus below:
+  // optional fields, undefined = legacy session / no attempt recorded.
+  enrichmentStatus?: 'pending' | 'running' | 'succeeded' | 'failed'
+  enrichmentError?: string
+  enrichmentCompletedAt?: Date
+
   pathwayGenerationStatus?: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
   pathwayGenerationError?: string
   pathwayGenerationStartedAt?: Date
@@ -319,6 +328,12 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     wasTruncatedByTimer: { type: [Boolean], default: undefined },
 
     // Pathway regeneration status — see interface comment for rationale.
+    enrichmentStatus: {
+      type: String,
+      enum: ['pending', 'running', 'succeeded', 'failed'],
+    },
+    enrichmentError: { type: String, maxlength: 500 },
+    enrichmentCompletedAt: { type: Date },
     pathwayGenerationStatus: {
       type: String,
       enum: ['pending', 'running', 'succeeded', 'failed', 'skipped'],

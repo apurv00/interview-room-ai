@@ -2092,7 +2092,25 @@ a dynamic medium. Decision: judgment slots run HIGH in code now (`generate-feedb
 _(2026-07-17 correction: `fusion-analysis` was misclassified — it merges already-computed signals
 into a fixed JSON shape, not judgment, and HIGH overran its 30s caller timeout, failing prod
 analyses for 6 days. Restored to NONE + maxTokens 3000, its pre-cutover no-reasoning envelope;
-incident log in AI_ANALYSIS.md §8.)_
+incident log in AI_ANALYSIS.md §8. Same-day second find, same class: generate-feedback's
+ENRICHMENT sub-call reuses the feedback slot and silently inherited HIGH, overrunning its 18s
+bound on every run since the cutover — feedback degraded to core-only (no ideal_answers/drills)
+and burned 18s of the feedback wait. Pinned per-call to LOW (founder call: exemplar quality
+deserves a small deliberation budget; deeper reasoning belongs in an async backfill, never the
+inline wait), bound resized 18s→30s with success-duration logging — then SUPERSEDED same day by the async
+redesign: enrichment left the request path entirely (feedback/enrich.requested Inngest job,
+enrichFeedbackJob) and runs at reasoningEffort HIGH with a 12k budget sized for the 30-minute
+worst case (10 weak questions + reasoning tokens billed against output). Founder ruling:
+teaching content never trades quality against request latency — there is no caller-side race
+anywhere in the enrichment path anymore. Full-slot audit had also found a THIRD call
+site: the drill-mode JIT ideal-answer backfill (modules/learn/services/idealAnswerBackfill.ts,
+6s interactive cap) — 100% timed out since the cutover, silently downgrading Strong Answer
+Outlines to QuestionInsightStrip; that blocking JIT call is now DELETED — a missing outline
+enqueues the same async job (reason 'drill-backfill'), so historical sessions regenerate at the
+same HIGH quality instead of a lesser interactive tier. All other effort-carrying
+slots audited clean (evaluate-answer's 10-15s client bounds comfortably fit its 'low' calls).
+Audit rule: any slot-effort change must enumerate EVERY call site of that slot — sub-calls
+inherit silently.)_
 generation runs medium/low (`generate-question` medium, `evaluate-answer` low — 5s client abort);
 real-time conversational + streaming slots run NONE (`turn-router`, `answer-candidate-question`,
 `coach-notes`, `learn.drill-evaluate` — reasoning precedes the first output/stream token, so there

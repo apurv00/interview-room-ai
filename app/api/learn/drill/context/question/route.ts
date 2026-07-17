@@ -7,7 +7,7 @@ import { InterviewSession } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import type { AnswerEvaluation, FeedbackData } from '@shared/types'
 import { getDomainLabel } from '@interview/config/interviewConfig'
-import { generateIdealAnswerForQuestion } from '@learn/services/idealAnswerBackfill'
+import { inngest } from '@shared/services/inngest'
 
 /**
  * Below this average score we treat the question as "weak enough" to
@@ -82,11 +82,13 @@ export async function GET(req: NextRequest) {
         'config.interviewType': 1,
         evaluations: 1,
         'feedback.ideal_answers': 1,
+        enrichmentStatus: 1,
       })
       .lean<{
         config?: { role?: string; interviewType?: string }
         evaluations?: AnswerEvaluation[]
         feedback?: Pick<FeedbackData, 'ideal_answers'>
+        enrichmentStatus?: string
       }>()
 
     if (!doc) {
@@ -98,68 +100,36 @@ export async function GET(req: NextRequest) {
       (ia) => ia.questionIndex === questionIndex,
     )
 
-    // JIT backfill — the batch enrichment in /api/generate-feedback
-    // routinely produces partial coverage (the LLM picks the worst few
-    // weak questions and skips others) even though the prompt asks for
-    // one entry per weak question. Pre-2026-05-19 sessions also only
-    // have top-3 outlines from the older enrichment path. When this
-    // route is asked about a weak question (avg < 60) that has no
-    // outline, generate ONE on demand and persist it to the session.
-    //
-    // Costs: ~$0.0005 per backfilled question on haiku; capped at 6s
-    // wall-clock so the drill page never feels frozen. Race-safe via
-    // a $ne update filter — concurrent requests for the same question
-    // result in at most one DB write; the loser wastes its LLM call
-    // (~$0.0005) but doesn't corrupt state.
+    // Missing outline → enqueue the FULL-quality async enrichment job for
+    // this session instead of the old 6s user-blocking JIT LLM call
+    // (removed 2026-07-17; it inherited reasoningEffort 'high' at the
+    // GPT-5.6 cutover and timed out on 100% of runs — third call site of
+    // the feedback slot). The job regenerates the complete ideal_answers
+    // set at 'high' and persists it; THIS request returns the existing
+    // QuestionInsightStrip fallback immediately, and the outline is there
+    // for the next visit (or the page's own refresh). Dedupe: skip the
+    // send when a job is already pending/running for this session.
     if (!idealAnswer && evaluation) {
       const avg = avgEvaluationScore(evaluation)
-      if (avg < WEAK_QUESTION_SCORE_THRESHOLD && evaluation.question && doc.config?.role) {
-        const role = doc.config.role
-        const interviewType = doc.config.interviewType ?? 'screening'
-        let domainLabel: string
-        try {
-          domainLabel = getDomainLabel(role)
-        } catch {
-          domainLabel = role
-        }
-        const generated = await generateIdealAnswerForQuestion({
-          question: evaluation.question,
-          candidateAnswer: String(evaluation.answer ?? ''),
-          domainLabel,
-          interviewType,
-          sessionId,
-          questionIndex,
-        })
-        if (generated) {
-          const entry = {
-            questionIndex,
-            strongAnswer: generated.strongAnswer,
-            keyElements: generated.keyElements,
-          }
-          try {
-            // Conditional $push — only writes if no entry for this
-            // questionIndex already exists. Two concurrent backfills:
-            // the second's filter doesn't match and updateOne returns
-            // matchedCount=0, leaving the first write intact.
-            await InterviewSession.updateOne(
-              {
-                _id: new mongoose.Types.ObjectId(sessionId),
-                userId: new mongoose.Types.ObjectId(session.user.id),
-                'feedback.ideal_answers.questionIndex': { $ne: questionIndex },
-              },
-              { $push: { 'feedback.ideal_answers': entry } },
-            )
-          } catch (persistErr) {
-            // Persist failure is non-fatal — we still return the
-            // generated outline so the user sees it on THIS request.
-            // The next visit re-triggers JIT backfill.
+      const jobActive = doc.enrichmentStatus === 'pending' || doc.enrichmentStatus === 'running'
+      if (avg < WEAK_QUESTION_SCORE_THRESHOLD && !jobActive) {
+        inngest
+          .send({
+            name: 'feedback/enrich.requested',
+            data: { sessionId, userId: session.user.id, reason: 'drill-backfill', questionIndex },
+          })
+          .then(() =>
+            InterviewSession.updateOne(
+              { _id: new mongoose.Types.ObjectId(sessionId) },
+              { $set: { enrichmentStatus: 'pending' } },
+            ),
+          )
+          .catch((err) =>
             logger.warn(
-              { err: persistErr, sessionId, questionIndex },
-              'ideal_answer backfill: persist failed; returning ephemeral outline',
-            )
-          }
-          idealAnswer = entry
-        }
+              { err, sessionId, questionIndex },
+              'drill-backfill enrichment enqueue failed; falling back to insight strip',
+            ),
+          )
       }
     }
 

@@ -373,7 +373,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
 
     expect(res.status).toBe(200)
     // LLM ran normally — one core call plus best-effort enrichment.
-    expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(mockCompletion).toHaveBeenCalledTimes(1) // core only — enrichment is async (2026-07-17)
   })
 
   it('F-4: pre-flight DB read failure is non-fatal (falls through to normal pipeline)', async () => {
@@ -393,7 +393,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
 
     expect(res.status).toBe(200)
     // Pipeline still runs — pre-flight is best-effort, not a gate.
-    expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(mockCompletion).toHaveBeenCalledTimes(1) // core only — enrichment is async (2026-07-17)
     // Warn was logged (but not error — non-fatal).
     expect(mockWarn).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: expect.any(String) }),
@@ -425,7 +425,7 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     // Pipeline continued normally — findOne returned null means no
     // concurrent writer visible to this user, so we generate freshly.
-    expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(mockCompletion).toHaveBeenCalledTimes(1) // core only — enrichment is async (2026-07-17)
   })
 
   // ─── F-3: aggregate side-effect summary log ─────────────────────────────
@@ -455,8 +455,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(7) // persist + jobsEvidence (Wave 4.3) + practiceStats + competency + sessionSummary + masteryTracking + universalPlanAdvance; pathwayPlan enqueued after persist
-    expect(context.succeeded).toBe(7)
+    expect(context.totalSideEffects).toBe(8) // persist + enrichment enqueue (2026-07-17) + jobsEvidence (Wave 4.3) + practiceStats + competency + sessionSummary + masteryTracking + universalPlanAdvance; pathwayPlan enqueued after persist
+    expect(context.succeeded).toBe(8)
     expect(context.failedCount).toBe(0)
     expect(context.failed).toBeUndefined()
     expect(context.sessionId).toBe('507f1f77bcf86cd799439011')
@@ -488,8 +488,8 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     )
     expect(summaryCall).toBeTruthy()
     const [context] = summaryCall as [Record<string, unknown>, string]
-    expect(context.totalSideEffects).toBe(7) // pathwayPlan no longer in sideEffects[] (PR #398); +jobsEvidence (Wave 4.3)
-    expect(context.succeeded).toBe(6)
+    expect(context.totalSideEffects).toBe(8) // pathwayPlan no longer in sideEffects[] (PR #398); +jobsEvidence (Wave 4.3); +enrichment enqueue (2026-07-17)
+    expect(context.succeeded).toBe(7) // 8 total (incl. enrichment enqueue) − 1 failed
     expect(context.failedCount).toBe(1)
     const failed = context.failed as Array<{ name: string; reason: string }>
     expect(failed.map((f) => f.name)).toEqual(['competency'])
@@ -531,3 +531,4 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     expect(warnCall).toBeFalsy()
   })
 })
+

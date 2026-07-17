@@ -37,10 +37,8 @@ import { computeCompletionAdjustment, type EndReason } from '@interview/services
 import { compactTranscript } from '@interview/services/eval/transcriptCompactor'
 import { computeEngagementContext } from '@interview/services/eval/engagementContext'
 import { getPlannedQuestionCountForFeedback } from '@interview/services/eval/sessionScoringPolicy'
-import {
-  FEEDBACK_CORE_RESPONSE_FORMAT,
-  FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
-} from '@interview/config/feedbackJsonSchemas'
+import { FEEDBACK_CORE_RESPONSE_FORMAT } from '@interview/config/feedbackJsonSchemas'
+import { inngest } from '@shared/services/inngest'
 import type { Duration } from '@shared/types'
 import { z } from 'zod'
 
@@ -124,156 +122,12 @@ function requireCoreFeedback(result: FeedbackCompletionResult): FeedbackData {
   return feedback
 }
 
-function scoreForEvaluation(e: Record<string, unknown>): number {
-  return Math.round((
-    (Number(e.relevance) || 0) +
-    (Number(e.structure) || 0) +
-    (Number(e.specificity) || 0) +
-    (Number(e.ownership) || 0)
-  ) / 4)
-}
-
-/**
- * Build the LLM context block listing weak questions for enrichment.
- *
- * 2026-05-19: widened from "top-3 weakest only" to "all questions
- * with avg < 60". User reported the prior behaviour as a visible bug:
- * drilling a weak question that wasn't in the top-3 produced no
- * strong-answer outline, just the lighter QuestionInsightStrip
- * fallback. The new behaviour generates one ideal_answer per weak
- * question — quadrupling typical enrichment token cost but matching
- * the user's mental model ("if it's weak enough to drill, it should
- * have an outline").
- *
- * `cap` is a hard upper bound (default 10) so a session with an
- * unusually large number of weak questions doesn't blow past the
- * enrichment LLM's maxTokens. Beyond 10 weak questions the user has
- * bigger problems than missing outlines.
- */
-function weakestQuestionContext(
-  evaluations: Array<Record<string, unknown>>,
-  cap = 10,
-): string {
-  return evaluations
-    .filter((e) => e.status !== 'failed')
-    .map((e) => ({ e, score: scoreForEvaluation(e) }))
-    // Only weak questions (avg < 60) need a strong-answer outline.
-    // Above that threshold the candidate's answer is already passable;
-    // outline-style guidance dilutes the LLM's focus.
-    .filter(({ score }) => score < 60)
-    .sort((a, b) => a.score - b.score || Number(a.e.questionIndex ?? 0) - Number(b.e.questionIndex ?? 0))
-    .slice(0, cap)
-    .map(({ e, score }) => {
-      const questionIndex = Number(e.questionIndex ?? 0)
-      const question = String(e.question ?? '').replace(/\s+/g, ' ').slice(0, 320)
-      const answer = String(e.answerSummary || e.answer || '').replace(/\s+/g, ' ').slice(0, 700)
-      return `Q${questionIndex + 1} (avg ${score})\nQuestion: ${question}\nAnswer evidence: ${answer}`
-    })
-    .join('\n\n')
-}
-
-// Default upper bound for the enrichment call. Enrichment is optional —
-// ideal_answers and drill_recommendations are nice-to-have, not required
-// for valid feedback. Awaiting it unbounded risks pushing the route past
-// `maxDuration=60` and losing persist + side effects of an otherwise
-// valid core scoring (Codex P1 on PR #349).
-//
-// 2026-05-19: bumped 8s → 18s to cover the larger enrichment payload
-// now that ideal_answers are generated for ALL weak questions (avg < 60),
-// not just the top-3. Typical session has 4–8 weak questions; the
-// model usually finishes within 8–12s but the headroom protects
-// against tail latencies. Still well below the 60s route maxDuration.
-const ENRICHMENT_TIMEOUT_MS = 18000
-
-async function generateOptionalEnrichment(params: {
-  systemPrompt: string
-  domainLabel: string
-  interviewType: string
-  evaluations: Array<Record<string, unknown>>
-  sessionId?: string
-  timeoutMs?: number
-}): Promise<{
-  ideal_answers: Array<Record<string, unknown>>
-  drill_recommendations: Array<Record<string, unknown>>
-  usage: { inputTokens: number; outputTokens: number }
-}> {
-  const empty = {
-    ideal_answers: [] as Array<Record<string, unknown>>,
-    drill_recommendations: [] as Array<Record<string, unknown>>,
-    usage: { inputTokens: 0, outputTokens: 0 },
-  }
-  const targetContext = weakestQuestionContext(params.evaluations)
-  if (!targetContext) {
-    return empty
-  }
-
-  // Promise.race-with-timeout: the underlying LLM call cannot be aborted
-  // (providers don't accept AbortSignal in this codebase), so a slow
-  // request keeps running as a "ghost" until the lambda terminates. But
-  // the response path stops waiting after `timeoutMs`, which is what
-  // protects the persist + side-effect block below.
-  const timeoutMs = params.timeoutMs ?? ENRICHMENT_TIMEOUT_MS
-  let timeoutHandle: NodeJS.Timeout | undefined
-  try {
-    const result = await Promise.race([
-      completion({
-        taskSlot: 'interview.generate-feedback',
-        system: `${params.systemPrompt}\n\nGenerate only supplemental coaching enrichment. Keep it concise and schema-conformant.`,
-        messages: [{
-          role: 'user',
-          content: `Create supplemental feedback for this ${params.domainLabel} ${params.interviewType} interview.
-
-Weak-question evidence (all answers with avg score < 60):
-${targetContext}
-
-Return ONE ideal_answer for EACH weak question listed above (match by questionIndex), plus 2-3 drill_recommendations. Each drill must have exactly two practice questions.
-
-For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based questionIndex values from the weak-question evidence above that this drill addresses. Use an empty array \`[]\` ONLY when the drill is genuinely cross-cutting (e.g. a general delivery drill not tied to any specific question). Prefer 1-2 entries when a clear question-to-drill mapping exists.`,
-        }],
-        // 2026-05-19: bumped 1800 → 5000 alongside widening to all
-        // weak questions. Each ideal_answer is ~250-350 tokens
-        // (strongAnswer paragraph + 3-5 keyElements chips); a typical
-        // 4-8 weak-question session needs ~1500-2800 tokens for
-        // ideal_answers, plus ~500 for drill_recommendations, plus
-        // headroom for the schema-validation buffer.
-        // 2026-07-01: 5000 → 7000 — the question count rose to 30, so the
-        // weak-question cap (10) now binds far more often, pushing the
-        // enrichment payload near the old ceiling.
-        // 2026-07-11: 7000 → 7800 — the feedback slot runs
-        // reasoningEffort:'high' on gpt-5.6-luna and reasoning tokens
-        // bill against max_completion_tokens; +800 keeps output headroom.
-        maxTokens: 7800,
-        responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
-      }),
-      new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(
-          () => reject(new Error(`Feedback enrichment timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        )
-      }),
-    ])
-    if (timeoutHandle) clearTimeout(timeoutHandle)
-    if (result.truncated) {
-      throw new Error('Feedback enrichment response was truncated')
-    }
-    const parsed = parseJsonRecord(result.text || '{}')
-    return {
-      ideal_answers: Array.isArray(parsed.ideal_answers) ? parsed.ideal_answers : [],
-      drill_recommendations: Array.isArray(parsed.drill_recommendations) ? parsed.drill_recommendations : [],
-      usage: {
-        inputTokens: result.inputTokens ?? 0,
-        outputTokens: result.outputTokens ?? 0,
-      },
-    }
-  } catch (err) {
-    if (timeoutHandle) clearTimeout(timeoutHandle)
-    aiLogger.warn(
-      { err, sessionId: params.sessionId, evaluationCount: params.evaluations.length, timeoutMs },
-      'generate-feedback enrichment failed or timed out; continuing with core feedback',
-    )
-    return empty
-  }
-}
+// Enrichment helpers (scoreForEvaluation, weakestQuestionContext, the
+// inline generateOptionalEnrichment and its timeout) moved to
+// modules/interview/services/eval/feedbackEnrichment.ts on 2026-07-17 when
+// enrichment left the request path for the `feedback/enrich.requested`
+// Inngest job (enrichFeedbackJob). Full history in that module + the
+// INTERVIEW_FLOW.md reasoning-tiers correction.
 
 // `computeEngagementContext` used to live here as an inline helper.
 // It moved to `modules/interview/services/eval/engagementContext.ts`
@@ -882,21 +736,14 @@ You repair malformed interview feedback JSON. The output must match the supplied
       const feedbackTruncated = false
       const raw = result.text || '{}'
 
-      const enrichment = await generateOptionalEnrichment({
-        systemPrompt,
-        domainLabel,
-        interviewType,
-        evaluations: evaluations as Array<Record<string, unknown>>,
-        sessionId: body.sessionId,
-      })
-      feedback.ideal_answers = enrichment.ideal_answers as FeedbackData['ideal_answers']
-      feedback.drill_recommendations = enrichment.drill_recommendations as FeedbackData['drill_recommendations']
-      // Codex P2 on PR #349: fold enrichment tokens into the
-      // api_call_feedback usage record below so cost/usage analytics
-      // capture both LLM calls. Enrichment returns { inputTokens: 0,
-      // outputTokens: 0 } on the empty/timeout/failure paths, so the
-      // addition is a no-op when enrichment didn't actually run.
-      const enrichmentTokens = enrichment.usage
+      // Enrichment moved OFF the request path (2026-07-17): ideal_answers +
+      // drill_recommendations are generated at full quality by the
+      // feedback/enrich.requested Inngest job. The response ships with empty
+      // arrays + enrichmentStatus 'pending' on the session; the feedback page
+      // polls and swaps the sections in when the job lands. The user never
+      // waits on teaching-content generation again.
+      feedback.ideal_answers = [] as FeedbackData['ideal_answers']
+      feedback.drill_recommendations = [] as FeedbackData['drill_recommendations']
 
       // G.1 telemetry — snapshot the model's raw values BEFORE any of the
       // server-side deterministic overrides below. This is the only place
@@ -1217,15 +1064,14 @@ You repair malformed interview feedback JSON. The output must match the supplied
         user,
         type: 'api_call_feedback',
         sessionId: body.sessionId,
-        // Codex P2 on PR #349: sum core + repair (when fired) + enrichment
-        // tokens so a single api_call_feedback record reflects the full
-        // cost of a successful feedback generation. coreInputTokens /
-        // coreOutputTokens accumulate across the core and structured-
-        // repair completions (see the catch branch above). enrichmentTokens
-        // is {0,0} when enrichment didn't run (no targets, timeout, or
-        // failure), so that addition is a no-op in those paths.
-        inputTokens: coreInputTokens + enrichmentTokens.inputTokens,
-        outputTokens: coreOutputTokens + enrichmentTokens.outputTokens,
+        // Core + structured-repair tokens only (they accumulate in
+        // coreInputTokens/coreOutputTokens — see the catch branch above).
+        // Enrichment left the request path 2026-07-17 and now bills its own
+        // api_call_feedback record from enrichFeedbackJob (supersedes the
+        // Codex P2 #349 fold-in, which existed because both calls shared
+        // this request).
+        inputTokens: coreInputTokens,
+        outputTokens: coreOutputTokens,
         modelUsed: result.model,
         durationMs: Date.now() - startTime,
         success: true,
@@ -1364,12 +1210,43 @@ You repair malformed interview feedback JSON. The output must match the supplied
             feedback,
             status: 'completed',
             completedAt: new Date(),
+            // Async enrichment (2026-07-17): the job flips this to
+            // running → succeeded/failed; the feedback page polls it.
+            enrichmentStatus: 'pending',
           }),
         )
         fireAndTrack(
           'persist',
           persistPromise,
           'Failed to persist feedback to session',
+        )
+
+        // Full-quality enrichment generation (ideal_answers + drills) —
+        // fire the job AFTER persist is scheduled; the job re-reads
+        // evaluations from the session doc (minimal-event discipline,
+        // Codex P2 #379 pattern). Inngest owns retries; onFailure marks
+        // enrichmentStatus 'failed' so the page never hangs on 'pending'.
+        fireAndTrack(
+          'enrichment',
+          persistPromise.then(() =>
+            inngest.send({
+              name: 'feedback/enrich.requested',
+              data: { sessionId, userId: user.id, reason: 'post-feedback' },
+            }).catch(async (err) => {
+              // Codex P2 (#552): the persist already wrote 'pending'; if the
+              // enqueue fails there is no job to flip it, the page would
+              // poll to timeout on every visit, and the drill route's
+              // dedupe would skip re-enqueues forever. Mark failed (the
+              // drill route re-enqueues on the next drill visit) and
+              // rethrow so the side-effect rail counts the failure.
+              await InterviewSession.findByIdAndUpdate(sessionId, {
+                enrichmentStatus: 'failed',
+                enrichmentError: `enqueue failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
+              }).catch(() => {})
+              throw err
+            }),
+          ),
+          'Feedback enrichment enqueue failed',
         )
 
         // G.14: flag-gated practiceStats write. When

@@ -1,6 +1,7 @@
 import { serve } from 'inngest/next'
 import { inngest } from '@shared/services/inngest'
 import { analysisJob } from '@interview/jobs/analysisJob'
+import { enrichFeedbackJob } from '@interview/jobs/enrichFeedbackJob'
 import { emailDigestJob } from '@learn/jobs/emailDigestJob'
 import { regeneratePlansJob } from '@learn/jobs/regeneratePlansJob'
 import { keepMongoWarmJob } from '@learn/jobs/keepMongoWarm'
@@ -36,5 +37,5 @@ export const dynamic = 'force-dynamic'
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [analysisJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsBoardProbeJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob, jobsAtsCheckJob, jobsEmailE0Job, jobsEmailSweepJob, jobsEvidenceAttributionJob, jobsEvidenceReconcileJob, jobsLinkCheckJob],
+  functions: [analysisJob, enrichFeedbackJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsBoardProbeJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob, jobsAtsCheckJob, jobsEmailE0Job, jobsEmailSweepJob, jobsEvidenceAttributionJob, jobsEvidenceReconcileJob, jobsLinkCheckJob],
 })
