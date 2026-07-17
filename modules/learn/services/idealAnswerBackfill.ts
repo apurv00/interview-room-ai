@@ -99,16 +99,30 @@ Write the outline and key elements for this one question.`
 
   let timeoutHandle: NodeJS.Timeout | undefined
   try {
-    const result = await Promise.race([
-      completion({
+    const llmCall = completion({
         taskSlot: 'interview.generate-feedback',
+        // JIT backfill blocks the drill page (6s cap below, by design):
+        // without this per-call override it inherits the slot's
+        // reasoningEffort 'high', which cannot finish inside 6s — every
+        // backfill timed out 2026-07-11→17 (third call site of the slot
+        // found in the full-slot audit; same class as fusion/enrichment).
+        // 'none' keeps the interactive path snappy; deep-reasoning
+        // exemplars belong to the async enrichment backfill, never to a
+        // user-blocking call.
+        reasoningEffort: 'none',
         system,
         messages: [{ role: 'user', content: userPrompt }],
         // Single-question outlines fit in 600 tokens easily. Headroom
         // keeps a verbose model from truncating.
         maxTokens: 900,
         responseFormat: SINGLE_IDEAL_ANSWER_RESPONSE_FORMAT,
-      }),
+      })
+    // Same ghost-promise guard as the batch enrichment: the losing racer
+    // cannot be aborted and its post-teardown rejection would surface as
+    // an unhandledRejection.
+    llmCall.catch(() => {})
+    const result = await Promise.race([
+      llmCall,
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
           () => reject(new Error(`ideal_answer backfill timed out after ${BACKFILL_TIMEOUT_MS}ms`)),

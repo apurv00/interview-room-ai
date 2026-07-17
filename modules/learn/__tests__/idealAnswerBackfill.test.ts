@@ -142,3 +142,29 @@ describe('generateIdealAnswerForQuestion', () => {
     })
   })
 })
+
+
+// 2026-07-17 full-slot audit: this JIT call is the THIRD call site of the
+// interview.generate-feedback slot and silently inherited reasoningEffort
+// 'high' at the GPT-5.6 cutover — 'high' cannot finish inside the 6s
+// interactive cap, so every backfill timed out 2026-07-11→17. Pin the
+// user-blocking path to 'none'.
+describe('backfill call envelope (2026-07-17)', () => {
+  it('pins the JIT call to reasoningEffort none', async () => {
+    mockCompletion.mockResolvedValue({
+      text: JSON.stringify({ strongAnswer: 'I led with the metric and owned the tradeoff clearly.', keyElements: ['quantified impact', 'owned the decision', 'clear tradeoff'] }),
+      truncated: false, inputTokens: 100, outputTokens: 80, model: 'm', provider: 'p', usedFallback: false,
+    })
+    const { generateIdealAnswerForQuestion } = await import('../services/idealAnswerBackfill')
+    const res = await generateIdealAnswerForQuestion({
+      question: 'Tell me about a launch you led.',
+      candidateAnswer: 'We launched a thing.',
+      domainLabel: 'Product Manager',
+      interviewType: 'screening',
+    })
+    expect(res).not.toBeNull()
+    const params = mockCompletion.mock.calls.at(-1)![0] as { reasoningEffort?: string; maxTokens?: number }
+    expect(params.reasoningEffort).toBe('none')
+    expect(params.maxTokens).toBe(900)
+  })
+})
