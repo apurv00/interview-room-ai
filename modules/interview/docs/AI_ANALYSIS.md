@@ -260,7 +260,8 @@ the "always STAR" ternary)._
 **2026-07-17 — Fusion step broken by the GPT-5.6 cutover (prod, 6 days).**
 The 2026-07-11 model cutover put `interview.fusion-analysis` on
 `gpt-5.6-luna` with `reasoningEffort: 'high'` ("judgment slot" tier), against
-`FUSION_TIMEOUT_MS = 30_000` sized in the Haiku era (3–5s calls). High-effort
+`FUSION_TIMEOUT_MS = 30_000` sized for `gpt-5.4-mini` (the slot's model until
+the cutover — latency-class mini, seconds per call). High-effort
 reasoning overran the timeout on most runs (`Fusion analysis timed out after
 30000ms`, stepId `run-fusion-enhanced`) and, when it did answer, its reasoning
 preamble broke the strict JSON parse (`Fusion analysis returned no valid
