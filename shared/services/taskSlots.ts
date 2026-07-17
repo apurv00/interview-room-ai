@@ -90,7 +90,13 @@ export const TASK_SLOT_DEFAULTS: Record<
   'interview.code-run':             { model: 'gpt-5.6-luna', maxTokens: 3000, provider: 'openai', reasoningEffort: 'low' },
   'interview.coach-notes':          { model: 'gpt-5.6-luna', maxTokens: 500, provider: 'openai', reasoningEffort: 'none' },
   'interview.jd-extract':           { model: 'gpt-5.6-luna', maxTokens: 2500, provider: 'openai', reasoningEffort: 'low' },
-  'interview.fusion-analysis':      { model: 'gpt-5.6-luna', maxTokens: 3600, provider: 'openai', reasoningEffort: 'high' },
+  // Fusion is structured signal-merging, not judgment, and never used
+  // reasoning pre-cutover (gpt-5.4-mini, no effort field): 'high' blew the 30s
+  // fusion timeout on most runs (prod incident 2026-07-11→17) and its
+  // reasoning preamble broke the strict JSON parse. 'none' + the pre-cutover
+  // 3000 cap restore the proven latency envelope (3600 existed only as
+  // reasoning-token headroom — OpenAI counts them against max output).
+  'interview.fusion-analysis':      { model: 'gpt-5.6-luna', maxTokens: 3000, provider: 'openai', reasoningEffort: 'none' },
   'resume.enhance-section':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.enhance-bullets':         { model: 'claude-sonnet-4-6', maxTokens: 1000, provider: 'anthropic' },
   'resume.generate-full':           { model: 'claude-sonnet-4-6', maxTokens: 3000, provider: 'anthropic' },

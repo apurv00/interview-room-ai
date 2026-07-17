@@ -139,10 +139,11 @@ The \`coachingTips\` (string array) and \`coachingTipsRich\` (object array) MUST
     lowConfidenceWords,
   )
 
-  // 30s safety timeout to bound the worst case. With maxDuration=60 on the
-  // inline fallback path, anything longer than 30s for fusion alone risks
-  // hitting the function timeout. Failing here lets the client retry cleanly
-  // instead of waiting until Vercel kills the function.
+  // Safety timeout to bound the worst case, sized for the slot's proven
+  // no-reasoning envelope (reasoningEffort 'none', maxTokens 3000 — the
+  // pre-cutover contract): reasoning tiers broke this in prod 2026-07-11→17
+  // ('high' overran 30s on most runs). If the slot's model/effort/maxTokens
+  // change, re-verify this bound against measured step durations first.
   const FUSION_TIMEOUT_MS = 30_000
   const response = await Promise.race([
     completion({
