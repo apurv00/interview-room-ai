@@ -174,16 +174,20 @@ function weakestQuestionContext(
 
 // Default upper bound for the enrichment call. Enrichment is optional —
 // ideal_answers and drill_recommendations are nice-to-have, not required
-// for valid feedback. Awaiting it unbounded risks pushing the route past
-// `maxDuration=60` and losing persist + side effects of an otherwise
-// valid core scoring (Codex P1 on PR #349).
+// for valid feedback. Awaiting it unbounded risks losing persist + side
+// effects of an otherwise valid core scoring (Codex P1 on PR #349).
 //
 // 2026-05-19: bumped 8s → 18s to cover the larger enrichment payload
 // now that ideal_answers are generated for ALL weak questions (avg < 60),
-// not just the top-3. Typical session has 4–8 weak questions; the
-// model usually finishes within 8–12s but the headroom protects
-// against tail latencies. Still well below the 60s route maxDuration.
-const ENRICHMENT_TIMEOUT_MS = 18000
+// not just the top-3.
+// 2026-07-17: 18s → 30s. The GPT-5.6 cutover made the enrichment call
+// inherit reasoningEffort 'high' from the slot, overrunning 18s on every
+// run since 2026-07-11 (silently degrading feedback to core-only). The
+// call is now pinned to 'none' below; 30s covers gpt-5.6-luna decoding
+// up to 10 ideal answers with tail margin, and the route's maxDuration
+// is 300 now — the old "60s" in this comment was stale. Success-path
+// duration is logged; re-size from that data, not from guesses.
+const ENRICHMENT_TIMEOUT_MS = 30_000
 
 async function generateOptionalEnrichment(params: {
   systemPrompt: string
@@ -214,10 +218,15 @@ async function generateOptionalEnrichment(params: {
   // protects the persist + side-effect block below.
   const timeoutMs = params.timeoutMs ?? ENRICHMENT_TIMEOUT_MS
   let timeoutHandle: NodeJS.Timeout | undefined
+  const startedAt = Date.now()
   try {
-    const result = await Promise.race([
-      completion({
+    const llmCall = completion({
         taskSlot: 'interview.generate-feedback',
+        // Enrichment is content generation (ideal answers + drills), not
+        // judgment: without this per-call override it inherits the slot's
+        // reasoningEffort 'high', which overran the enrichment timeout on
+        // every run 2026-07-11→17 (same failure class as the fusion slot).
+        reasoningEffort: 'none',
         system: `${params.systemPrompt}\n\nGenerate only supplemental coaching enrichment. Keep it concise and schema-conformant.`,
         messages: [{
           role: 'user',
@@ -242,9 +251,20 @@ For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based que
         // 2026-07-11: 7000 → 7800 — the feedback slot runs
         // reasoningEffort:'high' on gpt-5.6-luna and reasoning tokens
         // bill against max_completion_tokens; +800 keeps output headroom.
-        maxTokens: 7800,
+        // 2026-07-17: 7800 → 7000 — this call is pinned to 'none' above,
+        // so the reasoning-token headroom is no longer spent from budget.
+        maxTokens: 7000,
         responseFormat: FEEDBACK_ENRICHMENT_RESPONSE_FORMAT,
-      }),
+      })
+    // The losing racer cannot be aborted (providers accept no AbortSignal
+    // here), so after a timeout it keeps running as a ghost — and its
+    // eventual rejection, landing after the request context is torn down,
+    // surfaced as an unhandledRejection (pino msgPrefix TypeError observed
+    // in prod + staging 2026-07-17). Absorb it explicitly; the ghost's
+    // outcome is unusable by design.
+    llmCall.catch(() => {})
+    const result = await Promise.race([
+      llmCall,
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
           () => reject(new Error(`Feedback enrichment timed out after ${timeoutMs}ms`)),
@@ -257,6 +277,15 @@ For EACH drill_recommendation, populate \`targetQuestions\` with the 0-based que
       throw new Error('Feedback enrichment response was truncated')
     }
     const parsed = parseJsonRecord(result.text || '{}')
+    aiLogger.info(
+      {
+        sessionId: params.sessionId,
+        durationMs: Date.now() - startedAt,
+        idealAnswers: Array.isArray(parsed.ideal_answers) ? parsed.ideal_answers.length : 0,
+        outputTokens: result.outputTokens ?? 0,
+      },
+      'generate-feedback enrichment complete',
+    )
     return {
       ideal_answers: Array.isArray(parsed.ideal_answers) ? parsed.ideal_answers : [],
       drill_recommendations: Array.isArray(parsed.drill_recommendations) ? parsed.drill_recommendations : [],

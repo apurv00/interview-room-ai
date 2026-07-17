@@ -531,3 +531,34 @@ describe('POST /api/generate-feedback — G.6 idempotency lock', () => {
     expect(warnCall).toBeFalsy()
   })
 })
+
+// ─── 2026-07-17 enrichment envelope fix ─────────────────────────────────────
+// The GPT-5.6 cutover made the enrichment sub-call inherit the slot's
+// reasoningEffort 'high', overrunning its timeout on every run since
+// 2026-07-11 (feedback silently degraded to core-only). These pins keep the
+// enrichment call on the no-reasoning envelope its timeout is sized for.
+describe('POST /api/generate-feedback — enrichment call envelope', () => {
+  beforeEach(() => {
+    mockAcquire.mockReset()
+    mockRelease.mockReset()
+    mockCompletion.mockReset()
+  })
+
+  it('runs enrichment at reasoningEffort none with the reverted token budget', async () => {
+    mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
+    mockCompletion.mockResolvedValue(happyCompletion)
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200)
+
+    const enrichmentCall = mockCompletion.mock.calls.find(
+      (c) =>
+        typeof (c[0] as { system?: string })?.system === 'string' &&
+        (c[0] as { system: string }).system.includes('supplemental coaching enrichment'),
+    )
+    expect(enrichmentCall).toBeDefined()
+    const params = enrichmentCall![0] as { reasoningEffort?: string; maxTokens?: number }
+    expect(params.reasoningEffort).toBe('none')
+    expect(params.maxTokens).toBe(7000)
+  })
+})

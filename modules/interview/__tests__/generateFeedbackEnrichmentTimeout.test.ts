@@ -375,9 +375,10 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
 
   it('returns core feedback when enrichment hangs past the timeout (Codex P1)', async () => {
     // Core resolves immediately; enrichment hangs forever. With the
-    // 18000ms timeout (2026-05-19: bumped from 8s to cover the larger
-    // backfill payload) the route must still return a non-degraded
-    // core response without waiting for enrichment.
+    // 30000ms timeout (2026-07-17: bumped from 18s alongside pinning the
+    // enrichment call to reasoningEffort 'none' — see route comment) the
+    // route must still return a non-degraded core response without
+    // waiting for enrichment.
     mockCompletion.mockImplementation((opts: { responseFormat?: { name?: string } }) => {
       if (opts.responseFormat?.name === 'feedback_enrichment') {
         return new Promise(() => {}) // never resolves — simulates a hung provider
@@ -387,8 +388,8 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
 
     vi.useFakeTimers()
     const promise = POST(makeRequest())
-    // Advance past the 18s enrichment timeout deterministically.
-    await vi.advanceTimersByTimeAsync(18500)
+    // Advance past the 30s enrichment timeout deterministically.
+    await vi.advanceTimersByTimeAsync(30_500)
     vi.useRealTimers()
 
     const res = await promise
