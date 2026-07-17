@@ -281,6 +281,22 @@ describe('POST /api/generate-feedback — enrichment bounding (Codex P1) + token
     expect((persistCall![1] as { enrichmentStatus?: string }).enrichmentStatus).toBe('pending')
   })
 
+  it('marks enrichmentStatus failed when the enqueue rejects — pending is never orphaned (Codex P2)', async () => {
+    mockCompletion.mockResolvedValueOnce(coreResult())
+    mockInngestSend.mockRejectedValueOnce(new Error('inngest unavailable'))
+
+    const res = await POST(makeRequest())
+    expect(res.status).toBe(200) // enqueue failure never blocks feedback
+    await new Promise((r) => setImmediate(r))
+    await new Promise((r) => setImmediate(r))
+
+    const failWrite = mockFindByIdAndUpdate.mock.calls.find(
+      (c) => (c[1] as { enrichmentStatus?: string })?.enrichmentStatus === 'failed',
+    )
+    expect(failWrite).toBeDefined()
+    expect((failWrite![1] as { enrichmentError?: string }).enrichmentError).toContain('enqueue failed')
+  })
+
   it('bills only core tokens in api_call_feedback (enrichment bills from the job)', async () => {
     mockCompletion.mockResolvedValueOnce(coreResult())
 

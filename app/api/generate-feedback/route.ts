@@ -1232,6 +1232,18 @@ You repair malformed interview feedback JSON. The output must match the supplied
             inngest.send({
               name: 'feedback/enrich.requested',
               data: { sessionId, userId: user.id, reason: 'post-feedback' },
+            }).catch(async (err) => {
+              // Codex P2 (#552): the persist already wrote 'pending'; if the
+              // enqueue fails there is no job to flip it, the page would
+              // poll to timeout on every visit, and the drill route's
+              // dedupe would skip re-enqueues forever. Mark failed (the
+              // drill route re-enqueues on the next drill visit) and
+              // rethrow so the side-effect rail counts the failure.
+              await InterviewSession.findByIdAndUpdate(sessionId, {
+                enrichmentStatus: 'failed',
+                enrichmentError: `enqueue failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
+              }).catch(() => {})
+              throw err
             }),
           ),
           'Feedback enrichment enqueue failed',

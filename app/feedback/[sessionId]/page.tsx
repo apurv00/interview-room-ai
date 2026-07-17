@@ -269,6 +269,7 @@ function FeedbackPageInner() {
   // can legitimately take ~2 minutes — sized for the long-interview worst
   // case, not the 10-minute happy path. Mirrors the recording watcher.
   const [enrichmentPhase, setEnrichmentPhase] = useState<'idle' | 'generating' | 'done' | 'failed'>('idle')
+  const [enrichmentStatus, setEnrichmentStatus] = useState<string | null>(null)
   useEffect(() => {
     if (!sessionId || sessionId === 'local' || !feedback) return
     const hasContent =
@@ -276,6 +277,13 @@ function FeedbackPageInner() {
       (feedback.drill_recommendations?.length ?? 0) > 0
     if (hasContent) {
       setEnrichmentPhase('done')
+      return
+    }
+    // Codex P2 (#552): only watch when a job is actually active. Legacy
+    // sessions (no enrichmentStatus) and terminal states must never show
+    // the generating placeholder.
+    if (enrichmentStatus !== 'pending' && enrichmentStatus !== 'running') {
+      setEnrichmentPhase(enrichmentStatus === 'failed' ? 'failed' : 'idle')
       return
     }
     let cancelled = false
@@ -313,13 +321,23 @@ function FeedbackPageInner() {
         }
         if (json.enrichmentStatus === 'failed') {
           clearInterval(timer)
+          setEnrichmentStatus('failed')
           setEnrichmentPhase('failed')
           return
         }
         if (json.enrichmentStatus === 'succeeded') {
           // Succeeded with no content = no weak questions to enrich.
           clearInterval(timer)
+          setEnrichmentStatus('succeeded')
           setEnrichmentPhase('done')
+          return
+        }
+        if (!json.enrichmentStatus) {
+          // No job was ever enqueued for this session (legacy / edge path) —
+          // stop immediately rather than burning the 150s budget.
+          clearInterval(timer)
+          setEnrichmentStatus(null)
+          setEnrichmentPhase('idle')
           return
         }
       } catch {
@@ -331,7 +349,7 @@ function FeedbackPageInner() {
       clearInterval(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, feedback === null])
+  }, [sessionId, feedback === null, enrichmentStatus])
 
   // sideEffectOutcomes.pathwayPlan stays "scheduled" on persisted feedback even after
   // the pathway job finishes; hide the inline banner once polling observes completion.
@@ -793,6 +811,11 @@ function FeedbackPageInner() {
 
             if (session.feedback) {
               setFeedback(session.feedback as FeedbackData)
+              // Codex P2 (#552): the watcher must only run for sessions with
+              // an ACTIVE enrichment job — legacy sessions have no
+              // enrichmentStatus and would otherwise show a stuck 150s
+              // placeholder for content that can never arrive.
+              setEnrichmentStatus((session as { enrichmentStatus?: string }).enrichmentStatus ?? null)
               setLoading(false)
               // Recover stuck sessions: if feedback exists but status is not completed, fix it
               if (session.status && session.status !== 'completed') {
@@ -829,6 +852,7 @@ function FeedbackPageInner() {
                   if (pollData.hasRecording) fetchRecordingUrl()
                   if (pollData.feedback) {
                     setFeedback(pollData.feedback as FeedbackData)
+                    setEnrichmentStatus((pollData as { enrichmentStatus?: string }).enrichmentStatus ?? 'pending')
                     setLoading(false)
                     if (pollData.status !== 'completed') {
                       fetchWithRetry(`/api/interviews/${sessionId}`, {
@@ -1082,6 +1106,9 @@ function FeedbackPageInner() {
           : fb.confidence_level?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
       }
       setFeedback(fb as FeedbackData)
+      // Fresh generation: the route persists enrichmentStatus 'pending'
+      // atomically with the feedback write (local sessions never enqueue).
+      if (sessionId && sessionId !== 'local') setEnrichmentStatus('pending')
 
       // Persist feedback + ensure session is marked completed (recovers from stuck in_progress).
       //
