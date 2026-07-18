@@ -69,6 +69,54 @@ function computeEyeContactScore(
   return Math.max(0, Math.min(1, 1 - combined))
 }
 
+function clamp(value: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, value))
+}
+
+/**
+ * Sanitize one captured frame before it enters the upload payload.
+ *
+ * MediaPipe iris landmarks are frame-normalized but NOT clamped to [0,1]:
+ * when the face is partially out of frame (leaning into a laptop camera puts
+ * the eyes at/above the top edge), iris y goes below 0 and the ((v)/2-0.5)*2
+ * gaze mapping lands outside [-1,1]. One such frame — a near-certainty over a
+ * 30-minute interview — used to fail the server's Zod bounds and reject the
+ * ENTIRE landmarks payload, silently killing all facial analysis for the
+ * session (observed on the 2026-07-17 30-min staging gate at frames 2071+).
+ *
+ * Rules:
+ * - Any non-finite numeric (NaN pitch via asin on a float-noisy matrix value,
+ *   for example) → drop the frame entirely. JSON.stringify(NaN) === null and
+ *   the server would reject the payload; a non-finite frame carries no signal.
+ * - Finite but out-of-range gaze → clamp. Iris at/beyond the frame edge is
+ *   still real signal ("looking fully away"), and eyeContactScore already
+ *   treats it as maximal deviation.
+ * - Negative ts (backwards wall-clock step mid-interview) → clamp to 0; the
+ *   aggregator's windowing puts such frames in the first window.
+ *
+ * Exported for unit tests (MediaPipe itself can't run under vitest).
+ */
+export function sanitizeFacialFrame(frame: FacialFrame): FacialFrame | null {
+  const numerics = [
+    frame.ts,
+    frame.gazeX,
+    frame.gazeY,
+    frame.headPoseYaw,
+    frame.headPosePitch,
+    frame.eyeContactScore,
+    ...(frame.blendshapes ? Object.values(frame.blendshapes) : []),
+  ]
+  if (numerics.some((v) => !Number.isFinite(v))) return null
+
+  return {
+    ...frame,
+    ts: Math.max(0, frame.ts),
+    gazeX: clamp(frame.gazeX, -1, 1),
+    gazeY: clamp(frame.gazeY, -1, 1),
+    eyeContactScore: clamp(frame.eyeContactScore, 0, 1),
+  }
+}
+
 export interface UseFacialLandmarksReturn {
   isCapturing: boolean
   startCapture: (videoElement: HTMLVideoElement) => Promise<void>
@@ -146,9 +194,12 @@ export function useFacialLandmarks(): UseFacialLandmarksReturn {
           let headPosePitch = 0
           if (result.facialTransformationMatrixes?.[0]) {
             const m = result.facialTransformationMatrixes[0].data
-            // Extract Euler angles from rotation matrix
+            // Extract Euler angles from rotation matrix. Clamp the asin input:
+            // float noise puts matrix entries a hair past ±1 (e.g. 1.0000001),
+            // and asin(>1) is NaN — which would poison this frame's pitch AND
+            // eyeContactScore (NaN survives min/max clamps).
             headPoseYaw = Math.atan2(m[8], m[0]) * (180 / Math.PI)
-            headPosePitch = Math.asin(-m[4]) * (180 / Math.PI)
+            headPosePitch = Math.asin(Math.max(-1, Math.min(1, -m[4]))) * (180 / Math.PI)
           }
 
           // Extract expression from blend shapes
@@ -171,7 +222,7 @@ export function useFacialLandmarks(): UseFacialLandmarksReturn {
 
           const ts = (Date.now() - startTimeRef.current) / 1000
 
-          framesRef.current.push({
+          const frame = sanitizeFacialFrame({
             ts,
             gazeX: parseFloat(gazeX.toFixed(3)),
             gazeY: parseFloat(gazeY.toFixed(3)),
@@ -181,7 +232,9 @@ export function useFacialLandmarks(): UseFacialLandmarksReturn {
             eyeContactScore: parseFloat(eyeContactScore.toFixed(3)),
             blendshapes: roundedBlendshapes,
           })
+          if (!frame) return
 
+          framesRef.current.push(frame)
           setFrameCount(framesRef.current.length)
         } catch {
           // Silently skip frame on detection error
