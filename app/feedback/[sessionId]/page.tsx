@@ -1832,9 +1832,14 @@ function FeedbackPageInner() {
             tab is active AND a video is playing (VideoPlayer replaces it).
             Still shown on Multimodal when there's no video, since the
             video-less fallback renders the plain TranscriptTab + audio. */}
-        {recordingUrl && !(activeTab === 'analysis' && videoSrc) && (
+        {/* Guard on EITHER source (Codex P2 #555): audio-only sessions — the
+            small audio object landed while the camera multipart is still in
+            flight, the camera upload dropped, or the video was retention-
+            deleted after 30 days with audio preserved — must still get their
+            audio replay. recordingUrl alone would hide it. */}
+        {(audioUrl ?? recordingUrl) && !(activeTab === 'analysis' && videoSrc) && (
           <AudioPlayer
-            src={audioUrl ?? recordingUrl}
+            src={(audioUrl ?? recordingUrl) as string}
             questionMarkers={questionMarkers}
             onTimeUpdate={setCurrentAudioTime}
             onSeek={handleSeekExpose}
