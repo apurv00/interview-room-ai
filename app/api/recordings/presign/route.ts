@@ -43,10 +43,19 @@ export async function GET(req: NextRequest) {
   const interviewSession = await InterviewSession.findOne({
     _id: sessionId,
     userId: session.user.id,
-  }).select('recordingR2Key screenRecordingR2Key audioRecordingR2Key')
+  }).select('recordingR2Key screenRecordingR2Key audioRecordingR2Key privacyMode')
 
   if (!interviewSession) {
     return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+  }
+
+  // Privacy-mode sessions keep an audio artifact for the analysis pipeline,
+  // but audio REPLAY for them is an unmade product decision — the feedback
+  // page doesn't offer it, and this server-side gate stops a direct API call
+  // from minting a replay URL anyway (Codex P2 #555). Same 404 as
+  // no-recording so the response doesn't oracle the privacy flag.
+  if (kind === 'audio' && interviewSession.privacyMode === true) {
+    return NextResponse.json({ error: 'No recording for this session' }, { status: 404 })
   }
 
   const r2Key =

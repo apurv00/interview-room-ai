@@ -109,7 +109,14 @@ export default function MultimodalReplayShell({
     // paid only when the user actually seeks.
     if (!Number.isFinite(v.duration) && seconds > 0.5) {
       pendingSeekRef.current = seconds
-      requestProbeRef.current?.()
+      // Probe only once metadata is loaded: a pre-metadata probe leaves
+      // durationProbeInProgress set through the known-duration
+      // loadedmetadata path, permanently suppressing timeupdate (frozen
+      // timeline — Codex P2 #555). Pre-metadata seeks park in
+      // pendingSeekRef; loadedmetadata resumes them.
+      if (v.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        requestProbeRef.current?.()
+      }
       return
     }
     v.currentTime = seconds
@@ -223,6 +230,11 @@ export default function MultimodalReplayShell({
         setInternalDuration(v.duration)
         onDurationKnown?.(v.duration)
         restoreAfterRefresh()
+        const pending = pendingSeekRef.current
+        if (pending !== null) {
+          pendingSeekRef.current = null
+          try { v.currentTime = pending } catch { /* ignore */ }
+        }
         return
       }
       const known = knownDurationRef.current
@@ -233,6 +245,9 @@ export default function MultimodalReplayShell({
         setInternalDuration(known)
         onDurationKnown?.(known)
         restoreAfterRefresh()
+        // A seek parked before metadata loaded (seek guard defers the probe
+        // until HAVE_METADATA) resumes here.
+        if (pendingSeekRef.current !== null) startProbe()
         return
       }
       // Legacy session without a persisted duration — trigger the probe.

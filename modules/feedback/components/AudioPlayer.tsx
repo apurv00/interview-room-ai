@@ -73,7 +73,13 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     if (!Number.isFinite(audio.duration) && seconds > 0.5) {
       pendingSeekRef.current = seconds
       setCurrentTime(seconds)
-      requestProbeRef.current?.()
+      // Probe only once metadata is loaded — a pre-metadata probe leaves the
+      // in-progress flag set through the known-duration loadedmetadata path,
+      // permanently suppressing timeupdate (Codex P2 #555; reachable here
+      // via transcript click-to-seek before load completes).
+      if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        requestProbeRef.current?.()
+      }
       return
     }
     audio.currentTime = seconds
@@ -148,6 +154,12 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
         setIsLoading(false)
         setError(null)
         restoreAfterRefresh()
+        const pending = pendingSeekRef.current
+        if (pending !== null) {
+          pendingSeekRef.current = null
+          try { audio.currentTime = pending } catch { /* ignore */ }
+          setCurrentTime(pending)
+        }
         return
       }
       const known = knownDurationRef.current
@@ -160,6 +172,8 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
         setIsLoading(false)
         setError(null)
         restoreAfterRefresh()
+        // A seek parked before metadata loaded resumes here via the probe.
+        if (pendingSeekRef.current !== null) startProbe()
         return
       }
       startProbe()
