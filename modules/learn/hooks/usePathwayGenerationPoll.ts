@@ -61,10 +61,6 @@ export function usePathwayGenerationPoll({
       return 'done'
     }
 
-    const started = startedAtRef.current ?? Date.now()
-    if (Date.now() - started >= POLL_MAX_MS) {
-      return 'exhausted'
-    }
     return 'continue'
   }, [sessionId])
 
@@ -81,23 +77,35 @@ export function usePathwayGenerationPoll({
 
     const tick = async () => {
       if (cancelled) return
+      let outcome: 'continue' | 'done' | 'exhausted'
       try {
-        const outcome = await pollOnce()
-        if (cancelled) return
-        if (outcome === 'done') {
-          setPhase('done')
-          return
-        }
-        if (outcome === 'exhausted') {
-          setPhase('exhausted')
-          return
-        }
+        outcome = await pollOnce()
       } catch {
-        // Transient network — keep polling until budget exhausts.
+        // Transient network/parse failure — same as a non-OK response: fall
+        // through to the budget check below. (This path used to reschedule
+        // unconditionally, so an offline or persistently-401 tab polled every
+        // 3s forever — the comment here claimed a bound that did not exist.)
+        outcome = 'continue'
       }
-      if (!cancelled) {
-        window.setTimeout(() => void tick(), POLL_INTERVAL_MS)
+      if (cancelled) return
+      if (outcome === 'done') {
+        setPhase('done')
+        return
       }
+      if (outcome === 'exhausted') {
+        setPhase('exhausted')
+        return
+      }
+      // Budget check covers EVERY continue-flavored exit — ok-but-pending,
+      // non-OK responses, and thrown fetches — and runs AFTER response
+      // classification so a success that lands past the 120s budget still
+      // resolves 'done' instead of being discarded as 'exhausted'.
+      const started = startedAtRef.current ?? Date.now()
+      if (Date.now() - started >= POLL_MAX_MS) {
+        setPhase('exhausted')
+        return
+      }
+      window.setTimeout(() => void tick(), POLL_INTERVAL_MS)
     }
 
     void tick()

@@ -83,4 +83,68 @@ describe('usePathwayGenerationPoll', () => {
 
     await waitFor(() => expect(result.current.phase).toBe('done'))
   })
+
+  // The three cases below pin the budget fix: before it, the 120s check only
+  // ran on ok-and-pending responses, so persistent non-OK responses and thrown
+  // fetches polled every 3s for the tab's lifetime (~28,800 requests/night on
+  // an expired-auth tab left open).
+
+  it('exhausts within the budget on persistent non-OK responses (was: infinite loop)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }),
+    )
+
+    const { result } = renderHook(() =>
+      usePathwayGenerationPoll({
+        sessionId: SESSION_ID,
+        enabled: true,
+        onRefresh: vi.fn(),
+      }),
+    )
+
+    await waitFor(() => expect(result.current.pollExhausted).toBe(true))
+  })
+
+  it('exhausts within the budget when fetch rejects (offline tab)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+
+    const { result } = renderHook(() =>
+      usePathwayGenerationPoll({
+        sessionId: SESSION_ID,
+        enabled: true,
+        onRefresh: vi.fn(),
+      }),
+    )
+
+    await waitFor(() => expect(result.current.pollExhausted).toBe(true))
+  })
+
+  it('a success landing past the budget still resolves done, not exhausted', async () => {
+    // Date.now is already mocked past the 120s budget after the first call;
+    // the success classification must win because it runs before the budget check.
+    const onRefresh = vi.fn()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          state: 'success',
+          pathwayUpdate: { poll: false, reason: 'pathway_succeeded' },
+          pathway: { generatedFromSessionId: SESSION_ID },
+        }),
+      }),
+    )
+
+    const { result } = renderHook(() =>
+      usePathwayGenerationPoll({
+        sessionId: SESSION_ID,
+        enabled: true,
+        onRefresh,
+      }),
+    )
+
+    await waitFor(() => expect(result.current.phase).toBe('done'))
+    expect(onRefresh).toHaveBeenCalled()
+  })
 })

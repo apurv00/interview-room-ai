@@ -91,7 +91,7 @@ middleware.ts               # Route protection, subdomain rewriting, security he
 - **Background jobs (Inngest)**: Long-running and scheduled work runs as Inngest functions, not inline HTTP handlers.
   - Client posts to `/api/analysis/start` → route emits `inngest.send({ name: 'analysis/requested', ... })` → returns `{ jobId, status: 'pending' }` in <500ms.
   - `analysisJob` (at `modules/interview/jobs/analysisJob.ts`) runs the 5 pipeline steps as independent `step.run()` calls, each retried by Inngest.
-  - Client keeps polling `/api/analysis/[sessionId]` every 3s; DB row advances `pending → processing → completed`.
+  - Client keeps polling `/api/analysis/[sessionId]` every 2s (90-tick cap); DB row advances `pending → processing → completed`.
   - Scheduled functions: `emailDigestJob` (daily 9 AM UTC), `regeneratePlansJob` (monthly). All registered via `/api/inngest`.
   - Local dev: run `npm run dev:inngest` in a second terminal to boot the Inngest dev dashboard at localhost:8288.
 
