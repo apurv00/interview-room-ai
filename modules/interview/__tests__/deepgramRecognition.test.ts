@@ -2,9 +2,13 @@ import { renderHook, act } from '@testing-library/react'
 
 // ─── Mocks (before imports) ────────────────────────────────────────────────
 
-vi.mock('@interview/audio/recordingClock', () => ({
-  wallClockMsToAudioSeconds: vi.fn(() => 0),
-}))
+// Use the REAL recordingClock module: with the clock unset it behaves like
+// the old `() => 0` stub for every legacy test, and the word-clock drift
+// regression suite below needs the real arithmetic (the old stub is exactly
+// why this suite could never catch the 2026-07-18 drift bug).
+vi.mock('@interview/audio/recordingClock', async (importOriginal) => {
+  return await importOriginal()
+})
 
 vi.mock('@interview/config/speechMetrics', () => ({
   analyzeSpeech: vi.fn(() => ({
@@ -174,6 +178,7 @@ import {
   buildListenUrl,
   resolveSttLanguage,
 } from '../hooks/useDeepgramRecognition'
+import { setRecordingStartedAt, resetRecordingClock } from '../audio/recordingClock'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -3211,5 +3216,159 @@ describe('useDeepgramRecognition', () => {
     // wrap correctly identified ws1 as superseded and skipped
     // reconnect). The healthy in-flight session is intact.
     expect(mockWsInstance).toBe(ws2)
+  })
+})
+
+// ─── Word-timestamp clock (drift regression, 2026-07-18) ───────────────────
+//
+// Deepgram word times are relative to the audio fed into ONE WebSocket
+// connection. Since sockets are preserved across turns (e7bb36d), the old
+// conversion `wallClockMsToAudioSeconds(turnStart) + w.start` double-counted
+// every prior turn's audio (~60s/answer; +1148s over a 30-min interview).
+// These tests set the recording clock and simulate cumulative connection
+// stream time — the one thing the legacy stub mock made impossible.
+describe('word-timestamp clock (drift regression)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    resetRecordingClock()
+    setRecordingStartedAt(1_000_000)
+  })
+  afterEach(() => {
+    resetRecordingClock()
+    vi.useRealTimers()
+  })
+
+  function resultWithWords(words: Array<{ word: string; start: number; end: number }>) {
+    return {
+      type: 'Results',
+      is_final: true,
+      channel: {
+        alternatives: [
+          {
+            transcript: words.map((w) => w.word).join(' '),
+            words: words.map((w) => ({ ...w, confidence: 0.99 })),
+          },
+        ],
+      },
+    }
+  }
+
+  /** Post one PCM frame through the worklet path carrying `samples` Int16s. */
+  function postFrame(samples: number) {
+    lastWorkletInstance!.port.onmessage?.({ data: new Int16Array(samples).buffer })
+  }
+
+  it('turn 2 on a preserved socket does not double-count turn 1 audio (the +60s/answer drift)', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    // ── Turn 1 — starts ~2s into the recording ──
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    const done1 = vi.fn()
+    await act(async () => {
+      result.current.startListening(done1)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    // First frame anchors the base: wallClock(~2.02s) − 0.256 − 0 sent.
+    act(() => { postFrame(4096) })
+    // 60s of candidate audio enters the connection's stream clock — wall
+    // time advances in step (real audio is fed in real time; keepalive
+    // ticks during the answer add their small dribble to both clocks).
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    act(() => { postFrame(960_000 - 4096) })
+    await act(async () => {
+      // Turn-relative ≈ connection-relative for turn 1 (fresh clock).
+      mockWsInstance!.simulateMessage(resultWithWords([
+        { word: 'hello', start: 0.5, end: 0.8 },
+      ]))
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+    expect(done1).toHaveBeenCalled()
+    const words1 = done1.mock.calls[0][0].words as Array<{ start: number; end: number }>
+    // Real speech at ~2.5s from recording start.
+    expect(words1[0].start).toBeGreaterThan(1.5)
+    expect(words1[0].start).toBeLessThan(4)
+
+    // ── AI speaks for ~28s; socket preserved (grace trigger) ──
+    await act(async () => { await vi.advanceTimersByTimeAsync(28_000) })
+    expect(mockWsInstance!.readyState).toBe(MockWebSocket.OPEN)
+
+    // ── Turn 2 — starts ~93.5s into the recording ──
+    const done2 = vi.fn()
+    await act(async () => {
+      result.current.startListening(done2)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    act(() => { postFrame(4096) })
+    await act(async () => {
+      // Deepgram's stream clock is CUMULATIVE: turn 2's first word arrives
+      // at connection time ≈ 60s (turn 1 audio) + small keepalive dribble.
+      mockWsInstance!.simulateMessage(resultWithWords([
+        { word: 'sure', start: 60.6, end: 60.9 },
+      ]))
+      mockWsInstance!.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+    expect(done2).toHaveBeenCalled()
+    const words2 = done2.mock.calls[0][0].words as Array<{ start: number; end: number }>
+    // Real speech lands just after turn 2 begins (~94s from recording
+    // start). The OLD formula produced turnWallOffset + 60.6 ≈ 154s —
+    // the double-count this suite exists to prevent.
+    expect(words2[0].start).toBeGreaterThan(90)
+    expect(words2[0].start).toBeLessThan(100)
+  })
+
+  it('a reconnected socket re-anchors against its fresh stream clock', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    const done = vi.fn()
+    await act(async () => {
+      result.current.startListening(done)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    const firstWs = mockWsInstance!
+    act(() => { postFrame(4096) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+    act(() => { postFrame(320_000 - 4096) }) // 20s fed to connection 1, in real time
+
+    // Mid-turn 1011: hook reconnects; a NEW socket appears with a zeroed
+    // stream clock. Words after reconnect are relative to the NEW socket.
+    await act(async () => {
+      firstWs.readyState = MockWebSocket.CLOSED
+      firstWs.onclose?.(new CloseEvent('close', { code: 1011, reason: 'NET-0001', wasClean: false }))
+      // 800ms × attempt backoff + token fetch before the new socket exists.
+      await vi.advanceTimersByTimeAsync(2_000)
+    })
+    const secondWs = mockWsInstance!
+    expect(secondWs).not.toBe(firstWs)
+    act(() => { secondWs.simulateOpen() })
+    // First frame routed to the NEW socket re-anchors (sentSamples=0).
+    act(() => { postFrame(4096) })
+    await act(async () => {
+      // Deepgram's clock on the fresh connection restarts near 0.
+      secondWs.simulateMessage(resultWithWords([
+        { word: 'resumed', start: 0.4, end: 0.7 },
+      ]))
+      secondWs.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3500)
+    })
+    expect(done).toHaveBeenCalled()
+    const words = done.mock.calls[0][0].words as Array<{ start: number }>
+    const last = words[words.length - 1]
+    // Real time at re-anchor ≈ 22.6s (start + 20s of audio + 2s reconnect
+    // backoff); the word lands shortly after. The OLD formula produced
+    // turnWallOffset(≈0) + 0.4 ≈ 0.4s — collapsing post-reconnect words to
+    // the turn start.
+    expect(last.start).toBeGreaterThan(15)
+    expect(last.start).toBeLessThan(30)
   })
 })
