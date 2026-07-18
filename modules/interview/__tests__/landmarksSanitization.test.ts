@@ -77,6 +77,16 @@ describe('LandmarksUploadSchema sanitation (server)', () => {
     expect(result.success).toBe(false)
   })
 
+  it('enforces the cap on the RAW array — droppable frames cannot sneak an oversized payload under it (Codex P2 #553)', () => {
+    // 10,001 raw frames, half of them invalid: sanitation would shrink this
+    // under the cap; the raw-length check must reject it first.
+    const frames = Array.from({ length: 10_001 }, (_, i) =>
+      i % 2 === 0 ? frame() : { ...frame(), gazeY: null },
+    )
+    const result = LandmarksUploadSchema.safeParse({ sessionId: 'abc', frames })
+    expect(result.success).toBe(false)
+  })
+
   it('accepts an all-bad payload as an empty frame list (no facial data, but no 400)', () => {
     const parsed = LandmarksUploadSchema.parse({
       sessionId: 'abc',

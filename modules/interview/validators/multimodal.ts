@@ -36,6 +36,12 @@ function isFiniteNumber(value: unknown): value is number {
  */
 function sanitizeFrames(frames: unknown): unknown {
   if (!Array.isArray(frames)) return frames
+  // Enforce the raw cap BEFORE sanitation (Codex P2 on #553): dropping bad
+  // frames first would let an oversized payload sneak under the .max(10000)
+  // as long as enough entries were discardable — unbounded scan work for
+  // /api/recordings/landmarks. Pass the oversized array through untouched so
+  // the schema's own cap rejects it.
+  if (frames.length > 10_000) return frames
   const kept: unknown[] = []
   for (const raw of frames) {
     if (!raw || typeof raw !== 'object') {
