@@ -12,14 +12,31 @@ interface AudioPlayerProps {
   questionMarkers: QuestionMarker[]
   onTimeUpdate?: (currentTimeSeconds: number) => void
   onSeek?: (seekFn: (seconds: number) => void) => void
+  /**
+   * Recorder-truth duration persisted at upload time. When present, the
+   * MediaRecorder-webm EOF probe is SKIPPED — the probe seeks to
+   * MAX_SAFE_INTEGER to learn the duration, which forces the browser to
+   * stream the whole file at mount (the mechanism behind the 394MB-for-a-
+   * 157MB-recording DevTools capture). Legacy sessions without the field
+   * keep the probe as fallback.
+   */
+  knownDurationSeconds?: number | null
+  /**
+   * Mint a fresh presigned URL after a media error (the presign TTL expires
+   * under long-open tabs; R2 then 403s and the element dies). The parent
+   * swaps the src prop; this component restores position/playback. Absent
+   * for legacy non-presigned sources.
+   */
+  onRequestFreshUrl?: () => Promise<string | null>
 }
 
 import { formatTime } from '@shared/utils'
 
 const SPEEDS = [0.5, 1, 1.25, 1.5, 2] as const
 const THROTTLE_MS = 200
+const MAX_URL_REFRESH_ATTEMPTS = 2
 
-export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek }: AudioPlayerProps) {
+export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek, knownDurationSeconds, onRequestFreshUrl }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const lastUpdateRef = useRef(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -29,11 +46,38 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Prop mirrors for the stable (empty-deps) listener effect below.
+  const knownDurationRef = useRef(knownDurationSeconds)
+  knownDurationRef.current = knownDurationSeconds
+  const onRequestFreshUrlRef = useRef(onRequestFreshUrl)
+  onRequestFreshUrlRef.current = onRequestFreshUrl
+  const isPlayingRef = useRef(false)
+  isPlayingRef.current = isPlaying
+
+  // Cross-src state for error recovery + the deferred seek probe.
+  const refreshAttemptsRef = useRef(0)
+  const restoreAfterRefreshRef = useRef<{ time: number; wasPlaying: boolean } | null>(null)
+  const lastKnownTimeRef = useRef(0)
+  const pendingSeekRef = useRef<number | null>(null)
+  const requestProbeRef = useRef<(() => void) | null>(null)
+
   const seekTo = useCallback((seconds: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = seconds
+    const audio = audioRef.current
+    if (!audio) return
+    // Seek guard: on a cue-less MediaRecorder webm whose real duration the
+    // element doesn't know yet (probe skipped thanks to knownDurationSeconds),
+    // a forward seek into unbuffered territory can clamp to the buffered end.
+    // Run the EOF probe first — its full linear read is what makes arbitrary
+    // seeks reliable — and complete this seek when the real duration lands.
+    // The cost lands only on sessions where the user actually seeks.
+    if (!Number.isFinite(audio.duration) && seconds > 0.5) {
+      pendingSeekRef.current = seconds
       setCurrentTime(seconds)
+      requestProbeRef.current?.()
+      return
     }
+    audio.currentTime = seconds
+    setCurrentTime(seconds)
   }, [])
 
   // Expose seekTo to parent
@@ -50,13 +94,29 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     const audio = audioRef.current
     if (!audio) return
 
-    // MediaRecorder-produced WebM files don't include a duration header,
-    // so `audio.duration` is Infinity until the browser has scanned to the
-    // end. Workaround: on loadedmetadata, if duration is non-finite, seek
-    // to a very large value to force the browser to read to EOF; the real
-    // duration then arrives via the `durationchange` event, after which we
-    // seek back to 0. Mirrors the pattern in VideoPlayer.tsx.
+    // MediaRecorder-produced WebM files don't include a duration header, so
+    // `audio.duration` is Infinity until the browser has scanned to the end.
+    // When the recorder-truth duration was persisted (knownDurationSeconds)
+    // we use it directly and skip the scan; otherwise (legacy sessions — a
+    // self-extinguishing population, replay videos are retention-deleted
+    // after 30 days) keep the probe: seek to a very large value to force
+    // the browser to read to EOF; the real duration then arrives via
+    // `durationchange`, after which we seek back.
     let durationProbeInProgress = false
+
+    const startProbe = () => {
+      if (durationProbeInProgress) return
+      durationProbeInProgress = true
+      try {
+        audio.currentTime = Number.MAX_SAFE_INTEGER
+      } catch {
+        // Some browsers throw on non-finite seeks; bail out gracefully. The
+        // flag stays set so stray timeupdate events remain suppressed
+        // (original semantics).
+        setIsLoading(false)
+      }
+    }
+    requestProbeRef.current = startProbe
 
     const handleTimeUpdate = () => {
       // While probing for duration we may receive timeupdate events with
@@ -66,36 +126,57 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
       const now = performance.now()
       if (now - lastUpdateRef.current < THROTTLE_MS) return
       lastUpdateRef.current = now
+      lastKnownTimeRef.current = audio.currentTime
       setCurrentTime(audio.currentTime)
       onTimeUpdateRef.current?.(audio.currentTime)
+    }
+    const restoreAfterRefresh = () => {
+      const restore = restoreAfterRefreshRef.current
+      if (!restore) return
+      restoreAfterRefreshRef.current = null
+      try {
+        audio.currentTime = restore.time
+      } catch { /* ignore */ }
+      setCurrentTime(restore.time)
+      if (restore.wasPlaying) {
+        audio.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false))
+      }
     }
     const handleLoadedMetadata = () => {
       if (Number.isFinite(audio.duration) && audio.duration > 0) {
         setDuration(audio.duration)
         setIsLoading(false)
         setError(null)
+        restoreAfterRefresh()
         return
       }
-      // Duration is Infinity — trigger the probe.
-      durationProbeInProgress = true
-      try {
-        audio.currentTime = Number.MAX_SAFE_INTEGER
-      } catch {
-        // Some browsers throw on non-finite seeks; bail out gracefully.
+      const known = knownDurationRef.current
+      if (typeof known === 'number' && known > 0) {
+        // Probe skipped — recorder-truth duration sizes the scrubber. The
+        // durationchange handler below still lets the browser's own finite
+        // value win if/when the file fully buffers (drift correction for
+        // recorder stalls).
+        setDuration(known)
         setIsLoading(false)
+        setError(null)
+        restoreAfterRefresh()
+        return
       }
+      startProbe()
     }
     const handleDurationChange = () => {
       if (Number.isFinite(audio.duration) && audio.duration > 0) {
         setDuration(audio.duration)
         if (durationProbeInProgress) {
           durationProbeInProgress = false
+          const target = pendingSeekRef.current ?? 0
+          pendingSeekRef.current = null
           try {
-            audio.currentTime = 0
+            audio.currentTime = target
           } catch {
             /* ignore */
           }
-          setCurrentTime(0)
+          setCurrentTime(target)
           setIsLoading(false)
           setError(null)
         }
@@ -103,10 +184,11 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     }
     const handleCanPlay = () => {
       setIsLoading(false)
+      // Healthy load — reset the per-src refresh budget.
+      refreshAttemptsRef.current = 0
     }
     const handleEnded = () => setIsPlaying(false)
-    const handleError = () => {
-      setIsLoading(false)
+    const showMediaError = () => {
       const mediaErr = audio.error
       if (mediaErr) {
         switch (mediaErr.code) {
@@ -126,6 +208,36 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
         setError('Unable to play audio.')
       }
     }
+    const handleError = () => {
+      // Expired presigned URLs surface as code 4 (SRC_NOT_SUPPORTED — the R2
+      // 403 XML body fails demuxing) on load, or code 2 (NETWORK) on a range
+      // request mid-play — so recovery triggers on ANY code, bounded per src
+      // load. Without recovery the play button just dies silently until a
+      // full reload (which used to cost another full-file download).
+      const refresh = onRequestFreshUrlRef.current
+      if (refresh && refreshAttemptsRef.current < MAX_URL_REFRESH_ATTEMPTS) {
+        refreshAttemptsRef.current += 1
+        durationProbeInProgress = false
+        restoreAfterRefreshRef.current = {
+          time: lastKnownTimeRef.current,
+          wasPlaying: isPlayingRef.current,
+        }
+        setIsPlaying(false)
+        setIsLoading(true)
+        void refresh().then((freshUrl) => {
+          if (!freshUrl) {
+            restoreAfterRefreshRef.current = null
+            setIsLoading(false)
+            showMediaError()
+          }
+          // On success the parent swaps the src prop; loadedmetadata on the
+          // new source runs restoreAfterRefresh().
+        })
+        return
+      }
+      setIsLoading(false)
+      showMediaError()
+    }
 
     audio.addEventListener('timeupdate', handleTimeUpdate)
     audio.addEventListener('loadedmetadata', handleLoadedMetadata)
@@ -135,6 +247,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     audio.addEventListener('error', handleError)
 
     return () => {
+      requestProbeRef.current = null
       audio.removeEventListener('timeupdate', handleTimeUpdate)
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
       audio.removeEventListener('durationchange', handleDurationChange)
@@ -149,12 +262,21 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     if (!audio || error) return
     if (isPlaying) {
       audio.pause()
+      setIsPlaying(false)
     } else {
-      audio.play().catch(() => {
+      audio.play().then(() => setIsPlaying(true)).catch((err: unknown) => {
+        const name = (err as { name?: string })?.name
+        // AbortError: a load interrupted the play() — benign, the next
+        // gesture retries. NotAllowedError: autoplay policy — stay paused
+        // without an error banner (guaranteed on iOS for non-gesture play).
+        if (name === 'AbortError' || name === 'NotAllowedError') {
+          setIsPlaying(false)
+          return
+        }
+        setIsPlaying(false)
         setError('Playback failed. The file may be unavailable.')
       })
     }
-    setIsPlaying(!isPlaying)
   }
 
   function handleSeek(e: React.ChangeEvent<HTMLInputElement>) {
@@ -169,11 +291,17 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
     }
   }
 
+  // Single <audio> element across BOTH branches: the previous error branch
+  // rendered a second, positionally distinct element that the empty-deps
+  // listener effect had never wired — URL-refresh recovery would have driven
+  // a deaf element.
+  const audioElement = <audio ref={audioRef} src={src} preload="metadata" />
+
   // Error state
   if (error) {
     return (
       <div className="bg-white border border-red-500/30 rounded-2xl p-4 sticky top-[172px] z-[8]" role="alert">
-        <audio ref={audioRef} src={src} preload="metadata" />
+        {audioElement}
         <div className="flex items-center gap-3">
           <div className="shrink-0 w-9 h-9 rounded-full bg-red-600/20 flex items-center justify-center">
             <svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -188,7 +316,7 @@ export default function AudioPlayer({ src, questionMarkers, onTimeUpdate, onSeek
 
   return (
     <div className="bg-white/95 backdrop-blur-md border border-[#e1e8ed] rounded-2xl p-4 sticky top-[172px] z-[8] shadow-sm">
-      <audio ref={audioRef} src={src} preload="metadata" />
+      {audioElement}
 
       {/* Top row: play/pause + seek bar + time */}
       <div className="flex items-center gap-3">

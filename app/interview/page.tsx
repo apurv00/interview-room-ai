@@ -119,7 +119,7 @@ export default function InterviewPage() {
   const { isListening, liveTranscript, finalTranscript, interimTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt, getAndClearInterruptAccum } = useSpeechRecognition()
 
   // ── Recording (camera track) ──
-  const { isRecording, recordingDuration, startRecording, stopRecording } = useMediaRecorder()
+  const { isRecording, recordingDuration, startRecording, stopRecording, getDurationSeconds } = useMediaRecorder()
   // ── Recording (audio-only track — what Whisper transcribes). Kept
   //    separate from the camera webm because Groq Whisper rejects files
   //    >25MB and a multi-minute HD camera recording easily exceeds that.
@@ -207,6 +207,18 @@ export default function InterviewPage() {
       audioRecorder.stopRecording(),
     ])
 
+    // Recorder-truth span (camera and audio recorders start back-to-back, so
+    // either recorder's clock serves both files). Persisted so replay players
+    // can size their scrubbers without the EOF duration probe, which used to
+    // cost a full file download per player mount. Rounded to 0.1s; values <1s
+    // are noise (recorder never really started) and the schema floor is 1.
+    const rawDurationSeconds =
+      getDurationSeconds() ?? audioRecorder.getDurationSeconds()
+    const recordingDurationSeconds =
+      rawDurationSeconds !== null && rawDurationSeconds >= 1
+        ? Math.round(rawDurationSeconds * 10) / 10
+        : null
+
     const criticalUploads: Promise<unknown>[] = []
 
     // Stop facial capture and upload landmarks. This is small enough to wait
@@ -237,11 +249,26 @@ export default function InterviewPage() {
     // client-derived and tiny) hit R2.
     const privacyMode = config?.privacyMode === true
 
+    // Persist the duration up front, independent of which uploads succeed —
+    // privacy-mode sessions (audio-only) and dropped camera uploads still get
+    // a scrubber-accurate value. Fire-and-forget: the multipart 'complete'
+    // handler re-persists it server-side as the fallback for queued drains.
+    if (recordingDurationSeconds !== null) {
+      void fetch(`/api/interviews/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordingDurationSeconds }),
+        keepalive: true,
+      }).catch(() => {})
+    }
+
     // Upload audio/landmarks as small analysis artifacts. The camera
     // recording is replay-only and must not block feedback or analysis.
     const replayUploads: Promise<ReplayUploadResult>[] = []
     if (cameraBlob && !privacyMode) {
-      replayUploads.push(uploadReplayRecording(sessionId, 'camera', cameraBlob))
+      replayUploads.push(
+        uploadReplayRecording(sessionId, 'camera', cameraBlob, recordingDurationSeconds ?? undefined)
+      )
     }
     if (audioBlob) criticalUploads.push(uploadRecordingBlob(audioBlob, sessionId, 'audio'))
 
@@ -274,7 +301,7 @@ export default function InterviewPage() {
         new Promise<void>((resolve) => setTimeout(resolve, 8_000)),
       ])
     }
-  }, [stopRecording, audioRecorder, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
+  }, [stopRecording, audioRecorder, getDurationSeconds, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
 
   // Feedback #1: live coaching is chosen in the lobby and frozen for the session
   // (no in-room toggle). The lobby passes the choice via the room URL (?lc=0 when

@@ -32,14 +32,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
   }
 
-  // Optional `kind` query param: 'camera' (default) | 'screen'
-  const kind = req.nextUrl.searchParams.get('kind') === 'screen' ? 'screen' : 'camera'
+  // Optional `kind` query param: 'camera' (default) | 'screen' | 'audio'.
+  // 'audio' serves the audio-only webm (mixed candidate + AI voice, ~14MB for
+  // 30 min) so the feedback page's audio replay stops streaming the full
+  // camera video (~157MB for 30 min) just to play sound.
+  const kindParam = req.nextUrl.searchParams.get('kind')
+  const kind = kindParam === 'screen' || kindParam === 'audio' ? kindParam : 'camera'
 
   await connectDB()
   const interviewSession = await InterviewSession.findOne({
     _id: sessionId,
     userId: session.user.id,
-  }).select('recordingR2Key screenRecordingR2Key')
+  }).select('recordingR2Key screenRecordingR2Key audioRecordingR2Key')
 
   if (!interviewSession) {
     return NextResponse.json({ error: 'Session not found' }, { status: 404 })
@@ -48,15 +52,25 @@ export async function GET(req: NextRequest) {
   const r2Key =
     kind === 'screen'
       ? interviewSession.screenRecordingR2Key
-      : interviewSession.recordingR2Key
+      : kind === 'audio'
+        ? interviewSession.audioRecordingR2Key
+        : interviewSession.recordingR2Key
 
   if (!r2Key) {
     return NextResponse.json({ error: 'No recording for this session' }, { status: 404 })
   }
 
+  // 30 min: long enough that a normal replay session never sees an expired
+  // URL, short enough to bound leaked-URL exposure. The players recover from
+  // expiry via their media-error → re-presign handler, so this is a
+  // comfort margin, not a correctness bound. expiresInSeconds is returned so
+  // the client derives its cache TTL from the server instead of hardcoding a
+  // second constant that must be manually kept below this one.
+  const REPLAY_PRESIGN_TTL_SECONDS = 1800
+
   try {
-    const url = await getDownloadPresignedUrl(r2Key)
-    return NextResponse.json({ url })
+    const url = await getDownloadPresignedUrl(r2Key, REPLAY_PRESIGN_TTL_SECONDS)
+    return NextResponse.json({ url, kind, expiresInSeconds: REPLAY_PRESIGN_TTL_SECONDS })
   } catch {
     return NextResponse.json({ error: 'Failed to generate download URL' }, { status: 500 })
   }

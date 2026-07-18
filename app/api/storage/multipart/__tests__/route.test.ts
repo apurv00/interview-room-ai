@@ -168,6 +168,51 @@ describe('POST /api/storage/multipart', () => {
     )
   })
 
+  it('persists recorder-truth durationSeconds with a camera complete (queued-drain fallback path)', async () => {
+    const key = `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`
+    const res = await POST(makeRequest({
+      action: 'complete',
+      type: 'recording',
+      sessionId: mocks.sessionId,
+      key,
+      uploadId: 'upload-123',
+      sizeBytes: 164_656_436,
+      durationSeconds: 1789.4,
+      parts: [{ partNumber: 1, etag: '"etag-1"' }],
+    }))
+
+    expect(res.status).toBe(200)
+    expect(mocks.sessionFindOneAndUpdate).toHaveBeenCalledWith(
+      { _id: mocks.sessionId, userId: mocks.userId },
+      {
+        $set: {
+          recordingR2Key: key,
+          recordingSizeBytes: 164_656_436,
+          recordingDurationSeconds: 1789.4,
+        },
+      }
+    )
+  })
+
+  it('camera complete without durationSeconds patches only key+size (legacy clients)', async () => {
+    const key = `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`
+    const res = await POST(makeRequest({
+      action: 'complete',
+      type: 'recording',
+      sessionId: mocks.sessionId,
+      key,
+      uploadId: 'upload-123',
+      sizeBytes: 9_999,
+      parts: [{ partNumber: 1, etag: '"etag-1"' }],
+    }))
+
+    expect(res.status).toBe(200)
+    expect(mocks.sessionFindOneAndUpdate).toHaveBeenCalledWith(
+      { _id: mocks.sessionId, userId: mocks.userId },
+      { $set: { recordingR2Key: key, recordingSizeBytes: 9_999 } }
+    )
+  })
+
   it('recovers a retried complete (NoSuchUpload) when the object exists and patches the session', async () => {
     const key = `recordings/${mocks.userId}/${mocks.sessionId}-camera.webm`
     const noSuchUpload = Object.assign(new Error('NoSuchUpload'), { name: 'NoSuchUpload' })

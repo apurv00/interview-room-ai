@@ -41,6 +41,10 @@ export interface IInterviewSession extends Document {
 
   recordingUrl?: string
   recordingSizeBytes?: number
+  // Recorder-truth wall-clock span (seconds). Lets replay players size the
+  // scrubber without the EOF duration probe (MediaRecorder webm has no
+  // duration header) — the probe cost a full file download per player mount.
+  recordingDurationSeconds?: number
   recordingR2Key?: string
 
   // Screen recording (coding & system-design interviews) — captures the
@@ -237,6 +241,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 
     recordingUrl: { type: String },
     recordingSizeBytes: { type: Number },
+    recordingDurationSeconds: { type: Number },
     recordingR2Key: { type: String },
 
     // Screen recording (coding & system-design)

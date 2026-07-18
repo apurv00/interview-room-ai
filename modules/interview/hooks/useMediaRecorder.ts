@@ -7,6 +7,13 @@ export interface UseMediaRecorderReturn {
   recordingDuration: number
   startRecording: (stream: MediaStream, options?: MediaRecorderOptions) => void
   stopRecording: () => Promise<Blob | null>
+  /**
+   * Recorder-truth wall-clock span in seconds: live while recording, frozen
+   * at stop, null before the first start. The 1s-granularity
+   * `recordingDuration` state is for display; callbacks need this ref-backed
+   * read because the state value is stale inside stable useCallbacks.
+   */
+  getDurationSeconds: () => number | null
 }
 
 export function useMediaRecorder(): UseMediaRecorderReturn {
@@ -17,6 +24,8 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
   const chunksRef = useRef<Blob[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval>>()
   const resolveRef = useRef<((blob: Blob | null) => void) | null>(null)
+  const startedAtMsRef = useRef<number | null>(null)
+  const finalDurationSecondsRef = useRef<number | null>(null)
 
   const startRecording = useCallback((stream: MediaStream, options?: MediaRecorderOptions) => {
     // Require at least audio; video is optional but preferred
@@ -65,6 +74,9 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
 
       recorder.onstop = () => {
         clearInterval(timerRef.current)
+        if (startedAtMsRef.current !== null) {
+          finalDurationSecondsRef.current = (Date.now() - startedAtMsRef.current) / 1000
+        }
         const blob = new Blob(chunksRef.current, { type: mimeType })
         chunksRef.current = []
         resolveRef.current?.(blob)
@@ -85,6 +97,8 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
 
       // Duration tracker
       const startTime = Date.now()
+      startedAtMsRef.current = startTime
+      finalDurationSecondsRef.current = null
       timerRef.current = setInterval(() => {
         setRecordingDuration(Math.floor((Date.now() - startTime) / 1000))
       }, 1000)
@@ -106,5 +120,11 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
     })
   }, [])
 
-  return { isRecording, recordingDuration, startRecording, stopRecording }
+  const getDurationSeconds = useCallback((): number | null => {
+    if (finalDurationSecondsRef.current !== null) return finalDurationSecondsRef.current
+    if (startedAtMsRef.current !== null) return (Date.now() - startedAtMsRef.current) / 1000
+    return null
+  }, [])
+
+  return { isRecording, recordingDuration, startRecording, stopRecording, getDurationSeconds }
 }
