@@ -51,6 +51,7 @@ export async function enforceAnalysisCap(
         await InterviewSession.findByIdAndUpdate(analysis.sessionId, {
           $unset: {
             recordingR2Key: 1,
+            recordingDurationSeconds: 1,
             audioRecordingR2Key: 1,
             facialLandmarksR2Key: 1,
             screenRecordingR2Key: 1,

@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { useRouter, useParams } from 'next/navigation'
 import { ScoreRing } from '@shared/ui/ScoreBar'
 import AudioPlayer from '@feedback/components/AudioPlayer'
+import { resolveRecordingWatch, type RecordingFallback } from '@feedback/lib/recordingWatchPlan'
 import OverviewTab from '@feedback/components/OverviewTab'
 import ScoresTab from '@feedback/components/ScoresTab'
 import type { PeerData } from '@feedback/components/PeerComparison'
@@ -42,7 +43,7 @@ import { getDomainLabel } from '@interview/config/interviewConfig'
 import { computeOffsetSeconds } from '@interview/utils/offsetHelpers'
 import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData } from '@interview/utils/mergeSessionData'
 import { buildFeedbackPrintHtml } from '@interview/utils/feedbackPrintHtml'
-import { drainQueuedReplayUploads } from '@interview/utils/resumableUpload'
+import { drainQueuedReplayUploads, hasQueuedReplayUpload } from '@interview/utils/resumableUpload'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
 import { fetchFeedbackSessionSummary } from '@feedback/lib/feedbackSessionFetcher'
 import { bisectLastLE } from '@shared/utils'
@@ -100,7 +101,6 @@ const PEER_CACHE_PREFIX = 'peerData:'
 const SESSION_CACHE_PREFIX = 'feedback-session:'
 const RECORDING_URL_PREFIX = 'recording-url:'
 const SESSION_CACHE_TTL_MS = 120_000  // 2 minutes
-const RECORDING_URL_TTL_MS = 600_000  // 10 minutes
 
 function getCachedJSON<T>(key: string, ttlMs: number): T | null {
   try {
@@ -373,38 +373,142 @@ function FeedbackPageInner() {
   // /api/recordings/presign call fires at most once *in-flight* per page
   // mount; on failure it resets so the next caller can retry.
   const recordingFetchTriggeredRef = useRef(false)
+  // Separate latch for the audio-only object. Its failure mode differs: a
+  // missing audio object 404s forever, so this latch is NOT reset on failure
+  // (retrying under the watcher would 404-loop); the AudioPlayer just keeps
+  // the camera-URL fallback.
+  const audioFetchTriggeredRef = useRef(false)
 
   // Mirror of `recordingUrl` for closure-safe reads inside long-lived
   // setInterval callbacks (the watcher useEffect below would otherwise
   // capture the initial null value forever). Updated in a tiny
-  // useEffect that runs whenever recordingUrl changes.
+  // useEffect that runs whenever recordingUrl changes. recordingUrl stays
+  // the CAMERA (or legacy) URL — the audio URL lives in audioUrl and must
+  // never stop the camera watcher (the ~14MB audio presign lands seconds
+  // after interview end while a 157MB camera multipart can be minutes out).
   const recordingUrlRef = useRef<string | null>(null)
 
-  const fetchRecordingUrl = useCallback(() => {
-    if (recordingFetchTriggeredRef.current) return
-    recordingFetchTriggeredRef.current = true
-    setHasRecording(true)
-    const cachedUrl = getCachedJSON<string>(`${RECORDING_URL_PREFIX}${sessionId}`, RECORDING_URL_TTL_MS)
-    if (cachedUrl) {
-      setRecordingUrl(cachedUrl)
-      setVideoSrc(cachedUrl)
-      return
+  // Replay facts captured from whichever session-summary GET lands first
+  // (initial load, poll loop, watcher tick).
+  const replayMetaRef = useRef<{ hasAudioRecording: boolean; privacyMode: boolean; completedAtMs: number | null }>({
+    hasAudioRecording: false,
+    privacyMode: false,
+    completedAtMs: null,
+  })
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [recordingDurationSeconds, setRecordingDurationSeconds] = useState<number | null>(null)
+  const [recordingFallback, setRecordingFallback] = useState<RecordingFallback>('none')
+
+  const captureReplayMeta = useCallback((raw: unknown) => {
+    if (!raw || typeof raw !== 'object') return
+    const summary = raw as Record<string, unknown>
+    if (typeof summary.hasAudioRecording === 'boolean') {
+      replayMetaRef.current.hasAudioRecording = summary.hasAudioRecording
     }
-    fetch(`/api/recordings/presign?sessionId=${sessionId}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(presignData => {
-        if (presignData?.url) {
-          setRecordingUrl(presignData.url)
-          setVideoSrc(presignData.url)
-          setCachedJSON(`${RECORDING_URL_PREFIX}${sessionId}`, presignData.url)
-        } else {
-          recordingFetchTriggeredRef.current = false
-        }
-      })
-      .catch(() => {
-        recordingFetchTriggeredRef.current = false
-      })
+    const cfg = summary.config as { privacyMode?: boolean } | undefined
+    if (summary.privacyMode === true || cfg?.privacyMode === true) {
+      replayMetaRef.current.privacyMode = true
+    }
+    const completedAt = summary.completedAt ?? summary.createdAt
+    if (typeof completedAt === 'string') {
+      const ms = Date.parse(completedAt)
+      if (Number.isFinite(ms)) replayMetaRef.current.completedAtMs = ms
+    }
+    if (typeof summary.recordingDurationSeconds === 'number' && summary.recordingDurationSeconds > 0) {
+      setRecordingDurationSeconds(summary.recordingDurationSeconds)
+    }
+  }, [])
+
+  const readCachedPresign = useCallback((kind: 'camera' | 'audio'): string | null => {
+    // v2 per-kind cache entries carry their own expiry, derived from the
+    // server's expiresInSeconds — the old fixed 10-minute constant silently
+    // disagreed with the server-side presign TTL. Legacy v1 entries (un-kinded
+    // key) are deliberately never read.
+    const entry = getCachedJSON<{ url: string; expiresAtMs: number }>(
+      `${RECORDING_URL_PREFIX}v2:${kind}:${sessionId}`,
+      Number.MAX_SAFE_INTEGER,
+    )
+    if (!entry || typeof entry.url !== 'string') return null
+    if (!Number.isFinite(entry.expiresAtMs) || Date.now() >= entry.expiresAtMs) return null
+    return entry.url
   }, [sessionId])
+
+  const fetchPresign = useCallback(async (kind: 'camera' | 'audio'): Promise<string | null> => {
+    try {
+      const res = await fetch(`/api/recordings/presign?sessionId=${sessionId}&kind=${kind}`)
+      if (!res.ok) return null
+      const presignData = (await res.json()) as { url?: string; expiresInSeconds?: number }
+      if (!presignData?.url) return null
+      const ttlMs = Math.max(60_000, (presignData.expiresInSeconds ?? 900) * 1000 * 0.8)
+      setCachedJSON(`${RECORDING_URL_PREFIX}v2:${kind}:${sessionId}`, {
+        url: presignData.url,
+        expiresAtMs: Date.now() + ttlMs,
+      })
+      return presignData.url
+    } catch {
+      return null
+    }
+  }, [sessionId])
+
+  const fetchRecordingUrl = useCallback(() => {
+    setHasRecording(true)
+    if (!recordingFetchTriggeredRef.current) {
+      recordingFetchTriggeredRef.current = true
+      const cached = readCachedPresign('camera')
+      if (cached) {
+        setRecordingUrl(cached)
+        setVideoSrc(cached)
+      } else {
+        void fetchPresign('camera').then((url) => {
+          if (url) {
+            setRecordingUrl(url)
+            setVideoSrc(url)
+          } else {
+            recordingFetchTriggeredRef.current = false
+          }
+        })
+      }
+    }
+    // Audio-only object (~14MB vs ~157MB for a 30-min camera webm). Gated on
+    // the session actually having one AND not being privacy-mode: privacy
+    // users opted out of stored replay video, and whether they should get
+    // audio replay is an open product decision — behavior is unchanged for
+    // them (no player, as before).
+    if (
+      !audioFetchTriggeredRef.current &&
+      replayMetaRef.current.hasAudioRecording &&
+      !replayMetaRef.current.privacyMode
+    ) {
+      audioFetchTriggeredRef.current = true
+      const cached = readCachedPresign('audio')
+      if (cached) {
+        setAudioUrl(cached)
+      } else {
+        void fetchPresign('audio').then((url) => {
+          if (url) setAudioUrl(url)
+        })
+      }
+    }
+  }, [readCachedPresign, fetchPresign])
+
+  // Media-error recovery for the players: a presigned URL expired mid-view
+  // (30-min server TTL vs multi-hour open tabs). Mint a fresh URL and swap
+  // it in; the player restores its position. Only presign-derived sources
+  // call this — legacy session.recordingUrl documents never do.
+  const refreshReplayUrl = useCallback(async (kind: 'camera' | 'audio'): Promise<string | null> => {
+    try {
+      sessionStorage.removeItem(`${RECORDING_URL_PREFIX}v2:${kind}:${sessionId}`)
+    } catch { /* non-critical */ }
+    const url = await fetchPresign(kind)
+    if (!url) return null
+    if (kind === 'camera') {
+      setRecordingUrl(url)
+      setVideoSrc(url)
+    } else {
+      setAudioUrl(url)
+    }
+    return url
+  }, [fetchPresign, sessionId])
 
   // Keep recordingUrlRef in sync with recordingUrl state for the
   // watcher's closure-safe reads.
@@ -523,8 +627,29 @@ function FeedbackPageInner() {
     if (recordingFetchTriggeredRef.current) return
     let cancelled = false
     let attempts = 0
-    const MAX_ATTEMPTS = 15
+    // Budget + fallback message resolve from evidence (privacy flag, session
+    // recency, IndexedDB queued-upload record) once the first facts land —
+    // an unconditional long budget would show "still uploading…" as a lie on
+    // every history revisit of old/privacy sessions, and an unconditional
+    // short one re-breaks the 30-min case this exists for.
+    let maxAttempts = 15
+    let planResolved = false
     const INTERVAL_MS = 3000
+
+    const resolvePlan = async () => {
+      const queued = await hasQueuedReplayUpload(sessionId).catch(() => false)
+      if (cancelled) return
+      const plan = resolveRecordingWatch({
+        privacyMode: replayMetaRef.current.privacyMode,
+        completedAtMs: replayMetaRef.current.completedAtMs,
+        nowMs: Date.now(),
+        hasQueuedUpload: queued,
+      })
+      maxAttempts = plan.maxAttempts
+      planResolved = true
+      setRecordingFallback(plan.fallback)
+      if (plan.maxAttempts === 0) stop()
+    }
     let timer: ReturnType<typeof setInterval> | undefined
     const stop = () => {
       if (timer !== undefined) {
@@ -542,8 +667,14 @@ function FeedbackPageInner() {
         stop()
         return
       }
-      if (++attempts > MAX_ATTEMPTS) {
+      if (++attempts > maxAttempts) {
         stop()
+        // Exhausted with an upload that was plausibly in flight: soften to
+        // the definitive-but-honest state; a slow multipart can outlive even
+        // the extended budget, and a page refresh re-checks from scratch.
+        if (!cancelled && !recordingUrlRef.current) {
+          setRecordingFallback('none')
+        }
         return
       }
       try {
@@ -551,7 +682,10 @@ function FeedbackPageInner() {
         // recording-watcher GET shares its in-flight call with the
         // initial-load + poll-loop GETs mounted by the same page.
         const data = await fetchFeedbackSessionSummary(sessionId)
-        if (data?.hasRecording) {
+        captureReplayMeta(data)
+        if (!planResolved) await resolvePlan()
+        if (cancelled) return
+        if (data?.hasRecording || data?.hasAudioRecording) {
           // No-op if another path already triggered fetch; on its eventual
           // success the next tick observes recordingUrlRef and stops.
           fetchRecordingUrl()
@@ -565,7 +699,7 @@ function FeedbackPageInner() {
       cancelled = true
       stop()
     }
-  }, [sessionId, fetchRecordingUrl])
+  }, [sessionId, fetchRecordingUrl, captureReplayMeta])
 
   // ── Fullscreen replay overlay ──────────────────────────────────────────────
   useEffect(() => {
@@ -799,7 +933,8 @@ function FeedbackPageInner() {
             // Fetch presigned recording URL. If hasRecording is still false
             // here, the camera upload is in flight — Shape A inside the
             // poll loop + Shape B's watcher will pick it up.
-            if (session.hasRecording) {
+            captureReplayMeta(session)
+            if (session.hasRecording || session.hasAudioRecording) {
               fetchRecordingUrl()
             } else if (session.recordingUrl) {
               setRecordingUrl(session.recordingUrl as string)
@@ -849,7 +984,8 @@ function FeedbackPageInner() {
                 // request, not two.
                 const pollData = await fetchFeedbackSessionSummary(sessionId, { signal })
                 if (pollData) {
-                  if (pollData.hasRecording) fetchRecordingUrl()
+                  captureReplayMeta(pollData)
+                  if (pollData.hasRecording || pollData.hasAudioRecording) fetchRecordingUrl()
                   if (pollData.feedback) {
                     setFeedback(pollData.feedback as FeedbackData)
                     setEnrichmentStatus((pollData as { enrichmentStatus?: string }).enrichmentStatus ?? 'pending')
@@ -1696,12 +1832,19 @@ function FeedbackPageInner() {
             tab is active AND a video is playing (VideoPlayer replaces it).
             Still shown on Multimodal when there's no video, since the
             video-less fallback renders the plain TranscriptTab + audio. */}
-        {recordingUrl && !(activeTab === 'analysis' && videoSrc) && (
+        {/* Guard on EITHER source (Codex P2 #555): audio-only sessions — the
+            small audio object landed while the camera multipart is still in
+            flight, the camera upload dropped, or the video was retention-
+            deleted after 30 days with audio preserved — must still get their
+            audio replay. recordingUrl alone would hide it. */}
+        {(audioUrl ?? recordingUrl) && !(activeTab === 'analysis' && videoSrc) && (
           <AudioPlayer
-            src={recordingUrl}
+            src={(audioUrl ?? recordingUrl) as string}
             questionMarkers={questionMarkers}
             onTimeUpdate={setCurrentAudioTime}
             onSeek={handleSeekExpose}
+            knownDurationSeconds={recordingDurationSeconds}
+            onRequestFreshUrl={hasRecording || audioUrl ? () => refreshReplayUrl(audioUrl ? 'audio' : 'camera') : undefined}
           />
         )}
 
@@ -1740,6 +1883,9 @@ function FeedbackPageInner() {
             hasAnalysisSource={hasAnalysisSource}
             videoSrc={videoSrc}
             recordingUrl={recordingUrl}
+            recordingDurationSeconds={recordingDurationSeconds}
+            recordingFallback={recordingFallback}
+            onRequestFreshVideoUrl={hasRecording ? () => refreshReplayUrl('camera') : undefined}
             sessionStartedAt={sessionStartedAt}
             questionMarkers={questionMarkers}
             keyMoments={keyMoments}

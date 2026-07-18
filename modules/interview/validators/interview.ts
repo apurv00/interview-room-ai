@@ -288,6 +288,9 @@ export const UpdateSessionSchema = z.object({
   completedAt: z.string().datetime().optional(),
   recordingR2Key: z.string().max(1000).optional(),
   recordingSizeBytes: z.number().int().min(0).optional(),
+  // Recorder-truth span. Bounded so a broken client can't brick the replay
+  // scrubber (30-min product max + generous margin).
+  recordingDurationSeconds: z.number().min(1).max(14_400).optional(),
   screenRecordingR2Key: z.string().max(1000).optional(),
   screenRecordingSizeBytes: z.number().int().min(0).optional(),
   audioRecordingR2Key: z.string().max(1000).optional(),

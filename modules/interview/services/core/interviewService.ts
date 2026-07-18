@@ -48,6 +48,7 @@ interface UpdateSessionInput {
   completedAt?: string
   recordingR2Key?: string
   recordingSizeBytes?: number
+  recordingDurationSeconds?: number
   screenRecordingR2Key?: string
   screenRecordingSizeBytes?: number
   audioRecordingR2Key?: string
@@ -374,6 +375,7 @@ export async function updateSession(
   if (input.completedAt) updateFields.completedAt = new Date(input.completedAt)
   if (input.recordingR2Key) updateFields.recordingR2Key = input.recordingR2Key
   if (input.recordingSizeBytes !== undefined) updateFields.recordingSizeBytes = input.recordingSizeBytes
+  if (input.recordingDurationSeconds !== undefined) updateFields.recordingDurationSeconds = input.recordingDurationSeconds
   if (input.screenRecordingR2Key) updateFields.screenRecordingR2Key = input.screenRecordingR2Key
   if (input.screenRecordingSizeBytes !== undefined) updateFields.screenRecordingSizeBytes = input.screenRecordingSizeBytes
   if (input.audioRecordingR2Key) updateFields.audioRecordingR2Key = input.audioRecordingR2Key

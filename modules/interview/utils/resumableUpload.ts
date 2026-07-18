@@ -28,6 +28,10 @@ interface QueuedReplayUpload {
   blob: Blob
   sizeBytes: number
   contentType: string
+  // Recorder-truth span, persisted in IDB so a drain on a LATER page mount
+  // (where the interview tab's own duration PATCH never ran) still delivers
+  // it to the server at multipart 'complete'.
+  durationSeconds?: number
   createdAt: number
   key?: string
   uploadId?: string
@@ -260,6 +264,7 @@ async function completeMultipart(record: QueuedReplayUpload): Promise<string> {
     uploadId: record.uploadId,
     parts: record.parts,
     sizeBytes: record.sizeBytes,
+    ...(record.durationSeconds !== undefined ? { durationSeconds: record.durationSeconds } : {}),
   })
   return result.key
 }
@@ -415,7 +420,8 @@ async function uploadDirect(
   sessionId: string,
   kind: ReplayUploadKind,
   blob: Blob,
-  contentType: string
+  contentType: string,
+  durationSeconds?: number
 ): Promise<boolean> {
   const res = await fetch('/api/storage/presign', {
     method: 'POST',
@@ -438,7 +444,11 @@ async function uploadDirect(
 
   const patchBody = kind === 'screen'
     ? { screenRecordingR2Key: key, screenRecordingSizeBytes: blob.size }
-    : { recordingR2Key: key, recordingSizeBytes: blob.size }
+    : {
+        recordingR2Key: key,
+        recordingSizeBytes: blob.size,
+        ...(durationSeconds !== undefined ? { recordingDurationSeconds: durationSeconds } : {}),
+      }
   const patchRes = await fetch(`/api/interviews/${sessionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -450,12 +460,13 @@ async function uploadDirect(
 export async function uploadReplayRecording(
   sessionId: string,
   kind: ReplayUploadKind,
-  blob: Blob
+  blob: Blob,
+  durationSeconds?: number
 ): Promise<ReplayUploadResult> {
   const contentType = blob.type || 'video/webm'
   if (blob.size <= DIRECT_UPLOAD_LIMIT_BYTES) {
     try {
-      const uploaded = await uploadDirect(sessionId, kind, blob, contentType)
+      const uploaded = await uploadDirect(sessionId, kind, blob, contentType, durationSeconds)
       return { status: uploaded ? 'uploaded' : 'dropped' }
     } catch (err) {
       console.warn('Replay direct upload dropped', err)
@@ -470,6 +481,7 @@ export async function uploadReplayRecording(
     blob,
     sizeBytes: blob.size,
     contentType,
+    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
     createdAt: Date.now(),
     parts: [],
     attempts: 0,
@@ -516,6 +528,29 @@ export async function uploadReplayRecording(
   } finally {
     releaseLease(record.id)
   }
+}
+
+/**
+ * Does an un-dead queued upload exist for this session+kind? Used by the
+ * feedback page to distinguish "upload plausibly in flight" (show an honest
+ * "still uploading" state, keep watching) from "never coming" (show the
+ * definitive no-video message immediately). Zombie records — past the R2
+ * multipart TTL or out of retry budget — are excluded: they can never
+ * complete, and counting them would keep the optimistic message lying for up
+ * to 7 days of revisits.
+ */
+export async function hasQueuedReplayUpload(
+  sessionId: string,
+  kind: ReplayUploadKind = 'camera'
+): Promise<boolean> {
+  const records = await getAllUploads()
+  return records.some(
+    (record) =>
+      record.sessionId === sessionId &&
+      record.kind === kind &&
+      !isExpiredRecord(record) &&
+      !isExhaustedRetries(record)
+  )
 }
 
 export async function drainQueuedReplayUploads(): Promise<DrainReplayUploadsResult> {

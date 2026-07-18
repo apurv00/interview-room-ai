@@ -147,6 +147,54 @@ describe('MultimodalReplayShell — MediaRecorder duration probe (Codex P1)', ()
     expect(onTimeUpdate).not.toHaveBeenCalled()
   })
 
+  it('a pre-metadata seek does not start the probe and does not freeze timeupdate (Codex P2 #555)', () => {
+    const onTimeUpdate = vi.fn()
+    let seek: ((sec: number) => void) | null = null
+    const { container } = render(
+      <MultimodalReplayShell
+        src="blob:fake"
+        currentTimeSec={0}
+        playing={false}
+        setPlaying={() => {}}
+        replayFullscreen={false}
+        setReplayFullscreen={() => {}}
+        onTimeUpdate={onTimeUpdate}
+        onSeekRef={(fn) => { seek = fn }}
+        knownDurationSeconds={1800}
+      />
+    )
+    const video = container.querySelector('video')! as HTMLVideoElement
+    // Before metadata: duration NaN, readyState HAVE_NOTHING (jsdom default 0).
+    Object.defineProperty(video, 'duration', { configurable: true, get: () => NaN })
+
+    // Moment-click lands before loadedmetadata: must park, NOT probe — the
+    // old code set durationProbeInProgress immediately (a seek browsers
+    // discard pre-metadata), and the known-duration loadedmetadata path
+    // returned without clearing it, suppressing every subsequent timeupdate
+    // (frozen multimodal timeline).
+    act(() => { seek!(1330) })
+
+    // Pre-metadata timeupdates must NOT be suppressed (probe not started).
+    Object.defineProperty(video, 'currentTime', { configurable: true, get: () => 12.5, set: () => {} })
+    act(() => { fireEvent.timeUpdate(video) })
+    expect(onTimeUpdate).toHaveBeenCalledWith(12.5)
+
+    // Once metadata lands, the parked seek resumes via the probe, and the
+    // probe completes through durationchange, applying the parked target.
+    const seeks: number[] = []
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: () => 12.5,
+      set: (v: number) => { seeks.push(v) },
+    })
+    act(() => { fireEvent.loadedMetadata(video) })
+    expect(seeks).toContain(Number.MAX_SAFE_INTEGER)
+
+    Object.defineProperty(video, 'duration', { configurable: true, get: () => 1789 })
+    act(() => { fireEvent.durationChange(video) })
+    expect(seeks).toContain(1330)
+  })
+
   it('does NOT forward non-finite currentTime even if a stray timeupdate fires', () => {
     const onTimeUpdate = vi.fn()
     const { container } = render(

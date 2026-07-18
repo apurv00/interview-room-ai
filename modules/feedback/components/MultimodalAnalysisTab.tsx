@@ -39,6 +39,12 @@ interface MultimodalAnalysisTabProps {
   hasAnalysisSource: boolean
   videoSrc: string | null
   recordingUrl: string | null
+  /** Recorder-truth duration persisted at upload — see MultimodalReplayShell. */
+  recordingDurationSeconds?: number | null
+  /** What the video-less fallback should say (watch-plan-driven, page-owned). */
+  recordingFallback?: 'none' | 'uploading' | 'privacy'
+  /** Presign refresh for expired camera URLs (absent for legacy sources). */
+  onRequestFreshVideoUrl?: () => Promise<string | null>
   sessionStartedAt: number | null
   questionMarkers: QuestionMarker[]
   keyMoments: TimelineEvent[]
@@ -95,6 +101,9 @@ export default function MultimodalAnalysisTab({
   hasAnalysisSource,
   videoSrc,
   recordingUrl,
+  recordingDurationSeconds,
+  recordingFallback = 'none',
+  onRequestFreshVideoUrl,
   sessionStartedAt,
   questionMarkers,
   keyMoments,
@@ -126,11 +135,17 @@ export default function MultimodalAnalysisTab({
   // last timeline event's endSec; final fallback 300s so divisions don't blow up.
   const totalDurationSec = useMemo(() => {
     if (videoDuration > 0) return videoDuration
+    // Recorder-truth duration (persisted at upload) beats the timeline
+    // fallback: the analysis timeline ends at the last whisper word, clipping
+    // trailing silence/wrap-up and distorting playhead/marker geometry.
+    if (typeof recordingDurationSeconds === 'number' && recordingDurationSeconds > 0) {
+      return recordingDurationSeconds
+    }
     if (analysis?.timeline && analysis.timeline.length > 0) {
       return Math.ceil(analysis.timeline[analysis.timeline.length - 1].endSec)
     }
     return 300
-  }, [videoDuration, analysis?.timeline])
+  }, [videoDuration, recordingDurationSeconds, analysis?.timeline])
 
   // Active question — extracted to `findActiveQuestionIndex` for direct unit
   // testing. Returns -1 (no active question) when playback is before the
@@ -355,10 +370,32 @@ export default function MultimodalAnalysisTab({
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
             </svg>
           </div>
-          <p className="text-lg font-medium text-stone-900">Video wasn&apos;t recorded for this session</p>
-          <p className="text-sm text-stone-600 max-w-md mx-auto">
-            Multimodal replay is unavailable, but you can still review the transcript and coaching tips below.
-          </p>
+          {recordingFallback === 'uploading' ? (
+            <>
+              <p className="text-lg font-medium text-stone-900">Your recording is still uploading</p>
+              <p className="text-sm text-stone-600 max-w-md mx-auto">
+                Large videos can take a few minutes to finish uploading. This page
+                picks the replay up automatically once it lands.
+              </p>
+            </>
+          ) : recordingFallback === 'privacy' ? (
+            <>
+              <p className="text-lg font-medium text-stone-900">Video wasn&apos;t stored (privacy mode)</p>
+              <p className="text-sm text-stone-600 max-w-md mx-auto">
+                You opted out of video storage for this session. Transcript and
+                coaching tips are still available below.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-medium text-stone-900">No replay video available for this session</p>
+              <p className="text-sm text-stone-600 max-w-md mx-auto">
+                The video may not have finished uploading, or was removed after the
+                30-day replay retention window. Transcript and coaching tips are
+                still available below.
+              </p>
+            </>
+          )}
         </section>
 
         <TranscriptTab
@@ -403,6 +440,8 @@ export default function MultimodalAnalysisTab({
         <div className="bg-white border border-stone-200 rounded-xl p-3.5 flex flex-col gap-3 min-h-0 flex-[1.4] min-w-0">
           <MultimodalReplayShell
             src={videoSrc}
+            knownDurationSeconds={recordingDurationSeconds}
+            onRequestFreshUrl={onRequestFreshVideoUrl}
             currentTimeSec={analysisVideoTime}
             onTimeUpdate={setAnalysisVideoTime}
             onSeekRef={(fn) => {

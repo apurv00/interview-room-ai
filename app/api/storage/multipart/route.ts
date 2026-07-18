@@ -30,6 +30,10 @@ const MultipartSchema = z.object({
   uploadId: z.string().max(1000).optional(),
   partNumber: z.number().int().min(1).max(10_000).optional(),
   sizeBytes: z.number().int().min(0).optional(),
+  // Recorder-truth span, persisted with the camera recording at 'complete' so
+  // queued-drain uploads (finished on a later page, where the interview tab's
+  // own duration PATCH may never have landed) still carry it.
+  durationSeconds: z.number().min(1).max(14_400).optional(),
   parts: z.array(
     z.object({
       partNumber: z.number().int().min(1).max(10_000),
@@ -60,14 +64,18 @@ function keyFor(type: RecordingType, userId: string, sessionId: string): string 
   return recordingKey(userId, sessionId)
 }
 
-function patchFor(type: RecordingType, key: string, sizeBytes: number) {
+function patchFor(type: RecordingType, key: string, sizeBytes: number, durationSeconds?: number) {
   if (type === 'screen-recording') {
     return { screenRecordingR2Key: key, screenRecordingSizeBytes: sizeBytes }
   }
   if (type === 'audio-recording') {
     return { audioRecordingR2Key: key, audioRecordingSizeBytes: sizeBytes }
   }
-  return { recordingR2Key: key, recordingSizeBytes: sizeBytes }
+  return {
+    recordingR2Key: key,
+    recordingSizeBytes: sizeBytes,
+    ...(durationSeconds !== undefined ? { recordingDurationSeconds: durationSeconds } : {}),
+  }
 }
 
 function persistedFieldNames(type: RecordingType) {
@@ -168,7 +176,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
     }
 
-    const { action, type, sessionId, key, uploadId, partNumber, parts, sizeBytes } = parsed.data
+    const { action, type, sessionId, key, uploadId, partNumber, parts, sizeBytes, durationSeconds } = parsed.data
     Object.assign(logContext, {
       action,
       type,
@@ -249,7 +257,7 @@ export async function POST(req: NextRequest) {
       }
       await InterviewSession.findOneAndUpdate(
         { _id: sessionId, userId },
-        { $set: patchFor(type, key, sizeBytes) }
+        { $set: patchFor(type, key, sizeBytes, durationSeconds) }
       )
       return NextResponse.json({ key })
     }

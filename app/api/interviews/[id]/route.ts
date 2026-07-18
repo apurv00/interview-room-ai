@@ -44,6 +44,7 @@ export async function GET(
     const responseData = interviewSession.toObject ? interviewSession.toObject() : { ...interviewSession }
     const hasRecording = !!responseData.recordingR2Key
     const hasScreenRecording = !!responseData.screenRecordingR2Key
+    const hasAudioRecording = !!responseData.audioRecordingR2Key
     const hasLiveTranscriptWords =
       Array.isArray(responseData.liveTranscriptWords) && responseData.liveTranscriptWords.length > 0
 
@@ -78,6 +79,9 @@ export async function GET(
     delete responseData.liveTranscriptWords
     responseData.hasRecording = hasRecording
     responseData.hasScreenRecording = hasScreenRecording
+    // Lets the feedback page fetch the audio-only replay object without a
+    // guaranteed-404 probe on sessions that predate the audio track.
+    responseData.hasAudioRecording = hasAudioRecording
     // Mirror the gate in /api/analysis/start: transcript or live words only.
     // Evaluations alone do NOT drive analysis (Codex P2 #1 on PR #332).
     responseData.hasAnalysisSource = hasLiveTranscriptWords || hasStoredTranscript

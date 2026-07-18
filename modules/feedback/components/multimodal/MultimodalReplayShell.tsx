@@ -28,7 +28,20 @@ interface MultimodalReplayShellProps {
   setReplayFullscreen: (v: boolean) => void
   /** Optional callback when video metadata loads — useful for picking up duration. */
   onDurationKnown?: (sec: number) => void
+  /**
+   * Recorder-truth duration persisted at upload time. Skips the EOF probe
+   * (which forces a full-file download at mount on cue-less MediaRecorder
+   * webm). Legacy sessions without it keep the probe fallback.
+   */
+  knownDurationSeconds?: number | null
+  /**
+   * Mint a fresh presigned URL after a media error (expired presign TTL).
+   * Parent swaps src; this component restores the playhead.
+   */
+  onRequestFreshUrl?: () => Promise<string | null>
 }
+
+const MAX_URL_REFRESH_ATTEMPTS = 2
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -62,17 +75,51 @@ export default function MultimodalReplayShell({
   replayFullscreen,
   setReplayFullscreen,
   onDurationKnown,
+  knownDurationSeconds,
+  onRequestFreshUrl,
 }: MultimodalReplayShellProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const lastEmitRef = useRef(0)
   const [internalDuration, setInternalDuration] = useState(0)
 
+  // Prop mirrors + recovery state for the listener effect below.
+  const knownDurationRef = useRef(knownDurationSeconds)
+  knownDurationRef.current = knownDurationSeconds
+  const onRequestFreshUrlRef = useRef(onRequestFreshUrl)
+  onRequestFreshUrlRef.current = onRequestFreshUrl
+  const playingRef = useRef(false)
+  playingRef.current = playing
+  const refreshAttemptsRef = useRef(0)
+  const restoreAfterRefreshRef = useRef<{ time: number; wasPlaying: boolean } | null>(null)
+  const lastKnownTimeRef = useRef(0)
+  const pendingSeekRef = useRef<number | null>(null)
+  const requestProbeRef = useRef<(() => void) | null>(null)
+
   // Seek function exposed via the ref-callback pattern. Guard against
   // non-finite seconds (the existing VideoPlayer hit a TypeError here when
   // the duration hadn't loaded yet — same defensive check applies).
   const seekTo = useCallback((seconds: number) => {
-    if (!videoRef.current || !Number.isFinite(seconds)) return
-    videoRef.current.currentTime = seconds
+    const v = videoRef.current
+    if (!v || !Number.isFinite(seconds)) return
+    // Seek guard: with the EOF probe skipped (knownDurationSeconds), the
+    // element's own duration can still be Infinity, and a seek into
+    // unbuffered territory on a cue-less webm can clamp to the buffered end
+    // (a moment-click at 22:10 landing at 0:05). Run the probe first, then
+    // complete the seek when the real duration lands — the full-read cost is
+    // paid only when the user actually seeks.
+    if (!Number.isFinite(v.duration) && seconds > 0.5) {
+      pendingSeekRef.current = seconds
+      // Probe only once metadata is loaded: a pre-metadata probe leaves
+      // durationProbeInProgress set through the known-duration
+      // loadedmetadata path, permanently suppressing timeupdate (frozen
+      // timeline — Codex P2 #555). Pre-metadata seeks park in
+      // pendingSeekRef; loadedmetadata resumes them.
+      if (v.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        requestProbeRef.current?.()
+      }
+      return
+    }
+    v.currentTime = seconds
   }, [])
 
   useEffect(() => {
@@ -155,20 +202,56 @@ export default function MultimodalReplayShell({
 
     let durationProbeInProgress = false
 
-    const onLoadedMetadata = () => {
-      if (Number.isFinite(v.duration) && v.duration > 0) {
-        setInternalDuration(v.duration)
-        onDurationKnown?.(v.duration)
-        return
-      }
-      // Trigger the probe.
+    const startProbe = () => {
+      if (durationProbeInProgress) return
       durationProbeInProgress = true
       try {
         v.currentTime = Number.MAX_SAFE_INTEGER
       } catch {
         // Some browsers throw on non-finite seeks; nothing we can do
-        // beyond leaving duration at 0.
+        // beyond leaving duration at 0. The flag deliberately stays set so
+        // stray timeupdate events remain suppressed (original semantics).
       }
+    }
+    requestProbeRef.current = startProbe
+
+    const restoreAfterRefresh = () => {
+      const restore = restoreAfterRefreshRef.current
+      if (!restore) return
+      restoreAfterRefreshRef.current = null
+      try { v.currentTime = restore.time } catch { /* ignore */ }
+      if (restore.wasPlaying) {
+        v.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
+      }
+    }
+
+    const onLoadedMetadata = () => {
+      if (Number.isFinite(v.duration) && v.duration > 0) {
+        setInternalDuration(v.duration)
+        onDurationKnown?.(v.duration)
+        restoreAfterRefresh()
+        const pending = pendingSeekRef.current
+        if (pending !== null) {
+          pendingSeekRef.current = null
+          try { v.currentTime = pending } catch { /* ignore */ }
+        }
+        return
+      }
+      const known = knownDurationRef.current
+      if (typeof known === 'number' && known > 0) {
+        // Probe skipped — recorder-truth duration drives the timeline. The
+        // durationchange path below still lets the browser's own finite
+        // value win when the file fully buffers.
+        setInternalDuration(known)
+        onDurationKnown?.(known)
+        restoreAfterRefresh()
+        // A seek parked before metadata loaded (seek guard defers the probe
+        // until HAVE_METADATA) resumes here.
+        if (pendingSeekRef.current !== null) startProbe()
+        return
+      }
+      // Legacy session without a persisted duration — trigger the probe.
+      startProbe()
     }
 
     const onDurationChange = () => {
@@ -177,8 +260,11 @@ export default function MultimodalReplayShell({
         onDurationKnown?.(v.duration)
         if (durationProbeInProgress) {
           durationProbeInProgress = false
-          // Restore playhead to start after the EOF probe.
-          try { v.currentTime = 0 } catch { /* ignore */ }
+          // Restore playhead after the EOF probe — to the seek that
+          // triggered it (seek guard), else to the start.
+          const target = pendingSeekRef.current ?? 0
+          pendingSeekRef.current = null
+          try { v.currentTime = target } catch { /* ignore */ }
         }
       }
     }
@@ -192,6 +278,7 @@ export default function MultimodalReplayShell({
       if (now - lastEmitRef.current < TIME_UPDATE_THROTTLE_MS) return
       lastEmitRef.current = now
       if (Number.isFinite(v.currentTime)) {
+        lastKnownTimeRef.current = v.currentTime
         onTimeUpdate?.(v.currentTime)
       }
     }
@@ -199,6 +286,30 @@ export default function MultimodalReplayShell({
     const onEnded = () => setPlaying(false)
     const onPlay = () => setPlaying(true)
     const onPause = () => setPlaying(false)
+    const onCanPlay = () => {
+      // Healthy load — reset the per-src refresh budget.
+      refreshAttemptsRef.current = 0
+    }
+    const onError = () => {
+      // This shell previously had NO error listener: when the presigned URL
+      // expired (30-min TTL vs long-open tabs), play() rejected silently and
+      // the button just died until a full reload. Recover by minting a fresh
+      // URL (any error code — expired presigns surface as SRC_NOT_SUPPORTED
+      // on load and NETWORK mid-play), bounded per src load.
+      const refresh = onRequestFreshUrlRef.current
+      if (!refresh || refreshAttemptsRef.current >= MAX_URL_REFRESH_ATTEMPTS) return
+      refreshAttemptsRef.current += 1
+      durationProbeInProgress = false
+      restoreAfterRefreshRef.current = {
+        time: lastKnownTimeRef.current,
+        wasPlaying: playingRef.current,
+      }
+      setPlaying(false)
+      void refresh().then((freshUrl) => {
+        if (!freshUrl) restoreAfterRefreshRef.current = null
+        // On success the parent swaps src; loadedmetadata restores position.
+      })
+    }
 
     v.addEventListener('loadedmetadata', onLoadedMetadata)
     v.addEventListener('durationchange', onDurationChange)
@@ -206,14 +317,19 @@ export default function MultimodalReplayShell({
     v.addEventListener('ended', onEnded)
     v.addEventListener('play', onPlay)
     v.addEventListener('pause', onPause)
+    v.addEventListener('canplay', onCanPlay)
+    v.addEventListener('error', onError)
 
     return () => {
+      requestProbeRef.current = null
       v.removeEventListener('loadedmetadata', onLoadedMetadata)
       v.removeEventListener('durationchange', onDurationChange)
       v.removeEventListener('timeupdate', onTimeUpdateEv)
       v.removeEventListener('ended', onEnded)
       v.removeEventListener('play', onPlay)
       v.removeEventListener('pause', onPause)
+      v.removeEventListener('canplay', onCanPlay)
+      v.removeEventListener('error', onError)
     }
   }, [onTimeUpdate, onDurationKnown, setPlaying])
 
