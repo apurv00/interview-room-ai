@@ -27,7 +27,7 @@ for results.
    `{ jobId, status: 'pending' }` in <500ms.
 2. **Pending.** Feedback page shows a progress card ("Analyzing your
    interview — this takes about a minute"). Client polls
-   `GET /api/analysis/[sessionId]` every 3s.
+   `GET /api/analysis/[sessionId]` every 2s (max 90 ticks / 180s per trigger).
 3. **Processing.** The background job transcribes audio (Groq Whisper),
    downloads the facial landmarks blob from R2, computes prosody +
    facial signals, and runs a Claude Haiku fusion pass. DB status
@@ -92,7 +92,7 @@ Triggers:
 | Pipeline | `modules/interview/services/analysis/multimodalPipeline.ts` | Pure-function stages: `stepFetchSession`, `stepTranscribeAndDownload`, `stepProcessSignals`, `stepRunFusion`, `stepPersistResults`, `stepMarkFailed`. |
 | Storage | `shared/storage/r2.ts` | R2 client. Stores video recording, facial landmarks blob, audio track. |
 | AI | `shared/services/modelRouter.ts` | Claude Haiku fusion call routed via `completion()`. |
-| Client | `modules/interview/components/replay/AnalysisTrigger.tsx` | Fire-and-poll harness. 3s polling interval, progressive progress bar. |
+| Client | `app/feedback/[sessionId]/page.tsx` (`fetchAnalysis`/`pollAnalysis`) | Fire-and-poll harness, inline on the feedback page. 2s polling interval, 90-tick cap, progressive progress bar. |
 | Client | `modules/interview/components/replay/ReplayPage.tsx` | Renders the completed analysis: synced video, timeline, transcript. |
 | Model | `shared/db/models/InterviewSession.ts` | `analysisStatus`, `analysisResult`, `liveTranscriptWords`, R2 keys. |
 
@@ -142,7 +142,7 @@ Resets a failed row. Idempotent. Body is empty.
 
 | User experience | State | Implementation |
 |---|---|---|
-| "Analyzing your interview…" card appears | `pending` | `AnalysisTrigger.tsx` posts to `/api/analysis/start` |
+| "Analyzing your interview…" card appears | `pending` | feedback page `fetchAnalysis` posts to `/api/analysis/start` |
 | Progress bar advances to 40% | `processing` | `stepTranscribeAndDownload` completes in `analysisJob.ts:56` |
 | Progress bar advances to 75% | `processing` | `stepProcessSignals` + `stepRunFusion` complete |
 | Replay UI fades in | `completed` | Poll response includes `analysis` payload; `ReplayPage.tsx` renders |

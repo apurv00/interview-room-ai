@@ -434,10 +434,9 @@ Practice history: 5 sessions, avg score 72."
 ### Media Recording (`useMediaRecorder.ts`)
 
 - **API**: MediaRecorder API
-- **Format**: `video/webm; codecs=vp8,opus`
-- **Captures**: Camera video + microphone audio combined
-- **Upload**: Auto-uploads to R2 via `/api/recordings/upload` on interview end
-- **Size Limit**: 50MB max
+- **Format**: `video/webm; codecs=vp9,opus` (vp8 fallback)
+- **Captures**: Camera video (720p/24fps, 700 kbps) + mixed audio (candidate mic + AI voice, 64 kbps); a parallel audio-only webm records the same mix for transcription
+- **Upload**: Direct-to-R2 presigned PUT (≤20MB) or resumable multipart with IndexedDB retry queue (>20MB) on interview end — no server-side size cap; ~5.7 MB/min means 20/30-min interviews exceed 100MB by design
 - **Playback**: Available in feedback page via presigned R2 URLs
 
 ---
