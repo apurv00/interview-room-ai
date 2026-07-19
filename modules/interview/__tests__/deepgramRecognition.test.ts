@@ -3431,4 +3431,52 @@ describe('word-timestamp clock (drift regression)', () => {
     expect(last.start).toBeGreaterThan(1)
     expect(last.start).toBeLessThan(4.5)
   })
+
+  it('open-first ordering: the flush hands the anchor off before any live frame (Codex P2 #556 round 2)', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    const done = vi.fn()
+    await act(async () => {
+      result.current.startListening(done)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    const wsA = mockWsInstance!
+    act(() => { postFrame(4096) })
+
+    await act(async () => {
+      wsA.readyState = MockWebSocket.CLOSED
+      wsA.onclose?.(new CloseEvent('close', { code: 1011, reason: 'NET-0001', wasClean: false }))
+      await vi.advanceTimersByTimeAsync(2_000)
+    })
+    const wsB = mockWsInstance!
+    // Frames buffer while B is CONNECTING (anchor stamps ~2.3s), then B dies.
+    act(() => { postFrame(4096) })
+    await act(async () => {
+      wsB.readyState = MockWebSocket.CLOSED
+      wsB.onclose?.(new CloseEvent('close', { code: 1011, reason: 'NET-0001', wasClean: false }))
+      await vi.advanceTimersByTimeAsync(4_000)
+    })
+    const wsC = mockWsInstance!
+
+    // C OPENS FIRST — onopen's flushPendingPcm drains the B-era buffer
+    // before any live worklet frame arrives. The flush must hand the
+    // anchor to C; the later live frame must NOT re-stamp (~6.3s).
+    act(() => { wsC.simulateOpen() })
+    act(() => { postFrame(4096) })
+
+    await act(async () => {
+      wsC.simulateMessage(resultWithWords([{ word: 'kept', start: 0.1, end: 0.3 }]))
+      wsC.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3_500)
+    })
+    expect(done).toHaveBeenCalled()
+    const words = done.mock.calls[0][0].words as Array<{ start: number }>
+    const last = words[words.length - 1]
+    expect(last.start).toBeGreaterThan(1)
+    expect(last.start).toBeLessThan(4.5)
+  })
 })

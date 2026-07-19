@@ -1209,6 +1209,18 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     if (ws.readyState !== WebSocket.OPEN) return
     const frames = pcmBufferRef.current.drain()
     if (frames.length === 0) return
+    // Anchor handoff at the moment carried-over audio enters this socket
+    // (Codex P2 #556, round 2): when the successor of a failed-CONNECTING
+    // socket OPENS before any new worklet frame arrives, this flush drains
+    // the buffer first — the frame-time size() guard would then see an
+    // empty buffer and re-stamp, landing the flushed audio's words late by
+    // the reconnect gap. Adopting the socket here keeps the anchor that
+    // describes the flushed frames' capture time, making the open-first
+    // and frame-first orderings identical. No-op for a socket that already
+    // owns the anchor (normal cold-path flush).
+    if (anchoredWsRef.current !== ws && turnBaseAudioSecRef.current !== null) {
+      anchoredWsRef.current = ws
+    }
     for (const frame of frames) {
       try {
         ws.send(frame)
