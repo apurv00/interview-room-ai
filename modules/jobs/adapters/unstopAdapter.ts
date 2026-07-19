@@ -123,8 +123,11 @@ export const unstopAdapter: JobSourceAdapter = {
         ? it.seo_url
         : typeof it.public_url === 'string' && it.public_url.startsWith('http')
           ? it.public_url
-          : typeof it.public_url === 'string' && /^[a-z0-9][\w/-]*$/i.test(it.public_url)
-            ? `https://unstop.com/${it.public_url}`
+          : typeof it.public_url === 'string' && /^\/?[a-z0-9][\w/-]*$/i.test(it.public_url)
+            // One optional leading slash (root-relative '/jobs/foo' —
+            // Codex #558); '//host' stays blocked: the char after the
+            // optional slash must be alphanumeric.
+            ? `https://unstop.com/${it.public_url.replace(/^\//, '')}`
             : null
     if (!publicUrl) return null
 

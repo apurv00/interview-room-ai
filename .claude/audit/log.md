@@ -4091,3 +4091,14 @@ durable record; ids are best-effort pointers.
 - Ops queued post-merge: reset unstop health quarantined→active so the scheduler retries; verify next daily cycle STORES rows.
 - Also this pass: lever:groww confirmed dead at Lever ('Document not found') → disabled (reversible); porter re-probe live (3 rows — the 0-fetch cycle was likely a transient; watch next 6h cycle).
 - Verified: indiaAdapters 21 passed; full clean-env vitest 5774 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-19 — #558 Codex round 1 (1 P2, fixed)
+- Root-relative '/jobs/foo' (leading slash) still nulled under the alphanumeric-first charset — a page of that common form would re-trip the drift quarantine this PR exists to fix. One optional leading slash now accepted (stripped before origin-prefixing); '//host' protocol-relative stays blocked (char after the optional slash must be alphanumeric). Vector added.
+- Verified: indiaAdapters 21 passed; full clean-env vitest 5774 passed | 17 skipped; tsc/build clean.

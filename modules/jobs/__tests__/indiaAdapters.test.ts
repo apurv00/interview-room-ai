@@ -280,6 +280,9 @@ describe('unstop adapter', () => {
     // relative public_url alone → origin-prefixed
     const viaRel = unstopAdapter.normalize({ ...base, public_url: 'jobs/b2b-sales-1720712' }, { kind: 'feed' } as never)
     expect(viaRel!.applyOptions[0].url).toBe('https://unstop.com/jobs/b2b-sales-1720712')
+    // root-relative form (Codex #558) — one leading slash is fine
+    const viaRoot = unstopAdapter.normalize({ ...base, public_url: '/jobs/b2b-sales-1720712' }, { kind: 'feed' } as never)
+    expect(viaRoot!.applyOptions[0].url).toBe('https://unstop.com/jobs/b2b-sales-1720712')
     // junk paths still gate out — the apply-path promise stands
     expect(unstopAdapter.normalize({ ...base, public_url: '//evil.example/x' }, { kind: 'feed' } as never)).toBeNull()
     expect(unstopAdapter.normalize({ ...base, public_url: 'javascript:alert(1)' }, { kind: 'feed' } as never)).toBeNull()
