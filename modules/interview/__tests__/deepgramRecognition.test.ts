@@ -3371,4 +3371,64 @@ describe('word-timestamp clock (drift regression)', () => {
     expect(last.start).toBeGreaterThan(15)
     expect(last.start).toBeLessThan(30)
   })
+
+  it('a failed CONNECTING socket hands its buffered audio AND its anchor to the next socket (Codex P2 #556)', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    act(() => { result.current.warmUp() })
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    act(() => { mockWsInstance!.simulateOpen() })
+
+    const done = vi.fn()
+    await act(async () => {
+      result.current.startListening(done)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    const wsA = mockWsInstance!
+    act(() => { postFrame(4096) })
+
+    // Socket A dies mid-turn → reconnect B after backoff.
+    await act(async () => {
+      wsA.readyState = MockWebSocket.CLOSED
+      wsA.onclose?.(new CloseEvent('close', { code: 1011, reason: 'NET-0001', wasClean: false }))
+      await vi.advanceTimersByTimeAsync(2_000)
+    })
+    const wsB = mockWsInstance!
+    expect(wsB).not.toBe(wsA)
+
+    // Frames arrive while B is CONNECTING: they buffer, and the anchor
+    // stamps at THIS capture time (~2.3s into the turn).
+    act(() => { postFrame(4096) })
+
+    // B fails BEFORE opening → reconnect C after another backoff. The
+    // buffered frames survive into C's flush.
+    await act(async () => {
+      wsB.readyState = MockWebSocket.CLOSED
+      wsB.onclose?.(new CloseEvent('close', { code: 1011, reason: 'NET-0001', wasClean: false }))
+      await vi.advanceTimersByTimeAsync(4_000)
+    })
+    const wsC = mockWsInstance!
+    expect(wsC).not.toBe(wsB)
+
+    // More frames while C is CONNECTING — the anchor must NOT re-stamp to
+    // now (~6.3s): the buffer still holds B-era audio that will occupy C's
+    // stream from position 0.
+    act(() => { postFrame(4096) })
+    act(() => { wsC.simulateOpen() }) // flushPendingPcm sends buffered frames
+
+    await act(async () => {
+      // Deepgram's clock on C: the flushed B-era frame sits at ~0.
+      wsC.simulateMessage(resultWithWords([{ word: 'kept', start: 0.1, end: 0.3 }]))
+      wsC.simulateMessage(makeUtteranceEnd())
+      await vi.advanceTimersByTimeAsync(3_500)
+    })
+    expect(done).toHaveBeenCalled()
+    const words = done.mock.calls[0][0].words as Array<{ start: number }>
+    const last = words[words.length - 1]
+    // The B-era audio was captured ~2.3s in; with the anchor preserved the
+    // word lands there. Re-stamping at C's first frame (~6.3s) — the bug —
+    // would push it past 6s.
+    expect(last.start).toBeGreaterThan(1)
+    expect(last.start).toBeLessThan(4.5)
+  })
 })

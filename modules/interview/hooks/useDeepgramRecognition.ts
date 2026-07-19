@@ -1828,10 +1828,22 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // once sockets became preserved across turns — e7bb36d vs 090cae2.)
       if (anchoredWsRef.current !== activeWs) {
         anchoredWsRef.current = activeWs
-        turnBaseAudioSecRef.current = audioStreamBaseSeconds(
-          Date.now(),
-          (activeWs as TaggedWebSocket).__sentSamples ?? 0,
-        )
+        // Reconnect with buffered audio pending (the previous socket died
+        // while still CONNECTING): those frames were captured under the
+        // CURRENT anchor and will occupy the new connection's stream from
+        // position 0 when flushPendingPcm runs — re-stamping now would
+        // shift this turn's words late by the buffered duration (Codex P2
+        // #556). Keep the anchor: it still describes the capture time of
+        // the oldest audio bound for this socket. (Ring overflow beyond
+        // ~10s trims that oldest audio, leaving the preserved anchor early
+        // by the trimmed span — bounded, and only reachable on a
+        // pathologically hung connection.)
+        if (pcmBufferRef.current.size() === 0 || turnBaseAudioSecRef.current === null) {
+          turnBaseAudioSecRef.current = audioStreamBaseSeconds(
+            Date.now(),
+            (activeWs as TaggedWebSocket).__sentSamples ?? 0,
+          )
+        }
       }
       if (activeWs.readyState === WebSocket.CONNECTING) {
         // Worklet launched in parallel with warmUp (slow path in
