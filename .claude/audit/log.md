@@ -4066,3 +4066,14 @@ durable record; ids are best-effort pointers.
 ## 2026-07-19 — role prefill from latest experience on the saved-resume door (founder screenshot)
 - RCA: paste/upload paths already prefill role from experience[0].title; the "Use my saved resume" door copied only the saved targetRole — empty target = empty box (the founder's screenshot). Fix: BaseResumeSummary.latestRole = first non-empty experience title (service already loads the full resume); importBase prefills targetRole || latestRole, editable as before, saved target wins when present.
 - Verified: baseResumeService + start suites 14 passed; full clean-env vitest 5773 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-19 — #557 Codex round 1 (1 P2, fixed)
+- A whitespace-only saved targetRole beat latestRole on truthiness (the save path preserves targets as typed) — the confirm bar stayed blank despite a found experience title. Prefill predicate now trims first; fixture switched to '   ' so the trim is pinned directly.
+- Verified: start suite 6 passed; full clean-env vitest 5773 passed | 17 skipped; tsc/lint/build clean.

@@ -41,7 +41,7 @@ describe('/jobs/start doors', () => {
   it('saved-resume door prefills the role from the latest experience when no saved target exists (founder 2026-07-19)', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (String(url) === '/api/jobs/base-resume') {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ base: { id: 'r1', name: 'Apurv Resume.pdf', targetRole: '', latestRole: 'Senior Product Manager', skills: ['Roadmaps'] } }) })
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ base: { id: 'r1', name: 'Apurv Resume.pdf', targetRole: '   ', latestRole: 'Senior Product Manager', skills: ['Roadmaps'] } }) })
       }
       return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
     })
@@ -51,6 +51,10 @@ describe('/jobs/start doors', () => {
     await waitFor(() => expect(screen.getByText(/Role you.*targeting/i)).toBeTruthy())
     const input = screen.getByDisplayValue('Senior Product Manager') as HTMLInputElement
     expect(input).toBeTruthy()
+    // Codex #557: a WHITESPACE-only saved target must not beat the
+    // experience title (the save path preserves targets as typed) —
+    // covered by targetRole: '' above and pinned for '   ' via the same
+    // trim-first predicate.
     // Editable, and a saved TARGET wins over the experience title when present.
     fireEvent.change(input, { target: { value: 'VP Product' } })
     expect((screen.getByDisplayValue('VP Product') as HTMLInputElement)).toBeTruthy()

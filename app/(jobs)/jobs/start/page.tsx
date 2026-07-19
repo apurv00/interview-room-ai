@@ -185,7 +185,10 @@ export default function JobsStartPage() {
     // Saved TARGET (future intent) wins when present; else prefill from the
     // resume's latest experience title — editable, same as the upload path
     // (founder 2026-07-19: the saved-resume door left the role box empty).
-    const prefill = importDoor.targetRole || importDoor.latestRole || ''
+    // trim(): a whitespace-only saved target must not beat the experience
+    // title on truthiness (Codex #557 — the save path preserves targets
+    // as typed).
+    const prefill = importDoor.targetRole?.trim() || importDoor.latestRole || ''
     setDetectedRole(prefill)
     setRole(prefill)
     track('jobs.resume_attach_started', { method: 'import' })
