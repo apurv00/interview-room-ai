@@ -272,6 +272,19 @@ describe('apna fetch', () => {
 // ── Unstop ───────────────────────────────────────────────────────────────────
 
 describe('unstop adapter', () => {
+  it("live-API drift 2026-07-19: RELATIVE public_url normalizes via seo_url or origin prefix — never nulls the row", () => {
+    const base = { title: 'B2B Sales Associate', organisation: { name: 'Aroi' }, regn_open: true, id: 1720712, details: 'A real JD body here with enough words.' }
+    // seo_url absolute → preferred
+    const viaSeo = unstopAdapter.normalize({ ...base, public_url: 'jobs/b2b-sales-1720712', seo_url: 'https://unstop.com/jobs/b2b-sales-1720712' }, { kind: 'feed' } as never)
+    expect(viaSeo!.applyOptions[0].url).toBe('https://unstop.com/jobs/b2b-sales-1720712')
+    // relative public_url alone → origin-prefixed
+    const viaRel = unstopAdapter.normalize({ ...base, public_url: 'jobs/b2b-sales-1720712' }, { kind: 'feed' } as never)
+    expect(viaRel!.applyOptions[0].url).toBe('https://unstop.com/jobs/b2b-sales-1720712')
+    // junk paths still gate out — the apply-path promise stands
+    expect(unstopAdapter.normalize({ ...base, public_url: '//evil.example/x' }, { kind: 'feed' } as never)).toBeNull()
+    expect(unstopAdapter.normalize({ ...base, public_url: 'javascript:alert(1)' }, { kind: 'feed' } as never)).toBeNull()
+  })
+
   const target = { kind: 'feed' as const, feedId: 'unstop:jobs', page: 1, perPage: 15 }
   const item = (over: Record<string, unknown> = {}) => ({
     id: 991,
