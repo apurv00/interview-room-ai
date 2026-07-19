@@ -7,7 +7,10 @@
 import { describe, it, expect, vi } from 'vitest'
 
 // Top-level imports of the hook module (the helper lives there).
-vi.mock('@interview/audio/recordingClock', () => ({ wallClockMsToAudioSeconds: vi.fn(() => 0) }))
+// Real module: with the clock unset it returns 0 for every helper — same as
+// the old single-export stub, without silently dropping newer exports the
+// hook imports (audioStreamBaseSeconds broke here as undefined; Codex P2 #556).
+vi.mock('@interview/audio/recordingClock', async (importOriginal) => await importOriginal())
 vi.mock('@shared/analytics/track', () => ({ track: vi.fn() }))
 
 import { selectGraceMs } from '@interview/hooks/useDeepgramRecognition'
