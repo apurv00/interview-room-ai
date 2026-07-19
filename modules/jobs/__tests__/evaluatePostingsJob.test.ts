@@ -222,6 +222,57 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     // and it is NOT an error — throttling must not pollute the shadow-exit metric
     expect(mockCycleCreate.mock.calls.at(-1)![0].llm.errors).toBe(0)
+    // …but it IS visible (2026-07-16 stall: requested-40/scored-0 cycles
+    // were undiagnosable because budget skips counted NOTHING).
+    expect(mockCycleCreate.mock.calls.at(-1)![0].llm.skips).toMatchObject({ 'budget:daily-95pct': 1 })
+  })
+
+  it('skip REASONS are counted per label — the cycle row names why rows did not score', async () => {
+    resetAll()
+    // p-closed = ineligible; p-capped = attempts cap.
+    mockPostingFindById.mockImplementation((id: string) => ({
+      lean: () => Promise.resolve(
+        id === 'p-closed'
+          ? posting({ _id: id, status: 'closed', closedReason: 'source-revoked' })
+          : posting({ _id: id, llmVerdict: { status: 'pending', attempts: 5 } })
+      ),
+    }))
+    await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p-closed', 'p-capped'] } }, step,
+      { evaluateFn: vi.fn() as never }
+    )
+    const skips = mockCycleCreate.mock.calls.at(-1)![0].llm.skips
+    expect(skips).toMatchObject({ ineligible: 1, 'attempts-cap': 1 })
+  })
+
+  it('Codex #545 r2: a memoized pre-deploy step output WITHOUT skips still merges (deploy-boundary replay)', async () => {
+    resetAll()
+    // A step runner replaying a persisted old-shape output: strip skips.
+    const replayStep = {
+      run: async <T,>(name: string, fn: () => Promise<T> | T): Promise<T> => {
+        const out = await fn()
+        if (name.startsWith('evaluate-') && out && typeof out === 'object' && 'counters' in (out as object)) {
+          delete ((out as { counters: Record<string, unknown> }).counters as Record<string, unknown>).skips
+        }
+        return out
+      },
+    }
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+    const r = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } }, replayStep, { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never }
+    )
+    expect(r).toMatchObject({ scored: 1 }) // run FINISHES; no throw pre-write-cycle
+    expect(mockCycleCreate).toHaveBeenCalled()
+  })
+
+  it('Codex #545: a sweeper-level budget denial writes a diagnosable skip cycle row', async () => {
+    resetAll()
+    mockRedis.get.mockImplementation((k: string) => Promise.resolve(k === 'jobs:llm:degraded' ? '1' : null))
+    const r = await runVerdictSweeperHandler(step)
+    expect(r).toMatchObject({ skipped: 'circuit-breaker-degraded' })
+    const row = mockCycleCreate.mock.calls.at(-1)![0]
+    expect(row.kind).toBe('llm-verdict')
+    expect(row.llm.skips).toMatchObject({ 'sweeper:circuit-breaker-degraded': 1 })
   })
 
   it('circuit breaker: 6 consecutive failures set the degraded flag and stop the run', async () => {

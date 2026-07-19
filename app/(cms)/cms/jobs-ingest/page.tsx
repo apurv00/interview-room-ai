@@ -40,6 +40,8 @@ interface VerdictLlmBlock {
   llmClearedFlaggedRow: number
   costUsd: number
   epoch: string
+  /** Why rows didn't score (Codex #545) — absent on pre-deploy rows. */
+  skips?: Record<string, number>
 }
 interface VerdictPanel {
   config: {
@@ -175,7 +177,8 @@ export default function JobsIngestPage() {
             <tr className="border-b text-left text-gray-500">
               <th className="py-2 pr-4">Started</th><th className="pr-4">Requested</th><th className="pr-4">Scored</th>
               <th className="pr-4">Cache</th><th className="pr-4">Err</th><th className="pr-4">Timeout</th>
-              <th className="pr-4">Soft-closed</th><th className="pr-4">Disagree ↑/↓</th><th className="pr-4">Cost</th><th>Epoch</th>
+              <th className="pr-4">Soft-closed</th><th className="pr-4">Disagree ↑/↓</th><th className="pr-4">Cost</th>
+              <th className="pr-4">Skips (why not scored)</th><th>Epoch</th>
             </tr>
           </thead>
           <tbody>
@@ -190,11 +193,18 @@ export default function JobsIngestPage() {
                 <td className="pr-4">{c.llm?.softClosed ?? 0}</td>
                 <td className="pr-4">{c.llm ? `${c.llm.llmFlaggedCleanRow}/${c.llm.llmClearedFlaggedRow}` : '—'}</td>
                 <td className="pr-4">${(c.llm?.costUsd ?? 0).toFixed(3)}</td>
+                {/* The incident column (Codex #545): a requested-N/scored-0
+                    row must NAME its cause right here, not only in Mongo. */}
+                <td className="pr-4">
+                  {c.llm?.skips && Object.keys(c.llm.skips).length
+                    ? Object.entries(c.llm.skips).map(([k, v]) => `${k}:${v}`).join(' ')
+                    : '—'}
+                </td>
                 <td>{c.llm?.epoch ?? '—'}</td>
               </tr>
             ))}
             {!data.verdict.cycles.length && (
-              <tr><td className="py-2 text-gray-400" colSpan={10}>No verdict cycles yet — collection is {data.verdict.config.collectionEnabled ? 'on; the sweeper runs at :45' : 'off'}.</td></tr>
+              <tr><td className="py-2 text-gray-400" colSpan={11}>No verdict cycles yet — collection is {data.verdict.config.collectionEnabled ? 'on; the sweeper runs at :45' : 'off'}.</td></tr>
             )}
           </tbody>
         </table>

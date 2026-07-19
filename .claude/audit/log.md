@@ -3825,3 +3825,224 @@ durable record; ids are best-effort pointers.
 - P2 optimistic write token: ingestion replacing the URL (and clearing applyCheck) between pick and write could let stale evidence close a fresh-linked row. Every write now carries {applyCheck.lastCheckedAt: <picked state>} (or $exists:false for first checks) — a mid-sweep refresh voids the write; next sweep re-verifies. Pinned.
 - VERDICT STALL (ongoing): worker RUNS (writes requested-40 cycle rows), all 40 reach evaluate(), zero scored/tokens/attempts → evaluate() returns not-ok pre-LLM for every posting. getConfig defaults caps correctly (900/2.5/75); actual spend $0.96/mo. Remaining suspects: per-posting budget gate (reserve-counting may exhaust per-source 500/day via repeated sweeps), stuck degraded flag, or Redis-unreachable fail-closed. NOT visible from outside: worker step outputs / Redis meters. Founder ask: Inngest dashboard → jobs-evaluate-postings → any run today → run OUTPUT (skip counters). Observability gap to fix: worker telemetry doesn't record WHY rows skip — follow-up PR planned (skip-reason counters in the llm cycle block).
 - Verified: linkCheck 22 passed; full clean-env vitest 5768 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — verdict skip-reason telemetry (observability PR; incident follow-up)
+- The 2026-07-16 stall (requested-40/scored-0, all other counters zero, 1,882 pending frozen) was undiagnosable from telemetry: budget skips deliberately counted NOTHING and pre-evaluate skips were invisible. Every skip now lands in llm.skips per label (ineligible / attempts-cap / opted-out / hash-match / superseded / budget:<reason>) — the next prod cycle row NAMES the stall cause directly. Budget skips remain non-errors (shadow-exit metric unpolluted).
+- #543 MERGED + Inngest re-synced 19→20 (link-check cron live). Verified: worker suite 20 passed; full clean-env vitest 5769 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-16 — #545 Codex round 1 (1 P2, fixed) + link-check FIRST LIVE SWEEP
+- P2: the SWEEPER's preflight budget gate exited with no telemetry row at all — a sweeper-level denial was still an invisible stall. Both preflight exits (degraded flag, budget gate) now write an llm-verdict cycle row with skips {sweeper:<reason>: 1} best-effort. Pinned (degraded-flag vector asserts the row).
+- MILESTONE: first live link-check sweep (15:40Z): 150 checked / 15 dead-strike-1 / 82 alive / 53 unverifiable / 0 closed (correct — closes need the 2nd ≥20h strike). Railway open stays 0. Founder directive functioning in prod.
+- Verified: worker suite 21 passed; full clean-env vitest 5770 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-17 — #545 round 2 (1 P2, fixed)
+- Deploy-boundary replay: Inngest memoizes step outputs; a run spanning the deploy would replay pre-deploy counters WITHOUT skips and Object.entries(c.skips) threw before write-cycle — those in-flight runs could never finish. mergeLlmCounters defaults skips ?? {}. Pinned with a replay-step vector that strips skips from evaluate-step outputs.
+- Link-check layer humming: 1,050 rows checked cumulatively, ~24 dead-strike-1 per sweep, 0 closes (by design until the 2nd ≥20h strike). Railway 0.
+- Verified: worker 22 passed; full clean-env vitest 5771 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## #545 round 3 (1 P2, fixed) — skips rendered on the CMS dashboard
+- The skips telemetry lived only in Mongo; the /cms/jobs-ingest verdict-cycles table still showed the opaque requested-40/scored-0 row. New 'Skips (why not scored)' column renders every label:count; absent on pre-deploy rows.
+- Verified: modules/jobs 411 passed | 1 skipped; full clean-env vitest 5771 passed | 17 skipped; tsc/lint/build clean.
