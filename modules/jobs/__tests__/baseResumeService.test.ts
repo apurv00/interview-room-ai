@@ -68,6 +68,19 @@ describe('saveBaseResume validation (same contract as /api/resume/save)', () => 
 })
 
 describe('getBaseResume (the import door)', () => {
+  it("latestRole = first non-empty experience title — the confirm bar's prefill when no saved target exists (founder 2026-07-19)", async () => {
+    reset()
+    mockList.mockResolvedValue({ resumes: [{ id: 'r1', name: 'Apurv Resume.pdf', updatedAt: '2026-07-19' }] })
+    mockGet.mockResolvedValue({
+      skills: [{ items: ['Roadmaps'] }],
+      experience: [{ title: '' }, { title: '  Senior Product Manager  ' }, { title: 'Analyst' }],
+    })
+    const r = await getBaseResume('u1')
+    expect(r!.latestRole).toBe('Senior Product Manager')
+    expect(r!.targetRole).toBe('')
+  })
+
+
   it('returns the most recently updated resume with a flat deduped skill list', async () => {
     reset()
     mockList.mockResolvedValue({ resumes: [
@@ -76,7 +89,7 @@ describe('getBaseResume (the import door)', () => {
     ] })
     mockGet.mockResolvedValue({ skills: [{ items: ['SQL', 'Tableau'] }, { items: ['SQL', ' Python '] }] })
     const r = await getBaseResume('u1')
-    expect(r).toEqual({ id: 'newer', name: 'Base Resume — Data Analyst', targetRole: 'Data Analyst', skills: ['SQL', 'Tableau', 'Python'] })
+    expect(r).toEqual({ id: 'newer', name: 'Base Resume — Data Analyst', targetRole: 'Data Analyst', latestRole: '', skills: ['SQL', 'Tableau', 'Python'] })
     expect(mockGet).toHaveBeenCalledWith('u1', 'newer')
   })
 

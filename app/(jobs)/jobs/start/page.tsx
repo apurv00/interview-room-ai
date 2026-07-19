@@ -63,7 +63,7 @@ export default function JobsStartPage() {
   // auto-save (preserveFullText). Stays in memory/sessionStorage only.
   const [parsedResume, setParsedResume] = useState<ParsedResume | null>(null)
   const [rawText, setRawText] = useState('')
-  const [importDoor, setImportDoor] = useState<{ id: string; name: string; targetRole: string; skills: string[] } | null>(null)
+  const [importDoor, setImportDoor] = useState<{ id: string; name: string; targetRole: string; latestRole?: string; skills: string[] } | null>(null)
 
   // Authed import door — 401 = anon, hide silently.
   useEffect(() => {
@@ -182,8 +182,15 @@ export default function JobsStartPage() {
     if (!importDoor) return
     setMethod('import')
     setSkills(importDoor.skills)
-    setDetectedRole(importDoor.targetRole)
-    setRole(importDoor.targetRole)
+    // Saved TARGET (future intent) wins when present; else prefill from the
+    // resume's latest experience title — editable, same as the upload path
+    // (founder 2026-07-19: the saved-resume door left the role box empty).
+    // trim(): a whitespace-only saved target must not beat the experience
+    // title on truthiness (Codex #557 — the save path preserves targets
+    // as typed).
+    const prefill = importDoor.targetRole?.trim() || importDoor.latestRole || ''
+    setDetectedRole(prefill)
+    setRole(prefill)
     track('jobs.resume_attach_started', { method: 'import' })
     setDoor('confirm')
   }

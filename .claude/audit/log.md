@@ -4046,3 +4046,34 @@ durable record; ids are best-effort pointers.
 ## #545 round 3 (1 P2, fixed) — skips rendered on the CMS dashboard
 - The skips telemetry lived only in Mongo; the /cms/jobs-ingest verdict-cycles table still showed the opaque requested-40/scored-0 row. New 'Skips (why not scored)' column renders every label:count; absent on pre-deploy rows.
 - Verified: modules/jobs 411 passed | 1 skipped; full clean-env vitest 5771 passed | 17 skipped; tsc/lint/build clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-19 — VERDICT "STALL" INCIDENT CLOSED: budget:per-source-cap — the system was never stalled
+- #545 merged + deployed; the FIRST post-deploy sweeper cycle named it: skips {budget:per-source-cap: 40}. By-day scoring: Jul 15: 479 · 16: 470 · 17: 480 · 18: 490 · 19: 496 (total 2,415 scored, ~$0.46/day) — the worker has scored ~500/day EVERY day, hits the per-source cap (500/day jsearch), and every post-cap sweep showed requested-40/scored-0 with the reason invisible until #545. My Jul-16 'stall' diagnosis was WRONG: probes sampled capped-hour cycles; attempts-frozen rows were simply not-yet-picked queue (backlog 4,099 pending, corpus 5,619 — ingestion outpaces the 500/day drain).
+- The observability fix (#545) is what ended the confusion — the incident's real lesson stands: silent skips made a healthy throttle look like an outage.
+- Backlog math: net drain ~200-400/day after new arrivals → ~2-3 weeks to clear at current caps; the Jul-29 enforcement call benefits from a scored backlog. OFFER to founder: raise perSourceDailyCap 500→900 (matches dailyVerdictCap; ceiling ≈ $0.86/day, within dailyBudgetUsd 2.5) — spend policy = founder word, one config PATCH.
+- Jul 17-19 self-resolutions: jsearch healthy (Jul 18: 275 fetched/89 new; Jul-17 zero-fetch = empty window one-off); display twins 3,517/5,619 (item-7 verified at scale).
+
+## 2026-07-19 ~21:45 — SIX FOUNDER WORDS EXECUTED (all data-ops, no deploys)
+- (1) perSourceDailyCap 500→900 (backlog 4,099 drains ~5 days). (2) R1 LIVE-VERIFIED: founder session 15:56Z → 2 strong evidence rows, correct epoch/hash, snapshot {building, 2/11, q40}, terminal marker — every #538 invariant held. (3) 6 seeded ATS boards enabled + 4 NEW boards seeded after LIVE probes (gh:zenoti 45 / gh:observeai 16 / gh:glance 41 / lever:porter 18; most guessed tokens dead — verify-before-seed is the rule); future board-discovery agent recorded as founder ask. (4) apna+unstop enabled (founder word closed their own ToS gate). (5) jsearch stays daily. (6) verdict enforceEnabled TRUE — gate satisfied by the #516 committed baseline (epoch gpt-5.6-luna:v2 unchanged across all 2,415 scored; local eval harness unusable: no redis + provider-loader failure, honestly disclosed); 16 standing open frauds soft-closed (drill-down 100% junk: training ads, contact-harvest, 'ai ml test'). Sources: 13/13 enabled.
+
+## 2026-07-19 — role prefill from latest experience on the saved-resume door (founder screenshot)
+- RCA: paste/upload paths already prefill role from experience[0].title; the "Use my saved resume" door copied only the saved targetRole — empty target = empty box (the founder's screenshot). Fix: BaseResumeSummary.latestRole = first non-empty experience title (service already loads the full resume); importBase prefills targetRole || latestRole, editable as before, saved target wins when present.
+- Verified: baseResumeService + start suites 14 passed; full clean-env vitest 5773 passed | 17 skipped; tsc/lint/build/module-size clean.
+
+### 2026-07-11 17:57:14 +0530 · `c4f3ac9` · Apurv
+- **Subject:** fix(infra): hard-disable email digest — cron is live in prod and Resend key lands today
+- **Files:** 3 changed, 1 test file(s)
+- **Root-cause:** emailDigestJob called processEmailBatch() unconditionally,
+- **Tests-added: modules/learn/__tests__/emailDigestJob.test.ts**
+- **Verified-by:** unit tests 2/2 (skips unconditionally without scheduling a step; env vars cannot enable it — regression test for the no-flip-keys ruling); full vitest run 5294 passed / 0 failed; tsc --noEmit clean; g
+
+## 2026-07-19 — #557 Codex round 1 (1 P2, fixed)
+- A whitespace-only saved targetRole beat latestRole on truthiness (the save path preserves targets as typed) — the confirm bar stayed blank despite a found experience title. Prefill predicate now trims first; fixture switched to '   ' so the trim is pinned directly.
+- Verified: start suite 6 passed; full clean-env vitest 5773 passed | 17 skipped; tsc/lint/build clean.
