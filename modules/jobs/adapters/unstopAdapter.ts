@@ -23,6 +23,8 @@ interface UnstopItem {
   title?: string
   organisation?: { name?: string } | null
   public_url?: string
+  /** Absolute canonical URL — public_url went relative on the live API. */
+  seo_url?: string
   regnRequirements?: { remain_days?: number } | null
   region?: string
   details?: string
@@ -110,8 +112,24 @@ export const unstopAdapter: JobSourceAdapter = {
     const title = typeof it?.title === 'string' ? it.title.trim() : ''
     const company = typeof it?.organisation?.name === 'string' ? it.organisation.name.trim() : ''
     if (!title || !company) return null // drift: list item without its core fields
-    const publicUrl = typeof it.public_url === 'string' && it.public_url.startsWith('http') ? it.public_url : null
-    if (!publicUrl) return null // an apply path is the product's whole promise
+    // Apply URL (first-live-contact drift, 2026-07-19): public_url arrives
+    // RELATIVE ('jobs/slug-123') on the live API — the startsWith('http')
+    // gate nulled EVERY row (driftNulls:180 → auto-quarantine). Absolute
+    // form lives in seo_url; else prefix the site origin onto a clean
+    // relative path. The gate itself stays: an apply path is the
+    // product's whole promise.
+    const publicUrl =
+      typeof it.seo_url === 'string' && it.seo_url.startsWith('https://unstop.com/')
+        ? it.seo_url
+        : typeof it.public_url === 'string' && it.public_url.startsWith('http')
+          ? it.public_url
+          : typeof it.public_url === 'string' && /^\/?[a-z0-9][\w/-]*$/i.test(it.public_url)
+            // One optional leading slash (root-relative '/jobs/foo' —
+            // Codex #558); '//host' stays blocked: the char after the
+            // optional slash must be alphanumeric.
+            ? `https://unstop.com/${it.public_url.replace(/^\//, '')}`
+            : null
+    if (!publicUrl) return null
 
     const locations = it.jobDetail?.locations
     const city = Array.isArray(locations) && typeof locations[0] === 'string' ? locations[0] : (typeof it.region === 'string' ? it.region : '')
