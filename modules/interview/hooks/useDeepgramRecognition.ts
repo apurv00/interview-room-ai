@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { track } from '@shared/analytics/track'
-import { wallClockMsToAudioSeconds } from '@interview/audio/recordingClock'
+import { audioStreamBaseSeconds, wallClockMsToAudioSeconds } from '@interview/audio/recordingClock'
 import { PcmRingBuffer } from './pcmRingBuffer'
 import type {
   SpeechRecognitionResult,
@@ -159,7 +159,16 @@ export interface UseDeepgramRecognitionReturn {
  *  their onclose handlers reading each other's state. Each onclose
  *  reads the tag from ITS OWN `ws` closure variable — the instances
  *  never share the tag. Codex P2 on PR #293. */
-type TaggedWebSocket = WebSocket & { __finishTrigger?: FinishTrigger | null }
+type TaggedWebSocket = WebSocket & {
+  __finishTrigger?: FinishTrigger | null
+  /** Int16 samples actually sent on THIS connection (real PCM frames +
+   *  silent-PCM keepalives; the JSON KeepAlive text frame does not advance
+   *  Deepgram's audio clock and is not counted). Per-socket so a reconnect
+   *  naturally restarts the stream clock at 0 — mirrors the per-socket
+   *  __finishTrigger pattern. Basis for converting connection-relative word
+   *  timestamps to recording-relative absolutes. */
+  __sentSamples?: number
+}
 
 /** Belt-and-suspenders KeepAlive heartbeats against Deepgram's idle-close
  *  timer. We send BOTH on every tick:
@@ -400,6 +409,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
    *  results for the current turn. Translated from Deepgram's
    *  session-relative offsets via the recording clock. */
   const wordsRef = useRef<LiveTranscriptWord[]>([])
+  // Word-timestamp base for the current turn: recording-relative seconds at
+  // which this turn's audio began entering the CURRENT connection. Anchored
+  // on the first worklet frame routed to a socket each turn (anchoredWsRef
+  // tracks which socket the anchor belongs to, so a mid-turn reconnect
+  // re-anchors against the fresh connection's zeroed stream clock).
+  const turnBaseAudioSecRef = useRef<number | null>(null)
+  const anchoredWsRef = useRef<WebSocket | null>(null)
   const onCompleteRef = useRef<((result: SpeechRecognitionResult) => void) | null>(null)
   const startTimeRef = useRef(0)
   const rafRef = useRef<number>(0)
@@ -593,6 +609,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       droppedFrameCountRef.current = 0
       lastDropReadyStateRef.current = null
       wordsRef.current = []
+      turnBaseAudioSecRef.current = null
+      anchoredWsRef.current = null
       lastTranscriptRef.current = ''
       reconnectAttemptsRef.current = 0
       isFinishingRef.current = false
@@ -969,7 +987,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
             if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
             myKeepAliveTimer = setInterval(() => {
               if (ws.readyState === WebSocket.OPEN) {
-                try { ws.send(SILENT_PCM_KEEPALIVE) } catch { /* ignore */ }
+                try {
+                  ws.send(SILENT_PCM_KEEPALIVE)
+                  // 160 silent samples advance Deepgram's stream clock — count
+                  // them or word-time bases drift ~10ms per idle 3s tick.
+                  ;(ws as TaggedWebSocket).__sentSamples =
+                    ((ws as TaggedWebSocket).__sentSamples ?? 0) + SILENT_PCM_KEEPALIVE.byteLength / 2
+                } catch { /* ignore */ }
                 try { ws.send(KEEPALIVE_JSON) } catch { /* ignore */ }
               }
             }, KEEPALIVE_INTERVAL_MS)
@@ -1185,10 +1209,24 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     if (ws.readyState !== WebSocket.OPEN) return
     const frames = pcmBufferRef.current.drain()
     if (frames.length === 0) return
+    // Anchor handoff at the moment carried-over audio enters this socket
+    // (Codex P2 #556, round 2): when the successor of a failed-CONNECTING
+    // socket OPENS before any new worklet frame arrives, this flush drains
+    // the buffer first — the frame-time size() guard would then see an
+    // empty buffer and re-stamp, landing the flushed audio's words late by
+    // the reconnect gap. Adopting the socket here keeps the anchor that
+    // describes the flushed frames' capture time, making the open-first
+    // and frame-first orderings identical. No-op for a socket that already
+    // owns the anchor (normal cold-path flush).
+    if (anchoredWsRef.current !== ws && turnBaseAudioSecRef.current !== null) {
+      anchoredWsRef.current = ws
+    }
     for (const frame of frames) {
       try {
         ws.send(frame)
         audioFrameCountRef.current++
+        ;(ws as TaggedWebSocket).__sentSamples =
+          ((ws as TaggedWebSocket).__sentSamples ?? 0) + frame.byteLength / 2
       } catch {
         /* ignore — partial flush is still better than dropping everything */
       }
@@ -1288,7 +1326,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
               | Array<{ word: string; start: number; end: number; confidence?: number }>
               | undefined
             if (rawWords?.length) {
-              const turnStartAudioSec = wallClockMsToAudioSeconds(startTimeRef.current)
+              // Base = recording-relative time this turn's audio began
+              // entering THIS connection, anchored from audio actually fed
+              // (worklet onmessage). The old wall-clock-only base assumed
+              // w.start was turn-relative — true with a fresh socket per
+              // turn (090cae2), silently false once sockets were preserved
+              // across turns (e7bb36d): Deepgram's clock is cumulative per
+              // CONNECTION, so prior answers were re-added every turn
+              // (~60s/answer; +1148s over 30 min — 2026-07-18 diagnosis).
+              // Wall-clock fallback covers the no-frames-anchored edge.
+              const turnStartAudioSec =
+                turnBaseAudioSecRef.current ?? wallClockMsToAudioSeconds(startTimeRef.current)
               for (const w of rawWords) {
                 wordsRef.current.push({
                   word: w.word,
@@ -1440,7 +1488,13 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       if (keepAliveTimerRef.current) clearInterval(keepAliveTimerRef.current)
       myKeepAliveTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          try { ws.send(SILENT_PCM_KEEPALIVE) } catch { /* ignore */ }
+          try {
+            ws.send(SILENT_PCM_KEEPALIVE)
+            // 160 silent samples advance Deepgram's stream clock — count
+            // them or word-time bases drift ~10ms per idle 3s tick.
+            ;(ws as TaggedWebSocket).__sentSamples =
+              ((ws as TaggedWebSocket).__sentSamples ?? 0) + SILENT_PCM_KEEPALIVE.byteLength / 2
+          } catch { /* ignore */ }
           try { ws.send(KEEPALIVE_JSON) } catch { /* ignore */ }
         }
       }, KEEPALIVE_INTERVAL_MS)
@@ -1777,6 +1831,32 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
         lastDropReadyStateRef.current = activeWs ? activeWs.readyState : WebSocket.CLOSED
         return
       }
+      // Anchor the turn's word-timestamp base on the FIRST frame routed to
+      // this socket this turn: recording-relative now, minus the audio this
+      // connection's stream clock already contains (__sentSamples), minus
+      // one chunk of capture latency. Keyed on socket identity so a mid-turn
+      // reconnect re-anchors against the fresh connection's zeroed clock.
+      // (The old per-turn wall-clock base double-counted prior turns' audio
+      // once sockets became preserved across turns — e7bb36d vs 090cae2.)
+      if (anchoredWsRef.current !== activeWs) {
+        anchoredWsRef.current = activeWs
+        // Reconnect with buffered audio pending (the previous socket died
+        // while still CONNECTING): those frames were captured under the
+        // CURRENT anchor and will occupy the new connection's stream from
+        // position 0 when flushPendingPcm runs — re-stamping now would
+        // shift this turn's words late by the buffered duration (Codex P2
+        // #556). Keep the anchor: it still describes the capture time of
+        // the oldest audio bound for this socket. (Ring overflow beyond
+        // ~10s trims that oldest audio, leaving the preserved anchor early
+        // by the trimmed span — bounded, and only reachable on a
+        // pathologically hung connection.)
+        if (pcmBufferRef.current.size() === 0 || turnBaseAudioSecRef.current === null) {
+          turnBaseAudioSecRef.current = audioStreamBaseSeconds(
+            Date.now(),
+            (activeWs as TaggedWebSocket).__sentSamples ?? 0,
+          )
+        }
+      }
       if (activeWs.readyState === WebSocket.CONNECTING) {
         // Worklet launched in parallel with warmUp (slow path in
         // startListening) — buffer until ws.onopen fires flushPendingPcm.
@@ -1791,6 +1871,8 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       // unexpected 2× frame delta between consecutive packets.
       activeWs.send(frame)
       audioFrameCountRef.current++
+      ;(activeWs as TaggedWebSocket).__sentSamples =
+        ((activeWs as TaggedWebSocket).__sentSamples ?? 0) + frame.byteLength / 2
     }
 
     source.connect(worklet)

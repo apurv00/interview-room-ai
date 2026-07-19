@@ -2125,3 +2125,49 @@ evaluate-answer retry 500→800, generate-question retry 500→1200, generate-fe
 would 400. Live-verified shapes: feedback-core high+json_schema@6800 (74 reasoning tokens, 4.2s),
 generate-question medium@800 (39 tokens, 1.8s), turn-router none@150 (0 tokens, 1.3s) — all
 finish=stop, valid JSON.
+
+### 8.x — Live word timestamps drifted +~60s per answer: per-turn wall-clock base vs connection-cumulative Deepgram clock (2026-07-18)
+
+**Symptom**: `liveTranscriptWords` timelines overshot the real recording on
+EVERY session since 2026-04-21 (30-min interview: words ended at 2964s in a
+1816.64s recording, +1148s; 10-min sessions overshot 340-460s). Surfaced as
+"audio recording 30 min but video 27 min" (actually a display artifact) and,
+underneath it, systematically corrupted analysis: captions lagged ~39% of
+elapsed time with the last ~40% of speech never rendering, moment cards
+quoted speech from minutes earlier, per-question prosody stats were
+misattributed ~1.6 questions back, and the drift-inflated pauses forced
+`confidenceMarker: 'low'`, zeroing the Delivery×Content matrix y-axis for
+late questions. Scores were never affected (evaluation consumes text only).
+
+**Root cause — a two-commit interaction**: 090cae2 (2026-04-08) converted
+Deepgram word times with `wallClockMsToAudioSeconds(startTimeRef) + w.start`,
+correct while every turn opened a fresh WebSocket (`w.start` turn-relative).
+e7bb36d (2026-04-21) preserved the socket across turns for latency — making
+`w.start` CONNECTION-relative (cumulative over all audio ever fed) — and the
+conversion was never revisited. Audio feed pauses between turns (worklet torn
+down each `finishRecognition`; only 160-sample silent-PCM keepalives per 3s
+flow while the AI speaks), so each turn's stored times re-added all prior
+answers' audio: overshoot at turn N = Σ(prior turns' listening durations).
+Same failure class as the 2026-07-11 cutover outages: a lifecycle change
+silently invalidating a neighboring formula, verified only by a
+membership-style unit test.
+
+**Fix**: per-socket `__sentSamples` counter (real PCM frames + silent-PCM
+keepalives; the JSON KeepAlive text frame does not advance Deepgram's audio
+clock) and a per-turn, per-connection anchor set on the first worklet frame
+routed to a socket: `base = audioStreamBaseSeconds(now, sentSamples)` =
+recording-relative now − one chunk of capture latency − samples already on
+the connection's clock (pure helper in `recordingClock.ts`). Words become
+`base + w.start`. Per-socket counters + socket-identity anchoring also fix
+the previously unhandled mid-interview reconnect (a fresh socket resets
+Deepgram's clock to 0; old code made post-reconnect words collapse toward
+the turn start). Old sessions are NOT repairable — the decomposition was
+discarded at write time; forward-fix only.
+
+**Verification rule this adds**: any change to the Deepgram WS lifecycle
+(preserve/reconnect/keepalive/audio-feed pausing) MUST re-verify the word
+clock end-to-end: run a multi-question interview and assert the last stored
+word `end` ≤ ffmpeg-decoded media duration (+2s) and each turn's first-word
+`start` within ~2s of that turn's wall-clock offset. The unit suite cannot
+catch this class unless it sets the recording clock and simulates cumulative
+per-connection stream time — see `deepgramWordClock.test.ts`.
