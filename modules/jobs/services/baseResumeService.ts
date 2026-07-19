@@ -45,6 +45,11 @@ export interface BaseResumeSummary {
   id: string
   name: string
   targetRole: string
+  /** Latest experience title (first non-empty) — the confirm bar's role
+   *  prefill when no saved targetRole exists (founder 2026-07-19: the
+   *  saved-resume door left the role box empty; paste/upload already
+   *  prefill from experience). Editable downstream, never authoritative. */
+  latestRole: string
   skills: string[]
 }
 
@@ -60,10 +65,15 @@ export async function getBaseResume(userId: string): Promise<BaseResumeSummary |
   for (const g of ((full as { skills?: Array<{ items?: string[] }> })?.skills ?? [])) {
     for (const s of g.items ?? []) if (s?.trim()) skills.push(s.trim())
   }
+  // Latest experience title — resumes list newest first; scan for the
+  // first non-empty title rather than trusting [0] blindly.
+  const experience = (full as { experience?: Array<{ title?: string }> })?.experience ?? []
+  const latestRole = experience.map((e) => (e.title ?? '').trim()).find(Boolean) ?? ''
   return {
     id: latest.id,
     name: latest.name,
     targetRole: latest.targetRole ?? '',
+    latestRole: latestRole.slice(0, 80),
     skills: Array.from(new Set(skills)).slice(0, 20),
   }
 }
