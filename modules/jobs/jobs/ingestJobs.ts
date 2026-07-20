@@ -23,10 +23,12 @@ import { ingestBatch, makeRedisRepostCounter, type IngestCounters } from '../ser
  *
  * jobsSourceSyncJob (event, concurrency limit 2 — the Atlas shared-tier
  * rule; NOTE: first use of Inngest `concurrency` in this repo) — one
- * bucket per step.run: the worst case (3 full pages × 15s adapter
- * timeout + spacing) is ~46s, inside the Vercel Hobby 60s budget with
- * headroom (Codex on #511 — 5-bucket chunks could run 450s and Inngest
- * would retry the uncheckpointed chunk, re-burning billed quota).
+ * bucket per step.run: the worst case (4 full pages × 15s adapter
+ * timeout + spacing) is ~61s, well inside the real per-step budget
+ * (maxDuration=300s at app/api/inngest/route.ts — the earlier "Vercel
+ * Hobby 60s" sizing predated the plan check and is stale). BUCKETS_PER_CHUNK
+ * stays 1 (Codex on #511 — 5-bucket chunks could run 450s and Inngest would
+ * retry the uncheckpointed chunk, re-burning billed quota).
  * Normalizes (drift COUNTED and health-relevant), runs the deterministic
  * pipeline, updates freshness cursors, writes one JobIngestCycle row.
  */
@@ -46,7 +48,12 @@ export function resolveAdapter(sourceId: string, kind?: string): JobSourceAdapte
 }
 
 const BUCKETS_PER_CHUNK = 1
-const MAX_PAGES_PER_BUCKET = 3
+// Raised 3→4 with the country-only harvest cut (DECISIONS #23): a country query
+// carries far more fresh supply than a single metro slice did, so the known-rate
+// cutoff paginates it deeper — the extra page recovers coverage the dropped metro
+// breadth used to provide. Worst case 4×15s ≈ 61s, inside the 300s step budget.
+// Tune from live JobIngestCycle.quotaSpent once the first country-only cycle lands.
+const MAX_PAGES_PER_BUCKET = 4
 /** Feed sources (unstop) paginate deeper per run: their whole corpus sits
  *  behind one paged list, and the known-rate cutoff stops early once the
  *  run reaches already-ingested rows (Codex #536). */

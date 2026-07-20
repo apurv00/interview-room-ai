@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { jsearchAdapter, buildHarvestBuckets } from '@jobs'
 import type { FetchTarget } from '@jobs'
 
-const bucketTarget: FetchTarget = { kind: 'bucket', bucketId: 'backend:pune', query: 'backend developer in Pune', datePostedWindow: 'week', page: 1 }
+const bucketTarget: FetchTarget = { kind: 'bucket', bucketId: 'backend:in', query: 'backend developer india', datePostedWindow: 'week', page: 1 }
 
 // Fixture mirrors the probe-validated JSearch wire shape (PR #503).
 const RAW = {
@@ -57,12 +57,12 @@ describe('jsearchAdapter.buildTargets', () => {
     const buckets = buildHarvestBuckets()
     const targets = jsearchAdapter.buildTargets(
       { sourceId: 'jsearch', enabled: true },
-      [{ bucket: 'backend:pune', newestPostedAt: new Date(Date.now() - 2 * 3600_000) }]
+      [{ bucket: 'backend:in', newestPostedAt: new Date(Date.now() - 2 * 3600_000) }]
     )
     expect(targets).toHaveLength(buckets.length)
-    const pune = targets.find((t) => t.kind === 'bucket' && t.bucketId === 'backend:pune')
-    expect(pune && t(pune).datePostedWindow).toBe('day') // fresh cursor -> smallest window
-    const other = targets.find((t) => t.kind === 'bucket' && t.bucketId === 'frontend:pune')
+    const backend = targets.find((t) => t.kind === 'bucket' && t.bucketId === 'backend:in')
+    expect(backend && t(backend).datePostedWindow).toBe('day') // fresh cursor -> smallest window
+    const other = targets.find((t) => t.kind === 'bucket' && t.bucketId === 'frontend:in')
     expect(other && t(other).datePostedWindow).toBe('week') // no cursor -> full window
     function t(x: FetchTarget) { return x as Extract<FetchTarget, { kind: 'bucket' }> }
   })
@@ -73,11 +73,29 @@ describe('jsearchAdapter.buildTargets', () => {
 })
 
 describe('harvest matrix', () => {
-  it('covers every taxonomy domain, with remote variants except site-bound trades', () => {
+  it('covers every taxonomy domain at country level, with remote variants except site-bound trades', () => {
     const buckets = buildHarvestBuckets()
     const ids = new Set(buckets.map((b) => b.id))
-    expect(ids.has('mechanical:pune')).toBe(true)   // the once-missing domains harvest too
+    expect(ids.has('mechanical:in')).toBe(true)     // the once-missing domains harvest too
+    expect(ids.has('backend:in')).toBe(true)
     expect(ids.has('civil:remote')).toBe(false)     // site-bound: no remote cell
     expect(ids.has('backend:remote')).toBe(true)
+  })
+
+  it('is city-free (DECISIONS #21/#23): every cell is country or remote, none metro-sliced', () => {
+    const buckets = buildHarvestBuckets()
+    for (const b of buckets) {
+      // Regression guard for the ruling: no bucket keys on, or queries for, a metro.
+      expect(b.id.endsWith(':in') || b.id.endsWith(':remote')).toBe(true)
+      expect(b.query.toLowerCase()).not.toMatch(
+        /\b(bengaluru|bangalore|mumbai|delhi|ncr|hyderabad|pune|chennai|gurgaon|gurugram|noida)\b/,
+      )
+    }
+    // One country cell per domain; a remote cell for every domain except the
+    // three site-bound trades — so exactly two cells per remote-eligible domain.
+    const country = buckets.filter((b) => b.id.endsWith(':in')).length
+    const remote = buckets.filter((b) => b.id.endsWith(':remote')).length
+    expect(remote).toBe(country - 3)
+    expect(buckets.length).toBe(country + remote)
   })
 })
