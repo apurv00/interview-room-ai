@@ -123,6 +123,21 @@ describe('POST /api/interviews Jobs handoff', () => {
     }))
   })
 
+  it('rejects a browser role that differs from the re-resolved server role', async () => {
+    const response = await POST(request({
+      config: {
+        ...baseConfig,
+        role: 'browser-stale-role',
+        attribution: { source: 'jobs', jobId: JOB_ID },
+      },
+      jobsHandoffToken: 'signed-token',
+    }))
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ code: 'JOBS_HANDOFF_INVALID' })
+    expect(mockCreateSession).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['cross-job claim', { jobId: OTHER_JOB_ID, jobDescription: JD }],
     ['cross-JD claim', { jobId: JOB_ID, jobDescription: 'A different public JD' }],

@@ -46,6 +46,7 @@ vi.mock('@shared/logger', () => ({
 }))
 
 import { GET } from '../route'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 
 const USER_ID = new mongoose.Types.ObjectId().toString()
 const SESSION_ID = new mongoose.Types.ObjectId()
@@ -84,6 +85,25 @@ describe('GET /api/interviews/last-same-domain-feedback', () => {
 
     expect(res.status).toBe(400)
     expect(body.error).toMatch(/domain/i)
+  })
+
+  it('queries an exact CMS-boundary role without truncation and rejects one character over', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockFindOne.mockReturnValue(buildChain(null))
+    const atLimit = 'r'.repeat(INTERVIEW_ROLE_SLUG_MAX_CHARS)
+
+    const accepted = await GET(new NextRequest(
+      `http://localhost/api/interviews/last-same-domain-feedback?domain=${atLimit}`,
+    ))
+    expect(accepted.status).toBe(200)
+    expect(mockFindOne.mock.calls[0][0]['config.role']).toBe(atLimit)
+
+    mockFindOne.mockClear()
+    const rejected = await GET(new NextRequest(
+      `http://localhost/api/interviews/last-same-domain-feedback?domain=${atLimit}r`,
+    ))
+    expect(rejected.status).toBe(400)
+    expect(mockFindOne).not.toHaveBeenCalled()
   })
 
   it('returns { feedback: null } when no same-domain history exists', async () => {

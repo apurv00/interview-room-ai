@@ -3,16 +3,25 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
 import type { IParsedJobDescription, ParsedRequirement } from '@shared/types'
+import { normalizeInterviewRoleSlug } from '@shared/interviewContract'
 import { DOMAIN_COMPETENCIES, UNIVERSAL_COMPETENCIES } from '@learn'
+import {
+  getActiveInterviewDomainCatalog,
+  type ActiveInterviewDomainCatalog,
+} from './domainCatalogService'
 
 // ─── Parse Job Description ─────────────────────────────────────────────────
 
-export async function parseJobDescription(rawText: string): Promise<IParsedJobDescription> {
+export async function parseJobDescription(
+  rawText: string,
+  suppliedCatalog?: ActiveInterviewDomainCatalog,
+): Promise<IParsedJobDescription> {
   if (!isFeatureEnabled('jd_structured_parsing')) {
     return createFallbackParsedJD(rawText)
   }
 
   try {
+    const activeCatalog = suppliedCatalog ?? await getActiveInterviewDomainCatalog()
     // Build competency list for mapping
     const allCompetencies = [
       ...UNIVERSAL_COMPETENCIES,
@@ -33,7 +42,7 @@ Schema:
 {
   "company": "string (company name or empty)",
   "role": "string (job title)",
-  "inferredDomain": "string (one of: pm, frontend, backend, sdet, data-science, design, marketing, finance, business, sales, devops)",
+  "inferredDomain": "string (exactly one of: ${activeCatalog.slugs.join(', ')})",
   "requirements": [
     {
       "id": "req_1",
@@ -73,11 +82,15 @@ Schema:
         : [],
     }))
 
+    const inferredDomainCandidate = normalizeInterviewRoleSlug(parsed.inferredDomain)
+
     return {
       rawText,
       company: String(parsed.company || ''),
       role: String(parsed.role || ''),
-      inferredDomain: String(parsed.inferredDomain || ''),
+      inferredDomain: activeCatalog.inferenceSlugSet.has(inferredDomainCandidate)
+        ? inferredDomainCandidate
+        : '',
       requirements,
       keyThemes: Array.isArray(parsed.keyThemes) ? parsed.keyThemes.map(String) : [],
     }

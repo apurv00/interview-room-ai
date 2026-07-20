@@ -1,3 +1,5 @@
+import { normalizeInterviewRoleSlug } from '@shared/interviewContract'
+
 /**
  * Jobs domain taxonomy — KEYED ON THE INTERVIEW PRODUCT'S DOMAIN SLUGS
  * (shared/db/seed.ts BUILT_IN_DOMAINS / FALLBACK_DOMAINS). One vocabulary,
@@ -91,11 +93,17 @@ export function matchFresherDomain(text = ''): string | null {
  *  fall back to 'general' — never write a jobs-only slug into
  *  InterviewConfig.role (Codex on #524). Unknown ids return undefined so
  *  callers can try the X-ray's inferredDomain next. */
-export function interviewSlugForDomain(id: string | undefined | null): string | undefined {
-  if (!id) return undefined
-  const d = JOB_DOMAINS.find((x) => x.id === id)
-  if (!d) return undefined
-  return d.interviewSlug ?? 'general'
+export function interviewSlugForDomain(
+  id: string | undefined | null,
+  activeInterviewSlugs: ReadonlySet<string>,
+): string | undefined {
+  const normalized = normalizeInterviewRoleSlug(id)
+  if (!normalized) return undefined
+  const d = JOB_DOMAINS.find((x) => x.id === normalized)
+  const candidate = d ? d.interviewSlug ?? 'general' : normalized
+  // Runtime CMS state is authoritative: custom active roles pass, while a
+  // deactivated built-in is withheld immediately.
+  return activeInterviewSlugs.has(candidate) ? candidate : undefined
 }
 
 /**

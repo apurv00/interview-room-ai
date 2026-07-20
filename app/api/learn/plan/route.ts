@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 import { generateMonthlyPlan, getTodaysTasks } from '@learn/services/dailyPlanService'
 
 export const dynamic = 'force-dynamic'
 
 const GeneratePlanSchema = z.object({
-  domain: z.string().min(1).max(50),
+  domain: z.string().min(1).max(INTERVIEW_ROLE_SLUG_MAX_CHARS),
   interviewType: z.string().max(50).optional(),
   experience: z.enum(['0-2', '3-6', '7+']).optional(),
 })

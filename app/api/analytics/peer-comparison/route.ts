@@ -5,6 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 import { computePercentile } from '@learn/lib/peerComparison'
 
 export const dynamic = 'force-dynamic'
@@ -68,7 +69,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'role and experience are required' }, { status: 400 })
     }
     // Accept any role slug (dynamic domains via CMS)
-    if (typeof role !== 'string' || role.length > 50) {
+    if (typeof role !== 'string' || role.length > INTERVIEW_ROLE_SLUG_MAX_CHARS) {
       return NextResponse.json({ error: 'Invalid role' }, { status: 400 })
     }
     if (!VALID_EXPERIENCE.includes(experience)) {

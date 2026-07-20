@@ -61,11 +61,15 @@ describe('fresher measurement cells', () => {
 
 describe('interviewSlugForDomain (the hand-off role resolver, Codex #524)', async () => {
   const { interviewSlugForDomain } = await import('../config/domains')
-  it('maps catalog domains 1:1, jobs-only domains to general, unknown to undefined', () => {
-    expect(interviewSlugForDomain('backend')).toBe('backend')
-    expect(interviewSlugForDomain('hr')).toBe('general') // interviewSlug: null → general, never the raw jobs slug
-    expect(interviewSlugForDomain('astrology')).toBeUndefined()
-    expect(interviewSlugForDomain(undefined)).toBeUndefined()
+  it('maps only active CMS roles, including custom roles and jobs-only fallback', () => {
+    const active = new Set(['backend', 'general', 'product-designer', 'custom-quant-role'])
+    expect(interviewSlugForDomain('backend', active)).toBe('backend')
+    expect(interviewSlugForDomain('hr', active)).toBe('general') // interviewSlug: null → general, never the raw jobs slug
+    expect(interviewSlugForDomain('product-designer', active)).toBe('product-designer')
+    expect(interviewSlugForDomain('custom-quant-role', active)).toBe('custom-quant-role')
+    expect(interviewSlugForDomain('frontend', active)).toBeUndefined() // built-in, but CMS-inactive
+    expect(interviewSlugForDomain('astrology', active)).toBeUndefined()
+    expect(interviewSlugForDomain(undefined, active)).toBeUndefined()
   })
 })
 

@@ -25,6 +25,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (!xray) return NextResponse.json({ error: 'not found' }, { status: 404 })
   return NextResponse.json({
     cached: xray.cached,
+    retryable: xray.retryable === true,
     role: xray.parsed.role,
     inferredDomain: xray.parsed.inferredDomain,
     keyThemes: xray.parsed.keyThemes ?? [],

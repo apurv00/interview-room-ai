@@ -5,6 +5,7 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { logger } from '@shared/logger'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 
 export const dynamic = 'force-dynamic'
 
@@ -47,9 +48,9 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url)
-    const domain = searchParams.get('domain')?.trim().slice(0, 50)
-    if (!domain) {
-      return NextResponse.json({ error: 'domain is required' }, { status: 400 })
+    const domain = searchParams.get('domain')?.trim()
+    if (!domain || domain.length > INTERVIEW_ROLE_SLUG_MAX_CHARS) {
+      return NextResponse.json({ error: 'a valid domain is required' }, { status: 400 })
     }
 
     // Optional: bound the search to sessions completed BEFORE this one.

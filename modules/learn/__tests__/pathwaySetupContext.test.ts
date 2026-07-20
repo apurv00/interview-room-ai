@@ -19,6 +19,7 @@ import {
   readPathwaySetupContext,
   validateReturnTo,
 } from '../lib/pathwaySetupContext'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 
 function params(map: Record<string, string>): URLSearchParams {
   return new URLSearchParams(map)
@@ -68,15 +69,22 @@ describe('readPathwaySetupContext', () => {
       params({
         source: 'pathway',
         actionId: long, // cap 120
-        domain: long, // cap 50
+        domain: long,
         difficulty: long, // cap 40
         returnTo: long, // cap 500
       }),
     )
     expect(ctx?.actionId?.length).toBe(120)
-    expect(ctx?.domain?.length).toBe(50)
+    expect(ctx?.domain?.length).toBe(INTERVIEW_ROLE_SLUG_MAX_CHARS)
     expect(ctx?.difficulty?.length).toBe(40)
     expect(ctx?.returnTo?.length).toBe(200) // 200 < 500 cap
+  })
+
+  it('preserves an exact-max CMS role through the pathway URL contract', () => {
+    const role = 'r'.repeat(INTERVIEW_ROLE_SLUG_MAX_CHARS)
+    const ctx = readPathwaySetupContext(params({ source: 'pathway', domain: role }))
+
+    expect(ctx?.domain).toBe(role)
   })
 
   it('splits focus on commas, trims items, drops empties, caps to 10', () => {

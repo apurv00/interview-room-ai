@@ -1,9 +1,10 @@
 import { z } from 'zod'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 
 const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 export const CreateDomainSchema = z.object({
-  slug: z.string().min(1).max(100).regex(slugPattern, 'Slug must be lowercase alphanumeric with hyphens'),
+  slug: z.string().min(1).max(INTERVIEW_ROLE_SLUG_MAX_CHARS).regex(slugPattern, 'Slug must be lowercase alphanumeric with hyphens'),
   label: z.string().min(1).max(100),
   shortLabel: z.string().max(50).optional(),
   icon: z.string().max(10).optional(),

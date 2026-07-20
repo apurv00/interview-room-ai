@@ -3,6 +3,11 @@ import { gunzipSync } from 'zlib'
 import { isValidObjectId } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { JobApplication, JobPosting } from '@shared/db/models'
+import {
+  INTERVIEW_JOB_DESCRIPTION_MAX_CHARS,
+  INTERVIEW_TARGET_COMPANY_MAX_CHARS,
+} from '@shared/interviewContract'
+import { getActiveInterviewDomainCatalog } from '@interview/services/persona/domainCatalogService'
 import { interviewSlugForDomain } from '../config/domains'
 import { xrayHashOf } from './xrayService'
 
@@ -29,6 +34,24 @@ export interface ResolvedPracticeHandoff {
   applicationId?: string
 }
 
+interface PracticePostingSnapshot {
+  domain?: string | null
+  parsedJD?: unknown
+  parsedJDHash?: string | null
+  parsedJDRoleVersion?: string | null
+  jdCompressed?: unknown
+  jdDisplayCompressed?: unknown
+}
+
+export interface PreparedPracticeHandoff {
+  /** Safe text for both the detail page and the interview runtime. */
+  jobDescription: string
+  /** Present only when the canonical JD is readable. */
+  jdHash?: string
+  /** Present only when the canonical snapshot resolves through the closed taxonomy. */
+  role?: string
+}
+
 /** Full-strength identity for the signed trust boundary (cache hashes stay SHA-1). */
 export function practiceHandoffHashOf(jd: string): string {
   return createHash('sha256').update(jd.replace(/\s+/g, ' ').trim()).digest('hex')
@@ -48,10 +71,70 @@ function signature(payloadB64: string): Buffer {
 
 function inflate(value: unknown): string {
   if (!value) return ''
-  const buffer = Buffer.isBuffer(value)
-    ? value
-    : Buffer.from((value as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)
-  return gunzipSync(buffer).toString('utf8')
+  try {
+    const buffer = Buffer.isBuffer(value)
+      ? value
+      : Buffer.from((value as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)
+    return gunzipSync(buffer).toString('utf8')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * One preparation contract for detail rendering, token minting, and token
+ * resolution. The canonical gzip is the version authority; a display twin
+ * may preserve formatting only when it normalizes to the same full hash.
+ */
+export async function preparePracticeHandoffPosting(
+  posting: PracticePostingSnapshot,
+): Promise<PreparedPracticeHandoff> {
+  const canonicalJd = inflate(posting.jdCompressed)
+  const displayJd = inflate(posting.jdDisplayCompressed)
+
+  // A readable display twin remains useful for the job detail when the
+  // canonical body is corrupt, but Practice stays unavailable because no
+  // canonical version can be signed and re-resolved safely.
+  if (!canonicalJd.trim()) return { jobDescription: displayJd || canonicalJd }
+
+  const jdHash = practiceHandoffHashOf(canonicalJd)
+  const matchingDisplay = displayJd && practiceHandoffHashOf(displayJd) === jdHash
+  const jobDescription = matchingDisplay && displayJd.length <= INTERVIEW_JOB_DESCRIPTION_MAX_CHARS
+    ? displayJd
+    : canonicalJd
+  // Detail may still show an oversized source document, but readiness is
+  // withheld unless the exact text sent to the lobby passes its API schema.
+  if (jobDescription.length > INTERVIEW_JOB_DESCRIPTION_MAX_CHARS) {
+    return { jobDescription }
+  }
+  const activeCatalog = await getActiveInterviewDomainCatalog()
+  // Seed data remains useful for rendering selectors during a CMS outage,
+  // but it cannot prove that an operator has not deactivated a role. Practice
+  // therefore fails closed until a live CMS snapshot is available.
+  if (!activeCatalog.authoritative) return { jobDescription, jdHash }
+
+  const hasDeclaredDomain = posting.domain !== undefined &&
+    posting.domain !== null &&
+    posting.domain !== ''
+  const parsedDomain = (
+    !hasDeclaredDomain &&
+    posting.parsedJDHash === xrayHashOf(canonicalJd) &&
+    posting.parsedJDRoleVersion === activeCatalog.revision
+  )
+    ? (posting.parsedJD as { inferredDomain?: unknown } | null | undefined)?.inferredDomain
+    : undefined
+  const cachedParsedRole = typeof parsedDomain === 'string' ? parsedDomain : undefined
+  // A declared domain is an explicit classification. If it is malformed or
+  // CMS-inactive, do not bypass that operator decision with an inferred role.
+  const role = hasDeclaredDomain
+    ? interviewSlugForDomain(posting.domain, activeCatalog.slugSet)
+    : interviewSlugForDomain(cachedParsedRole, activeCatalog.slugSet)
+
+  return {
+    jobDescription,
+    jdHash,
+    ...(role ? { role } : {}),
+  }
 }
 
 /** Minted only from the authenticated full-detail projection. */
@@ -132,40 +215,22 @@ export async function resolvePracticeHandoff(
 
   await connectDB()
   const posting = await JobPosting.findById(payload.jid)
-    .select('company domain status parsedJD parsedJDHash jdCompressed jdDisplayCompressed')
+    .select('company domain status parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
     .lean()
   if (!posting || posting.status !== 'open') return null
 
-  let canonicalJd = ''
-  let displayJd = ''
-  try {
-    canonicalJd = inflate(posting.jdCompressed)
-    displayJd = inflate(posting.jdDisplayCompressed) || canonicalJd
-  } catch {
-    return null
-  }
-  if (!canonicalJd || practiceHandoffHashOf(canonicalJd) !== payload.jdh) return null
-  // A malformed/stale display twin must never change what the candidate
-  // practices. Canonical remains the signed source of truth.
-  if (practiceHandoffHashOf(displayJd) !== payload.jdh) displayJd = canonicalJd
+  const prepared = await preparePracticeHandoffPosting(posting)
+  if (!prepared.jdHash || prepared.jdHash !== payload.jdh) return null
 
   const application = await JobApplication.findOne({ userId, jobPostingId: payload.jid })
     .select('_id')
     .lean()
-  const cachedParsedRole = posting.parsedJDHash === xrayHashOf(canonicalJd)
-    ? (posting.parsedJD as { inferredDomain?: string } | undefined)?.inferredDomain
-    : undefined
-  // The cached parse is LLM-produced. Run it through the same closed Jobs
-  // taxonomy as the persisted posting domain before it becomes runtime
-  // InterviewConfig; an arbitrary string must never become a server-approved
-  // role merely because it was cached against the right JD hash.
-  const role = interviewSlugForDomain(posting.domain) ?? interviewSlugForDomain(cachedParsedRole)
   return {
     jobId: payload.jid,
-    jobDescription: displayJd,
+    jobDescription: prepared.jobDescription,
     jdHash: payload.jdh,
-    company: String(posting.company ?? '').slice(0, 200),
-    ...(role ? { role } : {}),
+    company: String(posting.company ?? '').slice(0, INTERVIEW_TARGET_COMPANY_MAX_CHARS),
+    ...(prepared.role ? { role: prepared.role } : {}),
     applicationId: application ? String(application._id) : undefined,
   }
 }

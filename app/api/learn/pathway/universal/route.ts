@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 import {
   generateUniversalPlan,
   getUniversalPlan,
@@ -23,7 +24,7 @@ export const GET = composeApiRoute({
 })
 
 const PostSchema = z.object({
-  domain: z.string().min(1).max(60),
+  domain: z.string().min(1).max(INTERVIEW_ROLE_SLUG_MAX_CHARS),
   depth: z.string().min(1).max(40),
   targetRole: z.string().max(120).optional(),
 })
