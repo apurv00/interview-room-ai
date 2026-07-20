@@ -408,8 +408,14 @@ export async function runSourceSyncHandler(
         // reaches the shifted backlog. Cap + non-full-page remain the
         // exits; known pages are merge-idempotent.
         const isContinuation = target.kind === 'feed' && target.page > 1
-        // A bucket with no persisted cursor is on its first run (#559).
-        const isFirstRunForBucket = !!distrustKey && !haveCursor.has(distrustKey)
+        // A BUCKET target with no persisted cursor is on its first run (#559).
+        // Gated to bucket kind (Codex on #559 round 2): a paged feed reuses
+        // distrustKey from cursorBucket, so an unstop feed whose cursor is lost
+        // while postings remain would otherwise skip the cutoff, drain to
+        // MAX_PAGES_PER_FEED, and write a cap-exit continuation that keeps
+        // paginating deep on later runs. Feeds already own their first-run drain
+        // via the full-page + continuation logic; the #23 rename is bucket-only.
+        const isFirstRunForBucket = target.kind === 'bucket' && !!distrustKey && !haveCursor.has(distrustKey)
         const distrustKnown = (!!distrustKey && distrust.has(distrustKey)) || isContinuation || isFirstRunForBucket
         await processTarget(adapter, sourceId, target, o, delayMs, initVerdictPending, distrustKnown)
         if (delayMs) await sleep(delayMs)

@@ -115,6 +115,29 @@ describe('runSourceSyncHandler — feed continuation', () => {
     expect(mockAdapterFetch.mock.calls[1][0]).toMatchObject({ page: 2 })
   })
 
+  it('a first-run feed (no cursor) does NOT get the #559 bucket distrust — an all-known full page still hits the cutoff instead of draining to the feed cap (Codex #559 round 2)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) }) // no cursor — first run for the feed
+    // Every incoming row is already stored → Tier-1 refresh → knownRate = 1.
+    ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockImplementation((q: Record<string, unknown>) =>
+      q?.['provenance.sourceKey']
+        ? Promise.resolve({ status: 'open', provenance: [{ sourceKey: q['provenance.sourceKey'], lastSeenAt: new Date(0) }], jdLength: 100000, locationKeys: [], locations: [], save: async () => ({}) })
+        : Promise.resolve(null)
+    )
+    // A physically-FULL page (rawPageSize ≥ PER_PAGE) of open, normalizable rows.
+    const openRow = (k: number) => ({ id: `u${k}`, title: 'Backend Developer', organisation: { name: `Acme ${k}` }, seo_url: `https://unstop.com/jobs/acme-${k}`, details: 'Build APIs. '.repeat(50), start_date: '2026-07-12T00:00:00Z', regn_open: true })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [openRow(1), openRow(2), openRow(3)], rawPageSize: 15 })
+    try {
+      await runSourceSyncHandler({ data: { sourceId: 'unstop' } }, step, { interRequestDelayMs: 0 })
+      // Cutoff fired at page 1 (the feed is NOT first-run-distrusted) — a single
+      // fetch, no drain to MAX_PAGES_PER_FEED, no cap-exit continuation.
+      expect(mockAdapterFetch).toHaveBeenCalledTimes(1)
+    } finally {
+      ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(null)
+    }
+  })
+
   it('resumes unstop at the persisted lastPage+1 — the continuation offset is never stomped (Codex #536)', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
