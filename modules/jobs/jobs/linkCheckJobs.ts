@@ -180,17 +180,15 @@ export async function runLinkCheckHandler(
         const prev = doc.applyCheck as { lastCheckedAt?: Date } | undefined
         const { state, shouldClose } = nextApplyCheckState(prev as never, outcome, new Date())
         const update: Record<string, unknown> = { $set: { applyCheck: state } }
+        let closedAt: Date | null = null
         if (shouldClose) {
+          closedAt = new Date()
           ;(update.$set as Record<string, unknown>).status = 'closed'
           ;(update.$set as Record<string, unknown>).closedReason = 'dead-apply-link'
-          ;(update.$set as Record<string, unknown>).closedAt = new Date()
-          // Closed-row lifecycle parity with the board-miss path (Codex
-          // #543 r4): unpinned rows enter the 7-day TTL purge; pinned
-          // (userReferenced) rows close but never purge.
-          if (!doc.userReferenced) {
-            ;(update.$set as Record<string, unknown>).purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
-          }
-          counters.closedNow += 1
+          ;(update.$set as Record<string, unknown>).closedAt = closedAt
+          // Close without a TTL first. Purge eligibility is stamped only by
+          // a second update that observes the current retention pin.
+          update.$unset = { purgeAt: 1 }
         }
         // Optimistic token (Codex #543 round 6): if ingestion replaced the
         // apply URL (and cleared applyCheck) between our pick and this
@@ -200,10 +198,30 @@ export async function runLinkCheckHandler(
         const token = prev?.lastCheckedAt
           ? { 'applyCheck.lastCheckedAt': prev.lastCheckedAt }
           : { applyCheck: { $exists: false } }
-        await JobPosting.updateOne(
+        const write = await JobPosting.updateOne(
           { _id: doc._id as never, ...token, ...(shouldClose ? { status: 'open' } : {}) } as never,
           update
         )
+        if (closedAt && (write?.matchedCount ?? 0) > 0) {
+          // Resolve TTL eligibility from the CURRENT retention pin. A
+          // concurrent first Save/Apply/Tailor either makes the true branch
+          // clear a stale purgeAt or runs after this and clears it itself.
+          const closeFilter = {
+            _id: doc._id as never,
+            status: 'closed',
+            closedReason: 'dead-apply-link',
+            closedAt,
+          }
+          await JobPosting.updateOne(
+            { ...closeFilter, userReferenced: true } as never,
+            { $unset: { purgeAt: 1 } },
+          )
+          await JobPosting.updateOne(
+            { ...closeFilter, userReferenced: { $ne: true } } as never,
+            { $set: { purgeAt: new Date(Date.now() + 7 * 24 * 3600 * 1000) } },
+          )
+          counters.closedNow += 1
+        }
       }
       return chunk.length
     })

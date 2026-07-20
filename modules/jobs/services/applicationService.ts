@@ -6,6 +6,7 @@ import { inngest } from '@shared/services/inngest'
 import { getShortFormMinAnswers } from '@interview/services/eval/sessionScoringPolicy'
 import { practiceHandoffHashOf } from './practiceHandoff'
 import { xrayHashOf } from './xrayService'
+import { jobPostingStateOf } from './postingAccess'
 
 /**
  * Application state transitions (PRODUCT_FLOW §2). `apply_clicked` is a
@@ -59,27 +60,85 @@ export async function releaseAtsClaim(userId: string, jobPostingId: string): Pro
 export async function saveTailoredVersion(
   userId: string,
   jobPostingId: string,
-  payload: { tailoredText: string; sourceResumeId?: string; matchScore?: number; addedKeywords: string[]; missingKeywords: string[] },
+  payload: {
+    tailoredText: string
+    sourceResumeId?: string
+    matchScore?: number
+    addedKeywords: string[]
+    missingKeywords: string[]
+    /** SHA-256 of the exact canonical JD version used by the Tailor run. */
+    sourceJdHash: string
+  },
   now = new Date()
-): Promise<{ ok: boolean }> {
-  const posting = await JobPosting.findById(jobPostingId).select('title company locations provenance status jdCompressed').lean()
-  if (!posting) return { ok: false }
-  let jdHash = ''
+): Promise<
+  | { ok: true }
+  | { ok: false; reason: 'not-found' | 'context-unavailable' | 'jd-mismatch' }
+> {
+  const posting = await JobPosting.findById(jobPostingId).select('title company locations provenance status closedReason jdCompressed').lean()
+  if (!posting) return { ok: false, reason: 'not-found' }
+  const postingState = jobPostingStateOf(posting)
+  const existingApp = await JobApplication.findOne({ userId, jobPostingId }).select('_id').lean()
+  // A closed id alone is not ownership proof. Preserve the same not-found
+  // boundary as detail: only an existing application may learn why its saved
+  // context can no longer accept an exact-job artifact.
+  if (postingState !== 'live' && !existingApp) return { ok: false, reason: 'not-found' }
+  if (postingState === 'restricted') return { ok: false, reason: 'context-unavailable' }
+
+  let canonicalJd = ''
   try {
     const buf = posting.jdCompressed as Buffer | undefined
-    const jd = buf?.length ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8') : ''
-    if (jd) jdHash = xrayHashOf(jd)
-  } catch { /* no jd → empty hash */ }
+    canonicalJd = buf?.length
+      ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8')
+      : ''
+  } catch { /* unreadable canonical JD cannot prove Tailor provenance */ }
+  if (!canonicalJd.trim()) return { ok: false, reason: 'context-unavailable' }
+  if (payload.sourceJdHash !== practiceHandoffHashOf(canonicalJd)) {
+    return { ok: false, reason: 'jd-mismatch' }
+  }
+
+  // Validate the posting version and lifecycle in the same write that repairs
+  // its retention pin. A merge/closure that wins after the read prevents the
+  // application artifact from being attached to stale context.
+  const postingGuard = await JobPosting.updateOne(
+    {
+      _id: jobPostingId,
+      status: postingState === 'live' ? 'open' : 'closed',
+      ...(postingState === 'archived' ? { closedReason: posting.closedReason } : {}),
+      jdCompressed: posting.jdCompressed,
+    },
+    { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+  )
+  if ((postingGuard?.matchedCount ?? 0) !== 1) {
+    return { ok: false, reason: 'context-unavailable' }
+  }
 
   // '' would fail the schema's string validation on create (Mongoose treats
   // empty as missing) — paste/upload-sourced tailors simply have no source
   // resume (Codex P1 on #526).
-  const tailoredVersion = { ...payload, sourceResumeId: payload.sourceResumeId || undefined, jdHash, createdAt: now }
-  const res = await JobApplication.updateOne({ userId, jobPostingId }, { $set: { tailoredVersion } })
-  if ((res?.matchedCount ?? 0) > 0) return { ok: true }
+  const tailoredVersion = {
+    tailoredText: payload.tailoredText,
+    sourceResumeId: payload.sourceResumeId || undefined,
+    matchScore: payload.matchScore,
+    addedKeywords: payload.addedKeywords,
+    missingKeywords: payload.missingKeywords,
+    jdHash: xrayHashOf(canonicalJd),
+    createdAt: now,
+  }
+  if (existingApp) {
+    const res = await JobApplication.updateOne(
+      { _id: existingApp._id, userId, jobPostingId },
+      { $set: { tailoredVersion } },
+    )
+    return (res?.matchedCount ?? 0) > 0
+      ? { ok: true }
+      : { ok: false, reason: 'context-unavailable' }
+  }
 
   // No row yet: implicit save (mirrors the save route's create + pin).
-  await JobPosting.updateOne({ _id: jobPostingId }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
+  // Ownership cannot be manufactured after closure. Bind the retention pin
+  // to an open posting in the same atomic write; a close that wins this race
+  // prevents application creation.
+  if (postingState !== 'live') return { ok: false, reason: 'not-found' }
   try {
     await JobApplication.create({
       userId,
@@ -96,7 +155,10 @@ export async function saveTailoredVersion(
     })
   } catch (err) {
     if ((err as { code?: number })?.code === 11000) {
-      await JobApplication.updateOne({ userId, jobPostingId }, { $set: { tailoredVersion } })
+      const raced = await JobApplication.updateOne({ userId, jobPostingId }, { $set: { tailoredVersion } })
+      if ((raced?.matchedCount ?? 0) !== 1) {
+        return { ok: false, reason: 'context-unavailable' }
+      }
     } else {
       throw err
     }
@@ -480,12 +542,12 @@ export async function recordApplyClick(
   const posting = await JobPosting.findById(jobPostingId).select('title company locations provenance status').lean()
   if (!posting) return null
 
-  // Clicking Apply references the posting as hard as saving does — pin it
-  // (and clear any racing TTL) so the tracker row never dangles (§4.3).
-  await JobPosting.updateOne({ _id: jobPostingId }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
-
   const existing = await JobApplication.findOne({ userId, jobPostingId }).select('status').lean()
   if (existing) {
+    // Existing ownership survives closure. Keep its retention pin healthy;
+    // a stale tab may still report the real click without granting access to
+    // anyone new.
+    await JobPosting.updateOne({ _id: jobPostingId }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
     if (existing.status !== 'saved') {
       return { status: existing.status, created: false, transitioned: false }
     }
@@ -502,6 +564,15 @@ export async function recordApplyClick(
     const winner = await JobApplication.findOne({ userId, jobPostingId }).select('status').lean()
     return winner ? { status: winner.status, created: false, transitioned: false } : null
   }
+
+  // A first click may create ownership only while the posting is live. The
+  // status predicate closes the read→pin race atomically with retention.
+  if (posting.status !== 'open') return null
+  const pin = await JobPosting.updateOne(
+    { _id: jobPostingId, status: 'open' },
+    { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+  )
+  if ((pin?.matchedCount ?? 0) !== 1) return null
 
   try {
     await JobApplication.create({

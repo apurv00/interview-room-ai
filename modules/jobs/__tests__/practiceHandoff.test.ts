@@ -92,17 +92,46 @@ describe('Jobs practice handoff', () => {
     expect(mockPostingFindById).not.toHaveBeenCalled()
   })
 
-  it('rejects a posting that closed or changed JD after token minting', async () => {
+  it('normal archive owner can resolve an exact-JD historical inferred role after catalog revision drift', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockPostingFindById.mockReturnValue(selectLean({
+      company: 'PhonePe', status: 'closed', closedReason: 'aged-out',
+      parsedJD: { inferredDomain: 'frontend' },
+      parsedJDHash: xrayHashOf(JD),
+      parsedJDRoleVersion: 'jd-role-v2:previous-catalog',
+      jdCompressed: gzipSync(Buffer.from(JD)),
+    }))
+
+    expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toMatchObject({
+      jobId: JOB_ID,
+      jobDescription: JD,
+      applicationId: 'app-canonical',
+      role: 'frontend',
+    })
+  })
+
+  it('token alone never grants archive access, and restricted closures fail before JD preparation', async () => {
     const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
     mockPostingFindById
       .mockReturnValueOnce(selectLean({
-        company: 'PhonePe', status: 'closed', jdCompressed: gzipSync(Buffer.from(JD)),
+        company: 'PhonePe', status: 'closed', closedReason: 'aged-out', jdCompressed: gzipSync(Buffer.from(JD)),
       }))
       .mockReturnValueOnce(selectLean({
-        company: 'PhonePe', status: 'open', jdCompressed: gzipSync(Buffer.from('A changed JD body')),
+        company: 'PhonePe', status: 'closed', closedReason: 'source-revoked', jdCompressed: gzipSync(Buffer.from(JD)),
       }))
+    mockApplicationFindOne.mockReturnValueOnce(selectLean(null))
 
     expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
+    expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
+    expect(mockApplicationFindOne).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects an exact token when the live JD changed after minting', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockPostingFindById.mockReturnValue(selectLean({
+      company: 'PhonePe', status: 'open', jdCompressed: gzipSync(Buffer.from('A changed JD body')),
+    }))
+
     expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
     expect(mockApplicationFindOne).not.toHaveBeenCalled()
   })
@@ -142,7 +171,7 @@ describe('Jobs practice handoff', () => {
     })).toEqual({ jobDescription: DISPLAY_JD })
   })
 
-  it('publishes readiness at the exact JD boundary and withholds it one character over', async () => {
+  it('publishes Practice readiness at the JD boundary but keeps only canonical identity one character over', async () => {
     const atLimit = 'j'.repeat(INTERVIEW_JOB_DESCRIPTION_MAX_CHARS)
     const overLimit = `${atLimit}j`
 
@@ -157,7 +186,10 @@ describe('Jobs practice handoff', () => {
     expect(await preparePracticeHandoffPosting({
       domain: 'backend',
       jdCompressed: gzipSync(Buffer.from(overLimit)),
-    })).toEqual({ jobDescription: overLimit })
+    })).toEqual({
+      jobDescription: overLimit,
+      jdHash: practiceHandoffHashOf(overLimit),
+    })
   })
 
   it('withholds readiness for a whitespace-only canonical JD', async () => {
@@ -233,6 +265,50 @@ describe('Jobs practice handoff', () => {
 
     expect(prepared.jdHash).toBe(HASH)
     expect(prepared.role).toBeUndefined()
+  })
+
+  it('keeps a same-JD historical inferred role usable for a normal archive after catalog revision drift', async () => {
+    const prepared = await preparePracticeHandoffPosting({
+      status: 'closed',
+      closedReason: 'aged-out',
+      jdCompressed: gzipSync(Buffer.from(JD)),
+      parsedJD: { inferredDomain: ' Frontend ' },
+      parsedJDHash: xrayHashOf(JD),
+      parsedJDRoleVersion: 'jd-role-v2:previous-catalog',
+    })
+
+    expect(prepared).toEqual({
+      jobDescription: JD,
+      jdHash: HASH,
+      role: 'frontend',
+    })
+  })
+
+  it('does not revive a historical inferred role for restricted archives or a slug removed from the current catalog', async () => {
+    const historical = {
+      status: 'closed' as const,
+      jdCompressed: gzipSync(Buffer.from(JD)),
+      parsedJD: { inferredDomain: 'frontend' },
+      parsedJDHash: xrayHashOf(JD),
+      parsedJDRoleVersion: 'jd-role-v2:previous-catalog',
+    }
+
+    expect((await preparePracticeHandoffPosting({
+      ...historical,
+      closedReason: 'source-revoked',
+    })).role).toBeUndefined()
+
+    mockGetActiveCatalog.mockResolvedValue({
+      ...ACTIVE_CATALOG,
+      slugs: ['backend', 'general'],
+      slugSet: new Set(['backend', 'general']),
+      inferenceSlugSet: new Set(['backend', 'general']),
+      revision: 'jd-role-v2:without-frontend',
+    })
+    expect((await preparePracticeHandoffPosting({
+      ...historical,
+      closedReason: 'aged-out',
+    })).role).toBeUndefined()
   })
 
   it('fails Practice readiness closed when the CMS catalog is unavailable', async () => {

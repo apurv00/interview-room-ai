@@ -1,0 +1,97 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const {
+  mockGetServerSession, mockConnectDB, mockGetConfig, mockApplicationExists,
+  mockPostingFindById, mockUserFindById, mockInngestSend, mockEventCreate,
+  mockPreparePractice,
+} = vi.hoisted(() => ({
+  mockGetServerSession: vi.fn(),
+  mockConnectDB: vi.fn(),
+  mockGetConfig: vi.fn(),
+  mockApplicationExists: vi.fn(),
+  mockPostingFindById: vi.fn(),
+  mockUserFindById: vi.fn(),
+  mockInngestSend: vi.fn(),
+  mockEventCreate: vi.fn(),
+  mockPreparePractice: vi.fn(),
+}))
+
+vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
+vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
+vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
+vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend } }))
+vi.mock('@shared/db/models', () => ({
+  JobsEmailConfig: { getConfig: mockGetConfig },
+  JobApplication: { exists: mockApplicationExists },
+  JobPosting: { findById: mockPostingFindById },
+  User: { findById: mockUserFindById },
+  ProductEvent: { create: mockEventCreate },
+}))
+vi.mock('@jobs', () => ({
+  isSuppressed: () => false,
+  jobPostingStateOf: (posting: { status: string; closedReason?: string }) => (
+    posting.status === 'open'
+      ? 'live'
+      : posting.closedReason === 'aged-out'
+        ? 'archived'
+        : 'restricted'
+  ),
+  preparePracticeHandoffPosting: mockPreparePractice,
+}))
+
+import { POST } from '../route'
+
+const USER_ID = '507f1f77bcf86cd799439010'
+const JOB_ID = '507f1f77bcf86cd799439011'
+const selectLean = (value: unknown) => ({ select: () => ({ lean: () => Promise.resolve(value) }) })
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+  mockConnectDB.mockResolvedValue(undefined)
+  mockGetConfig.mockResolvedValue({ e0Enabled: true })
+  mockApplicationExists.mockResolvedValue({ _id: 'app1' })
+  mockPostingFindById.mockReturnValue(selectLean({ status: 'closed', closedReason: 'aged-out' }))
+  mockUserFindById.mockReturnValue(selectLean({ emailPreferences: { jobs: { unsubscribedStreams: [] } } }))
+  mockInngestSend.mockResolvedValue(undefined)
+  mockEventCreate.mockResolvedValue({})
+  mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash', role: 'backend' })
+})
+
+describe('POST /api/jobs/[id]/practice-link-email archive policy', () => {
+  it('keeps deferred Practice available for a normal archive owner', async () => {
+    const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/practice-link-email`, { method: 'POST' }), { params: { id: JOB_ID } })
+
+    expect(await response.json()).toEqual({ ok: true })
+    expect(mockInngestSend).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'jobs/email.requested', data: expect.objectContaining({ userId: USER_ID, jobPostingId: JOB_ID }),
+    }))
+  })
+
+  it('declines restricted closures without scheduling a dead promise', async () => {
+    mockPostingFindById.mockReturnValue(selectLean({ status: 'closed', closedReason: 'source-revoked' }))
+
+    const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/practice-link-email`, { method: 'POST' }), { params: { id: JOB_ID } })
+
+    expect(await response.json()).toEqual({ ok: false, reason: 'unavailable' })
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('requires the caller-owned application before scheduling', async () => {
+    mockApplicationExists.mockResolvedValue(null)
+
+    const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/practice-link-email`, { method: 'POST' }), { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(404)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('declines when the retained JD or active CMS role cannot support Practice', async () => {
+    mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash' })
+
+    const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/practice-link-email`, { method: 'POST' }), { params: { id: JOB_ID } })
+
+    expect(await response.json()).toEqual({ ok: false, reason: 'unavailable' })
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+})

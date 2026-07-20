@@ -16,6 +16,7 @@ interface Row {
   company: string
   location: string
   status: string
+  postingState: 'live' | 'archived' | 'restricted' | 'snapshot-only'
   daysInStatus: number
   practiceCount: number
   notes?: string
@@ -140,7 +141,7 @@ export default function TrackerPage() {
   if (error === 'auth') {
     return (
       <main className="mx-auto max-w-3xl px-4 py-16">
-        <p className="font-medium">Sign in to see your tracker.</p>
+        <p className="font-medium">Sign in to see your job tracker.</p>
         <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Browse jobs</Link>
       </main>
     )
@@ -149,7 +150,10 @@ export default function TrackerPage() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
       <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold">My applications</h1>
+        <div>
+          <h1 className="text-2xl font-semibold">Job tracker</h1>
+          <p className="mt-1 text-sm text-slate-500">Tracked jobs, grouped by your current status.</p>
+        </div>
         <Link href="/jobs" className="text-sm text-blue-600 hover:underline">Browse jobs</Link>
       </div>
 
@@ -168,7 +172,7 @@ export default function TrackerPage() {
 
       {view && view.groups.length === 0 && (
         <div className="mt-8 rounded-xl border border-slate-200 border-dashed p-6 bg-white">
-          <p className="font-medium">Nothing tracked yet.</p>
+          <p className="font-medium">No tracked jobs yet.</p>
           <p className="mt-1 text-sm text-slate-500">Save or apply to a job and it lands here automatically.</p>
         </div>
       )}
@@ -182,12 +186,23 @@ export default function TrackerPage() {
             {g.rows.map((r) => (
               <li key={r.jobPostingId} className="rounded-xl border border-slate-200 p-3 bg-white">
                 <div className="flex items-baseline justify-between gap-2">
-                  <Link href={`/jobs/${r.jobPostingId}`} className="font-medium hover:underline">{r.title}</Link>
+                  <Link
+                    href={`/jobs/${r.jobPostingId}`}
+                    aria-label={`${r.postingState === 'live' ? 'Open job' : 'Open saved details'} for ${r.title} at ${r.company}`}
+                    className="font-medium hover:underline"
+                  >
+                    {r.title}
+                  </Link>
                   <span className="shrink-0 text-xs text-slate-500">{r.daysInStatus}d</span>
                 </div>
                 <p className="mt-0.5 text-sm text-slate-500">
                   {r.company}{r.location ? ` · ${r.location}` : ''} · Evidence {r.practiceCount}/3
                 </p>
+                {r.postingState !== 'live' && (
+                  <p className="mt-1 text-xs font-medium text-amber-700">
+                    {r.postingState === 'archived' ? 'Posting no longer active · saved details available' : 'Posting unavailable · tracked history preserved'}
+                  </p>
+                )}
                 {r.nudge === 'waiting' && <p className="mt-1 text-xs text-amber-700">Still waiting on {r.company}? Keep prepping — evidence carries to similar jobs.</p>}
                 {r.nudge === 'ghost-prompt' && (
                   <p className="mt-1 text-xs text-amber-700">
@@ -203,7 +218,13 @@ export default function TrackerPage() {
                   <button onClick={() => { setNotesFor(r.jobPostingId); setNotesDraft(r.notes ?? '') }} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 bg-white">
                     {r.notes ? 'Edit note' : 'Add note'}
                   </button>
-                  <Link href={`/jobs/${r.jobPostingId}`} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-blue-600 bg-white">View</Link>
+                  <Link
+                    href={`/jobs/${r.jobPostingId}`}
+                    aria-label={`${r.postingState === 'live' ? 'View job' : 'View saved details'} for ${r.title} at ${r.company}`}
+                    className="rounded-full border border-slate-200 px-2 py-0.5 text-xs text-blue-600 bg-white"
+                  >
+                    {r.postingState === 'live' ? 'View' : 'View saved details'}
+                  </Link>
                 </div>
                 {dateSheetFor === r.jobPostingId && r.status === 'interview_scheduled' && (
                   <div className="mt-2 rounded-lg border border-blue-300 bg-blue-50 p-2 text-xs">
@@ -233,7 +254,7 @@ export default function TrackerPage() {
 
       {undo && (
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg">
+          <div role="status" aria-live="polite" aria-atomic="true" className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg">
             <span>{undo.label}</span>
             <button onClick={undoLast} className="ml-3 font-medium text-blue-600 hover:underline">Undo</button>
           </div>

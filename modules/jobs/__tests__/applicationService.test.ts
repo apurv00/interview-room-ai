@@ -72,7 +72,7 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     expect(created.status).toBe('apply_clicked')
     expect(created.statusHistory[0]).toMatchObject({ status: 'apply_clicked', source: 'system' })
     expect(created.jobSnapshot.applyTierAtClick).toBe('direct-ats')
-    expect(mockPostingUpdateOne).toHaveBeenCalledWith({ _id: 'j1' }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith({ _id: 'j1', status: 'open' }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
   })
 
   it('saved → apply_clicked transitions with a system history entry, guarded against races', async () => {
@@ -127,13 +127,28 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     })
   })
 
-  it('missing posting → null (route 404s); closed posting still records the click (link can outlive the row)', async () => {
+  it('missing or closed unowned posting → null; a closed owner may still record a stale real click', async () => {
     reset(null)
     expect(await recordApplyClick('u1', 'gone', {}, NOW)).toBeNull()
     reset({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'closed' })
     mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
-    const r = await recordApplyClick('u1', 'j1', {}, NOW)
-    expect(r?.status).toBe('apply_clicked') // a real click on a stale-but-rendered page is still a machine fact
+    expect(await recordApplyClick('u1', 'j1', {}, NOW)).toBeNull()
+    expect(mockAppCreate).not.toHaveBeenCalled()
+
+    reset({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'closed' })
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'saved' }) }) })
+    expect(await recordApplyClick('u1', 'j1', {}, NOW)).toEqual({
+      status: 'apply_clicked', created: false, transitioned: true,
+    })
+  })
+
+  it('does not create ownership when closure wins the atomic open-posting pin', async () => {
+    reset()
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
+    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    expect(await recordApplyClick('u1', 'j1', {}, NOW)).toBeNull()
+    expect(mockAppCreate).not.toHaveBeenCalled()
   })
 })
 
@@ -614,20 +629,24 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
 
 describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
   const { gzipSync } = require('zlib')
-  const PAYLOAD = { tailoredText: 'TAILORED', sourceResumeId: 'r1', matchScore: 78, addedKeywords: ['sql'], missingKeywords: ['kafka'] }
-  const PASTE_PAYLOAD = { tailoredText: 'TAILORED', sourceResumeId: undefined, matchScore: 78, addedKeywords: [], missingKeywords: [] }
-  function postingChain(doc: unknown) {
+  const TAILOR_JD = 'the jd body'
+  const TAILOR_JD_COMPRESSED = gzipSync(Buffer.from(TAILOR_JD))
+  const TAILOR_SOURCE_HASH = practiceHandoffHashOf(TAILOR_JD)
+  const PAYLOAD = { tailoredText: 'TAILORED', sourceResumeId: 'r1', matchScore: 78, addedKeywords: ['sql'], missingKeywords: ['kafka'], sourceJdHash: TAILOR_SOURCE_HASH }
+  const PASTE_PAYLOAD = { tailoredText: 'TAILORED', sourceResumeId: undefined, matchScore: 78, addedKeywords: [], missingKeywords: [], sourceJdHash: TAILOR_SOURCE_HASH }
+  function postingChain(doc: unknown, app: unknown = { _id: 'app1' }) {
     mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(doc) }) })
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(app) }) })
   }
 
   it('existing row: $set tailoredVersion with jdHash bound to the posting JD', async () => {
     reset()
-    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: gzipSync(Buffer.from('the jd body')) })
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED })
     mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
     const r = await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)
     expect(r).toEqual({ ok: true })
     const [filter, update] = mockAppUpdateOne.mock.calls[0]
-    expect(filter).toEqual({ userId: 'u1', jobPostingId: 'j1' })
+    expect(filter).toEqual({ _id: 'app1', userId: 'u1', jobPostingId: 'j1' })
     expect(update.$set.tailoredVersion).toMatchObject({ tailoredText: 'TAILORED', matchScore: 78, createdAt: NOW })
     expect(update.$set.tailoredVersion.jdHash).toHaveLength(20)
     expect(mockAppCreate).not.toHaveBeenCalled()
@@ -635,20 +654,21 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
 
   it('no row: implicit save — creates at saved WITH the tailored version and pins the posting', async () => {
     reset()
-    postingChain({ title: 'SDE', company: 'X', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open', jdCompressed: undefined })
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+    postingChain({ title: 'SDE', company: 'X', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }, null)
     const r = await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)
     expect(r).toEqual({ ok: true })
     const created = mockAppCreate.mock.calls[0][0]
     expect(created.status).toBe('saved')
     expect(created.tailoredVersion.tailoredText).toBe('TAILORED')
-    expect(mockPostingUpdateOne).toHaveBeenCalledWith({ _id: 'j1' }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: 'j1', status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }),
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+    )
   })
 
   it('paste-sourced tailors (no sourceResumeId) create cleanly — empty string never reaches Mongoose (Codex P1 #526)', async () => {
     reset()
-    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open' })
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }, null)
     const r = await saveTailoredVersion('u1', 'j1', PASTE_PAYLOAD, NOW)
     expect(r).toEqual({ ok: true })
     const created = mockAppCreate.mock.calls[0][0]
@@ -656,13 +676,49 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     expect('sourceResumeId' in created.tailoredVersion && created.tailoredVersion.sourceResumeId === '').toBe(false)
   })
 
+  it('updates an existing normal archive but cannot manufacture closed or restricted ownership', async () => {
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'closed', closedReason: 'aged-out', jdCompressed: TAILOR_JD_COMPRESSED })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
+    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: true })
+
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'closed', closedReason: 'aged-out', jdCompressed: TAILOR_JD_COMPRESSED }, null)
+    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: false, reason: 'not-found' })
+    expect(mockAppCreate).not.toHaveBeenCalled()
+
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'closed', closedReason: 'source-revoked', jdCompressed: TAILOR_JD_COMPRESSED })
+    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: false, reason: 'context-unavailable' })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('does not implicitly save when closure wins the atomic open-posting pin', async () => {
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }, null)
+    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: false, reason: 'context-unavailable' })
+    expect(mockAppCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects an edited or stale JD hash before it can attach an artifact', async () => {
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED })
+
+    expect(await saveTailoredVersion('u1', 'j1', { ...PAYLOAD, sourceJdHash: practiceHandoffHashOf('edited jd') }, NOW))
+      .toEqual({ ok: false, reason: 'jd-mismatch' })
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+  })
+
   it('missing posting → ok:false; create race falls back to update', async () => {
     reset()
     postingChain(null)
-    expect(await saveTailoredVersion('u1', 'gone', PAYLOAD, NOW)).toEqual({ ok: false })
+    expect(await saveTailoredVersion('u1', 'gone', PAYLOAD, NOW)).toEqual({ ok: false, reason: 'not-found' })
     reset()
-    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open' })
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 }).mockResolvedValueOnce({ matchedCount: 1 })
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }, null)
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
     mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
     expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: true })
   })

@@ -53,7 +53,12 @@ import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner
 import { usePathwayGenerationPoll } from '@learn/hooks/usePathwayGenerationPoll'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import JobsCountLink from '@jobs/components/JobsCountLink'
-import { planRetakeNavigation } from '@interview/utils/retakeNavigation'
+import {
+  persistGenericRetakeConfig,
+  planRetakeNavigation,
+  retakeConfigFromStoredSession,
+  type RetakeRouteResponse,
+} from '@interview/utils/retakeNavigation'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 
@@ -217,6 +222,9 @@ function FeedbackPageInner() {
 
   // Retake flow
   const [retakeLoading, setRetakeLoading] = useState(false)
+  const [retakeSetupConfig, setRetakeSetupConfig] = useState<
+    ReturnType<typeof retakeConfigFromStoredSession>
+  >()
 
   // Pathway retry banner — when the pathway empty-state CTA sends the
   // user here with `?retryPathway=1`, we fire one POST to
@@ -901,6 +909,7 @@ function FeedbackPageInner() {
         }
 
         if (session) {
+            setRetakeSetupConfig(retakeConfigFromStoredSession(session))
             // Capture retake linkage for the comparison card. Sessions
             // created before the retake feature was added have no
             // parentSessionId, so this silently no-ops for them.
@@ -1999,8 +2008,9 @@ function FeedbackPageInner() {
                     setRetakeLoading(false)
                     return
                   }
-                  const plan = planRetakeNavigation(await res.json(), sessionId)
-                  if (plan.jobId) {
+                  const retakePayload = await res.json() as RetakeRouteResponse
+                  const plan = planRetakeNavigation(retakePayload, sessionId)
+                  if (plan.kind === 'jobs-practice') {
                     // The original signed token was consumed. Return through
                     // the job page so a fresh canonical handoff is minted;
                     // never copy the parent session's stale Jobs config.
@@ -2012,17 +2022,26 @@ function FeedbackPageInner() {
                     router.push(plan.href)
                     return
                   }
-                  // Merge the parent's config into the setup form via
-                  // localStorage so hydration picks it up seamlessly. We
-                  // use the feedback page's own `data.config` (already
-                  // fetched) rather than the endpoint's summary to preserve
-                  // JD / resume / target company fields.
+                  // Reconstruct the parent's setup shape from its compact
+                  // config plus top-level JD/resume fields before applying
+                  // the Jobs-origin scrub.
                   try {
-                    const fullConfig = data?.config
-                    if (fullConfig) {
-                      localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(fullConfig))
+                    // This removes the old key first for Jobs-origin fallback,
+                    // even when a malformed cached payload has no replacement
+                    // config. No prior Jobs token/JD can survive into setup.
+                    persistGenericRetakeConfig(
+                      localStorage,
+                      STORAGE_KEYS.INTERVIEW_CONFIG,
+                      retakeSetupConfig ?? retakePayload.config,
+                      retakePayload.jobsOrigin === true,
+                    )
+                    if (plan.kind === 'retake') {
+                      localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, plan.parentSessionId)
+                    } else {
+                      // Without the verified exact-JD benchmark this is a new
+                      // general practice, not a comparable retake.
+                      localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
                     }
-                    localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, plan.parentSessionId)
                     localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
                   } catch { /* ignore */ }
                   router.push(plan.href)

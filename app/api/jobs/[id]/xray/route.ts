@@ -16,13 +16,15 @@ export const dynamic = 'force-dynamic'
  */
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions)
-  if (!session?.user) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
+  const userId = (session?.user as { id?: string } | undefined)?.id
+  if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
+  const privateResponse = { headers: { 'Cache-Control': 'private, no-store' } }
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
-    return NextResponse.json({ error: 'not found' }, { status: 404 })
+    return NextResponse.json({ error: 'not found' }, { status: 404, ...privateResponse })
   }
   await connectDB()
-  const xray = await getOrParseXray(params.id)
-  if (!xray) return NextResponse.json({ error: 'not found' }, { status: 404 })
+  const xray = await getOrParseXray(params.id, userId)
+  if (!xray) return NextResponse.json({ error: 'not found' }, { status: 404, ...privateResponse })
   return NextResponse.json({
     cached: xray.cached,
     retryable: xray.retryable === true,
@@ -35,5 +37,5 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       requirement: r.requirement,
       importance: r.importance,
     })),
-  })
+  }, privateResponse)
 }

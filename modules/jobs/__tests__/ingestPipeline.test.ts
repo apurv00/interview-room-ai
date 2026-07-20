@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockFindOne, mockFind, mockCreate } = vi.hoisted(() => ({
+const { mockFindOne, mockFindById, mockFind, mockCreate } = vi.hoisted(() => ({
   mockFindOne: vi.fn(),
+  mockFindById: vi.fn(),
   mockFind: vi.fn(),
   mockCreate: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findOne: mockFindOne, find: mockFind, create: mockCreate },
+  JobPosting: { findOne: mockFindOne, findById: mockFindById, find: mockFind, create: mockCreate },
 }))
 
 import { ingestBatch, evictProvenance, makeRedisRepostCounter } from '../services/ingestPipeline'
@@ -33,12 +34,15 @@ function job(overrides: Partial<NormalizedJob> = {}): NormalizedJob {
 
 function reset(): void {
   mockFindOne.mockReset().mockResolvedValue(null)
+  mockFindById.mockReset().mockResolvedValue(null)
   mockFind.mockReset().mockReturnValue({ limit: () => Promise.resolve([]) })
   mockCreate.mockReset().mockResolvedValue({})
 }
 
 function docStub(overrides: Record<string, unknown> = {}) {
   return {
+    _id: 'p1',
+    updatedAt: new Date('2026-07-20T00:00:00Z'),
     status: 'open',
     provenance: [] as Array<Record<string, unknown>>,
     locationKeys: [] as string[],
@@ -82,6 +86,59 @@ describe('ingestBatch — identity ladder', () => {
     expect(existing.save).toHaveBeenCalled()
     expect(mockCreate).not.toHaveBeenCalled()
   })
+
+  it.each(['source-revoked', 'llm-verdict'] as const)(
+    're-reads after a stale normal-archive reopen and never reverses a newer %s close',
+    async (restrictedReason) => {
+      reset()
+      const provenance = [{
+        sourceId: 'jsearch',
+        externalId: 'ext-1',
+        sourceKey: 'jsearch:ext-1',
+        applyUrl: 'https://careers.acme.com/1',
+        lastSeenAt: new Date('2026-07-01'),
+      }]
+      const staleError = new Error('lifecycle CAS missed')
+      staleError.name = 'DocumentNotFoundError'
+      const staleArchive = docStub({
+        status: 'closed',
+        closedReason: 'board-poll-miss',
+        provenance: structuredClone(provenance),
+        jdLength: 999,
+        save: vi.fn().mockRejectedValue(staleError),
+      })
+      const restricted = docStub({
+        status: 'closed',
+        closedReason: restrictedReason,
+        updatedAt: new Date('2026-07-20T01:00:00Z'),
+        provenance: structuredClone(provenance),
+        jdLength: 999,
+      })
+      mockFindOne.mockResolvedValueOnce(staleArchive)
+      mockFindById.mockResolvedValueOnce(restricted)
+
+      const counters = await ingestBatch([job()], 'jsearch')
+
+      expect((staleArchive as Record<string, unknown>).status).toBe('open')
+      expect((staleArchive as Record<string, unknown>).$where).toEqual({
+        status: 'closed',
+        closedReason: 'board-poll-miss',
+        updatedAt: staleArchive.updatedAt,
+      })
+      expect(staleArchive.save).toHaveBeenCalledWith({ w: 1 })
+      expect(mockFindById).toHaveBeenCalledWith('p1')
+      expect(restricted.status).toBe('closed')
+      expect((restricted as Record<string, unknown>).closedReason).toBe(restrictedReason)
+      expect((restricted as Record<string, unknown>).$where).toEqual({
+        status: 'closed',
+        closedReason: restrictedReason,
+        updatedAt: restricted.updatedAt,
+      })
+      expect(restricted.save).toHaveBeenCalledOnce()
+      expect(restricted.save).toHaveBeenCalledWith({ w: 1 })
+      expect(counters).toMatchObject({ refreshed: 1, storeErrors: 0 })
+    },
+  )
 
   it('tier 2: fingerprint merge takes longest JD, earliest postedAt, unions locations', async () => {
     reset()

@@ -11,6 +11,7 @@ const {
   mockGetConfig, mockSendEmail, mockSendFindOne, mockSendCreate, mockSendCount,
   mockUserFindById, mockAppFindOne, mockAppFind, mockAppExists, mockPostingFindById,
   mockSessionExists, mockInngestSend, mockLoggerError, mockSendUpdateMany, mockAppUpdateMany, mockSendAggregate, mockSendDeleteMany,
+  mockPreparePractice,
 } = vi.hoisted(() => ({
   mockGetConfig: vi.fn(),
   mockSendEmail: vi.fn(),
@@ -29,6 +30,7 @@ const {
   mockSendAggregate: vi.fn(),
   mockSendDeleteMany: vi.fn(),
   mockLoggerError: vi.fn(),
+  mockPreparePractice: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
@@ -37,6 +39,7 @@ vi.mock('@shared/services/inngest', () => ({
   inngest: { send: mockInngestSend, createFunction: vi.fn(() => ({})) },
 }))
 vi.mock('@shared/services/emailService', () => ({ sendEmail: mockSendEmail }))
+vi.mock('../services/practiceHandoff', () => ({ preparePracticeHandoffPosting: mockPreparePractice }))
 vi.mock('@shared/services/signedActionToken', () => ({
   mintActionToken: vi.fn((input: { action: string }) => `tok-${input.action}`),
 }))
@@ -72,7 +75,8 @@ beforeEach(() => {
   mockSendCount.mockResolvedValue(0)
   mockSendEmail.mockResolvedValue({ ok: true, id: 're-1' })
   mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } } }))
-  mockPostingFindById.mockReturnValue(selectLean({ title: 'Backend Engineer', company: 'Acme' }))
+  mockPostingFindById.mockReturnValue(selectLean({ title: 'Backend Engineer', company: 'Acme', status: 'open' }))
+  mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash', role: 'backend' })
   mockSessionExists.mockResolvedValue(null)
   mockSendUpdateMany.mockResolvedValue({})
   mockAppUpdateMany.mockResolvedValue({})
@@ -143,8 +147,8 @@ describe('templates', () => {
   it('subjects never impersonate employer contact (banned-pattern list, R9)', () => {
     const subjects = [
       buildE0Email({ company: 'Acme', jobTitle: 'Backend Engineer', practiceUrl: 'https://x/p', footer }).subject,
-      buildE2Email({ company: 'Acme', jobTitle: 'Backend Engineer', whenLabel: 'tomorrow', prepPlanUrl: 'https://x/pp', warmUpUrl: 'https://x/w', logisticsOnly: false, footer }).subject,
-      buildE2Email({ company: 'Acme', jobTitle: 'Backend Engineer', whenLabel: 'this week', prepPlanUrl: 'https://x/pp', warmUpUrl: 'https://x/w', logisticsOnly: true, footer }).subject,
+      buildE2Email({ company: 'Acme', jobTitle: 'Backend Engineer', whenLabel: 'tomorrow', prepPlanUrl: 'https://x/pp', warmUpUrl: 'https://x/w', logisticsOnly: false, practiceAvailable: true, footer }).subject,
+      buildE2Email({ company: 'Acme', jobTitle: 'Backend Engineer', whenLabel: 'this week', prepPlanUrl: 'https://x/pp', warmUpUrl: 'https://x/w', logisticsOnly: true, practiceAvailable: true, footer }).subject,
     ]
     for (const s of subjects) {
       for (const banned of BANNED_SUBJECT_PATTERNS) expect(s).not.toMatch(banned)
@@ -159,10 +163,20 @@ describe('templates', () => {
   })
 
   it('logistics-only E2 (practiced in last 24h) drops the warm-up push', () => {
-    const full = buildE2Email({ company: 'Acme', jobTitle: 'X', whenLabel: 'tomorrow', prepPlanUrl: 'https://x/pp', warmUpUrl: 'https://x/warm', logisticsOnly: false, footer })
-    const light = buildE2Email({ company: 'Acme', jobTitle: 'X', whenLabel: 'tomorrow', prepPlanUrl: 'https://x/pp', warmUpUrl: 'https://x/warm', logisticsOnly: true, footer })
+    const full = buildE2Email({ company: 'Acme', jobTitle: 'X', whenLabel: 'tomorrow', prepPlanUrl: 'https://x/pp', warmUpUrl: 'https://x/warm', logisticsOnly: false, practiceAvailable: true, footer })
+    const light = buildE2Email({ company: 'Acme', jobTitle: 'X', whenLabel: 'tomorrow', prepPlanUrl: 'https://x/pp', warmUpUrl: 'https://x/warm', logisticsOnly: true, practiceAvailable: true, footer })
     expect(full.html).toContain('https://x/warm')
     expect(light.html).not.toContain('https://x/warm')
+  })
+
+  it('E2 uses a generic setup CTA when exact-posting Practice is unavailable', () => {
+    const { html } = buildE2Email({
+      company: 'Acme', jobTitle: 'X', whenLabel: 'tomorrow', prepPlanUrl: 'https://x/setup',
+      warmUpUrl: 'https://x/must-not-appear', logisticsOnly: false, practiceAvailable: false, footer,
+    })
+    expect(html).toContain('https://x/setup')
+    expect(html).not.toContain('https://x/must-not-appear')
+    expect(html).toMatch(/general\s+interview preparation/)
   })
 
   it('templates escape user-influenced strings', () => {
@@ -252,6 +266,37 @@ describe('runE0Handler', () => {
     expect(r.outcome).toBe('suppressed')
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
+
+  it('drops a deferred Practice promise when the posting becomes restricted before send', async () => {
+    mockPostingFindById.mockReturnValue(selectLean({
+      title: 'Backend Engineer', company: 'Acme', status: 'closed', closedReason: 'source-revoked',
+    }))
+
+    expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
+      outcome: 'posting-restricted',
+    })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('honors a deferred Practice promise for an owned, normally archived posting', async () => {
+    mockPostingFindById.mockReturnValue(selectLean({
+      title: 'Backend Engineer', company: 'Acme', status: 'closed', closedReason: 'aged-out',
+    }))
+
+    expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
+      outcome: 'sent',
+    })
+    expect(mockSendEmail).toHaveBeenCalledOnce()
+  })
+
+  it('drops E0 when the retained JD or active CMS role is no longer Practice-ready', async () => {
+    mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash' })
+
+    expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
+      outcome: 'practice-unavailable',
+    })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
 })
 
 // ── E2 sweep ─────────────────────────────────────────────────────────────────
@@ -268,6 +313,7 @@ describe('runEmailSweepHandler', () => {
     _id: 'app1', userId: 'u1', jobPostingId: 'j1',
     interviewDate: new Date('2026-07-22T00:00:00Z'), // IST Jul 22 — T-1 is today
     interviewDateConfidence: 'exact', practiceSessionIds: [],
+    jobSnapshot: { title: 'Saved Backend Engineer', company: 'Saved Acme' },
     ...over,
   })
   // Cursor-paginated chain: find().select().sort().limit().lean(); rows are
@@ -368,6 +414,39 @@ describe('runEmailSweepHandler', () => {
     const html = mockSendEmail.mock.calls[0][0].html as string
     expect(html).not.toContain('practice=1') // no warm-up CTA
     expect(html).toContain('prep=1')
+  })
+
+  it('keeps E2 transactional but removes exact-job CTAs for restricted or no-longer-ready context', async () => {
+    mockAppFind.mockImplementation(findChain([appRow()]))
+    mockPostingFindById.mockReturnValue(selectLean({
+      title: 'Untrusted title', company: 'Untrusted company', status: 'closed', closedReason: 'source-revoked',
+    }))
+
+    await runEmailSweepHandler(step)
+
+    let html = mockSendEmail.mock.calls[0][0].html as string
+    expect(html).toContain('/interview/setup')
+    expect(html).not.toContain('practice=1')
+    expect(html).not.toContain('Untrusted company')
+    expect(html).toContain('Saved Acme')
+    expect(mockPreparePractice).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    mockGetConfig.mockResolvedValue({ e2Enabled: true, globalWeeklyCap: 3 })
+    mockSendFindOne.mockReturnValue(lean(null))
+    mockSendCreate.mockResolvedValue({})
+    mockSendCount.mockResolvedValue(0)
+    mockSendEmail.mockResolvedValue({ ok: true, id: 're-2' })
+    mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } } }))
+    mockPostingFindById.mockReturnValue(selectLean({ title: 'Backend Engineer', company: 'Acme', status: 'open' }))
+    mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash' })
+    mockSessionExists.mockResolvedValue(null)
+    mockAppFind.mockImplementation(findChain([appRow()]))
+
+    await runEmailSweepHandler(step)
+    html = mockSendEmail.mock.calls[0][0].html as string
+    expect(html).toContain('/interview/setup')
+    expect(html).not.toContain('practice=1')
   })
 })
 
@@ -476,6 +555,57 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     mockPostingFindById.mockReturnValue(selectLean({ status: 'closed' }))
     feed([e4Row('b1')], [])
     expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockPreparePractice).not.toHaveBeenCalled()
+  })
+
+  it('E4 revalidates exact-posting Practice readiness at send time and does not burn an unready candidate', async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash' }) // CMS role was deactivated after derivation
+    feed([e4Row('b1')], [])
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockPreparePractice).toHaveBeenCalledWith(expect.objectContaining({ status: 'open' }))
+    expect(mockSendCreate).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('E4 releases its reservation when exact-posting Practice becomes unavailable immediately before delivery', async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockPreparePractice
+      .mockResolvedValueOnce({ jobDescription: 'JD', jdHash: 'hash', role: 'backend' })
+      .mockResolvedValueOnce({ jobDescription: 'JD', jdHash: 'hash' })
+    feed([e4Row('b1')], [])
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({
+      userId: '507f1f77bcf86cd799439011',
+      stream: 'e4',
+      dedupeKey: 'b1',
+    }))
+    expect(mockPreparePractice).toHaveBeenCalledTimes(2)
+    expect(mockSendDeleteMany).toHaveBeenCalledWith({
+      userId: '507f1f77bcf86cd799439011',
+      stream: 'e4',
+      dedupeKey: { $in: ['b1'] },
+      sentAt: { $exists: false },
+    })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('E4 fails closed and releases its reservation when the final readiness lookup errors', async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockPreparePractice
+      .mockResolvedValueOnce({ jobDescription: 'JD', jdHash: 'hash', role: 'backend' })
+      .mockRejectedValueOnce(new Error('CMS unavailable'))
+    feed([e4Row('b1')], [])
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockSendDeleteMany).toHaveBeenCalledWith(expect.objectContaining({
+      stream: 'e4',
+      dedupeKey: { $in: ['b1'] },
+      sentAt: { $exists: false },
+    }))
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 

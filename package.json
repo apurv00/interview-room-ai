@@ -60,7 +60,9 @@
     "qa:v3:ui-smoke:prod": "node scripts/qa-v3-ui-smoke.mjs --prod",
     "qa:v3:gate": "node scripts/qa-v3-gate.mjs",
     "qa:v3:gate:prod": "node scripts/qa-v3-gate.mjs --prod",
-    "replay:pathway": "node scripts/replay-pathway-regenerate.mjs"
+    "replay:pathway": "node scripts/replay-pathway-regenerate.mjs",
+    "repair:jobs-retention": "tsx -r dotenv/config scripts/repair-jobs-retention.ts",
+    "check:jobs-retention": "tsx -r dotenv/config scripts/repair-jobs-retention.ts --check"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",
@@ -122,11 +124,13 @@
     "@types/react-dom": "^18",
     "@vitejs/plugin-react": "^5.1.4",
     "autoprefixer": "^10",
+    "dotenv": "17.4.2",
     "eslint": "^8",
     "eslint-config-next": "14.2.35",
     "jsdom": "^28.1.0",
     "postcss": "^8",
     "tailwindcss": "^3.4.0",
+    "tsx": "4.23.1",
     "typescript": "^5",
     "vitest": "^4.0.18"
   }

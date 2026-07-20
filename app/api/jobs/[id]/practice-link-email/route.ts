@@ -3,9 +3,9 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
-import { JobApplication, JobsEmailConfig, ProductEvent, User } from '@shared/db/models'
+import { JobApplication, JobPosting, JobsEmailConfig, ProductEvent, User } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
-import { isSuppressed } from '@jobs'
+import { isSuppressed, jobPostingStateOf, preparePracticeHandoffPosting } from '@jobs'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,12 +25,22 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   }
 
   await connectDB()
-  const [cfg, application, user] = await Promise.all([
+  const [cfg, application, posting, user] = await Promise.all([
     JobsEmailConfig.getConfig(),
     JobApplication.exists({ userId, jobPostingId: params.id }),
+    JobPosting.findById(params.id)
+      .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+      .lean(),
     User.findById(userId).select('emailPreferences.jobs.unsubscribedStreams').lean(),
   ])
-  if (!application) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
+  if (!application || !posting) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
+  if (jobPostingStateOf(posting) === 'restricted') {
+    return NextResponse.json({ ok: false, reason: 'unavailable' }, { status: 200 })
+  }
+  const prepared = await preparePracticeHandoffPosting(posting)
+  if (!prepared.role || !prepared.jdHash) {
+    return NextResponse.json({ ok: false, reason: 'unavailable' }, { status: 200 })
+  }
   if (!cfg.e0Enabled) return NextResponse.json({ ok: false, reason: 'unavailable' }, { status: 200 })
   if (isSuppressed(user?.emailPreferences?.jobs?.unsubscribedStreams, 'e0')) {
     // "email is off for your account" — visible decline, never a silent

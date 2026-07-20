@@ -1,4 +1,3 @@
-import { gunzipSync } from 'zlib'
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { JobApplication, JobPosting, UsageRecord, ProductEvent } from '@shared/db/models'
@@ -7,6 +6,8 @@ import { checkATS } from '@resume'
 import { getBaseResume } from '../services/baseResumeService'
 import { getResume } from '@resume'
 import { xrayHashOf, legacyXrayHashOf } from '../services/xrayService'
+import { jobPostingStateOf } from '../services/postingAccess'
+import { preparePracticeHandoffPosting } from '../services/practiceHandoff'
 
 /**
  * Save-gated per-job ATS check (Wave 3.3, founder decision Q3). The ~35s
@@ -49,13 +50,16 @@ export async function runAtsCheckHandler(
         { $unset: { atsRequestedAt: 1 } }
       )
 
-    const posting = await JobPosting.findById(jobPostingId).select('jdCompressed').lean()
-    const buf = posting?.jdCompressed as Buffer | undefined
-    let jd = ''
-    try {
-      jd = buf?.length ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8') : ''
-    } catch { /* corrupt gzip → no JD */ }
-    if (!jd) {
+    const posting = await JobPosting.findById(jobPostingId)
+      .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+      .lean()
+    if (!posting || jobPostingStateOf(posting) === 'restricted') {
+      await clearOwnClaim()
+      return { skipped: 'posting-unavailable' as const }
+    }
+    const prepared = await preparePracticeHandoffPosting(posting)
+    const jd = prepared.jobDescription
+    if (!prepared.jdHash) {
       await clearOwnClaim()
       return { skipped: 'no-jd' as const }
     }
@@ -86,9 +90,39 @@ export async function runAtsCheckHandler(
     }
 
     try {
+      // The event may wait in a queue while the posting changes. Re-check
+      // lifecycle and exact body immediately before billed work; the route's
+      // earlier capability decision is never authorization for the worker.
+      const currentPosting = await JobPosting.findById(jobPostingId)
+        .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+        .lean()
+      if (!currentPosting || jobPostingStateOf(currentPosting) === 'restricted') {
+        await clearOwnClaim()
+        return { skipped: 'posting-unavailable' as const }
+      }
+      const currentPrepared = await preparePracticeHandoffPosting(currentPosting)
+      if (!currentPrepared.jdHash || xrayHashOf(currentPrepared.jobDescription) !== jdHash) {
+        await clearOwnClaim()
+        return { skipped: 'posting-changed' as const }
+      }
       const result = await checkATS({ resumeText, jobDescription: jd })
       const score = (result as { score?: number })?.score ?? 0
       const missing = ((result as { keywords?: { missing?: string[] } })?.keywords?.missing ?? []).slice(0, 20)
+      // A safety/legal restriction that lands during the model call must not
+      // persist new JD-derived evidence. Spending cannot be rolled back, but
+      // the artifact and telemetry can still fail closed.
+      const finalPosting = await JobPosting.findById(jobPostingId)
+        .select('status closedReason jdCompressed jdDisplayCompressed')
+        .lean()
+      if (!finalPosting || jobPostingStateOf(finalPosting) === 'restricted') {
+        await clearOwnClaim()
+        return { skipped: 'posting-unavailable' as const }
+      }
+      const finalPrepared = await preparePracticeHandoffPosting(finalPosting)
+      if (!finalPrepared.jdHash || xrayHashOf(finalPrepared.jobDescription) !== jdHash) {
+        await clearOwnClaim()
+        return { skipped: 'posting-changed' as const }
+      }
       // ONE claim-scoped atomic write: result + marker clear land only for
       // the run that still owns the claim. A superseded run (its claim
       // reclaimed while it executed past the stale window) matches nothing —

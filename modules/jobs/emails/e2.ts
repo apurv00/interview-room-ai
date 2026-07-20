@@ -15,12 +15,23 @@ export interface E2Input {
   prepPlanUrl: string
   warmUpUrl: string
   logisticsOnly: boolean
+  /** False when the saved posting can no longer authorize exact-JD prep. */
+  practiceAvailable: boolean
   footer: EmailFooterInput
 }
 
 export function buildE2Email(input: E2Input): { subject: string; html: string } {
   const subject = `Your ${input.company} interview is ${input.whenLabel} — you've got this`
-  const body = input.logisticsOnly
+  const body = !input.practiceAvailable
+    ? `
+  <h1 style="font-size: 20px; margin: 0 0 12px;">Interview ${escapeHtml(input.whenLabel)}: ${escapeHtml(input.company)} 🍀</h1>
+  <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px;">
+    Your interview reminder is still active. The saved posting can no longer
+    support an exact-job practice session, but you can continue with general
+    interview preparation.
+  </p>
+  ${ctaButton(input.prepPlanUrl, 'Open interview setup')}`
+    : input.logisticsOnly
     ? `
   <h1 style="font-size: 20px; margin: 0 0 12px;">Interview ${escapeHtml(input.whenLabel)}: ${escapeHtml(input.company)} 🍀</h1>
   <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px;">

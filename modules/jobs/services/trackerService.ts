@@ -1,5 +1,6 @@
-import { JobApplication, ProductEvent } from '@shared/db/models'
+import { JobApplication, JobPosting, ProductEvent } from '@shared/db/models'
 import { logger } from '@shared/logger'
+import { jobPostingStateOf, type JobPostingState } from './postingAccess'
 
 /**
  * Tracker v1 (PRODUCT_FLOW §2 route table + §4b anti-nag; Wave 4.2).
@@ -36,6 +37,7 @@ export interface TrackerRow {
   company: string
   location: string
   status: string
+  postingState: JobPostingState | 'snapshot-only'
   daysInStatus: number
   practiceCount: number
   notes?: string
@@ -66,6 +68,17 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
     .sort({ updatedAt: -1 })
     .limit(500)
     .lean()
+  // One bounded batch keeps lifecycle separate from application status and
+  // avoids an N+1 lookup for up to 500 tracker rows. A missing retained post
+  // becomes snapshot-only rather than breaking the user's tracker link.
+  const postings = apps.length
+    ? await JobPosting.find({ _id: { $in: apps.map((app) => app.jobPostingId) } })
+        .select('_id status closedReason')
+        .lean()
+    : []
+  const postingStateById = new Map(
+    postings.map((posting) => [String(posting._id), jobPostingStateOf(posting)]),
+  )
 
   // Lazy auto-ghost (P-4): collect crossings, persist in ONE bulk write,
   // then render the post-transition state.
@@ -126,16 +139,19 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
   const rows: TrackerRow[] = apps.map((a) => {
     const ageDays = Math.floor((now.getTime() - lastActivityAt(a).getTime()) / (24 * 3600_000))
     const ghostable = (GHOSTABLE_STATUSES as readonly string[]).includes(a.status)
+    const postingState = postingStateById.get(String(a.jobPostingId)) ?? 'snapshot-only'
+    const canNudgePreparation = postingState === 'live' || postingState === 'archived'
     return {
       jobPostingId: String(a.jobPostingId),
       title: a.jobSnapshot?.title ?? 'Unknown role',
       company: a.jobSnapshot?.company ?? '',
       location: a.jobSnapshot?.location ?? '',
       status: a.status,
+      postingState,
       daysInStatus: ageDays,
       practiceCount: Math.min(3, a.verifiedPracticeSessionIds?.length ?? 0),
       notes: a.notes || undefined,
-      nudge: ghostable && ageDays >= NUDGE_GHOST_PROMPT_DAYS ? 'ghost-prompt' : ghostable && ageDays >= NUDGE_WAITING_DAYS ? 'waiting' : null,
+      nudge: canNudgePreparation && ghostable && ageDays >= NUDGE_GHOST_PROMPT_DAYS ? 'ghost-prompt' : canNudgePreparation && ghostable && ageDays >= NUDGE_WAITING_DAYS ? 'waiting' : null,
       unconfirmedClick: a.status === 'apply_clicked',
     }
   })

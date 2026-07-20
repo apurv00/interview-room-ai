@@ -155,12 +155,17 @@ export interface SolicitationSendInput {
   /** The coarse settings toggle this stream rides (EMAILS.md §3) — re-read
    *  with the suppression list at send time (Codex #533). */
   coarseToggle: 'nudges' | 'digest'
+  /** Optional source-of-truth check performed after reservation and the
+   *  preference re-read, immediately before provider delivery. A false or
+   *  failed check releases the unstamped reservation and sends nothing. */
+  beforeDelivery?: () => Promise<boolean>
 }
 
 export type SolicitationSendOutcome =
   | { outcome: 'sent'; resendId?: string; reserved: string[] }
   | { outcome: 'all-reserved' }
   | { outcome: 'suppressed' }
+  | { outcome: 'precondition-failed' }
   | { outcome: 'send-failed' }
 
 /**
@@ -199,6 +204,27 @@ export async function sendSolicitation(input: SolicitationSendInput): Promise<So
       sentAt: { $exists: false },
     })
     return { outcome: 'suppressed' }
+  }
+
+  if (input.beforeDelivery) {
+    let permitted = false
+    try {
+      permitted = await input.beforeDelivery()
+    } catch (err) {
+      logger.warn(
+        { err, userId: input.userId, stream: input.stream },
+        'solicitation pre-delivery check failed — releasing reservation',
+      )
+    }
+    if (!permitted) {
+      await JobsEmailSend.deleteMany({
+        userId: input.userId,
+        stream: input.stream,
+        dedupeKey: { $in: reserved },
+        sentAt: { $exists: false },
+      })
+      return { outcome: 'precondition-failed' }
+    }
   }
 
   const res = await sendEmail({

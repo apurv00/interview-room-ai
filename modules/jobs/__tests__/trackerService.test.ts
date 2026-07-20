@@ -1,13 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockFind, mockBulkWrite, mockUpdateOne, mockEventCreate } = vi.hoisted(() => ({
+const { mockFind, mockPostingFind, mockBulkWrite, mockUpdateOne, mockEventCreate } = vi.hoisted(() => ({
   mockFind: vi.fn(),
+  mockPostingFind: vi.fn(),
   mockBulkWrite: vi.fn(),
   mockUpdateOne: vi.fn(),
   mockEventCreate: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
   JobApplication: { find: mockFind, bulkWrite: mockBulkWrite, updateOne: mockUpdateOne },
+  JobPosting: { find: mockPostingFind },
   ProductEvent: { create: mockEventCreate },
 }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
@@ -43,10 +45,13 @@ function chain(apps: unknown[]) {
   mockFind.mockReturnValue({
     select: () => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve(apps) }) }) }),
   })
+  mockPostingFind.mockReturnValue({
+    select: () => ({ lean: () => Promise.resolve((apps as Array<{ jobPostingId: string }>).map((row) => ({ _id: row.jobPostingId, status: 'open' }))) }),
+  })
 }
 
 function reset() {
-  for (const m of [mockFind, mockBulkWrite, mockUpdateOne, mockEventCreate]) m.mockReset()
+  for (const m of [mockFind, mockPostingFind, mockBulkWrite, mockUpdateOne, mockEventCreate]) m.mockReset()
   mockBulkWrite.mockImplementation(async (ops: unknown[]) => ({ modifiedCount: (ops as unknown[]).length }))
   mockUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockEventCreate.mockResolvedValue({})
@@ -142,6 +147,45 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
 
     expect(rows.find((row) => row.jobPostingId === verified.jobPostingId)?.practiceCount).toBe(3)
     expect(rows.find((row) => row.jobPostingId === legacyOnly.jobPostingId)?.practiceCount).toBe(0)
+  })
+
+  it('batches posting lifecycle and marks closed or missing rows without changing application status', async () => {
+    reset()
+    const live = app({ status: 'applied' })
+    const closed = app({ status: 'interview_scheduled' })
+    const missing = app({ status: 'offer' })
+    chain([live, closed, missing])
+    mockPostingFind.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve([
+        { _id: live.jobPostingId, status: 'open' },
+        { _id: closed.jobPostingId, status: 'closed', closedReason: 'aged-out' },
+      ]) }),
+    })
+
+    const view = await getTracker('u1', NOW)
+    const rows = view.groups.flatMap((group) => group.rows)
+
+    expect(rows.find((row) => row.jobPostingId === live.jobPostingId)).toMatchObject({ status: 'applied', postingState: 'live' })
+    expect(rows.find((row) => row.jobPostingId === closed.jobPostingId)).toMatchObject({ status: 'interview_scheduled', postingState: 'archived' })
+    expect(rows.find((row) => row.jobPostingId === missing.jobPostingId)).toMatchObject({ status: 'offer', postingState: 'snapshot-only' })
+    expect(mockPostingFind).toHaveBeenCalledTimes(1)
+  })
+
+  it('suppresses positive preparation nudges when posting context is restricted or missing', async () => {
+    reset()
+    const restricted = app({ status: 'applied', statusHistory: [{ status: 'applied', at: daysAgo(8), source: 'user' }] })
+    const missing = app({ status: 'applied', statusHistory: [{ status: 'applied', at: daysAgo(22), source: 'user' }] })
+    chain([restricted, missing])
+    mockPostingFind.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve([
+        { _id: restricted.jobPostingId, status: 'closed', closedReason: 'source-revoked' },
+      ]) }),
+    })
+
+    const rows = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)
+
+    expect(rows.find((row) => row.jobPostingId === restricted.jobPostingId)).toMatchObject({ postingState: 'restricted', nudge: null })
+    expect(rows.find((row) => row.jobPostingId === missing.jobPostingId)).toMatchObject({ postingState: 'snapshot-only', nudge: null })
   })
 
   it('confirm card: freshest apply_clicked row inside 20h-7d, gated by the ask budget', async () => {

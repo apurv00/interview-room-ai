@@ -24,6 +24,21 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
   await connectDB()
+  const existing = await JobApplication.findOne({ userId, jobPostingId: params.id }).select('status').lean()
+  if (existing) {
+    // Ownership, not discovery state, authorizes this idempotent path. A
+    // posting may have closed after the user saved/applied; keep its durable
+    // tracker context pinned without creating a new closed-posting owner.
+    const pin = await JobPosting.updateOne(
+      { _id: params.id },
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+    )
+    if ((pin?.matchedCount ?? 0) !== 1) {
+      return NextResponse.json({ error: 'not found' }, { status: 404 })
+    }
+    return NextResponse.json({ ok: true, status: existing.status, alreadySaved: true })
+  }
+
   const posting = await JobPosting.findById(params.id).select('title company locations provenance status').lean()
   if (!posting || posting.status !== 'open') return NextResponse.json({ error: 'not found' }, { status: 404 })
 
@@ -33,10 +48,12 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   // the same write: the delisting sweep can close+stamp between our open-
   // check read and this write, and a pinned row must never carry a TTL
   // (Codex on #517). Runs on the already-saved path too — self-healing.
-  await JobPosting.updateOne({ _id: params.id }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
-  const existing = await JobApplication.findOne({ userId, jobPostingId: params.id }).select('status').lean()
-  if (existing) {
-    return NextResponse.json({ ok: true, status: existing.status, alreadySaved: true })
+  const pin = await JobPosting.updateOne(
+    { _id: params.id, status: 'open' },
+    { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+  )
+  if ((pin?.matchedCount ?? 0) !== 1) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
   try {
     await JobApplication.create({

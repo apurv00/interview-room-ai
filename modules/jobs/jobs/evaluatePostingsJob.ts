@@ -11,6 +11,7 @@ import { neutralizePromptLine } from '@shared/services/promptSecurity'
 import { makeLlmBudget } from '../services/llmBudget'
 import { reconcileVerdict } from '../services/verdictReconciler'
 import { hostOf } from '../services/qualityGate'
+import { jobPostingStateOf, NORMAL_ARCHIVE_CLOSED_REASONS } from '../services/postingAccess'
 
 /**
  * LLM verdict worker + sweeper (INGESTION §4.5 layer 2, ruling #16).
@@ -21,9 +22,9 @@ import { hostOf } from '../services/qualityGate'
  * idempotent on verdictInputHash: a step retry skips already-scored rows.
  *
  * Sweeper: hourly cron + manual `jobs/verdict.sweep` kick. Feeds the worker
- * from BOTH the pending partial index (steady state) and open rows with no
- * llmVerdict sub-doc at all (pre-flip corpus / missed enqueues / backfill),
- * so no survivor sits unevaluated indefinitely. Oldest-first, budget-aware
+ * from BOTH the pending partial index (steady state) and eligible open/normal-
+ * archive rows with no llmVerdict sub-doc at all (pre-flip corpus / missed
+ * enqueues / backfill), so no survivor sits unevaluated indefinitely. Oldest-first, budget-aware
  * (80% → halve, 95% → pending-only), attempts <5.
  *
  * Every switch here is DATA (JobsVerdictConfig singleton — founder ruling
@@ -156,9 +157,18 @@ export async function runEvaluatePostingsHandler(
       let tripped = false
       for (const id of chunk) {
         const doc = await JobPosting.findById(id).lean()
-        // llm-verdict tombstones stay eligible: §4.3 'a changed body
-        // re-verdicts and may reopen' — every OTHER closed reason is out.
-        const eligible = doc && (doc.status === 'open' || doc.closedReason === 'llm-verdict')
+        // LLM tombstones stay eligible for changed-input re-verdicts. A
+        // normal archive is eligible while its verdict is missing or pending:
+        // this is the recovery rail when a safety upgrade CAS lost to a
+        // harmless retention-pin write, including legacy rows whose first
+        // evaluation started without a verdict subdocument. Restricted and
+        // unknown closures stay out.
+        const eligible = doc && (
+          doc.status === 'open' ||
+          doc.closedReason === 'llm-verdict' ||
+          (jobPostingStateOf(doc) === 'archived' &&
+            (!doc.llmVerdict || doc.llmVerdict.status === 'pending'))
+        )
         if (!doc || !eligible) {
           c.skips['ineligible'] = (c.skips['ineligible'] ?? 0) + 1
           continue
@@ -269,12 +279,15 @@ export async function runEvaluatePostingsHandler(
             set.status = 'closed'
             set.closedReason = 'llm-verdict'
             set.closedAt = new Date()
+            // Verdict tombstones are permanent anti-resurrection identity;
+            // no stale lifecycle TTL may delete them.
+            unset = { purgeAt: 1 }
           } else if (cfg.enforceEnabled && doc.status === 'closed' && doc.closedReason === 'llm-verdict' && !rec.wouldSoftClose) {
             // §4.3: a changed body re-verdicts AND MAY REOPEN — the new
             // verdict cleared the fraud bar, so the tombstone returns to
             // the open pool.
             set.status = 'open'
-            unset = { closedReason: 1, closedAt: 1 }
+            unset = { closedReason: 1, closedAt: 1, purgeAt: 1 }
           }
           // Freshness guard (Codex on #515): a sync merge landing between
           // our read and this write resets the verdict to pending — an
@@ -282,10 +295,46 @@ export async function runEvaluatePostingsHandler(
           // inputs, and the sweeper never revisits scored rows. updatedAt
           // is the save-bumped dirty token; no match = leave the merge's
           // pending state standing (sweeper re-picks it).
-          const res = await JobPosting.updateOne(
-            { _id: doc._id, updatedAt: doc.updatedAt },
+          const lifecycleFilter = doc.status === 'open'
+            ? { status: 'open' }
+            : { status: 'closed', closedReason: doc.closedReason }
+          let res = await JobPosting.updateOne(
+            { _id: doc._id, updatedAt: doc.updatedAt, ...lifecycleFilter },
             unset ? { $set: set, $unset: unset } : { $set: set }
           )
+          // Safety verdicts outrank normal expiry/delisting. If a normal
+          // archive won the race after our read, re-read its exact inputs and
+          // upgrade it only when the model scored the same content. The
+          // second updatedAt CAS prevents a later source merge or
+          // source-revoked close from being overwritten.
+          if ((res?.matchedCount ?? 1) === 0 && softClose) {
+            const latest = await JobPosting.findById(doc._id).lean()
+            if (latest && jobPostingStateOf(latest) === 'archived') {
+              const latestApplyHosts = Array.from(new Set(
+                (latest.provenance ?? []).map((e) => (e.applyUrl ? hostOf(e.applyUrl) : '')).filter(Boolean)
+              )).sort()
+              const latestInputHash = verdictInputHash({
+                companyKey: latest.companyKey,
+                titleKey: latest.titleKey,
+                locationKey: latest.locationKeys?.[0] ?? '',
+                normalizedBody: stripRecruiterPii(sliceBody(jdBodyOf(latest))),
+                applyHosts: latestApplyHosts,
+                salaryText: latest.salaryText ?? null,
+                epochModel,
+              })
+              if (latestInputHash === outcome.inputHash) {
+                res = await JobPosting.updateOne(
+                  {
+                    _id: latest._id,
+                    updatedAt: latest.updatedAt,
+                    status: 'closed',
+                    closedReason: latest.closedReason,
+                  },
+                  unset ? { $set: set, $unset: unset } : { $set: set },
+                )
+              }
+            }
+          }
           if ((res?.matchedCount ?? 1) === 0) {
             c.skips['superseded'] = (c.skips['superseded'] ?? 0) + 1
             continue // superseded mid-flight — not scored
@@ -319,7 +368,13 @@ export async function runEvaluatePostingsHandler(
           // Same freshness guard: never stomp a mid-flight merge reset
           // (attempts:0 for NEW inputs) with a failure bump for OLD inputs.
           await JobPosting.updateOne(
-            { _id: doc._id, updatedAt: doc.updatedAt },
+            {
+              _id: doc._id,
+              updatedAt: doc.updatedAt,
+              ...(doc.status === 'open'
+                ? { status: 'open' }
+                : { status: 'closed', closedReason: doc.closedReason }),
+            },
             {
               $set: {
                 'llmVerdict.status': 'pending',
@@ -415,6 +470,19 @@ export async function runVerdictSweeperHandler(
         // §4.3: llm-verdict tombstones whose inputs changed re-verdict
         // (the merge resets them to pending) and may reopen.
         { status: 'closed', closedReason: 'llm-verdict' },
+        // A safety-verdict upgrade can lose its fallback CAS to a benign
+        // ownership-pin write. Missing/pending normal archives must re-enter
+        // so the exact-input verdict eventually wins once lifecycle writes
+        // quiesce. Keeping this verdict predicate inside the lifecycle branch
+        // prevents stale-epoch scored archives from joining the backfill below.
+        {
+          status: 'closed',
+          closedReason: { $in: NORMAL_ARCHIVE_CLOSED_REASONS },
+          $or: [
+            { 'llmVerdict.status': 'pending' },
+            { llmVerdict: { $exists: false } },
+          ],
+        },
       ],
     }
     const optOutScope = optedOut.length ? [{ 'provenance.sourceId': { $nin: optedOut } }] : []
@@ -426,7 +494,7 @@ export async function runVerdictSweeperHandler(
             // Steady state: rides the §4.3 pending partial index.
             { 'llmVerdict.status': 'pending', 'llmVerdict.attempts': { $lt: MAX_ATTEMPTS } },
             // Catch-all net: pre-flip corpus / missed enqueues (bounded ≤25k scan).
-            { llmVerdict: { $exists: false }, status: 'open' },
+            { llmVerdict: { $exists: false } },
           ],
         },
         ...optOutScope,

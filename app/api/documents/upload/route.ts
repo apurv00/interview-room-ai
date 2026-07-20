@@ -18,6 +18,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    const originUserId = req.headers.get('x-origin-user-id')
+    if (originUserId !== null && originUserId !== session.user.id) {
+      return NextResponse.json(
+        { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
+        { status: 409 },
+      )
+    }
+
     // Rate limit: 10 uploads per user per hour
     const rateLimited = await checkRateLimit(session.user.id, {
       windowMs: 3600_000,

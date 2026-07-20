@@ -61,6 +61,7 @@ import {
 import { useOnboardingProfile } from '@shared/hooks/useOnboardingProfile'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
+import { genericRetakeConfig, isObjectId } from '@interview/utils/retakeNavigation'
 
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
 const DURATIONS: Duration[] = [10, 20, 30]
@@ -86,7 +87,9 @@ type PathwayInterviewConfig = InterviewConfig & {
 export default function InterviewSetupForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const retakeParentId = searchParams?.get('retake') || null
+  const retakeCandidate = searchParams?.get('retake') || null
+  const retakeParentId = isObjectId(retakeCandidate) ? retakeCandidate : null
+  const jobsFallback = searchParams?.get('jobsFallback') === '1'
   const pathwayContext = useMemo(
     () => readPathwaySetupContext(searchParams),
     [searchParams],
@@ -200,11 +203,13 @@ export default function InterviewSetupForm() {
       const configStr = retakeParentId ? (legacy || scoped) : (scoped || legacy)
 
       if (configStr) {
-        const c: InterviewConfig = JSON.parse(configStr)
+        const parsed: InterviewConfig = JSON.parse(configStr)
+        const c = jobsFallback ? genericRetakeConfig(parsed, true) : parsed
+        const safeConfigStr = JSON.stringify(c)
         // Sync the scoped key so subsequent visits short-circuit the DB
         // fallback. Also clear the legacy key once it's been consumed by a
         // retake to prevent the next non-retake visit from picking it up.
-        localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, configStr)
+        localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${userId}`, safeConfigStr)
         if (legacy) localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
         finalize(c)
         return
@@ -218,7 +223,9 @@ export default function InterviewSetupForm() {
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { config: InterviewConfig | null } | null) => {
         if (cancelled) return
-        const c = data?.config || null
+        const c = data?.config
+          ? (jobsFallback ? genericRetakeConfig(data.config, true) : data.config)
+          : null
         if (c) {
           // Hydrate localStorage so future visits skip the network hop.
           try {
@@ -240,7 +247,7 @@ export default function InterviewSetupForm() {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, authSession?.user?.id, retakeParentId, pathwayContext])
+  }, [status, authSession?.user?.id, retakeParentId, jobsFallback, pathwayContext])
 
   // ─── Pathway action hand-off ───────────────────────────────────────────
   useEffect(() => {
@@ -503,6 +510,14 @@ export default function InterviewSetupForm() {
           JSON.stringify(persistable)
         )
       }
+      // The validated URL is the durable retake authority. Writing here also
+      // covers direct/new-tab generic fallback navigation where the source
+      // page's click handler never ran.
+      if (retakeParentId) {
+        localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, retakeParentId)
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+      }
     } catch { /* quota */ }
 
     if (status !== 'authenticated') {
@@ -527,6 +542,7 @@ export default function InterviewSetupForm() {
     targetCompany,
     targetIndustry,
     pathwayContext,
+    retakeParentId,
     authSession?.user?.id,
     router,
     requireAuth,

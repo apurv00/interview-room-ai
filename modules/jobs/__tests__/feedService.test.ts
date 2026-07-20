@@ -270,6 +270,7 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect(detail.jd).toBe(display)
     expect(detail.practiceRole).toBe('frontend')
     expect(detail.practiceHandoffToken).toEqual(expect.any(String))
+    expect(detail.tailorInputHash).toBe(practiceHandoffHashOf(canonical))
     const payload = JSON.parse(
       Buffer.from(detail.practiceHandoffToken!.split('.')[0], 'base64url').toString('utf8')
     ) as { jdh: string }
@@ -385,6 +386,9 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect(detail.jd).toBe(oversized)
     expect(detail.practiceRole).toBeUndefined()
     expect(detail.practiceHandoffToken).toBeUndefined()
+    expect(detail.capabilities.practice).toBe(false)
+    expect(detail.capabilities.tailor).toBe(true)
+    expect(detail.tailorInputHash).toBe(practiceHandoffHashOf(oversized))
   })
 
   it('authed = full body: gunzipped JD + tier-sorted apply ladder + demotion flags', async () => {
@@ -398,6 +402,8 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     const d = await getJobDetail('j1', 'u1')
     expect(d!.gated).toBe(false)
     if (!d!.gated) {
+      expect(d!.postingState).toBe('live')
+      expect(d!.capabilities.apply).toBe(true)
       expect(d!.jd).toBe('build distributed things')
       expect(d!.applyOptions.map((o) => o.tier)).toEqual(['direct-ats', 'aggregator-redirect'])
       expect(d!.flags).toEqual({ staffing: false, shortJd: false, repost: false })
@@ -511,10 +517,117 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     }
   })
 
-  it('closed or missing postings 404 regardless of auth', async () => {
-    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ status: 'closed' })) })
-    expect(await getJobDetail('j1', 'u1')).toBeNull()
+  it('closed anonymous and non-owner requests remain indistinguishable from missing', async () => {
+    mockAppFindOne.mockClear()
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ status: 'closed', closedReason: 'aged-out' })) })
+    expect(await getJobDetail('j1', null)).toBeNull()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ status: 'closed', closedReason: 'aged-out' })) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+    expect(await getJobDetail('j1', 'other-user')).toBeNull()
+
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
     expect(await getJobDetail('nope', 'u1')).toBeNull()
+  })
+
+  it('normal closed owner receives an archived JD projection with preparation but no apply authority', async () => {
+    const canonical = 'Build accessible React interfaces and production design systems.'
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      status: 'closed',
+      closedReason: 'aged-out',
+      domain: undefined,
+      jdCompressed: gzipSync(Buffer.from(canonical)),
+      parsedJD: { inferredDomain: 'frontend', keyThemes: ['accessibility'], requirements: [] },
+      parsedJDHash: xrayHashOf(canonical),
+      // Archives cannot mutate their saved X-ray to chase every CMS
+      // revision; the exact-JD role remains valid while the current closed
+      // catalog still contains it.
+      parsedJDRoleVersion: 'jd-role-v2:previous-catalog',
+    })) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app-archived', status: 'applied', verifiedPracticeSessionIds: ['s1'],
+    }) }) })
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail).toMatchObject({
+      postingState: 'archived',
+      jd: canonical,
+      applyOptions: [],
+      application: { applicationId: 'app-archived', status: 'applied', practiceCount: 1 },
+      capabilities: { apply: false, viewSource: false, xray: true, tailor: true, practice: true, atsCheck: true },
+    })
+    expect(detail.practiceHandoffToken).toEqual(expect.any(String))
+    expect(detail.practiceRole).toBe('frontend')
+    expect(detail).not.toHaveProperty('applyTier')
+    expect(JSON.stringify(detail)).not.toContain('boards.greenhouse.io')
+  })
+
+  it.each(['source-revoked', 'llm-verdict', undefined])('restricted closure %s retains history but withholds JD-derived content', async (closedReason) => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      status: 'closed', closedReason, title: 'Mutable unsafe title', company: 'Mutable unsafe company',
+      salaryText: 'untrusted salary', domain: 'backend', jdCompressed: gzipSync(Buffer.from('sensitive removed body')),
+    })) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app-restricted', status: 'applied', verifiedPracticeSessionIds: ['s1', 's2'],
+      jobSnapshot: { title: 'Saved safe title', company: 'Saved safe company', location: 'Remote' },
+      atsResult: {
+        score: 91,
+        missingKeywords: ['sensitive-JD-keyword'],
+        checkedAt: new Date('2026-07-19T00:00:00Z'),
+      },
+    }) }) })
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail.postingState).toBe('restricted')
+    expect(detail).toMatchObject({ title: 'Saved safe title', company: 'Saved safe company', locations: ['Remote'], isRemote: true })
+    expect(detail.application).toMatchObject({ applicationId: 'app-restricted', practiceCount: 2 })
+    expect(detail.application?.ats).toMatchObject({ state: 'done' })
+    expect(detail.application?.ats).not.toHaveProperty('score')
+    expect(detail.application?.ats).not.toHaveProperty('missingKeywords')
+    expect(detail.capabilities).toEqual({ apply: false, viewSource: false, xray: false, tailor: false, practice: false, atsCheck: false })
+    expect(detail).not.toHaveProperty('jd')
+    expect(detail).not.toHaveProperty('applyTier')
+    expect(detail).not.toHaveProperty('practiceHandoffToken')
+    expect(detail).not.toHaveProperty('tailorInputHash')
+    expect(detail).not.toHaveProperty('salaryText')
+    expect(detail).not.toHaveProperty('domain')
+    expect(JSON.stringify(detail)).not.toContain('sensitive removed body')
+    expect(JSON.stringify(detail)).not.toContain('sensitive-JD-keyword')
+  })
+
+  it('missing retained posting falls back to the owner-only tracker snapshot', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app-snapshot',
+      status: 'offer',
+      jobSnapshot: { title: 'Saved role', company: 'Saved Co', location: 'Pune', applyUrlAtClick: 'https://secret.example/apply' },
+      verifiedPracticeSessionIds: ['s1'],
+      atsResult: {
+        score: 87,
+        missingKeywords: ['deleted-JD-keyword'],
+        checkedAt: new Date('2026-07-18T00:00:00Z'),
+      },
+    }) }) })
+
+    const detail = requireFullDetail(await getJobDetail('missing-job', 'u1'))
+
+    expect(detail).toMatchObject({
+      postingState: 'snapshot-only',
+      title: 'Saved role',
+      company: 'Saved Co',
+      locations: ['Pune'],
+      isRemote: false,
+      application: { applicationId: 'app-snapshot', status: 'offer', practiceCount: 1 },
+    })
+    expect(detail.capabilities).toEqual({ apply: false, viewSource: false, xray: false, tailor: false, practice: false, atsCheck: false })
+    expect(JSON.stringify(detail)).not.toContain('secret.example')
+    expect(detail.application?.ats).toMatchObject({ state: 'done' })
+    expect(detail.application?.ats).not.toHaveProperty('score')
+    expect(detail.application?.ats).not.toHaveProperty('missingKeywords')
+    expect(JSON.stringify(detail)).not.toContain('deleted-JD-keyword')
   })
 })

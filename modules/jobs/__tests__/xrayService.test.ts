@@ -1,13 +1,17 @@
 import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
-const { mockFindById, mockUpdateOne, mockParse, mockGetActiveCatalog } = vi.hoisted(() => ({
+const { mockFindById, mockUpdateOne, mockParse, mockGetActiveCatalog, mockAppExists } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockUpdateOne: vi.fn(),
   mockParse: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
+  mockAppExists: vi.fn(),
 }))
-vi.mock('@shared/db/models', () => ({ JobPosting: { findById: mockFindById, updateOne: mockUpdateOne } }))
+vi.mock('@shared/db/models', () => ({
+  JobPosting: { findById: mockFindById, updateOne: mockUpdateOne },
+  JobApplication: { exists: mockAppExists },
+}))
 vi.mock('@interview', () => ({ parseJobDescription: mockParse }))
 vi.mock('@interview/services/persona/domainCatalogService', () => ({
   getActiveInterviewDomainCatalog: mockGetActiveCatalog,
@@ -32,10 +36,11 @@ function chain(doc: unknown) {
 }
 
 function reset() {
-  for (const m of [mockFindById, mockUpdateOne, mockParse, mockGetActiveCatalog]) m.mockReset()
+  for (const m of [mockFindById, mockUpdateOne, mockParse, mockGetActiveCatalog, mockAppExists]) m.mockReset()
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
   mockParse.mockResolvedValue(PARSED)
   mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
+  mockAppExists.mockResolvedValue(null)
 }
 
 describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
@@ -461,11 +466,45 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     })
   })
 
-  it('closed postings are NOT X-ray-able — aligned with the detail 404 (Codex #518)', async () => {
+  it('closed X-rays remain unavailable without owner proof', async () => {
     reset()
-    chain({ _id: 'j1', status: 'closed', jdCompressed: gzipSync(Buffer.from(JD)), parsedJD: EXTRACTED, parsedJDHash: xrayHashOf(JD) })
+    chain({ _id: 'j1', status: 'closed', closedReason: 'aged-out', jdCompressed: gzipSync(Buffer.from(JD)), parsedJD: EXTRACTED, parsedJDHash: xrayHashOf(JD) })
     expect(await getOrParseXray('j1')).toBeNull()
     expect(mockParse).not.toHaveBeenCalled()
+  })
+
+  it('serves only an exact cached X-ray to a normal archive owner without parser or write work', async () => {
+    reset()
+    mockAppExists.mockResolvedValue({ _id: 'app1' })
+    chain({
+      _id: 'j1', status: 'closed', closedReason: 'aged-out',
+      jdCompressed: gzipSync(Buffer.from(JD)), parsedJD: EXTRACTED, parsedJDHash: xrayHashOf(JD),
+      parsedJDRoleVersion: 'jd-role-v2:previous-catalog',
+    })
+
+    expect(await getOrParseXray('j1', 'u1')).toEqual({ parsed: EXTRACTED, cached: true })
+    expect(mockAppExists).toHaveBeenCalledWith({ userId: 'u1', jobPostingId: 'j1' })
+    expect(mockGetActiveCatalog).not.toHaveBeenCalled()
+    expect(mockParse).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('never parses a cache miss or serves a restricted closed X-ray', async () => {
+    reset()
+    mockAppExists.mockResolvedValue({ _id: 'app1' })
+    chain({ _id: 'j1', status: 'closed', closedReason: 'aged-out', jdCompressed: gzipSync(Buffer.from(JD)) })
+    expect(await getOrParseXray('j1', 'u1')).toBeNull()
+
+    reset()
+    mockAppExists.mockResolvedValue({ _id: 'app1' })
+    chain({
+      _id: 'j1', status: 'closed', closedReason: 'source-revoked',
+      jdCompressed: gzipSync(Buffer.from(JD)), parsedJD: EXTRACTED, parsedJDHash: xrayHashOf(JD),
+    })
+    expect(await getOrParseXray('j1', 'u1')).toBeNull()
+    expect(mockAppExists).not.toHaveBeenCalled()
+    expect(mockParse).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
   })
 
   it('missing posting or empty/corrupt JD → null (route 404s; nothing to parse)', async () => {
