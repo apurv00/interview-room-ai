@@ -314,7 +314,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     // clean ones — demoted, never hidden (they may still work for others).
     .sort((a, b) => Number(a.broken) - Number(b.broken) || TIER_RANK[a.tier] - TIER_RANK[b.tier])
     .map(({ url, tier, viaSite }) => ({ url, tier, viaSite }))
-  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status practiceSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
+  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
   // An atsResult is 'done' only for the CURRENT (resume x JD) pair (Codex
   // on #521): a JD merge OR a resume edit re-opens the check. The resume
   // comparison costs two User reads, so it runs only on the narrow path
@@ -347,7 +347,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
           status: app.status,
           interviewDate: app.interviewDate ? new Date(app.interviewDate).toISOString() : undefined,
           interviewDateConfidence: app.interviewDateConfidence,
-          practiceCount: Math.min(3, app.practiceSessionIds?.length ?? 0),
+          practiceCount: Math.min(3, app.verifiedPracticeSessionIds?.length ?? 0),
           ats: app.atsResult && atsCurrent
             ? { state: 'done' as const, score: app.atsResult.score, missingKeywords: (app.atsResult.missingKeywords ?? []).slice(0, 5), checkedAt: new Date(app.atsResult.checkedAt).toISOString() }
             : app.atsRequestedAt && Date.now() - new Date(app.atsRequestedAt).getTime() < 3 * 60_000

@@ -269,6 +269,9 @@ export const GenerateFeedbackSchema = z.object({
 
 export const CreateSessionSchema = z.object({
   config: InterviewConfigSchema,
+  // Transport-only proof for Jobs-attributed sessions. It is validated and
+  // consumed by POST /api/interviews, never persisted in InterviewConfig.
+  jobsHandoffToken: z.string().min(1).max(2048).optional(),
   templateId: z.string().optional(),
   candidateEmail: z.string().email().optional(),
   candidateName: z.string().max(200).optional(),

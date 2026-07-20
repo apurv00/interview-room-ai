@@ -124,18 +124,31 @@ export async function deleteInterviewSession(
   }
 
   // Readiness evidence rows are session-scoped personal data
-  // (READINESS.md §1, panel R26). Capture which applications they fed
-  // BEFORE deleting so their denormalized snapshots can be cleared —
-  // otherwise a band derived from deleted answers survives indefinitely
-  // if the user never practices that job again (Codex #538 round 2).
-  const readinessAppIds = await JobPracticeEvidence.distinct('applicationId', { sessionId })
+  // (READINESS.md §1, panel R26). Capture existing evidence owners before
+  // deleting; the final ticker mutation below independently catches an
+  // application attached after this lookup.
+  const evidenceAppIds = await JobPracticeEvidence.distinct('applicationId', { sessionId })
+  // Evidence rows are canonical DB writes, but filter defensively so a
+  // malformed legacy row cannot throw a CastError after the session fence.
+  // Never use session.attribution.applicationId here: historical values came
+  // from the browser. The post-delete ticker predicate is the canonical net.
+  const readinessAppIds = Array.from(new Set(
+    evidenceAppIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => String(id))
+  ))
 
-  // Cascade DB deletes for documents tied to this single session.
+  // Delete the session first: this is the durable fence observed by the
+  // attribution worker's post-write check. Evidence cleanup must happen
+  // after it, never in the same Promise.all, or a late writer can resurrect
+  // rows after the cleanup wins its race.
+  await InterviewSession.deleteOne({ _id: sessionId })
+
+  // Cascade the remaining documents tied to this single session.
   await Promise.all([
     MultimodalAnalysis.deleteOne({ sessionId }),
     SessionSummary.deleteOne({ sessionId }),
     JobPracticeEvidence.deleteMany({ sessionId }),
-    InterviewSession.deleteOne({ _id: sessionId }),
   ])
 
   // Clear (never recompute here — shared/** cannot reach modules/jobs
@@ -144,16 +157,33 @@ export async function deleteInterviewSession(
   // from the surviving rows.
   if (readinessAppIds.length > 0) {
     await JobApplication.updateMany(
-      { _id: { $in: readinessAppIds } },
-      { $unset: { readiness: 1 } }
+      { _id: { $in: readinessAppIds }, userId: session.userId },
+      {
+        $unset: { readiness: 1 },
+        $inc: { readinessRevision: 1 },
+      }
     )
   }
-  // The deleted session must also leave the applications' session ticker
-  // — "n/3 sessions" sells readiness evidence, not attendance, and a
-  // GDPR-deleted session must not stay referenced anywhere.
+  // The deleted session must also leave the applications' session ticker.
+  // Unset readiness in the SAME mutation: an attribution writer may have
+  // attached the app after evidenceAppIds was captured but before the session
+  // deletion fence. This post-delete predicate catches that late attachment.
   await JobApplication.updateMany(
-    { userId: session.userId, practiceSessionIds: sessionId },
-    { $pull: { practiceSessionIds: sessionId } }
+    {
+      userId: session.userId,
+      $or: [
+        { practiceSessionIds: sessionId },
+        { verifiedPracticeSessionIds: sessionId },
+      ],
+    },
+    {
+      $unset: { readiness: 1 },
+      $inc: { readinessRevision: 1 },
+      $pull: {
+        practiceSessionIds: sessionId,
+        verifiedPracticeSessionIds: sessionId,
+      },
+    }
   )
 
   logger.info(
@@ -177,9 +207,9 @@ export interface DeleteAccountResult {
 /**
  * Permanently delete the user and every record that references them.
  *
- * Order matters: collect R2 keys from interview sessions first, then
- * cascade-delete every userId-keyed collection, then drop NextAuth
- * adapter collections, then delete the User document last.
+ * Order matters: collect R2 keys, delete interview sessions, cascade the
+ * remaining collections, drop auth state and User, then sweep applications
+ * last to fence concurrent Jobs practice materialization.
  */
 export async function deleteUserAccount(
   userId: string,
@@ -234,10 +264,22 @@ export async function deleteUserAccount(
     )
   }
 
-  // 2. Cascade-delete every collection that references the user via userId.
+  // 2. Delete sessions first. Jobs practice evidence can create an
+  // application from a scored session, so this must complete before the
+  // final application sweep rather than racing it in Promise.all.
   const collectionsCleared: Record<string, number> = {}
+  try {
+    const res = await InterviewSession.deleteMany({ userId: userObjectId })
+    collectionsCleared.InterviewSession = res.deletedCount ?? 0
+  } catch (err) {
+    logger.error({ err, collection: 'InterviewSession', userId }, 'Cascade delete failed for collection')
+    collectionsCleared.InterviewSession = -1
+  }
+
+  // 3. Cascade-delete the remaining user-scoped collections in parallel.
+  // JobApplication is deliberately last (after User deletion) so a late
+  // practice writer either sees the missing-user fence or is swept here.
   const cascadeOps: Array<[string, Promise<{ deletedCount?: number }>]> = [
-    ['InterviewSession', InterviewSession.deleteMany({ userId: userObjectId })],
     ['MultimodalAnalysis', MultimodalAnalysis.deleteMany({ userId: userObjectId })],
     ['UsageRecord', UsageRecord.deleteMany({ userId: userObjectId })],
     ['WeaknessCluster', WeaknessCluster.deleteMany({ userId: userObjectId })],
@@ -251,7 +293,6 @@ export async function deleteUserAccount(
     ['DrillAttempt', DrillAttempt.deleteMany({ userId: userObjectId })],
     ['UserCompetencyState', UserCompetencyState.deleteMany({ userId: userObjectId })],
     ['ServedProblem', ServedProblem.deleteMany({ userId: userObjectId })],
-    ['JobApplication', JobApplication.deleteMany({ userId: userObjectId })],
     ['ProductEvent', ProductEvent.deleteMany({ userId: userObjectId })],
     ['JobsEmailSend', JobsEmailSend.deleteMany({ userId: userObjectId })],
     ['JobPracticeEvidence', JobPracticeEvidence.deleteMany({ userId: userObjectId })],
@@ -280,7 +321,7 @@ export async function deleteUserAccount(
     }
   }
 
-  // 3. WaitlistEntry is keyed by email, not userId.
+  // 4. WaitlistEntry is keyed by email, not userId.
   if (email) {
     try {
       const res = await WaitlistEntry.deleteMany({ email: email.toLowerCase().trim() })
@@ -291,7 +332,7 @@ export async function deleteUserAccount(
     }
   }
 
-  // 4. NextAuth MongoDB adapter collections live outside the Mongoose models
+  // 5. NextAuth MongoDB adapter collections live outside the Mongoose models
   //    (accounts, sessions, verification_tokens). Drop them via the raw client.
   try {
     const client = await getClientPromise()
@@ -308,9 +349,19 @@ export async function deleteUserAccount(
     logger.warn({ err, userId }, 'NextAuth adapter cleanup failed')
   }
 
-  // 5. Finally drop the User document itself.
+  // 6. Drop the User document to close the practice-writer fence, then run
+  // the final application sweep. A writer that started earlier but reaches
+  // its post-write check now observes the missing user and removes its row.
   const userRes = await User.deleteOne({ _id: userObjectId })
   collectionsCleared['User'] = userRes.deletedCount ?? 0
+
+  try {
+    const appRes = await JobApplication.deleteMany({ userId: userObjectId })
+    collectionsCleared.JobApplication = appRes.deletedCount ?? 0
+  } catch (err) {
+    logger.error({ err, collection: 'JobApplication', userId }, 'Cascade delete failed for collection')
+    collectionsCleared.JobApplication = -1
+  }
 
   logger.info(
     { userId, email, collectionsCleared, r2KeysDeleted, r2KeysFailed },

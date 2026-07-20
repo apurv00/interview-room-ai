@@ -9,6 +9,7 @@ import { STORAGE_KEYS } from '@shared/storageKeys'
 import { interviewSlugForDomain } from '@jobs/config/domains'
 import { buildPrepPlan } from '@jobs/config/prepPlan'
 import AuthGateModal from '@shared/ui/AuthGateModal'
+import { retakeParentFromSearch } from '@interview/utils/retakeNavigation'
 
 /**
  * /jobs/[id] — public SHELL, authed BODY (founder ruling P-2, 2026-07-14).
@@ -33,6 +34,7 @@ interface Detail {
   salaryText?: string
   applyTier?: string
   gated: boolean
+  practiceHandoffToken?: string
   jd?: string
   applyOptions?: ApplyOption[]
   flags?: { staffing: boolean; shortJd: boolean; repost: boolean }
@@ -67,6 +69,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [sheet, setSheet] = useState<null | { kind: 'normal' | 'quick'; clicked: { url: string; tier: string }; elapsedMs: number }>(null)
   const [inference, setInference] = useState<'idle' | 'asking'>('idle')
   const [practiceEmail, setPracticeEmail] = useState<'idle' | 'sent' | 'email-off' | 'unavailable'>('idle')
+  const [practiceStart, setPracticeStart] = useState<'idle' | 'loading' | 'error'>('idle')
   const [sheetDone, setSheetDone] = useState<string | null>(null)
 
   useEffect(() => {
@@ -215,40 +218,55 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail, xray])
 
-  function onPractice() {
+  async function onPractice() {
     if (!detail || detail.gated) return
-    // Resolve through the domain metadata: jobs-only slugs (hr) map to
-    // 'general', never raw into InterviewConfig.role (Codex on #524);
-    // the X-ray's inferredDomain is already an interview slug.
-    const role = interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain
-    if (!role) return
-    // The hand-off (PRODUCT_FLOW §1 Stage 4; precedent learn/practice):
-    // config to localStorage, then the lobby owns everything — auth gate,
-    // post-OAuth resume, JD-skip. attribution rides the Wave-0 schema field
-    // (round-trip tested); generate-question spends ~60% of questions on JD
-    // must-haves for free. Zero hot-path edits.
-    const config = {
-      role,
-      experience: '3-6',
-      duration: 20,
-      jobDescription: detail.jd,
-      targetCompany: detail.company,
-      attribution: { source: 'jobs', jobId: detail.id, applicationId: detail.application?.applicationId },
-    }
+    setPracticeStart('loading')
     try {
+      // Refresh at click time so a long-open tab never hands the lobby an
+      // expired intent. The signed token binds user + job + exact JD hash;
+      // the session API resolves all three back to server state.
+      const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+      if (!response.ok) throw new Error('handoff unavailable')
+      const fresh = (await response.json()) as Detail
+      if (fresh.gated || !fresh.jd || !fresh.practiceHandoffToken) throw new Error('handoff unavailable')
+      const role = interviewSlugForDomain(fresh.domain) ?? xray?.inferredDomain
+      if (!role) throw new Error('unsupported role')
+      const config = {
+        role,
+        experience: '3-6' as const,
+        duration: 20,
+        jobDescription: fresh.jd,
+        targetCompany: fresh.company,
+        attribution: { source: 'jobs' as const, jobId: fresh.id, applicationId: fresh.application?.applicationId },
+        // Transport-only: /interview extracts this before the runtime config
+        // reaches question/evaluation/model routes.
+        jobsHandoffToken: fresh.practiceHandoffToken,
+      }
       localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
-    } catch { return }
-    fetch('/api/events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'jobs.prep_started',
-        jobPostingId: params.id,
-        props: { applicationId: detail.application?.applicationId, evidenceCount: detail.application?.practiceCount ?? 0 },
-      }),
-      keepalive: true,
-    }).catch(() => {})
-    router.push('/lobby')
+      const retakeParent = retakeParentFromSearch(window.location.search)
+      if (retakeParent) {
+        localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, retakeParent)
+      } else {
+        // Do not let an abandoned generic retake link an unrelated Jobs
+        // practice session. Fresh URL intent is the only authority here.
+        localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+      }
+      setDetail(fresh)
+      fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'jobs.prep_started',
+          jobPostingId: fresh.id,
+          props: { applicationId: fresh.application?.applicationId, evidenceCount: fresh.application?.practiceCount ?? 0 },
+        }),
+        keepalive: true,
+      }).catch(() => {})
+      router.push('/lobby')
+    } catch {
+      autoPracticeFired.current = false
+      setPracticeStart('error')
+    }
   }
 
   async function onSave() {
@@ -428,9 +446,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             {(interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain) && (
               <button
                 onClick={onPracticeClick}
+                disabled={practiceStart === 'loading'}
                 className="rounded-lg border border-blue-400 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50"
               >
-                🎙 Practice for this job · 20 min
+                {practiceStart === 'loading' ? 'Preparing practice…' : '🎙 Practice for this job · 20 min'}
               </button>
             )}
             <button
@@ -451,6 +470,11 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               </a>
             )}
           </div>
+          {practiceStart === 'error' && (
+            <p role="alert" className="mt-2 text-sm text-red-600">
+              We couldn&apos;t prepare this job practice. Refresh the posting and try again.
+            </p>
+          )}
           {alternates.length > 0 && (
             <p className="mt-2 text-xs text-slate-500">
               Also available: {alternates.map((o, i) => (
@@ -500,7 +524,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                           <li key={sess.label} className="flex items-center justify-between gap-2">
                             <span className="text-sm">{sess.label}{sess.dayOffset > 0 ? ` (in ${sess.dayOffset}d)` : ''}</span>
                             {sess.dayOffset === 0 && (
-                              <button onClick={onPracticeClick} className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium text-white">Start</button>
+                              <button
+                                onClick={onPracticeClick}
+                                disabled={practiceStart === 'loading'}
+                                className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:cursor-wait disabled:opacity-60"
+                              >
+                                {practiceStart === 'loading' ? 'Preparing…' : 'Start'}
+                              </button>
                             )}
                           </li>
                         ))}

@@ -18,6 +18,11 @@ export interface IJobPracticeEvidence extends Document {
   applicationId: mongoose.Types.ObjectId
   jobPostingId: mongoose.Types.ObjectId
   sessionId: mongoose.Types.ObjectId
+  /** Missing means legacy/browser-attributed evidence. Such rows remain
+   * exportable but are quarantined from readiness and evidence counts. */
+  handoffVersion?: 1
+  /** Full normalized SHA-256 from the verified Jobs session marker. */
+  handoffJdHash?: string
   /** X-ray requirement id — bound to the parse of `xrayHash` (parse cache
    *  is first-write-wins per hash, so these ids are stable). */
   requirementId: string
@@ -43,6 +48,8 @@ const JobPracticeEvidenceSchema = new Schema<IJobPracticeEvidence>(
     applicationId: { type: Schema.Types.ObjectId, ref: 'JobApplication', required: true },
     jobPostingId: { type: Schema.Types.ObjectId, ref: 'JobPosting', required: true },
     sessionId: { type: Schema.Types.ObjectId, ref: 'InterviewSession', required: true },
+    handoffVersion: { type: Number, enum: [1] },
+    handoffJdHash: { type: String, maxlength: 64 },
     requirementId: { type: String, required: true, maxlength: 120 },
     xrayHash: { type: String, required: true, maxlength: 64 },
     strength: { type: String, enum: ['strong', 'partial'], required: true },

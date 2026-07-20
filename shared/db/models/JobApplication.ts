@@ -83,11 +83,18 @@ export interface IJobApplication extends Document {
   atsRequestedAt?: Date
   notes?: string
   brokenLinkReports: Array<{ url: string; reportedAt: Date }>
+  /** Historical attendance links, including rows created before signed Jobs
+   * handoffs existed. Kept for operational/backcompat consumers only. */
   practiceSessionIds: mongoose.Types.ObjectId[]
+  /** Sessions whose Jobs handoff was verified server-side (v1). Only this
+   * array may drive candidate-facing evidence counts. */
+  verifiedPracticeSessionIds?: mongoose.Types.ObjectId[]
   /** Denormalized readiness snapshot (READINESS.md §1 — recomputed by the
    *  attribution worker at evidence-write time; consumers NEVER recompute
    *  per-request). Absent until the first attribution lands. */
   readiness?: {
+    /** Missing on legacy snapshots, which consumers must not surface. */
+    handoffVersion?: 1
     band: 'none' | 'building' | 'practiced' | 'strong-evidence'
     sessions: number
     practicedCount: number
@@ -98,6 +105,10 @@ export interface IJobApplication extends Document {
     scoringEpoch: string
     at: Date
   }
+  /** Optimistic fence for denormalized readiness writes. Snapshot publishers
+   * increment it atomically; evidence deletion increments it to invalidate
+   * any writer that read the pre-deletion evidence set. */
+  readinessRevision: number
   ghostSuggestedAt?: Date
   createdAt: Date
   updatedAt: Date
@@ -188,9 +199,11 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       default: [],
     },
     practiceSessionIds: { type: [Schema.Types.ObjectId], ref: 'InterviewSession', default: [] },
+    verifiedPracticeSessionIds: { type: [Schema.Types.ObjectId], ref: 'InterviewSession', default: [] },
     readiness: {
       type: new Schema(
         {
+          handoffVersion: { type: Number, enum: [1] },
           band: { type: String, enum: ['none', 'building', 'practiced', 'strong-evidence'], required: true },
           sessions: { type: Number, required: true, min: 0 },
           practicedCount: { type: Number, required: true, min: 0 },
@@ -205,6 +218,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       ),
       required: false,
     },
+    readinessRevision: { type: Number, default: 0, min: 0 },
     ghostSuggestedAt: { type: Date },
   },
   { timestamps: true }

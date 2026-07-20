@@ -34,7 +34,7 @@ import { NextRequest } from 'next/server'
 const {
   mockAcquire, mockRelease, mockCompletion, mockWarn, mockError, mockInfo,
   mockSessionFindOne, mockFindByIdAndUpdate, mockFindOneAndUpdate, mockIsFeatureEnabled,
-  mockGeneratePathwayPlan, mockEvaluateSession, mockInngestSend,
+  mockGeneratePathwayPlan, mockEvaluateSession, mockInngestSend, mockRecordPracticeEvidence,
 } = vi.hoisted(() => ({
   mockAcquire: vi.fn(),
   mockRelease: vi.fn(),
@@ -61,6 +61,7 @@ const {
   mockGeneratePathwayPlan: vi.fn().mockResolvedValue(undefined),
   mockEvaluateSession: vi.fn().mockResolvedValue({}),
   mockInngestSend: vi.fn().mockResolvedValue({ ids: ['evt-1'] }),
+  mockRecordPracticeEvidence: vi.fn().mockResolvedValue({ recorded: false }),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -174,6 +175,10 @@ vi.mock('@shared/services/inngest', () => ({
   },
 }))
 
+vi.mock('@jobs', () => ({
+  recordPracticeEvidence: mockRecordPracticeEvidence,
+}))
+
 vi.mock('@learn/services/masteryTracker', () => ({
   updateMasteryBatch: vi.fn().mockResolvedValue([]),
 }))
@@ -278,6 +283,8 @@ describe('POST /api/generate-feedback — side-effect outcome observability (PR 
     mockEvaluateSession.mockResolvedValue({})
     mockInngestSend.mockReset()
     mockInngestSend.mockResolvedValue({ ids: ['evt-1'] })
+    mockRecordPracticeEvidence.mockReset()
+    mockRecordPracticeEvidence.mockResolvedValue({ recorded: false })
 
     // Default: feedback lock acquires cleanly, completion succeeds.
     mockAcquire.mockResolvedValue({ lockKey: 'k', lockValue: 'v', acquired: true })
@@ -572,6 +579,56 @@ describe('POST /api/generate-feedback — side-effect outcome observability (PR 
     // (impossible here because the mock awaits its own setTimeout,
     // but a defensive belt-and-suspenders assertion).
     expect(elapsed).toBeGreaterThanOrEqual(30)
+  })
+
+  it('durably starts Jobs evidence after persistence and before returning', async () => {
+    let releasePersist!: () => void
+    let releaseEvidence!: () => void
+    let persistCommitted = false
+    let evidenceAttached = false
+    const persistGate = new Promise<void>((resolve) => {
+      releasePersist = resolve
+    })
+    const evidenceGate = new Promise<void>((resolve) => {
+      releaseEvidence = resolve
+    })
+    mockFindByIdAndUpdate.mockImplementation(async (_id: unknown, update: unknown) => {
+      const u = update as { feedback?: unknown }
+      if (u?.feedback === undefined) return undefined
+      await persistGate
+      persistCommitted = true
+      return undefined
+    })
+    mockRecordPracticeEvidence.mockImplementation(async () => {
+      await evidenceGate
+      evidenceAttached = true
+      return { recorded: true }
+    })
+
+    const responsePromise = POST(makeRequest())
+    let responseSettled = false
+    void responsePromise.then(() => { responseSettled = true })
+    await vi.waitFor(() => {
+      expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ status: 'completed', feedback: expect.anything() })
+      )
+    })
+    expect(mockRecordPracticeEvidence).not.toHaveBeenCalled()
+
+    releasePersist()
+    await vi.waitFor(() => expect(mockRecordPracticeEvidence).toHaveBeenCalledTimes(1))
+    expect(persistCommitted).toBe(true)
+    expect(responseSettled).toBe(false)
+    expect(mockFindByIdAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRecordPracticeEvidence.mock.invocationCallOrder[0]
+    )
+
+    releaseEvidence()
+    const response = await responsePromise
+
+    expect(response.status).toBe(200)
+    expect(evidenceAttached).toBe(true)
   })
 
   // ── Backward compatibility: response shape remains valid ──

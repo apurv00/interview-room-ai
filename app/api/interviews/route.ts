@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { ZodError } from 'zod'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { CreateSessionSchema } from '@interview/validators/interview'
 import { createSession, listSessions } from '@interview/services/core/interviewService'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
+import { practiceHandoffHashOf, resolvePracticeHandoff } from '@jobs/services/practiceHandoff'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,15 +20,76 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const validated = CreateSessionSchema.parse(body)
 
+    let config = validated.config
+    let jobDescription = validated.config.jobDescription
+    let verifiedJobsAttribution:
+      | {
+          source: 'jobs'
+          jobId: string
+          applicationId?: string
+          handoffVersion: 1
+          jdHash: string
+          verifiedAt: Date
+        }
+      | undefined
+    const claimedAttribution = validated.config.attribution
+    if (claimedAttribution || validated.jobsHandoffToken) {
+      if (!claimedAttribution || !validated.jobsHandoffToken) {
+        throw new AppError(
+          'This job practice link is invalid. Return to the job and start again.',
+          409,
+          'JOBS_HANDOFF_INVALID'
+        )
+      }
+      const handoff = await resolvePracticeHandoff(
+        validated.jobsHandoffToken,
+        session.user.id
+      )
+      if (
+        !handoff ||
+        !handoff.role ||
+        claimedAttribution.jobId !== handoff.jobId ||
+        !validated.config.jobDescription ||
+        practiceHandoffHashOf(validated.config.jobDescription) !== handoff.jdHash ||
+        validated.config.role !== handoff.role
+      ) {
+        throw new AppError(
+          'This job practice link expired or changed. Return to the job and start again.',
+          409,
+          'JOBS_HANDOFF_INVALID'
+        )
+      }
+      const canonicalAttribution = {
+        source: 'jobs' as const,
+        jobId: handoff.jobId,
+        ...(handoff.applicationId ? { applicationId: handoff.applicationId } : {}),
+      }
+      config = {
+        ...validated.config,
+        role: handoff.role,
+        jobDescription: handoff.jobDescription,
+        targetCompany: handoff.company,
+        attribution: canonicalAttribution,
+      }
+      jobDescription = handoff.jobDescription
+      verifiedJobsAttribution = {
+        ...canonicalAttribution,
+        handoffVersion: 1,
+        jdHash: handoff.jdHash,
+        verifiedAt: new Date(),
+      }
+    }
+
     const interviewSession = await createSession({
       userId: session.user.id,
       organizationId: session.user.organizationId,
-      config: validated.config,
+      config,
+      verifiedJobsAttribution,
       templateId: validated.templateId,
       candidateEmail: validated.candidateEmail,
       candidateName: validated.candidateName,
       userAgent: req.headers.get('user-agent') || undefined,
-      jobDescription: validated.config.jobDescription,
+      jobDescription,
       resumeText: validated.config.resumeText,
       jdFileName: validated.config.jdFileName,
       resumeFileName: validated.config.resumeFileName,
@@ -40,6 +103,12 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     if (err instanceof AppError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.statusCode })
+    }
+    if (err instanceof ZodError) {
+      return NextResponse.json(
+        { error: 'Invalid session configuration', code: 'VALIDATION_ERROR' },
+        { status: 400 }
+      )
     }
     logger.error({ err }, 'Failed to create interview session')
     return NextResponse.json({ error: 'Failed to create session' }, { status: 500 })

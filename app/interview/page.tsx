@@ -87,6 +87,7 @@ export default function InterviewPage() {
 
   // ── Config ──
   const [config, setConfig] = useState<InterviewConfig | null>(null)
+  const [jobsHandoffToken, setJobsHandoffToken] = useState<string | undefined>()
   const [codingLanguage, setCodingLanguage] = useState<import('@shared/types').CodeLanguage>('python')
   const [currentProblem, setCurrentProblem] = useState<CodingProblem | null>(null)
   const [currentDesignProblem, setCurrentDesignProblem] = useState<DesignProblem | null>(null)
@@ -319,6 +320,7 @@ export default function InterviewPage() {
   // ── Interview engine ──
   const interview = useInterview({
     config,
+    jobsHandoffToken,
     voicesReady,
     startListening,
     stopListening,
@@ -484,7 +486,11 @@ export default function InterviewPage() {
       return
     }
 
-    const parsed = JSON.parse(stored)
+    // The Jobs handoff signature is transport-only. Keep it separate from
+    // InterviewConfig so runtime/model requests cannot inherit it.
+    const storedConfig = JSON.parse(stored) as InterviewConfig & { jobsHandoffToken?: string }
+    const { jobsHandoffToken: storedJobsHandoffToken, ...parsed } = storedConfig
+    setJobsHandoffToken(storedJobsHandoffToken)
     // Record the served problem in the server-side ServedProblem ledger at
     // selection time (fire-and-forget — recording must never block interview
     // start). AI problems are also recorded server-side inside the generate

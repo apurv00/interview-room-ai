@@ -62,7 +62,7 @@ const GROUP_ORDER = ['interview_scheduled', 'apply_clicked', 'applied', 'saved',
 
 export async function getTracker(userId: string, now = new Date()): Promise<TrackerView> {
   const apps = await JobApplication.find({ userId })
-    .select('jobPostingId jobSnapshot status statusHistory practiceSessionIds notes outcome updatedAt')
+    .select('jobPostingId jobSnapshot status statusHistory verifiedPracticeSessionIds notes outcome updatedAt')
     .sort({ updatedAt: -1 })
     .limit(500)
     .lean()
@@ -133,7 +133,7 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
       location: a.jobSnapshot?.location ?? '',
       status: a.status,
       daysInStatus: ageDays,
-      practiceCount: Math.min(3, a.practiceSessionIds?.length ?? 0),
+      practiceCount: Math.min(3, a.verifiedPracticeSessionIds?.length ?? 0),
       notes: a.notes || undefined,
       nudge: ghostable && ageDays >= NUDGE_GHOST_PROMPT_DAYS ? 'ghost-prompt' : ghostable && ageDays >= NUDGE_WAITING_DAYS ? 'waiting' : null,
       unconfirmedClick: a.status === 'apply_clicked',

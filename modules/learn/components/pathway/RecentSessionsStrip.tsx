@@ -7,6 +7,7 @@ import { motion } from 'framer-motion'
 import { Clock, RotateCcw, ArrowRight } from 'lucide-react'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { getDomainLabel } from '@interview/config/interviewConfig'
+import { planRetakeNavigation } from '@interview/utils/retakeNavigation'
 
 interface RecentSession {
   _id: string
@@ -58,7 +59,16 @@ export default function RecentSessionsStrip() {
         setRetakingId(null)
         return
       }
-      const { parentSessionId } = await res.json()
+      const plan = planRetakeNavigation(await res.json(), sessionId)
+      if (plan.jobId) {
+        try {
+          localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+          localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+          localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+        } catch { /* storage unavailable — URL intent still works */ }
+        router.push(plan.href)
+        return
+      }
       // Fetch the full parent session so we can pre-fill the form with the
       // original JD/resume/config, not just the summary from /retake.
       try {
@@ -69,10 +79,10 @@ export default function RecentSessionsStrip() {
             localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(full.config))
           }
         }
-        localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, parentSessionId || sessionId)
+        localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, plan.parentSessionId)
         localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
       } catch { /* ignore */ }
-      router.push(`/interview/setup?retake=${parentSessionId || sessionId}`)
+      router.push(plan.href)
     } catch {
       setRetakingId(null)
     }

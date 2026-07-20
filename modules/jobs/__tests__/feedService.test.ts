@@ -266,9 +266,26 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
 
   it('authed detail carries the caller\'s own application summary (chip + ticker inputs)', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
-    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'app-1', status: 'apply_clicked', practiceSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'app-1', status: 'apply_clicked', verifiedPracticeSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
     const d = await getJobDetail('j1', 'u1')
-    if (!d!.gated) expect(d!.application).toEqual({ applicationId: 'app-1', status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
+    if (!d!.gated) expect(d!.application).toMatchObject({ applicationId: 'app-1', status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
+  })
+
+  it('quarantines legacy attendance from the candidate-facing practice count', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({
+        lean: () => Promise.resolve({
+          _id: 'legacy-app',
+          status: 'saved',
+          practiceSessionIds: ['legacy-a', 'legacy-b', 'legacy-c'],
+        }),
+      }),
+    })
+
+    const detail = await getJobDetail('j1', 'u1')
+
+    if (!detail!.gated) expect(detail!.application?.practiceCount).toBe(0)
   })
 
   it('a stale-RESUME atsResult re-opens the check even when the JD matches (Codex #521 round-5)', async () => {

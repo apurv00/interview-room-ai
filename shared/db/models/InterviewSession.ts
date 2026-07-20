@@ -114,6 +114,11 @@ export interface IInterviewSession extends Document {
     source: 'jobs'
     jobId: string
     applicationId?: string
+    /** Server-issued Jobs intent proof metadata. Legacy/unverified rows omit it
+     * and are intentionally ineligible for automatic tracker evidence. */
+    handoffVersion?: 1
+    jdHash?: string
+    verifiedAt?: Date
     /** Stamped by the evidence-attribution worker at every TERMINAL
      *  outcome — including zero-evidence ones, which store no rows. The
      *  reconciliation sweep only re-emits unstamped sessions (Codex #538:
@@ -295,6 +300,9 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
           source: { type: String, enum: ['jobs'], required: true },
           jobId: { type: String, required: true, maxlength: 64 },
           applicationId: { type: String, maxlength: 64 },
+          handoffVersion: { type: Number, enum: [1] },
+          jdHash: { type: String, maxlength: 64 },
+          verifiedAt: { type: Date },
           // Strict subdoc: without this declaration the worker's dot-path
           // $set would be silently stripped and the sweep would loop.
           evidenceProcessedAt: { type: Date },

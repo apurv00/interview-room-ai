@@ -1283,11 +1283,18 @@ You repair malformed interview feedback JSON. The output must match the supplied
 
         // Jobs evidence ticker (Wave 4.3): a jobs-attributed session that
         // reached SCORED feedback counts toward the per-job n/3. Additive
-        // side effect, idempotent in the service ($addToSet), never blocks
-        // or fails feedback.
+        // side effect, idempotent in the service ($addToSet). Its durable
+        // attach/enqueue boundary is awaited below, but a failure is tracked
+        // and never fails the feedback response.
+        const jobsEvidencePromise = persistPromise.then(() =>
+          recordPracticeEvidence(user.id, sessionId)
+        )
         fireAndTrack(
           'jobsEvidence',
-          Promise.resolve().then(() => recordPracticeEvidence(user.id, sessionId)),
+          // Session-level eligibility requires the completed status + feedback
+          // to be durable. Chain this rail behind that commit so the immediate
+          // call and the reconciliation sweep use the same persisted truth.
+          jobsEvidencePromise,
           'Jobs practice-evidence push failed',
         )
 
@@ -1443,6 +1450,11 @@ You repair malformed interview feedback JSON. The output must match the supplied
         // cost is an accepted failure mode for Mongo outage, not a
         // timing race.
         await persistPromise.catch(() => { /* tracked above */ })
+        // Unlike long-running learning enrichments, Jobs evidence must reach
+        // its durable attach/enqueue point before this serverless invocation
+        // returns. Otherwise a post-response freeze can leave the candidate's
+        // n/3 state stale until the daily reconciliation sweep.
+        await jobsEvidencePromise.catch(() => { /* tracked above */ })
 
         // Codex P2 on PR #398 — enqueue only after feedback is committed so
         // pathwayJob reads real session.feedback (not synthetic persist-race

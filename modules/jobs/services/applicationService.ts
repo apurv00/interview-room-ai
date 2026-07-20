@@ -1,7 +1,10 @@
 import { gunzipSync } from 'zlib'
-import { JobApplication, JobPosting, InterviewSession, ProductEvent } from '@shared/db/models'
+import { isValidObjectId } from 'mongoose'
+import { JobApplication, JobPosting, InterviewSession, ProductEvent, User } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { inngest } from '@shared/services/inngest'
+import { getShortFormMinAnswers } from '@interview/services/eval/sessionScoringPolicy'
+import { practiceHandoffHashOf } from './practiceHandoff'
 import { xrayHashOf } from './xrayService'
 
 /**
@@ -198,53 +201,268 @@ export async function reportBrokenLink(
   return { ok: true }
 }
 
+export interface EnsuredPracticeApplication {
+  applicationId: string
+  jobPostingId: string
+  sessionId: string
+  evidenceCount: number
+  /** True only for the write that inserted this session id. */
+  newlyAdded: boolean
+}
+
+/** One source of truth for whether a persisted evaluation can mint Jobs evidence. */
+export function isScorablePracticeEvaluation(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const evaluation = value as Record<string, unknown>
+  return (
+    (evaluation.status ?? 'ok') === 'ok' &&
+    typeof evaluation.answer === 'string' &&
+    evaluation.answer.trim().length > 0
+  )
+}
+
 /**
- * Evidence push (Wave 4.3, PRODUCT_FLOW §1 Stage 4): a jobs-attributed
- * session that reached SCORED feedback lands in
- * JobApplication.practiceSessionIds — the tracker/detail evidence ticker
- * (n/3) reads that array. Idempotent ($addToSet — feedback retries and
- * cache reloads must not double-count). Called fire-and-forget from the
- * generate-feedback route's side-effect rail; never throws into it.
- * Sessions refused scoring (short-form guard) deliberately do NOT count —
- * the ticker sells readiness evidence, not attendance.
+ * Session-level evidence gate. A usable answer is not enough: Jobs evidence
+ * is created only after the interview has durably reached completed feedback
+ * and met the same type-aware minimum used by generate-feedback.
+ */
+export function hasCompletedScoredPractice(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const session = value as Record<string, unknown>
+  if (session.status !== 'completed') return false
+  const feedback = session.feedback
+  if (
+    !feedback ||
+    typeof feedback !== 'object' ||
+    typeof (feedback as Record<string, unknown>).overall_score !== 'number'
+  ) return false
+  const evaluations = Array.isArray(session.evaluations) ? session.evaluations : []
+  const interviewType = (session.config as { interviewType?: string } | undefined)?.interviewType
+  return evaluations.filter(isScorablePracticeEvaluation).length >= getShortFormMinAnswers(interviewType)
+}
+
+function inflateJobDescription(value: unknown): string {
+  if (!value) return ''
+  const buffer = Buffer.isBuffer(value)
+    ? value
+    : Buffer.from((value as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)
+  return gunzipSync(buffer).toString('utf8')
+}
+
+/**
+ * Resolve a scored Jobs session to its canonical user+posting relationship.
+ * Kept separate from event emission so the reconciliation sweep can repair
+ * already-lost practice-first sessions without recursively emitting work.
+ */
+export async function ensurePracticeApplication(
+  userId: string,
+  sessionId: string,
+  now = new Date()
+): Promise<EnsuredPracticeApplication | null> {
+  const sessionFilter = { _id: sessionId, userId }
+  const session = await InterviewSession.findOne(sessionFilter)
+    .select('attribution userId jobDescription config evaluations status feedback')
+    .lean()
+  const attr = session?.attribution as {
+    source?: string
+    jobId?: string
+    applicationId?: string
+    handoffVersion?: number
+    jdHash?: string
+  } | undefined
+  if (
+    !session ||
+    attr?.source !== 'jobs' ||
+    !attr.jobId ||
+    !isValidObjectId(attr.jobId) ||
+    attr.handoffVersion !== 1 ||
+    !attr.jdHash ||
+    !hasCompletedScoredPractice(session)
+  ) return null
+
+  // Full-account deletion removes User before its final JobApplication
+  // sweep. Refuse a late side-effect after that durable deletion fence.
+  if (!(await User.exists({ _id: userId }))) return null
+
+  // applicationId originates in browser-held config and is advisory only.
+  // The unique user+posting pair is the canonical identity and prevents a
+  // stale, forged, or malformed application id from cross-attaching evidence.
+  const filter = { userId, jobPostingId: attr.jobId }
+
+  // jobId originates in browser-held config too. Bind it to the JD that the
+  // server persisted on the session before mutating any posting/application;
+  // malformed, stale, cross-job, missing, or corrupt bodies fail closed.
+  const posting = await JobPosting.findById(attr.jobId)
+    .select('title company locations provenance jdCompressed')
+    .lean()
+  const sessionJd =
+    (session as { jobDescription?: string }).jobDescription ??
+    (session.config as { jobDescription?: string } | undefined)?.jobDescription
+  let postingJd = ''
+  try {
+    postingJd = inflateJobDescription(posting?.jdCompressed)
+  } catch {
+    return null
+  }
+  const sessionJdHash = sessionJd ? practiceHandoffHashOf(sessionJd) : ''
+  if (
+    !posting ||
+    !sessionJd ||
+    !postingJd ||
+    sessionJdHash !== attr.jdHash ||
+    sessionJdHash !== practiceHandoffHashOf(postingJd)
+  ) return null
+
+  // Pin only the exact JD version just verified. If ingestion replaced or
+  // removed it between the read and this write, reconciliation can retry
+  // against the new server truth instead of cross-attaching stale evidence.
+  const pin = await JobPosting.updateOne(
+    { _id: attr.jobId, jdCompressed: posting.jdCompressed },
+    { $set: { userReferenced: true }, $unset: { purgeAt: 1 } }
+  )
+  if ((pin?.matchedCount ?? 0) === 0) return null
+
+  const snapshot = {
+    title: String(posting.title ?? '').slice(0, 300),
+    company: String(posting.company ?? '').slice(0, 300),
+    location: String((posting.locations ?? [])[0] ?? '').slice(0, 200),
+    source: String(posting.provenance?.[0]?.sourceId ?? 'unknown').slice(0, 100),
+  }
+  const evidenceFilter = { ...filter, verifiedPracticeSessionIds: { $ne: session._id } }
+  const attach = {
+    $addToSet: {
+      // Keep the historical attendance array for email/backcompat consumers,
+      // but only the verified array drives evidence counts.
+      practiceSessionIds: session._id,
+      verifiedPracticeSessionIds: session._id,
+    },
+  }
+
+  // The $ne predicate, not modifiedCount, proves this write inserted the
+  // session. Mongoose timestamps can otherwise modify updatedAt on a no-op
+  // $addToSet and falsely crown every retry as the event-emitting winner.
+  let newlyAdded = false
+  const existingAttach = await JobApplication.updateOne(evidenceFilter, attach)
+  if ((existingAttach?.matchedCount ?? 0) > 0) {
+    newlyAdded = true
+  } else {
+    const alreadyAttached = await JobApplication.findOne({ ...filter, verifiedPracticeSessionIds: session._id })
+      .select('_id')
+      .lean()
+    if (!alreadyAttached) {
+      try {
+        const result = await JobApplication.updateOne(
+          evidenceFilter,
+          {
+            $setOnInsert: {
+              jobSnapshot: snapshot,
+              status: 'saved',
+              statusHistory: [{ status: 'saved', at: now, source: 'system' }],
+            },
+            $addToSet: {
+              practiceSessionIds: session._id,
+              verifiedPracticeSessionIds: session._id,
+            },
+          },
+          { upsert: true, setDefaultsOnInsert: true, runValidators: true }
+        )
+        newlyAdded = (result?.upsertedCount ?? 0) > 0 || (result?.matchedCount ?? 0) > 0
+      } catch (err) {
+        if ((err as { code?: number })?.code !== 11000) throw err
+        // A concurrent Save/Apply/Tailor/practice won the unique tuple. Retry
+        // the conditional attach only; never overwrite the winner's state.
+        const result = await JobApplication.updateOne(evidenceFilter, attach)
+        newlyAdded = (result?.matchedCount ?? 0) > 0
+      }
+    }
+  }
+
+  // Close both single-session and full-account deletion races. Account
+  // deletion removes sessions first, User next, and applications last; a
+  // writer spanning that sequence either gets swept or observes the fence.
+  const [sessionStillExists, userStillExists] = await Promise.all([
+    InterviewSession.findOne(sessionFilter).select('_id').lean(),
+    User.exists({ _id: userId }),
+  ])
+  if (!userStillExists) {
+    await JobApplication.deleteOne(filter)
+    return null
+  }
+  if (!sessionStillExists) {
+    await JobApplication.updateOne(filter, {
+      $pull: {
+        practiceSessionIds: session._id,
+        verifiedPracticeSessionIds: session._id,
+      },
+    })
+    return null
+  }
+
+  // Prove the canonical row still exists after the write (account deletion
+  // can race this rail) and that it actually contains the evidence before an
+  // attribution event is emitted.
+  const app = await JobApplication.findOne({ ...filter, verifiedPracticeSessionIds: session._id })
+    .select('_id verifiedPracticeSessionIds jobPostingId')
+    .lean()
+  if (!app) return null
+
+  // Repair stale/missing client-carried attribution so a failed immediate
+  // emit remains recoverable by the canonical reconciliation sweep.
+  if (String(attr.applicationId ?? '') !== String(app._id)) {
+    try {
+      await InterviewSession.updateOne(
+        {
+          _id: session._id,
+          userId,
+          'attribution.source': 'jobs',
+          'attribution.jobId': attr.jobId,
+        },
+        { $set: { 'attribution.applicationId': String(app._id) } }
+      )
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'practice application attribution repair failed')
+    }
+  }
+
+  return {
+    applicationId: String(app._id),
+    jobPostingId: String(app.jobPostingId),
+    sessionId: String(session._id),
+    evidenceCount: Math.min(3, app.verifiedPracticeSessionIds?.length ?? 0),
+    newlyAdded,
+  }
+}
+
+/**
+ * Evidence push (Wave 4.3): scored job-specific practice is an intentional
+ * tracking signal. The first session atomically auto-saves the job with a
+ * system history entry; retries return the durable count but only the write
+ * winner emits attribution work.
  */
 export async function recordPracticeEvidence(
   userId: string,
-  sessionId: string
+  sessionId: string,
+  now = new Date()
 ): Promise<{ recorded: boolean; evidenceCount?: number }> {
-  const session = await InterviewSession.findById(sessionId).select('attribution userId').lean()
-  const attr = session?.attribution as { source?: string; jobId?: string; applicationId?: string } | undefined
-  if (!session || String(session.userId) !== String(userId) || attr?.source !== 'jobs' || !attr.jobId) {
-    return { recorded: false }
+  const ensured = await ensurePracticeApplication(userId, sessionId, now)
+  if (!ensured) return { recorded: false }
+
+  if (ensured.newlyAdded) {
+    try {
+      await inngest.send({
+        id: `jobs-evidence-${ensured.sessionId}`,
+        name: 'jobs/evidence.attribute',
+        data: {
+          sessionId: ensured.sessionId,
+          applicationId: ensured.applicationId,
+          jobPostingId: ensured.jobPostingId,
+        },
+      })
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'evidence.attribute emit failed — reconciliation sweep will recover')
+    }
   }
-  const filter = attr.applicationId
-    ? { _id: attr.applicationId, userId } // userId guard: never attach to another user's row
-    : { userId, jobPostingId: attr.jobId }
-  const app = await JobApplication.findOneAndUpdate(
-    filter,
-    { $addToSet: { practiceSessionIds: session._id } },
-    { new: true }
-  )
-    .select('practiceSessionIds jobPostingId')
-    .lean()
-  if (!app) return { recorded: false } // practiced without saving and no click row — nothing to attach to
-  // Readiness attribution (READINESS.md §1): THIS is the emit site — the
-  // rail fires for every scored session, but only a recorded jobs
-  // attribution mints evidence work. Awaited (cheap) so the reconciliation
-  // sweep is a net, not the primary path; failure never breaks the feedback flow.
-  try {
-    await inngest.send({
-      name: 'jobs/evidence.attribute',
-      data: {
-        sessionId: String(session._id),
-        applicationId: String(app._id),
-        jobPostingId: String(app.jobPostingId),
-      },
-    })
-  } catch (err) {
-    logger.warn({ err, sessionId }, 'evidence.attribute emit failed — reconciliation sweep will recover')
-  }
-  return { recorded: true, evidenceCount: Math.min(3, app.practiceSessionIds?.length ?? 0) }
+  return { recorded: true, evidenceCount: ensured.evidenceCount }
 }
 
 export interface ApplyClickResult {
@@ -271,14 +489,18 @@ export async function recordApplyClick(
     if (existing.status !== 'saved') {
       return { status: existing.status, created: false, transitioned: false }
     }
-    await JobApplication.updateOne(
+    const transitioned = await JobApplication.updateOne(
       { userId, jobPostingId, status: 'saved' }, // status in the filter: never race-regress a concurrent forward move
       {
         $set: { status: 'apply_clicked', 'jobSnapshot.applyTierAtClick': click.tier, 'jobSnapshot.applyUrlAtClick': click.url },
         $push: { statusHistory: { status: 'apply_clicked', at: now, source: 'system' } },
       }
     )
-    return { status: 'apply_clicked', created: false, transitioned: true }
+    if ((transitioned?.matchedCount ?? 0) > 0) {
+      return { status: 'apply_clicked', created: false, transitioned: true }
+    }
+    const winner = await JobApplication.findOne({ userId, jobPostingId }).select('status').lean()
+    return winner ? { status: winner.status, created: false, transitioned: false } : null
   }
 
   try {
@@ -299,9 +521,21 @@ export async function recordApplyClick(
     return { status: 'apply_clicked', created: true, transitioned: true }
   } catch (err) {
     if ((err as { code?: number })?.code === 11000) {
-      // Concurrent create won the unique index — report the surviving row.
+      // A Save/Tailor/practice create may have won. Preserve the Apply
+      // machine fact by conditionally advancing a saved winner; if a later
+      // status won too, reread it without regression.
+      const transitioned = await JobApplication.updateOne(
+        { userId, jobPostingId, status: 'saved' },
+        {
+          $set: { status: 'apply_clicked', 'jobSnapshot.applyTierAtClick': click.tier, 'jobSnapshot.applyUrlAtClick': click.url },
+          $push: { statusHistory: { status: 'apply_clicked', at: now, source: 'system' } },
+        }
+      )
+      if ((transitioned?.matchedCount ?? 0) > 0) {
+        return { status: 'apply_clicked', created: false, transitioned: true }
+      }
       const winner = await JobApplication.findOne({ userId, jobPostingId }).select('status').lean()
-      return { status: winner?.status ?? 'apply_clicked', created: false, transitioned: false }
+      return winner ? { status: winner.status, created: false, transitioned: false } : null
     }
     throw err
   }

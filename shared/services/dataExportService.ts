@@ -151,7 +151,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
 
   // Readiness evidence (READINESS.md §1) — cursor-paginated to exhaustion
   // like every per-user collection here.
-  interface LeanEvidence { _id: mongoose.Types.ObjectId; requirementId: string; xrayHash: string; strength: string; answerScore: number; scoringEpoch: string; at: Date; sessionId: mongoose.Types.ObjectId; jobPostingId: mongoose.Types.ObjectId }
+  interface LeanEvidence { _id: mongoose.Types.ObjectId; requirementId: string; xrayHash: string; handoffVersion?: number; handoffJdHash?: string; strength: string; answerScore: number; scoringEpoch: string; at: Date; sessionId: mongoose.Types.ObjectId; jobPostingId: mongoose.Types.ObjectId }
   const practiceEvidenceRows: LeanEvidence[] = []
   let evidenceCursor: mongoose.Types.ObjectId | null = null
   for (;;) {
@@ -159,7 +159,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       userId: uid,
       ...(evidenceCursor ? { _id: { $lt: evidenceCursor } } : {}),
     })
-      .select('requirementId xrayHash strength answerScore scoringEpoch at sessionId jobPostingId')
+      .select('requirementId xrayHash handoffVersion handoffJdHash strength answerScore scoringEpoch at sessionId jobPostingId')
       .sort({ _id: -1 })
       .limit(2000)
       .lean()) as unknown as LeanEvidence[]
