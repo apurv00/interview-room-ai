@@ -365,6 +365,31 @@ describe('runSourceSyncHandler', () => {
     }
   })
 
+  it('a bucket that fills all MAX_PAGES_PER_BUCKET pages with fresh rows logs a cap-exit — deep-backlog drop is never silent (Codex #559 round 3)', async () => {
+    resetAll()
+    const { logger } = await import('@shared/logger')
+    vi.mocked(logger.warn).mockClear()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    // Every page is FULL (10 rows) and every row is NEW (findOne default → null)
+    // → knownRate 0, no cutoff → the bucket paginates to the 4-page cap and
+    // cap-exits with backlog still behind it.
+    mockAdapterFetch.mockImplementation(async (t: { bucketId?: string; page?: number }) => ({
+      ok: true, status: 200, attempts: 1,
+      raw: Array.from({ length: 10 }, (_, k) => ({
+        job_id: `id-${t.bucketId}-p${t.page}-${k}`, job_title: 'Backend Developer', employer_name: `Acme ${t.page}-${k}`,
+        job_city: 'Pune', job_description: 'Build APIs. '.repeat(50),
+        job_posted_at_datetime_utc: '2026-07-12T00:00:00Z', job_apply_link: `https://careers.acme.com/${t.page}/${k}`,
+      })),
+    }))
+    await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    const warnCalls = vi.mocked(logger.warn).mock.calls as Array<[Record<string, unknown>, string]>
+    const capWarn = warnCalls.find((c) => c[1]?.includes('cap-exit'))
+    expect(capWarn).toBeTruthy()
+    // 4 = MAX_PAGES_PER_BUCKET; the tail beyond page 4 was dropped this run.
+    expect(capWarn![0]).toMatchObject({ bucket: expect.any(String), pagesFetched: 4 })
+  })
+
   it('a garbage postedAt never reaches the cursor write — finalize still succeeds', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })

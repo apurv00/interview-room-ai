@@ -225,6 +225,21 @@ async function processTarget(
       if (t.kind === 'feed' && cursorKey) {
         outcome.feedContinuation[cursorKey] = capExit ? page : 0
       }
+      // No silent caps (Codex on #559 round 3): a BUCKET that fills all
+      // MAX_PAGES_PER_BUCKET pages with fresh rows has more backlog than one run
+      // fetches, and — unlike a feed — a bucket has no continuation, so the
+      // freshness cursor advances and pages beyond the cap are not revisited
+      // (JSearch's date_posted is a RELATIVE window, so a feed-style page-resume
+      // can't pin a stable query across runs). Collapsing 6 metros into one ':in'
+      // bucket (#23) makes this reachable for a very-high-volume domain-day; the
+      // measured supply (~≤24/domain/day vs the 40-row cap, DECISIONS #17) keeps
+      // it below the cap in steady state, and the rename's cold-fill backlog is
+      // already in-corpus from the pre-#23 metro harvest — so no actual supply
+      // loss is expected. This warn makes any REAL cap-exit visible so ops can
+      // raise the cap or build bucket continuation (DECISIONS #23 follow-up).
+      if (capExit && t.kind === 'bucket') {
+        logger.warn({ sourceId, bucket: cursorKey, pagesFetched }, 'jobs ingest: bucket cap-exit — deep backlog beyond MAX_PAGES_PER_BUCKET dropped this run')
+      }
       // Clean exit: every page this window owed us was fetched — the
       // cursor may now advance (bucket targets key on bucketId; sitemap/
       // feed targets on their explicit cursorBucket).
