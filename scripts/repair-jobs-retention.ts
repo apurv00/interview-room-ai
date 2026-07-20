@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env tsx
 /**
  * Idempotent repair for the Jobs ownership/TTL invariant.
  *
@@ -11,15 +11,48 @@
  * Dry-run by default:
  *   npm run repair:jobs-retention
  *   npm run repair:jobs-retention -- --apply
+ *   npm run check:jobs-retention     # read-only deploy gate; non-zero on drift
  */
 
+import { pathToFileURL } from 'node:url'
 import { connectDB } from '../shared/db/connection'
 import { JobApplication, JobPosting } from '../shared/db/models'
 
 const BATCH_SIZE = 500
 
-async function main() {
-  const apply = process.argv.includes('--apply')
+export interface RetentionInvariantCounts {
+  ownerContradictions: number
+  pinnedWithTtl: number
+}
+
+export type RetentionRepairMode = 'dry-run' | 'apply' | 'check'
+
+export function retentionRepairModeOf(argv: string[]): RetentionRepairMode {
+  const supportedArguments = new Set(['--apply', '--check'])
+  const unknownArguments = argv.filter((argument) => !supportedArguments.has(argument))
+  if (unknownArguments.length) {
+    throw new Error(`unknown argument${unknownArguments.length === 1 ? '' : 's'}: ${unknownArguments.join(', ')}`)
+  }
+
+  const apply = argv.includes('--apply')
+  const check = argv.includes('--check')
+  if (apply && check) throw new Error('choose either --apply or --check, not both')
+  return apply ? 'apply' : check ? 'check' : 'dry-run'
+}
+
+export function assertRetentionInvariant({
+  ownerContradictions,
+  pinnedWithTtl,
+}: RetentionInvariantCounts): void {
+  if (ownerContradictions || pinnedWithTtl) {
+    throw new Error(
+      `retention invariant failed: owner contradictions=${ownerContradictions}, pinned TTL rows=${pinnedWithTtl}`,
+    )
+  }
+}
+
+export async function runRetentionRepair(argv: string[]): Promise<void> {
+  const mode = retentionRepairModeOf(argv)
   await connectDB()
 
   const ownedIds = (await JobApplication.distinct('jobPostingId')).filter(Boolean)
@@ -48,7 +81,13 @@ async function main() {
   console.log(`Owner rows with a broken pin/TTL invariant: ${ownerContradictions}`)
   console.log(`All pinned rows still carrying purgeAt: ${pinnedWithTtl}`)
 
-  if (!apply) {
+  if (mode === 'check') {
+    assertRetentionInvariant({ ownerContradictions, pinnedWithTtl })
+    console.log('\nCHECK PASSED — every retained owner row is pinned and has no TTL.')
+    return
+  }
+
+  if (mode === 'dry-run') {
     console.log('\nDRY RUN — no writes performed. Re-run with --apply to repair.')
     return
   }
@@ -72,9 +111,13 @@ async function main() {
   console.log(`Owned rows modified: ${modified}`)
   console.log(`Additional pinned TTL rows modified: ${pinnedRepair.modifiedCount ?? 0}`)
 
-  const remainingOwners = ownedIds.length
+  // Re-read ownership after the writes. Old application writers may still be
+  // draining while the migration runs, so verification must not reuse the
+  // pre-repair snapshot.
+  const verifiedOwnedIds = (await JobApplication.distinct('jobPostingId')).filter(Boolean)
+  const remainingOwners = verifiedOwnedIds.length
     ? await JobPosting.countDocuments({
-        _id: { $in: ownedIds },
+        _id: { $in: verifiedOwnedIds },
         $or: [
           { userReferenced: { $ne: true } },
           { purgeAt: { $exists: true } },
@@ -85,15 +128,23 @@ async function main() {
     userReferenced: true,
     purgeAt: { $exists: true },
   })
-  if (remainingOwners || remainingPinnedTtl) {
-    throw new Error(`repair incomplete: owner contradictions=${remainingOwners}, pinned TTL rows=${remainingPinnedTtl}`)
-  }
+  assertRetentionInvariant({
+    ownerContradictions: remainingOwners,
+    pinnedWithTtl: remainingPinnedTtl,
+  })
   console.log('\nVerified: every retained owner row is pinned and has no TTL.')
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error('Jobs retention repair failed:', error)
-    process.exit(1)
-  })
+async function main() {
+  await runRetentionRepair(process.argv.slice(2))
+}
+
+const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (isMain) {
+  main()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error('Jobs retention repair failed:', error)
+      process.exit(1)
+    })
+}

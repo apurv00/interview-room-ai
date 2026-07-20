@@ -24,17 +24,25 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
   await connectDB()
+  const existing = await JobApplication.findOne({ userId, jobPostingId: params.id }).select('status').lean()
+  if (existing) {
+    // Ownership, not discovery state, authorizes this idempotent path. A
+    // posting may have closed after the user saved/applied; keep its durable
+    // tracker context pinned without creating a new closed-posting owner.
+    const pin = await JobPosting.updateOne(
+      { _id: params.id },
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+    )
+    if ((pin?.matchedCount ?? 0) !== 1) {
+      return NextResponse.json({ error: 'not found' }, { status: 404 })
+    }
+    return NextResponse.json({ ok: true, status: existing.status, alreadySaved: true })
+  }
+
   const posting = await JobPosting.findById(params.id).select('title company locations provenance status').lean()
   if (!posting || posting.status !== 'open') return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   const now = new Date()
-  const existing = await JobApplication.findOne({ userId, jobPostingId: params.id }).select('status').lean()
-  if (existing) {
-    // Existing ownership is already durable; self-heal its retention pin if
-    // closure raced the initial status read.
-    await JobPosting.updateOne({ _id: params.id }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
-    return NextResponse.json({ ok: true, status: existing.status, alreadySaved: true })
-  }
   // Retention pin (PRODUCT_FLOW §2: creation sets ingestion's userReferenced
   // pin — the tracker needs a stable posting _id forever). $unset purgeAt in
   // the same write: the delisting sweep can close+stamp between our open-

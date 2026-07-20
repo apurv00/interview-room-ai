@@ -64,12 +64,49 @@ describe('POST /api/jobs/[id]/save open-state ownership fence', () => {
     expect(mockEventCreate).not.toHaveBeenCalled()
   })
 
-  it('keeps an existing owner idempotent without regressing application state', async () => {
-    mockApplicationFindOne.mockReturnValue(selectLean({ status: 'applied' }))
+  it.each(['open', 'closed'])(
+    'keeps an existing owner idempotent and repairs its retention pin when the posting is %s',
+    async (status) => {
+      mockPostingFindById.mockReturnValue(selectLean({
+        title: 'Backend Engineer', company: 'Acme', locations: ['Pune'], provenance: [], status,
+      }))
+      mockApplicationFindOne.mockReturnValue(selectLean({ status: 'applied' }))
+
+      const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/save`, { method: 'POST' }), { params: { id: JOB_ID } })
+
+      expect(await response.json()).toEqual({ ok: true, status: 'applied', alreadySaved: true })
+      expect(mockApplicationFindOne).toHaveBeenCalledWith({ userId: USER_ID, jobPostingId: JOB_ID })
+      expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+        { _id: JOB_ID },
+        { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+      )
+      expect(mockPostingFindById).not.toHaveBeenCalled()
+      expect(mockApplicationCreate).not.toHaveBeenCalled()
+      expect(mockEventCreate).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps a closed non-owner indistinguishable from a missing posting and does not pin it', async () => {
+    mockPostingFindById.mockReturnValue(selectLean({
+      title: 'Backend Engineer', company: 'Acme', locations: ['Pune'], provenance: [], status: 'closed',
+    }))
 
     const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/save`, { method: 'POST' }), { params: { id: JOB_ID } })
 
-    expect(await response.json()).toEqual({ ok: true, status: 'applied', alreadySaved: true })
+    expect(response.status).toBe(404)
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockApplicationCreate).not.toHaveBeenCalled()
+    expect(mockEventCreate).not.toHaveBeenCalled()
+  })
+
+  it('does not claim a repaired owner pin when the retained posting row is already missing', async () => {
+    mockApplicationFindOne.mockReturnValue(selectLean({ status: 'applied' }))
+    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/save`, { method: 'POST' }), { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(404)
+    expect(mockPostingFindById).not.toHaveBeenCalled()
     expect(mockApplicationCreate).not.toHaveBeenCalled()
   })
 })

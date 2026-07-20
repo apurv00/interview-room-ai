@@ -23,6 +23,15 @@ self-practice API still trusts candidate-submitted answers/evaluations within
 the authenticated session. Readiness therefore remains coaching evidence, not
 an employer-verifiable credential or proof that an answer was spoken live.
 
+**CMS availability is part of the Practice authorization boundary.** If the
+active role catalog cannot be loaded authoritatively, Jobs intentionally
+withholds the role and disables new job-specific Practice site-wide—even for a
+posting with a declared domain or cached X-ray. Seed roles are availability
+fallbacks, never authorization. The detail page keeps existing non-Practice
+history and shows retry/general-setup recovery. Operations must alert on catalog
+load failure, verify the CMS/DB path and current catalog revision, and restore
+that authority; do not bypass the outage with seed or stale inferred roles.
+
 ## 1. PR-R1 — Attribution (the data layer, ships dark)
 
 **Emit site** [R14][R19]: the generate-feedback rail fires for every

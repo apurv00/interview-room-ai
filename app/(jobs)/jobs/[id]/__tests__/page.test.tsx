@@ -475,12 +475,39 @@ describe('Job detail Practice readiness', () => {
     render(<JobDetailPage params={{ id: JOB_ID }} />)
 
     expect(await screen.findByText('Posting unavailable')).toBeTruthy()
+    expect(screen.getByText(/removed by policy or closed before a safe archive reason was recorded/i)).toBeTruthy()
     expect(screen.getByText('The original job description is not available.')).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'Tailor resume' })).toBeNull()
     expect(screen.queryByRole('button', { name: /Practice for this job/i })).toBeNull()
     expect(screen.getByText('ATS check completed before this posting became unavailable.')).toBeTruthy()
     expect(document.body.textContent).not.toContain('undefined/100')
     expect(document.body.textContent).not.toContain('Missing:')
+    expect(mockFetch.mock.calls.some(([url]) => String(url).endsWith('/xray'))).toBe(false)
+  })
+
+  it('explains why an archive that closed before its first X-ray cannot generate one later', async () => {
+    const archivedWithoutXray = {
+      ...BASE_DETAIL,
+      postingState: 'archived' as const,
+      capabilities: {
+        ...BASE_DETAIL.capabilities,
+        xray: false,
+      },
+      application: {
+        applicationId: 'app1',
+        status: 'saved',
+        practiceCount: 0,
+        ats: { state: 'none' as const },
+      },
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(archivedWithoutXray) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByText(/X-ray wasn.t saved while this job was live/i)).toBeTruthy()
+    expect(screen.getByText(/can.t be generated after closure/i)).toBeTruthy()
     expect(mockFetch.mock.calls.some(([url]) => String(url).endsWith('/xray'))).toBe(false)
   })
 

@@ -773,7 +773,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           <p className="mt-1 text-xs text-amber-800">
             {postingState === 'archived'
               ? 'Your tracked status, saved job description, and available preparation tools are still here.'
-              : 'Your tracked history is preserved, but this posting’s content and new job-specific actions are unavailable.'}
+              : postingState === 'snapshot-only'
+                ? 'The original posting record is gone, so only your tracked status and saved activity summary remain.'
+                : 'For safety, only your tracked status remains when a posting was removed by policy or closed before a safe archive reason was recorded.'}
           </p>
         </aside>
       )}
@@ -1071,7 +1073,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             {detail.capabilities?.xray === false && (
               <p className="mt-3 text-sm text-slate-500">
                 {postingState === 'archived'
-                  ? 'No saved X-ray is available for this closed posting.'
+                  ? 'X-ray wasn\'t saved while this job was live, so it can\'t be generated after closure.'
                   : 'X-ray is unavailable because the original posting content is not available.'}
               </p>
             )}
