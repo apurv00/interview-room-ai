@@ -383,6 +383,16 @@ export async function runSourceSyncHandler(
   // are partially stored, so "already known" cannot mean "window exhausted"
   // — the known-rate cutoff is disabled for them until a full clean pass.
   const distrust = new Set(cursors.filter((c) => c.windowIncomplete).map((c) => c.bucket))
+  // First run for a bucket with NO cursor yet must ALSO distrust the known-rate
+  // cutoff (Codex on #559): when a bucket id is new to an EXISTING corpus — the
+  // #23 metro→country rename ('backend:pune'… → 'backend:in') is the live case,
+  // where the DB already holds the old metro rows — page 1 of the country query
+  // is mostly already-known, trips the ≥60% cutoff, stops before the deep pages
+  // the #23 depth-recovery relies on, and writes a cursor that freezes the
+  // shallow coverage. No cursor ⇒ "known" is not evidence of window exhaustion;
+  // on a genuinely empty corpus this is a no-op (nothing is known, so the cutoff
+  // cannot fire), so it only ever helps.
+  const haveCursor = new Set(cursors.map((c) => c.bucket))
 
   const total: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [], feedContinuation: {} }
   for (let i = 0; i < targets.length; i += BUCKETS_PER_CHUNK) {
@@ -398,7 +408,9 @@ export async function runSourceSyncHandler(
         // reaches the shifted backlog. Cap + non-full-page remain the
         // exits; known pages are merge-idempotent.
         const isContinuation = target.kind === 'feed' && target.page > 1
-        const distrustKnown = (!!distrustKey && distrust.has(distrustKey)) || isContinuation
+        // A bucket with no persisted cursor is on its first run (#559).
+        const isFirstRunForBucket = !!distrustKey && !haveCursor.has(distrustKey)
+        const distrustKnown = (!!distrustKey && distrust.has(distrustKey)) || isContinuation || isFirstRunForBucket
         await processTarget(adapter, sourceId, target, o, delayMs, initVerdictPending, distrustKnown)
         if (delayMs) await sleep(delayMs)
       }
