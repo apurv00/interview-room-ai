@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import PathwayEmptyState from '../components/pathway/PathwayEmptyState'
 import TodayActionCard from '../components/pathway/TodayActionCard'
 import PathwayPendingBanner from '../components/pathway/PathwayPendingBanner'
@@ -13,8 +13,9 @@ vi.mock('next/link', () => ({
   ),
 }))
 
+const { mockPush } = vi.hoisted(() => ({ mockPush: vi.fn() }))
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: mockPush }),
 }))
 
 const baselineAction: PathwayAction = {
@@ -29,6 +30,8 @@ const baselineAction: PathwayAction = {
 describe('Pathway state components', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    mockPush.mockReset()
+    localStorage.clear()
   })
 
   it('renders the empty Pathway baseline CTA as the single primary action', () => {
@@ -130,5 +133,46 @@ describe('Pathway state components', () => {
     })
     expect(screen.getByText(/Completed interviews will appear here/i)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Start/i }).getAttribute('href')).toContain('/interview/setup?')
+  })
+
+  it('routes verified Jobs retakes through the job page without copying stale config', async () => {
+    const sessionId = '507f1f77bcf86cd799439011'
+    const parentSessionId = '507f1f77bcf86cd799439012'
+    const jobId = '507f1f77bcf86cd799439013'
+    vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.startsWith('/api/interviews?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            sessions: [{
+              _id: sessionId,
+              config: { role: 'backend', interviewType: 'behavioral' },
+              feedback: { overall_score: 82 },
+            }],
+          }),
+        } as Response
+      }
+      if (url === `/api/interviews/${sessionId}/retake`) {
+        return {
+          ok: true,
+          json: async () => ({ parentSessionId, jobsPractice: { jobId } }),
+        } as Response
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    localStorage.setItem('interviewConfig', JSON.stringify({ role: 'stale' }))
+    localStorage.setItem('pendingRetakeParent', '507f1f77bcf86cd799439099')
+
+    render(<RecentSessionsStrip />)
+    fireEvent.click(await screen.findByRole('button', { name: /Retake/i }))
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(
+        `/jobs/${jobId}?practice=1&retake=${parentSessionId}`
+      )
+    })
+    expect(localStorage.getItem('interviewConfig')).toBeNull()
+    expect(localStorage.getItem('pendingRetakeParent')).toBeNull()
   })
 })

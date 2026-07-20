@@ -14,6 +14,8 @@
  * `URLSearchParams`-like reader.
  */
 
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
+
 /**
  * Minimal `URLSearchParams` shape so callers can pass either:
  *   - the native `URLSearchParams` object, or
@@ -54,9 +56,9 @@ export interface PathwaySetupContext {
  *
  * All string values are length-capped to defend against quota abuse
  * from a forged URL (e.g. someone manually pasting a 10MB
- * `?difficulty=` param). Caps were chosen to match the original local
- * implementation in InterviewSetupForm.tsx so the extraction is
- * behaviour-preserving.
+ * `?difficulty=` param). Each cap follows its downstream contract; notably,
+ * `domain` uses the shared CMS/interview role limit so a valid role is never
+ * silently truncated between Pathway and interview setup.
  */
 export function readPathwaySetupContext(
   searchParams: SearchParamReader | null | undefined,
@@ -77,7 +79,7 @@ export function readPathwaySetupContext(
   return {
     source: 'pathway',
     actionId: clean(searchParams.get('actionId')),
-    domain: clean(searchParams.get('domain'), 50),
+    domain: clean(searchParams.get('domain'), INTERVIEW_ROLE_SLUG_MAX_CHARS),
     interviewType: clean(searchParams.get('interviewType'), 50),
     difficulty: clean(searchParams.get('difficulty'), 40),
     focus,

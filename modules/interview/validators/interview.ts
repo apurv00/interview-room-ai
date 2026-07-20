@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import {
+  INTERVIEW_JOB_DESCRIPTION_MAX_CHARS,
+  INTERVIEW_ROLE_SLUG_MAX_CHARS,
+  INTERVIEW_TARGET_COMPANY_MAX_CHARS,
+} from '@shared/interviewContract'
 
 const MAX_LATENCY_TELEMETRY_BYTES = 2048
 const MAX_LATENCY_TIMESTAMP_MS = 4_102_444_800_000 // 2100-01-01T00:00:00.000Z
@@ -42,15 +47,15 @@ export const InterviewLatencyTelemetrySchema = z
 export type InterviewLatencyTelemetryInput = z.infer<typeof InterviewLatencyTelemetrySchema>
 
 export const InterviewConfigSchema = z.object({
-  role: z.string().min(1).max(50),
+  role: z.string().min(1).max(INTERVIEW_ROLE_SLUG_MAX_CHARS),
   interviewType: z.string().min(1).max(50).optional().default('screening'),
   experience: z.enum(['0-2', '3-6', '7+']),
   duration: z.number().int().min(5).max(60),
-  jobDescription: z.string().max(50000).optional(),
+  jobDescription: z.string().max(INTERVIEW_JOB_DESCRIPTION_MAX_CHARS).optional(),
   resumeText: z.string().max(50000).optional(),
   jdFileName: z.string().max(500).optional(),
   resumeFileName: z.string().max(500).optional(),
-  targetCompany: z.string().max(200).optional(),
+  targetCompany: z.string().max(INTERVIEW_TARGET_COMPANY_MAX_CHARS).optional(),
   targetIndustry: z.string().max(200).optional(),
   privacyMode: z.boolean().optional(),
   pathwayContext: z.object({
@@ -269,6 +274,9 @@ export const GenerateFeedbackSchema = z.object({
 
 export const CreateSessionSchema = z.object({
   config: InterviewConfigSchema,
+  // Transport-only proof for Jobs-attributed sessions. It is validated and
+  // consumed by POST /api/interviews, never persisted in InterviewConfig.
+  jobsHandoffToken: z.string().min(1).max(2048).optional(),
   templateId: z.string().optional(),
   candidateEmail: z.string().email().optional(),
   candidateName: z.string().max(200).optional(),

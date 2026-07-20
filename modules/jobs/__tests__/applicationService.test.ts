@@ -1,30 +1,65 @@
 import { describe, it, expect, vi } from 'vitest'
+import { gzipSync } from 'zlib'
+import { JobApplication as RealJobApplication } from '@shared/db/models/JobApplication'
 
-const { mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate } = vi.hoisted(() => ({
+const { mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne } = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
   mockAppFindOne: vi.fn(),
   mockAppUpdateOne: vi.fn(),
   mockAppCreate: vi.fn(),
   mockAppFindOneAndUpdate: vi.fn(),
+  mockAppDeleteOne: vi.fn(),
 }))
-const { mockSessionFindById } = vi.hoisted(() => ({ mockSessionFindById: vi.fn() }))
+const { mockSessionFindById, mockSessionFindOne, mockSessionUpdateOne } = vi.hoisted(() => ({
+  mockSessionFindById: vi.fn(),
+  mockSessionFindOne: vi.fn(),
+  mockSessionUpdateOne: vi.fn(),
+}))
+const { mockInngestSend, mockProductEventCreate } = vi.hoisted(() => ({
+  mockInngestSend: vi.fn(),
+  mockProductEventCreate: vi.fn(),
+}))
+const { mockUserExists } = vi.hoisted(() => ({ mockUserExists: vi.fn() }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne },
-  JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne, create: mockAppCreate, findOneAndUpdate: mockAppFindOneAndUpdate },
-  InterviewSession: { findById: mockSessionFindById },
+  JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne, create: mockAppCreate, findOneAndUpdate: mockAppFindOneAndUpdate, deleteOne: mockAppDeleteOne },
+  InterviewSession: { findById: mockSessionFindById, findOne: mockSessionFindOne, updateOne: mockSessionUpdateOne },
+  ProductEvent: { create: mockProductEventCreate },
+  User: { exists: mockUserExists },
 }))
+vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend } }))
 
-import { recordApplyClick, claimAtsRun, transitionStatus, reportBrokenLink, recordPracticeEvidence, saveTailoredVersion } from '../services/applicationService'
+import {
+  recordApplyClick,
+  claimAtsRun,
+  transitionStatus,
+  reportBrokenLink,
+  recordPracticeEvidence,
+  saveTailoredVersion,
+  hasCompletedScoredPractice,
+} from '../services/applicationService'
+import { xrayHashOf } from '../services/xrayService'
+import { practiceHandoffHashOf } from '../services/practiceHandoff'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
+const PRACTICE_JD = 'Backend engineer building Node.js and MongoDB payment systems. '.repeat(3)
+const PRACTICE_JD_COMPRESSED = gzipSync(Buffer.from(PRACTICE_JD))
+const PRACTICE_JD_HASH = practiceHandoffHashOf(PRACTICE_JD)
 
-function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open' }) {
-  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate]) m.mockReset()
+function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open', jdCompressed: PRACTICE_JD_COMPRESSED }) {
+  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockUserExists]) m.mockReset()
+  mockInngestSend.mockReset()
+  mockProductEventCreate.mockReset()
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(posting) }) })
-  mockPostingUpdateOne.mockResolvedValue({})
-  mockAppUpdateOne.mockResolvedValue({})
+  mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mockAppUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockAppCreate.mockResolvedValue({})
+  mockAppDeleteOne.mockResolvedValue({ deletedCount: 1 })
+  mockSessionUpdateOne.mockResolvedValue({})
+  mockUserExists.mockResolvedValue({ _id: 'u1' })
+  mockInngestSend.mockResolvedValue(undefined)
+  mockProductEventCreate.mockResolvedValue(undefined)
 }
 
 describe('recordApplyClick (machine fact — never conflated with the user claim)', () => {
@@ -62,14 +97,34 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     }
   })
 
-  it('unique-index race on create reports the surviving row instead of throwing', async () => {
+  it('unique-index race with a practice/save winner still preserves the Apply machine fact', async () => {
     reset()
     mockAppFindOne
       .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
-      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'saved' }) }) })
     mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
     const r = await recordApplyClick('u1', 'j1', {}, NOW)
-    expect(r).toEqual({ status: 'saved', created: false, transitioned: false })
+    expect(r).toEqual({ status: 'apply_clicked', created: false, transitioned: true })
+    expect(mockAppUpdateOne).toHaveBeenCalledWith(
+      { userId: 'u1', jobPostingId: 'j1', status: 'saved' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'apply_clicked' }),
+        $push: { statusHistory: expect.objectContaining({ status: 'apply_clicked', source: 'system' }) },
+      })
+    )
+  })
+
+  it('unique-index race never regresses a winner that already advanced beyond saved', async () => {
+    reset()
+    mockAppFindOne
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'applied' }) }) })
+    mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
+
+    expect(await recordApplyClick('u1', 'j1', {}, NOW)).toEqual({
+      status: 'applied', created: false, transitioned: false,
+    })
   })
 
   it('missing posting → null (route 404s); closed posting still records the click (link can outlive the row)', async () => {
@@ -160,50 +215,400 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
 })
 
 describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () => {
-  function sessionChain(doc: unknown) {
-    mockSessionFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(doc) }) })
+  const PRACTICE_JOB_ID = '507f1f77bcf86cd799439011'
+  const MISSING_JOB_ID = '507f1f77bcf86cd799439099'
+
+  function appQuery(doc: unknown) {
+    return { select: () => ({ lean: () => Promise.resolve(doc) }) }
   }
-  function appUpdateChain(doc: unknown) {
-    mockAppFindOneAndUpdate.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(doc) }) })
+  function scoredSession(doc: Record<string, unknown>) {
+    const session = {
+      jobDescription: PRACTICE_JD,
+      status: 'completed',
+      feedback: { overall_score: 78 },
+      config: { interviewType: 'behavioral' },
+      evaluations: [
+        { status: 'ok', answer: 'A scored answer' },
+        { status: 'ok', answer: 'A second scored answer' },
+        { status: 'ok', answer: 'A third scored answer' },
+      ],
+      ...doc,
+    }
+    if (session.attribution && typeof session.attribution === 'object') {
+      session.attribution = {
+        handoffVersion: 1,
+        jdHash: PRACTICE_JD_HASH,
+        ...(session.attribution as Record<string, unknown>),
+      }
+    }
+    return session
+  }
+  function sessionQuery(doc: unknown) {
+    return { select: () => ({ lean: () => Promise.resolve(doc) }) }
+  }
+  function sessionChain(doc: unknown) {
+    const persisted = doc && typeof doc === 'object'
+      ? scoredSession(doc as Record<string, unknown>)
+      : doc
+    mockSessionFindOne.mockReturnValue(sessionQuery(persisted))
   }
 
-  it('jobs-attributed session lands in practiceSessionIds via $addToSet (idempotent), count capped at 3', async () => {
+  it('uses the real type-aware completed-feedback gate', () => {
+    const standard = scoredSession({})
+    expect(hasCompletedScoredPractice(standard)).toBe(true)
+    expect(hasCompletedScoredPractice({ ...standard, status: 'in_progress' })).toBe(false)
+    expect(hasCompletedScoredPractice({ ...standard, evaluations: standard.evaluations.slice(0, 2) })).toBe(false)
+    expect(hasCompletedScoredPractice({ ...standard, feedback: undefined })).toBe(false)
+    expect(hasCompletedScoredPractice({
+      ...standard,
+      config: { interviewType: 'coding' },
+      evaluations: standard.evaluations.slice(0, 1),
+    })).toBe(true)
+    expect(hasCompletedScoredPractice({
+      ...standard,
+      config: { interviewType: 'system-design' },
+      evaluations: standard.evaluations.slice(0, 1),
+    })).toBe(true)
+  })
+
+  it('rejects completed rows that lack a server-verified Jobs handoff marker', async () => {
     reset()
-    mockSessionFindById.mockReset()
-    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: 'j1', applicationId: 'app1' } })
-    appUpdateChain({ practiceSessionIds: ['a', 'b', 'c', 'd'] })
+    mockSessionFindOne.mockReturnValue(sessionQuery({
+      ...scoredSession({ _id: 's1', userId: 'u1' }),
+      attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID },
+    }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockUserExists).not.toHaveBeenCalled()
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('existing canonical row gains evidence without mutating status/history; count is capped at 3', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID, applicationId: 'app1' } })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1, upsertedCount: 0 })
+    mockAppFindOne.mockReturnValue(appQuery({ _id: 'app1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: ['a', 'b', 'c', 'd'] }))
+
     const r = await recordPracticeEvidence('u1', 's1')
     expect(r).toEqual({ recorded: true, evidenceCount: 3 })
-    const [filter, update] = mockAppFindOneAndUpdate.mock.calls[0]
-    expect(filter).toEqual({ _id: 'app1', userId: 'u1' }) // userId guard
-    expect(update).toEqual({ $addToSet: { practiceSessionIds: 's1' } })
+    const [filter, update] = mockAppUpdateOne.mock.calls[0]
+    expect(filter).toEqual({
+      userId: 'u1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: { $ne: 's1' },
+    }) // canonical ownership + job binding; predicate proves insertion
+    expect(update.$addToSet).toEqual({ practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' })
+    expect(update.$setOnInsert).toBeUndefined() // destination validators never see create-only snapshot fields
+    expect(update.$set).toBeUndefined()
+    expect(update.$push).toBeUndefined()
+    expect(mockInngestSend).toHaveBeenCalledWith({
+      id: 'jobs-evidence-s1',
+      name: 'jobs/evidence.attribute',
+      data: { sessionId: 's1', applicationId: 'app1', jobPostingId: PRACTICE_JOB_ID },
+    })
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled() // already canonical
   })
 
-  it('no applicationId falls back to the jobPostingId row; non-jobs / foreign sessions record nothing', async () => {
+  it('no applicationId still resolves the canonical row and repairs persisted attribution', async () => {
     reset()
-    mockSessionFindById.mockReset()
-    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: 'j9' } })
-    appUpdateChain({ practiceSessionIds: ['s1'] })
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID } })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1, upsertedCount: 0 })
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app9',
+      jobPostingId: PRACTICE_JOB_ID,
+      practiceSessionIds: ['legacy-a', 'legacy-b', 's1'],
+      verifiedPracticeSessionIds: ['s1'],
+    }))
+
     const r = await recordPracticeEvidence('u1', 's1')
     expect(r).toEqual({ recorded: true, evidenceCount: 1 })
-    expect(mockAppFindOneAndUpdate.mock.calls[0][0]).toEqual({ userId: 'u1', jobPostingId: 'j9' })
-
-    // non-jobs session
-    mockAppFindOneAndUpdate.mockClear()
-    sessionChain({ _id: 's2', userId: 'u1', attribution: undefined })
-    expect(await recordPracticeEvidence('u1', 's2')).toEqual({ recorded: false })
-    // another user's session id must never attach
-    sessionChain({ _id: 's3', userId: 'someone-else', attribution: { source: 'jobs', jobId: 'j1' } })
-    expect(await recordPracticeEvidence('u1', 's3')).toEqual({ recorded: false })
-    expect(mockAppFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne.mock.calls[0][0]).toEqual({
+      userId: 'u1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: { $ne: 's1' },
+    })
+    expect(mockSessionUpdateOne).toHaveBeenCalledWith(
+      { _id: 's1', userId: 'u1', 'attribution.source': 'jobs', 'attribution.jobId': PRACTICE_JOB_ID },
+      { $set: { 'attribution.applicationId': 'app9' } }
+    )
   })
 
-  it('no application row to attach to → recorded:false (practiced without saving or clicking)', async () => {
+  it('non-jobs and non-owned sessions record nothing', async () => {
     reset()
-    mockSessionFindById.mockReset()
-    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: 'j1' } })
-    appUpdateChain(null)
+    sessionChain({ _id: 's2', userId: 'u1', attribution: undefined })
+    expect(await recordPracticeEvidence('u1', 's2')).toEqual({ recorded: false })
+    sessionChain(null) // owner-scoped query does not return another user's row
+    expect(await recordPracticeEvidence('u1', 's3')).toEqual({ recorded: false })
+    expect(mockSessionFindOne).toHaveBeenLastCalledWith({ _id: 's3', userId: 'u1' })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('practice-first atomically auto-saves the job and records evidence in one upsert', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID } })
+    mockAppUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 1 })
+    mockAppFindOne
+      .mockReturnValueOnce(appQuery(null))
+      .mockReturnValue(appQuery({ _id: 'app-new', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: ['s1'] }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+
+    const upsertCall = mockAppUpdateOne.mock.calls.find((call) => call[2]?.upsert)
+    expect(upsertCall).toBeDefined()
+    const [filter, update, options] = upsertCall!
+    expect(filter).toEqual({
+      userId: 'u1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: { $ne: 's1' },
+    })
+    expect(update.$addToSet).toEqual({ practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' })
+    expect(update.$setOnInsert).toMatchObject({
+      jobSnapshot: { title: 'SDE', company: 'PhonePe', location: 'Pune', source: 'jsearch' },
+      status: 'saved',
+      statusHistory: [{ status: 'saved', source: 'system' }],
+    })
+    expect(update.$setOnInsert.statusHistory[0].at).toBeInstanceOf(Date)
+    expect(options).toMatchObject({ upsert: true, setDefaultsOnInsert: true, runValidators: true })
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      { _id: PRACTICE_JOB_ID, jdCompressed: PRACTICE_JD_COMPRESSED },
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } }
+    )
+    expect(mockInngestSend).toHaveBeenCalledWith({
+      id: 'jobs-evidence-s1',
+      name: 'jobs/evidence.attribute',
+      data: { sessionId: 's1', applicationId: 'app-new', jobPostingId: PRACTICE_JOB_ID },
+    })
+  })
+
+  it('a stale applicationId cannot misattribute evidence; it falls back to the canonical user+job row', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID, applicationId: 'stale-app' } })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1, upsertedCount: 0 })
+    mockAppFindOne.mockReturnValue(appQuery({ _id: 'canonical-app', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: ['s1'] }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+    expect(mockAppUpdateOne.mock.calls[0][0]).toEqual({
+      userId: 'u1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: { $ne: 's1' },
+    })
+    expect(mockInngestSend.mock.calls[0][0].data.applicationId).toBe('canonical-app')
+    expect(mockSessionUpdateOne.mock.calls[0][1]).toEqual({ $set: { 'attribution.applicationId': 'canonical-app' } })
+  })
+
+  it('an idempotent retry returns the durable count without emitting or charging again', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID, applicationId: 'app1' } })
+    // Even if timestamp middleware reports modifiedCount:1, the conditional
+    // predicate matched no row, so this caller is not the insertion winner.
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 1, upsertedCount: 0 })
+    mockAppFindOne.mockReturnValue(appQuery({ _id: 'app1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: ['s1'] }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('keeps the insertion predicate under real Mongoose timestamp middleware', async () => {
+    type CollectionUpdateOne = typeof RealJobApplication.collection.updateOne
+    const original = RealJobApplication.collection.updateOne
+    let observedFilter: Record<string, unknown> | undefined
+    let observedUpdate: Record<string, unknown> | undefined
+    RealJobApplication.collection.updateOne = (async (filter, update) => {
+      observedFilter = filter as unknown as Record<string, unknown>
+      observedUpdate = update as unknown as Record<string, unknown>
+      return { acknowledged: true, matchedCount: 0, modifiedCount: 0 }
+    }) as CollectionUpdateOne
+
+    try {
+      await RealJobApplication.updateOne(
+        {
+          userId: '507f1f77bcf86cd799439010',
+          jobPostingId: PRACTICE_JOB_ID,
+          verifiedPracticeSessionIds: { $ne: '507f1f77bcf86cd799439012' },
+        },
+        {
+          $addToSet: {
+            practiceSessionIds: '507f1f77bcf86cd799439012',
+            verifiedPracticeSessionIds: '507f1f77bcf86cd799439012',
+          },
+        }
+      )
+    } finally {
+      RealJobApplication.collection.updateOne = original
+    }
+
+    expect(String((observedFilter?.verifiedPracticeSessionIds as { $ne: unknown }).$ne)).toBe('507f1f77bcf86cd799439012')
+    expect(observedUpdate?.$set).toMatchObject({ updatedAt: expect.any(Date) })
+    expect(String((observedUpdate?.$addToSet as { verifiedPracticeSessionIds: unknown }).verifiedPracticeSessionIds)).toBe(
+      '507f1f77bcf86cd799439012'
+    )
+  })
+
+  it('a duplicate-key upsert race retries the idempotent evidence attach on the winning row', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID } })
+    mockAppUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 0 })
+      .mockRejectedValueOnce(Object.assign(new Error('duplicate'), { code: 11000 }))
+      .mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1, upsertedCount: 0 })
+    mockAppFindOne
+      .mockReturnValueOnce(appQuery(null))
+      .mockReturnValue(appQuery({ _id: 'winner', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: ['s1'] }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+    expect(mockAppUpdateOne).toHaveBeenCalledTimes(3)
+    expect(mockAppUpdateOne.mock.calls[2][0]).toEqual({
+      userId: 'u1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: { $ne: 's1' },
+    })
+    expect(mockAppUpdateOne.mock.calls[2][1]).toEqual({
+      $addToSet: { practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' },
+    })
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('missing posting cannot fabricate a tracker snapshot', async () => {
+    reset(null)
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: MISSING_JOB_ID } })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 0 })
+    mockAppFindOne.mockReturnValue(appQuery(null))
+
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('missing posting fails closed even when a browser id names an existing application', async () => {
+    reset(null)
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: MISSING_JOB_ID } })
+    mockAppFindOne.mockReturnValue(appQuery({ _id: 'existing-app', jobPostingId: MISSING_JOB_ID, verifiedPracticeSessionIds: ['s1'] }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('malformed job attribution is rejected before any database write or event', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: 'not-an-object-id' } })
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('failed/truncated-only evaluations cannot materialize a tracker row', async () => {
+    reset()
+    sessionChain({
+      _id: 's1',
+      userId: 'u1',
+      attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID },
+      evaluations: [
+        { status: 'failed', answer: 'not scored' },
+        { status: 'truncated', answer: 'not scored either' },
+      ],
+    })
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockUserExists).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('server-side JD binding rejects a valid but cross-job browser jobId before mutation', async () => {
+    reset()
+    sessionChain({
+      _id: 's1',
+      userId: 'u1',
+      jobDescription: 'A completely different role and description',
+      attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID },
+    })
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('normalizes unbounded posting fields to the application snapshot schema limits', async () => {
+    reset({
+      title: 'SDE',
+      company: 'PhonePe',
+      locations: ['L'.repeat(250)],
+      provenance: [{ sourceId: 'S'.repeat(150) }],
+      status: 'open',
+      jdCompressed: PRACTICE_JD_COMPRESSED,
+    })
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID } })
+    mockAppUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 1 })
+    mockAppFindOne
+      .mockReturnValueOnce(appQuery(null))
+      .mockReturnValue(appQuery({ _id: 'app-new', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: ['s1'] }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+    const upsert = mockAppUpdateOne.mock.calls.find((call) => call[2]?.upsert)
+    const setOnInsert = upsert?.[1].$setOnInsert
+    expect(setOnInsert.jobSnapshot.location).toHaveLength(200)
+    expect(setOnInsert.jobSnapshot.source).toHaveLength(100)
+    const validationError = new RealJobApplication({
+      userId: '507f1f77bcf86cd799439010',
+      jobPostingId: PRACTICE_JOB_ID,
+      ...setOnInsert,
+      practiceSessionIds: ['507f1f77bcf86cd799439012'],
+      verifiedPracticeSessionIds: ['507f1f77bcf86cd799439012'],
+    }).validateSync()
+    expect(validationError).toBeUndefined()
+  })
+
+  it('removes a late application write when full-account deletion removes the user', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID } })
+    mockUserExists
+      .mockResolvedValueOnce({ _id: 'u1' })
+      .mockResolvedValueOnce(null)
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockAppDeleteOne).toHaveBeenCalledWith({ userId: 'u1', jobPostingId: PRACTICE_JOB_ID })
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('pulls the evidence reference when the session is deleted during materialization', async () => {
+    reset()
+    const firstRead = scoredSession({
+      _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID },
+    })
+    mockSessionFindOne
+      .mockReturnValueOnce(sessionQuery(firstRead))
+      .mockReturnValueOnce(sessionQuery(null))
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
+      { userId: 'u1', jobPostingId: PRACTICE_JOB_ID },
+      { $pull: { practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' } }
+    )
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('a vanished application after the write returns false and emits nothing', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID } })
+    mockAppUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 1 })
+    mockAppFindOne.mockReturnValue(appQuery(null))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('an event-send failure does not roll back durable evidence', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID, applicationId: 'app1' } })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1, upsertedCount: 0 })
+    mockAppFindOne.mockReturnValue(appQuery({ _id: 'app1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: ['s1'] }))
+    mockInngestSend.mockRejectedValueOnce(new Error('temporary outage'))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
   })
 })
 

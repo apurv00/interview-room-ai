@@ -18,10 +18,13 @@ vi.mock('@shared/storage/r2', () => ({
 const mockSessionFindById = vi.fn()
 const mockSessionDeleteOne = vi.fn()
 const mockSessionFind = vi.fn()
+const mockSessionDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockUserDeleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 })
 const mockServedProblemUpdateOne = vi.fn().mockResolvedValue({ acknowledged: true })
 const mockEvidenceDistinct = vi.fn()
+const mockEvidenceDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockJobAppUpdateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 })
+const mockJobAppDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 vi.mock('@shared/db/models/InterviewSession', () => ({
   InterviewSession: {
     findById: (...args: unknown[]) => mockSessionFindById(...args),
@@ -46,7 +49,7 @@ vi.mock('@shared/db/models', () => {
     InterviewSession: {
       findById: (...args: unknown[]) => mockSessionFindById(...args),
       find: (...args: unknown[]) => mockSessionFind(...args),
-      deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+      deleteMany: (...args: unknown[]) => mockSessionDeleteMany(...args),
       deleteOne: (...args: unknown[]) => mockSessionDeleteOne(...args),
     },
     MultimodalAnalysis: {
@@ -61,13 +64,13 @@ vi.mock('@shared/db/models', () => {
     WizardSession: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     StreakDay: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     JobApplication: {
-      deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+      deleteMany: (...args: unknown[]) => mockJobAppDeleteMany(...args),
       updateMany: (...args: unknown[]) => mockJobAppUpdateMany(...args),
     },
     ProductEvent: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     JobsEmailSend: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     JobPracticeEvidence: {
-      deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
+      deleteMany: (...args: unknown[]) => mockEvidenceDeleteMany(...args),
       distinct: (...args: unknown[]) => mockEvidenceDistinct(...args),
     },
     LessonEngagement: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
@@ -107,6 +110,7 @@ describe('accountDeletion – R2 key coverage', () => {
     mockDeleteFromR2.mockResolvedValue(undefined)
     mockSessionDeleteOne.mockResolvedValue({ deletedCount: 1 })
     mockEvidenceDistinct.mockResolvedValue([])
+    mockEvidenceDeleteMany.mockResolvedValue({ deletedCount: 0 })
   })
 
   it('deletes audioRecordingR2Key and screenRecordingR2Key when present', async () => {
@@ -185,30 +189,110 @@ describe('accountDeletion – R2 key coverage', () => {
     })
     // A band derived from deleted answers must not survive the delete —
     // absent snapshot = "no claims"; next attribution write rebuilds it.
-    mockEvidenceDistinct.mockResolvedValue(['app-1', 'app-2'])
+    mockEvidenceDistinct.mockResolvedValue([
+      '507f1f77bcf86cd799439021',
+      '507f1f77bcf86cd799439022',
+    ])
 
     await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
 
     expect(mockEvidenceDistinct).toHaveBeenCalledWith('applicationId', { sessionId: expect.anything() })
     expect(mockJobAppUpdateMany).toHaveBeenCalledWith(
-      { _id: { $in: ['app-1', 'app-2'] } },
-      { $unset: { readiness: 1 } }
+      {
+        _id: { $in: ['507f1f77bcf86cd799439021', '507f1f77bcf86cd799439022'] },
+        userId: expect.anything(),
+      },
+      { $unset: { readiness: 1 }, $inc: { readinessRevision: 1 } }
     )
   })
 
-  it('pulls the deleted session from the practiceSessionIds ticker — "n/3 sessions" sells evidence, not attendance', async () => {
+  it('clears readiness from a late-attached application in the final ticker mutation', async () => {
+    const userId = { toString: () => 'user-1' }
+    mockSessionFindById.mockResolvedValue({
+      _id: 'sess-readiness-race',
+      userId,
+    })
+    mockEvidenceDistinct.mockResolvedValue([])
+
+    await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+
+    expect(mockJobAppUpdateMany).toHaveBeenCalledWith(
+      {
+        userId,
+        $or: [
+          { practiceSessionIds: '507f1f77bcf86cd799439011' },
+          { verifiedPracticeSessionIds: '507f1f77bcf86cd799439011' },
+        ],
+      },
+      {
+        $unset: { readiness: 1 },
+        $inc: { readinessRevision: 1 },
+        $pull: {
+          practiceSessionIds: '507f1f77bcf86cd799439011',
+          verifiedPracticeSessionIds: '507f1f77bcf86cd799439011',
+        },
+      }
+    )
+  })
+
+  it('ignores a malformed legacy attribution applicationId and still completes the ticker fence', async () => {
+    const userId = { toString: () => 'user-1' }
+    mockSessionFindById.mockResolvedValue({
+      _id: 'sess-legacy-attribution',
+      userId,
+      attribution: { source: 'jobs', applicationId: 'browser-not-an-object-id' },
+    })
+    mockEvidenceDistinct.mockResolvedValue([])
+
+    await expect(
+      deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+    ).resolves.toMatchObject({ sessionId: '507f1f77bcf86cd799439011' })
+
+    expect(mockJobAppUpdateMany).toHaveBeenCalledWith(
+      {
+        userId,
+        $or: [
+          { practiceSessionIds: '507f1f77bcf86cd799439011' },
+          { verifiedPracticeSessionIds: '507f1f77bcf86cd799439011' },
+        ],
+      },
+      {
+        $unset: { readiness: 1 },
+        $inc: { readinessRevision: 1 },
+        $pull: {
+          practiceSessionIds: '507f1f77bcf86cd799439011',
+          verifiedPracticeSessionIds: '507f1f77bcf86cd799439011',
+        },
+      }
+    )
+  })
+
+  it('pulls the deleted session from both historical and verified practice arrays', async () => {
     const userId = { toString: () => 'user-1' }
     mockSessionFindById.mockResolvedValue({ _id: 'sess-7', userId })
 
     await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
 
     expect(mockJobAppUpdateMany).toHaveBeenCalledWith(
-      { userId, practiceSessionIds: '507f1f77bcf86cd799439011' },
-      { $pull: { practiceSessionIds: '507f1f77bcf86cd799439011' } }
+      {
+        userId,
+        $or: [
+          { practiceSessionIds: '507f1f77bcf86cd799439011' },
+          { verifiedPracticeSessionIds: '507f1f77bcf86cd799439011' },
+        ],
+      },
+      {
+        $unset: { readiness: 1 },
+        $inc: { readinessRevision: 1 },
+        $pull: {
+          practiceSessionIds: '507f1f77bcf86cd799439011',
+          verifiedPracticeSessionIds: '507f1f77bcf86cd799439011',
+        },
+      }
     )
   })
 
-  it('sessions with no evidence rows never clear snapshots (only the ticker pull runs)', async () => {
+  it('sessions with no initial evidence skip the stale-id update but retain the final ticker fence', async () => {
     mockSessionFindById.mockResolvedValue({
       _id: 'sess-6',
       userId: { toString: () => 'user-1' },
@@ -216,8 +300,64 @@ describe('accountDeletion – R2 key coverage', () => {
 
     await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
 
-    const unsetCalls = mockJobAppUpdateMany.mock.calls.filter((c) => c[1] && '$unset' in (c[1] as object))
-    expect(unsetCalls).toHaveLength(0)
+    expect(mockJobAppUpdateMany.mock.calls.some((c) => '_id' in (c[0] as object))).toBe(false)
+    expect(mockJobAppUpdateMany).toHaveBeenCalledWith(
+      {
+        userId: expect.anything(),
+        $or: [
+          { practiceSessionIds: '507f1f77bcf86cd799439011' },
+          { verifiedPracticeSessionIds: '507f1f77bcf86cd799439011' },
+        ],
+      },
+      expect.objectContaining({
+        $unset: { readiness: 1 },
+        $inc: { readinessRevision: 1 },
+      })
+    )
+  })
+
+  it('establishes the session-deletion fence before sweeping evidence', async () => {
+    const ownerId = { toString: () => 'user-1' }
+    mockSessionFindById.mockResolvedValue({
+      _id: 'sess-fence',
+      userId: ownerId,
+    })
+    let releaseSessionDelete!: (value: { deletedCount: number }) => void
+    mockSessionDeleteOne.mockReturnValueOnce(new Promise((resolve) => {
+      releaseSessionDelete = resolve
+    }))
+
+    const deletion = deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+    await vi.waitFor(() => expect(mockSessionDeleteOne).toHaveBeenCalledTimes(1))
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockJobAppUpdateMany).not.toHaveBeenCalled()
+
+    releaseSessionDelete({ deletedCount: 1 })
+    await deletion
+
+    expect(mockEvidenceDeleteMany).toHaveBeenCalledWith({
+      sessionId: '507f1f77bcf86cd799439011',
+    })
+    expect(mockJobAppUpdateMany).toHaveBeenCalledWith(
+      {
+        userId: ownerId,
+        $or: [
+          { practiceSessionIds: '507f1f77bcf86cd799439011' },
+          { verifiedPracticeSessionIds: '507f1f77bcf86cd799439011' },
+        ],
+      },
+      {
+        $unset: { readiness: 1 },
+        $inc: { readinessRevision: 1 },
+        $pull: {
+          practiceSessionIds: '507f1f77bcf86cd799439011',
+          verifiedPracticeSessionIds: '507f1f77bcf86cd799439011',
+        },
+      }
+    )
+    expect(mockSessionDeleteOne.mock.invocationCallOrder[0]).toBeLessThan(
+      mockEvidenceDeleteMany.mock.invocationCallOrder[0]
+    )
   })
 })
 
@@ -226,6 +366,9 @@ describe('deleteUserAccount – R2 key coverage', () => {
     vi.clearAllMocks()
     mockDeleteFromR2.mockResolvedValue(undefined)
     mockUserDeleteOne.mockResolvedValue({ deletedCount: 1 })
+    mockSessionDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockJobAppDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockEvidenceDeleteMany.mockResolvedValue({ deletedCount: 0 })
   })
 
   it('collects audioRecordingR2Key and screenRecordingR2Key from every session and deletes them', async () => {
@@ -307,5 +450,29 @@ describe('deleteUserAccount – R2 key coverage', () => {
       resumeR2Key: 1,
       jdR2Key: 1,
     })
+  })
+
+  it('completes session deletion and closes the user fence before the final application sweep', async () => {
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    let releaseSessionDelete!: (value: { deletedCount: number }) => void
+    mockSessionDeleteMany.mockReturnValueOnce(new Promise((resolve) => {
+      releaseSessionDelete = resolve
+    }))
+
+    const deletion = deleteUserAccount('507f1f77bcf86cd799439011', 'user@example.com')
+    await vi.waitFor(() => expect(mockSessionDeleteMany).toHaveBeenCalledTimes(1))
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockUserDeleteOne).not.toHaveBeenCalled()
+    expect(mockJobAppDeleteMany).not.toHaveBeenCalled()
+
+    releaseSessionDelete({ deletedCount: 1 })
+    await deletion
+
+    expect(mockEvidenceDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUserDeleteOne).toHaveBeenCalledTimes(1)
+    expect(mockJobAppDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUserDeleteOne.mock.invocationCallOrder[0]).toBeLessThan(
+      mockJobAppDeleteMany.mock.invocationCallOrder[0]
+    )
   })
 })

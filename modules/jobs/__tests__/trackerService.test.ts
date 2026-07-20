@@ -30,6 +30,7 @@ function app(over: Record<string, unknown> = {}) {
     status: 'applied',
     statusHistory: [{ status: 'applied', at: daysAgo(1), source: 'user' }],
     practiceSessionIds: [],
+    verifiedPracticeSessionIds: [],
     outcome: { askCount: 0 },
     updatedAt: daysAgo(1),
     ...over,
@@ -122,6 +123,25 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
     chain([app()])
     await getTracker('u1', NOW)
     expect(mockBulkWrite).not.toHaveBeenCalled()
+  })
+
+  it('counts only verified practice and quarantines legacy attendance', async () => {
+    reset()
+    const verified = app({
+      practiceSessionIds: ['legacy-a', 'verified-a', 'verified-b', 'verified-c', 'verified-d'],
+      verifiedPracticeSessionIds: ['verified-a', 'verified-b', 'verified-c', 'verified-d'],
+    })
+    const legacyOnly = app({
+      practiceSessionIds: ['legacy-a', 'legacy-b', 'legacy-c'],
+      verifiedPracticeSessionIds: [],
+    })
+    chain([verified, legacyOnly])
+
+    const view = await getTracker('u1', NOW)
+    const rows = view.groups.flatMap((group) => group.rows)
+
+    expect(rows.find((row) => row.jobPostingId === verified.jobPostingId)?.practiceCount).toBe(3)
+    expect(rows.find((row) => row.jobPostingId === legacyOnly.jobPostingId)?.practiceCount).toBe(0)
   })
 
   it('confirm card: freshest apply_clicked row inside 20h-7d, gated by the ask budget', async () => {

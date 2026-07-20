@@ -28,6 +28,15 @@ interface CreateSessionInput {
   resumeText?: string
   jdFileName?: string
   resumeFileName?: string
+  /** Server-verified Jobs intent. Browser config attribution is never persisted directly. */
+  verifiedJobsAttribution?: {
+    source: 'jobs'
+    jobId: string
+    applicationId?: string
+    handoffVersion: 1
+    jdHash: string
+    verifiedAt: Date
+  }
   /**
    * If set, the new session is a retake. The service resolves this id to
    * the root of the retake chain so every retake of the same original
@@ -35,6 +44,36 @@ interface CreateSessionInput {
    * derived from the current max within that chain + 1.
    */
   parentSessionId?: string
+}
+
+type RetakeAttribution = {
+  source?: string
+  jobId?: string
+  handoffVersion?: number
+  jdHash?: string
+}
+
+function verifiedJobsRetakeIdentity(attribution: RetakeAttribution | undefined) {
+  return attribution?.source === 'jobs' &&
+    attribution.handoffVersion === 1 &&
+    typeof attribution.jobId === 'string' &&
+    typeof attribution.jdHash === 'string' &&
+    attribution.jdHash.length === 64
+    ? { jobId: attribution.jobId, jdHash: attribution.jdHash }
+    : undefined
+}
+
+/** Keep retake comparisons inside one server-verified job + JD benchmark. */
+export function isRetakeContextCompatible(
+  current: CreateSessionInput['verifiedJobsAttribution'],
+  parent: RetakeAttribution | undefined,
+): boolean {
+  const currentIdentity = verifiedJobsRetakeIdentity(current)
+  const parentIdentity = verifiedJobsRetakeIdentity(parent)
+  if (!currentIdentity && !parentIdentity) return true
+  return !!currentIdentity && !!parentIdentity &&
+    currentIdentity.jobId === parentIdentity.jobId &&
+    currentIdentity.jdHash === parentIdentity.jdHash
 }
 
 interface UpdateSessionInput {
@@ -189,11 +228,34 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   if (input.parentSessionId) {
     try {
       const parent = await InterviewSession.findById(input.parentSessionId)
-        .select('_id parentSessionId userId')
+        .select('_id parentSessionId userId attribution')
         .lean()
-      if (parent && parent.userId.toString() === input.userId) {
-        rootParentId = (parent.parentSessionId as mongoose.Types.ObjectId | undefined) ||
+      if (
+        parent &&
+        parent.userId.toString() === input.userId &&
+        isRetakeContextCompatible(
+          input.verifiedJobsAttribution,
+          parent.attribution as RetakeAttribution | undefined,
+        )
+      ) {
+        const candidateRootId = (parent.parentSessionId as mongoose.Types.ObjectId | undefined) ||
           (parent._id as mongoose.Types.ObjectId)
+        const root = parent.parentSessionId
+          ? await InterviewSession.findById(candidateRootId)
+            .select('_id userId attribution')
+            .lean()
+          : parent
+        if (
+          !root ||
+          root.userId.toString() !== input.userId ||
+          !isRetakeContextCompatible(
+            input.verifiedJobsAttribution,
+            root.attribution as RetakeAttribution | undefined,
+          )
+        ) {
+          throw new Error('Retake root does not match the current interview context')
+        }
+        rootParentId = candidateRootId
         const maxInChain = await InterviewSession.findOne({
           userId: new mongoose.Types.ObjectId(input.userId),
           parentSessionId: rootParentId,
@@ -249,10 +311,9 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       // Privacy mode — promoted from config to a top-level field so it can
       // be queried/audited independently of the nested config blob.
       privacyMode: input.config.privacyMode === true ? true : undefined,
-      // Jobs attribution — promoted for the same reason (the config subdoc
-      // strips unknown keys). attributionRoundTrip.test.ts trips if this
-      // line is removed.
-      attribution: input.config.attribution,
+      // Jobs attribution is promoted only after POST /api/interviews has
+      // verified the signed, user-bound handoff. Client config is advisory.
+      attribution: input.verifiedJobsAttribution,
       parentSessionId: rootParentId,
       retakeNumber,
       plannedQuestionCount,

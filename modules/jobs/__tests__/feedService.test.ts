@@ -1,7 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
-const { mockFind, mockFindById, mockAppFindOne, mockGetBase, mockGetResume } = vi.hoisted(() => ({ mockFind: vi.fn(), mockFindById: vi.fn(), mockAppFindOne: vi.fn(), mockGetBase: vi.fn(), mockGetResume: vi.fn() }))
+const { mockFind, mockFindById, mockAppFindOne, mockGetBase, mockGetResume, mockGetActiveCatalog } = vi.hoisted(() => ({ mockFind: vi.fn(), mockFindById: vi.fn(), mockAppFindOne: vi.fn(), mockGetBase: vi.fn(), mockGetResume: vi.fn(), mockGetActiveCatalog: vi.fn() }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { find: mockFind, findById: mockFindById },
   JobApplication: { findOne: mockAppFindOne },
@@ -11,11 +11,24 @@ vi.mock('@resume', async (importOriginal) => {
   const real = await importOriginal<typeof import('@resume')>()
   return { ...real, getResume: mockGetResume }
 })
+vi.mock('@interview/services/persona/domainCatalogService', () => ({
+  getActiveInterviewDomainCatalog: mockGetActiveCatalog,
+}))
 
 import { tierAScore, tierBScore, matchedSkillsOf, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
+import { practiceHandoffHashOf } from '../services/practiceHandoff'
 import { xrayHashOf } from '../services/xrayService'
+import { INTERVIEW_JOB_DESCRIPTION_MAX_CHARS } from '@shared/interviewContract'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
+const ACTIVE_CATALOG = {
+  slugs: ['backend', 'frontend', 'general', 'mobile'],
+  slugSet: new Set(['backend', 'frontend', 'general', 'mobile']),
+  inferenceSlugSet: new Set(['backend', 'frontend', 'general', 'mobile']),
+  revision: 'jd-role-v2:test',
+  authoritative: true,
+  source: 'cms' as const,
+}
 
 function doc(over: Record<string, unknown> = {}) {
   return {
@@ -34,6 +47,12 @@ function doc(over: Record<string, unknown> = {}) {
     provenance: [{ sourceId: 'gh:phonepe', externalId: '1', sourceKey: 'gh:phonepe:1', applyUrl: 'https://boards.greenhouse.io/x/1', applyTier: 'direct-ats' }],
     ...over,
   }
+}
+
+function requireFullDetail(detail: Awaited<ReturnType<typeof getJobDetail>>) {
+  expect(detail).toMatchObject({ gated: false })
+  if (!detail || detail.gated) throw new Error('expected authenticated full detail')
+  return detail
 }
 
 describe('tierAScore (deterministic rank — rules only, §serving honesty)', () => {
@@ -200,7 +219,12 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
 })
 
 describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
-  mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
+  beforeEach(() => {
+    vi.stubEnv('NEXTAUTH_SECRET', 'test-secret-longer-than-sixteen-characters')
+    mockGetActiveCatalog.mockReset()
+    mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
+  })
 
   it('anon = gated shell — JD and apply URLs are ABSENT from the object, not just hidden', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ jdCompressed: gzipSync(Buffer.from('secret JD body')) })) })
@@ -227,6 +251,140 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     })) })
     const legacy = await getJobDetail('j1', 'u1')
     if (!legacy!.gated) expect(legacy!.jd).toBe('para one para two')
+  })
+
+  it('publishes role + canonical token together for a domain-less job with a current mapped parse', async () => {
+    const canonical = 'Build accessible React interfaces at production scale.'
+    const display = 'Build accessible React interfaces\n\nat production scale.'
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      domain: undefined,
+      jdCompressed: gzipSync(Buffer.from(canonical)),
+      jdDisplayCompressed: gzipSync(Buffer.from(display)),
+      parsedJD: { inferredDomain: 'frontend' },
+      parsedJDHash: xrayHashOf(canonical),
+      parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+    })) })
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail.jd).toBe(display)
+    expect(detail.practiceRole).toBe('frontend')
+    expect(detail.practiceHandoffToken).toEqual(expect.any(String))
+    const payload = JSON.parse(
+      Buffer.from(detail.practiceHandoffToken!.split('.')[0], 'base64url').toString('utf8')
+    ) as { jdh: string }
+    expect(payload.jdh).toBe(practiceHandoffHashOf(canonical))
+  })
+
+  it('falls back to canonical text and hashes canonical when the display twin is stale', async () => {
+    const canonical = 'Canonical backend role with Node.js and MongoDB.'
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from(canonical)),
+      jdDisplayCompressed: gzipSync(Buffer.from('A stale display from another posting.')),
+    })) })
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail.jd).toBe(canonical)
+    expect(detail.practiceRole).toBe('backend')
+    const payload = JSON.parse(
+      Buffer.from(detail.practiceHandoffToken!.split('.')[0], 'base64url').toString('utf8')
+    ) as { jdh: string }
+    expect(payload.jdh).toBe(practiceHandoffHashOf(canonical))
+  })
+
+  it('does not publish Practice readiness for an unknown or stale inferred role', async () => {
+    const canonical = 'A role whose source omitted the product domain.'
+    mockFindById
+      .mockReturnValueOnce({ lean: () => Promise.resolve(doc({
+        domain: undefined,
+        jdCompressed: gzipSync(Buffer.from(canonical)),
+        parsedJD: { inferredDomain: 'Product Manager' },
+        parsedJDHash: xrayHashOf(canonical),
+        parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+      })) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(doc({
+        domain: undefined,
+        jdCompressed: gzipSync(Buffer.from(canonical)),
+        parsedJD: { inferredDomain: 'frontend' },
+        parsedJDHash: 'stale-hash',
+        parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+      })) })
+
+    for (const result of [await getJobDetail('j1', 'u1'), await getJobDetail('j1', 'u1')]) {
+      const detail = requireFullDetail(result)
+      expect(detail.practiceRole).toBeUndefined()
+      expect(detail.practiceHandoffToken).toBeUndefined()
+    }
+  })
+
+  it('admits CMS-active custom roles and withholds CMS-inactive built-ins', async () => {
+    const canonical = 'A specialized role from the live interview catalog.'
+    const customCatalog = {
+      slugs: ['custom-quant-role', 'general'],
+      slugSet: new Set(['custom-quant-role', 'general']),
+      inferenceSlugSet: new Set(['custom-quant-role', 'general']),
+      revision: 'jd-role-v2:custom',
+      authoritative: true,
+      source: 'cms' as const,
+    }
+    const withoutBackend = {
+      slugs: ['general'],
+      slugSet: new Set(['general']),
+      inferenceSlugSet: new Set(['general']),
+      revision: 'jd-role-v2:no-backend',
+      authoritative: true,
+      source: 'cms' as const,
+    }
+    mockGetActiveCatalog
+      .mockResolvedValueOnce(customCatalog)
+      .mockResolvedValueOnce(withoutBackend)
+    mockFindById
+      .mockReturnValueOnce({ lean: () => Promise.resolve(doc({
+        domain: undefined,
+        jdCompressed: gzipSync(Buffer.from(canonical)),
+        parsedJD: { inferredDomain: 'custom-quant-role' },
+        parsedJDHash: xrayHashOf(canonical),
+        parsedJDRoleVersion: customCatalog.revision,
+      })) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(doc({
+        domain: 'backend',
+        jdCompressed: gzipSync(Buffer.from(canonical)),
+      })) })
+
+    const custom = requireFullDetail(await getJobDetail('j1', 'u1'))
+    const inactive = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(custom.practiceRole).toBe('custom-quant-role')
+    expect(custom.practiceHandoffToken).toEqual(expect.any(String))
+    expect(inactive.practiceRole).toBeUndefined()
+    expect(inactive.practiceHandoffToken).toBeUndefined()
+  })
+
+  it('can display a readable twin but refuses Practice when canonical gzip is corrupt', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: Buffer.from('not-gzip'),
+      jdDisplayCompressed: gzipSync(Buffer.from('Readable display-only job description.')),
+    })) })
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail.jd).toBe('Readable display-only job description.')
+    expect(detail.practiceRole).toBeUndefined()
+    expect(detail.practiceHandoffToken).toBeUndefined()
+  })
+
+  it('shows an oversized JD but does not advertise an API-invalid Practice flow', async () => {
+    const oversized = 'j'.repeat(INTERVIEW_JOB_DESCRIPTION_MAX_CHARS + 1)
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from(oversized)),
+    })) })
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail.jd).toBe(oversized)
+    expect(detail.practiceRole).toBeUndefined()
+    expect(detail.practiceHandoffToken).toBeUndefined()
   })
 
   it('authed = full body: gunzipped JD + tier-sorted apply ladder + demotion flags', async () => {
@@ -266,9 +424,26 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
 
   it('authed detail carries the caller\'s own application summary (chip + ticker inputs)', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
-    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'app-1', status: 'apply_clicked', practiceSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'app-1', status: 'apply_clicked', verifiedPracticeSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
     const d = await getJobDetail('j1', 'u1')
-    if (!d!.gated) expect(d!.application).toEqual({ applicationId: 'app-1', status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
+    if (!d!.gated) expect(d!.application).toMatchObject({ applicationId: 'app-1', status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
+  })
+
+  it('quarantines legacy attendance from the candidate-facing practice count', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({
+        lean: () => Promise.resolve({
+          _id: 'legacy-app',
+          status: 'saved',
+          practiceSessionIds: ['legacy-a', 'legacy-b', 'legacy-c'],
+        }),
+      }),
+    })
+
+    const detail = await getJobDetail('j1', 'u1')
+
+    if (!detail!.gated) expect(detail!.application?.practiceCount).toBe(0)
   })
 
   it('a stale-RESUME atsResult re-opens the check even when the JD matches (Codex #521 round-5)', async () => {

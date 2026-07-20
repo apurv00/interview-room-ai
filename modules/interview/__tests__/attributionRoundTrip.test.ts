@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { InterviewConfigSchema } from '../validators/interview'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
+import { isRetakeContextCompatible } from '../services/core/interviewService'
 
 /**
  * Attribution round-trip guard (jobs plan Wave 0.2 — the package-4 deliverable
@@ -18,6 +19,12 @@ import { InterviewSession } from '@shared/db/models/InterviewSession'
  */
 
 const ATTRIBUTION = { source: 'jobs' as const, jobId: 'job_abc123', applicationId: 'app_xyz789' }
+const VERIFIED_ATTRIBUTION = {
+  ...ATTRIBUTION,
+  handoffVersion: 1 as const,
+  jdHash: 'server-jd-hash',
+  verifiedAt: new Date('2026-07-20T10:00:00Z'),
+}
 
 const VALID_CONFIG = {
   role: 'Backend Engineer',
@@ -46,19 +53,22 @@ describe('attribution round-trip (Wave 0.2)', () => {
     ).toBe(false)
   })
 
-  it('layer 2 — Mongoose: the schema persists attribution (no strict-mode strip)', () => {
+  it('layer 2 — Mongoose: the schema persists verified attribution metadata (no strict-mode strip)', () => {
     // Offline doc construction — no DB needed; strict-mode stripping happens
     // right here at assignment. This is the exact layer that ate pathwayContext.
     const doc = new InterviewSession({
       userId: '64b7f1f77bcf86cd79943901',
       config: { role: 'Backend Engineer', experience: '0-2', duration: 15 },
-      attribution: ATTRIBUTION,
+      attribution: VERIFIED_ATTRIBUTION,
     })
-    const obj = doc.toObject() as { attribution?: typeof ATTRIBUTION }
+    const obj = doc.toObject() as { attribution?: typeof VERIFIED_ATTRIBUTION }
     expect(obj.attribution).toBeDefined()
     expect(obj.attribution?.source).toBe('jobs')
     expect(obj.attribution?.jobId).toBe('job_abc123')
     expect(obj.attribution?.applicationId).toBe('app_xyz789')
+    expect(obj.attribution?.handoffVersion).toBe(1)
+    expect(obj.attribution?.jdHash).toBe('server-jd-hash')
+    expect(obj.attribution?.verifiedAt).toEqual(new Date('2026-07-20T10:00:00Z'))
   })
 
   it('layer 2b — Mongoose: pathwayContext precedent still strips (documents WHY this test exists)', () => {
@@ -75,7 +85,7 @@ describe('attribution round-trip (Wave 0.2)', () => {
     expect(obj.config.pathwayContext).toBeUndefined()
   })
 
-  it('layer 3 — service promotion line exists in createSession (tripwire)', () => {
+  it('layer 3 — service promotes only server-verified attribution (tripwire)', () => {
     // The passthrough is plain JS that neither Zod nor Mongoose can guard;
     // a deleted line = attribution silently never persisted. Crude but
     // effective: the source must contain the promotion.
@@ -83,6 +93,29 @@ describe('attribution round-trip (Wave 0.2)', () => {
       path.join(__dirname, '../services/core/interviewService.ts'),
       'utf8'
     )
-    expect(src).toMatch(/attribution:\s*input\.config\.attribution/)
+    expect(src).toMatch(/attribution:\s*input\.verifiedJobsAttribution/)
+    expect(src).not.toMatch(/attribution:\s*input\.config\.attribution/)
+  })
+})
+
+describe('verified Jobs retake context', () => {
+  const current = {
+    source: 'jobs' as const,
+    jobId: '507f1f77bcf86cd799439011',
+    handoffVersion: 1 as const,
+    jdHash: 'a'.repeat(64),
+    verifiedAt: new Date(),
+  }
+
+  it('accepts only the same verified job and exact JD benchmark', () => {
+    expect(isRetakeContextCompatible(current, current)).toBe(true)
+    expect(isRetakeContextCompatible(current, { ...current, jobId: '507f1f77bcf86cd799439012' })).toBe(false)
+    expect(isRetakeContextCompatible(current, { ...current, jdHash: 'b'.repeat(64) })).toBe(false)
+    expect(isRetakeContextCompatible(current, { source: 'jobs', jobId: current.jobId })).toBe(false)
+  })
+
+  it('does not let a generic session attach to a verified Jobs chain', () => {
+    expect(isRetakeContextCompatible(undefined, current)).toBe(false)
+    expect(isRetakeContextCompatible(undefined, undefined)).toBe(true)
   })
 })

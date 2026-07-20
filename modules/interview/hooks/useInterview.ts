@@ -80,6 +80,8 @@ type InterviewLatencyTelemetry = {
 
 interface UseInterviewOptions {
   config: InterviewConfig | null
+  /** Signed Jobs intent, consumed only by POST /api/interviews. */
+  jobsHandoffToken?: string
   voicesReady: boolean
   startListening: (onComplete: (result: SpeechRecognitionResult) => void, options?: StartListeningOptions) => void
   /** Terminate the active listening session. `reason` identifies the
@@ -229,6 +231,7 @@ export interface UseInterviewReturn {
 
 export function useInterview({
   config,
+  jobsHandoffToken,
   voicesReady,
   startListening,
   stopListening,
@@ -582,13 +585,19 @@ export function useInterview({
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
       if (raw) pendingRetakeParent = raw
-      localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
     } catch { /* ignore */ }
 
-    const dbSessionPromise = createDbSession(config, pendingRetakeParent)
+    const clearPendingRetakeParent = () => {
+      try {
+        localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+      } catch { /* ignore */ }
+    }
+
+    const dbSessionPromise = createDbSession(config, pendingRetakeParent, jobsHandoffToken)
     sessionCreationPromiseRef.current = dbSessionPromise
     dbSessionPromise.then((result) => {
       if (result.limitReached) {
+        clearPendingRetakeParent()
         usageLimitReachedRef.current = true
         interviewAbortRef.current?.abort()
         coachingAbortRef.current?.abort()
@@ -604,7 +613,24 @@ export function useInterview({
         return
       }
 
+      if (result.handoffInvalid) {
+        clearPendingRetakeParent()
+        interviewAbortRef.current?.abort()
+        coachingAbortRef.current?.abort()
+        stopListening('usageLimit')
+        onRecordingStop?.()
+        setCurrentQuestion(result.error || 'This job practice link is no longer valid.')
+        setCoachingTip('Return to the job posting and start practice again.')
+        transitionTo('ENDED')
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+        localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+        const jobId = config.attribution?.jobId
+        setTimeout(() => router.push(jobId ? `/jobs/${jobId}` : '/jobs'), 4000)
+        return
+      }
+
       if (result.forbidden) {
+        clearPendingRetakeParent()
         // Server-side experience gate rejected this depth for the band (e.g. academics at
         // 3-6/7+). createDbSession returns no sessionId; without this branch the loop would
         // keep calling generate/evaluate with the rejected config. Abort and surface it.
@@ -612,7 +638,7 @@ export function useInterview({
         coachingAbortRef.current?.abort()
         stopListening('usageLimit')
         onRecordingStop?.()
-        setCurrentQuestion("This interview type isn't available for your experience level. Please choose a different interview type.")
+        setCurrentQuestion(result.error || "This interview type isn't available for your experience level. Please choose a different interview type.")
         setCoachingTip('The Academic / Subject Viva is only available for the 0-2 (fresher) experience level.')
         transitionTo('ENDED')
         localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
@@ -622,7 +648,21 @@ export function useInterview({
       }
 
       if (result.sessionId) {
+        clearPendingRetakeParent()
         sessionIdRef.current = result.sessionId
+        // The signed Jobs intent has been consumed. Remove it from durable
+        // browser storage without changing hook state (which would re-run the
+        // session-creation effect); runtime config never contained it.
+        try {
+          const stored = localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+          if (stored) {
+            const parsed = JSON.parse(stored) as Record<string, unknown>
+            if ('jobsHandoffToken' in parsed) {
+              delete parsed.jobsHandoffToken
+              localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(parsed))
+            }
+          }
+        } catch { /* storage unavailable — the short-lived token still expires */ }
         // Mark session as active to prevent duplicate creation on back navigation
         localStorage.setItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION, result.sessionId)
         persistSession(result.sessionId, {
@@ -634,7 +674,7 @@ export function useInterview({
         })
       }
     })
-  }, [config]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config, jobsHandoffToken]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Timer countdown with milestone nudges (TM6) ────────────────────────
 

@@ -52,6 +52,7 @@ import { useInterview } from '../hooks/useInterview'
 import type { InterviewConfig } from '@shared/types'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
 import { deriveCoachingTip } from '@interview/config/coachingTips'
+import { STORAGE_KEYS } from '@shared/storageKeys'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -171,7 +172,71 @@ describe('useInterview', () => {
     }))
   })
 
+  it('sends combined Jobs-retake intent only to session creation and clears both transports', async () => {
+    const jobsConfig: InterviewConfig = {
+      ...baseConfig,
+      jobDescription: 'A server-issued job description',
+      attribution: {
+        source: 'jobs',
+        jobId: '507f1f77bcf86cd799439011',
+      },
+    }
+    localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify({
+      ...jobsConfig,
+      jobsHandoffToken: 'signed-jobs-token',
+    }))
+    localStorage.setItem(
+      STORAGE_KEYS.PENDING_RETAKE_PARENT,
+      '507f1f77bcf86cd799439012'
+    )
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/jobs/')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ practiceHandoffToken: 'fresh-jobs-token' }),
+        }
+      }
+      return {
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'test-session-123',
+          question: 'Tell me about a challenge you faced.',
+        }),
+      }
+    })
+
+    renderHook(() => useInterview(makeOptions({
+      config: jobsConfig,
+      jobsHandoffToken: 'signed-jobs-token',
+    })))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    const createCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([url]) => url === '/api/interviews'
+    )
+    expect(createCall).toBeDefined()
+    const body = JSON.parse((createCall?.[1] as RequestInit).body as string)
+    expect(global.fetch).toHaveBeenCalledWith(
+      '/api/jobs/507f1f77bcf86cd799439011',
+      { cache: 'no-store' },
+    )
+    expect(body.jobsHandoffToken).toBe('fresh-jobs-token')
+    expect(body.parentSessionId).toBe('507f1f77bcf86cd799439012')
+    expect(body.config).not.toHaveProperty('jobsHandoffToken')
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG) || '{}')).not.toHaveProperty(
+      'jobsHandoffToken'
+    )
+    expect(localStorage.getItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)).toBeNull()
+  })
+
   it('handles DB session creation failure gracefully', async () => {
+    localStorage.setItem(
+      STORAGE_KEYS.PENDING_RETAKE_PARENT,
+      '507f1f77bcf86cd799439012'
+    )
     ;(global.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Network'))
 
     const { result } = renderHook(() => useInterview(makeOptions()))
@@ -182,6 +247,10 @@ describe('useInterview', () => {
 
     // Should not throw — sessionId stays null
     expect(result.current.sessionId).toBeNull()
+    // The next reload can retry the same lineage after a transient failure.
+    expect(localStorage.getItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)).toBe(
+      '507f1f77bcf86cd799439012'
+    )
   })
 
   it('ends interview immediately when monthly usage limit is reached', async () => {
@@ -200,6 +269,53 @@ describe('useInterview', () => {
     expect(result.current.phase).toBe('ENDED')
     expect(result.current.currentQuestion).toContain('Monthly interview limit reached')
     expect(result.current.coachingTip).toContain('monthly interview limit')
+  })
+
+  it('surfaces an invalid Jobs handoff distinctly and returns to that posting', async () => {
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/jobs/')) {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ practiceHandoffToken: 'refreshed-but-stale-token' }),
+        }
+      }
+      if (url === '/api/interviews') {
+        return {
+          ok: false,
+          status: 409,
+          json: () => Promise.resolve({
+            code: 'JOBS_HANDOFF_INVALID',
+            error: 'This job practice link expired or changed.',
+          }),
+        }
+      }
+      return {
+        ok: true,
+        json: () => Promise.resolve({ question: 'Tell me about a challenge you faced.' }),
+      }
+    })
+    const jobsConfig: InterviewConfig = {
+      ...baseConfig,
+      attribution: { source: 'jobs', jobId: '507f1f77bcf86cd799439011' },
+    }
+
+    const { result } = renderHook(() => useInterview(makeOptions({
+      config: jobsConfig,
+      jobsHandoffToken: 'expired-token',
+    })))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
+    })
+
+    expect(result.current.phase).toBe('ENDED')
+    expect(result.current.currentQuestion).toContain('expired or changed')
+    expect(result.current.coachingTip).toContain('job posting')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(mockPush).toHaveBeenCalledWith('/jobs/507f1f77bcf86cd799439011')
   })
 
   it('keeps STATUS notices visible even when live coaching is disabled (Codex P2)', async () => {

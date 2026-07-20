@@ -1,8 +1,13 @@
 import { gunzipSync } from 'zlib'
 import { createHash } from 'crypto'
-import { JobPosting } from '@shared/db/models'
+import type mongoose from 'mongoose'
+import { JobPosting, type IJobPosting } from '@shared/db/models'
 import { parseJobDescription } from '@interview'
 import type { IParsedJobDescription } from '@shared/types'
+import {
+  getActiveInterviewDomainCatalog,
+} from '@interview/services/persona/domainCatalogService'
+import { interviewSlugForDomain } from '../config/domains'
 
 /**
  * Interview X-ray (PRODUCT_FLOW §2 detail route, Wave 3.1b) — ONE persisted
@@ -15,9 +20,9 @@ import type { IParsedJobDescription } from '@shared/types'
  * Lazy + cached: the first authed detail view pays the parse; every later
  * view (and the Wave-4 practice hand-off) reads JobPosting.parsedJD. A
  * merge that replaces the JD changes the hash and the next view re-parses.
- * Two concurrent first-viewers may both parse (same content, same result,
- * last-write-wins) — the Redis NX lock stays in the deferred backlog with
- * the problem-generation one.
+ * Two concurrent first-viewers may both parse, but a JD-version-bound CAS
+ * preserves the first persisted result. The Redis NX lock stays in the
+ * deferred backlog with the problem-generation one.
  */
 
 /**
@@ -59,43 +64,217 @@ export type XrayParsed = Omit<IParsedJobDescription, 'rawText'>
 export interface XrayResult {
   parsed: XrayParsed
   cached: boolean
+  /** Practice role authority is temporarily unresolved; evidence may still be stable. */
+  retryable?: boolean
 }
 
 export async function getOrParseXray(jobPostingId: string): Promise<XrayResult | null> {
+  return getOrParseXrayVersion(jobPostingId, true)
+}
+
+function inflateCanonicalJd(value: unknown): string {
+  try {
+    const buf = value as Buffer | undefined
+    return buf?.length
+      ? gunzipSync(Buffer.isBuffer(buf)
+        ? buf
+        : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8')
+      : ''
+  } catch {
+    return ''
+  }
+}
+
+function hasDeclaredDomain(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== ''
+}
+
+function exactRoleVersionCondition(
+  value: unknown,
+): mongoose.QueryFilter<IJobPosting>['parsedJDRoleVersion'] {
+  if (value === undefined) return { $exists: false }
+  if (value === null) {
+    return { $eq: null, $exists: true } as mongoose.QueryFilter<IJobPosting>['parsedJDRoleVersion']
+  }
+  return String(value)
+}
+
+async function getOrParseXrayVersion(
+  jobPostingId: string,
+  allowVersionRetry: boolean,
+): Promise<XrayResult | null> {
   const doc = await JobPosting.findById(jobPostingId)
-    .select('jdCompressed parsedJD parsedJDHash status')
+    .select('domain jdCompressed parsedJD parsedJDHash parsedJDRoleVersion status')
     .lean()
   // Closed postings 404 on the detail body — the X-ray endpoint must not
   // out-serve it during the retention window (Codex on #518).
   if (!doc || doc.status !== 'open') return null
 
-  const buf = doc.jdCompressed as Buffer | undefined
-  let jd = ''
-  try {
-    jd = buf?.length ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8') : ''
-  } catch { /* corrupt gzip = no body; nothing to parse */ }
+  const jd = inflateCanonicalJd(doc.jdCompressed)
   if (!jd) return null
 
   const hash = xrayHashOf(jd)
-  if (doc.parsedJD && doc.parsedJDHash === hash) {
-    return { parsed: doc.parsedJD as XrayParsed, cached: true }
+  const activeCatalog = await getActiveInterviewDomainCatalog()
+  const hasCurrentBodyParse = !!doc.parsedJD && doc.parsedJDHash === hash
+  if (hasCurrentBodyParse) {
+    const stableParsed = doc.parsedJD as XrayParsed
+    if (!activeCatalog.authoritative) {
+      // Preserve useful evidence during a CMS outage, but never refresh or
+      // authorize a role from the seeded availability fallback.
+      return { parsed: stableParsed, cached: true, retryable: true }
+    }
+    // An explicit posting domain is the Practice classification authority.
+    // Whether active (ready) or inactive/malformed (unsupported), there is no
+    // reason to spend an LLM call refreshing a lower-precedence inferred role.
+    if (hasDeclaredDomain(doc.domain)) {
+      return { parsed: stableParsed, cached: true }
+    }
+    if (doc.parsedJDRoleVersion === activeCatalog.revision) {
+      return { parsed: stableParsed, cached: true }
+    }
   }
 
-  const { rawText: _omit, ...extracted } = await parseJobDescription(jd)
+  const { rawText: _omit, ...extracted } = await parseJobDescription(jd, activeCatalog)
+  const parserFallback = extracted.requirements.length === 0 && extracted.keyThemes.length === 0
+
+  if (hasCurrentBodyParse) {
+    // The JD requirements are already evidence-bound. A taxonomy/prompt/CMS
+    // revision refreshes ONLY the inferred role, never requirement IDs.
+    const stableParsed = doc.parsedJD as XrayParsed
+    const refreshed = { ...stableParsed, inferredDomain: extracted.inferredDomain }
+    if (!extracted.inferredDomain) {
+      return reconcileCurrentXray(
+        jobPostingId,
+        hash,
+        allowVersionRetry,
+        { parsed: stableParsed, cached: false, retryable: true },
+      )
+    }
+    const write = await JobPosting.updateOne(
+      {
+        _id: jobPostingId,
+        status: 'open',
+        jdCompressed: doc.jdCompressed,
+        parsedJDHash: hash,
+        // Bind the CAS to the exact catalog revision read. A slower request
+        // using catalog A must not overwrite a newer catalog-B winner.
+        parsedJDRoleVersion: exactRoleVersionCondition(doc.parsedJDRoleVersion),
+      },
+      {
+        $set: {
+          'parsedJD.inferredDomain': extracted.inferredDomain,
+          parsedJDRoleVersion: activeCatalog.revision,
+        },
+      },
+    )
+    if (write.modifiedCount > 0) return { parsed: refreshed, cached: false }
+    return reconcileCurrentXray(
+      jobPostingId,
+      hash,
+      allowVersionRetry,
+      { parsed: stableParsed, cached: false, retryable: true },
+    )
+  }
+
   // The parser NEVER throws — model/JSON failures return an all-empty
   // fallback (no requirements, no themes). Caching that would pin a blank
   // X-ray to this hash forever; serve it for THIS view but leave the row
   // unparsed so a later view retries (Codex on #518). A genuine parse of a
   // real JD always carries at least one requirement or theme.
-  const isFallback = extracted.requirements.length === 0 && extracted.keyThemes.length === 0
-  if (!isFallback) {
+  if (!parserFallback) {
+    const canPersistInferredRole = activeCatalog.authoritative && !!extracted.inferredDomain
+    const persistedParse = canPersistInferredRole
+      ? extracted
+      : { ...extracted, inferredDomain: '' }
     // FIRST-WRITE-WINS per hash (READINESS.md §1, panel R11): evidence
     // rows bind to this parse's requirement ids — a same-hash re-parse
     // (cache-miss race) must never replace the ids they point at.
-    await JobPosting.updateOne(
-      { _id: jobPostingId, parsedJDHash: { $ne: hash } },
-      { $set: { parsedJD: extracted, parsedJDHash: hash } }
+    const $set: Record<string, unknown> = {
+      parsedJD: persistedParse,
+      parsedJDHash: hash,
+      ...(canPersistInferredRole
+        ? { parsedJDRoleVersion: activeCatalog.revision }
+        : {}),
+    }
+    const write = await JobPosting.updateOne(
+      {
+        _id: jobPostingId,
+        status: 'open',
+        jdCompressed: doc.jdCompressed,
+        $or: [
+          { parsedJDHash: { $ne: hash } },
+          { parsedJD: { $exists: false } },
+          { parsedJD: null },
+        ],
+      },
+      {
+        $set,
+        ...(!canPersistInferredRole ? { $unset: { parsedJDRoleVersion: 1 } } : {}),
+      }
     )
+    if (write.modifiedCount > 0) {
+      const roleRetryable = !activeCatalog.authoritative ||
+        (!hasDeclaredDomain(doc.domain) && !extracted.inferredDomain)
+      return {
+        parsed: persistedParse,
+        cached: false,
+        ...(roleRetryable ? { retryable: true } : {}),
+      }
+    }
   }
-  return { parsed: extracted, cached: false }
+  return reconcileCurrentXray(
+    jobPostingId,
+    hash,
+    allowVersionRetry,
+    {
+      parsed: activeCatalog.authoritative ? extracted : { ...extracted, inferredDomain: '' },
+      cached: false,
+      retryable: true,
+    },
+  )
+}
+
+async function reconcileCurrentXray(
+  jobPostingId: string,
+  expectedHash: string,
+  allowVersionRetry: boolean,
+  sameVersionFallback: XrayResult,
+): Promise<XrayResult | null> {
+  // A concurrent parser, close, or JD replacement may win while the model is
+  // running. Prefer the persisted winner, including over an empty fallback.
+  const current = await JobPosting.findById(jobPostingId)
+    .select('domain jdCompressed parsedJD parsedJDHash parsedJDRoleVersion status')
+    .lean()
+  if (!current || current.status !== 'open') return null
+  const currentJd = inflateCanonicalJd(current.jdCompressed)
+  if (!currentJd) return null
+  const currentHash = xrayHashOf(currentJd)
+  if (currentHash !== expectedHash) {
+    return allowVersionRetry
+      ? getOrParseXrayVersion(jobPostingId, false)
+      : null
+  }
+  if (current.parsedJD && current.parsedJDHash === currentHash) {
+    // Re-read the live catalog after a lost CAS. This both recognizes a newer
+    // taxonomy winner and prevents the losing request's snapshot from being
+    // treated as current. Evidence is independently useful and always wins
+    // over an empty same-hash fallback.
+    const latestCatalog = await getActiveInterviewDomainCatalog()
+    const parsed = current.parsedJD as XrayParsed
+    const inferredRole = interviewSlugForDomain(
+      parsed.inferredDomain,
+      latestCatalog.slugSet,
+    )
+    const roleRetryable = !latestCatalog.authoritative || (
+      !hasDeclaredDomain(current.domain) && (
+        current.parsedJDRoleVersion !== latestCatalog.revision || !inferredRole
+      )
+    )
+    return {
+      parsed,
+      cached: true,
+      ...(roleRetryable ? { retryable: true } : {}),
+    }
+  }
+  return sameVersionFallback
 }

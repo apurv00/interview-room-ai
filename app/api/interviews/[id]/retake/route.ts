@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import mongoose from 'mongoose'
 import { authOptions } from '@shared/auth/authOptions'
 import { getSession } from '@interview/services/core/interviewService'
+import { JobPosting } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 
@@ -22,6 +23,8 @@ export const dynamic = 'force-dynamic'
  *   - `config`         — role / interviewType / experience / duration
  *   - `parentSessionId`— the ROOT of the retake chain (so every retake of
  *                        the same original shares the same parent id)
+ *   - `jobsPractice`   — verified Jobs source only; sends the client back
+ *                        through the job page for a fresh signed handoff
  *   - `hasJobDescription`, `hasResumeText` — booleans so the client can show
  *     a "JD/resume will be preserved" hint; actual text stays server-side to
  *     avoid leaking PII through localStorage. The setup form's existing
@@ -50,10 +53,40 @@ export async function POST(
       authSession.user.organizationId,
       { excludeTranscript: true }
     )
+    // getSession intentionally permits organization-scoped viewers. Retaking
+    // is a candidate mutation, so this endpoint is strictly owner-only.
+    if (String(parent.userId) !== authSession.user.id) {
+      return NextResponse.json({ error: 'Forbidden', code: 'FORBIDDEN' }, { status: 403 })
+    }
 
     // Resolve root parent so chained retakes always link to the original,
     // keeping the comparison query trivial.
     const rootParentId = (parent.parentSessionId?.toString()) || params.id
+    const attribution = parent.attribution as {
+      source?: string
+      jobId?: string
+      handoffVersion?: number
+      jdHash?: string
+    } | undefined
+    const claimedJobId = attribution?.jobId
+    const attributedJobId =
+      attribution?.source === 'jobs' &&
+      attribution.handoffVersion === 1 &&
+      typeof attribution.jdHash === 'string' &&
+      attribution.jdHash.length === 64 &&
+      typeof claimedJobId === 'string' &&
+      mongoose.Types.ObjectId.isValid(claimedJobId)
+        ? claimedJobId
+        : undefined
+    // A closed or deleted posting cannot issue a fresh signed handoff. Omit
+    // jobsPractice so the caller falls back to the ordinary retake setup
+    // instead of sending the candidate to a dead Jobs detail route.
+    const verifiedJobId = attributedJobId && await JobPosting.exists({
+      _id: attributedJobId,
+      status: 'open',
+    })
+      ? attributedJobId
+      : undefined
 
     logger.info(
       { parentSessionId: params.id, rootParentId, userId: authSession.user.id },
@@ -70,6 +103,7 @@ export async function POST(
       },
       hasJobDescription: !!parent.jobDescription,
       hasResumeText: !!parent.resumeText,
+      ...(verifiedJobId ? { jobsPractice: { jobId: verifiedJobId } } : {}),
     })
   } catch (err) {
     if (err instanceof AppError) {

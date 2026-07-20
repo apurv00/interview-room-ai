@@ -53,6 +53,7 @@ import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner
 import { usePathwayGenerationPoll } from '@learn/hooks/usePathwayGenerationPoll'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import JobsCountLink from '@jobs/components/JobsCountLink'
+import { planRetakeNavigation } from '@interview/utils/retakeNavigation'
 
 // ─── Error Boundary ──────────────────────────────────────────────────────────
 
@@ -1998,7 +1999,19 @@ function FeedbackPageInner() {
                     setRetakeLoading(false)
                     return
                   }
-                  const { parentSessionId } = await res.json()
+                  const plan = planRetakeNavigation(await res.json(), sessionId)
+                  if (plan.jobId) {
+                    // The original signed token was consumed. Return through
+                    // the job page so a fresh canonical handoff is minted;
+                    // never copy the parent session's stale Jobs config.
+                    try {
+                      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
+                      localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
+                      localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+                    } catch { /* storage unavailable — URL intent still works */ }
+                    router.push(plan.href)
+                    return
+                  }
                   // Merge the parent's config into the setup form via
                   // localStorage so hydration picks it up seamlessly. We
                   // use the feedback page's own `data.config` (already
@@ -2009,10 +2022,10 @@ function FeedbackPageInner() {
                     if (fullConfig) {
                       localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(fullConfig))
                     }
-                    localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, parentSessionId || sessionId)
+                    localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, plan.parentSessionId)
                     localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
                   } catch { /* ignore */ }
-                  router.push(`/interview/setup?retake=${parentSessionId || sessionId}`)
+                  router.push(plan.href)
                 } catch {
                   setRetakeLoading(false)
                 }

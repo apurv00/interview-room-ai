@@ -4,11 +4,10 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { STORAGE_KEYS } from '@shared/storageKeys'
-// Deep import (app/** is barrel-exempt): domains.ts is pure constants —
-// the @jobs barrel would drag mongoose into this client chunk.
-import { interviewSlugForDomain } from '@jobs/config/domains'
+import { INTERVIEW_TARGET_COMPANY_MAX_CHARS } from '@shared/interviewContract'
 import { buildPrepPlan } from '@jobs/config/prepPlan'
 import AuthGateModal from '@shared/ui/AuthGateModal'
+import { retakeParentFromSearch } from '@interview/utils/retakeNavigation'
 
 /**
  * /jobs/[id] — public SHELL, authed BODY (founder ruling P-2, 2026-07-14).
@@ -21,7 +20,7 @@ import AuthGateModal from '@shared/ui/AuthGateModal'
 
 interface ApplyOption { url: string; tier: string; viaSite?: string }
 interface XrayReq { id: string; category: string; requirement: string; importance: 'must-have' | 'nice-to-have' }
-interface Xray { role: string; inferredDomain?: string; keyThemes: string[]; requirements: XrayReq[] }
+interface Xray { role: string; inferredDomain?: string; keyThemes: string[]; requirements: XrayReq[]; retryable?: boolean }
 interface Detail {
   id: string
   title: string
@@ -33,6 +32,8 @@ interface Detail {
   salaryText?: string
   applyTier?: string
   gated: boolean
+  practiceRole?: string
+  practiceHandoffToken?: string
   jd?: string
   applyOptions?: ApplyOption[]
   flags?: { staffing: boolean; shortJd: boolean; repost: boolean }
@@ -54,6 +55,12 @@ const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
   'aggregator-redirect': (_co, via) => `Via ${via ?? 'the source'} — this link redirects`,
 }
 
+// A lost X-ray response can precede the server's eventual parse/CAS. Poll
+// across ~31 seconds of scheduled backoff so that result can still unlock
+// Practice; successful X-ray responses keep the normal bounded read retries.
+const LOST_XRAY_READINESS_DELAYS_MS = [0, 250, 750, 2_000, 4_000, 8_000, 8_000, 8_000] as const
+const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
+
 export default function JobDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [detail, setDetail] = useState<Detail | null>(null)
@@ -62,11 +69,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [saved, setSaved] = useState(false)
   const [xray, setXray] = useState<Xray | null>(null)
   const [xrayState, setXrayState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
+  const [xrayAttempt, setXrayAttempt] = useState(0)
   const [atsBusy, setAtsBusy] = useState(false)
   const [atsHint, setAtsHint] = useState<string | null>(null)
   const [sheet, setSheet] = useState<null | { kind: 'normal' | 'quick'; clicked: { url: string; tier: string }; elapsedMs: number }>(null)
   const [inference, setInference] = useState<'idle' | 'asking'>('idle')
   const [practiceEmail, setPracticeEmail] = useState<'idle' | 'sent' | 'email-off' | 'unavailable'>('idle')
+  const [practiceStart, setPracticeStart] = useState<'idle' | 'loading' | 'error'>('idle')
   const [sheetDone, setSheetDone] = useState<string | null>(null)
 
   useEffect(() => {
@@ -89,6 +98,11 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   // was still uncached — concurrent LLM calls for one JD (Codex on #521).
   const xrayFetchedFor = useRef<string | null>(null)
   const pendingPollFor = useRef<string | null>(null)
+  const practiceStartInFlight = useRef(false)
+  const practiceReadyRef = useRef(false)
+  practiceReadyRef.current = !!(
+    detail && !detail.gated && detail.practiceRole && detail.practiceHandoffToken
+  )
 
   // A check queued in another tab / before a refresh arrives as state
   // 'pending' with no local poll loop — poll until it settles or times out
@@ -108,22 +122,95 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail, params.id])
+  const loadedDetailId = detail?.id
+  const detailIsGated = detail?.gated
   useEffect(() => {
-    if (!detail || detail.gated) return
+    if (loadedDetailId !== params.id || detailIsGated !== false) return
     if (xrayFetchedFor.current === params.id) return
     xrayFetchedFor.current = params.id
     setXrayState('loading')
-    fetch(`/api/jobs/${params.id}/xray`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((x) => { setXray(x); setXrayState('ready') })
-      .catch(() => setXrayState('failed'))
-  }, [detail, params.id])
+    let cancelled = false
+    const needsPracticeReconciliation = !practiceReadyRef.current
+
+    async function reconcilePracticeReadiness(pollUntilReady: boolean) {
+      // The X-ray request can finish server-side even when its response is
+      // lost before its parse/CAS settles. Only that uncertain transport path
+      // polls successful-but-not-ready projections; an ordinary successful
+      // X-ray gets one authoritative read so unsupported roles do not churn.
+      const delays = pollUntilReady
+        ? LOST_XRAY_READINESS_DELAYS_MS
+        : NORMAL_READINESS_DELAYS_MS
+      for (const delay of delays) {
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+        if (cancelled) return
+        try {
+          const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+          if (!response.ok) continue
+          const reconciled = await response.json() as Detail
+          if (!cancelled) setDetail(reconciled)
+          const isReady = !!(reconciled.practiceRole && reconciled.practiceHandoffToken)
+          if (!pollUntilReady || isReady) return
+        } catch { /* bounded retry */ }
+      }
+    }
+
+    ;(async () => {
+      let xrayCompletionUncertain = false
+      try {
+        let response: Response
+        try {
+          response = await fetch(`/api/jobs/${params.id}/xray`)
+        } catch (error) {
+          xrayCompletionUncertain = true
+          throw error
+        }
+        if (!response.ok) {
+          // Gateways and server timeouts can answer before (or after) the
+          // origin finishes its parse/CAS. Auth/not-found responses are
+          // definitive and must not create background polling traffic.
+          if (response.status === 408 || response.status >= 500) {
+            xrayCompletionUncertain = true
+          }
+          throw new Error(String(response.status))
+        }
+        let nextXray: Xray
+        try {
+          nextXray = await response.json() as Xray
+        } catch (error) {
+          xrayCompletionUncertain = true
+          throw error
+        }
+        if (cancelled) return
+        setXray(nextXray)
+        const hasEvidence = nextXray.keyThemes.length > 0 || nextXray.requirements.length > 0
+        // Role refresh can be retryable independently of the evidence body.
+        // Never hide stable requirements/themes because CMS role authority is
+        // temporarily unavailable.
+        setXrayState(nextXray.retryable && !hasEvidence ? 'failed' : 'ready')
+      } catch {
+        if (!cancelled) setXrayState('failed')
+      } finally {
+        // A domain-less posting may become Practice-ready only after the
+        // parse is persisted. Never trust the browser-visible parse as the
+        // eligibility source, including when its response was lost.
+        if (needsPracticeReconciliation && !cancelled) {
+          await reconcilePracticeReadiness(xrayCompletionUncertain)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [detailIsGated, loadedDetailId, params.id, xrayAttempt])
 
   async function refetchDetail() {
     try {
       const r = await fetch(`/api/jobs/${params.id}`)
       if (r.ok) setDetail(await r.json())
     } catch { /* keep the current view */ }
+  }
+
+  function retryXray() {
+    xrayFetchedFor.current = null
+    setXrayAttempt((attempt) => attempt + 1)
   }
 
   async function onAtsCheck() {
@@ -198,57 +285,76 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
   // ?practice=1 (Codex #532): the E0/E2 emails' CTAs promise "tap → the
   // session starts". Auto-start ONCE when the detail is loaded, authed,
-  // and the role is resolvable — otherwise the page still shows Start
-  // front and center; the link degrades to the detail page, never breaks.
-  const autoPracticeFired = useRef(false)
+  // and the server has published a role + signed canonical snapshot.
+  // Otherwise the link degrades to the detail page, never a broken lobby.
+  const autoPracticeAttemptedFor = useRef<string | null>(null)
   useEffect(() => {
-    if (autoPracticeFired.current || !detail || detail.gated) return
+    if (autoPracticeAttemptedFor.current === params.id || !detail || detail.gated) return
     try {
       if (new URLSearchParams(window.location.search).get('practice') !== '1') return
     } catch {
       return
     }
-    const role = interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain
-    if (!role) return // domain-less posting: leave the user on the Start button
-    autoPracticeFired.current = true
+    if (!detail.practiceRole || !detail.practiceHandoffToken) return
+    autoPracticeAttemptedFor.current = params.id
     onPractice()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail, xray])
+  }, [detail, params.id])
 
-  function onPractice() {
-    if (!detail || detail.gated) return
-    // Resolve through the domain metadata: jobs-only slugs (hr) map to
-    // 'general', never raw into InterviewConfig.role (Codex on #524);
-    // the X-ray's inferredDomain is already an interview slug.
-    const role = interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain
-    if (!role) return
-    // The hand-off (PRODUCT_FLOW §1 Stage 4; precedent learn/practice):
-    // config to localStorage, then the lobby owns everything — auth gate,
-    // post-OAuth resume, JD-skip. attribution rides the Wave-0 schema field
-    // (round-trip tested); generate-question spends ~60% of questions on JD
-    // must-haves for free. Zero hot-path edits.
-    const config = {
-      role,
-      experience: '3-6',
-      duration: 20,
-      jobDescription: detail.jd,
-      targetCompany: detail.company,
-      attribution: { source: 'jobs', jobId: detail.id, applicationId: detail.application?.applicationId },
-    }
+  async function onPractice() {
+    if (!detail || detail.gated || practiceStartInFlight.current) return
+    practiceStartInFlight.current = true
+    setPracticeStart('loading')
     try {
+      // Refresh at click time so a long-open tab never hands the lobby an
+      // expired intent. The signed token binds user + job + exact JD hash;
+      // the session API resolves all three back to server state.
+      const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+      if (!response.ok) throw new Error('handoff unavailable')
+      const fresh = (await response.json()) as Detail
+      if (
+        fresh.gated ||
+        !fresh.jd ||
+        !fresh.practiceRole ||
+        !fresh.practiceHandoffToken
+      ) throw new Error('handoff unavailable')
+      const config = {
+        role: fresh.practiceRole,
+        experience: '3-6' as const,
+        duration: 20,
+        jobDescription: fresh.jd,
+        targetCompany: fresh.company.slice(0, INTERVIEW_TARGET_COMPANY_MAX_CHARS),
+        attribution: { source: 'jobs' as const, jobId: fresh.id, applicationId: fresh.application?.applicationId },
+        // Transport-only: /interview extracts this before the runtime config
+        // reaches question/evaluation/model routes.
+        jobsHandoffToken: fresh.practiceHandoffToken,
+      }
       localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(config))
-    } catch { return }
-    fetch('/api/events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'jobs.prep_started',
-        jobPostingId: params.id,
-        props: { applicationId: detail.application?.applicationId, evidenceCount: detail.application?.practiceCount ?? 0 },
-      }),
-      keepalive: true,
-    }).catch(() => {})
-    router.push('/lobby')
+      const retakeParent = retakeParentFromSearch(window.location.search)
+      if (retakeParent) {
+        localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, retakeParent)
+      } else {
+        // Do not let an abandoned generic retake link an unrelated Jobs
+        // practice session. Fresh URL intent is the only authority here.
+        localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+      }
+      setDetail(fresh)
+      fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'jobs.prep_started',
+          jobPostingId: fresh.id,
+          props: { applicationId: fresh.application?.applicationId, evidenceCount: fresh.application?.practiceCount ?? 0 },
+        }),
+        keepalive: true,
+      }).catch(() => {})
+      router.push('/lobby')
+    } catch {
+      setPracticeStart('error')
+    } finally {
+      practiceStartInFlight.current = false
+    }
   }
 
   async function onSave() {
@@ -380,6 +486,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
   const primary = detail.applyOptions?.[0]
   const alternates = (detail.applyOptions ?? []).slice(1)
+  const practiceReady = !!detail.practiceRole && !!detail.practiceHandoffToken
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -425,14 +532,31 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 </p>
               </div>
             )}
-            {(interviewSlugForDomain(detail.domain) ?? xray?.inferredDomain) && (
+            {practiceReady ? (
               <button
                 onClick={onPracticeClick}
+                disabled={practiceStart === 'loading'}
                 className="rounded-lg border border-blue-400 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50"
               >
-                🎙 Practice for this job · 20 min
+                {practiceStart === 'loading' ? 'Preparing practice…' : '🎙 Practice for this job · 20 min'}
               </button>
-            )}
+            ) : xrayState === 'loading' ? (
+              <button
+                disabled
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-500"
+              >
+                Preparing job-specific practice…
+              </button>
+            ) : xrayState === 'ready' && xray?.retryable ? (
+              <span className="text-xs text-amber-700">
+                Practice setup is temporarily unavailable.{' '}
+                <button className="font-medium text-blue-600 hover:underline" onClick={retryXray}>
+                  Retry practice setup
+                </button>
+              </span>
+            ) : xrayState === 'ready' ? (
+              <span className="text-xs text-slate-500">Job-specific practice isn&apos;t available for this role yet.</span>
+            ) : null}
             <button
               onClick={onSave}
               disabled={saved}
@@ -451,6 +575,11 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               </a>
             )}
           </div>
+          {practiceStart === 'error' && (
+            <p role="alert" className="mt-2 text-sm text-red-600">
+              We couldn&apos;t prepare this job practice. Refresh the posting and try again.
+            </p>
+          )}
           {alternates.length > 0 && (
             <p className="mt-2 text-xs text-slate-500">
               Also available: {alternates.map((o, i) => (
@@ -499,8 +628,14 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                         {plan.sessions.map((sess) => (
                           <li key={sess.label} className="flex items-center justify-between gap-2">
                             <span className="text-sm">{sess.label}{sess.dayOffset > 0 ? ` (in ${sess.dayOffset}d)` : ''}</span>
-                            {sess.dayOffset === 0 && (
-                              <button onClick={onPracticeClick} className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium text-white">Start</button>
+                            {sess.dayOffset === 0 && practiceReady && (
+                              <button
+                                onClick={onPracticeClick}
+                                disabled={practiceStart === 'loading'}
+                                className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:cursor-wait disabled:opacity-60"
+                              >
+                                {practiceStart === 'loading' ? 'Preparing…' : 'Start'}
+                              </button>
                             )}
                           </li>
                         ))}
@@ -576,7 +711,22 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             <h2 className="text-lg font-medium">Interview X-ray</h2>
             <p className="mt-0.5 text-xs text-slate-500">What this JD says the interview will probe.</p>
             {xrayState === 'loading' && <p className="mt-3 text-sm text-slate-500">Reading the JD…</p>}
-            {xrayState === 'failed' && <p className="mt-3 text-sm text-slate-500">X-ray unavailable for this posting.</p>}
+            {xrayState === 'failed' && (
+              <p className="mt-3 text-sm text-slate-500">
+                X-ray unavailable for this posting.{' '}
+                <button
+                  className="font-medium text-blue-600 hover:underline"
+                  onClick={retryXray}
+                >
+                  Try again
+                </button>
+              </p>
+            )}
+            {xrayState === 'ready' && xray?.retryable && (
+              <p className="mt-3 text-xs text-amber-700">
+                Practice role verification is temporarily unavailable; the saved X-ray evidence remains visible.
+              </p>
+            )}
             {xrayState === 'ready' && xray && (
               <div className="mt-3 space-y-4">
                 {xray.keyThemes.length > 0 && (

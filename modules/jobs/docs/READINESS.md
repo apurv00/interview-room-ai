@@ -17,15 +17,33 @@ is never disabled). Zero evidence = zero claims. Copy uses the verb
 **"practiced against"** — never "covered": covering is a competence claim
 the evidence cannot carry [R0].
 
+**Trust boundary:** the signed handoff authenticates which user intentionally
+started practice for which job/JD; it is not an anti-cheat attestation. The
+self-practice API still trusts candidate-submitted answers/evaluations within
+the authenticated session. Readiness therefore remains coaching evidence, not
+an employer-verifiable credential or proof that an answer was spoken live.
+
 ## 1. PR-R1 — Attribution (the data layer, ships dark)
 
 **Emit site** [R14][R19]: the generate-feedback rail fires for every
 scored session; jobs-attribution resolves inside `recordPracticeEvidence`
 — which is therefore where `jobs/evidence.attribute` is emitted, only on
-`recorded: true`, carrying the resolved `{sessionId, applicationId,
-jobPostingId}` it already holds. A low-frequency reconciliation sweep
-(verdict-sweeper pattern) catches missed emits: jobs-attributed scored
-sessions with no evidence rows.
+`recorded: true`, carrying the canonical `{sessionId, applicationId,
+jobPostingId}` it already holds. The producer uses a stable per-session event
+id and the worker repeats that key as function idempotency. Generate-feedback
+awaits the feedback commit and the evidence attach/enqueue attempt before
+returning, so a serverless post-response freeze cannot defer the visible
+ticker until the sweep. Failures remain non-fatal to feedback and are repaired
+by reconciliation. Those transport
+guards are bounded; `attribution.evidenceProcessedAt` is the durable early-exit
+that prevents a later duplicate from re-billing the model. A low-frequency
+reconciliation sweep (verdict-sweeper pattern) keyset-pages beyond poison rows,
+repairs the application row and stale session attribution, and re-emits every
+server-verified `completed` session with persisted feedback and the real
+type-aware scorable minimum (standard ≥3; coding/system-design ≥1). Completed
+but ineligible rows are terminally stamped so they cannot starve later work.
+Evidence-row existence is not treated as completion: an unordered bulk insert
+may have landed only a subset, so only `evidenceProcessedAt` closes the loop.
 
 **Worker** (`jobsEvidenceAttributionJob`) — three steps so retries never
 re-bill the LLM [R25]: `load-inputs` → `llm-attribute` → `persist`.
@@ -36,9 +54,11 @@ re-bill the LLM [R25]: `load-inputs` → `llm-attribute` → `persist`.
   EXCLUDED from attribution entirely [R13]. Missing/empty evaluations →
   throw (Inngest backoff covers the persist race), bounded retries, logged
   terminal drop.
-- *JD-version binding* [R23]: hash the SESSION's own `jobDescription`
-  (`xrayHashOf` — the same value the repo already stores as `jdHash`;
-  never `bodyHashOf` [R16]). If it equals the posting's `parsedJDHash`,
+- *Handoff/JD-version binding* [R23]: session attribution first carries a
+  server-verified normalized SHA-256 `jdHash`; legacy/unverified rows cannot
+  enter the evidence rail. The worker separately hashes the SESSION's own
+  `jobDescription` with `xrayHashOf` for the existing parse-cache/readiness
+  identity. If it equals the posting's `parsedJDHash`,
   attribute against the cached parse; else the run is a counted skip
   (`jd-version-mismatch`) — **never attribute across JD versions**, and
   v1 never makes a second parse call (parsing the session's own JD copy
@@ -65,6 +85,7 @@ re-bill the LLM [R25]: `load-inputs` → `llm-attribute` → `persist`.
 ```
 JobPracticeEvidence {
   userId, applicationId, jobPostingId, sessionId,
+  handoffVersion: 1, handoffJdHash,
   requirementId, xrayHash, strength: 'strong'|'partial',
   answerScore, scoringEpoch, at
 }
@@ -77,9 +98,18 @@ unique index { sessionId, requirementId, xrayHash }   // real, DB-level
   affected applications' readiness snapshots** (Codex #538 r2: a band
   derived from deleted answers must not survive; shared/** cannot reach
   the band math, and an absent snapshot = "no claims" — the safe
-  direction; the next attribution write rebuilds it). After persist,
-  the worker recomputes and **denormalizes a readiness snapshot onto
-  JobApplication**: `readiness: {band, sessions, practicedCount,
+  direction; the next attribution write rebuilds it). Session deletion is
+  ordered before its evidence sweep. The worker also rechecks the owner-scoped
+  session, User and application after all writes; a concurrent deletion causes
+  evidence deletion plus readiness/ticker compensation and is never marked
+  processed. Snapshot publication uses an application-level
+  `readinessRevision` compare-and-swap. Every evidence deletion increments the
+  same revision, so a worker that read rows before another session was deleted
+  cannot resurrect an aggregate containing the deleted answers. After persist,
+  Legacy evidence rows remain exportable but lack handoff provenance and are
+  excluded from both snapshot recomputation and the candidate-facing verified
+  session ticker. The worker recomputes and **denormalizes a readiness snapshot onto
+  JobApplication**: `readiness: {handoffVersion: 1, band, sessions, practicedCount,
   mustHaveTotal, quality, strongCoverage, xrayHash, scoringEpoch, at}`
   [R22] — every consumer reads the snapshot; nothing recomputes bands
   per-request. `quality` and `strongCoverage` are IN the snapshot (Codex

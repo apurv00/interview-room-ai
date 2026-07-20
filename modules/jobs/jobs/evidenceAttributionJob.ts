@@ -1,11 +1,17 @@
 import { z } from 'zod'
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { InterviewSession, JobApplication, JobPosting, JobPracticeEvidence } from '@shared/db/models'
+import { InterviewSession, JobApplication, JobPosting, JobPracticeEvidence, User } from '@shared/db/models'
 import { completion, resolveModel } from '@shared/services/modelRouter'
 import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 import { logger } from '@shared/logger'
 import { xrayHashOf } from '../services/xrayService'
+import { practiceHandoffHashOf } from '../services/practiceHandoff'
+import {
+  ensurePracticeApplication,
+  hasCompletedScoredPractice,
+  isScorablePracticeEvaluation,
+} from '../services/applicationService'
 import { computeReadiness, STRENGTH_WEIGHT, type EvidenceRowLike } from '../config/readiness'
 
 /**
@@ -73,10 +79,15 @@ interface LoadedInputs {
     | 'no-parse' // TRANSIENT: X-ray parse not cached yet — never stamped
     | 'no-must-haves' // terminal: parse exists but lists zero must-haves
     | 'missing-context'
+    | 'identity-mismatch' // TRANSIENT: canonical sweep repairs stale ids
+    | 'not-scored' // TRANSIENT: feedback persistence must win before attribution
+    | 'already-processed'
   answers: Array<{ index: number; question: string; answer: string; answerScore: number }>
   mustHaves: Array<{ id: string; requirement: string }>
   xrayHash: string
+  handoffJdHash: string
   applicationId: string
+  userId: string
 }
 
 export function buildAttributionPrompt(
@@ -115,6 +126,69 @@ async function markEvidenceProcessed(sessionId: string): Promise<void> {
   )
 }
 
+interface VerifiedReadinessInput {
+  sessionId: string
+  applicationId: string
+  userId: string
+  jobPostingId: string
+  xrayHash: string
+  handoffJdHash: string
+  mustHaveIds: string[]
+  epoch: string
+}
+
+/**
+ * Rebuild readiness exclusively from server-verified v1 evidence. The
+ * application membership predicate is both an ownership fence and a deletion
+ * fence: a legacy/browser-attributed session can never surface a snapshot.
+ */
+async function writeVerifiedReadinessSnapshot(input: VerifiedReadinessInput): Promise<boolean> {
+  const baseFilter = {
+    _id: input.applicationId,
+    userId: input.userId,
+    jobPostingId: input.jobPostingId,
+    verifiedPracticeSessionIds: input.sessionId,
+  }
+  // A snapshot is derived from a multi-document evidence read. Publish it
+  // only if no other publisher or deletion invalidated that read; retrying
+  // recomputes from the new durable set instead of overwriting newer truth.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const app = await JobApplication.findOne(baseFilter)
+      .select('readinessRevision')
+      .lean()
+    if (!app) return false
+    const rawRevision = Number((app as { readinessRevision?: number }).readinessRevision ?? 0)
+    const expectedRevision = Number.isSafeInteger(rawRevision) && rawRevision >= 0 ? rawRevision : 0
+    const allRows = await JobPracticeEvidence.find({
+      applicationId: input.applicationId,
+      handoffVersion: 1,
+      handoffJdHash: input.handoffJdHash,
+    })
+      .select('requirementId xrayHash strength answerScore scoringEpoch sessionId')
+      .lean()
+    const snapshot = {
+      ...computeReadiness(
+        allRows.map((row) => ({ ...row, sessionId: String(row.sessionId) })) as unknown as EvidenceRowLike[],
+        { xrayHash: input.xrayHash, mustHaveIds: input.mustHaveIds },
+        input.epoch
+      ),
+      handoffVersion: 1 as const,
+    }
+    const revisionPredicate = expectedRevision === 0
+      ? { $or: [{ readinessRevision: 0 }, { readinessRevision: { $exists: false } }] }
+      : { readinessRevision: expectedRevision }
+    const write = await JobApplication.updateOne(
+      { ...baseFilter, ...revisionPredicate },
+      {
+        $set: { readiness: snapshot },
+        $inc: { readinessRevision: 1 },
+      }
+    )
+    if ((write?.matchedCount ?? 0) > 0) return true
+  }
+  return false
+}
+
 export async function runEvidenceAttributionHandler(
   event: { data: { sessionId: string; applicationId: string; jobPostingId: string } },
   step: StepRunner
@@ -124,14 +198,36 @@ export async function runEvidenceAttributionHandler(
 
   const inputs = await step.run('load-inputs', async (): Promise<LoadedInputs> => {
     const none = (outcome: LoadedInputs['outcome']): LoadedInputs => ({
-      outcome, answers: [], mustHaves: [], xrayHash: '', applicationId,
+      outcome, answers: [], mustHaves: [], xrayHash: '', handoffJdHash: '', applicationId, userId: '',
     })
     const [session, application, posting] = await Promise.all([
-      InterviewSession.findById(sessionId).select('config evaluations userId jobDescription').lean(),
-      JobApplication.findById(applicationId).select('userId').lean(),
+      InterviewSession.findById(sessionId).select('config evaluations userId jobDescription attribution status feedback').lean(),
+      JobApplication.findById(applicationId).select('userId jobPostingId').lean(),
       JobPosting.findById(jobPostingId).select('parsedJD parsedJDHash').lean(),
     ])
     if (!session || !application) return none('missing-context')
+    const sessionAttr = session.attribution as {
+      source?: string
+      jobId?: string
+      handoffVersion?: number
+      jdHash?: string
+      evidenceProcessedAt?: Date
+    } | undefined
+    if (
+      sessionAttr?.source !== 'jobs' ||
+      sessionAttr.handoffVersion !== 1 ||
+      !sessionAttr.jdHash ||
+      String(sessionAttr.jobId ?? '') !== String(jobPostingId) ||
+      String(session.userId) !== String(application.userId) ||
+      String(application.jobPostingId) !== String(jobPostingId)
+    ) {
+      return none('identity-mismatch')
+    }
+    // Event/function ids deduplicate for a bounded window. The persisted
+    // marker is the permanent fence against a later duplicate re-billing
+    // the model after that window expires.
+    if (sessionAttr.evidenceProcessedAt) return none('already-processed')
+    if (!hasCompletedScoredPractice(session)) return none('not-scored')
     // The JD lives TOP-LEVEL on InterviewSession — /api/interviews mirrors
     // it out of config because the strict config subdoc strips undeclared
     // keys (Codex #538 r3 P1: reading config.jobDescription meant every
@@ -149,6 +245,7 @@ export async function runEvidenceAttributionHandler(
     // session PRACTICED AGAINST. Mismatch with the posting's cached parse
     // = counted skip (never cross-version, never a second parse in v1).
     const sessionHash = xrayHashOf(jd)
+    if (practiceHandoffHashOf(jd) !== sessionAttr.jdHash) return none('identity-mismatch')
     if (!posting?.parsedJD || posting.parsedJDHash !== sessionHash) {
       return none(posting?.parsedJD ? 'jd-version-mismatch' : 'no-parse')
     }
@@ -166,7 +263,7 @@ export async function runEvidenceAttributionHandler(
     // Epoch is NOT read per-row — see currentScoringEpoch (Codex #538 P1).
     const answers = evals
       .map((e, i) => ({ e, i }))
-      .filter(({ e }) => (e.status ?? 'ok') === 'ok' && typeof e.answer === 'string' && (e.answer as string).trim())
+      .filter(({ e }) => isScorablePracticeEvaluation(e))
       .map(({ e, i }) => ({
         index: i,
         question: String(e.question ?? '').slice(0, 500),
@@ -182,7 +279,9 @@ export async function runEvidenceAttributionHandler(
       answers,
       mustHaves,
       xrayHash: sessionHash,
+      handoffJdHash: sessionAttr.jdHash,
       applicationId,
+      userId: String(session.userId),
     }
   })
   if (inputs.outcome !== 'ok') {
@@ -199,7 +298,14 @@ export async function runEvidenceAttributionHandler(
     //   old-JD sessions churn the sweep for at most 7 days, then age out.
     // Throw paths never stamp: Inngest retries are the path, the sweep
     // is the net.
-    if (inputs.outcome !== 'no-parse' && inputs.outcome !== 'jd-version-mismatch') {
+    if (
+      inputs.outcome !== 'no-parse' &&
+      inputs.outcome !== 'jd-version-mismatch' &&
+      inputs.outcome !== 'missing-context' &&
+      inputs.outcome !== 'identity-mismatch' &&
+      inputs.outcome !== 'not-scored' &&
+      inputs.outcome !== 'already-processed'
+    ) {
       await step.run('mark-processed', () => markEvidenceProcessed(sessionId))
     }
     return { outcome: inputs.outcome }
@@ -239,9 +345,12 @@ export async function runEvidenceAttributionHandler(
     // llm-attribute and persist (a window Inngest backoff can stretch to
     // minutes), inserting would RESURRECT evidence the cascade removed
     // and re-write the snapshot the delete just unset. Abort untouched.
-    const sessionAlive = await InterviewSession.exists({ _id: sessionId })
-    if (!sessionAlive) {
-      logger.warn({ sessionId }, 'session deleted mid-attribution — persist aborted')
+    const [sessionAlive, userAlive] = await Promise.all([
+      InterviewSession.exists({ _id: sessionId, userId: inputs.userId }),
+      User.exists({ _id: inputs.userId }),
+    ])
+    if (!sessionAlive || !userAlive) {
+      logger.warn({ sessionId }, 'session or owner deleted mid-attribution — persist aborted')
       return 0
     }
     const epoch = await currentScoringEpoch()
@@ -268,6 +377,8 @@ export async function runEvidenceAttributionHandler(
           score,
           doc: {
             sessionId, applicationId, jobPostingId,
+            handoffVersion: 1,
+            handoffJdHash: inputs.handoffJdHash,
             requirementId: reqId,
             xrayHash: inputs.xrayHash,
             strength: att.strength,
@@ -279,7 +390,12 @@ export async function runEvidenceAttributionHandler(
       }
     }
     const docs = Array.from(bestByReq.values()).map((b) => b.doc)
-    const app = await JobApplication.findById(applicationId).select('userId').lean()
+    const app = await JobApplication.findOne({
+      _id: applicationId,
+      userId: inputs.userId,
+      jobPostingId,
+      verifiedPracticeSessionIds: sessionId,
+    }).select('userId jobPostingId').lean()
     if (!app) return 0
     // Replace semantics per (session, hash): stale rows out, new set in —
     // the unique index makes duplicate delivery inert.
@@ -294,17 +410,58 @@ export async function runEvidenceAttributionHandler(
     }
 
     // Denormalize the readiness snapshot (panel R22) — consumers never
-    // recompute. Epoch filter = the SAME epoch the rows above were
-    // stamped with (currentScoringEpoch — single source, Codex #538 P1).
-    const allRows = await JobPracticeEvidence.find({ applicationId })
-      .select('requirementId xrayHash strength answerScore scoringEpoch sessionId')
-      .lean()
-    const snapshot = computeReadiness(
-      allRows.map((r) => ({ ...r, sessionId: String(r.sessionId) })) as unknown as EvidenceRowLike[],
-      { xrayHash: inputs.xrayHash, mustHaveIds: inputs.mustHaves.map((m) => m.id) },
-      epoch
-    )
-    await JobApplication.updateOne({ _id: applicationId }, { $set: { readiness: snapshot } })
+    // recompute. Per-application function concurrency below prevents two
+    // workers from publishing snapshots from differently aged row reads.
+    const readinessWritten = await writeVerifiedReadinessSnapshot({
+      sessionId,
+      applicationId,
+      userId: String(app.userId),
+      jobPostingId,
+      xrayHash: inputs.xrayHash,
+      handoffJdHash: inputs.handoffJdHash,
+      mustHaveIds: inputs.mustHaves.map((mustHave) => mustHave.id),
+      epoch,
+    })
+    // A preflight check is not a deletion fence. Recheck after every
+    // evidence/readiness write; deletion paths remove sessions before their
+    // evidence sweep, so every interleaving is either swept or compensated.
+    const appFilter = {
+      _id: applicationId,
+      userId: inputs.userId,
+      jobPostingId,
+      verifiedPracticeSessionIds: sessionId,
+    }
+    const [sessionStillAlive, userStillAlive, appStillAlive] = await Promise.all([
+      InterviewSession.exists({ _id: sessionId, userId: inputs.userId }),
+      User.exists({ _id: inputs.userId }),
+      JobApplication.exists(appFilter),
+    ])
+    if (!sessionStillAlive || !userStillAlive || !appStillAlive) {
+      await JobPracticeEvidence.deleteMany({ sessionId })
+      if (!userStillAlive) {
+        await JobApplication.deleteOne(appFilter)
+      } else if (appStillAlive) {
+        await JobApplication.updateOne(appFilter, {
+          $unset: { readiness: 1 },
+          $inc: { readinessRevision: 1 },
+          $pull: {
+            practiceSessionIds: sessionId,
+            verifiedPracticeSessionIds: sessionId,
+          },
+        })
+      }
+      logger.warn(
+        { sessionId, sessionStillAlive: !!sessionStillAlive, userStillAlive: !!userStillAlive },
+        'attribution writes compensated after concurrent deletion'
+      )
+      return 0
+    }
+
+    // A surviving canonical application should always match the snapshot
+    // update. If it did not, retry rather than permanently stamping a partial
+    // evidence write as complete.
+    if (!readinessWritten) throw new Error('verified readiness snapshot write missed canonical application')
+
     // Zero stored rows (all 'none' / belt-dropped) is still PROCESSED —
     // without the marker the sweep re-emits and re-bills daily (Codex #538).
     await markEvidenceProcessed(sessionId)
@@ -314,42 +471,81 @@ export async function runEvidenceAttributionHandler(
   return { outcome: 'attributed', rows }
 }
 
-/** Reconciliation sweep (panel R14): jobs-attributed scored sessions from
- *  the last 7 days with no evidence rows get their event re-emitted —
- *  the awaited emit is the path, this is the net. Capped per run. */
+/** Reconciliation sweep (panel R14): eligible Jobs-attributed sessions from
+ *  the last 7 days without the durable processed marker get re-emitted. Row
+ *  existence is intentionally ignored because a partial unordered insert
+ *  cannot prove that readiness was fully materialized. Capped per run. */
 export async function runEvidenceReconcileHandler(step: StepRunner): Promise<{ reEmitted: number }> {
   await connectDB()
   const candidates = await step.run('find-missing', async () => {
-    const sessions = await InterviewSession.find({
-      'attribution.source': 'jobs',
-      // Processed sessions (including zero-evidence outcomes) are stamped
-      // by the worker — the sweep only chases UNstamped ones (Codex #538).
-      'attribution.evidenceProcessedAt': { $exists: false },
-      createdAt: { $gte: new Date(Date.now() - 7 * 86_400_000) },
-      'evaluations.0': { $exists: true },
-    })
-      .select('_id attribution userId')
-      .limit(200)
-      .lean()
     const out: Array<{ sessionId: string; applicationId: string; jobPostingId: string }> = []
-    for (const s of sessions) {
-      const attr = s.attribution as { jobId?: string; applicationId?: string } | undefined
-      if (!attr?.jobId) continue
-      // Legacy net: rows attributed before the stamp existed have no
-      // evidenceProcessedAt — their evidence rows still mark them done.
-      const has = await JobPracticeEvidence.exists({ sessionId: s._id })
-      if (has) continue
-      const app = attr.applicationId
-        ? await JobApplication.findOne({ _id: attr.applicationId, userId: s.userId }).select('_id jobPostingId').lean()
-        : await JobApplication.findOne({ userId: s.userId, jobPostingId: attr.jobId }).select('_id jobPostingId').lean()
-      if (!app) continue
-      out.push({ sessionId: String(s._id), applicationId: String(app._id), jobPostingId: String(app.jobPostingId) })
-      if (out.length >= 50) break
-    }
+    let afterId: unknown
+    const pageSize = 200
+    do {
+      const filter: Record<string, unknown> = {
+        'attribution.source': 'jobs',
+        'attribution.handoffVersion': 1,
+        // Processed sessions (including zero-evidence outcomes) are stamped
+        // by the worker — the sweep only chases UNstamped ones (Codex #538).
+        'attribution.evidenceProcessedAt': { $exists: false },
+        status: 'completed',
+        feedback: { $exists: true },
+        createdAt: { $gte: new Date(Date.now() - 7 * 86_400_000) },
+        // Push the type-aware minimum into Mongo so known short-form rows do
+        // not occupy scan pages. The exact scorable-answer check stays below.
+        $or: [
+          {
+            'config.interviewType': { $in: ['coding', 'system-design'] },
+            'evaluations.0': { $exists: true },
+          },
+          {
+            'config.interviewType': { $nin: ['coding', 'system-design'] },
+            'evaluations.2': { $exists: true },
+          },
+        ],
+      }
+      if (afterId) filter._id = { $gt: afterId }
+      const sessions = await InterviewSession.find(filter)
+        .select('_id attribution userId evaluations status feedback config')
+        .sort({ _id: 1 })
+        .limit(pageSize)
+        .lean()
+      if (sessions.length === 0) break
+      afterId = sessions[sessions.length - 1]._id
+
+      for (const s of sessions) {
+        const attr = s.attribution as { jobId?: string; jdHash?: string } | undefined
+        if (!attr?.jobId || !attr.jdHash) continue
+        // Completed-but-ineligible is terminal. Stamp it once so corrupt or
+        // failed answer arrays cannot become a permanent sweep poison page.
+        if (!hasCompletedScoredPractice(s)) {
+          await markEvidenceProcessed(String(s._id))
+          continue
+        }
+        const ensured = await ensurePracticeApplication(String(s.userId), String(s._id)).catch((err) => {
+          logger.warn({ err, sessionId: s._id }, 'evidence reconciliation candidate failed')
+          return null
+        })
+        if (!ensured) continue
+        // Row existence cannot prove a previous unordered bulk insert was
+        // complete. Re-run attribution for every eligible unstamped session;
+        // the worker replaces that session's entire verified row set before
+        // atomically publishing the snapshot and processed marker.
+        out.push({
+          sessionId: ensured.sessionId,
+          applicationId: ensured.applicationId,
+          jobPostingId: ensured.jobPostingId,
+        })
+        if (out.length >= 50) break
+      }
+      if (sessions.length < pageSize) break
+    } while (out.length < 50)
     return out
   })
   for (const c of candidates) {
-    await inngest.send({ name: 'jobs/evidence.attribute', data: c })
+    await step.run(`emit-${c.sessionId}`, () =>
+      inngest.send({ id: `jobs-evidence-${c.sessionId}`, name: 'jobs/evidence.attribute', data: c })
+    )
   }
   return { reEmitted: candidates.length }
 }
@@ -359,7 +555,11 @@ export const jobsEvidenceAttributionJob = inngest.createFunction(
     id: 'jobs-evidence-attribution',
     name: 'Jobs: practice-evidence attribution',
     retries: 3, // covers the evaluations persist race; llm-attribute memoizes across persist retries
-    concurrency: [{ limit: 2 }],
+    idempotency: 'event.data.sessionId',
+    concurrency: [
+      { limit: 2 },
+      { limit: 1, key: 'event.data.applicationId' },
+    ],
     triggers: [{ event: 'jobs/evidence.attribute' }],
   },
   async ({ event, step }) =>

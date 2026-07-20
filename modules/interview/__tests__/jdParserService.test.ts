@@ -8,20 +8,36 @@ vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }))
 
-const mockCompletion = vi.fn()
+const { mockCompletion, mockGetActiveCatalog } = vi.hoisted(() => ({
+  mockCompletion: vi.fn(),
+  mockGetActiveCatalog: vi.fn(),
+}))
 
 vi.mock('@shared/services/modelRouter', () => ({
   completion: (...args: unknown[]) => mockCompletion(...args),
+}))
+vi.mock('@interview/services/persona/domainCatalogService', () => ({
+  getActiveInterviewDomainCatalog: mockGetActiveCatalog,
 }))
 
 import { parseJobDescription, buildParsedJDContext } from '@interview/services/persona/jdParserService'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import type { IParsedJobDescription } from '@shared/types'
 
+const ACTIVE_CATALOG = {
+  slugs: ['backend', 'custom-quant-role', 'general', 'mobile', 'pm'],
+  slugSet: new Set(['backend', 'custom-quant-role', 'general', 'mobile', 'pm']),
+  inferenceSlugSet: new Set(['backend', 'custom-quant-role', 'general', 'mobile', 'pm']),
+  revision: 'jd-role-v2:test',
+  authoritative: true,
+  source: 'cms' as const,
+}
+
 describe('jdParserService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(isFeatureEnabled).mockReturnValue(true)
+    mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
     mockCompletion.mockResolvedValue({
       text: JSON.stringify({
         company: 'Acme Corp',
@@ -53,6 +69,72 @@ describe('jdParserService', () => {
       expect(result.requirements[0].importance).toBe('must-have')
       expect(result.requirements[2].importance).toBe('nice-to-have')
       expect(result.keyThemes).toContain('leadership')
+    })
+
+    it('offers the active CMS taxonomy to the model', async () => {
+      await parseJobDescription('Mobile engineer role with Android ownership and release experience.')
+
+      const request = mockCompletion.mock.calls[0][0] as { system: string }
+      expect(request.system).toContain(
+        `exactly one of: ${ACTIVE_CATALOG.slugs.join(', ')}`,
+      )
+    })
+
+    it('accepts active built-in/custom slugs and rejects inactive or arbitrary output', async () => {
+      const response = (inferredDomain: unknown) => ({
+        text: JSON.stringify({
+          company: 'Acme Corp',
+          role: 'Mobile Engineer',
+          inferredDomain,
+          requirements: [{
+            id: 'req_1',
+            category: 'technical',
+            requirement: 'Android experience',
+            importance: 'must-have',
+            targetCompetencies: [],
+          }],
+          keyThemes: ['mobile'],
+        }),
+      })
+      mockCompletion
+        .mockResolvedValueOnce(response(' Mobile '))
+        .mockResolvedValueOnce(response('custom-quant-role'))
+        .mockResolvedValueOnce(response('frontend'))
+        .mockResolvedValueOnce(response('attacker-controlled-role'))
+
+      expect((await parseJobDescription('A valid mobile role')).inferredDomain).toBe('mobile')
+      expect((await parseJobDescription('A CMS-added quant role')).inferredDomain).toBe('custom-quant-role')
+      expect((await parseJobDescription('An inactive built-in role')).inferredDomain).toBe('')
+      expect((await parseJobDescription('An untrusted role')).inferredDomain).toBe('')
+    })
+
+    it('rejects an active slug that was not advertised in the bounded inference enum', async () => {
+      const boundedCatalog = {
+        ...ACTIVE_CATALOG,
+        slugs: ['backend'],
+        inferenceSlugSet: new Set(['backend']),
+      }
+      mockGetActiveCatalog.mockResolvedValue(boundedCatalog)
+      mockCompletion.mockResolvedValue({
+        text: JSON.stringify({
+          company: 'Acme Corp',
+          role: 'Quant Engineer',
+          inferredDomain: 'custom-quant-role',
+          requirements: [{
+            id: 'req_1',
+            category: 'technical',
+            requirement: 'Pricing systems',
+            importance: 'must-have',
+            targetCompetencies: [],
+          }],
+          keyThemes: ['pricing'],
+        }),
+      })
+
+      const result = await parseJobDescription('Quant engineer role')
+
+      expect(boundedCatalog.slugSet.has('custom-quant-role')).toBe(true)
+      expect(result.inferredDomain).toBe('')
     })
 
     it('returns fallback when feature flag is disabled', async () => {

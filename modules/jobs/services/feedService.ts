@@ -1,10 +1,13 @@
-import { gunzipSync } from 'zlib'
 import { JobPosting, JobApplication, type IJobPosting } from '@shared/db/models'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
 import { titleJaccard } from './identityResolver'
 import { xrayHashOf, legacyXrayHashOf } from './xrayService'
 import { getBaseResume } from './baseResumeService'
 import { getResume } from '@resume'
+import {
+  mintPracticeHandoffToken,
+  preparePracticeHandoffPosting,
+} from './practiceHandoff'
 
 /**
  * Feed serving (PRODUCT_FLOW §1 Stage 0, Wave 3.1) — Tier-A DETERMINISTIC
@@ -265,6 +268,9 @@ export interface JobDetailShell {
 export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
   gated: false
   jd: string
+  /** Server-authoritative Practice readiness. Both fields appear together. */
+  practiceRole?: string
+  practiceHandoffToken?: string
   /** Tier-honest apply ladder, best-first — subtitles are the UI's job. */
   applyOptions: Array<{ url: string; tier: ApplyTier; viaSite?: string }>
   flags: { staffing: boolean; shortJd: boolean; repost: boolean }
@@ -297,16 +303,8 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
   const doc = await JobPosting.findById(id).lean()
   if (!doc || doc.status !== 'open') return null
   if (!userId) return { ...shellOf(doc as IJobPosting), gated: true }
-  // Prefer the display twin (block structure preserved — founder item 7);
-  // legacy rows without it fall back to the collapsed canonical body.
-  // xrayHashOf is whitespace-insensitive, so downstream hashing of this
-  // text (practice hand-off → readiness version binding, ATS identity)
-  // is IDENTICAL for both shapes.
-  const buf = (doc.jdDisplayCompressed ?? doc.jdCompressed) as Buffer | undefined
-  let jd = ''
-  try {
-    jd = buf?.length ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8') : ''
-  } catch { /* corrupt gzip = empty body; the card still renders */ }
+  const practice = await preparePracticeHandoffPosting(doc)
+  const jd = practice.jobDescription
   const applyOptions = (doc.provenance ?? [])
     .filter((p) => p.applyUrl && p.applyTier && isSafeHttpUrl(p.applyUrl))
     .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite, broken: (p.brokenReportCount ?? 0) > 0 }))
@@ -314,7 +312,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     // clean ones — demoted, never hidden (they may still work for others).
     .sort((a, b) => Number(a.broken) - Number(b.broken) || TIER_RANK[a.tier] - TIER_RANK[b.tier])
     .map(({ url, tier, viaSite }) => ({ url, tier, viaSite }))
-  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status practiceSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
+  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
   // An atsResult is 'done' only for the CURRENT (resume x JD) pair (Codex
   // on #521): a JD merge OR a resume edit re-opens the check. The resume
   // comparison costs two User reads, so it runs only on the narrow path
@@ -339,6 +337,16 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     ...shellOf(doc as IJobPosting),
     gated: false,
     jd,
+    ...(practice.role && practice.jdHash
+      ? {
+          practiceRole: practice.role,
+          practiceHandoffToken: mintPracticeHandoffToken({
+            userId,
+            jobId: String(doc._id),
+            jdHash: practice.jdHash,
+          }),
+        }
+      : {}),
     applyOptions,
     flags: { staffing: !!doc.flags?.staffing, shortJd: !!doc.flags?.shortJd, repost: !!doc.flags?.repost },
     application: app
@@ -347,7 +355,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
           status: app.status,
           interviewDate: app.interviewDate ? new Date(app.interviewDate).toISOString() : undefined,
           interviewDateConfidence: app.interviewDateConfidence,
-          practiceCount: Math.min(3, app.practiceSessionIds?.length ?? 0),
+          practiceCount: Math.min(3, app.verifiedPracticeSessionIds?.length ?? 0),
           ats: app.atsResult && atsCurrent
             ? { state: 'done' as const, score: app.atsResult.score, missingKeywords: (app.atsResult.missingKeywords ?? []).slice(0, 5), checkedAt: new Date(app.atsResult.checkedAt).toISOString() }
             : app.atsRequestedAt && Date.now() - new Date(app.atsRequestedAt).getTime() < 3 * 60_000
