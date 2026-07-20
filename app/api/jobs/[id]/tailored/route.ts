@@ -28,18 +28,57 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   } catch {
     return NextResponse.json({ error: 'invalid JSON' }, { status: 400 })
   }
+  // The Tailor run captures the authenticated user before generation. A
+  // provider sign-in/account switch can replace the cookie while the model is
+  // running; never let that result mutate the newly active account.
+  if (typeof body.originUserId !== 'string' || body.originUserId !== userId) {
+    return NextResponse.json(
+      { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
+      { status: 409 },
+    )
+  }
   if (typeof body.tailoredText !== 'string' || !body.tailoredText.trim()) {
     return NextResponse.json({ error: 'tailoredText required' }, { status: 400 })
   }
-  await connectDB()
-  const result = await saveTailoredVersion(userId, params.id, {
-    tailoredText: body.tailoredText.slice(0, 100_000),
-    sourceResumeId: typeof body.sourceResumeId === 'string' && body.sourceResumeId ? body.sourceResumeId.slice(0, 100) : undefined,
-    matchScore: typeof body.matchScore === 'number' ? Math.max(0, Math.min(100, body.matchScore)) : undefined,
-    addedKeywords: Array.isArray(body.addedKeywords) ? (body.addedKeywords as string[]).slice(0, 30).map((k) => String(k).slice(0, 60)) : [],
-    missingKeywords: Array.isArray(body.missingKeywords) ? (body.missingKeywords as string[]).slice(0, 30).map((k) => String(k).slice(0, 60)) : [],
-  })
-  if (!result.ok) return NextResponse.json({ error: 'posting not found' }, { status: 404 })
+  if (typeof body.sourceJdHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.sourceJdHash)) {
+    return NextResponse.json(
+      { error: 'sourceJdHash required', code: 'SOURCE_JD_HASH_REQUIRED' },
+      { status: 400 },
+    )
+  }
+  let result: Awaited<ReturnType<typeof saveTailoredVersion>>
+  try {
+    await connectDB()
+    result = await saveTailoredVersion(userId, params.id, {
+      tailoredText: body.tailoredText.slice(0, 100_000),
+      sourceResumeId: typeof body.sourceResumeId === 'string' && body.sourceResumeId ? body.sourceResumeId.slice(0, 100) : undefined,
+      matchScore: typeof body.matchScore === 'number' ? Math.max(0, Math.min(100, body.matchScore)) : undefined,
+      addedKeywords: Array.isArray(body.addedKeywords) ? (body.addedKeywords as string[]).slice(0, 30).map((k) => String(k).slice(0, 60)) : [],
+      missingKeywords: Array.isArray(body.missingKeywords) ? (body.missingKeywords as string[]).slice(0, 30).map((k) => String(k).slice(0, 60)) : [],
+      sourceJdHash: body.sourceJdHash,
+    })
+  } catch (err) {
+    logger.warn({ err }, 'tailored resume attachment failed after identity verification')
+    return NextResponse.json(
+      { error: 'temporary attachment failure', code: 'ATTACHMENT_TEMPORARY', identityVerified: true },
+      { status: 503 },
+    )
+  }
+  if (!result.ok) {
+    if (result.reason === 'jd-mismatch') {
+      return NextResponse.json(
+        { error: 'job description changed', code: 'JOB_DESCRIPTION_CHANGED' },
+        { status: 409 },
+      )
+    }
+    if (result.reason === 'context-unavailable') {
+      return NextResponse.json(
+        { error: 'job context unavailable', code: 'JOB_CONTEXT_UNAVAILABLE' },
+        { status: 409 },
+      )
+    }
+    return NextResponse.json({ error: 'posting not found', code: 'JOB_NOT_FOUND' }, { status: 404 })
+  }
   try {
     await ProductEvent.create({ name: 'jobs.tailor_run', userId, jobPostingId: params.id, props: { matchScore: body.matchScore }, ts: new Date() })
   } catch (err) {

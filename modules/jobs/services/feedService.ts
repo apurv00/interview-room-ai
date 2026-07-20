@@ -8,6 +8,7 @@ import {
   mintPracticeHandoffToken,
   preparePracticeHandoffPosting,
 } from './practiceHandoff'
+import { jobPostingStateOf, type JobPostingState } from './postingAccess'
 
 /**
  * Feed serving (PRODUCT_FLOW §1 Stage 0, Wave 3.1) — Tier-A DETERMINISTIC
@@ -267,7 +268,19 @@ export interface JobDetailShell {
 
 export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
   gated: false
-  jd: string
+  /** Discovery lifecycle is distinct from the caller's tracked lifecycle. */
+  postingState: JobPostingState | 'snapshot-only'
+  jd?: string
+  capabilities: {
+    apply: boolean
+    viewSource: boolean
+    xray: boolean
+    tailor: boolean
+    practice: boolean
+    atsCheck: boolean
+  }
+  /** Current canonical JD version for a tracked Tailor association. */
+  tailorInputHash?: string
   /** Server-authoritative Practice readiness. Both fields appear together. */
   practiceRole?: string
   practiceHandoffToken?: string
@@ -301,25 +314,80 @@ function shellOf(doc: IJobPosting): Omit<JobDetailShell, 'gated'> {
 
 export async function getJobDetail(id: string, userId?: string | null): Promise<JobDetailShell | JobDetailFull | null> {
   const doc = await JobPosting.findById(id).lean()
-  if (!doc || doc.status !== 'open') return null
-  if (!userId) return { ...shellOf(doc as IJobPosting), gated: true }
-  const practice = await preparePracticeHandoffPosting(doc)
+  if (!doc) {
+    if (!userId) return null
+    const snapshotApp = await JobApplication.findOne({ userId, jobPostingId: id })
+      .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt')
+      .lean()
+    if (!snapshotApp) return null
+    const snapshotLocation = snapshotApp.jobSnapshot?.location?.trim() ?? ''
+    return {
+      id,
+      title: snapshotApp.jobSnapshot?.title ?? 'Saved job',
+      company: snapshotApp.jobSnapshot?.company ?? '',
+      locations: snapshotLocation ? [snapshotLocation] : [],
+      isRemote: /\bremote\b/i.test(snapshotLocation),
+      gated: false,
+      postingState: 'snapshot-only',
+      capabilities: {
+        apply: false,
+        viewSource: false,
+        xray: false,
+        tailor: false,
+        practice: false,
+        atsCheck: false,
+      },
+      applyOptions: [],
+      flags: { staffing: false, shortJd: false, repost: false },
+      application: {
+        applicationId: String(snapshotApp._id),
+        status: snapshotApp.status,
+        interviewDate: snapshotApp.interviewDate ? new Date(snapshotApp.interviewDate).toISOString() : undefined,
+        interviewDateConfidence: snapshotApp.interviewDateConfidence,
+        practiceCount: Math.min(3, snapshotApp.verifiedPracticeSessionIds?.length ?? 0),
+        ats: snapshotApp.atsResult
+          ? {
+              state: 'done',
+              checkedAt: new Date(snapshotApp.atsResult.checkedAt).toISOString(),
+            }
+          : { state: 'none' },
+      },
+    }
+  }
+  if (doc.status !== 'open' && doc.status !== 'closed') return null
+  // Closed postings leave public discovery, but an existing tracker row is
+  // durable user-owned context. Resolve that ownership before preparing or
+  // projecting any JD-derived content; non-owners receive the same 404 as an
+  // unknown posting so closure never widens the private-detail boundary.
+  if (!userId) {
+    return doc.status === 'open'
+      ? { ...shellOf(doc as IJobPosting), gated: true }
+      : null
+  }
+  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
+  if (doc.status === 'closed' && !app) return null
+
+  const postingState = jobPostingStateOf(doc as IJobPosting)
+  const practice = postingState === 'restricted'
+    ? { jobDescription: '' }
+    : await preparePracticeHandoffPosting(doc)
   const jd = practice.jobDescription
-  const applyOptions = (doc.provenance ?? [])
-    .filter((p) => p.applyUrl && p.applyTier && isSafeHttpUrl(p.applyUrl))
-    .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite, broken: (p.brokenReportCount ?? 0) > 0 }))
-    // Crowd-healed ladder (§4b): rungs with dead-click reports sink below
-    // clean ones — demoted, never hidden (they may still work for others).
-    .sort((a, b) => Number(a.broken) - Number(b.broken) || TIER_RANK[a.tier] - TIER_RANK[b.tier])
-    .map(({ url, tier, viaSite }) => ({ url, tier, viaSite }))
-  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
+  const applyOptions = postingState === 'live'
+    ? (doc.provenance ?? [])
+        .filter((p) => p.applyUrl && p.applyTier && isSafeHttpUrl(p.applyUrl))
+        .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite, broken: (p.brokenReportCount ?? 0) > 0 }))
+        // Crowd-healed ladder (§4b): rungs with dead-click reports sink below
+        // clean ones — demoted, never hidden (they may still work for others).
+        .sort((a, b) => Number(a.broken) - Number(b.broken) || TIER_RANK[a.tier] - TIER_RANK[b.tier])
+        .map(({ url, tier, viaSite }) => ({ url, tier, viaSite }))
+    : []
   // An atsResult is 'done' only for the CURRENT (resume x JD) pair (Codex
   // on #521): a JD merge OR a resume edit re-opens the check. The resume
   // comparison costs two User reads, so it runs only on the narrow path
   // where a result exists and the JD already matches. Rows with nothing to
   // compare against (legacy result without resumeHash, or the resume
   // deleted since) keep the historical score — better than a dead button.
-  let atsCurrent = !!app?.atsResult && (!jd || app.atsResult.jdHash === xrayHashOf(jd))
+  let atsCurrent = postingState !== 'restricted' && !!app?.atsResult && (!jd || app.atsResult.jdHash === xrayHashOf(jd))
   if (atsCurrent && app?.atsResult?.resumeHash) {
     const base = await getBaseResume(userId)
     const full = base ? await getResume(userId, base.id) : null
@@ -333,11 +401,40 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
         app.atsResult.resumeHash === legacyXrayHashOf(resumeText)
     }
   }
+  const fullShell = shellOf(doc as IJobPosting)
+  const retainedShell = { ...fullShell }
+  delete retainedShell.applyTier
+  const snapshotLocation = app?.jobSnapshot?.location?.trim() ?? ''
+  const restrictedShell: Omit<JobDetailShell, 'gated'> = {
+    id: String(doc._id),
+    title: app?.jobSnapshot?.title ?? 'Saved job',
+    company: app?.jobSnapshot?.company ?? '',
+    locations: snapshotLocation ? [snapshotLocation] : [],
+    isRemote: /\bremote\b/i.test(snapshotLocation),
+  }
+  const hasCanonicalJd = !!practice.jdHash
+  const hasCachedXray = hasCanonicalJd && !!doc.parsedJD && doc.parsedJDHash === xrayHashOf(jd)
+  const capabilities = {
+    apply: postingState === 'live' && applyOptions.length > 0,
+    viewSource: postingState === 'live' && applyOptions.length > 0,
+    xray: hasCanonicalJd && (postingState === 'live' || hasCachedXray),
+    tailor: postingState !== 'restricted' && !!jd.trim(),
+    practice: postingState !== 'restricted' && !!practice.role && hasCanonicalJd,
+    atsCheck: postingState !== 'restricted' && !!app && hasCanonicalJd,
+  }
+  const tailorInputHash = capabilities.tailor ? practice.jdHash : undefined
   return {
-    ...shellOf(doc as IJobPosting),
+    ...(postingState === 'live'
+      ? fullShell
+      : postingState === 'archived'
+        ? retainedShell
+        : restrictedShell),
     gated: false,
-    jd,
-    ...(practice.role && practice.jdHash
+    postingState,
+    capabilities,
+    ...(tailorInputHash ? { tailorInputHash } : {}),
+    ...(postingState !== 'restricted' ? { jd } : {}),
+    ...(capabilities.practice && practice.role && practice.jdHash
       ? {
           practiceRole: practice.role,
           practiceHandoffToken: mintPracticeHandoffToken({
@@ -348,7 +445,9 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
         }
       : {}),
     applyOptions,
-    flags: { staffing: !!doc.flags?.staffing, shortJd: !!doc.flags?.shortJd, repost: !!doc.flags?.repost },
+    flags: postingState === 'restricted'
+      ? { staffing: false, shortJd: false, repost: false }
+      : { staffing: !!doc.flags?.staffing, shortJd: !!doc.flags?.shortJd, repost: !!doc.flags?.repost },
     application: app
       ? {
           applicationId: String(app._id),
@@ -356,8 +455,10 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
           interviewDate: app.interviewDate ? new Date(app.interviewDate).toISOString() : undefined,
           interviewDateConfidence: app.interviewDateConfidence,
           practiceCount: Math.min(3, app.verifiedPracticeSessionIds?.length ?? 0),
-          ats: app.atsResult && atsCurrent
-            ? { state: 'done' as const, score: app.atsResult.score, missingKeywords: (app.atsResult.missingKeywords ?? []).slice(0, 5), checkedAt: new Date(app.atsResult.checkedAt).toISOString() }
+          ats: postingState === 'restricted' && app.atsResult
+            ? { state: 'done' as const, checkedAt: new Date(app.atsResult.checkedAt).toISOString() }
+            : app.atsResult && atsCurrent
+              ? { state: 'done' as const, score: app.atsResult.score, missingKeywords: (app.atsResult.missingKeywords ?? []).slice(0, 5), checkedAt: new Date(app.atsResult.checkedAt).toISOString() }
             : app.atsRequestedAt && Date.now() - new Date(app.atsRequestedAt).getTime() < 3 * 60_000
               ? { state: 'pending' as const }
               : { state: 'none' as const },

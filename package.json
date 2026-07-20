@@ -60,7 +60,8 @@
     "qa:v3:ui-smoke:prod": "node scripts/qa-v3-ui-smoke.mjs --prod",
     "qa:v3:gate": "node scripts/qa-v3-gate.mjs",
     "qa:v3:gate:prod": "node scripts/qa-v3-gate.mjs --prod",
-    "replay:pathway": "node scripts/replay-pathway-regenerate.mjs"
+    "replay:pathway": "node scripts/replay-pathway-regenerate.mjs",
+    "repair:jobs-retention": "npx tsx -r dotenv/config scripts/repair-jobs-retention.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",

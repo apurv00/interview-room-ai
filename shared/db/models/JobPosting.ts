@@ -15,9 +15,10 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
  *
  * Lifecycle: closed on evidence (validThrough past, 2 board-poll misses,
  * 14d lastSeenAt silence), purged 7d after close via the purgeAt TTL — EXCEPT
- * userReferenced rows (tracker keeps a stable _id forever) and
- * closedReason:'llm-verdict' rows (slimmed to tombstones so the fingerprint
- * keeps blocking scam resurrection; Codex on #504).
+ * userReferenced rows (tracker keeps a stable _id and normally archived
+ * canonical JD for owner preparation) and closedReason:'llm-verdict' rows
+ * (slimmed to restricted tombstones so the fingerprint keeps blocking scam
+ * resurrection; Codex on #504).
  */
 
 export interface IJobProvenance {

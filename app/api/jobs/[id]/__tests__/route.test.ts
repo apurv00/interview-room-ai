@@ -95,4 +95,38 @@ describe('GET /api/jobs/[id] practice handoff', () => {
     expect(response.status).toBe(404)
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
+
+  it('prevents anonymous not-found responses from being cached', async () => {
+    mockGetServerSession.mockResolvedValue(null)
+    mockGetJobDetail.mockResolvedValue(null)
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}`), {
+      params: { id: JOB_ID },
+    })
+
+    expect(response.status).toBe(404)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(await response.json()).toEqual({ error: 'not found' })
+  })
+
+  it('passes an owner archive projection through as private without adding authority', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockGetJobDetail.mockResolvedValue({
+      id: JOB_ID,
+      gated: false,
+      postingState: 'archived',
+      title: 'Backend Engineer',
+      company: 'PhonePe',
+      jd: JD,
+      applyOptions: [],
+    })
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}`), {
+      params: { id: JOB_ID },
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(await response.json()).toMatchObject({ postingState: 'archived', applyOptions: [] })
+  })
 })

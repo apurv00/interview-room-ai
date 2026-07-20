@@ -1,13 +1,14 @@
 import { gunzipSync } from 'zlib'
 import { createHash } from 'crypto'
 import type mongoose from 'mongoose'
-import { JobPosting, type IJobPosting } from '@shared/db/models'
+import { JobApplication, JobPosting, type IJobPosting } from '@shared/db/models'
 import { parseJobDescription } from '@interview'
 import type { IParsedJobDescription } from '@shared/types'
 import {
   getActiveInterviewDomainCatalog,
 } from '@interview/services/persona/domainCatalogService'
 import { interviewSlugForDomain } from '../config/domains'
+import { jobPostingStateOf } from './postingAccess'
 
 /**
  * Interview X-ray (PRODUCT_FLOW §2 detail route, Wave 3.1b) — ONE persisted
@@ -68,8 +69,11 @@ export interface XrayResult {
   retryable?: boolean
 }
 
-export async function getOrParseXray(jobPostingId: string): Promise<XrayResult | null> {
-  return getOrParseXrayVersion(jobPostingId, true)
+export async function getOrParseXray(
+  jobPostingId: string,
+  userId?: string | null,
+): Promise<XrayResult | null> {
+  return getOrParseXrayVersion(jobPostingId, true, userId)
 }
 
 function inflateCanonicalJd(value: unknown): string {
@@ -102,18 +106,32 @@ function exactRoleVersionCondition(
 async function getOrParseXrayVersion(
   jobPostingId: string,
   allowVersionRetry: boolean,
+  userId?: string | null,
 ): Promise<XrayResult | null> {
   const doc = await JobPosting.findById(jobPostingId)
-    .select('domain jdCompressed parsedJD parsedJDHash parsedJDRoleVersion status')
+    .select('domain jdCompressed parsedJD parsedJDHash parsedJDRoleVersion status closedReason')
     .lean()
-  // Closed postings 404 on the detail body — the X-ray endpoint must not
-  // out-serve it during the retention window (Codex on #518).
-  if (!doc || doc.status !== 'open') return null
+  if (!doc || (doc.status !== 'open' && doc.status !== 'closed')) return null
+  const postingState = jobPostingStateOf(doc)
+  if (postingState === 'restricted') return null
+  // Archived X-rays are owner-only historical evidence. Never invoke the
+  // parser or refresh taxonomy on a closed row: if the exact retained JD was
+  // not parsed while live, there is no saved X-ray to serve.
+  if (postingState === 'archived') {
+    if (!userId) return null
+    const application = await JobApplication.exists({ userId, jobPostingId })
+    if (!application) return null
+  }
 
   const jd = inflateCanonicalJd(doc.jdCompressed)
   if (!jd) return null
 
   const hash = xrayHashOf(jd)
+  if (postingState === 'archived') {
+    return doc.parsedJD && doc.parsedJDHash === hash
+      ? { parsed: doc.parsedJD as XrayParsed, cached: true }
+      : null
+  }
   const activeCatalog = await getActiveInterviewDomainCatalog()
   const hasCurrentBodyParse = !!doc.parsedJD && doc.parsedJDHash === hash
   if (hasCurrentBodyParse) {

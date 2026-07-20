@@ -190,6 +190,10 @@ export const TailorSchema = z.object({
   resumeText: z.string().min(50).transform((s) => s.slice(0, AI_INPUT_MAX)),
   jobDescription: z.string().min(50).transform((s) => s.slice(0, AI_INPUT_MAX)),
   companyName: clampStr(200).optional(),
+  // Optional for backwards compatibility and anonymous Tailor runs. Clients
+  // that start while authenticated send this so the route can reject an
+  // account switch before charging quota or invoking the model.
+  originUserId: z.string().min(1).max(128).optional(),
 })
 
 export const ParseResumeSchema = z.object({

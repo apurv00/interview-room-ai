@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest'
 const {
   mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne,
   mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch,
+  mockPostingUpdateOne,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockSourceFindOne: vi.fn(),
@@ -12,6 +13,7 @@ const {
   mockCursorBulkWrite: vi.fn(),
   mockCycleCreate: vi.fn(),
   mockAdapterFetch: vi.fn(),
+  mockPostingUpdateOne: vi.fn(),
 }))
 
 vi.mock('@shared/services/inngest', () => ({
@@ -21,14 +23,12 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
 vi.mock('@shared/redis', () => ({ redis: { sadd: vi.fn(), expire: vi.fn(), scard: vi.fn() } }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findOne: vi.fn().mockResolvedValue(null), find: vi.fn(() => ({ limit: () => Promise.resolve([]) })), create: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({}) },
+  JobPosting: { findOne: vi.fn().mockResolvedValue(null), find: vi.fn(() => ({ limit: () => Promise.resolve([]) })), create: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({}), updateOne: mockPostingUpdateOne },
   JobSourceConfig: { findOne: mockSourceFindOne, find: mockSourceFind, updateOne: mockSourceUpdateOne },
   JobIngestCursor: { find: mockCursorFind, bulkWrite: mockCursorBulkWrite },
   JobIngestCycle: { create: mockCycleCreate },
   // §4.5 switch read once per sync — OFF keeps these tests byte-identical.
   JobsVerdictConfig: { getConfig: vi.fn().mockResolvedValue({ collectionEnabled: false, enforceEnabled: false }) },
-  // Pin re-derivation (§2): default = a live tracker row exists.
-  JobApplication: { exists: vi.fn().mockResolvedValue({ _id: 'app1' }) },
 }))
 vi.mock('../adapters/jsearchAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/jsearchAdapter')>()
@@ -50,11 +50,12 @@ import { JobPosting } from '@shared/db/models'
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 
 function resetAll(): void {
-  for (const m of [mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne, mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch]) m.mockReset()
+  for (const m of [mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne, mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch, mockPostingUpdateOne]) m.mockReset()
   mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
   mockSourceUpdateOne.mockResolvedValue({})
   mockCursorBulkWrite.mockResolvedValue({})
   mockCycleCreate.mockResolvedValue({})
+  mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
 }
 
 describe('runIngestSchedulerHandler', () => {
@@ -508,6 +509,8 @@ describe('board sync uses per-config sourceId (Codex #513 P1)', () => {
 
 function docStub(overrides: Record<string, unknown> = {}) {
   return {
+    _id: 'p1',
+    updatedAt: new Date('2026-07-20T00:00:00Z'),
     status: 'open',
     closedReason: undefined as string | undefined,
     provenance: [] as Array<Record<string, unknown>>,
@@ -535,11 +538,43 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([staleSolo, staleShared]) } as never)
     const r = await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
     expect(r).toMatchObject({ cycleWritten: true })
-    expect(staleSolo.status).toBe('closed')
-    expect(staleSolo.closedReason).toBe('board-poll-miss')
-    expect(staleSolo.save).toHaveBeenCalled()
+    expect(mockPostingUpdateOne.mock.calls[0][0]).toMatchObject({
+      _id: 'p1', status: 'open', updatedAt: staleSolo.updatedAt,
+    })
+    expect(mockPostingUpdateOne.mock.calls[0][1]).toMatchObject({
+      $set: { status: 'closed', closedReason: 'board-poll-miss', boardPollMisses: 2 },
+      $unset: { purgeAt: 1 },
+    })
+    expect(mockPostingUpdateOne.mock.calls[1][0]).toMatchObject({
+      status: 'closed', closedReason: 'board-poll-miss', userReferenced: true,
+    })
+    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({
+      status: 'closed', closedReason: 'board-poll-miss', userReferenced: { $ne: true },
+    })
+    expect(mockPostingUpdateOne.mock.calls[2][1].$set.purgeAt).toBeInstanceOf(Date)
     expect(staleShared.status).toBe('open') // another source still lists it
     expect(staleShared.save).not.toHaveBeenCalled()
+  })
+
+  it('a restricted close that wins after the stale scan cannot be downgraded to a board archive', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
+    const stale = docStub({ boardPollMisses: 1, provenance: [{ sourceId: 'gh:phonepe', externalId: 'gone', sourceKey: 'gh:phonepe:gone', lastSeenAt: new Date() }] })
+    const { JobPosting } = await import('@shared/db/models')
+    vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([stale]) } as never)
+    // source-revoked/llm-verdict landed and bumped the lifecycle before the
+    // board close CAS. The miss must also suppress both TTL follow-up writes.
+    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
+
+    expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
+    expect(mockPostingUpdateOne.mock.calls[0][0]).toMatchObject({
+      _id: 'p1', status: 'open', updatedAt: stale.updatedAt,
+    })
+    expect(stale.save).not.toHaveBeenCalled()
   })
 
   it('first miss only increments; a failed fetch is NOT a miss', async () => {
@@ -551,8 +586,10 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([stale]) } as never)
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
     await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
-    expect(stale.boardPollMisses).toBe(1)
-    expect(stale.status).toBe('open')
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: 'p1', status: 'open', updatedAt: stale.updatedAt }),
+      { $set: { boardPollMisses: 1 } },
+    )
 
     // drifted run: incomplete seen-set — the sweep must not run either
     resetAll()
@@ -572,25 +609,29 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
-    const pinned = { provenance: [{ sourceId: 'gh:phonepe', sourceKey: 'gh:phonepe:z9' }], boardPollMisses: 1, userReferenced: true, save: vi.fn().mockResolvedValue(undefined) } as Record<string, unknown>
+    const pinned = docStub({ provenance: [{ sourceId: 'gh:phonepe', sourceKey: 'gh:phonepe:z9' }], boardPollMisses: 1, userReferenced: true })
     vi.mocked((await import('@shared/db/models')).JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([pinned]) } as never)
     await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
-    expect(pinned.status).toBe('closed')
-    expect(pinned.purgeAt).toBeUndefined()
+    expect(mockPostingUpdateOne.mock.calls[0][1]).toMatchObject({
+      $set: { status: 'closed', closedReason: 'board-poll-miss' },
+      $unset: { purgeAt: 1 },
+    })
+    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({ userReferenced: { $ne: true } })
 
-    // ...but an ORPHANED pin (tracker rows cascaded away) re-derives to
-    // unpinned: pin cleared, TTL stamped (Codex #517 round-3)
+    // Pins are monotonic in the close path: clearing one from a cross-
+    // collection existence check races a concurrent first ownership write.
+    // Conservative orphan cleanup belongs in a separate reconciliation job.
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
     const models = await import('@shared/db/models')
-    vi.mocked(models.JobApplication.exists).mockResolvedValueOnce(null as never)
-    const orphaned = { provenance: [{ sourceId: 'gh:phonepe', sourceKey: 'gh:phonepe:z8' }], boardPollMisses: 1, userReferenced: true, save: vi.fn().mockResolvedValue(undefined) } as Record<string, unknown>
+    const orphaned = docStub({ provenance: [{ sourceId: 'gh:phonepe', sourceKey: 'gh:phonepe:z8' }], boardPollMisses: 1, userReferenced: true })
     vi.mocked(models.JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([orphaned]) } as never)
     await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
-    expect(orphaned.userReferenced).toBe(false)
-    expect(orphaned.purgeAt).toBeInstanceOf(Date)
+    expect(orphaned.userReferenced).toBe(true)
+    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({ userReferenced: { $ne: true } })
+    expect(orphaned.save).not.toHaveBeenCalled()
 
     // failed fetch: the sweep must not run at all
     resetAll()

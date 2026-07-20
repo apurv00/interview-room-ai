@@ -150,10 +150,187 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     mockPostingUpdateOne.mockResolvedValue({ matchedCount: 0 }) // merge bumped updatedAt mid-flight
     const r = await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never })
     // filter carries the optimistic-concurrency token...
-    expect(mockPostingUpdateOne.mock.calls[0][0]).toEqual({ _id: 'p1', updatedAt: doc.updatedAt })
+    expect(mockPostingUpdateOne.mock.calls[0][0]).toEqual({ _id: 'p1', updatedAt: doc.updatedAt, status: 'open' })
     // ...and a superseded write is NOT counted as scored
     expect(r).toMatchObject({ evaluated: 1, scored: 0 })
     expect(mockCycleCreate.mock.calls.at(-1)![0].llm.scored).toBe(0)
+  })
+
+  it('an exact-input safety verdict upgrades a normal archive that won the close race', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValue({ ...CFG_ON, enforceEnabled: true })
+    const initial = posting()
+    const archived = posting({
+      status: 'closed',
+      closedReason: 'board-poll-miss',
+      updatedAt: new Date('2026-07-20T01:00:00Z'),
+    })
+    mockPostingFindById
+      .mockReturnValueOnce({ lean: () => Promise.resolve(initial) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(archived) })
+    mockPostingUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 1 })
+
+    const r = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: vi.fn().mockResolvedValue({ ...okOutcome(), inputHash: FIXTURE_HASH }) as never },
+    )
+
+    expect(mockPostingUpdateOne).toHaveBeenCalledTimes(2)
+    expect(mockPostingUpdateOne.mock.calls[1][0]).toEqual({
+      _id: 'p1',
+      updatedAt: archived.updatedAt,
+      status: 'closed',
+      closedReason: 'board-poll-miss',
+    })
+    expect(mockPostingUpdateOne.mock.calls[1][1]).toMatchObject({
+      $set: { status: 'closed', closedReason: 'llm-verdict' },
+      $unset: { purgeAt: 1 },
+    })
+    expect(r).toMatchObject({ evaluated: 1, scored: 1 })
+  })
+
+  it('eventually restricts a pending normal archive after both initial safety CAS writes lose to benign pin updates', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValue({ ...CFG_ON, enforceEnabled: true })
+    const initial = posting()
+    const firstArchive = posting({
+      status: 'closed',
+      closedReason: 'aged-out',
+      updatedAt: new Date('2026-07-20T01:00:00Z'),
+    })
+    const retryArchive = posting({
+      status: 'closed',
+      closedReason: 'aged-out',
+      updatedAt: new Date('2026-07-20T02:00:00Z'),
+    })
+    mockPostingFindById
+      .mockReturnValueOnce({ lean: () => Promise.resolve(initial) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(firstArchive) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(retryArchive) })
+    mockPostingUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 1 })
+    const evaluateFn = vi.fn().mockResolvedValue({ ...okOutcome(), inputHash: FIXTURE_HASH })
+
+    expect(await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )).toMatchObject({ evaluated: 1, scored: 0 })
+    expect(await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )).toMatchObject({ evaluated: 1, scored: 1 })
+
+    expect(mockPostingUpdateOne.mock.calls[2][0]).toEqual({
+      _id: 'p1',
+      updatedAt: retryArchive.updatedAt,
+      status: 'closed',
+      closedReason: 'aged-out',
+    })
+    expect(mockPostingUpdateOne.mock.calls[2][1]).toMatchObject({
+      $set: { status: 'closed', closedReason: 'llm-verdict' },
+      $unset: { purgeAt: 1 },
+    })
+  })
+
+  it('eventually restricts a normal archive with no verdict after both safety CAS writes lose', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValue({ ...CFG_ON, enforceEnabled: true })
+    const initial = posting({ llmVerdict: undefined })
+    const firstArchive = posting({
+      status: 'closed',
+      closedReason: 'valid-through-expired',
+      llmVerdict: undefined,
+      updatedAt: new Date('2026-07-20T01:00:00Z'),
+    })
+    const retryArchive = posting({
+      status: 'closed',
+      closedReason: 'valid-through-expired',
+      llmVerdict: undefined,
+      updatedAt: new Date('2026-07-20T02:00:00Z'),
+    })
+    mockPostingFindById
+      .mockReturnValueOnce({ lean: () => Promise.resolve(initial) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(firstArchive) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(retryArchive) })
+    mockPostingUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 1 })
+    const evaluateFn = vi.fn().mockResolvedValue({ ...okOutcome(), inputHash: FIXTURE_HASH })
+
+    expect(await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )).toMatchObject({ evaluated: 1, scored: 0 })
+    expect(await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )).toMatchObject({ evaluated: 1, scored: 1 })
+
+    expect(mockPostingUpdateOne.mock.calls[2][0]).toEqual({
+      _id: 'p1',
+      updatedAt: retryArchive.updatedAt,
+      status: 'closed',
+      closedReason: 'valid-through-expired',
+    })
+    expect(mockPostingUpdateOne.mock.calls[2][1]).toMatchObject({
+      $set: { status: 'closed', closedReason: 'llm-verdict' },
+      $unset: { purgeAt: 1 },
+    })
+  })
+
+  it('does not upgrade a raced archive when the verdict inputs changed', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValue({ ...CFG_ON, enforceEnabled: true })
+    mockPostingFindById
+      .mockReturnValueOnce({ lean: () => Promise.resolve(posting()) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(posting({
+        status: 'closed',
+        closedReason: 'dead-apply-link',
+        titleKey: 'changed title',
+        updatedAt: new Date('2026-07-20T01:00:00Z'),
+      })) })
+    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    const r = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: vi.fn().mockResolvedValue({ ...okOutcome(), inputHash: FIXTURE_HASH }) as never },
+    )
+
+    expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
+    expect(r).toMatchObject({ evaluated: 1, scored: 0 })
+  })
+
+  it('never overwrites source-revoked when a legal close wins the verdict race', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValue({ ...CFG_ON, enforceEnabled: true })
+    mockPostingFindById
+      .mockReturnValueOnce({ lean: () => Promise.resolve(posting()) })
+      .mockReturnValueOnce({ lean: () => Promise.resolve(posting({
+        status: 'closed',
+        closedReason: 'source-revoked',
+        updatedAt: new Date('2026-07-20T01:00:00Z'),
+      })) })
+    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    const r = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: vi.fn().mockResolvedValue({ ...okOutcome(), inputHash: FIXTURE_HASH }) as never },
+    )
+
+    expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
+    expect(r).toMatchObject({ evaluated: 1, scored: 0 })
   })
 
   it('a scored row with a STALE hash re-verdicts (§4.5 input change re-enqueues)', async () => {
@@ -174,19 +351,21 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: vi.fn().mockResolvedValue(okOutcome(genuine)) as never })
     const [, update] = mockPostingUpdateOne.mock.calls[0]
     expect(update.$set.status).toBe('open')
-    expect(update.$unset).toEqual({ closedReason: 1, closedAt: 1 })
+    expect(update.$unset).toEqual({ closedReason: 1, closedAt: 1, purgeAt: 1 })
     // ...but a still-fraud verdict keeps the tombstone closed
     resetAll()
     mockGetConfig.mockResolvedValue({ ...CFG_ON, enforceEnabled: true })
     mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting({ status: 'closed', closedReason: 'llm-verdict', llmVerdict: { status: 'pending', attempts: 1 } })) })
     await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never })
-    const set2 = mockPostingUpdateOne.mock.calls[0][1].$set
+    const update2 = mockPostingUpdateOne.mock.calls[0][1]
+    const set2 = update2.$set
     expect(set2.status).toBe('closed')
+    expect(update2.$unset).toEqual({ purgeAt: 1 })
   })
 
-  it('closed rows with any OTHER reason stay ineligible', async () => {
+  it('restricted closed rows stay ineligible', async () => {
     resetAll()
-    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting({ status: 'closed', closedReason: 'aged-out' })) })
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting({ status: 'closed', closedReason: 'source-revoked' })) })
     const evaluateFn = vi.fn()
     await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: evaluateFn as never })
     expect(evaluateFn).not.toHaveBeenCalled()
@@ -336,7 +515,7 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
     expect(mockPostingFind).not.toHaveBeenCalled()
   })
 
-  it('queries BOTH pending rows (attempts<5) and no-subdoc open rows, oldest-first, and enqueues in 40-id batches', async () => {
+  it('queries pending and eligible no-subdoc rows, oldest-first, and enqueues in 40-id batches', async () => {
     resetAll()
     const rows = Array.from({ length: 45 }, (_, i) => ({ _id: `id${i}` }))
     sweepChain(rows)
@@ -346,10 +525,18 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
     expect(query.$and[0].$or).toEqual([
       { status: 'open' },
       { status: 'closed', closedReason: 'llm-verdict' },
+      {
+        status: 'closed',
+        closedReason: { $in: ['board-poll-miss', 'valid-through-expired', 'aged-out', 'dead-apply-link'] },
+        $or: [
+          { 'llmVerdict.status': 'pending' },
+          { llmVerdict: { $exists: false } },
+        ],
+      },
     ])
     expect(query.$and[1].$or).toEqual([
       { 'llmVerdict.status': 'pending', 'llmVerdict.attempts': { $lt: 5 } },
-      { llmVerdict: { $exists: false }, status: 'open' },
+      { llmVerdict: { $exists: false } },
     ])
     expect(query.$and).toHaveLength(2) // no opt-outs configured → no $nin clause
     expect(mockSend.mock.calls[0][0].name).toBe('jobs/verdict.requested')

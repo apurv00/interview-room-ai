@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { STORAGE_KEYS } from '@shared/storageKeys'
@@ -32,6 +32,15 @@ interface Detail {
   salaryText?: string
   applyTier?: string
   gated: boolean
+  postingState?: 'live' | 'archived' | 'restricted' | 'snapshot-only'
+  capabilities?: {
+    apply: boolean
+    viewSource: boolean
+    xray: boolean
+    tailor: boolean
+    practice: boolean
+    atsCheck: boolean
+  }
   practiceRole?: string
   practiceHandoffToken?: string
   jd?: string
@@ -64,7 +73,7 @@ const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
 export default function JobDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [detail, setDetail] = useState<Detail | null>(null)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'missing'>('loading')
+  const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'unavailable'>('loading')
   const [gate, setGate] = useState<null | 'view_job_detail' | 'save_job'>(null)
   const [saved, setSaved] = useState(false)
   const [xray, setXray] = useState<Xray | null>(null)
@@ -77,18 +86,46 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [practiceEmail, setPracticeEmail] = useState<'idle' | 'sent' | 'email-off' | 'unavailable'>('idle')
   const [practiceStart, setPracticeStart] = useState<'idle' | 'loading' | 'error'>('idle')
   const [sheetDone, setSheetDone] = useState<string | null>(null)
+  const [retakeParentId, setRetakeParentId] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch(`/api/jobs/${params.id}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => { setDetail(d); setStatus('ready') })
-      .catch(() => setStatus('missing'))
+    try {
+      setRetakeParentId(retakeParentFromSearch(window.location.search) ?? null)
+    } catch {
+      setRetakeParentId(null)
+    }
+  }, [params.id])
+
+  useEffect(() => {
+    let cancelled = false
+    setDetail(null)
+    setStatus('loading')
+    void (async () => {
+      try {
+        const response = await fetch(`/api/jobs/${params.id}`)
+        if (cancelled) return
+        if (!response.ok) {
+          setStatus(response.status === 404 ? 'missing' : 'unavailable')
+          return
+        }
+        const nextDetail = await response.json() as Detail
+        if (cancelled) return
+        setDetail(nextDetail)
+        setStatus('ready')
+      } catch {
+        if (!cancelled) {
+          setDetail(null)
+          setStatus('unavailable')
+        }
+      }
+    })()
     fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'jobs.job_viewed', jobPostingId: params.id, props: {} }),
       keepalive: true,
     }).catch(() => {})
+    return () => { cancelled = true }
   }, [params.id])
 
   // X-ray loads progressively AFTER the body — the first view on a posting
@@ -100,15 +137,42 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const pendingPollFor = useRef<string | null>(null)
   const practiceStartInFlight = useRef(false)
   const practiceReadyRef = useRef(false)
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const unavailableRef = useRef<HTMLElement>(null)
+  const sheetDialogRef = useRef<HTMLDivElement>(null)
+  const sheetInvokerRef = useRef<HTMLElement | null>(null)
   practiceReadyRef.current = !!(
     detail && !detail.gated && detail.practiceRole && detail.practiceHandoffToken
   )
+
+  const restoreReturnSheetFocus = useCallback(() => {
+    const invoker = sheetInvokerRef.current
+    if (!invoker) {
+      const fallback = titleRef.current ?? unavailableRef.current
+      fallback?.focus()
+      return
+    }
+    if (invoker.isConnected) invoker.focus()
+    else (titleRef.current ?? unavailableRef.current)?.focus()
+    // Invalidation sets the replacement projection in the same React batch.
+    // Re-check after commit: the invoker may have been connected above but
+    // removed moments later when Apply disappears.
+    window.setTimeout(() => {
+      if (!invoker.isConnected) (titleRef.current ?? unavailableRef.current)?.focus()
+    }, 0)
+  }, [])
+
+  const closeReturnSheet = useCallback(() => {
+    setSheet(null)
+    restoreReturnSheetFocus()
+  }, [restoreReturnSheetFocus])
 
   // A check queued in another tab / before a refresh arrives as state
   // 'pending' with no local poll loop — poll until it settles or times out
   // (Codex on #521), once per posting.
   useEffect(() => {
     if (detail?.gated !== false || detail.application?.ats.state !== 'pending') return
+    if (detail.capabilities?.atsCheck === false) return
     if (pendingPollFor.current === params.id) return
     pendingPollFor.current = params.id
     let cancelled = false
@@ -124,8 +188,22 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }, [detail, params.id])
   const loadedDetailId = detail?.id
   const detailIsGated = detail?.gated
+  const detailCanXray = detail?.gated === false && (detail.capabilities?.xray ?? true)
+  const detailPostingState = detail?.gated === false
+    ? (detail.postingState ?? 'live')
+    : 'live'
   useEffect(() => {
-    if (loadedDetailId !== params.id || detailIsGated !== false) return
+    // A posting can be restricted while this tab is open. Remove any
+    // previously fetched JD-derived evidence and let a later reopen fetch a
+    // fresh server-authorized projection instead of rendering stale X-ray UI.
+    if (detailIsGated === false && !detailCanXray) {
+      xrayFetchedFor.current = null
+      setXray(null)
+      setXrayState('idle')
+    }
+  }, [detailCanXray, detailIsGated])
+  useEffect(() => {
+    if (loadedDetailId !== params.id || detailIsGated !== false || !detailCanXray) return
     if (xrayFetchedFor.current === params.id) return
     xrayFetchedFor.current = params.id
     setXrayState('loading')
@@ -199,7 +277,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       }
     })()
     return () => { cancelled = true }
-  }, [detailIsGated, loadedDetailId, params.id, xrayAttempt])
+  }, [detailCanXray, detailIsGated, loadedDetailId, params.id, xrayAttempt])
 
   async function refetchDetail() {
     try {
@@ -214,13 +292,20 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   async function onAtsCheck() {
+    if (detail?.capabilities?.atsCheck === false) return
     setAtsBusy(true)
     setAtsHint(null)
     try {
       const res = await fetch(`/api/jobs/${params.id}/ats-check`, { method: 'POST' })
       if (res.status === 409) {
         const { reason } = await res.json().catch(() => ({ reason: '' }))
-        setAtsHint(reason === 'no-resume' ? 'Attach a resume first — the check compares it to this JD.' : 'Save this job first to unlock the ATS check.')
+        setAtsHint(
+          reason === 'no-resume'
+            ? 'Attach a resume first — the check compares it to this JD.'
+            : reason === 'posting-unavailable'
+              ? 'This posting no longer supports a new ATS check.'
+              : 'Save this job first to unlock the ATS check.',
+        )
         return
       }
       if (!res.ok) { setAtsHint('Could not start the check — try again.'); return }
@@ -270,6 +355,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   async function requestPracticeEmail() {
+    if (detail?.capabilities?.practice === false) {
+      setPracticeEmail('unavailable')
+      return
+    }
     // Honest states (EMAILS.md §3): the server declines visibly when the
     // stream is off or the user unsubscribed — never a silent accept.
     try {
@@ -310,8 +399,24 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       // expired intent. The signed token binds user + job + exact JD hash;
       // the session API resolves all three back to server state.
       const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
-      if (!response.ok) throw new Error('handoff unavailable')
-      const fresh = (await response.json()) as Detail
+      if (!response.ok) {
+        setDetail(null)
+        setStatus(response.status === 404 ? 'missing' : 'unavailable')
+        throw new Error('handoff unavailable')
+      }
+      let fresh: Detail
+      try {
+        fresh = (await response.json()) as Detail
+      } catch {
+        setDetail(null)
+        setStatus('unavailable')
+        throw new Error('handoff unavailable')
+      }
+      // Reconcile the fresh authorization projection before checking
+      // readiness. A restricted/gated response must replace stale live JD,
+      // X-ray, Apply, and Tailor UI even though Practice itself cannot start.
+      setDetail(fresh)
+      setStatus('ready')
       if (
         fresh.gated ||
         !fresh.jd ||
@@ -338,7 +443,6 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         // practice session. Fresh URL intent is the only authority here.
         localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
       }
-      setDetail(fresh)
       fetch('/api/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -369,7 +473,8 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     }
   }
 
-  function onApply(opt: ApplyOption) {
+  function onApply(opt: ApplyOption, invoker: HTMLElement) {
+    sheetInvokerRef.current = invoker
     // SYNC open inside the click handler — never after an await.
     window.open(opt.url, '_blank', 'noopener')
     // Arm the return-sheet (§4b): fires on visibilitychange→visible, ≥20s
@@ -392,30 +497,142 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   // Return-to-tab sheet (§4b): ≥20s away = the real ask; <20s = lead with
   // "did the link work?". One-shot — the arm record clears when shown.
   useEffect(() => {
-    function onVisible() {
-      if (document.visibilityState !== 'visible') return
-      let rec: { clickedAt: number; url: string; tier: string } | null = null
-      try {
-        const raw = localStorage.getItem(`JOBS_RETURN_${params.id}`)
-        if (raw) rec = JSON.parse(raw)
-      } catch { /* noop */ }
-      if (!rec) return
-      const elapsed = Date.now() - rec.clickedAt
-      if (elapsed > 45 * 60_000) {
-        try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
-        return
-      }
+    if (detailIsGated === true || detailPostingState !== 'live') {
       try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
-      setSheet({ kind: elapsed >= 20_000 ? 'normal' : 'quick', clicked: { url: rec.url, tier: rec.tier }, elapsedMs: elapsed })
+      closeReturnSheet()
+      if (
+        detailIsGated === true ||
+        detailPostingState === 'restricted' ||
+        detailPostingState === 'snapshot-only'
+      ) {
+        setInference('idle')
+        setSheetDone(null)
+      }
+      return
+    }
+    let cancelled = false
+    let validating = false
+    async function onVisible() {
+      if (document.visibilityState !== 'visible') return
+      if (validating) return
+      validating = true
+      try {
+        const clearArm = () => {
+          try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
+        }
+        const clearJobSpecificProjection = () => {
+          clearArm()
+          closeReturnSheet()
+          setSheetDone(null)
+          setInference('idle')
+          setXray(null)
+          setXrayState('idle')
+        }
+        // The posting may have closed while the employer tab was active.
+        // Re-authorize lifecycle before asking any apply-return question.
+        const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+        if (cancelled) return
+        if (!response.ok) {
+          clearJobSpecificProjection()
+          setDetail(null)
+          setStatus('unavailable')
+          return
+        }
+        const fresh = await response.json() as Detail
+        if (cancelled) return
+        if (fresh.gated) {
+          clearJobSpecificProjection()
+          setDetail(fresh)
+          setStatus('ready')
+          return
+        }
+        const freshState = fresh.postingState ?? 'live'
+        if (freshState !== 'live') {
+          clearArm()
+          closeReturnSheet()
+          if (freshState === 'restricted' || freshState === 'snapshot-only') {
+            setSheetDone(null)
+            setInference('idle')
+          }
+          setDetail(fresh)
+          setStatus('ready')
+          return
+        }
+        setDetail(fresh)
+        let rec: { clickedAt: number; url: string; tier: string } | null = null
+        try {
+          const raw = localStorage.getItem(`JOBS_RETURN_${params.id}`)
+          if (raw) rec = JSON.parse(raw)
+        } catch { /* noop */ }
+        if (!rec) return
+        const elapsed = Date.now() - rec.clickedAt
+        if (elapsed > 45 * 60_000) {
+          clearArm()
+          return
+        }
+        clearArm()
+        setSheet({ kind: elapsed >= 20_000 ? 'normal' : 'quick', clicked: { url: rec.url, tier: rec.tier }, elapsedMs: elapsed })
+      } catch {
+        if (!cancelled) {
+          try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
+          closeReturnSheet()
+          setSheetDone(null)
+          setInference('idle')
+          setXray(null)
+          setXrayState('idle')
+          setDetail(null)
+          setStatus('unavailable')
+        }
+      } finally {
+        validating = false
+      }
     }
     document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [params.id])
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [closeReturnSheet, detailIsGated, detailPostingState, params.id])
+
+  useEffect(() => {
+    if (!sheet) return
+    const dialog = sheetDialogRef.current
+    if (!dialog) return
+    const dialogElement = dialog
+    const focusableSelector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusableElements = () => Array.from(dialogElement.querySelectorAll<HTMLElement>(focusableSelector))
+    ;(focusableElements()[0] ?? dialogElement).focus()
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeReturnSheet()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = focusableElements()
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialogElement.focus()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && (document.activeElement === first || !dialogElement.contains(document.activeElement))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || !dialogElement.contains(document.activeElement))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [closeReturnSheet, sheet])
 
   async function sheetApplied() {
     const clicked = sheet?.clicked
     const elapsedMs = sheet?.elapsedMs
-    setSheet(null)
+    closeReturnSheet()
     const post = () =>
       fetch(`/api/jobs/${params.id}/status`, {
         method: 'POST',
@@ -438,13 +655,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       setSheetDone('Marked as applied ✓ — it’s on your tracker.')
       refetchDetail()
     } else {
-      setSheetDone('Couldn’t record that just now — your application is real either way; hit Save and mark it applied in a moment.')
+      setSheetDone('Couldn’t record that just now — open your tracker to update the status when you’re ready.')
     }
   }
 
   async function sheetBrokenLink() {
     const clicked = sheet?.clicked
-    setSheet(null)
+    closeReturnSheet()
     if (!clicked) return
     const alternates = (detail?.applyOptions ?? []).filter((o) => o.url !== clicked.url)
     const post = () =>
@@ -474,30 +691,102 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     }
   }
 
+  const genericSetupHref = '/interview/setup?jobsFallback=1'
+  const rememberGenericRetake = () => {
+    try {
+      // Exact-job comparison requires the same server-verified job + JD hash.
+      // Generic fallback intentionally starts a new, non-comparable practice.
+      localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+    } catch { /* setup URL remains authoritative */ }
+  }
+
   if (status === 'missing') {
     return (
       <main className="mx-auto max-w-3xl px-4 py-16">
         <p className="font-medium">This posting isn&apos;t available anymore.</p>
+        {retakeParentId && (
+          <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-3 block text-sm font-medium text-blue-600 hover:underline">
+            Start a new general practice
+          </Link>
+        )}
+        <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Back to jobs</Link>
+      </main>
+    )
+  }
+  if (status === 'unavailable') {
+    return (
+      <main ref={unavailableRef} tabIndex={-1} className="mx-auto max-w-3xl px-4 py-16">
+        <p className="font-medium">We couldn&apos;t confirm this posting is still available.</p>
+        <p className="mt-1 text-sm text-slate-500">Refresh before applying or opening the employer link.</p>
+        {retakeParentId && (
+          <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-3 block text-sm font-medium text-blue-600 hover:underline">
+            Start a new general practice
+          </Link>
+        )}
         <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Back to jobs</Link>
       </main>
     )
   }
   if (!detail) return <main className="mx-auto max-w-3xl px-4 py-16 text-sm text-slate-500">Loading…</main>
 
-  const primary = detail.applyOptions?.[0]
-  const alternates = (detail.applyOptions ?? []).slice(1)
-  const practiceReady = !!detail.practiceRole && !!detail.practiceHandoffToken
+  const postingState = detail.gated ? 'live' : (detail.postingState ?? 'live')
+  const isLive = postingState === 'live'
+  const primary = isLive && detail.capabilities?.apply !== false
+    ? detail.applyOptions?.[0]
+    : undefined
+  const alternates = isLive ? (detail.applyOptions ?? []).slice(1) : []
+  const practiceReady = detail.capabilities?.practice !== false && !!detail.practiceRole && !!detail.practiceHandoffToken
+  const canTailor = !detail.gated && (detail.capabilities?.tailor ?? isLive)
+  const hasRestrictedPrepContext = postingState === 'restricted' || postingState === 'snapshot-only'
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
-      <Link href="/jobs" className="text-sm text-slate-500 hover:underline">← All jobs</Link>
-      <h1 className="mt-3 text-2xl font-semibold">{detail.title}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Link href={isLive ? '/jobs' : '/jobs/tracker'} className="text-sm text-slate-500 hover:underline">
+          {isLive ? '← All jobs' : '← Job tracker'}
+        </Link>
+        {!isLive && (
+          <Link href="/jobs" className="text-sm text-blue-600 hover:underline">Find similar live jobs</Link>
+        )}
+      </div>
+      <h1 ref={titleRef} tabIndex={-1} className="mt-3 text-2xl font-semibold">{detail.title}</h1>
       <p className="mt-1 text-slate-500">
         {detail.company}
         {detail.locations[0] ? ` · ${detail.locations[0]}` : ''}
         {detail.isRemote ? ' · Remote' : ''}
         {detail.salaryText ? ` · ${detail.salaryText}` : ''}
       </p>
+
+      {!detail.gated && !isLive && (
+        <aside
+          aria-label="Posting status"
+          aria-live="polite"
+          className="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"
+        >
+          <p className="font-medium">
+            {postingState === 'archived'
+              ? 'Posting no longer active'
+              : postingState === 'snapshot-only'
+                ? 'Original posting unavailable'
+                : 'Posting unavailable'}
+          </p>
+          <p className="mt-1 text-xs text-amber-800">
+            {postingState === 'archived'
+              ? 'Your tracked status, saved job description, and available preparation tools are still here.'
+              : 'Your tracked history is preserved, but this posting’s content and new job-specific actions are unavailable.'}
+          </p>
+        </aside>
+      )}
+
+      {retakeParentId && !practiceReady && detail.application?.status !== 'interview_scheduled' && (
+        <aside className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+          <p className="font-medium">Exact-job context is no longer available for this retake.</p>
+          <p className="mt-1 text-xs text-slate-600">You can start a new general practice without the posting-derived JD. It won&apos;t be compared with this exact-job session.</p>
+          <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-2 inline-block text-xs font-medium text-blue-600 hover:underline">
+            Start new general interview setup
+          </Link>
+        </aside>
+      )}
 
       {detail.gated ? (
         <div className="relative mt-8">
@@ -522,7 +811,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             {primary && (
               <div>
                 <button
-                  onClick={() => onApply(primary)}
+                  onClick={(event) => onApply(primary, event.currentTarget)}
                   className="rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
                 >
                   Apply ↗
@@ -532,6 +821,11 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 </p>
               </div>
             )}
+            {postingState === 'archived' && (
+              <span className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600">
+                Posting no longer active
+              </span>
+            )}
             {practiceReady ? (
               <button
                 onClick={onPracticeClick}
@@ -540,6 +834,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               >
                 {practiceStart === 'loading' ? 'Preparing practice…' : '🎙 Practice for this job · 20 min'}
               </button>
+            ) : detail.capabilities?.practice === false && !isLive ? (
+              <span className="text-xs text-slate-500">
+                Job-specific practice isn&apos;t available for this retained posting.
+              </span>
             ) : xrayState === 'loading' ? (
               <button
                 disabled
@@ -557,14 +855,24 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             ) : xrayState === 'ready' ? (
               <span className="text-xs text-slate-500">Job-specific practice isn&apos;t available for this role yet.</span>
             ) : null}
-            <button
-              onClick={onSave}
-              disabled={saved}
-              className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-60"
-            >
-              {saved ? 'Saved ✓' : 'Save'}
-            </button>
-            {primary && (
+            {canTailor && (
+              <Link
+                href={`/resume/tailor?jobId=${detail.id}`}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-slate-50"
+              >
+                Tailor resume
+              </Link>
+            )}
+            {isLive && (
+              <button
+                onClick={onSave}
+                disabled={saved}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-60"
+              >
+                {saved ? 'Saved ✓' : 'Save'}
+              </button>
+            )}
+            {primary && detail.capabilities?.viewSource !== false && (
               <a
                 href={primary.url}
                 target="_blank"
@@ -580,10 +888,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               We couldn&apos;t prepare this job practice. Refresh the posting and try again.
             </p>
           )}
-          {alternates.length > 0 && (
+          {isLive && alternates.length > 0 && (
             <p className="mt-2 text-xs text-slate-500">
               Also available: {alternates.map((o, i) => (
-                <button key={i} onClick={() => onApply(o)} className="underline decoration-dotted hover:text-slate-600">
+                <button key={i} onClick={(event) => onApply(o, event.currentTarget)} className="underline decoration-dotted hover:text-slate-600">
                   {o.viaSite ?? o.tier}{i < alternates.length - 1 ? ', ' : ''}
                 </button>
               ))}
@@ -600,7 +908,43 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             </div>
           )}
 
-          {detail.application?.status === 'interview_scheduled' ? (
+          {detail.application?.status === 'interview_scheduled' && !practiceReady ? (
+            <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+              <p className="font-medium">
+                {detail.application.interviewDate
+                  ? 'Interview status and date saved.'
+                  : 'Interview status saved.'}
+              </p>
+              {/* Date capture belongs to the tracked application, not the
+                  exact-JD Practice capability. Keep it usable when the role
+                  is unsupported, CMS is unavailable, or context is restricted. */}
+              {!detail.application.interviewDate && (
+                <div className="mt-2">
+                  <p className="text-xs text-slate-600">
+                    {detail.application.interviewDateConfidence === 'unknown' ? 'Know the date now?' : 'When is it?'}
+                  </p>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {[
+                      ['tomorrow', 'Tomorrow'],
+                      ['this-week', 'This week'],
+                      ['next-week', 'Next week'],
+                      ...(detail.application.interviewDateConfidence === 'unknown' ? [] : [['not-sure', 'Not sure yet']]),
+                    ].map(([c, l]) => (
+                      <button key={c} onClick={() => captureDate(c)} className="rounded-full border border-slate-200 px-2.5 py-1 text-xs hover:bg-white">{l}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="mt-1 text-xs text-slate-600">
+                {hasRestrictedPrepContext
+                  ? 'Exact-job preparation is unavailable because the original posting context can no longer be used.'
+                  : 'Job-specific preparation is currently unavailable, but you can still prepare in the general interview setup.'}
+              </p>
+              <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-2 inline-block text-xs font-medium text-blue-600 hover:underline">
+                Open general interview setup
+              </Link>
+            </div>
+          ) : detail.application?.status === 'interview_scheduled' ? (
             /* §4c hero swap: the chip yields to the PREP PLAN panel. */
             <div className="mt-5 rounded-lg border border-blue-300 bg-blue-50 p-4 text-sm">
               <p className="font-medium">🎙 You got the interview. Let&apos;s make sure you&apos;re ready.</p>
@@ -651,7 +995,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   EMAILS.md §1): voice mocks need a mic + quiet room, and
                   interview news arrives on a phone. Honest states only —
                   a request the server won't honor is declined visibly. */}
-              {practiceEmail === 'idle' && (
+              {detail.capabilities?.practice !== false && practiceEmail === 'idle' && (
                 <button
                   onClick={requestPracticeEmail}
                   className="mt-2 text-xs font-medium text-blue-600 hover:underline"
@@ -675,7 +1019,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 its DB row (DECISIONS #19). "Not ready" is banned copy; Apply is
                 never disabled. */
             <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
-              <span className="font-medium">Apply now — prep while you wait.</span>
+              <span className="font-medium">
+                {isLive ? 'Apply now — prep while you wait.' : 'Your preparation history stays with this tracked job.'}
+              </span>
               <span className="ml-2 text-xs text-slate-600">
                 Evidence toward readiness on this job: {detail.application?.practiceCount ?? 0}/3 sessions
               </span>
@@ -685,22 +1031,34 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           <section className="mt-6" aria-label="ATS check">
             {detail.application?.ats.state === 'done' ? (
               <div className="rounded-lg border border-slate-200 p-3 text-sm bg-white">
-                <span className="font-medium">ATS match: {detail.application.ats.score}/100</span>
-                {(detail.application.ats.missingKeywords?.length ?? 0) > 0 && (
-                  <span className="ml-2 text-xs text-slate-500">
-                    Missing: {detail.application.ats.missingKeywords!.join(', ')}
-                  </span>
+                {hasRestrictedPrepContext ? (
+                  <span className="font-medium">ATS check completed before this posting became unavailable.</span>
+                ) : (
+                  <>
+                    <span className="font-medium">ATS match: {detail.application.ats.score}/100</span>
+                    {(detail.application.ats.missingKeywords?.length ?? 0) > 0 && (
+                      <span className="ml-2 text-xs text-slate-500">
+                        Missing: {detail.application.ats.missingKeywords!.join(', ')}
+                      </span>
+                    )}
+                  </>
                 )}
                 {/* Resume edited since? The job compares BOTH hashes — an
                     unchanged pair returns the cached score instantly. */}
-                <button onClick={onAtsCheck} className="ml-3 text-xs text-blue-600 hover:underline">Re-check</button>
+                {detail.capabilities?.atsCheck !== false && (
+                  <button onClick={onAtsCheck} className="ml-3 text-xs text-blue-600 hover:underline">Re-check</button>
+                )}
               </div>
+            ) : detail.application?.ats.state === 'pending' && detail.capabilities?.atsCheck === false ? (
+              <p className="text-sm text-slate-500">An ATS check was pending when this posting became unavailable.</p>
             ) : detail.application?.ats.state === 'pending' || atsBusy ? (
               <p className="text-sm text-slate-500">Checking your resume against this JD (~1 min)…</p>
-            ) : detail.application ? (
+            ) : detail.application && detail.capabilities?.atsCheck !== false ? (
               <button onClick={onAtsCheck} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
                 Check my resume against this JD
               </button>
+            ) : !isLive ? (
+              <p className="text-xs text-slate-500">No new ATS check is available for this retained posting.</p>
             ) : (
               <p className="text-xs text-slate-500">Save this job to unlock the ATS check.</p>
             )}
@@ -710,8 +1068,15 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           <section className="mt-8" aria-label="Interview X-ray">
             <h2 className="text-lg font-medium">Interview X-ray</h2>
             <p className="mt-0.5 text-xs text-slate-500">What this JD says the interview will probe.</p>
-            {xrayState === 'loading' && <p className="mt-3 text-sm text-slate-500">Reading the JD…</p>}
-            {xrayState === 'failed' && (
+            {detail.capabilities?.xray === false && (
+              <p className="mt-3 text-sm text-slate-500">
+                {postingState === 'archived'
+                  ? 'No saved X-ray is available for this closed posting.'
+                  : 'X-ray is unavailable because the original posting content is not available.'}
+              </p>
+            )}
+            {detailCanXray && xrayState === 'loading' && <p className="mt-3 text-sm text-slate-500">Reading the JD…</p>}
+            {detailCanXray && xrayState === 'failed' && (
               <p className="mt-3 text-sm text-slate-500">
                 X-ray unavailable for this posting.{' '}
                 <button
@@ -722,12 +1087,12 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 </button>
               </p>
             )}
-            {xrayState === 'ready' && xray?.retryable && (
+            {detailCanXray && xrayState === 'ready' && xray?.retryable && (
               <p className="mt-3 text-xs text-amber-700">
                 Practice role verification is temporarily unavailable; the saved X-ray evidence remains visible.
               </p>
             )}
-            {xrayState === 'ready' && xray && (
+            {detailCanXray && xrayState === 'ready' && xray && (
               <div className="mt-3 space-y-4">
                 {xray.keyThemes.length > 0 && (
                   <div className="flex flex-wrap gap-2">
@@ -762,16 +1127,30 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             )}
           </section>
 
-          <section className="prose prose-sm mt-8 max-w-none whitespace-pre-wrap text-sm leading-relaxed">
-            {detail.jd || 'The source didn’t provide a full description — use the posting link above.'}
-          </section>
+          {detail.jd ? (
+            <section className="mt-8" aria-label={isLive ? 'Job description' : 'Saved job description'}>
+              <h2 className="text-lg font-medium">{isLive ? 'Job description' : 'Saved job description'}</h2>
+              <div className="prose prose-sm mt-3 max-w-none whitespace-pre-wrap text-sm leading-relaxed">
+                {detail.jd}
+              </div>
+            </section>
+          ) : (
+            <p className="mt-8 text-sm text-slate-500">The original job description is not available.</p>
+          )}
         </>
       )}
 
       {sheet && (
-        <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
-            <p className="font-medium">
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-900/20 p-4">
+          <div
+            ref={sheetDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="job-return-sheet-title"
+            tabIndex={-1}
+            className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-4 shadow-lg"
+          >
+            <p id="job-return-sheet-title" className="font-medium">
               {sheet.kind === 'quick' ? 'That was quick — did the link work?' : `Did you apply to ${detail.company}?`}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -781,7 +1160,12 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 </button>
               )}
               <button
-                onClick={() => { setSheet(null); setSheetDone('No rush — want an edge first? Tailor your resume for this job (~15s).') }}
+                onClick={() => {
+                  closeReturnSheet()
+                  setSheetDone(canTailor
+                    ? 'No rush — want an edge first? Tailor your resume for this job (~15s).'
+                    : 'No rush — keep this job tracked and update its status when you’re ready.')
+                }}
                 className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm bg-white"
               >
                 {sheet.kind === 'quick' ? 'It worked — still applying' : 'Not yet'}
@@ -795,9 +1179,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       )}
       {sheetDone && (
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
-          <div className="flex items-start justify-between rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg">
-            <p>{sheetDone}{sheetDone.includes('Tailor') && <> <Link href="/resume/tailor" className="text-blue-600 underline">Open tailor</Link></>}</p>
-            <button onClick={() => setSheetDone(null)} aria-label="Dismiss" className="ml-3 text-slate-500 hover:text-slate-600">✕</button>
+          <div role="status" aria-live="polite" aria-atomic="true" className="flex items-start justify-between rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg">
+            <p>{sheetDone}{canTailor && sheetDone.includes('Tailor') && <> <Link href={`/resume/tailor?jobId=${detail.id}`} className="text-blue-600 underline">Open tailor</Link></>}</p>
+            <button onClick={() => { setSheetDone(null); restoreReturnSheetFocus() }} aria-label="Dismiss" className="ml-3 text-slate-500 hover:text-slate-600">✕</button>
           </div>
         </div>
       )}

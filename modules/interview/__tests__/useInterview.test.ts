@@ -232,6 +232,35 @@ describe('useInterview', () => {
     expect(localStorage.getItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)).toBeNull()
   })
 
+  it('starts a scrubbed Jobs fallback as new general practice without false lineage', async () => {
+    const generalConfig: InterviewConfig = {
+      ...baseConfig,
+      interviewType: 'behavioral',
+      resumeText: 'Candidate-owned resume',
+      resumeFileName: 'resume.pdf',
+    }
+
+    renderHook(() => useInterview(makeOptions({ config: generalConfig })))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    const createCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([url]) => url === '/api/interviews'
+    )
+    const body = JSON.parse((createCall?.[1] as RequestInit).body as string)
+    expect(body.config).toMatchObject({
+      role: 'SWE',
+      resumeText: 'Candidate-owned resume',
+      resumeFileName: 'resume.pdf',
+    })
+    expect(body).not.toHaveProperty('parentSessionId')
+    expect(body).not.toHaveProperty('jobsHandoffToken')
+    expect(body.config).not.toHaveProperty('jobDescription')
+    expect(body.config).not.toHaveProperty('attribution')
+  })
+
   it('handles DB session creation failure gracefully', async () => {
     localStorage.setItem(
       STORAGE_KEYS.PENDING_RETAKE_PARENT,

@@ -213,7 +213,7 @@ describe('runLinkCheckHandler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    mockPostingUpdateOne.mockResolvedValue({})
+    mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
     mockCycleCreate.mockResolvedValue({})
   })
 
@@ -234,8 +234,12 @@ describe('runLinkCheckHandler', () => {
     const [filter, update] = mockPostingUpdateOne.mock.calls[0]
     expect(filter).toMatchObject({ _id: 'p1', status: 'open' }) // guarded
     expect((update as { $set: Record<string, unknown> }).$set).toMatchObject({ status: 'closed', closedReason: 'dead-apply-link' })
-    // Unpinned rows enter the 7-day purge (Codex #543 r4).
-    expect((update as { $set: Record<string, unknown> }).$set.purgeAt).toBeInstanceOf(Date)
+    // Close first clears every TTL, then current DB pin state determines
+    // whether a second conditional write may stamp a new one.
+    expect((update as { $unset: Record<string, unknown> }).$unset).toEqual({ purgeAt: 1 })
+    expect(mockPostingUpdateOne.mock.calls[1][0]).toMatchObject({ userReferenced: true })
+    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({ userReferenced: { $ne: true } })
+    expect(mockPostingUpdateOne.mock.calls[2][1].$set.purgeAt).toBeInstanceOf(Date)
     expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'link-check', linkCheck: expect.objectContaining({ checked: 1, dead: 1, closedNow: 1 }) }))
   })
 
@@ -290,6 +294,30 @@ describe('runLinkCheckHandler', () => {
     await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve)
     const [filter] = mockPostingUpdateOne.mock.calls[0]
     expect((filter as Record<string, unknown>)['applyCheck.lastCheckedAt']).toEqual(prevChecked)
+  })
+
+  it('does not stamp TTL or closed telemetry when the optimistic close loses its race', async () => {
+    const prevChecked = new Date(NOW.getTime() - 25 * 3600_000)
+    const doc = {
+      _id: 'p-race',
+      provenance: [{ applyUrl: 'https://dead.example/a' }],
+      applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: prevChecked, lastDeadAt: prevChecked },
+    }
+    mockPostingFind
+      .mockReturnValueOnce(chain([doc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    const result = await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve)
+
+    expect(result.closed).toBe(0)
+    expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
+    expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
+      linkCheck: expect.objectContaining({ closedNow: 0 }),
+    }))
   })
 
   it('blocklisted URLs are skipped entirely — a blocklist-only posting is unverifiable, never fetched', async () => {

@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import FileDropzone from '@shared/ui/FileDropzone'
@@ -27,9 +28,200 @@ interface TailorResult {
   outputTruncated?: boolean
 }
 
+type JobPostingState = 'live' | 'archived' | 'restricted' | 'snapshot-only'
+type JobAssociationState =
+  | 'idle'
+  | 'saving'
+  | 'saved'
+  | 'detached'
+  | 'incomplete'
+  | 'auth-required'
+  | 'context-error'
+  | 'lifecycle-error'
+  | 'verification-error'
+  | 'transient-error'
+type JobContextStatus = 'loading' | 'ready' | 'terminal' | 'transient-error'
+type JobAssociationDisposition = 'display' | 'unverified' | 'discard' | 'stale'
+
+interface LoadedJobContext {
+  jobId: string
+  jobDescription: string
+  companyName: string
+  sourceJdHash: string
+}
+
+interface JobAssociationPayload {
+  jobId: string
+  sourceJdHash: string
+  tailoredText: string
+  /** Client session that originated the run; the API exact-matches it. */
+  originUserId?: string
+  sourceResumeId?: string
+  matchScore?: number
+  addedKeywords: string[]
+  missingKeywords: string[]
+}
+
+interface StoredPendingAssociation {
+  version: 1
+  savedAt: number
+  payload: JobAssociationPayload
+  result: TailorResult
+  resumeFileName: string
+}
+
+interface HeldTailorResult {
+  payload: JobAssociationPayload
+  result: TailorResult
+  resumeFileName: string
+}
+
+const PENDING_ASSOCIATION_KEY = 'jobs:tailor-pending-association:v1'
+const PENDING_ASSOCIATION_TTL_MS = 10 * 60 * 1000
+const MAX_TAILORED_TEXT_CHARS = 100_000
+const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/i
+const JD_HASH_PATTERN = /^[a-f0-9]{64}$/
+
+function validUserId(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim() || value.length > 128) return null
+  return value
+}
+
+function cappedString(value: unknown, maxLength: number, required = false): string | null {
+  if (typeof value !== 'string') return null
+  const capped = value.slice(0, maxLength)
+  if (required && !capped.trim()) return null
+  return capped
+}
+
+function cappedKeywords(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  return value
+    .slice(0, 30)
+    .map((keyword) => cappedString(keyword, 60))
+    .filter((keyword): keyword is string => keyword !== null && !!keyword.trim())
+}
+
+function normalizeAssociationPayload(value: unknown): JobAssociationPayload | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<JobAssociationPayload>
+  if (typeof candidate.jobId !== 'string' || !OBJECT_ID_PATTERN.test(candidate.jobId)) return null
+  if (typeof candidate.sourceJdHash !== 'string' || !JD_HASH_PATTERN.test(candidate.sourceJdHash)) return null
+  const originUserId = validUserId(candidate.originUserId)
+  if (!originUserId) return null
+  const tailoredText = cappedString(candidate.tailoredText, MAX_TAILORED_TEXT_CHARS, true)
+  const addedKeywords = cappedKeywords(candidate.addedKeywords)
+  const missingKeywords = cappedKeywords(candidate.missingKeywords)
+  if (!tailoredText || !addedKeywords || !missingKeywords) return null
+  const sourceResumeId = candidate.sourceResumeId === undefined
+    ? undefined
+    : cappedString(candidate.sourceResumeId, 100, true)
+  if (candidate.sourceResumeId !== undefined && !sourceResumeId) return null
+  const matchScore = typeof candidate.matchScore === 'number' && Number.isFinite(candidate.matchScore)
+    ? Math.max(0, Math.min(100, candidate.matchScore))
+    : undefined
+  return {
+    jobId: candidate.jobId,
+    sourceJdHash: candidate.sourceJdHash,
+    tailoredText,
+    originUserId,
+    sourceResumeId: sourceResumeId ?? undefined,
+    matchScore,
+    addedKeywords,
+    missingKeywords,
+  }
+}
+
+function normalizeTailorResult(value: unknown): TailorResult | null {
+  if (!value || typeof value !== 'object') return null
+  const candidate = value as Partial<TailorResult>
+  const tailoredResume = cappedString(candidate.tailoredResume, MAX_TAILORED_TEXT_CHARS, true)
+  const addedKeywords = cappedKeywords(candidate.addedKeywords)
+  const missingKeywords = cappedKeywords(candidate.missingKeywords)
+  if (!tailoredResume || !addedKeywords || !missingKeywords || !Array.isArray(candidate.changes)) return null
+  if (typeof candidate.matchScore !== 'number' || !Number.isFinite(candidate.matchScore)) return null
+  const changes = candidate.changes.slice(0, 50).flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return []
+    const section = cappedString(entry.section, 120)
+    const change = cappedString(entry.change, 1_000)
+    const reason = cappedString(entry.reason, 1_000)
+    return section !== null && change !== null && reason !== null
+      ? [{ section, change, reason }]
+      : []
+  })
+  return {
+    tailoredResume,
+    changes,
+    matchScore: Math.max(0, Math.min(100, candidate.matchScore)),
+    missingKeywords,
+    addedKeywords,
+    inputTruncated: candidate.inputTruncated === true,
+    outputTruncated: candidate.outputTruncated === true,
+  }
+}
+
+function readStoredPendingAssociation(now = Date.now()): StoredPendingAssociation | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_ASSOCIATION_KEY)
+    if (!raw) return null
+    const candidate = JSON.parse(raw) as Partial<StoredPendingAssociation>
+    const savedAt = candidate.savedAt
+    const payload = normalizeAssociationPayload(candidate.payload)
+    const result = normalizeTailorResult(candidate.result)
+    const resumeFileName = cappedString(candidate.resumeFileName, 200)
+    const validAge = typeof savedAt === 'number' && Number.isFinite(savedAt) &&
+      savedAt <= now + 60_000 && now - savedAt <= PENDING_ASSOCIATION_TTL_MS
+    if (candidate.version !== 1 || !validAge || !payload || !result || resumeFileName === null || payload.tailoredText !== result.tailoredResume) {
+      window.sessionStorage.removeItem(PENDING_ASSOCIATION_KEY)
+      return null
+    }
+    return { version: 1, savedAt, payload, result, resumeFileName }
+  } catch {
+    try { window.sessionStorage.removeItem(PENDING_ASSOCIATION_KEY) } catch { /* unavailable */ }
+    return null
+  }
+}
+
+function storePendingAssociation(
+  payloadValue: JobAssociationPayload,
+  resultValue: TailorResult,
+  resumeFileNameValue: string,
+): boolean {
+  if (typeof window === 'undefined') return false
+  const payload = normalizeAssociationPayload(payloadValue)
+  const result = normalizeTailorResult(resultValue)
+  const resumeFileName = cappedString(resumeFileNameValue, 200)
+  if (!payload || !result || resumeFileName === null || payload.tailoredText !== result.tailoredResume) return false
+  try {
+    window.sessionStorage.setItem(PENDING_ASSOCIATION_KEY, JSON.stringify({
+      version: 1,
+      savedAt: Date.now(),
+      payload,
+      result,
+      resumeFileName,
+    } satisfies StoredPendingAssociation))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function clearStoredPendingAssociation(expected?: Pick<JobAssociationPayload, 'jobId' | 'sourceJdHash'>): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (expected) {
+      const current = readStoredPendingAssociation()
+      if (current && (current.payload.jobId !== expected.jobId || current.payload.sourceJdHash !== expected.sourceJdHash)) return
+    }
+    window.sessionStorage.removeItem(PENDING_ASSOCIATION_KEY)
+  } catch { /* unavailable */ }
+}
+
 export default function TailorPage() {
   const router = useRouter()
-  const { status: authStatus } = useSession()
+  const { data: session, status: authStatus } = useSession()
+  const sessionUserId = validUserId((session?.user as { id?: unknown } | undefined)?.id)
   const { requireAuth } = useAuthGate()
   const isAnonymous = authStatus !== 'authenticated'
   const [savedResumes, setSavedResumes] = useState<SavedResume[]>([])
@@ -38,88 +230,534 @@ export default function TailorPage() {
   const [resumeFileName, setResumeFileName] = useState('')
   const [jobDescription, setJobDescription] = useState('')
   const [companyName, setCompanyName] = useState('')
+  const [jobPostingState, setJobPostingState] = useState<JobPostingState | null>(null)
+  const [jobTailorAllowed, setJobTailorAllowed] = useState<boolean | null>(null)
+  const [jobContextStatus, setJobContextStatus] = useState<JobContextStatus>('loading')
+  const [jobContextRetry, setJobContextRetry] = useState(0)
+  const [loadedJobContext, setLoadedJobContext] = useState<LoadedJobContext | null>(null)
+  const [jobAssociation, setJobAssociation] = useState<JobAssociationState>('idle')
+  const [pendingAssociation, setPendingAssociation] = useState<JobAssociationPayload | null>(null)
   const [tailoring, setTailoring] = useState(false)
   const [result, setResult] = useState<TailorResult | null>(null)
+  const [resultResumeFileName, setResultResumeFileName] = useState('')
+  const [resultOriginUserId, setResultOriginUserId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
   const [savingCopy, setSavingCopy] = useState(false)
-  // Jobs hand-off (Wave 4.5, package 11): ?jobId= prefills the JD from the
-  // posting and the tailored result persists on the application row.
-  const searchParams = useSearchParams()
-  const jobId = searchParams?.get('jobId') ?? null
-  useEffect(() => {
-    if (!jobId) return
-    fetch(`/api/jobs/${jobId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d && d.gated === false) {
-          if (typeof d.jd === 'string' && d.jd) setJobDescription((prev) => prev || d.jd)
-          if (typeof d.company === 'string') setCompanyName((prev) => prev || d.company)
-        }
-      })
-      .catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId])
   /** Controlled value for the saved-resume dropdown. The old uncontrolled
    *  defaultValue meant that after "Remove", re-selecting the SAME resume
    *  fired no change event — the dropdown looked selected but did nothing. */
   const [selectedId, setSelectedId] = useState('')
+  const [loadedSavedResumeId, setLoadedSavedResumeId] = useState('')
+  // Jobs hand-off (Wave 4.5, package 11): ?jobId= prefills the JD from the
+  // posting and the tailored result persists on the application row.
+  const searchParams = useSearchParams()
+  const jobId = searchParams?.get('jobId') ?? null
+  const jobContextSessionKey = authStatus === 'authenticated'
+    ? `user:${sessionUserId ?? 'unknown'}`
+    : authStatus
+  const activeJobIdRef = useRef<string | null>(jobId)
+  const jobFetchRequestRef = useRef(0)
+  const tailorRequestRef = useRef(0)
+  const associationRequestRef = useRef(0)
+  const pendingRecoveryAttemptRef = useRef<string | null>(null)
+  const savedResumeRequestRef = useRef(0)
+  const savedResumeAbortRef = useRef<AbortController | null>(null)
+  const savedResumeListRequestRef = useRef(0)
+  const savedResumeListAbortRef = useRef<AbortController | null>(null)
+  const uploadRequestRef = useRef(0)
+  const uploadAbortRef = useRef<AbortController | null>(null)
+  const saveCopyRequestRef = useRef(0)
+  const heldResultRef = useRef<HeldTailorResult | null>(null)
+  const selectedResumeIdRef = useRef('')
+  const sessionUserIdRef = useRef<string | null>(sessionUserId)
+  const previousSessionUserIdRef = useRef<string | null>(sessionUserId)
+  activeJobIdRef.current = jobId
+  sessionUserIdRef.current = sessionUserId
+  const resolvedIdentityChanged = !!previousSessionUserIdRef.current &&
+    previousSessionUserIdRef.current !== sessionUserId
+
+  const scrubAccountBoundState = useCallback((message: string) => {
+    clearStoredPendingAssociation()
+    jobFetchRequestRef.current += 1
+    tailorRequestRef.current += 1
+    associationRequestRef.current += 1
+    savedResumeRequestRef.current += 1
+    savedResumeAbortRef.current?.abort()
+    savedResumeAbortRef.current = null
+    savedResumeListRequestRef.current += 1
+    savedResumeListAbortRef.current?.abort()
+    savedResumeListAbortRef.current = null
+    uploadRequestRef.current += 1
+    uploadAbortRef.current?.abort()
+    uploadAbortRef.current = null
+    saveCopyRequestRef.current += 1
+    heldResultRef.current = null
+    selectedResumeIdRef.current = ''
+    pendingRecoveryAttemptRef.current = null
+    setSavedResumes([])
+    setSelectedId('')
+    setLoadedSavedResumeId('')
+    setResumeText('')
+    setResumeFileName('')
+    setResumeSource('upload')
+    setUploading(false)
+    setTailoring(false)
+    setSavingCopy(false)
+    setResult(null)
+    setResultResumeFileName('')
+    setResultOriginUserId(null)
+    setPendingAssociation(null)
+    setJobAssociation('idle')
+    setLoadedJobContext(null)
+    setJobDescription('')
+    setCompanyName('')
+    setJobPostingState(null)
+    setJobTailorAllowed(false)
+    setJobContextStatus('terminal')
+    setError(message)
+  }, [])
 
   useEffect(() => {
-    if (authStatus === 'authenticated') {
-      fetch('/api/resume/save')
-        .then(r => r.json())
-        .then(data => setSavedResumes(data.resumes || []))
-        .catch(() => {})
+    const requestId = ++jobFetchRequestRef.current
+    const controller = new AbortController()
+    // A query-param transition is a new provenance boundary. Invalidate every
+    // in-flight result and clear values derived from the previous posting.
+    tailorRequestRef.current += 1
+    associationRequestRef.current += 1
+    setTailoring(false)
+    setResult(null)
+    setResultResumeFileName('')
+    setResultOriginUserId(null)
+    heldResultRef.current = null
+    saveCopyRequestRef.current += 1
+    setSavingCopy(false)
+    setError('')
+    setJobDescription('')
+    setCompanyName('')
+    setJobPostingState(null)
+    setLoadedJobContext(null)
+    setPendingAssociation(null)
+    setJobAssociation('idle')
+    pendingRecoveryAttemptRef.current = null
+    setJobTailorAllowed(jobId ? null : false)
+    setJobContextStatus(jobId ? 'loading' : 'terminal')
+    if (!jobId) return () => controller.abort()
+
+    fetch(`/api/jobs/${jobId}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (response.status === 404) return { kind: 'terminal' as const }
+        if (!response.ok) return { kind: 'transient-error' as const }
+        try {
+          const data = await response.json()
+          if (!data || typeof data !== 'object' || typeof data.gated !== 'boolean') {
+            return { kind: 'transient-error' as const }
+          }
+          // A shell while the client has an authenticated continuation means
+          // the server has not observed the refreshed session yet. Keep the
+          // continuation retryable; it is not an authoritative policy denial.
+          if (data.gated === true) return { kind: 'transient-error' as const }
+          if (!data.capabilities || typeof data.capabilities.tailor !== 'boolean' ||
+            !['live', 'archived', 'restricted', 'snapshot-only'].includes(data.postingState)) {
+            return { kind: 'transient-error' as const }
+          }
+          return { kind: 'detail' as const, data }
+        } catch {
+          return { kind: 'transient-error' as const }
+        }
+      })
+      .then((resolution) => {
+        if (controller.signal.aborted || requestId !== jobFetchRequestRef.current || activeJobIdRef.current !== jobId) return
+        if (resolution.kind === 'transient-error') {
+          setJobTailorAllowed(false)
+          setJobContextStatus('transient-error')
+          setJobAssociation('detached')
+          return
+        }
+        if (resolution.kind === 'terminal') {
+          setJobTailorAllowed(false)
+          setJobContextStatus('terminal')
+          setJobAssociation('detached')
+          return
+        }
+        const d = resolution.data
+        if (d.gated === false) {
+          const nextJd = typeof d.jd === 'string' ? d.jd : ''
+          const nextCompany = typeof d.company === 'string' ? d.company : ''
+          const sourceJdHash = typeof d.tailorInputHash === 'string' && /^[a-f0-9]{64}$/.test(d.tailorInputHash)
+            ? d.tailorInputHash
+            : ''
+          setJobDescription(nextJd)
+          setCompanyName(nextCompany)
+          if (['live', 'archived', 'restricted', 'snapshot-only'].includes(d.postingState)) {
+            setJobPostingState(d.postingState as JobPostingState)
+          }
+          const allowed = d.capabilities?.tailor === true && !!nextJd.trim() && !!sourceJdHash
+          setJobTailorAllowed(allowed)
+          setJobContextStatus(allowed ? 'ready' : 'terminal')
+          if (allowed) {
+            setLoadedJobContext({ jobId, jobDescription: nextJd, companyName: nextCompany, sourceJdHash })
+          } else {
+            setJobAssociation('detached')
+          }
+          return
+        }
+        setJobTailorAllowed(false)
+        setJobContextStatus('terminal')
+        setJobAssociation('detached')
+      })
+      .catch(() => {
+        if (controller.signal.aborted || requestId !== jobFetchRequestRef.current) return
+        setJobTailorAllowed(false)
+        setJobContextStatus('transient-error')
+        setJobAssociation('detached')
+      })
+    return () => controller.abort()
+  }, [jobId, jobContextRetry, jobContextSessionKey])
+  useEffect(() => () => {
+    savedResumeAbortRef.current?.abort()
+    savedResumeListAbortRef.current?.abort()
+    uploadAbortRef.current?.abort()
+  }, [])
+
+  useEffect(() => {
+    const stored = readStoredPendingAssociation()
+    if (stored && stored.payload.jobId !== jobId) clearStoredPendingAssociation()
+  }, [jobId])
+
+  useEffect(() => {
+    const previousUserId = previousSessionUserIdRef.current
+    const authenticatedIdentityChanged = !!previousUserId && previousUserId !== sessionUserId
+    previousSessionUserIdRef.current = sessionUserId
+
+    savedResumeListRequestRef.current += 1
+    savedResumeListAbortRef.current?.abort()
+    savedResumeListAbortRef.current = null
+    savedResumeRequestRef.current += 1
+    savedResumeAbortRef.current?.abort()
+    savedResumeAbortRef.current = null
+    selectedResumeIdRef.current = ''
+    setSavedResumes([])
+
+    if (authenticatedIdentityChanged) {
+      clearStoredPendingAssociation()
+      uploadRequestRef.current += 1
+      uploadAbortRef.current?.abort()
+      uploadAbortRef.current = null
+      tailorRequestRef.current += 1
+      associationRequestRef.current += 1
+      saveCopyRequestRef.current += 1
+      heldResultRef.current = null
+      setSelectedId('')
+      setLoadedSavedResumeId('')
+      setResumeText('')
+      setResumeFileName('')
+      setResumeSource('upload')
+      setUploading(false)
+      setTailoring(false)
+      setSavingCopy(false)
+      setResult(null)
+      setResultResumeFileName('')
+      setResultOriginUserId(null)
+      setPendingAssociation(null)
+      setJobAssociation('idle')
+      setError('')
     }
-  }, [authStatus])
+
+    if (authStatus !== 'authenticated' || !sessionUserId) return
+    const controller = new AbortController()
+    savedResumeListAbortRef.current = controller
+    const requestId = savedResumeListRequestRef.current
+    fetch('/api/resume/save', {
+      headers: { 'x-origin-user-id': sessionUserId },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (response.status === 409) {
+          const conflict = await response.json().catch(() => null) as { code?: unknown } | null
+          return conflict?.code === 'SESSION_CHANGED'
+            ? { kind: 'session-changed' as const }
+            : { kind: 'ignored' as const }
+        }
+        if (!response.ok) return { kind: 'ignored' as const }
+        return { kind: 'data' as const, data: await response.json() }
+      })
+      .then((resolution) => {
+        if (controller.signal.aborted || requestId !== savedResumeListRequestRef.current || sessionUserIdRef.current !== sessionUserId) return
+        if (resolution.kind === 'session-changed') {
+          scrubAccountBoundState('Your sign-in account changed while saved resumes were loading. Sign in again before continuing.')
+          return
+        }
+        if (resolution.kind === 'data') {
+          setSavedResumes(Array.isArray(resolution.data?.resumes) ? resolution.data.resumes : [])
+        }
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [authStatus, scrubAccountBoundState, sessionUserId])
 
   async function handleSelectSaved(id: string) {
     const resume = savedResumes.find(r => r.id === id)
     if (!resume) return
+    const resumeUserId = sessionUserId
+    if (authStatus !== 'authenticated' || !resumeUserId) {
+      setError('We could not verify your sign-in account. Sign in again before loading this resume.')
+      return
+    }
+    savedResumeRequestRef.current += 1
+    savedResumeAbortRef.current?.abort()
+    const controller = new AbortController()
+    savedResumeAbortRef.current = controller
+    const requestId = savedResumeRequestRef.current
+    selectedResumeIdRef.current = id
+    setLoadedSavedResumeId('')
+    setResumeText('')
+    setResumeFileName('')
+    setResumeSource('saved')
     setError('')
     try {
-      const res = await fetch(`/api/resume/save?id=${id}`)
+      const res = await fetch(`/api/resume/save?id=${id}`, {
+        headers: { 'x-origin-user-id': resumeUserId },
+        signal: controller.signal,
+      })
+      if (controller.signal.aborted || requestId !== savedResumeRequestRef.current || selectedResumeIdRef.current !== id || resumeUserId !== sessionUserIdRef.current) return
+      if (res.status === 409) {
+        const conflict = await res.json().catch(() => null) as { code?: unknown } | null
+        if (controller.signal.aborted || requestId !== savedResumeRequestRef.current || selectedResumeIdRef.current !== id || resumeUserId !== sessionUserIdRef.current) return
+        if (conflict?.code === 'SESSION_CHANGED') {
+          scrubAccountBoundState('Your sign-in account changed while this resume was loading. Sign in again before continuing.')
+          return
+        }
+      }
       if (!res.ok) {
         // Stale dropdown (deleted in another tab) used to no-op silently.
         setError('That resume could not be loaded — it may have been deleted. Pick another or refresh.')
         setSelectedId('')
+        selectedResumeIdRef.current = ''
         return
       }
       const data = await res.json()
+      if (controller.signal.aborted || requestId !== savedResumeRequestRef.current || selectedResumeIdRef.current !== id || resumeUserId !== sessionUserIdRef.current) return
       if (data.fullText) {
         setResumeText(data.fullText)
         setResumeFileName(resume.name)
         setResumeSource('saved')
+        setLoadedSavedResumeId(id)
       } else {
         setError('That resume has no text to tailor yet — open it in the builder and add content first.')
         setSelectedId('')
+        selectedResumeIdRef.current = ''
       }
     } catch {
+      if (controller.signal.aborted || requestId !== savedResumeRequestRef.current || selectedResumeIdRef.current !== id || resumeUserId !== sessionUserIdRef.current) return
       setError('Could not load that resume. Please try again.')
       setSelectedId('')
+      selectedResumeIdRef.current = ''
+    } finally {
+      if (savedResumeAbortRef.current === controller) savedResumeAbortRef.current = null
     }
   }
 
   async function handleUpload(file: File) {
     if (isAnonymous) { requireAuth('parse_resume'); return }
+    const uploadUserId = sessionUserId
+    if (!uploadUserId) {
+      setError('We could not verify your sign-in account. Sign in again before uploading this resume.')
+      return
+    }
+    savedResumeRequestRef.current += 1
+    savedResumeAbortRef.current?.abort()
+    savedResumeAbortRef.current = null
+    selectedResumeIdRef.current = ''
+    setLoadedSavedResumeId('')
+    setSelectedId('')
+    uploadRequestRef.current += 1
+    uploadAbortRef.current?.abort()
+    const controller = new AbortController()
+    uploadAbortRef.current = controller
+    const requestId = uploadRequestRef.current
     setUploading(true)
     setError('')
     try {
       const formData = new FormData()
       formData.append('file', file)
       formData.append('docType', 'resume')
-      const res = await fetch('/api/documents/upload', { method: 'POST', body: formData })
+      const res = await fetch('/api/documents/upload', {
+        method: 'POST',
+        headers: { 'x-origin-user-id': uploadUserId },
+        body: formData,
+        signal: controller.signal,
+      })
       const data = await res.json()
+      if (controller.signal.aborted || requestId !== uploadRequestRef.current || uploadUserId !== sessionUserIdRef.current) return
+      if (res.status === 409 && data?.code === 'SESSION_CHANGED') {
+        scrubAccountBoundState('Your sign-in account changed before the upload completed. Sign in again, then upload the resume again.')
+        return
+      }
       if (res.ok) {
         setResumeText(data.text)
         setResumeFileName(data.fileName)
         setResumeSource('upload')
-        setSelectedId('')
       } else setError(data.error || 'Upload failed')
-    } catch { setError('Upload failed') }
-    setUploading(false)
+    } catch {
+      if (!controller.signal.aborted && requestId === uploadRequestRef.current && uploadUserId === sessionUserIdRef.current) {
+        setError('Upload failed')
+      }
+    } finally {
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null
+      if (requestId === uploadRequestRef.current) setUploading(false)
+    }
   }
+
+  const persistJobAssociation = useCallback(async (payload: JobAssociationPayload) => {
+    if (!payload.originUserId || payload.originUserId !== sessionUserIdRef.current) {
+      scrubAccountBoundState('This result belongs to a different sign-in session. Sign in again, then rerun Tailor.')
+      return 'discard' satisfies JobAssociationDisposition
+    }
+    const requestId = ++associationRequestRef.current
+    setPendingAssociation(payload)
+    setJobAssociation('saving')
+    try {
+      const association = await fetch(`/api/jobs/${payload.jobId}/tailored`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceJdHash: payload.sourceJdHash,
+          tailoredText: payload.tailoredText,
+          originUserId: payload.originUserId,
+          sourceResumeId: payload.sourceResumeId,
+          matchScore: payload.matchScore,
+          addedKeywords: payload.addedKeywords,
+          missingKeywords: payload.missingKeywords,
+        }),
+      })
+      if (requestId !== associationRequestRef.current || activeJobIdRef.current !== payload.jobId) {
+        return 'stale' satisfies JobAssociationDisposition
+      }
+      const responseBody = association.ok
+        ? null
+        : await association.json().catch(() => null) as { code?: unknown; identityVerified?: unknown } | null
+      if (requestId !== associationRequestRef.current || activeJobIdRef.current !== payload.jobId) {
+        return 'stale' satisfies JobAssociationDisposition
+      }
+      if (association.status === 409 && responseBody?.code === 'SESSION_CHANGED') {
+        scrubAccountBoundState('Your sign-in account changed while Tailor was running. Sign in again, then rerun Tailor for this job.')
+        return 'discard' satisfies JobAssociationDisposition
+      }
+      if (association.ok) {
+        clearStoredPendingAssociation(payload)
+        setPendingAssociation(null)
+        setJobAssociation('saved')
+      } else if (association.status === 401) {
+        setJobAssociation('auth-required')
+        return 'unverified' satisfies JobAssociationDisposition
+      } else if (association.status === 503 &&
+        responseBody?.code === 'ATTACHMENT_TEMPORARY' &&
+        responseBody.identityVerified === true) {
+        setJobAssociation('transient-error')
+      } else if (
+        (association.status === 400 && responseBody?.code === 'SOURCE_JD_HASH_REQUIRED') ||
+        (association.status === 404 && responseBody?.code === 'JOB_NOT_FOUND') ||
+        (association.status === 409 && ['JOB_DESCRIPTION_CHANGED', 'JOB_CONTEXT_UNAVAILABLE'].includes(String(responseBody?.code)))
+      ) {
+        clearStoredPendingAssociation(payload)
+        setPendingAssociation(null)
+        setJobAssociation('lifecycle-error')
+      } else {
+        setJobAssociation('verification-error')
+        return 'unverified' satisfies JobAssociationDisposition
+      }
+      return 'display' satisfies JobAssociationDisposition
+    } catch {
+      if (requestId === associationRequestRef.current && activeJobIdRef.current === payload.jobId) {
+        setJobAssociation('verification-error')
+        return 'unverified' satisfies JobAssociationDisposition
+      }
+      return 'stale' satisfies JobAssociationDisposition
+    }
+  }, [scrubAccountBoundState])
+
+  const revealHeldTailorResult = useCallback((payload: JobAssociationPayload) => {
+    const held = heldResultRef.current
+    if (!held ||
+      held.payload.jobId !== payload.jobId ||
+      held.payload.sourceJdHash !== payload.sourceJdHash ||
+      held.payload.originUserId !== payload.originUserId ||
+      payload.originUserId !== sessionUserIdRef.current ||
+      activeJobIdRef.current !== payload.jobId) return false
+    heldResultRef.current = null
+    setResult(held.result)
+    setResultResumeFileName(held.resumeFileName)
+    setResultOriginUserId(payload.originUserId ?? null)
+    return true
+  }, [])
+
+  useEffect(() => {
+    if (authStatus === 'loading' || jobContextStatus === 'loading') return
+    const stored = readStoredPendingAssociation()
+    if (!stored) return
+    if (authStatus !== 'authenticated' || !sessionUserId) {
+      setPendingAssociation(null)
+      setResult(null)
+      setResultResumeFileName('')
+      setResultOriginUserId(null)
+      heldResultRef.current = null
+      setJobAssociation('idle')
+      return
+    }
+    if (stored.payload.originUserId !== sessionUserId) {
+      clearStoredPendingAssociation()
+      setPendingAssociation(null)
+      setResult(null)
+      setResultResumeFileName('')
+      setResultOriginUserId(null)
+      heldResultRef.current = null
+      setJobAssociation('idle')
+      return
+    }
+    if (stored.payload.jobId !== jobId) {
+      clearStoredPendingAssociation()
+      return
+    }
+    const recoveryId = `${stored.savedAt}:${stored.payload.jobId}:${stored.payload.sourceJdHash}`
+    if (jobContextStatus === 'transient-error') {
+      if (pendingRecoveryAttemptRef.current === `${recoveryId}:context`) return
+      pendingRecoveryAttemptRef.current = `${recoveryId}:context`
+      heldResultRef.current = {
+        payload: stored.payload,
+        result: stored.result,
+        resumeFileName: stored.resumeFileName,
+      }
+      setResult(null)
+      setResultResumeFileName('')
+      setResultOriginUserId(null)
+      setPendingAssociation(stored.payload)
+      setJobAssociation('context-error')
+      return
+    }
+    if (!loadedJobContext || jobTailorAllowed !== true ||
+      loadedJobContext.jobId !== stored.payload.jobId ||
+      loadedJobContext.sourceJdHash !== stored.payload.sourceJdHash) {
+      clearStoredPendingAssociation(stored.payload)
+      heldResultRef.current = null
+      return
+    }
+    if (pendingRecoveryAttemptRef.current === recoveryId) return
+    pendingRecoveryAttemptRef.current = recoveryId
+    setPendingAssociation(stored.payload)
+    heldResultRef.current = {
+      payload: stored.payload,
+      result: stored.result,
+      resumeFileName: stored.resumeFileName,
+    }
+    void (async () => {
+      const disposition = await persistJobAssociation(stored.payload)
+      if (disposition !== 'display' ||
+        stored.payload.originUserId !== sessionUserIdRef.current ||
+        activeJobIdRef.current !== stored.payload.jobId) return
+      revealHeldTailorResult(stored.payload)
+    })()
+  }, [authStatus, jobId, jobTailorAllowed, jobContextStatus, loadedJobContext, persistJobAssociation, revealHeldTailorResult, sessionUserId])
 
   async function handleTailor() {
     if (!resumeText || !jobDescription) {
@@ -128,32 +766,90 @@ export default function TailorPage() {
     }
     setError('')
     setTailoring(true)
+    setPendingAssociation(null)
+    setJobAssociation('idle')
+    heldResultRef.current = null
+    setResultOriginUserId(null)
+    const requestId = ++tailorRequestRef.current
+    const resumeSnapshot = {
+      text: resumeText,
+      sourceResumeId: resumeSource === 'saved' && selectedId && loadedSavedResumeId === selectedId
+        ? selectedId
+        : undefined,
+      fileName: resumeFileName,
+    }
+    const originUserId = authStatus === 'authenticated' ? sessionUserId ?? undefined : undefined
+    const associationContext = loadedJobContext &&
+      jobId === loadedJobContext.jobId &&
+      jobTailorAllowed === true &&
+      jobDescription === loadedJobContext.jobDescription &&
+      companyName === loadedJobContext.companyName
+      ? loadedJobContext
+      : null
     try {
       const res = await fetch('/api/resume/tailor', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resumeText, jobDescription, companyName: companyName || undefined }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(originUserId ? { 'x-origin-user-id': originUserId } : {}),
+        },
+        body: JSON.stringify({
+          resumeText: resumeSnapshot.text,
+          jobDescription,
+          companyName: companyName || undefined,
+          originUserId,
+        }),
       })
       const data = await res.json()
+      if (requestId !== tailorRequestRef.current || activeJobIdRef.current !== jobId) return
+      if (res.status === 409 && data?.code === 'SESSION_CHANGED') {
+        scrubAccountBoundState('Your sign-in account changed before tailoring completed. Sign in again, then rerun Tailor.')
+        return
+      }
       if (res.ok) {
-        setResult(data)
-      // Persist on the application row (latest-wins; never a cap seat).
-      // Truncated outputs are NOT persisted — the same flags already
-      // disable 'Save as New Resume' because the text omits the untouched
-      // tail (Codex on #526); an incomplete per-job resume is worse than none.
-      if (jobId && !data.inputTruncated && !data.outputTruncated) {
-        fetch(`/api/jobs/${jobId}/tailored`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        if (originUserId && originUserId !== sessionUserIdRef.current) {
+          scrubAccountBoundState('Your sign-in account changed while Tailor was running. Sign in again, then rerun Tailor.')
+          return
+        }
+        // Persist only the exact tracked-job input captured when this run
+        // started. Edited prefills and query-param transitions remain useful
+        // general Tailor runs but never create a false job association.
+        if (associationContext && !data.inputTruncated && !data.outputTruncated) {
+          const associationPayload: JobAssociationPayload = {
+            jobId: associationContext.jobId,
+            sourceJdHash: associationContext.sourceJdHash,
             tailoredText: data.tailoredResume ?? data.tailoredText ?? '',
-            sourceResumeId: '',
+            originUserId,
+            sourceResumeId: resumeSnapshot.sourceResumeId,
             matchScore: data.matchScore,
             addedKeywords: data.addedKeywords ?? [],
             missingKeywords: data.missingKeywords ?? [],
-          }),
-        }).catch(() => {})
-      }
+          }
+          if (originUserId) {
+            heldResultRef.current = {
+              payload: associationPayload,
+              result: data,
+              resumeFileName: resumeSnapshot.fileName,
+            }
+            const disposition = await persistJobAssociation(associationPayload)
+            if (disposition !== 'display' ||
+              requestId !== tailorRequestRef.current ||
+              originUserId !== sessionUserIdRef.current ||
+              activeJobIdRef.current !== jobId) return
+            revealHeldTailorResult(associationPayload)
+            return
+          } else {
+            setPendingAssociation(associationPayload)
+            setJobAssociation('auth-required')
+          }
+        } else if (jobId && (data.inputTruncated || data.outputTruncated)) {
+          setJobAssociation('incomplete')
+        } else if (jobId) {
+          setJobAssociation('detached')
+        }
+        setResult(data)
+        setResultResumeFileName(resumeSnapshot.fileName)
+        setResultOriginUserId(originUserId ?? null)
       } else if (res.status === 429 && data.code === 'ANON_DAILY_LIMIT') {
         // Anonymous user hit the daily IP cap — soft-prompt them to sign in
         setError('Daily limit reached. Sign in for unlimited tailoring.')
@@ -162,12 +858,25 @@ export default function TailorPage() {
         setError(data.error || 'Tailoring failed')
       }
     } catch { setError('Network error') }
-    setTailoring(false)
+    finally {
+      if (requestId === tailorRequestRef.current) setTailoring(false)
+    }
   }
 
   async function handleSaveAsCopy() {
     if (!result) return
     if (isAnonymous) { requireAuth('save_resume'); return }
+    const saveOriginUserId = resultOriginUserId
+    if (!saveOriginUserId) {
+      setError('Run Tailor again while signed in before saving this result as a resume.')
+      return
+    }
+    if (saveOriginUserId !== sessionUserIdRef.current) {
+      scrubAccountBoundState('This result belongs to a different sign-in session. Sign in again, then rerun Tailor before saving it.')
+      return
+    }
+    const requestId = ++saveCopyRequestRef.current
+    const resultSnapshot = result
     setSavingCopy(true)
     setError('')
     try {
@@ -184,16 +893,22 @@ export default function TailorPage() {
         body: JSON.stringify({
           // Strip-before-append: re-tailoring a tailored resume was stacking
           // "(Tailored) (Tailored)" onto the name (founder catch 2026-07-16).
-          name: tailoredResumeName(resumeFileName, companyName),
+          name: tailoredResumeName(resultResumeFileName || resumeFileName, companyName),
           targetRole: '',
           targetCompany: companyName || '',
-          fullText: result.tailoredResume,
+          fullText: resultSnapshot.tailoredResume,
+          originUserId: saveOriginUserId,
           // matchScore is JD-match, NOT ATS compatibility — storing it as
           // atsScore made the dashboard "ATS: N" badge lie. The badge now
           // only shows scores from a real ATS check.
         }),
       })
       const data = await res.json()
+      if (requestId !== saveCopyRequestRef.current || saveOriginUserId !== sessionUserIdRef.current) return
+      if (res.status === 409 && data?.code === 'SESSION_CHANGED') {
+        scrubAccountBoundState('Your sign-in account changed before this resume could be saved. Sign in again, then rerun Tailor.')
+        return
+      }
       if (res.ok) {
         router.push(`/resume/builder?id=${data.id}`)
       } else if (data.code === 'RESUME_LIMIT') {
@@ -201,8 +916,59 @@ export default function TailorPage() {
       } else {
         setError(data.error || 'Failed to save')
       }
-    } catch { setError('Save failed') }
-    setSavingCopy(false)
+    } catch {
+      if (requestId === saveCopyRequestRef.current && saveOriginUserId === sessionUserIdRef.current) {
+        setError('Save failed')
+      }
+    } finally {
+      if (requestId === saveCopyRequestRef.current) setSavingCopy(false)
+    }
+  }
+
+  async function retryHeldAttachment() {
+    const held = heldResultRef.current
+    if (!held || !pendingAssociation ||
+      held.payload.jobId !== pendingAssociation.jobId ||
+      held.payload.sourceJdHash !== pendingAssociation.sourceJdHash) return
+    const disposition = await persistJobAssociation(pendingAssociation)
+    if (disposition === 'display') revealHeldTailorResult(pendingAssociation)
+  }
+
+  function handleSignInToAttach() {
+    if (!pendingAssociation) return
+    const held = heldResultRef.current
+    const pendingResult = result ?? held?.result
+    const pendingFileName = result ? resultResumeFileName : held?.resumeFileName ?? ''
+    if (!pendingResult) return
+    const stored = storePendingAssociation(pendingAssociation, pendingResult, pendingFileName)
+    if (!stored) {
+      setError('We couldn’t safely preserve this result for sign-in. Sign in separately, then return and rerun Tailor.')
+      return
+    }
+    // A 401 is authoritative even if useSession still has a cached
+    // authenticated snapshot. Route through the dedicated OAuth screen; its
+    // provider buttons explicitly sign out before starting sign-in.
+    if (authStatus === 'authenticated') {
+      const callbackUrl = `/resume/tailor?jobId=${encodeURIComponent(pendingAssociation.jobId)}`
+      router.push(`/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`)
+    } else {
+      requireAuth('save_resume')
+    }
+  }
+
+  const trackedPrefillUnchanged = !!loadedJobContext &&
+    loadedJobContext.jobId === jobId &&
+    loadedJobContext.jobDescription === jobDescription &&
+    loadedJobContext.companyName === companyName
+
+  if (resolvedIdentityChanged) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <div role="status" className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          Verifying the active account…
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -211,9 +977,85 @@ export default function TailorPage() {
       <p className="text-sm text-slate-500">
         Upload your resume and paste a job description. AI will tailor your resume to highlight the most relevant experience.
       </p>
+      {jobId && jobTailorAllowed !== null && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          {jobContextStatus === 'transient-error' ? (
+            <span>
+              We couldn&apos;t verify the saved job context right now.{' '}
+              <button
+                type="button"
+                onClick={() => setJobContextRetry((attempt) => attempt + 1)}
+                className="font-medium text-blue-600 hover:underline"
+              >
+                Retry job details
+              </button>
+              .
+            </span>
+          ) : jobTailorAllowed && trackedPrefillUnchanged ? (
+            <span>
+              Using {jobPostingState === 'archived' ? 'the retained archived description' : 'the job description'}
+              {companyName ? ` for ${companyName}` : ''}
+              {jobPostingState === 'archived' ? ' · posting no longer active' : ''}.
+            </span>
+          ) : jobTailorAllowed ? (
+            <span>
+              You edited the saved job context. This run will stay general and won&apos;t be attached to the tracked job.
+            </span>
+          ) : (
+            <span>
+              The saved description is unavailable or can no longer be verified. You can continue as a general tailoring run, but it won&apos;t be attached to this tracked job.
+            </span>
+          )}{' '}
+          <Link href={`/jobs/${jobId}`} className="font-medium text-blue-600 hover:underline">Back to saved details</Link>
+        </div>
+      )}
 
       {!result ? (
         <div className="space-y-6">
+          {pendingAssociation && ['saving', 'context-error', 'verification-error', 'auth-required'].includes(jobAssociation) && (
+            <div
+              role="status"
+              aria-atomic="true"
+              className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800"
+            >
+              <p>
+                {jobAssociation === 'saving'
+                  ? 'Verifying the active account before showing the Tailor result…'
+                  : jobAssociation === 'context-error'
+                    ? 'We couldn’t reverify the saved job context yet. The saved Tailor result remains hidden.'
+                    : jobAssociation === 'auth-required'
+                      ? 'Your session expired. The Tailor result remains hidden until you sign in and its originating account is verified.'
+                      : 'We couldn’t verify the active account, so the Tailor result remains hidden.'}
+              </p>
+              {jobAssociation === 'context-error' && (
+                <button
+                  type="button"
+                  onClick={() => setJobContextRetry((attempt) => attempt + 1)}
+                  className="mt-2 font-medium text-blue-700 hover:underline"
+                >
+                  Retry job verification
+                </button>
+              )}
+              {jobAssociation === 'verification-error' && (
+                <button
+                  type="button"
+                  onClick={retryHeldAttachment}
+                  className="mt-2 font-medium text-blue-700 hover:underline"
+                >
+                  Retry attachment
+                </button>
+              )}
+              {jobAssociation === 'auth-required' && (
+                <button
+                  type="button"
+                  onClick={handleSignInToAttach}
+                  className="mt-2 font-medium text-blue-700 hover:underline"
+                >
+                  Sign in to attach
+                </button>
+              )}
+            </div>
+          )}
           <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
             <h2 className="text-sm font-semibold text-slate-500">Your Resume</h2>
 
@@ -222,7 +1064,23 @@ export default function TailorPage() {
                 <label className="text-[10px] text-slate-500 uppercase tracking-wider">From Saved Resumes</label>
                 <select
                   value={selectedId}
-                  onChange={e => { setSelectedId(e.target.value); if (e.target.value) handleSelectSaved(e.target.value) }}
+                  onChange={e => {
+                    const nextId = e.target.value
+                    setSelectedId(nextId)
+                    selectedResumeIdRef.current = nextId
+                    if (nextId) {
+                      void handleSelectSaved(nextId)
+                    } else {
+                      savedResumeRequestRef.current += 1
+                      savedResumeAbortRef.current?.abort()
+                      savedResumeAbortRef.current = null
+                      setLoadedSavedResumeId('')
+                      if (resumeSource === 'saved') {
+                        setResumeText('')
+                        setResumeFileName('')
+                      }
+                    }
+                  }}
                   className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 >
                   <option value="">Choose a saved resume...</option>
@@ -245,7 +1103,16 @@ export default function TailorPage() {
                   <span className="text-sm text-[#059669]">{resumeFileName || 'Resume loaded'}</span>
                   <span className="text-[10px] text-slate-500">({resumeSource === 'saved' ? 'saved' : 'uploaded'})</span>
                 </div>
-                <button onClick={() => { setResumeText(''); setResumeFileName(''); setSelectedId('') }} className="text-xs text-slate-500 hover:text-slate-500">
+                <button onClick={() => {
+                  savedResumeRequestRef.current += 1
+                  savedResumeAbortRef.current?.abort()
+                  savedResumeAbortRef.current = null
+                  selectedResumeIdRef.current = ''
+                  setResumeText('')
+                  setResumeFileName('')
+                  setSelectedId('')
+                  setLoadedSavedResumeId('')
+                }} className="text-xs text-slate-500 hover:text-slate-500">
                   Remove
                 </button>
               </div>
@@ -259,7 +1126,17 @@ export default function TailorPage() {
                     <label className="text-[10px] text-slate-500 uppercase tracking-wider">Paste your resume text</label>
                     <textarea
                       value={resumeSource === 'paste' ? resumeText : ''}
-                      onChange={e => { setResumeText(e.target.value); setResumeSource('paste'); setResumeFileName(e.target.value ? 'Pasted resume' : '') }}
+                      onChange={e => {
+                        savedResumeRequestRef.current += 1
+                        savedResumeAbortRef.current?.abort()
+                        savedResumeAbortRef.current = null
+                        selectedResumeIdRef.current = ''
+                        setSelectedId('')
+                        setLoadedSavedResumeId('')
+                        setResumeText(e.target.value)
+                        setResumeSource('paste')
+                        setResumeFileName(e.target.value ? 'Pasted resume' : '')
+                      }}
                       placeholder="Paste your resume here. To upload a PDF or DOCX, sign in."
                       rows={8}
                       className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-y"
@@ -314,6 +1191,58 @@ export default function TailorPage() {
         </div>
       ) : (
         <div className="space-y-6 animate-fade-in">
+          {jobId && jobAssociation !== 'idle' && (
+            <div
+              role="status"
+              aria-atomic="true"
+              className={`rounded-xl border px-4 py-3 text-xs ${jobAssociation === 'saved' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}
+            >
+              <p>
+                {jobAssociation === 'saving'
+                  ? 'Attaching this version to the tracked job…'
+                  : jobAssociation === 'saved'
+                    ? 'Attached to this tracked job.'
+                    : jobAssociation === 'auth-required'
+                      ? 'Your tailored resume is ready, but your session expired before it could be attached.'
+                      : jobAssociation === 'context-error'
+                        ? 'Your tailored resume is ready, but we couldn’t reverify the saved job context yet.'
+                      : jobAssociation === 'lifecycle-error'
+                        ? 'Your tailored resume is ready, but it wasn’t attached because the saved job description or posting lifecycle changed.'
+                        : jobAssociation === 'transient-error'
+                          ? 'Your tailored resume is ready, but a temporary service error prevented attachment.'
+                          : jobAssociation === 'incomplete'
+                            ? 'Your tailored resume is ready, but an incomplete result cannot be attached to the tracked job.'
+                            : 'This is a general tailoring result and is not attached to the tracked job.'}
+              </p>
+              {jobAssociation === 'transient-error' && pendingAssociation && (
+                <button
+                  type="button"
+                  onClick={() => persistJobAssociation(pendingAssociation)}
+                  className="mt-2 font-medium text-blue-700 hover:underline"
+                >
+                  Retry attachment
+                </button>
+              )}
+              {jobAssociation === 'context-error' && pendingAssociation && (
+                <button
+                  type="button"
+                  onClick={() => setJobContextRetry((attempt) => attempt + 1)}
+                  className="mt-2 font-medium text-blue-700 hover:underline"
+                >
+                  Retry job verification
+                </button>
+              )}
+              {jobAssociation === 'auth-required' && (
+                <button
+                  type="button"
+                  onClick={handleSignInToAttach}
+                  className="mt-2 font-medium text-blue-700 hover:underline"
+                >
+                  Sign in to attach
+                </button>
+              )}
+            </div>
+          )}
           {error && (
             <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" strokeWidth={2} />
@@ -406,7 +1335,18 @@ export default function TailorPage() {
             </pre>
           </div>
 
-          <button onClick={() => setResult(null)} className="text-sm text-blue-600 hover:text-blue-500 transition-colors">
+          <button onClick={() => {
+            associationRequestRef.current += 1
+            saveCopyRequestRef.current += 1
+            clearStoredPendingAssociation(pendingAssociation ?? undefined)
+            heldResultRef.current = null
+            setPendingAssociation(null)
+            setJobAssociation('idle')
+            setResult(null)
+            setResultResumeFileName('')
+            setResultOriginUserId(null)
+            setSavingCopy(false)
+          }} className="text-sm text-blue-600 hover:text-blue-500 transition-colors">
             Start Over
           </button>
         </div>

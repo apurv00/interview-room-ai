@@ -12,6 +12,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  const originUserId = req.headers.get('x-origin-user-id')
+  if (originUserId !== null && originUserId !== session.user.id) {
+    return NextResponse.json(
+      { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
+      { status: 409 },
+    )
+  }
+
   const { searchParams } = new URL(req.url)
   const id = searchParams.get('id')
 
@@ -47,6 +55,15 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json()
+  if (body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'originUserId')) {
+    const originUserId = body?.originUserId
+    if (typeof originUserId !== 'string' || originUserId !== session.user.id) {
+      return NextResponse.json(
+        { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
+        { status: 409 },
+      )
+    }
+  }
   // preserveFullText is a control flag, not resume data — parse it off the
   // body BEFORE Zod validation (ResumeSchema would strip an unknown key). Set
   // by callers holding an authoritative complete fullText plus a partial

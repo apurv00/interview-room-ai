@@ -2,10 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import mongoose from 'mongoose'
 
-const { mockGetServerSession, mockGetSession, mockJobPostingExists } = vi.hoisted(() => ({
+const {
+  mockGetServerSession,
+  mockGetSession,
+  mockJobPostingFindById,
+  mockJobApplicationExists,
+  mockPreparePractice,
+} = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockGetSession: vi.fn(),
-  mockJobPostingExists: vi.fn(),
+  mockJobPostingFindById: vi.fn(),
+  mockJobApplicationExists: vi.fn(),
+  mockPreparePractice: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({
@@ -16,7 +24,11 @@ vi.mock('@interview/services/core/interviewService', () => ({
   getSession: (...args: unknown[]) => mockGetSession(...args),
 }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { exists: (...args: unknown[]) => mockJobPostingExists(...args) },
+  JobPosting: { findById: (...args: unknown[]) => mockJobPostingFindById(...args) },
+  JobApplication: { exists: (...args: unknown[]) => mockJobApplicationExists(...args) },
+}))
+vi.mock('@jobs/services/practiceHandoff', () => ({
+  preparePracticeHandoffPosting: (...args: unknown[]) => mockPreparePractice(...args),
 }))
 vi.mock('@shared/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -30,6 +42,14 @@ const SESSION_ID = new mongoose.Types.ObjectId().toString()
 const ROOT_ID = new mongoose.Types.ObjectId().toString()
 const JOB_ID = new mongoose.Types.ObjectId().toString()
 const JD_HASH = 'a'.repeat(64)
+
+function postingResult(posting: { status: string; closedReason?: string } | null) {
+  return {
+    select: vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue(posting),
+    }),
+  }
+}
 
 function parent(overrides: Record<string, unknown> = {}) {
   return {
@@ -61,7 +81,9 @@ describe('POST /api/interviews/[id]/retake', () => {
       user: { id: USER_ID, role: 'user', organizationId: undefined },
     })
     mockGetSession.mockResolvedValue(parent())
-    mockJobPostingExists.mockResolvedValue({ _id: JOB_ID })
+    mockJobPostingFindById.mockReturnValue(postingResult({ status: 'open' }))
+    mockJobApplicationExists.mockResolvedValue(null)
+    mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', role: 'backend', jdHash: JD_HASH })
   })
 
   it('returns a verified Jobs practice intent and the root of a retake chain', async () => {
@@ -80,11 +102,13 @@ describe('POST /api/interviews/[id]/retake', () => {
 
     expect(response.status).toBe(200)
     expect(body.parentSessionId).toBe(ROOT_ID)
+    expect(body.jobsOrigin).toBe(true)
     expect(body.jobsPractice).toEqual({ jobId: JOB_ID })
-    expect(mockJobPostingExists).toHaveBeenCalledWith({ _id: JOB_ID, status: 'open' })
+    expect(mockJobPostingFindById).toHaveBeenCalledWith(JOB_ID)
+    expect(mockJobApplicationExists).not.toHaveBeenCalled()
   })
 
-  it('falls back to generic retake when the attributed posting is no longer open', async () => {
+  it('keeps a normally archived posting exact for its authenticated tracker owner', async () => {
     mockGetSession.mockResolvedValue(parent({
       attribution: {
         source: 'jobs',
@@ -93,14 +117,95 @@ describe('POST /api/interviews/[id]/retake', () => {
         jdHash: JD_HASH,
       },
     }))
-    mockJobPostingExists.mockResolvedValue(null)
+    mockJobPostingFindById.mockReturnValue(postingResult({
+      status: 'closed',
+      closedReason: 'valid-through-expired',
+    }))
+    mockJobApplicationExists.mockResolvedValue({ _id: new mongoose.Types.ObjectId().toString() })
 
     const response = await callRoute()
     const body = await response.json()
 
     expect(response.status).toBe(200)
     expect(body.parentSessionId).toBe(SESSION_ID)
+    expect(body.jobsPractice).toEqual({ jobId: JOB_ID })
+    expect(mockJobApplicationExists).toHaveBeenCalledWith({
+      userId: USER_ID,
+      jobPostingId: JOB_ID,
+    })
+  })
+
+  it.each([
+    ['a normally archived posting owned by another user', { status: 'closed', closedReason: 'aged-out' }, false],
+    ['a restricted posting', { status: 'closed', closedReason: 'source-revoked' }, true],
+    ['an unknown legacy closure', { status: 'closed' }, true],
+    ['a deleted posting', null, true],
+  ])('falls back to generic retake for %s', async (_label, posting, applicationExistsShouldStayUnused) => {
+    mockGetSession.mockResolvedValue(parent({
+      attribution: {
+        source: 'jobs',
+        jobId: JOB_ID,
+        handoffVersion: 1,
+        jdHash: JD_HASH,
+      },
+    }))
+    mockJobPostingFindById.mockReturnValue(postingResult(posting))
+    mockJobApplicationExists.mockResolvedValue(null)
+
+    const response = await callRoute()
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.jobsOrigin).toBe(true)
     expect(body.jobsPractice).toBeUndefined()
+    if (applicationExistsShouldStayUnused) {
+      expect(mockJobApplicationExists).not.toHaveBeenCalled()
+    } else {
+      expect(mockJobApplicationExists).toHaveBeenCalledWith({
+        userId: USER_ID,
+        jobPostingId: JOB_ID,
+      })
+    }
+    expect(mockPreparePractice).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['the current JD hash changed', { jobDescription: 'Changed JD', role: 'backend', jdHash: 'b'.repeat(64) }],
+    ['the CMS role is no longer active', { jobDescription: 'JD', jdHash: JD_HASH }],
+  ])('falls back to generic retake when %s', async (_label, prepared) => {
+    mockGetSession.mockResolvedValue(parent({
+      attribution: {
+        source: 'jobs',
+        jobId: JOB_ID,
+        handoffVersion: 1,
+        jdHash: JD_HASH,
+      },
+    }))
+    mockPreparePractice.mockResolvedValue(prepared)
+
+    const response = await callRoute()
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.jobsOrigin).toBe(true)
+    expect(body.jobsPractice).toBeUndefined()
+  })
+
+  it('degrades a Practice preparation outage to generic retake', async () => {
+    mockGetSession.mockResolvedValue(parent({
+      attribution: {
+        source: 'jobs',
+        jobId: JOB_ID,
+        handoffVersion: 1,
+        jdHash: JD_HASH,
+      },
+    }))
+    mockPreparePractice.mockRejectedValue(new Error('CMS unavailable'))
+
+    const response = await callRoute()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ jobsOrigin: true })
   })
 
   it.each([
@@ -116,7 +221,7 @@ describe('POST /api/interviews/[id]/retake', () => {
     expect(response.status).toBe(200)
     expect(body.parentSessionId).toBe(SESSION_ID)
     expect(body.jobsPractice).toBeUndefined()
-    expect(mockJobPostingExists).not.toHaveBeenCalled()
+    expect(mockJobPostingFindById).not.toHaveBeenCalled()
   })
 
   it('is owner-only even when getSession permits an organization viewer', async () => {

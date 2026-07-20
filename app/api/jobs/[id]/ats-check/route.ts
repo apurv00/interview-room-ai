@@ -3,9 +3,15 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
-import { JobApplication } from '@shared/db/models'
+import { JobApplication, JobPosting } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
-import { getBaseResume, claimAtsRun, releaseAtsClaim } from '@jobs'
+import {
+  getBaseResume,
+  claimAtsRun,
+  releaseAtsClaim,
+  jobPostingStateOf,
+  preparePracticeHandoffPosting,
+} from '@jobs'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,8 +31,20 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   }
   await connectDB()
 
-  const app = await JobApplication.findOne({ userId, jobPostingId: params.id }).select('atsResult atsRequestedAt').lean()
+  const [app, posting] = await Promise.all([
+    JobApplication.findOne({ userId, jobPostingId: params.id }).select('atsResult atsRequestedAt').lean(),
+    JobPosting.findById(params.id)
+      .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+      .lean(),
+  ])
   if (!app) return NextResponse.json({ reason: 'save-first' }, { status: 409 })
+  if (!posting || jobPostingStateOf(posting) === 'restricted') {
+    return NextResponse.json({ reason: 'posting-unavailable' }, { status: 409 })
+  }
+  const prepared = await preparePracticeHandoffPosting(posting)
+  if (!prepared.jdHash) {
+    return NextResponse.json({ reason: 'posting-unavailable' }, { status: 409 })
+  }
   if (!(await getBaseResume(userId))) return NextResponse.json({ reason: 'no-resume' }, { status: 409 })
 
   // ATOMIC claim (Codex on #521): concurrent POSTs must not both enqueue —

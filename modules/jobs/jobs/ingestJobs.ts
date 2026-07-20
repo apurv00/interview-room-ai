@@ -1,6 +1,6 @@
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle, JobsVerdictConfig, JobApplication } from '@shared/db/models'
+import { JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle, JobsVerdictConfig } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
@@ -501,27 +501,51 @@ export async function runSourceSyncHandler(
       for (const doc of stale) {
         if (!doc.provenance.every((e) => e.sourceId === sourceId)) continue
         const misses = (doc.boardPollMisses ?? 0) + 1
-        doc.boardPollMisses = misses
-        if (misses >= 2) {
-          doc.status = 'closed'
-          doc.closedReason = 'board-poll-miss'
-          doc.closedAt = new Date()
-          // userReferenced rows (saved/tracked) close but NEVER purge — the
-          // tracker keeps a stable _id forever (§4.3). The pin is RE-DERIVED
-          // here, not trusted (PRODUCT_FLOW §2: scan JobApplication existence
-          // during GC — immune to cascade drift): account deletion removes
-          // JobApplication rows without touching pins, and clearing pins at
-          // delete time would be refcount-unsafe (other users may reference
-          // the same posting). Orphaned pins clear + purge normally
-          // (Codex on #517 round-3).
-          let pinned = !!doc.userReferenced
-          if (pinned && !(await JobApplication.exists({ jobPostingId: doc._id }))) {
-            doc.userReferenced = false
-            pinned = false
+        const closedAt = misses >= 2 ? new Date() : null
+        // The stale scan is only a candidate list. Lifecycle writes must be
+        // guarded by the exact version we inspected: a legal/safety close or
+        // a fresh source merge landing after find() takes precedence over a
+        // board miss. Hydrated doc.save() would otherwise overwrite that
+        // newer state with board-poll-miss.
+        const close = closedAt
+          ? {
+              $set: {
+                boardPollMisses: misses,
+                status: 'closed',
+                closedReason: 'board-poll-miss',
+                closedAt,
+              },
+              // Close first without a TTL. A crash before the conditional
+              // stamp leaks storage but cannot delete a newly owned archive.
+              $unset: { purgeAt: 1 },
+            }
+          : { $set: { boardPollMisses: misses } }
+        const closeResult = await JobPosting.updateOne(
+          { _id: doc._id, status: 'open', updatedAt: doc.updatedAt },
+          close,
+        )
+        if ((closeResult?.matchedCount ?? 1) === 0) continue
+        if (closedAt) {
+          // Retention is a monotonic ownership invariant. Decide purge from
+          // the CURRENT pin after the close write, never from this stale
+          // hydrated document: Save/Apply/Tailor may have pinned it while the
+          // board poll was running. Whichever operation wins last either
+          // withholds purgeAt here or unsets it in the pin write.
+          const closeFilter = {
+            _id: doc._id,
+            status: 'closed',
+            closedReason: 'board-poll-miss',
+            closedAt,
           }
-          if (!pinned) doc.purgeAt = new Date(Date.now() + 7 * 24 * 3600 * 1000)
+          await JobPosting.updateOne(
+            { ...closeFilter, userReferenced: true },
+            { $unset: { purgeAt: 1 } },
+          )
+          await JobPosting.updateOne(
+            { ...closeFilter, userReferenced: { $ne: true } },
+            { $set: { purgeAt: new Date(Date.now() + 7 * 24 * 3600 * 1000) } },
+          )
         }
-        await doc.save()
       }
     }
 

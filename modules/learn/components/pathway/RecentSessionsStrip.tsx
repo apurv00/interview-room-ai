@@ -7,7 +7,12 @@ import { motion } from 'framer-motion'
 import { Clock, RotateCcw, ArrowRight } from 'lucide-react'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { getDomainLabel } from '@interview/config/interviewConfig'
-import { planRetakeNavigation } from '@interview/utils/retakeNavigation'
+import {
+  persistGenericRetakeConfig,
+  planRetakeNavigation,
+  retakeConfigFromStoredSession,
+  type RetakeRouteResponse,
+} from '@interview/utils/retakeNavigation'
 
 interface RecentSession {
   _id: string
@@ -59,8 +64,9 @@ export default function RecentSessionsStrip() {
         setRetakingId(null)
         return
       }
-      const plan = planRetakeNavigation(await res.json(), sessionId)
-      if (plan.jobId) {
+      const retakePayload = await res.json() as RetakeRouteResponse
+      const plan = planRetakeNavigation(retakePayload, sessionId)
+      if (plan.kind === 'jobs-practice') {
         try {
           localStorage.removeItem(STORAGE_KEYS.INTERVIEW_CONFIG)
           localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
@@ -69,17 +75,46 @@ export default function RecentSessionsStrip() {
         router.push(plan.href)
         return
       }
+      // Establish a safe legacy value before the richer full-session fetch.
+      // Retake-mode setup reads legacy before any older user-scoped config,
+      // so even a hung/failed fetch cannot revive a revoked Jobs JD.
+      if (retakePayload.jobsOrigin === true) {
+        try {
+          persistGenericRetakeConfig(
+            localStorage,
+            STORAGE_KEYS.INTERVIEW_CONFIG,
+            retakePayload.config,
+            true,
+          )
+        } catch { /* the later write gets another chance */ }
+      }
       // Fetch the full parent session so we can pre-fill the form with the
-      // original JD/resume/config, not just the summary from /retake.
+      // original JD/resume/config, which the API persists as a compact config
+      // plus top-level document fields rather than one nested object.
+      let fullConfig: ReturnType<typeof retakeConfigFromStoredSession>
       try {
         const sRes = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`)
         if (sRes.ok) {
           const full = await sRes.json()
-          if (full?.config) {
-            localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(full.config))
-          }
+          fullConfig = retakeConfigFromStoredSession(full)
         }
-        localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, plan.parentSessionId)
+      } catch { /* the safe summary from /retake remains usable */ }
+      try {
+        // Remove-first for Jobs fallback, including when the full-session
+        // fetch fails, so revoked JD/token/attribution state cannot survive.
+        persistGenericRetakeConfig(
+          localStorage,
+          STORAGE_KEYS.INTERVIEW_CONFIG,
+          fullConfig ?? retakePayload.config,
+          retakePayload.jobsOrigin === true,
+        )
+        if (plan.kind === 'retake') {
+          localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, plan.parentSessionId)
+        } else {
+          // A scrubbed Jobs fallback is a new general practice, not a score-
+          // comparable retake of an exact-JD parent.
+          localStorage.removeItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)
+        }
         localStorage.removeItem(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION)
       } catch { /* ignore */ }
       router.push(plan.href)

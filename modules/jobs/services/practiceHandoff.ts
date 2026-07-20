@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from 'crypto'
 import { gunzipSync } from 'zlib'
 import { isValidObjectId } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { JobApplication, JobPosting } from '@shared/db/models'
+import { JobApplication, JobPosting, type IJobPosting } from '@shared/db/models'
 import {
   INTERVIEW_JOB_DESCRIPTION_MAX_CHARS,
   INTERVIEW_TARGET_COMPANY_MAX_CHARS,
@@ -10,6 +10,7 @@ import {
 import { getActiveInterviewDomainCatalog } from '@interview/services/persona/domainCatalogService'
 import { interviewSlugForDomain } from '../config/domains'
 import { xrayHashOf } from './xrayService'
+import { jobPostingStateOf } from './postingAccess'
 
 const TOKEN_TYPE = 'jobs-practice'
 const TOKEN_VERSION = 1
@@ -35,6 +36,8 @@ export interface ResolvedPracticeHandoff {
 }
 
 interface PracticePostingSnapshot {
+  status?: IJobPosting['status']
+  closedReason?: IJobPosting['closedReason']
   domain?: string | null
   parsedJD?: unknown
   parsedJDHash?: string | null
@@ -104,8 +107,11 @@ export async function preparePracticeHandoffPosting(
     : canonicalJd
   // Detail may still show an oversized source document, but readiness is
   // withheld unless the exact text sent to the lobby passes its API schema.
+  // Keep the canonical identity: Tailor and ATS accept larger inputs and
+  // must not lose their exact-version binding merely because Practice has a
+  // narrower transport contract.
   if (jobDescription.length > INTERVIEW_JOB_DESCRIPTION_MAX_CHARS) {
-    return { jobDescription }
+    return { jobDescription, jdHash }
   }
   const activeCatalog = await getActiveInterviewDomainCatalog()
   // Seed data remains useful for rendering selectors during a CMS outage,
@@ -113,13 +119,27 @@ export async function preparePracticeHandoffPosting(
   // therefore fails closed until a live CMS snapshot is available.
   if (!activeCatalog.authoritative) return { jobDescription, jdHash }
 
+  const postingState = posting.status === 'closed'
+    ? jobPostingStateOf({ status: posting.status, closedReason: posting.closedReason })
+    : 'live'
+  // Safety/legal closures never gain a role through a stale cached parse,
+  // even when a caller accidentally reaches this shared preparation helper.
+  if (postingState === 'restricted') return { jobDescription, jdHash }
+
   const hasDeclaredDomain = posting.domain !== undefined &&
     posting.domain !== null &&
     posting.domain !== ''
   const parsedDomain = (
     !hasDeclaredDomain &&
     posting.parsedJDHash === xrayHashOf(canonicalJd) &&
-    posting.parsedJDRoleVersion === activeCatalog.revision
+    (
+      posting.parsedJDRoleVersion === activeCatalog.revision ||
+      // Closed normal archives cannot refresh their X-ray without mutating
+      // historical evidence. A same-JD inferred role may survive catalog
+      // revision drift only while today's authoritative catalog still maps
+      // that slug; interviewSlugForDomain below is the closed-set check.
+      postingState === 'archived'
+    )
   )
     ? (posting.parsedJD as { inferredDomain?: unknown } | null | undefined)?.inferredDomain
     : undefined
@@ -215,16 +235,30 @@ export async function resolvePracticeHandoff(
 
   await connectDB()
   const posting = await JobPosting.findById(payload.jid)
-    .select('company domain status parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+    .select('company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
     .lean()
-  if (!posting || posting.status !== 'open') return null
+  if (!posting || (posting.status !== 'open' && posting.status !== 'closed')) return null
+  const postingState = jobPostingStateOf(posting)
+  if (postingState === 'restricted') return null
+
+  // A token minted while a posting was open must not become an archive
+  // entitlement by itself. Once closed, the tracker row is the durable
+  // ownership proof; resolve it before returning any saved JD context.
+  let application = postingState === 'archived'
+    ? await JobApplication.findOne({ userId, jobPostingId: payload.jid })
+        .select('_id')
+        .lean()
+    : null
+  if (postingState === 'archived' && !application) return null
 
   const prepared = await preparePracticeHandoffPosting(posting)
   if (!prepared.jdHash || prepared.jdHash !== payload.jdh) return null
 
-  const application = await JobApplication.findOne({ userId, jobPostingId: payload.jid })
-    .select('_id')
-    .lean()
+  if (postingState === 'live') {
+    application = await JobApplication.findOne({ userId, jobPostingId: payload.jid })
+      .select('_id')
+      .lean()
+  }
   return {
     jobId: payload.jid,
     jobDescription: prepared.jobDescription,

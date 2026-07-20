@@ -3,7 +3,9 @@ import { getServerSession } from 'next-auth'
 import mongoose from 'mongoose'
 import { authOptions } from '@shared/auth/authOptions'
 import { getSession } from '@interview/services/core/interviewService'
-import { JobPosting } from '@shared/db/models'
+import { JobApplication, JobPosting } from '@shared/db/models'
+import { jobPostingStateOf } from '@jobs/services/postingAccess'
+import { preparePracticeHandoffPosting } from '@jobs/services/practiceHandoff'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 
@@ -25,6 +27,8 @@ export const dynamic = 'force-dynamic'
  *                        the same original shares the same parent id)
  *   - `jobsPractice`   — verified Jobs source only; sends the client back
  *                        through the job page for a fresh signed handoff
+ *   - `jobsOrigin`     — tells generic fallback clients to discard any
+ *                        posting-derived browser config when reuse is denied
  *   - `hasJobDescription`, `hasResumeText` — booleans so the client can show
  *     a "JD/resume will be preserved" hint; actual text stays server-side to
  *     avoid leaking PII through localStorage. The setup form's existing
@@ -68,9 +72,10 @@ export async function POST(
       handoffVersion?: number
       jdHash?: string
     } | undefined
+    const jobsOrigin = attribution?.source === 'jobs'
     const claimedJobId = attribution?.jobId
     const attributedJobId =
-      attribution?.source === 'jobs' &&
+      jobsOrigin &&
       attribution.handoffVersion === 1 &&
       typeof attribution.jdHash === 'string' &&
       attribution.jdHash.length === 64 &&
@@ -78,15 +83,39 @@ export async function POST(
       mongoose.Types.ObjectId.isValid(claimedJobId)
         ? claimedJobId
         : undefined
-    // A closed or deleted posting cannot issue a fresh signed handoff. Omit
-    // jobsPractice so the caller falls back to the ordinary retake setup
-    // instead of sending the candidate to a dead Jobs detail route.
-    const verifiedJobId = attributedJobId && await JobPosting.exists({
-      _id: attributedJobId,
-      status: 'open',
-    })
-      ? attributedJobId
-      : undefined
+    // Live Jobs context remains available to its original candidate. Normal
+    // expiry/delisting also remains available, but only when a JobApplication
+    // proves that this authenticated user tracked it before closure. In both
+    // cases the CURRENT posting must still mint exact-JD Practice for the same
+    // hash as the parent session. Safety/legal closures, changed/unreadable
+    // JDs, inactive CMS roles, deleted postings, and foreign archives fall
+    // back to a generic retake.
+    let verifiedJobId: string | undefined
+    if (attributedJobId) {
+      const posting = await JobPosting.findById(attributedJobId)
+        .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+        .lean()
+      if (posting) {
+        const postingState = jobPostingStateOf(posting)
+        const mayReuseArchivedContext = postingState === 'archived' && !!(
+          await JobApplication.exists({
+            userId: authSession.user.id,
+            jobPostingId: attributedJobId,
+          })
+        )
+        if (postingState === 'live' || mayReuseArchivedContext) {
+          try {
+            const prepared = await preparePracticeHandoffPosting(posting)
+            if (prepared.role && prepared.jdHash === attribution?.jdHash) {
+              verifiedJobId = attributedJobId
+            }
+          } catch {
+            // CMS/JD preparation failure degrades to generic retake. The
+            // candidate's retake remains usable without a false exact-JD CTA.
+          }
+        }
+      }
+    }
 
     logger.info(
       { parentSessionId: params.id, rootParentId, userId: authSession.user.id },
@@ -103,6 +132,7 @@ export async function POST(
       },
       hasJobDescription: !!parent.jobDescription,
       hasResumeText: !!parent.resumeText,
+      ...(jobsOrigin ? { jobsOrigin: true } : {}),
       ...(verifiedJobId ? { jobsPractice: { jobId: verifiedJobId } } : {}),
     })
   } catch (err) {

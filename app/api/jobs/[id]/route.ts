@@ -16,7 +16,10 @@ export const dynamic = 'force-dynamic'
  */
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
-    return NextResponse.json({ error: 'not found' }, { status: 404 })
+    return NextResponse.json(
+      { error: 'not found' },
+      { status: 404, headers: { 'Cache-Control': 'no-store' } },
+    )
   }
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id ?? null
@@ -28,7 +31,10 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   if (!detail) {
     return NextResponse.json(
       { error: 'not found' },
-      { status: 404, ...(privateResponse ?? {}) }
+      {
+        status: 404,
+        headers: { 'Cache-Control': userId ? 'private, no-store' : 'no-store' },
+      }
     )
   }
   return NextResponse.json(detail, privateResponse)

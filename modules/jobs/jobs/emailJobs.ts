@@ -8,6 +8,8 @@ import { buildE1Email, buildE4Email } from '../emails/e1'
 import { buildFooterUrls, sendTransactional, sendSolicitation, solicitationSentLast7d, isSuppressed } from '../services/emailSendService'
 import { mintActionToken } from '@shared/services/signedActionToken'
 import { isInSendWindow, nextSendSlot, e2SendInstant, istCalendarDaysBetween } from '../config/emailTiming'
+import { jobPostingStateOf } from '../services/postingAccess'
+import { preparePracticeHandoffPosting } from '../services/practiceHandoff'
 
 /**
  * Email jobs (EMAILS.md §1/§6): transactional E0 + E2, solicitation E1 + E4.
@@ -65,10 +67,15 @@ export async function runE0Handler(
     const [user, application, posting] = await Promise.all([
       User.findById(userId).select('email emailPreferences.jobs.unsubscribedStreams').lean(),
       JobApplication.findOne({ userId, jobPostingId }).select('_id').lean(),
-      JobPosting.findById(jobPostingId).select('title company').lean(),
+      JobPosting.findById(jobPostingId)
+        .select('title company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+        .lean(),
     ])
     if (!user?.email || !application || !posting) return 'missing-context'
     if (isSuppressed(user.emailPreferences?.jobs?.unsubscribedStreams, 'e0')) return 'suppressed'
+    if (jobPostingStateOf(posting) === 'restricted') return 'posting-restricted'
+    const prepared = await preparePracticeHandoffPosting(posting)
+    if (!prepared.role || !prepared.jdHash) return 'practice-unavailable'
 
     const footerUrls = buildFooterUrls(userId, 'e0')
     const { subject, html } = buildE0Email({
@@ -123,13 +130,14 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
       type Candidate = {
         applicationId: string; userId: string; jobPostingId: string
         interviewDateISO: string; confidence: 'exact' | 'week'; practiceSessionIds: string[]
+        title: string; company: string
       }
       const due: Candidate[] = []
       const pastWindow: Candidate[] = []
       let cursor: string | null = null
       let truncated = false
       for (;;) {
-        type LeanApp = { _id: unknown; userId: unknown; jobPostingId: unknown; interviewDate?: Date; interviewDateConfidence?: string; practiceSessionIds?: unknown[] }
+        type LeanApp = { _id: unknown; userId: unknown; jobPostingId: unknown; interviewDate?: Date; interviewDateConfidence?: string; practiceSessionIds?: unknown[]; jobSnapshot?: { title?: string; company?: string } }
         const batch: LeanApp[] = await JobApplication.find({
           // Only rows STILL scheduled (Codex #532): a stale interviewDate on
           // a row the user corrected to rejected/withdrawn/ghosted must
@@ -142,7 +150,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
           interviewDateConfidence: { $in: ['exact', 'week'] },
           ...(cursor ? { _id: { $gt: cursor } } : {}),
         })
-          .select('_id userId jobPostingId interviewDate interviewDateConfidence practiceSessionIds')
+          .select('_id userId jobPostingId interviewDate interviewDateConfidence practiceSessionIds jobSnapshot')
           .sort({ _id: 1 })
           .limit(200)
           .lean<LeanApp[]>()
@@ -156,6 +164,8 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             interviewDateISO: r.interviewDate!.toISOString().slice(0, 10),
             confidence: r.interviewDateConfidence as 'exact' | 'week',
             practiceSessionIds: (r.practiceSessionIds ?? []).map(String),
+            title: r.jobSnapshot?.title ?? 'this role',
+            company: r.jobSnapshot?.company ?? 'the company',
           }
           // Automatic sends are bounded to 24h of the FIRST due instant
           // (EMAILS.md §2, Codex #532): past it, Resend's idempotency key
@@ -215,8 +225,16 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             if (!user?.email) continue
             if (isSuppressed(user.emailPreferences?.jobs?.unsubscribedStreams, 'e2')) continue
 
-            const posting = await JobPosting.findById(c.jobPostingId).select('title company').lean()
-            if (!posting) continue
+            const posting = await JobPosting.findById(c.jobPostingId)
+              .select('title company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+              .lean()
+            const postingState = posting ? jobPostingStateOf(posting) : 'restricted'
+            const prepared = postingState !== 'restricted' && posting
+              ? await preparePracticeHandoffPosting(posting)
+              : null
+            const practiceAvailable = !!prepared?.role && !!prepared.jdHash
+            const company = postingState === 'restricted' ? c.company : (posting?.company ?? c.company)
+            const jobTitle = postingState === 'restricted' ? c.title : (posting?.title ?? c.title)
 
             // Logistics-only variant when a practice session happened in the
             // last 24h (R10) — the user is already warm.
@@ -233,14 +251,17 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             const whenLabel = c.confidence === 'week' ? 'this week' : daysUntil <= 1 ? 'tomorrow' : `in ${daysUntil} days`
             const footerUrls = buildFooterUrls(c.userId, 'e2')
             const { subject, html } = buildE2Email({
-              company: posting.company ?? 'the company',
-              jobTitle: posting.title ?? 'this role',
+              company,
+              jobTitle,
               whenLabel,
-              prepPlanUrl: `${APP_URL}/jobs/${c.jobPostingId}?prep=1`,
+              prepPlanUrl: practiceAvailable
+                ? `${APP_URL}/jobs/${c.jobPostingId}?prep=1`
+                : `${APP_URL}/interview/setup`,
               warmUpUrl: `${APP_URL}/jobs/${c.jobPostingId}?practice=1`,
               logisticsOnly,
+              practiceAvailable,
               footer: {
-                whyLine: `you set an interview date for ${posting.title ?? 'this role'} at ${posting.company ?? 'the company'}`,
+                whyLine: `you set an interview date for ${jobTitle} at ${company}`,
                 ...footerUrls,
               },
             })
@@ -441,10 +462,16 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
                   userId, stream: 'e0', dedupeKey: { $regex: `^${c.applicationId}:` }, sentAt: { $exists: true },
                 }).lean()
                 if (e0Honored) continue
-                // Posting must still be open — never nudge practice for a
-                // closed job (review R2/R7).
-                const posting = await JobPosting.findById(c.jobPostingId).select('status').lean()
+                // Revalidate the exact-posting Practice contract at send
+                // time. An open row alone is insufficient: its retained JD
+                // may be unreadable or its role may have been deactivated in
+                // CMS since this candidate was derived.
+                const posting = await JobPosting.findById(c.jobPostingId)
+                  .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+                  .lean()
                 if (!posting || posting.status !== 'open') continue
+                const prepared = await preparePracticeHandoffPosting(posting)
+                if (!prepared.role || !prepared.jdHash) continue
                 const footerUrls = buildFooterUrls(userId, 'e4')
                 const { subject, html } = buildE4Email({
                   company: c.company,
@@ -463,6 +490,14 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
                 const res = await sendSolicitation({
                   userId, stream: 'e4', dedupeKeys: [c.applicationId],
                   to: user.email, subject, html, coarseToggle: 'nudges',
+                  beforeDelivery: async () => {
+                    const currentPosting = await JobPosting.findById(c.jobPostingId)
+                      .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+                      .lean()
+                    if (!currentPosting || currentPosting.status !== 'open') return false
+                    const currentPrepared = await preparePracticeHandoffPosting(currentPosting)
+                    return !!currentPrepared.role && !!currentPrepared.jdHash
+                  },
                 })
                 if (res.outcome === 'sent') {
                   remaining--

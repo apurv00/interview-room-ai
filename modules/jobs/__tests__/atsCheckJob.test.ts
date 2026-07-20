@@ -3,7 +3,7 @@ import { gzipSync } from 'zlib'
 
 const {
   mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockUsageCreate, mockEventCreate,
-  mockCheckATS, mockGetBase, mockGetResume,
+  mockCheckATS, mockGetBase, mockGetResume, mockPreparePractice,
 } = vi.hoisted(() => ({
   mockAppFindOne: vi.fn(),
   mockAppUpdateOne: vi.fn(),
@@ -13,6 +13,7 @@ const {
   mockCheckATS: vi.fn(),
   mockGetBase: vi.fn(),
   mockGetResume: vi.fn(),
+  mockPreparePractice: vi.fn(),
 }))
 
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: vi.fn(), createFunction: vi.fn(() => ({})) } }))
@@ -26,6 +27,7 @@ vi.mock('@shared/db/models', () => ({
 }))
 vi.mock('@resume', () => ({ checkATS: mockCheckATS, getResume: mockGetResume, listResumes: vi.fn(), saveResume: vi.fn(), ResumeSchema: { safeParse: vi.fn() } }))
 vi.mock('../services/baseResumeService', () => ({ getBaseResume: mockGetBase }))
+vi.mock('../services/practiceHandoff', () => ({ preparePracticeHandoffPosting: mockPreparePractice }))
 
 import { runAtsCheckHandler } from '../jobs/atsCheckJob'
 import { xrayHashOf } from '../services/xrayService'
@@ -36,10 +38,11 @@ const CLAIMED = '2026-07-14T12:00:00.000Z'
 const EVENT = { data: { userId: 'u1', jobPostingId: 'j1', claimedAt: CLAIMED } }
 
 function reset(app: unknown = { _id: 'app1', atsResult: undefined }) {
-  for (const m of [mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockUsageCreate, mockEventCreate, mockCheckATS, mockGetBase, mockGetResume]) m.mockReset()
+  for (const m of [mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockUsageCreate, mockEventCreate, mockCheckATS, mockGetBase, mockGetResume, mockPreparePractice]) m.mockReset()
   mockAppFindOne.mockResolvedValue(app)
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1 })
-  mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ jdCompressed: gzipSync(Buffer.from(JD)) }) }) })
+  mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) }) }) })
+  mockPreparePractice.mockResolvedValue({ jobDescription: JD, jdHash: 'canonical-sha256', role: 'backend' })
   mockGetBase.mockResolvedValue({ id: 'base-1', name: 'Base Resume — QA', targetRole: 'QA', skills: [] })
   mockGetResume.mockResolvedValue({ fullText: 'MY RESUME TEXT' })
   mockCheckATS.mockResolvedValue({ score: 72, keywords: { found: ['node.js'], missing: ['sql', 'kafka'], total: 3 } })
@@ -113,5 +116,34 @@ describe('runAtsCheckHandler (Save-gated background one-shot)', () => {
     expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'check-failed' })
     expect(mockAppUpdateOne.mock.calls.at(-1)![1]).toEqual({ $unset: { atsRequestedAt: 1 } })
     expect(mockUsageCreate).not.toHaveBeenCalled() // no quota record for a failed run
+  })
+
+  it('allows a normal owner archive but rejects a restricted posting before model work', async () => {
+    reset()
+    mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'closed', closedReason: 'aged-out' }) }) })
+    expect(await runAtsCheckHandler(EVENT, step)).toMatchObject({ done: true, cached: false })
+
+    reset()
+    mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'closed', closedReason: 'source-revoked' }) }) })
+    expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'posting-unavailable' })
+    expect(mockCheckATS).not.toHaveBeenCalled()
+  })
+
+  it('rejects a body or policy change before persisting an ATS artifact', async () => {
+    reset()
+    mockPreparePractice
+      .mockResolvedValueOnce({ jobDescription: JD, jdHash: 'v1' })
+      .mockResolvedValueOnce({ jobDescription: `${JD} changed`, jdHash: 'v2' })
+    expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'posting-changed' })
+    expect(mockCheckATS).not.toHaveBeenCalled()
+
+    reset()
+    mockPostingFindById
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'open' }) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'open' }) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'closed', closedReason: 'llm-verdict' }) }) })
+    expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'posting-unavailable' })
+    expect(mockCheckATS).toHaveBeenCalledOnce()
+    expect(mockUsageCreate).not.toHaveBeenCalled()
   })
 })

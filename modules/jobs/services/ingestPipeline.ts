@@ -290,6 +290,59 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
   }
 }
 
+const MERGE_SAVE_ATTEMPTS = 2
+
+function isStaleMergeSave(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name
+  return name === 'DocumentNotFoundError' || name === 'VersionError'
+}
+
+/**
+ * Persist a merge against the exact lifecycle/version that was inspected.
+ *
+ * `mergeIntoDoc` legitimately reopens normal expiry closures. A plain
+ * hydrated `save()` could therefore reopen a newer source-revoked or
+ * llm-verdict close that landed after the identity lookup. Mongoose's
+ * documented `$where` save predicate turns that write into a CAS. On a miss
+ * we discard the mutated stale document, re-read, and re-apply policy to the
+ * current lifecycle; restricted rows may refresh identity inputs but can
+ * never be reopened by this layer.
+ */
+async function mergeAndSaveWithLifecycleCas(
+  initial: IJobPosting,
+  prepared: PreparedPosting,
+  sourceId: string,
+  now: Date,
+): Promise<void> {
+  let doc = initial
+  for (let attempt = 0; attempt < MERGE_SAVE_ATTEMPTS; attempt++) {
+    const expectedStatus = doc.status
+    const expectedClosedReason = doc.closedReason
+    const expectedUpdatedAt = doc.updatedAt
+    mergeIntoDoc(doc, prepared, sourceId, now)
+    const where: Record<string, unknown> = {
+      status: expectedStatus,
+      updatedAt: expectedUpdatedAt,
+    }
+    if (expectedStatus === 'closed') {
+      where.closedReason = expectedClosedReason ?? { $exists: false }
+    }
+    const guardedDoc = doc as IJobPosting & { $where: Record<string, unknown> }
+    guardedDoc.$where = where
+    try {
+      // Explicit acknowledgement is required for Mongoose to surface a
+      // zero-match custom `$where` predicate as DocumentNotFoundError.
+      await doc.save({ w: 1 })
+      return
+    } catch (error) {
+      if (!isStaleMergeSave(error) || attempt + 1 >= MERGE_SAVE_ATTEMPTS) throw error
+      const latest = await JobPosting.findById(doc._id)
+      if (!latest) throw error
+      doc = latest
+    }
+  }
+}
+
 export async function ingestBatch(
   jobs: NormalizedJob[],
   sourceId: string,
@@ -351,8 +404,7 @@ export async function ingestBatch(
     if (prepared.sourceKey) {
       const bySource = await JobPosting.findOne({ 'provenance.sourceKey': prepared.sourceKey })
       if (bySource) {
-        mergeIntoDoc(bySource, prepared, sourceId, now)
-        await bySource.save()
+        await mergeAndSaveWithLifecycleCas(bySource, prepared, sourceId, now)
         counters.refreshed++
         continue
       }
@@ -375,8 +427,7 @@ export async function ingestBatch(
           counters.newCount++
           continue
         }
-        mergeIntoDoc(byFp, prepared, sourceId, now)
-        await byFp.save()
+        await mergeAndSaveWithLifecycleCas(byFp, prepared, sourceId, now)
         counters.merged++
         continue
       }
@@ -395,8 +446,7 @@ export async function ingestBatch(
           !(prepared.job.externalId && c.provenance.some((e) => e.sourceId === sourceId && e.externalId !== prepared.job.externalId))
       )
       if (match) {
-        mergeIntoDoc(match, prepared, sourceId, now)
-        await match.save()
+        await mergeAndSaveWithLifecycleCas(match, prepared, sourceId, now)
         counters.fuzzyMerged++
         counters.merged++
         continue
