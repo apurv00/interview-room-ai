@@ -23,10 +23,12 @@ import { ingestBatch, makeRedisRepostCounter, type IngestCounters } from '../ser
  *
  * jobsSourceSyncJob (event, concurrency limit 2 — the Atlas shared-tier
  * rule; NOTE: first use of Inngest `concurrency` in this repo) — one
- * bucket per step.run: the worst case (3 full pages × 15s adapter
- * timeout + spacing) is ~46s, inside the Vercel Hobby 60s budget with
- * headroom (Codex on #511 — 5-bucket chunks could run 450s and Inngest
- * would retry the uncheckpointed chunk, re-burning billed quota).
+ * bucket per step.run: the worst case (4 full pages × 15s adapter
+ * timeout + spacing) is ~61s, well inside the real per-step budget
+ * (maxDuration=300s at app/api/inngest/route.ts — the earlier "Vercel
+ * Hobby 60s" sizing predated the plan check and is stale). BUCKETS_PER_CHUNK
+ * stays 1 (Codex on #511 — 5-bucket chunks could run 450s and Inngest would
+ * retry the uncheckpointed chunk, re-burning billed quota).
  * Normalizes (drift COUNTED and health-relevant), runs the deterministic
  * pipeline, updates freshness cursors, writes one JobIngestCycle row.
  */
@@ -46,7 +48,12 @@ export function resolveAdapter(sourceId: string, kind?: string): JobSourceAdapte
 }
 
 const BUCKETS_PER_CHUNK = 1
-const MAX_PAGES_PER_BUCKET = 3
+// Raised 3→4 with the country-only harvest cut (DECISIONS #23): a country query
+// carries far more fresh supply than a single metro slice did, so the known-rate
+// cutoff paginates it deeper — the extra page recovers coverage the dropped metro
+// breadth used to provide. Worst case 4×15s ≈ 61s, inside the 300s step budget.
+// Tune from live JobIngestCycle.quotaSpent once the first country-only cycle lands.
+const MAX_PAGES_PER_BUCKET = 4
 /** Feed sources (unstop) paginate deeper per run: their whole corpus sits
  *  behind one paged list, and the known-rate cutoff stops early once the
  *  run reaches already-ingested rows (Codex #536). */
@@ -218,6 +225,21 @@ async function processTarget(
       if (t.kind === 'feed' && cursorKey) {
         outcome.feedContinuation[cursorKey] = capExit ? page : 0
       }
+      // No silent caps (Codex on #559 round 3): a BUCKET that fills all
+      // MAX_PAGES_PER_BUCKET pages with fresh rows has more backlog than one run
+      // fetches, and — unlike a feed — a bucket has no continuation, so the
+      // freshness cursor advances and pages beyond the cap are not revisited
+      // (JSearch's date_posted is a RELATIVE window, so a feed-style page-resume
+      // can't pin a stable query across runs). Collapsing 6 metros into one ':in'
+      // bucket (#23) makes this reachable for a very-high-volume domain-day; the
+      // measured supply (~≤24/domain/day vs the 40-row cap, DECISIONS #17) keeps
+      // it below the cap in steady state, and the rename's cold-fill backlog is
+      // already in-corpus from the pre-#23 metro harvest — so no actual supply
+      // loss is expected. This warn makes any REAL cap-exit visible so ops can
+      // raise the cap or build bucket continuation (DECISIONS #23 follow-up).
+      if (capExit && t.kind === 'bucket') {
+        logger.warn({ sourceId, bucket: cursorKey, pagesFetched }, 'jobs ingest: bucket cap-exit — deep backlog beyond MAX_PAGES_PER_BUCKET dropped this run')
+      }
       // Clean exit: every page this window owed us was fetched — the
       // cursor may now advance (bucket targets key on bucketId; sitemap/
       // feed targets on their explicit cursorBucket).
@@ -376,6 +398,16 @@ export async function runSourceSyncHandler(
   // are partially stored, so "already known" cannot mean "window exhausted"
   // — the known-rate cutoff is disabled for them until a full clean pass.
   const distrust = new Set(cursors.filter((c) => c.windowIncomplete).map((c) => c.bucket))
+  // First run for a bucket with NO cursor yet must ALSO distrust the known-rate
+  // cutoff (Codex on #559): when a bucket id is new to an EXISTING corpus — the
+  // #23 metro→country rename ('backend:pune'… → 'backend:in') is the live case,
+  // where the DB already holds the old metro rows — page 1 of the country query
+  // is mostly already-known, trips the ≥60% cutoff, stops before the deep pages
+  // the #23 depth-recovery relies on, and writes a cursor that freezes the
+  // shallow coverage. No cursor ⇒ "known" is not evidence of window exhaustion;
+  // on a genuinely empty corpus this is a no-op (nothing is known, so the cutoff
+  // cannot fire), so it only ever helps.
+  const haveCursor = new Set(cursors.map((c) => c.bucket))
 
   const total: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [], feedContinuation: {} }
   for (let i = 0; i < targets.length; i += BUCKETS_PER_CHUNK) {
@@ -391,7 +423,15 @@ export async function runSourceSyncHandler(
         // reaches the shifted backlog. Cap + non-full-page remain the
         // exits; known pages are merge-idempotent.
         const isContinuation = target.kind === 'feed' && target.page > 1
-        const distrustKnown = (!!distrustKey && distrust.has(distrustKey)) || isContinuation
+        // A BUCKET target with no persisted cursor is on its first run (#559).
+        // Gated to bucket kind (Codex on #559 round 2): a paged feed reuses
+        // distrustKey from cursorBucket, so an unstop feed whose cursor is lost
+        // while postings remain would otherwise skip the cutoff, drain to
+        // MAX_PAGES_PER_FEED, and write a cap-exit continuation that keeps
+        // paginating deep on later runs. Feeds already own their first-run drain
+        // via the full-page + continuation logic; the #23 rename is bucket-only.
+        const isFirstRunForBucket = target.kind === 'bucket' && !!distrustKey && !haveCursor.has(distrustKey)
+        const distrustKnown = (!!distrustKey && distrust.has(distrustKey)) || isContinuation || isFirstRunForBucket
         await processTarget(adapter, sourceId, target, o, delayMs, initVerdictPending, distrustKnown)
         if (delayMs) await sleep(delayMs)
       }

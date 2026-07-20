@@ -115,6 +115,29 @@ describe('runSourceSyncHandler — feed continuation', () => {
     expect(mockAdapterFetch.mock.calls[1][0]).toMatchObject({ page: 2 })
   })
 
+  it('a first-run feed (no cursor) does NOT get the #559 bucket distrust — an all-known full page still hits the cutoff instead of draining to the feed cap (Codex #559 round 2)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) }) // no cursor — first run for the feed
+    // Every incoming row is already stored → Tier-1 refresh → knownRate = 1.
+    ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockImplementation((q: Record<string, unknown>) =>
+      q?.['provenance.sourceKey']
+        ? Promise.resolve({ status: 'open', provenance: [{ sourceKey: q['provenance.sourceKey'], lastSeenAt: new Date(0) }], jdLength: 100000, locationKeys: [], locations: [], save: async () => ({}) })
+        : Promise.resolve(null)
+    )
+    // A physically-FULL page (rawPageSize ≥ PER_PAGE) of open, normalizable rows.
+    const openRow = (k: number) => ({ id: `u${k}`, title: 'Backend Developer', organisation: { name: `Acme ${k}` }, seo_url: `https://unstop.com/jobs/acme-${k}`, details: 'Build APIs. '.repeat(50), start_date: '2026-07-12T00:00:00Z', regn_open: true })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [openRow(1), openRow(2), openRow(3)], rawPageSize: 15 })
+    try {
+      await runSourceSyncHandler({ data: { sourceId: 'unstop' } }, step, { interRequestDelayMs: 0 })
+      // Cutoff fired at page 1 (the feed is NOT first-run-distrusted) — a single
+      // fetch, no drain to MAX_PAGES_PER_FEED, no cap-exit continuation.
+      expect(mockAdapterFetch).toHaveBeenCalledTimes(1)
+    } finally {
+      ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(null)
+    }
+  })
+
   it('resumes unstop at the persisted lastPage+1 — the continuation offset is never stomped (Codex #536)', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
@@ -244,8 +267,13 @@ describe('runSourceSyncHandler', () => {
     const retryBucket = (targets[0] as { bucketId: string }).bucketId
     const trustedBucket = (targets[1] as { bucketId: string }).bucketId
     // Prior run stored page 1 of retryBucket then died on page 2 → its
-    // cursor row carries the durable flag and NO newestPostedAt.
-    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([{ bucket: retryBucket, windowIncomplete: true }]) })
+    // cursor row carries the durable flag and NO newestPostedAt. trustedBucket
+    // carries a normal COMPLETED cursor so it is not a first run — the #559
+    // no-cursor distrust doesn't apply and it trusts the cutoff.
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([
+      { bucket: retryBucket, windowIncomplete: true },
+      { bucket: trustedBucket, newestPostedAt: new Date('2026-07-01T00:00:00Z') },
+    ]) })
     // Every incoming row is ALREADY STORED (the partial run's writes):
     // Tier-1 sourceKey lookup returns a refreshable doc → refreshed++ →
     // knownRate = 1 ≥ cutoff on every page-1.
@@ -290,6 +318,76 @@ describe('runSourceSyncHandler', () => {
     } finally {
       ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(null)
     }
+  })
+
+  it('a first-run bucket (no cursor yet) distrusts the known-rate cutoff — a #23 renamed bucket over an existing corpus must not freeze shallow (Codex #559)', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    const targets = jsearchAdapter.buildTargets({ sourceId: 'jsearch', enabled: true }, [])
+    const freshBucket = (targets[0] as { bucketId: string }).bucketId    // brand new — no cursor (the rename)
+    const knownBucket = (targets[1] as { bucketId: string }).bucketId    // already has a completed cursor
+    // Only knownBucket has a persisted cursor; freshBucket is new to the corpus.
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([{ bucket: knownBucket, newestPostedAt: new Date('2026-07-01T00:00:00Z') }]) })
+    // Every incoming row is ALREADY STORED (the existing metro-built corpus) →
+    // Tier-1 sourceKey lookup refreshes → knownRate = 1 on every page 1.
+    ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockImplementation((q: Record<string, unknown>) =>
+      q?.['provenance.sourceKey']
+        ? Promise.resolve({
+            status: 'open',
+            provenance: [{ sourceKey: q['provenance.sourceKey'], lastSeenAt: new Date(0) }],
+            jdLength: 100000, locationKeys: [], locations: [],
+            save: async () => ({}),
+          })
+        : Promise.resolve(null)
+    )
+    const fullPage = (bucket: string, page: number, n: number) => Array.from({ length: n }, (_, k) => ({
+      job_id: `id-${bucket}-p${page}-${k}`, job_title: 'Backend Developer', employer_name: `Acme ${k}`,
+      job_city: 'Pune', job_description: 'Build APIs. '.repeat(50),
+      job_posted_at_datetime_utc: '2026-07-12T00:00:00Z', job_apply_link: `https://careers.acme.com/${page}/${k}`,
+    }))
+    mockAdapterFetch.mockImplementation(async (t: { bucketId?: string; page?: number }) => ({
+      ok: true, status: 200, attempts: 1,
+      // Page 1 full everywhere; page 2 (reached only by distrusted buckets) is
+      // non-full → a clean exit.
+      raw: fullPage(t.bucketId ?? 'b', t.page ?? 1, (t.page ?? 1) === 1 ? 10 : 1),
+    }))
+    try {
+      const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+      expect(r).toMatchObject({ cycleWritten: true })
+      const pagesFor = (b: string) => mockAdapterFetch.mock.calls.filter((c) => c[0].bucketId === b).map((c) => c[0].page)
+      // The brand-new bucket paginated PAST the all-known page 1 — the deep
+      // country coverage the #23 page cap relies on, instead of freezing shallow.
+      expect(pagesFor(freshBucket)).toContain(2)
+      // A bucket that already has a completed cursor still trusts the cutoff.
+      expect(pagesFor(knownBucket)).toEqual([1])
+    } finally {
+      ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(null)
+    }
+  })
+
+  it('a bucket that fills all MAX_PAGES_PER_BUCKET pages with fresh rows logs a cap-exit — deep-backlog drop is never silent (Codex #559 round 3)', async () => {
+    resetAll()
+    const { logger } = await import('@shared/logger')
+    vi.mocked(logger.warn).mockClear()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    // Every page is FULL (10 rows) and every row is NEW (findOne default → null)
+    // → knownRate 0, no cutoff → the bucket paginates to the 4-page cap and
+    // cap-exits with backlog still behind it.
+    mockAdapterFetch.mockImplementation(async (t: { bucketId?: string; page?: number }) => ({
+      ok: true, status: 200, attempts: 1,
+      raw: Array.from({ length: 10 }, (_, k) => ({
+        job_id: `id-${t.bucketId}-p${t.page}-${k}`, job_title: 'Backend Developer', employer_name: `Acme ${t.page}-${k}`,
+        job_city: 'Pune', job_description: 'Build APIs. '.repeat(50),
+        job_posted_at_datetime_utc: '2026-07-12T00:00:00Z', job_apply_link: `https://careers.acme.com/${t.page}/${k}`,
+      })),
+    }))
+    await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    const warnCalls = vi.mocked(logger.warn).mock.calls as Array<[Record<string, unknown>, string]>
+    const capWarn = warnCalls.find((c) => c[1]?.includes('cap-exit'))
+    expect(capWarn).toBeTruthy()
+    // 4 = MAX_PAGES_PER_BUCKET; the tail beyond page 4 was dropped this run.
+    expect(capWarn![0]).toMatchObject({ bucket: expect.any(String), pagesFetched: 4 })
   })
 
   it('a garbage postedAt never reaches the cursor write — finalize still succeeds', async () => {
