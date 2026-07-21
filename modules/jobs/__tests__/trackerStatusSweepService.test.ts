@@ -4,7 +4,8 @@ const {
   MockJobsAccountInactiveError,
   mockConnectDB,
   mockIndexes,
-  mockFind,
+  mockAggregate,
+  mockAggregateHint,
   mockUpdateOne,
   mockCreateEvent,
   mockWithActiveJobsAccountWrite,
@@ -16,7 +17,8 @@ const {
     MockJobsAccountInactiveError,
     mockConnectDB: vi.fn(),
     mockIndexes: vi.fn(),
-    mockFind: vi.fn(),
+    mockAggregate: vi.fn(),
+    mockAggregateHint: vi.fn(),
     mockUpdateOne: vi.fn(),
     mockCreateEvent: vi.fn(),
     mockWithActiveJobsAccountWrite: vi.fn(),
@@ -29,12 +31,19 @@ vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/db/models', () => ({
   JobApplication: {
     collection: { indexes: mockIndexes },
-    find: mockFind,
+    aggregate: mockAggregate,
     updateOne: mockUpdateOne,
   },
   ProductEvent: { create: mockCreateEvent },
+  User: { collection: { name: 'users' } },
 }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
+  JOBS_ACTIVE_ACCOUNT_STATES_FILTER: {
+    $or: [
+      { accountState: 'active' },
+      { accountState: { $exists: false } },
+    ],
+  },
   JobsAccountInactiveError: MockJobsAccountInactiveError,
   withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
 }))
@@ -64,12 +73,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
 }
 
 function mockCandidates(rows: ReturnType<typeof candidate>[]) {
-  const lean = vi.fn().mockResolvedValue(rows)
-  const limit = vi.fn(() => ({ lean }))
-  const sort = vi.fn(() => ({ limit }))
-  const select = vi.fn(() => ({ sort }))
-  mockFind.mockReturnValue({ select })
-  return { select, sort, limit, lean }
+  mockAggregateHint.mockResolvedValue(rows)
 }
 
 describe('runTrackerStatusSweep', () => {
@@ -81,6 +85,8 @@ describe('runTrackerStatusSweep', () => {
       key: TRACKER_STATUS_SWEEP_INDEX_KEY,
       partialFilterExpression: TRACKER_STATUS_SWEEP_INDEX_PARTIAL,
     }])
+    mockAggregate.mockReturnValue({ hint: mockAggregateHint })
+    mockAggregateHint.mockResolvedValue([])
     mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
     mockCreateEvent.mockResolvedValue([])
     mockWithActiveJobsAccountWrite.mockImplementation(
@@ -90,18 +96,51 @@ describe('runTrackerStatusSweep', () => {
 
   it('selects only explicitly confirmed applications at the 35-day cutoff', async () => {
     const row = candidate()
-    const query = mockCandidates([row])
+    mockCandidates([row])
 
     const report = await runTrackerStatusSweep({ now: NOW })
 
     const cutoff = new Date('2026-06-16T12:00:00.000Z')
-    expect(mockFind).toHaveBeenCalledWith({
-      status: 'applied',
-      appliedAt: { $type: 'date', $lte: cutoff },
-    })
-    expect(query.select).toHaveBeenCalledWith('_id userId jobPostingId appliedAt updatedAt')
-    expect(query.sort).toHaveBeenCalledWith({ appliedAt: 1, _id: 1 })
-    expect(query.limit).toHaveBeenCalledWith(501)
+    expect(mockAggregate).toHaveBeenCalledWith([
+      {
+        $match: {
+          status: 'applied',
+          appliedAt: { $type: 'date', $lte: cutoff },
+        },
+      },
+      { $sort: { appliedAt: 1, _id: 1 } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'userId',
+          foreignField: '_id',
+          pipeline: [
+            {
+              $match: {
+                $or: [
+                  { accountState: 'active' },
+                  { accountState: { $exists: false } },
+                ],
+              },
+            },
+            { $project: { _id: 1 } },
+          ],
+          as: 'activeOwner',
+        },
+      },
+      { $match: { 'activeOwner.0': { $exists: true } } },
+      { $limit: 501 },
+      {
+        $project: {
+          _id: 1,
+          userId: 1,
+          jobPostingId: 1,
+          appliedAt: 1,
+          updatedAt: 1,
+        },
+      },
+    ])
+    expect(mockAggregateHint).toHaveBeenCalledWith(TRACKER_STATUS_SWEEP_INDEX_NAME)
     expect(report).toEqual({
       at: NOW.toISOString(),
       cutoff: cutoff.toISOString(),
@@ -121,7 +160,7 @@ describe('runTrackerStatusSweep', () => {
     await expect(runTrackerStatusSweep({ now: NOW }))
       .rejects.toThrow(TRACKER_STATUS_SWEEP_INDEX_NAME)
 
-    expect(mockFind).not.toHaveBeenCalled()
+    expect(mockAggregate).not.toHaveBeenCalled()
     expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
   })
 
@@ -172,8 +211,7 @@ describe('runTrackerStatusSweep', () => {
 
   it('is idempotent when a retry replays the same candidate snapshot', async () => {
     const row = candidate()
-    const query = mockCandidates([row])
-    mockFind.mockReturnValue({ select: query.select })
+    mockCandidates([row])
     mockUpdateOne
       .mockResolvedValueOnce({ modifiedCount: 1 })
       .mockResolvedValueOnce({ modifiedCount: 0 })
@@ -186,7 +224,7 @@ describe('runTrackerStatusSweep', () => {
     expect(mockCreateEvent).toHaveBeenCalledOnce()
   })
 
-  it('skips an inactive account and continues with other users', async () => {
+  it('fences an account that becomes inactive after selection and continues', async () => {
     const inactive = candidate()
     const active = candidate({
       _id: '64b000000000000000000004',
@@ -207,6 +245,22 @@ describe('runTrackerStatusSweep', () => {
     })
     expect(mockUpdateOne).toHaveBeenCalledOnce()
     expect(mockLoggerWarn).toHaveBeenCalledOnce()
+  })
+
+  it('does no transactional work when owner filtering removes every due row', async () => {
+    mockCandidates([])
+
+    const report = await runTrackerStatusSweep({ now: NOW, limit: 1 })
+
+    expect(report).toMatchObject({
+      scanned: 0,
+      ghosted: 0,
+      accountInactive: 0,
+      capped: false,
+    })
+    expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockCreateEvent).not.toHaveBeenCalled()
   })
 
   it('processes only the bounded window and reports deferred work', async () => {

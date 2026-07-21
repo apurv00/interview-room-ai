@@ -8,6 +8,8 @@ const ACTIVE_ACCOUNT_STATES = {
   ],
 }
 
+export const JOBS_ACTIVE_ACCOUNT_STATES_FILTER = ACTIVE_ACCOUNT_STATES
+
 const TRANSACTION_OPTIONS = {
   readConcern: { level: 'snapshot' as const },
   writeConcern: { w: 'majority' as const },

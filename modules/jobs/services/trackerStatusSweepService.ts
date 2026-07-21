@@ -1,8 +1,9 @@
 import { connectDB } from '@shared/db/connection'
-import { JobApplication, ProductEvent } from '@shared/db/models'
+import { JobApplication, ProductEvent, User } from '@shared/db/models'
 import { logger } from '@shared/logger'
-import type { Types } from 'mongoose'
+import type { PipelineStage, Types } from 'mongoose'
 import {
+  JOBS_ACTIVE_ACCOUNT_STATES_FILTER,
   JobsAccountInactiveError,
   withActiveJobsAccountWrite,
 } from '@shared/services/jobsAccountFence'
@@ -96,6 +97,46 @@ function boundedLimit(requested: number | undefined): number {
   return Math.min(TRACKER_STATUS_SWEEP_LIMIT, Math.max(1, Math.floor(requested)))
 }
 
+function activeCandidatePipeline(
+  cutoff: Date,
+  limit: number,
+): PipelineStage[] {
+  return [
+    {
+      $match: {
+        status: 'applied',
+        appliedAt: { $type: 'date', $lte: cutoff },
+      },
+    },
+    { $sort: { appliedAt: 1, _id: 1 } },
+    {
+      $lookup: {
+        from: User.collection.name,
+        localField: 'userId',
+        foreignField: '_id',
+        pipeline: [
+          { $match: JOBS_ACTIVE_ACCOUNT_STATES_FILTER },
+          { $project: { _id: 1 } },
+        ],
+        as: 'activeOwner',
+      },
+    },
+    { $match: { 'activeOwner.0': { $exists: true } } },
+    // Apply the work cap only after missing/deleting owners are excluded, so
+    // an orphan prefix cannot hide active applications from every daily run.
+    { $limit: limit + 1 },
+    {
+      $project: {
+        _id: 1,
+        userId: 1,
+        jobPostingId: 1,
+        appliedAt: 1,
+        updatedAt: 1,
+      },
+    },
+  ]
+}
+
 /**
  * Applies the 35-day reversible inference outside every user-facing read.
  *
@@ -117,15 +158,9 @@ export async function runTrackerStatusSweep(
   const limit = boundedLimit(options.limit)
   const cutoff = new Date(now.getTime() - TRACKER_GHOST_AFTER_DAYS * DAY_MS)
 
-  const discovered = await JobApplication.find({
-    status: 'applied',
-    appliedAt: { $type: 'date', $lte: cutoff },
-  })
-    .select('_id userId jobPostingId appliedAt updatedAt')
-    .sort({ appliedAt: 1, _id: 1 })
-    .limit(limit + 1)
-    .lean<TrackerStatusCandidate[]>()
-
+  const discovered = await JobApplication
+    .aggregate<TrackerStatusCandidate>(activeCandidatePipeline(cutoff, limit))
+    .hint(TRACKER_STATUS_SWEEP_INDEX_NAME)
   const candidates = discovered.slice(0, limit)
   const byUser = new Map<string, TrackerStatusCandidate[]>()
   for (const candidate of candidates) {
