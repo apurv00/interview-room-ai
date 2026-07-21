@@ -5,10 +5,22 @@ import { authOptions } from '@shared/auth/authOptions'
 import { CreateSessionSchema } from '@interview/validators/interview'
 import { createSession, listSessions } from '@interview/services/core/interviewService'
 import { logger } from '@shared/logger'
+import {
+  activeJobsAccountIds,
+  isJobsAccountActive,
+} from '@shared/services/jobsAccountFence'
+import { connectDB } from '@shared/db/connection'
 import { AppError } from '@shared/errors'
 import { practiceHandoffHashOf, resolvePracticeHandoff } from '@jobs/services/practiceHandoff'
 
 export const dynamic = 'force-dynamic'
+
+function accountUnavailable() {
+  return NextResponse.json(
+    { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+    { status: 401 },
+  )
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -143,10 +155,17 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  let requesterUserId: string | undefined
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    requesterUserId = session.user.id
+
+    await connectDB()
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailable()
     }
 
     const { searchParams } = new URL(req.url)
@@ -171,7 +190,7 @@ export async function GET(req: NextRequest) {
     // Codex P2 on PR #332). Existence booleans are computed server-side
     // in listSessions() via aggregation so the response never carries the
     // heavy liveTranscriptWords / transcript arrays.
-    const sanitizedSessions = result.sessions.map((s: any) => { // eslint-disable-line
+    let sanitizedSessions = result.sessions.map((s: any) => { // eslint-disable-line
       const obj = s.toObject ? s.toObject() : { ...s }
       const hasRecording = !!obj.recordingR2Key
       const hasScreenRecording = !!obj.screenRecordingR2Key
@@ -179,8 +198,28 @@ export async function GET(req: NextRequest) {
       delete obj.recordingR2Key
       delete obj.screenRecordingR2Key
       delete obj.audioRecordingR2Key
+      delete obj.facialLandmarksR2Key
+      delete obj.resumeR2Key
+      delete obj.jdR2Key
+      delete obj.inviteTokenHash
+      delete obj.inviteTokenExpiry
       delete obj.hasLiveTranscriptWords
       delete obj.hasStoredTranscript
+      // Match the detail-route privacy boundary. Organization viewers need
+      // scores and session metadata, never another candidate's raw resume,
+      // JD, email address, or browser fingerprint.
+      if (obj.userId?.toString() !== session.user.id) {
+        delete obj.resumeText
+        delete obj.userAgent
+        delete obj.candidateEmail
+        delete obj.jobDescription
+        delete obj.parsedResume
+        delete obj.parsedJobDescription
+        delete obj.resumeFileName
+        delete obj.jdFileName
+        delete obj.recordingUrl
+        delete obj.shareToken
+      }
       return {
         ...obj,
         hasRecording,
@@ -189,8 +228,42 @@ export async function GET(req: NextRequest) {
       }
     })
 
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailable()
+    }
+
+    // The active-owner ID set used by listSessions can become stale while its
+    // aggregate is in flight. Re-check only the returned foreign owners at
+    // the final disclosure boundary and prune raced/malformed rows instead of
+    // failing the recruiter's entire page.
+    const foreignOwnerIds = Array.from(new Set(
+      sanitizedSessions
+        .map((row: { userId?: unknown }) => row.userId?.toString())
+        .filter((ownerId: string | undefined): ownerId is string => !!ownerId && ownerId !== session.user.id),
+    ))
+    const finalActiveAccountIds = await activeJobsAccountIds([
+      session.user.id,
+      ...foreignOwnerIds,
+    ])
+    if (!finalActiveAccountIds.has(session.user.id)) {
+      return accountUnavailable()
+    }
+    sanitizedSessions = sanitizedSessions.filter((row: { userId?: unknown }) => {
+      const ownerId = row.userId?.toString()
+      return !!ownerId && finalActiveAccountIds.has(ownerId)
+    })
+
     return NextResponse.json({ ...result, sessions: sanitizedSessions })
   } catch (err) {
+    if (requesterUserId) {
+      try {
+        if (!(await isJobsAccountActive(requesterUserId))) {
+          return accountUnavailable()
+        }
+      } catch {
+        // Preserve the original list failure when the diagnostic check fails.
+      }
+    }
     logger.error({ err }, 'Failed to list interview sessions')
     return NextResponse.json({ error: 'Failed to list sessions' }, { status: 500 })
   }

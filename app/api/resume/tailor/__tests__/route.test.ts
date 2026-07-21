@@ -137,13 +137,60 @@ describe('POST /api/resume/tailor session provenance', () => {
     await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
   })
 
-  it('preserves authenticated callers that omit originUserId', async () => {
+  it('prefers account-unavailable when provider failure races deletion', async () => {
+    mocks.tailorResume.mockRejectedValue(new Error('provider failed'))
+    mocks.isJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      request({ ...validBody, originUserId: USER_B_ID }, USER_B_ID),
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+  })
+
+  it('account-fences authenticated callers that omit originUserId', async () => {
     const response = await POST(request(validBody))
 
     expect(response.status).toBe(200)
     expect(mocks.redisIncr).toHaveBeenCalledTimes(1)
     expect(mocks.tailorResume).toHaveBeenCalledWith(validBody)
-    expect(mocks.isJobsAccountActive).not.toHaveBeenCalled()
+    expect(mocks.isJobsAccountActive).toHaveBeenCalledTimes(3)
+  })
+
+  it('rejects an inactive authenticated caller without provenance before quota or model work', async () => {
+    mocks.isJobsAccountActive.mockResolvedValueOnce(false)
+
+    const response = await POST(request(validBody))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mocks.redisIncr).not.toHaveBeenCalled()
+    expect(mocks.tailorResume).not.toHaveBeenCalled()
+  })
+
+  it('cannot downgrade an authenticated request to anonymous when deletion removes its session mid-request', async () => {
+    mocks.getServerSession
+      .mockResolvedValueOnce({ user: { id: USER_B_ID, plan: 'free' } })
+      .mockResolvedValueOnce(null)
+    mocks.isJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(request(validBody))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mocks.tailorResume).not.toHaveBeenCalled()
   })
 
   it('preserves anonymous callers that omit originUserId', async () => {

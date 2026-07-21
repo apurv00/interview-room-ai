@@ -14,6 +14,12 @@ const accountUnavailableResponse = () => NextResponse.json(
   { status: 401 },
 )
 
+// composeApiRoute performs its own session lookup. Preserve the authenticated
+// identity observed by the outer pre-quota guard so a deletion/session removal
+// between those two reads cannot silently downgrade this same request to the
+// anonymous Tailor contract.
+const authenticatedRequestUsers = new WeakMap<NextRequest, string>()
+
 // Open to anonymous users so the strongest "wow" tool of the resume funnel
 // (job-specific tailoring) is reachable from SEO landings without sign-in.
 // Stateless service — no user.id dependency. Anonymous IPs capped at 3
@@ -28,23 +34,43 @@ const composedPOST = composeApiRoute({
     anonDailyLimit: 3,
   },
   handler: async (req, { body, user }) => {
-    // Defense in depth for clients that send body provenance. The Tailor page
-    // also sends x-origin-user-id so its account-switch rejection happens in
-    // the wrapper below, before composeApiRoute consumes quota.
-    if (body.originUserId !== undefined &&
-      (user.id === 'anonymous' || body.originUserId !== user.id)) {
+    const outerAuthenticatedUserId = authenticatedRequestUsers.get(req)
+    const innerAuthenticatedUserId = user.id === 'anonymous' ? null : user.id
+    if (
+      outerAuthenticatedUserId &&
+      innerAuthenticatedUserId !== outerAuthenticatedUserId
+    ) {
+      // Session disappearance can be the direct result of account deletion.
+      // Prefer the exact terminal deletion signal over a generic identity
+      // change when the original account fence is now inactive.
+      if (!(await isJobsAccountActive(outerAuthenticatedUserId))) {
+        return accountUnavailableResponse()
+      }
       return NextResponse.json(
         { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
         { status: 409 },
       )
     }
-    const accountBoundOrigin = user.id !== 'anonymous' && (
-      body.originUserId !== undefined || req.headers.get('x-origin-user-id') !== null
-    )
+    const accountBoundUserId = outerAuthenticatedUserId ?? innerAuthenticatedUserId
+    // Defense in depth for clients that send body provenance. The Tailor page
+    // also sends x-origin-user-id so its account-switch rejection happens in
+    // the wrapper below, before composeApiRoute consumes quota.
+    const headerOriginUserId = req.headers.get('x-origin-user-id')
+    if (
+      (body.originUserId !== undefined &&
+        (!accountBoundUserId || body.originUserId !== accountBoundUserId)) ||
+      (headerOriginUserId !== null &&
+        (!accountBoundUserId || headerOriginUserId !== accountBoundUserId))
+    ) {
+      return NextResponse.json(
+        { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
+        { status: 409 },
+      )
+    }
     try {
-      if (accountBoundOrigin) {
+      if (accountBoundUserId) {
         await connectDB()
-        if (!(await isJobsAccountActive(user.id))) return accountUnavailableResponse()
+        if (!(await isJobsAccountActive(accountBoundUserId))) return accountUnavailableResponse()
       }
       // Keep provenance out of the AI-service payload. It exists only to bind
       // this HTTP request to the session that originated the client run.
@@ -55,11 +81,20 @@ const composedPOST = composeApiRoute({
       })
       // Provider work cannot be recalled if deletion starts mid-call, but its
       // private result must never be returned to the stale authenticated tab.
-      if (accountBoundOrigin && !(await isJobsAccountActive(user.id))) {
+      if (accountBoundUserId && !(await isJobsAccountActive(accountBoundUserId))) {
         return accountUnavailableResponse()
       }
       return NextResponse.json(result)
     } catch {
+      if (accountBoundUserId) {
+        try {
+          if (!(await isJobsAccountActive(accountBoundUserId))) {
+            return accountUnavailableResponse()
+          }
+        } catch {
+          // Preserve the provider failure if the diagnostic recheck also fails.
+        }
+      }
       return NextResponse.json({ error: 'Failed to tailor resume' }, { status: 500 })
     }
   },
@@ -76,19 +111,27 @@ export async function POST(
   context?: { params?: Record<string, string> },
 ): Promise<NextResponse> {
   const originUserId = req.headers.get('x-origin-user-id')
-  if (originUserId !== null) {
-    const session = await getServerSession(authOptions)
-    const currentUserId = (session?.user as { id?: string } | undefined)?.id
-    if (!currentUserId || originUserId !== currentUserId) {
-      return NextResponse.json(
-        { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
-        { status: 409 },
-      )
-    }
+  const session = await getServerSession(authOptions)
+  const currentUserId = (session?.user as { id?: string } | undefined)?.id
+  if (originUserId !== null && (!currentUserId || originUserId !== currentUserId)) {
+    return NextResponse.json(
+      { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
+      { status: 409 },
+    )
+  }
+  // Every authenticated Tailor request is account-bound, including legacy
+  // clients that omit provenance. Keep this check outside composeApiRoute so
+  // inactive accounts consume neither quota nor a potentially large JSON parse.
+  if (currentUserId) {
     await connectDB()
     if (!(await isJobsAccountActive(currentUserId))) {
       return accountUnavailableResponse()
     }
+    authenticatedRequestUsers.set(req, currentUserId)
   }
-  return composedPOST(req, context)
+  try {
+    return await composedPOST(req, context)
+  } finally {
+    authenticatedRequestUsers.delete(req)
+  }
 }

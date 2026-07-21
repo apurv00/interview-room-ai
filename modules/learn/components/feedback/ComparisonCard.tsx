@@ -38,6 +38,15 @@ interface ComparisonCardProps {
    * chronologically previous session. Drives "vs first attempt" copy.
    */
   parentSessionId?: string
+  /** Notify the owning page of the exact account-deletion terminal signal. */
+  onAccountUnavailable?: () => void
+}
+
+async function isExactAccountUnavailable(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false
+  const readable = typeof response.clone === 'function' ? response.clone() : response
+  const body = await readable.json().catch(() => null) as { code?: unknown } | null
+  return body?.code === 'ACCOUNT_UNAVAILABLE'
 }
 
 function DeltaBadge({ delta, label }: { delta: number | null; label: string }) {
@@ -85,11 +94,18 @@ function ArrowIcon({ direction }: { direction: 'up' | 'down' | 'same' | 'new' })
   return null
 }
 
-export default function ComparisonCard({ currentScores, overallScore, domain, parentSessionId }: ComparisonCardProps) {
+export default function ComparisonCard({
+  currentScores,
+  overallScore,
+  domain,
+  parentSessionId,
+  onAccountUnavailable,
+}: ComparisonCardProps) {
   const [data, setData] = useState<ComparisonResult | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let cancelled = false
     const params = new URLSearchParams({
       relevance: String(currentScores.relevance),
       structure: String(currentScores.structure),
@@ -101,10 +117,33 @@ export default function ComparisonCard({ currentScores, overallScore, domain, pa
     if (parentSessionId) params.set('parentSessionId', parentSessionId)
 
     fetch(`/api/learn/comparison?${params}`)
-      .then(r => r.json())
-      .then(d => { setData(d); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [currentScores, overallScore, domain, parentSessionId])
+      .then(async (response) => {
+        if (await isExactAccountUnavailable(response)) {
+          if (!cancelled) {
+            setData(null)
+            setLoading(false)
+            onAccountUnavailable?.()
+          }
+          return null
+        }
+        if (!response.ok) {
+          if (!cancelled) setLoading(false)
+          return null
+        }
+        return response.json() as Promise<ComparisonResult>
+      })
+      .then((result) => {
+        if (cancelled || !result) return
+        setData(result)
+        setLoading(false)
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [currentScores, overallScore, domain, parentSessionId, onAccountUnavailable])
 
   if (loading) {
     return (

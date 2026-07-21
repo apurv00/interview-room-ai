@@ -14,6 +14,7 @@ import {
   __resetReplayUploadPrivacyForTests,
   type ReplayUploadOperation,
 } from '@shared/services/replayUploadPrivacy'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 export type ReplayUploadKind = 'camera' | 'screen'
 export type ReplayUploadStatus = 'uploaded' | 'queued' | 'dropped'
@@ -24,6 +25,7 @@ export interface ReplayUploadResult {
 
 export interface ReplayUploadIntent {
   readonly privacyGeneration: number
+  readonly originUserId?: string
 }
 
 /**
@@ -31,8 +33,11 @@ export interface ReplayUploadIntent {
  * the recorder is still materializing its Blob, the eventual upload inherits
  * the old generation and is rejected instead of becoming fresh activity.
  */
-export function captureReplayUploadIntent(): ReplayUploadIntent {
-  return { privacyGeneration: currentReplayUploadPrivacyGeneration() }
+export function captureReplayUploadIntent(originUserId?: string): ReplayUploadIntent {
+  return {
+    privacyGeneration: currentReplayUploadPrivacyGeneration(),
+    ...(originUserId ? { originUserId } : {}),
+  }
 }
 
 export interface DrainReplayUploadsResult {
@@ -56,6 +61,8 @@ interface QueuedReplayUpload {
   blob: Blob
   sizeBytes: number
   contentType: string
+  /** Account that owned the browser session when recording stopped. */
+  originUserId?: string
   // Recorder-truth span, persisted in IDB so a drain on a LATER page mount
   // (where the interview tab's own duration PATCH never ran) still delivers
   // it to the server at multipart 'complete'.
@@ -87,6 +94,20 @@ class PermanentMultipartUploadError extends Error {
     super(message)
     this.name = 'PermanentMultipartUploadError'
   }
+}
+
+async function isTerminalAccountBoundary(response: Response): Promise<boolean> {
+  if (response.status !== 401 && response.status !== 409) return false
+  const readable = typeof response.clone === 'function' ? response.clone() : response
+  const body = await readable.json().catch(() => null) as { code?: unknown } | null
+  return (response.status === 401 && body?.code === 'ACCOUNT_UNAVAILABLE') ||
+    (response.status === 409 && body?.code === 'SESSION_CHANGED')
+}
+
+async function establishAccountUnavailableBoundary(): Promise<void> {
+  // Cancellation/generation invalidation is synchronous inside this helper;
+  // the returned promise only represents the bounded IndexedDB purge.
+  await clearAllInterviewStorage().catch(() => {})
 }
 
 function isPermanentMultipartUploadError(err: unknown): err is PermanentMultipartUploadError {
@@ -260,14 +281,23 @@ async function getAllUploads(operation: ReplayUploadOperation): Promise<QueuedRe
 async function postMultipart<T>(
   body: Record<string, unknown>,
   operation: ReplayUploadOperation,
+  originUserId?: string,
 ): Promise<T> {
   assertReplayUploadOperationActive(operation)
   const res = await fetch('/api/storage/multipart', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(originUserId ? { 'x-origin-user-id': originUserId } : {}),
+    },
     body: JSON.stringify(body),
     signal: operation.signal,
   })
+  assertReplayUploadOperationActive(operation)
+  if (await isTerminalAccountBoundary(res)) {
+    await establishAccountUnavailableBoundary()
+    assertReplayUploadOperationActive(operation)
+  }
   assertReplayUploadOperationActive(operation)
   if (!res.ok) {
     const responseText = await res.text().catch(() => '')
@@ -355,7 +385,7 @@ async function ensureMultipart(
     action: 'create',
     type: uploadTypeFor(record.kind),
     sessionId: record.sessionId,
-  }, operation)
+  }, operation, record.originUserId)
 
   const next = {
     ...record,
@@ -381,7 +411,7 @@ async function completeMultipart(
     parts: record.parts,
     sizeBytes: record.sizeBytes,
     ...(record.durationSeconds !== undefined ? { durationSeconds: record.durationSeconds } : {}),
-  }, operation)
+  }, operation, record.originUserId)
   return result.key
 }
 
@@ -480,7 +510,7 @@ async function serverAbort(
       action: 'abort',
       key: record.key,
       uploadId: record.uploadId,
-    }, operation)
+    }, operation, record.originUserId)
   } catch (err) {
     if (isReplayUploadPrivacyCancellation(err, operation)) throw err
     console.warn('Replay multipart abort failed (non-fatal)', err)
@@ -507,10 +537,12 @@ async function uploadMultipartRecord(
       const { start, end } = getPartRange(partNumber, current.sizeBytes, partSizeBytes)
       const { url } = await postMultipart<{ url: string }>({
         action: 'sign-part',
+        type: uploadTypeFor(current.kind),
+        sessionId: current.sessionId,
         key: current.key,
         uploadId: current.uploadId,
         partNumber,
-      }, operation)
+      }, operation, current.originUserId)
       const etag = await uploadPartWithRetry(
         url,
         current.blob.slice(start, end, current.contentType),
@@ -549,12 +581,16 @@ async function uploadDirect(
   blob: Blob,
   contentType: string,
   operation: ReplayUploadOperation,
-  durationSeconds?: number
+  durationSeconds?: number,
+  originUserId?: string,
 ): Promise<boolean> {
   assertReplayUploadOperationActive(operation)
   const res = await fetch('/api/storage/presign', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(originUserId ? { 'x-origin-user-id': originUserId } : {}),
+    },
     body: JSON.stringify({
       action: 'upload',
       type: uploadTypeFor(kind),
@@ -562,6 +598,11 @@ async function uploadDirect(
     }),
     signal: operation.signal,
   })
+  assertReplayUploadOperationActive(operation)
+  if (await isTerminalAccountBoundary(res)) {
+    await establishAccountUnavailableBoundary()
+    assertReplayUploadOperationActive(operation)
+  }
   assertReplayUploadOperationActive(operation)
   if (!res.ok) return false
 
@@ -576,21 +617,28 @@ async function uploadDirect(
   assertReplayUploadOperationActive(operation)
   if (!uploadRes.ok) return false
 
-  const patchBody = kind === 'screen'
-    ? { screenRecordingR2Key: key, screenRecordingSizeBytes: blob.size }
-    : {
-        recordingR2Key: key,
-        recordingSizeBytes: blob.size,
-        ...(durationSeconds !== undefined ? { recordingDurationSeconds: durationSeconds } : {}),
-      }
-  const patchRes = await fetch(`/api/interviews/${sessionId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patchBody),
+  const finalizeRes = await fetch('/api/recordings/finalize', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(originUserId ? { 'x-origin-user-id': originUserId } : {}),
+    },
+    body: JSON.stringify({
+      type: uploadTypeFor(kind),
+      sessionId,
+      key,
+      sizeBytes: blob.size,
+      ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    }),
     signal: operation.signal,
   })
   assertReplayUploadOperationActive(operation)
-  return patchRes.ok
+  if (await isTerminalAccountBoundary(finalizeRes)) {
+    await establishAccountUnavailableBoundary()
+    assertReplayUploadOperationActive(operation)
+  }
+  assertReplayUploadOperationActive(operation)
+  return finalizeRes.ok
 }
 
 export async function uploadReplayRecording(
@@ -612,6 +660,7 @@ export async function uploadReplayRecording(
           contentType,
           operation,
           durationSeconds,
+          intent?.originUserId,
         )
         return { status: uploaded ? 'uploaded' : 'dropped' }
       } catch (err) {
@@ -629,6 +678,7 @@ export async function uploadReplayRecording(
       blob,
       sizeBytes: blob.size,
       contentType,
+      ...(intent?.originUserId ? { originUserId: intent.originUserId } : {}),
       ...(durationSeconds !== undefined ? { durationSeconds } : {}),
       createdAt: Date.now(),
       parts: [],

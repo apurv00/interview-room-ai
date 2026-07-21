@@ -93,13 +93,7 @@ interface UpdateSessionInput {
   durationActualSeconds?: number
   startedAt?: string
   completedAt?: string
-  recordingR2Key?: string
-  recordingSizeBytes?: number
   recordingDurationSeconds?: number
-  screenRecordingR2Key?: string
-  screenRecordingSizeBytes?: number
-  audioRecordingR2Key?: string
-  audioRecordingSizeBytes?: number
   liveTranscriptWords?: Array<{
     word: string
     start: number
@@ -493,13 +487,7 @@ export async function updateSession(
   if (input.durationActualSeconds !== undefined) updateFields.durationActualSeconds = input.durationActualSeconds
   if (input.startedAt) updateFields.startedAt = new Date(input.startedAt)
   if (input.completedAt) updateFields.completedAt = new Date(input.completedAt)
-  if (input.recordingR2Key) updateFields.recordingR2Key = input.recordingR2Key
-  if (input.recordingSizeBytes !== undefined) updateFields.recordingSizeBytes = input.recordingSizeBytes
   if (input.recordingDurationSeconds !== undefined) updateFields.recordingDurationSeconds = input.recordingDurationSeconds
-  if (input.screenRecordingR2Key) updateFields.screenRecordingR2Key = input.screenRecordingR2Key
-  if (input.screenRecordingSizeBytes !== undefined) updateFields.screenRecordingSizeBytes = input.screenRecordingSizeBytes
-  if (input.audioRecordingR2Key) updateFields.audioRecordingR2Key = input.audioRecordingR2Key
-  if (input.audioRecordingSizeBytes !== undefined) updateFields.audioRecordingSizeBytes = input.audioRecordingSizeBytes
   if (input.liveTranscriptWords) updateFields.liveTranscriptWords = input.liveTranscriptWords
   if (input.codingProblemId) updateFields.codingProblemId = input.codingProblemId
   if (input.designProblemId) updateFields.designProblemId = input.designProblemId
@@ -552,10 +540,24 @@ export async function listSessions(input: ListSessionsInput) {
   const skip = (page - 1) * limit
 
   const filter: Record<string, unknown> = {}
+  const organizationScoped = Boolean(
+    input.organizationId &&
+    ['recruiter', 'org_admin', 'platform_admin'].includes(input.role),
+  )
 
   // If recruiter/admin, show org sessions; otherwise show own sessions
-  if (input.organizationId && ['recruiter', 'org_admin', 'platform_admin'].includes(input.role)) {
-    filter.organizationId = new mongoose.Types.ObjectId(input.organizationId)
+  if (organizationScoped) {
+    const organizationId = new mongoose.Types.ObjectId(input.organizationId)
+    const { _id: _requesterId, ...activeAccountState } = activeJobsAccountFilter(input.userId)
+    // Resolve active organization members before applying skip/limit/count.
+    // Missing Users and explicit `deleting` Users therefore cannot occupy a
+    // page slot or inflate pagination for recruiter/admin history.
+    const activeOwnerIds = await User.distinct('_id', {
+      organizationId,
+      ...activeAccountState,
+    })
+    filter.organizationId = organizationId
+    filter.userId = { $in: activeOwnerIds }
   } else {
     filter.userId = new mongoose.Types.ObjectId(input.userId)
   }

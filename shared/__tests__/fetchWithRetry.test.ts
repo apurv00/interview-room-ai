@@ -13,6 +13,7 @@ import { aiLogger } from '@shared/logger'
 describe('fetchWithRetry', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    vi.mocked(aiLogger.warn).mockClear()
     vi.useFakeTimers()
   })
 
@@ -76,6 +77,25 @@ describe('fetchWithRetry', () => {
 
     expect(result).toBe(true)
     expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry a response classified as terminal', async () => {
+    const terminalResponse = { ok: false, status: 401 } as Response
+    const fetchSpy = vi.fn().mockResolvedValue(terminalResponse)
+    const isTerminalResponse = vi.fn().mockResolvedValue(true)
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const result = await fetchWithRetry(
+      '/api/test',
+      { method: 'PATCH' },
+      { isTerminalResponse },
+    )
+
+    expect(result).toBe(false)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(isTerminalResponse).toHaveBeenCalledOnce()
+    expect(isTerminalResponse).toHaveBeenCalledWith(terminalResponse)
+    expect(aiLogger.warn).not.toHaveBeenCalled()
   })
 
   it('respects custom maxRetries option', async () => {

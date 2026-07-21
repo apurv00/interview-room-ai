@@ -137,7 +137,11 @@ function setCachedJSON<T>(key: string, data: T): void {
 
 async function isExactAccountUnavailable(response: Response): Promise<boolean> {
   if (response.status !== 401) return false
-  const body = await response.json().catch(() => null) as { code?: unknown } | null
+  // Preserve the original body for the caller's ordinary error handling when
+  // a generic 401 is not the account-deletion terminal signal. Test doubles
+  // may not implement clone(), so retain the existing compatible fallback.
+  const readable = typeof response.clone === 'function' ? response.clone() : response
+  const body = await readable.json().catch(() => null) as { code?: unknown } | null
   return body?.code === 'ACCOUNT_UNAVAILABLE'
 }
 
@@ -292,6 +296,7 @@ function FeedbackPageInner() {
   >(null)
   const [pathwayPollEpoch, setPathwayPollEpoch] = useState(0)
   const pathwayRetryTriggeredRef = useRef(false)
+  const accountUnavailableHandlerRef = useRef<() => void>(() => {})
 
   const pathwayPlanScheduled = useMemo(
     () =>
@@ -310,6 +315,7 @@ function FeedbackPageInner() {
     sessionId: !accountUnavailable && sessionId !== 'local' ? sessionId : null,
     enabled: !accountUnavailable && pathwayPlanScheduled,
     pollEpoch: pathwayPollEpoch,
+    onAccountUnavailable: () => accountUnavailableHandlerRef.current(),
     onRefresh: async () => {
       if (!sessionId || sessionId === 'local' || accountUnavailableRef.current) return
       try {
@@ -506,6 +512,13 @@ function FeedbackPageInner() {
     setRetakeSetupConfig(undefined)
     setParentSessionId(null)
   }, [])
+  accountUnavailableHandlerRef.current = handleAccountUnavailable
+
+  const handleExactAccountUnavailableResponse = useCallback(async (response: Response) => {
+    if (!(await isExactAccountUnavailable(response))) return false
+    handleAccountUnavailable()
+    return true
+  }, [handleAccountUnavailable])
 
   const captureReplayMeta = useCallback((raw: unknown) => {
     if (accountUnavailableRef.current) return
@@ -674,7 +687,10 @@ function FeedbackPageInner() {
     fetch(`/api/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}`, {
       signal: accountAbortControllerRef.current.signal,
     })
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (await handleExactAccountUnavailableResponse(r)) return null
+        return r.ok ? r.json() : null
+      })
       .then((vm) => {
         if (accountUnavailableRef.current) return null
         const reason = vm?.pathwayUpdate?.reason
@@ -697,6 +713,7 @@ function FeedbackPageInner() {
       })
       .then(async (res) => {
         if (accountUnavailableRef.current || !res) return
+        if (await handleExactAccountUnavailableResponse(res)) return
         if (res.ok) {
           setPathwayRetryStatus({ kind: 'success' })
           setPathwayPollEpoch((n) => n + 1)
@@ -740,7 +757,7 @@ function FeedbackPageInner() {
         const message = err instanceof Error ? err.message : 'Network error'
         setPathwayRetryStatus({ kind: 'error', message })
       })
-  }, [accountUnavailable, sessionId, router])
+  }, [accountUnavailable, sessionId, router, handleExactAccountUnavailableResponse])
 
   // ── Late-landing recording catcher (Shape B) ───────────────────────────────
   // Camera upload is fire-and-forget per app/interview/page.tsx — the
@@ -867,6 +884,7 @@ function FeedbackPageInner() {
       const res = await fetch(`/api/analysis/${sessionId}`, {
         signal: accountAbortControllerRef.current.signal,
       })
+      if (await handleExactAccountUnavailableResponse(res)) return
       if (accountUnavailableRef.current) return
       if (res.ok) {
         const data = await res.json()
@@ -893,6 +911,7 @@ function FeedbackPageInner() {
           body: JSON.stringify({ sessionId }),
           signal: accountAbortControllerRef.current.signal,
         })
+        if (await handleExactAccountUnavailableResponse(startRes)) return
         if (accountUnavailableRef.current) return
         if (startRes.ok) {
           const startData = await startRes.json()
@@ -902,6 +921,7 @@ function FeedbackPageInner() {
             const analysisRes = await fetch(`/api/analysis/${sessionId}`, {
               signal: accountAbortControllerRef.current.signal,
             })
+            if (await handleExactAccountUnavailableResponse(analysisRes)) return
             if (accountUnavailableRef.current) return
             if (analysisRes.ok) {
               const completedAnalysis = await analysisRes.json()
@@ -930,7 +950,7 @@ function FeedbackPageInner() {
       setAnalysisError('Failed to load analysis')
       setAnalysisLoading(false)
     }
-  }, [sessionId, hasAnalysisSource]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, hasAnalysisSource, handleExactAccountUnavailableResponse]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const pollAnalysis = useCallback(() => {
     if (accountUnavailableRef.current) return () => {}
@@ -957,6 +977,10 @@ function FeedbackPageInner() {
         const res = await fetch(`/api/analysis/${sessionId}`, {
           signal: accountAbortControllerRef.current.signal,
         })
+        if (await handleExactAccountUnavailableResponse(res)) {
+          clearInterval(interval)
+          return
+        }
         if (accountUnavailableRef.current) {
           clearInterval(interval)
           return
@@ -994,7 +1018,7 @@ function FeedbackPageInner() {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [sessionId])
+  }, [sessionId, handleExactAccountUnavailableResponse])
 
   const handleTabChange = useCallback((tab: FeedbackTab) => {
     if (accountUnavailableRef.current) return
@@ -1015,7 +1039,10 @@ function FeedbackPageInner() {
       fetch(`/api/interviews/${sessionId}/transcript`, {
         signal: accountAbortControllerRef.current.signal,
       })
-        .then((r) => r.ok ? r.json() : null)
+        .then(async (r) => {
+          if (await handleExactAccountUnavailableResponse(r)) return null
+          return r.ok ? r.json() : null
+        })
         .then((d) => {
           if (accountUnavailableRef.current) return
           if (d?.transcript) {
@@ -1033,7 +1060,7 @@ function FeedbackPageInner() {
     if (tab === 'analysis' && !analysis && !analysisLoading) {
       fetchAnalysis()
     }
-  }, [lazyTranscript, transcriptLoading, sessionId, analysis, analysisLoading, fetchAnalysis])
+  }, [lazyTranscript, transcriptLoading, sessionId, analysis, analysisLoading, fetchAnalysis, handleExactAccountUnavailableResponse])
 
   // ── Data loading ────────────────────────────────────────────────────────────
 
@@ -1159,7 +1186,7 @@ function FeedbackPageInner() {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ status: 'completed', completedAt: new Date().toISOString() }),
-                }).catch(() => {})
+                }, { isTerminalResponse: handleExactAccountUnavailableResponse }).catch(() => {})
               }
               return
             }
@@ -1197,7 +1224,7 @@ function FeedbackPageInner() {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ status: 'completed', completedAt: new Date().toISOString() }),
-                      }).catch(() => {})
+                      }, { isTerminalResponse: handleExactAccountUnavailableResponse }).catch(() => {})
                     }
                     return
                   }
@@ -1511,7 +1538,7 @@ function FeedbackPageInner() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(patchBody),
           signal: requestSignal,
-        })
+        }, { isTerminalResponse: handleExactAccountUnavailableResponse })
         if (!isCurrent()) return
         if (!saved) {
           setSaveWarning('Feedback generated but could not be saved. It may not appear in history.')
@@ -1590,7 +1617,7 @@ function FeedbackPageInner() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patchBody),
         signal: accountAbortControllerRef.current.signal,
-      })
+      }, { isTerminalResponse: handleExactAccountUnavailableResponse })
       if (accountUnavailableRef.current) return
       if (!saved) {
         setSaveWarning('Save failed again. The feedback is visible now but may not appear in history.')
@@ -2201,6 +2228,7 @@ function FeedbackPageInner() {
             parentSessionId={parentSessionId || undefined}
             onQuestionClick={handleQuestionRefToScoresTab}
             maxQuestionIndex={maxQuestionIndex}
+            onAccountUnavailable={handleAccountUnavailable}
             // Round 5a feature #2 — Claude's narrative arc + per-Q sparkline.
             // Both are no-ops when multimodal analysis hasn't run; the
             // ConfidenceArcCard itself renders null in that case.
@@ -2257,6 +2285,7 @@ function FeedbackPageInner() {
                     method: 'POST',
                     signal: accountAbortControllerRef.current.signal,
                   })
+                  if (await handleExactAccountUnavailableResponse(res)) return
                   if (accountUnavailableRef.current) return
                   if (!res.ok) {
                     setRetakeLoading(false)

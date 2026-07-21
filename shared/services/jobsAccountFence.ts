@@ -53,6 +53,17 @@ export async function isJobsAccountActive(userId: string): Promise<boolean> {
   return !!(await User.exists(activeJobsAccountFilter(userId)))
 }
 
+/** Resolve several lifecycle predicates in one Mongo snapshot/read. */
+export async function activeJobsAccountIds(userIds: string[]): Promise<Set<string>> {
+  const validIds = Array.from(new Set(userIds.filter((id) => mongoose.Types.ObjectId.isValid(id))))
+  if (validIds.length === 0) return new Set()
+  const ids = await User.distinct('_id', {
+    _id: { $in: validIds },
+    ...ACTIVE_ACCOUNT_STATES,
+  })
+  return new Set(ids.map((id) => id.toString()))
+}
+
 /**
  * Durable A04 write fence.
  *

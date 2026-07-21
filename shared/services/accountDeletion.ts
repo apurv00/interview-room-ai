@@ -19,9 +19,9 @@
  *   tokens), and the WaitlistEntry document if present. Returns a
  *   summary of what was removed for logging.
  *
- * R2 deletes are best-effort: a failed object delete is logged but
- * never blocks the database delete. Orphaned objects are cheaper to
- * sweep later than to leave a half-deleted account.
+ * Per-session R2 deletes remain best-effort after the atomic session fence.
+ * Full-account deletion is stricter: a failed object delete keeps the User in
+ * `deleting` state and preserves Mongo key inventory for an idempotent retry.
  */
 
 import mongoose from 'mongoose'
@@ -77,53 +77,6 @@ export async function deleteInterviewSession(
     throw new Error('Forbidden')
   }
 
-  // Best-effort R2 cleanup. Failures are logged but never block the DB delete.
-  const r2Keys: string[] = []
-  if (session.recordingR2Key) r2Keys.push(session.recordingR2Key)
-  if (session.audioRecordingR2Key) r2Keys.push(session.audioRecordingR2Key)
-  if (session.screenRecordingR2Key) r2Keys.push(session.screenRecordingR2Key)
-  if (session.facialLandmarksR2Key) r2Keys.push(session.facialLandmarksR2Key)
-  if (session.resumeR2Key) r2Keys.push(session.resumeR2Key)
-  if (session.jdR2Key) r2Keys.push(session.jdR2Key)
-
-  let r2KeysDeleted = 0
-  let r2KeysFailed = 0
-  await Promise.all(
-    r2Keys.map(async (key) => {
-      try {
-        await deleteFromR2(key)
-        r2KeysDeleted++
-      } catch (err) {
-        r2KeysFailed++
-        logger.warn({ err, key, sessionId }, 'R2 delete failed during session purge')
-      }
-    })
-  )
-
-  // Redact the served-problem ledger's stored AI problem body for this
-  // session's problem(s). Keyed via the session's own codingProblemId /
-  // designProblemId — the ledger row itself stays (it's the cross-session
-  // no-repeat memory; deleting it would re-enable repeats of a problem the
-  // user already saw), but the generated content is personal-adjacent
-  // (resume-tailored scenarios) and must not outlive the session delete.
-  // Best-effort: a redaction failure never blocks the session delete.
-  // Codex P2 on #485.
-  const redactTargets: Array<['coding' | 'system-design', string | undefined]> = [
-    ['coding', session.codingProblemId],
-    ['system-design', session.designProblemId],
-  ]
-  for (const [kind, problemId] of redactTargets) {
-    if (!problemId) continue
-    try {
-      await ServedProblem.updateOne(
-        { userId: session.userId, kind, problemId },
-        { $unset: { problemBody: 1 } }
-      )
-    } catch (err) {
-      logger.warn({ err, sessionId, kind, problemId }, 'ServedProblem body redaction failed during session delete')
-    }
-  }
-
   // Readiness evidence rows are session-scoped personal data
   // (READINESS.md §1, panel R26). Capture existing evidence owners before
   // deleting; the final ticker mutation below independently catches an
@@ -143,7 +96,64 @@ export async function deleteInterviewSession(
   // attribution worker's post-write check. Evidence cleanup must happen
   // after it, never in the same Promise.all, or a late writer can resurrect
   // rows after the cleanup wins its race.
-  await InterviewSession.deleteOne({ _id: sessionId })
+  const deleteFilter = isPlatformAdmin
+    ? { _id: sessionId }
+    : { _id: sessionId, userId }
+  const deletedSession = await InterviewSession.findOneAndDelete(deleteFilter)
+  if (!deletedSession) throw new Error('Session not found')
+  const deletedOwnerId = deletedSession.userId
+
+  // Redact the served-problem ledger's stored AI problem body for the latest
+  // problem ids captured by the atomic session fence. The ledger row itself
+  // stays (it's the cross-session no-repeat memory; deleting it would
+  // re-enable repeats), but generated content must not outlive the session.
+  // Best-effort: a redaction failure never blocks the session delete.
+  // Codex P2 on #485.
+  const redactTargets: Array<['coding' | 'system-design', string | undefined]> = [
+    ['coding', deletedSession.codingProblemId],
+    ['system-design', deletedSession.designProblemId],
+  ]
+  for (const [kind, problemId] of redactTargets) {
+    if (!problemId) continue
+    try {
+      await ServedProblem.updateOne(
+        { userId: deletedOwnerId, kind, problemId },
+        { $unset: { problemBody: 1 } }
+      )
+    } catch (err) {
+      logger.warn({ err, sessionId, kind, problemId }, 'ServedProblem body redaction failed during session delete')
+    }
+  }
+
+  // The atomic delete returns the latest document at the session fence. An
+  // artifact key associated before this operation is therefore included;
+  // an association ordered after it cannot find the session and must
+  // compensate its own upload. R2 cleanup remains best-effort and happens
+  // only after the durable Mongo ordering point.
+  const r2Keys: string[] = []
+  if (deletedSession.recordingR2Key) r2Keys.push(deletedSession.recordingR2Key)
+  if (deletedSession.audioRecordingR2Key) r2Keys.push(deletedSession.audioRecordingR2Key)
+  if (deletedSession.screenRecordingR2Key) r2Keys.push(deletedSession.screenRecordingR2Key)
+  if (deletedSession.facialLandmarksR2Key) r2Keys.push(deletedSession.facialLandmarksR2Key)
+  if (deletedSession.resumeR2Key) r2Keys.push(deletedSession.resumeR2Key)
+  if (deletedSession.jdR2Key) r2Keys.push(deletedSession.jdR2Key)
+
+  let r2KeysDeleted = 0
+  let r2KeysFailed = 0
+  await Promise.all(
+    r2Keys.map(async (key) => {
+      try {
+        await deleteFromR2(key, {
+          ownerUserId: String(deletedOwnerId),
+          sessionId,
+        })
+        r2KeysDeleted++
+      } catch (err) {
+        r2KeysFailed++
+        logger.warn({ err, key, sessionId }, 'R2 delete failed during session purge')
+      }
+    })
+  )
 
   // Cascade the remaining documents tied to this single session.
   await Promise.all([
@@ -158,7 +168,7 @@ export async function deleteInterviewSession(
   // from the surviving rows.
   if (readinessAppIds.length > 0) {
     await JobApplication.updateMany(
-      { _id: { $in: readinessAppIds }, userId: session.userId },
+      { _id: { $in: readinessAppIds }, userId: deletedOwnerId },
       {
         $unset: { readiness: 1 },
         $inc: { readinessRevision: 1 },
@@ -171,7 +181,7 @@ export async function deleteInterviewSession(
   // deletion fence. This post-delete predicate catches that late attachment.
   await JobApplication.updateMany(
     {
-      userId: session.userId,
+      userId: deletedOwnerId,
       $or: [
         { practiceSessionIds: sessionId },
         { verifiedPracticeSessionIds: sessionId },
@@ -270,12 +280,12 @@ export async function deleteUserAccount(
       $inc: { jobsWriteRevision: 1 },
     },
     { new: true, writeConcern: { w: 'majority' } },
-  ).select('_id email role accountState').lean()
+  ).select('_id email role accountState resumeR2Key').lean()
   let missingUserRecovery = false
 
   if (!deletionOwner) {
     const existing = await User.findById(userObjectId)
-      .select('_id email role accountState')
+      .select('_id email role accountState resumeR2Key')
       .lean()
     if (!existing) {
       // A lost-success retry and a legacy partial deletion are indistinguishable
@@ -312,6 +322,7 @@ export async function deleteUserAccount(
   ).lean()
 
   const r2Keys: string[] = []
+  if (deletionOwner?.resumeR2Key) r2Keys.push(deletionOwner.resumeR2Key)
   for (const s of sessions) {
     if (s.recordingR2Key) r2Keys.push(s.recordingR2Key)
     if (s.audioRecordingR2Key) r2Keys.push(s.audioRecordingR2Key)
@@ -332,7 +343,9 @@ export async function deleteUserAccount(
     logger.error({ err, userId }, 'Mandatory usage-buffer deletion fence failed')
   }
 
-  // Best-effort R2 cleanup, in parallel, capped at 25 concurrent deletes.
+  // R2 cleanup is part of verified deletion. Stop before removing Mongo rows
+  // when any object cannot be deleted so their key inventory remains durable
+  // and the idempotent deleting-state retry can finish the purge.
   let r2KeysDeleted = 0
   let r2KeysFailed = 0
   const CONCURRENCY = 25
@@ -341,7 +354,7 @@ export async function deleteUserAccount(
     await Promise.all(
       chunk.map(async (key) => {
         try {
-          await deleteFromR2(key)
+          await deleteFromR2(key, { ownerUserId: userId })
           r2KeysDeleted++
         } catch (err) {
           r2KeysFailed++
@@ -349,6 +362,9 @@ export async function deleteUserAccount(
         }
       })
     )
+  }
+  if (r2KeysFailed > 0) {
+    throw new AccountDeletionIncompleteError(['R2 artifacts'])
   }
 
   // 2. Delete sessions first. The account lifecycle marker above prevents a
@@ -434,6 +450,9 @@ export async function deleteUserAccount(
     }
   } catch (err) {
     logger.warn({ err, userId }, 'NextAuth adapter cleanup failed')
+    collectionsCleared['nextauth.accounts'] = -1
+    collectionsCleared['nextauth.sessions'] = -1
+    if (email) collectionsCleared['nextauth.verification_tokens'] = -1
   }
 
   // 6. Mandatory Jobs/user-side-effect sweep. Once the opening marker
@@ -448,10 +467,10 @@ export async function deleteUserAccount(
     ['JobPracticeEvidence', JobPracticeEvidence.deleteMany({ userId: userObjectId })],
     ['JobApplication', JobApplication.deleteMany({ userId: userObjectId })],
   ]
-  const failedJobsSweeps: string[] = collectionsCleared.InterviewSession === -1
-    ? ['InterviewSession']
-    : []
-  if (usageBufferCleanupFailed) failedJobsSweeps.push('UsageBuffer')
+  const failedMandatorySweeps = Object.entries(collectionsCleared)
+    .filter(([, deletedCount]) => deletedCount === -1)
+    .map(([name]) => name)
+  if (usageBufferCleanupFailed) failedMandatorySweeps.push('UsageBuffer')
   for (const [name, op] of finalJobsOps) {
     try {
       const res = await op
@@ -459,11 +478,11 @@ export async function deleteUserAccount(
     } catch (err) {
       logger.error({ err, collection: name, userId }, 'Mandatory Jobs cascade delete failed')
       collectionsCleared[name] = -1
-      failedJobsSweeps.push(name)
+      failedMandatorySweeps.push(name)
     }
   }
-  if (failedJobsSweeps.length > 0) {
-    throw new AccountDeletionIncompleteError(failedJobsSweeps)
+  if (failedMandatorySweeps.length > 0) {
+    throw new AccountDeletionIncompleteError(Array.from(new Set(failedMandatorySweeps)))
   }
 
   // 7. User is last. Its explicit `deleting` state remains the write fence

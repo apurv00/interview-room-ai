@@ -11,7 +11,7 @@ const ONBOARDING_FIELDS = [
   'targetRole', 'experienceLevel',
   'currentTitle', 'currentIndustry',
   'targetCompanyType', 'interviewGoal', 'weakAreas',
-  'resumeText', 'resumeFileName', 'resumeR2Key',
+  'resumeText', 'resumeFileName',
   'targetCompanies',
   'linkedinUrl', 'yearsInCurrentRole', 'educationLevel',
   'topSkills', 'communicationStyle', 'feedbackPreference',

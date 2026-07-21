@@ -1,22 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseDocument, UnsupportedFileTypeError } from '@shared/services/documentParser'
 import { logger } from '@shared/logger'
-import { uploadToR2, documentKey, isR2Configured } from '@shared/storage/r2'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
+import { connectDB } from '@shared/db/connection'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
+const accountUnavailableResponse = () => NextResponse.json(
+  { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+  { status: 401 },
+)
+
 export async function POST(req: NextRequest) {
+  let requesterUserId: string | undefined
   try {
-    // Auth required to prevent anonymous storage exhaustion and compute abuse
+    // Auth required to prevent anonymous document-parsing compute abuse.
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    requesterUserId = session.user.id
 
     const originUserId = req.headers.get('x-origin-user-id')
     if (originUserId !== null && originUserId !== session.user.id) {
@@ -24,6 +32,11 @@ export async function POST(req: NextRequest) {
         { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
         { status: 409 },
       )
+    }
+
+    await connectDB()
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailableResponse()
     }
 
     // Rate limit: 10 uploads per user per hour
@@ -57,6 +70,12 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(arrayBuffer)
 
     const result = await parseDocument(buffer, file.name)
+    // Parsing may take long enough for account deletion to commit. Never
+    // return extracted resume/JD text to the stale authenticated tab after
+    // that privacy boundary.
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailableResponse()
+    }
 
     // Truly empty extraction fails for EVERY file type; the near-empty
     // heuristic applies to PDFs ONLY — that is the scanned-image signature.
@@ -78,27 +97,22 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Store original file in R2 if configured
-    let r2Key: string | undefined
-    if (isR2Configured()) {
-      try {
-        const userId = session.user.id
-        const key = documentKey(userId, docType, file.name)
-        await uploadToR2(key, buffer, file.type || 'application/octet-stream')
-        r2Key = key
-      } catch (uploadErr) {
-        logger.warn({ err: uploadErr }, 'Failed to store original document in R2 — parsed text still available')
-      }
-    }
-
     return NextResponse.json({
       text: result.text,
       fileName: file.name,
       wordCount: result.wordCount,
       docType,
-      r2Key,
     })
   } catch (err) {
+    if (requesterUserId) {
+      try {
+        if (!(await isJobsAccountActive(requesterUserId))) {
+          return accountUnavailableResponse()
+        }
+      } catch {
+        // Preserve the original parser/input failure if this check fails.
+      }
+    }
     // Surface the actionable unsupported-type message (drag-and-drop bypasses
     // the client's accept filter, so .doc/.rtf/.odt land here) — everything
     // else stays generic.

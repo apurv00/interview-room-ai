@@ -43,6 +43,10 @@ import {
   uploadReplayRecording,
   type ReplayUploadResult,
 } from '@interview/utils/resumableUpload'
+import {
+  requestAccountBoundJson,
+  uploadRecordingArtifact,
+} from '@interview/utils/accountBoundArtifactUpload'
 
 import { formatTime } from '@shared/utils'
 
@@ -138,73 +142,12 @@ export default function InterviewPage() {
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
   const { startCapture, stopCapture, framesRef } = useFacialLandmarks()
 
-  // Upload a recording blob via presigned R2 PUT and patch the session
-  // with the resulting key. Returns true on success.
-  const uploadRecordingBlob = useCallback(
-    async (
-      blob: Blob,
-      sessionId: string,
-      kind: 'camera' | 'audio'
-    ): Promise<boolean> => {
-      try {
-        const presignType = kind === 'audio' ? 'audio-recording' : 'recording'
-        const presignRes = await fetch('/api/storage/presign', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'upload',
-            type: presignType,
-            sessionId,
-          }),
-        })
-        if (!presignRes.ok) {
-          console.error('Presign request failed:', presignRes.status)
-          return false
-        }
-        const { url, key, contentType } = await presignRes.json()
-        const uploadContentType =
-          contentType ||
-          blob.type ||
-          (kind === 'audio' ? 'audio/webm' : 'video/webm')
-
-        const uploadRes = await fetch(url, {
-          method: 'PUT',
-          headers: { 'Content-Type': uploadContentType },
-          body: blob,
-        })
-        if (!uploadRes.ok) {
-          console.error('R2 upload failed:', uploadRes.status)
-          return false
-        }
-
-        const patchBody =
-          kind === 'audio'
-            ? { audioRecordingR2Key: key, audioRecordingSizeBytes: blob.size }
-            : { recordingR2Key: key, recordingSizeBytes: blob.size }
-
-        const patchRes = await fetch(`/api/interviews/${sessionId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patchBody),
-        })
-        if (!patchRes.ok) {
-          console.error('Failed to update session with R2 key:', patchRes.status)
-          return false
-        }
-        return true
-      } catch (err) {
-        console.error('Recording upload error:', err)
-        return false
-      }
-    },
-    []
-  )
-
   // Handle recording stop
   const handleRecordingStop = useCallback(async () => {
     // Capture before recorder shutdown: Blob materialization is asynchronous,
     // so account cleanup during stopRecording must invalidate the later upload.
-    const replayUploadIntent = captureReplayUploadIntent()
+    const originUserId = authSession?.user?.id
+    const replayUploadIntent = captureReplayUploadIntent(originUserId)
 
     // Stop the camera + audio recorders in parallel (audio runs for every
     // interview; camera unless privacy mode).
@@ -232,21 +175,22 @@ export default function InterviewPage() {
     if (isMultimodalEnabled) {
       const frames = stopCapture()
       const sessionId = interviewRef.current?.sessionId
-      if (frames.length > 0 && sessionId) {
+      if (frames.length > 0 && sessionId && originUserId) {
         criticalUploads.push(
-          fetch('/api/recordings/landmarks', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId, frames }),
-          }).then((res) => {
-            if (!res.ok) throw new Error(`Landmarks upload failed: ${res.status}`)
-          })
+          requestAccountBoundJson(
+            '/api/recordings/landmarks',
+            { sessionId, frames },
+            replayUploadIntent,
+            originUserId,
+          ).then((res) => {
+            if (res && !res.ok) throw new Error(`Landmarks upload failed: ${res.status}`)
+          }),
         )
       }
     }
 
     const sessionId = interviewRef.current?.sessionId
-    if (!sessionId) return
+    if (!sessionId || !originUserId) return
 
     // Privacy mode — opt out of video storage. The big camera webm
     // (~30–80MB per session) is dropped on the floor; only the small
@@ -260,12 +204,13 @@ export default function InterviewPage() {
     // a scrubber-accurate value. Fire-and-forget: the multipart 'complete'
     // handler re-persists it server-side as the fallback for queued drains.
     if (recordingDurationSeconds !== null) {
-      void fetch(`/api/interviews/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recordingDurationSeconds }),
-        keepalive: true,
-      }).catch(() => {})
+      void requestAccountBoundJson(
+        `/api/interviews/${sessionId}`,
+        { recordingDurationSeconds },
+        replayUploadIntent,
+        originUserId,
+        { method: 'PATCH', keepalive: true },
+      ).catch(() => {})
     }
 
     // Upload audio/landmarks as small analysis artifacts. The camera
@@ -282,7 +227,17 @@ export default function InterviewPage() {
         )
       )
     }
-    if (audioBlob) criticalUploads.push(uploadRecordingBlob(audioBlob, sessionId, 'audio'))
+    if (audioBlob) {
+      criticalUploads.push(
+        uploadRecordingArtifact(
+          audioBlob,
+          sessionId,
+          'audio',
+          replayUploadIntent,
+          originUserId,
+        ),
+      )
+    }
 
     if (replayUploads.length > 0) {
       Promise.allSettled(replayUploads).then((results) => {
@@ -313,7 +268,7 @@ export default function InterviewPage() {
         new Promise<void>((resolve) => setTimeout(resolve, 8_000)),
       ])
     }
-  }, [stopRecording, audioRecorder, getDurationSeconds, isMultimodalEnabled, stopCapture, uploadRecordingBlob, config?.privacyMode])
+  }, [stopRecording, audioRecorder, getDurationSeconds, isMultimodalEnabled, stopCapture, config?.privacyMode, authSession?.user?.id])
 
   // Feedback #1: live coaching is chosen in the lobby and frozen for the session
   // (no in-room toggle). The lobby passes the choice via the room URL (?lc=0 when

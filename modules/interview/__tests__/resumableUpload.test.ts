@@ -7,6 +7,10 @@ import {
 } from '@interview/utils/resumableUpload'
 import { cancelAndPurgeReplayUploads } from '@shared/services/replayUploadPrivacy'
 
+const USER_ID = '507f1f77bcf86cd799439010'
+const SESSION_ID = '507f1f77bcf86cd799439011'
+const RECORDING_KEY = `recordings/${USER_ID}/${SESSION_ID}-1700000000000.webm`
+
 function installFakeIndexedDb() {
   const stores = new Map<string, Map<string, unknown>>()
   const db = {
@@ -97,7 +101,7 @@ function installMultipartFetch(completeStatuses: { current: number[] }) {
       const body = JSON.parse(String(init?.body ?? '{}')) as { action?: string; partNumber?: number }
       if (body.action === 'create') {
         return jsonResponse({
-          key: 'recordings/user/session-camera.webm',
+          key: RECORDING_KEY,
           uploadId: 'upload-123',
           contentType: 'video/webm',
           partSizeBytes: 64 * 1024 * 1024,
@@ -108,7 +112,7 @@ function installMultipartFetch(completeStatuses: { current: number[] }) {
       }
       if (body.action === 'complete') {
         const status = completeStatuses.current.shift() ?? 200
-        if (status === 200) return jsonResponse({ key: 'recordings/user/session-camera.webm' })
+        if (status === 200) return jsonResponse({ key: RECORDING_KEY })
         return jsonResponse({ error: 'complete failed' }, status)
       }
     }
@@ -229,27 +233,125 @@ describe('resumable replay upload helpers', () => {
     expect(urls).toEqual(['/api/storage/presign', 'https://r2.example/direct'])
   })
 
-  it('allows a new replay upload operation after a completed privacy purge', async () => {
-    await cancelAndPurgeReplayUploads()
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-      if (url === '/api/storage/presign') {
-        return jsonResponse({
-          url: 'https://r2.example/new-account-direct',
-          key: 'recordings/user/new-account.webm',
-          contentType: 'video/webm',
-        })
-      }
-      if (url === 'https://r2.example/new-account-direct') return new Response('', { status: 200 })
-      if (url === '/api/interviews/507f1f77bcf86cd799439011') return jsonResponse({ ok: true })
-      throw new Error(`Unexpected fetch: ${url}`)
-    }))
+  it('turns exact account-unavailable at direct presign into a terminal privacy boundary', async () => {
+    const intent = captureReplayUploadIntent()
+    const fetchMock = vi.fn(async () => jsonResponse({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    }, 401))
+    vi.stubGlobal('fetch', fetchMock)
 
     await expect(uploadReplayRecording(
       '507f1f77bcf86cd799439011',
       'camera',
+      new Blob(['small replay'], { type: 'video/webm' }),
+      undefined,
+      intent,
+    )).resolves.toEqual({ status: 'dropped' })
+
+    await expect(uploadReplayRecording(
+      '507f1f77bcf86cd799439011',
+      'camera',
+      new Blob(['must stay cancelled'], { type: 'video/webm' }),
+      undefined,
+      intent,
+    )).resolves.toEqual({ status: 'dropped' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows a new replay upload operation after a completed privacy purge', async () => {
+    await cancelAndPurgeReplayUploads()
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      calls.push({ url, init })
+      if (url === '/api/storage/presign') {
+        return jsonResponse({
+          url: 'https://r2.example/new-account-direct',
+          key: RECORDING_KEY,
+          contentType: 'video/webm',
+        })
+      }
+      if (url === 'https://r2.example/new-account-direct') return new Response('', { status: 200 })
+      if (url === '/api/recordings/finalize') return jsonResponse({ success: true })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+    const intent = captureReplayUploadIntent(USER_ID)
+
+    await expect(uploadReplayRecording(
+      SESSION_ID,
+      'camera',
       new Blob(['new account replay'], { type: 'video/webm' }),
+      undefined,
+      intent,
     )).resolves.toEqual({ status: 'uploaded' })
+    expect(calls.map((call) => call.url)).toEqual([
+      '/api/storage/presign',
+      'https://r2.example/new-account-direct',
+      '/api/recordings/finalize',
+    ])
+    expect(calls[0].init?.headers).toMatchObject({ 'x-origin-user-id': USER_ID })
+    expect(calls[2].init?.headers).toMatchObject({ 'x-origin-user-id': USER_ID })
+  })
+
+  it('purges queued replay data when direct finalization returns exact session-changed', async () => {
+    const stores = installFakeIndexedDb()
+    await drainQueuedReplayUploads()
+    stores.get('uploads')!.set('stale-account:camera:0', {
+      id: 'stale-account:camera:0',
+      sessionId: SESSION_ID,
+      kind: 'camera',
+      blob: new Blob(['queued replay'], { type: 'video/webm' }),
+      sizeBytes: 13,
+      contentType: 'video/webm',
+      createdAt: Date.now(),
+      parts: [],
+      attempts: 0,
+    })
+
+    const intent = captureReplayUploadIntent(USER_ID)
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      calls.push(url)
+      if (url === '/api/storage/presign') {
+        return jsonResponse({
+          url: 'https://r2.example/direct',
+          key: RECORDING_KEY,
+          contentType: 'video/webm',
+        })
+      }
+      if (url === 'https://r2.example/direct') return new Response('', { status: 200 })
+      if (url === '/api/recordings/finalize') {
+        return jsonResponse({
+          error: 'sign-in session changed',
+          code: 'SESSION_CHANGED',
+        }, 409)
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(uploadReplayRecording(
+      SESSION_ID,
+      'camera',
+      new Blob(['stale tab'], { type: 'video/webm' }),
+      undefined,
+      intent,
+    )).resolves.toEqual({ status: 'dropped' })
+    expect(stores.get('uploads')?.size).toBe(0)
+
+    await expect(uploadReplayRecording(
+      SESSION_ID,
+      'camera',
+      new Blob(['must remain cancelled'], { type: 'video/webm' }),
+      undefined,
+      intent,
+    )).resolves.toEqual({ status: 'dropped' })
+    expect(calls).toEqual([
+      '/api/storage/presign',
+      'https://r2.example/direct',
+      '/api/recordings/finalize',
+    ])
   })
 
   it('rejects an upload whose intent predates account cleanup', async () => {
@@ -814,6 +916,97 @@ describe('resumable replay upload helpers', () => {
   })
 
   // ── Layer 4: 401 from server marks the record permanent ─────────────────
+  it('purges the full replay queue when multipart returns exact account-unavailable', async () => {
+    const stores = installFakeIndexedDb()
+    await drainQueuedReplayUploads()
+
+    const baseRecord = {
+      sessionId: '507f1f77bcf86cd799439011',
+      kind: 'camera' as const,
+      blob: new Blob([new Uint8Array(8 * 1024 * 1024)], { type: 'video/webm' }),
+      sizeBytes: 8 * 1024 * 1024,
+      contentType: 'video/webm',
+      createdAt: Date.now(),
+      parts: [] as Array<{ partNumber: number; etag: string }>,
+      attempts: 0,
+      partSizeBytes: 8 * 1024 * 1024,
+    }
+    stores.get('uploads')!.set('account-unavailable:camera:1', {
+      ...baseRecord,
+      id: 'account-unavailable:camera:1',
+      key: 'recordings/user/session-camera-1.webm',
+      uploadId: 'upload-account-unavailable-1',
+    })
+    stores.get('uploads')!.set('account-unavailable:camera:2', {
+      ...baseRecord,
+      id: 'account-unavailable:camera:2',
+      key: 'recordings/user/session-camera-2.webm',
+      uploadId: 'upload-account-unavailable-2',
+    })
+
+    const fetchMock = vi.fn(async () => jsonResponse({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    }, 401))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 2,
+      uploaded: 0,
+      queued: 0,
+      dropped: 0,
+      skipped: 0,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(stores.get('uploads')?.size).toBe(0)
+  })
+
+  it('purges the full replay queue when multipart returns exact session-changed', async () => {
+    const stores = installFakeIndexedDb()
+    await drainQueuedReplayUploads()
+
+    const baseRecord = {
+      sessionId: SESSION_ID,
+      kind: 'camera' as const,
+      blob: new Blob([new Uint8Array(8 * 1024 * 1024)], { type: 'video/webm' }),
+      sizeBytes: 8 * 1024 * 1024,
+      contentType: 'video/webm',
+      originUserId: USER_ID,
+      createdAt: Date.now(),
+      parts: [] as Array<{ partNumber: number; etag: string }>,
+      attempts: 0,
+      partSizeBytes: 8 * 1024 * 1024,
+    }
+    stores.get('uploads')!.set('session-changed:camera:1', {
+      ...baseRecord,
+      id: 'session-changed:camera:1',
+      key: RECORDING_KEY,
+      uploadId: 'upload-session-changed-1',
+    })
+    stores.get('uploads')!.set('session-changed:camera:2', {
+      ...baseRecord,
+      id: 'session-changed:camera:2',
+      key: `recordings/${USER_ID}/${SESSION_ID}-1700000000001.webm`,
+      uploadId: 'upload-session-changed-2',
+    })
+
+    const fetchMock = vi.fn(async () => jsonResponse({
+      error: 'sign-in session changed',
+      code: 'SESSION_CHANGED',
+    }, 409))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 2,
+      uploaded: 0,
+      queued: 0,
+      dropped: 0,
+      skipped: 0,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(stores.get('uploads')?.size).toBe(0)
+  })
+
   it('treats 401/403 from /api/storage/multipart as a permanent failure (Layer 4)', async () => {
     // Simulates the user's NextAuth session expiring mid-upload. Retrying
     // forever with the same expired cookie is pointless — the record must

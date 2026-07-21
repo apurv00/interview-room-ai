@@ -8,18 +8,26 @@ const {
   mockJobPostingFindById,
   mockJobApplicationExists,
   mockPreparePractice,
+  mockIsJobsAccountActive,
+  mockConnectDB,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockGetSession: vi.fn(),
   mockJobPostingFindById: vi.fn(),
   mockJobApplicationExists: vi.fn(),
   mockPreparePractice: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
+  mockConnectDB: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
 }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
+vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: (...args: unknown[]) => mockIsJobsAccountActive(...args),
+}))
 vi.mock('@interview/services/core/interviewService', () => ({
   getSession: (...args: unknown[]) => mockGetSession(...args),
 }))
@@ -84,6 +92,40 @@ describe('POST /api/interviews/[id]/retake', () => {
     mockJobPostingFindById.mockReturnValue(postingResult({ status: 'open' }))
     mockJobApplicationExists.mockResolvedValue(null)
     mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', role: 'backend', jdHash: JD_HASH })
+    mockConnectDB.mockResolvedValue(undefined)
+    mockIsJobsAccountActive.mockResolvedValue(true)
+  })
+
+  it('returns exact account-unavailable semantics before loading retake data', async () => {
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    const response = await callRoute()
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockGetSession).not.toHaveBeenCalled()
+  })
+
+  it('withholds captured retake data when deletion wins before response', async () => {
+    mockIsJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    const response = await callRoute()
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+  })
+
+  it('prefers account-unavailable when deletion interrupts the parent read', async () => {
+    mockGetSession.mockRejectedValue(new Error('session swept'))
+    mockIsJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    const response = await callRoute()
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
   })
 
   it('returns a verified Jobs practice intent and the root of a retake chain', async () => {

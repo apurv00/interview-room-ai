@@ -20,6 +20,15 @@ interface UsePathwayGenerationPollOptions {
   onRefresh: () => void | Promise<void>
   /** Bump after a successful pathway retry to restart the 120s poll window. */
   pollEpoch?: number
+  /** Exact account-deletion terminal signal observed by the pathway read. */
+  onAccountUnavailable?: () => void
+}
+
+async function isExactAccountUnavailable(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false
+  const readable = typeof response.clone === 'function' ? response.clone() : response
+  const body = await readable.json().catch(() => null) as { code?: unknown } | null
+  return body?.code === 'ACCOUNT_UNAVAILABLE'
 }
 
 export function usePathwayGenerationPoll({
@@ -27,11 +36,14 @@ export function usePathwayGenerationPoll({
   enabled,
   onRefresh,
   pollEpoch = 0,
+  onAccountUnavailable,
 }: UsePathwayGenerationPollOptions) {
   const [phase, setPhase] = useState<PathwayPollPhase>('idle')
   const startedAtRef = useRef<number | null>(null)
   const onRefreshRef = useRef(onRefresh)
   onRefreshRef.current = onRefresh
+  const onAccountUnavailableRef = useRef(onAccountUnavailable)
+  onAccountUnavailableRef.current = onAccountUnavailable
 
   const pollOnce = useCallback(async (): Promise<'continue' | 'done' | 'exhausted'> => {
     if (!sessionId) return 'exhausted'
@@ -39,6 +51,10 @@ export function usePathwayGenerationPoll({
       `/api/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}`,
       { cache: 'no-store' },
     )
+    if (await isExactAccountUnavailable(res)) {
+      onAccountUnavailableRef.current?.()
+      return 'done'
+    }
     if (!res.ok) return 'continue'
 
     const data = (await res.json()) as PathwayPollResponse

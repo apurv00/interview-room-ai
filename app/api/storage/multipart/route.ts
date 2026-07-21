@@ -7,10 +7,24 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { aiLogger } from '@shared/logger'
 import {
+  isJobsAccountActive,
+  JobsAccountInactiveError,
+  JobsAccountTransactionsRequiredError,
+} from '@shared/services/jobsAccountFence'
+import {
+  associateRecordingArtifact,
+  cleanupSupersededRecordingArtifact,
+  isSessionRecordingKey,
+  parseRecordingArtifactKey,
+  RecordingArtifactKeyRejectedError,
+  RecordingArtifactSessionNotFoundError,
+} from '@interview/services/core/recordingArtifactService'
+import {
   abortMultipartUpload,
   audioRecordingKey,
   completeMultipartUpload,
   createMultipartUpload,
+  deleteFromR2,
   getMultipartPartPresignedUrl,
   isR2Configured,
   objectExists,
@@ -21,6 +35,7 @@ import {
 export const dynamic = 'force-dynamic'
 
 const PART_SIZE_BYTES = 8 * 1024 * 1024
+const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
 
 const MultipartSchema = z.object({
   action: z.enum(['create', 'sign-part', 'complete', 'abort']),
@@ -54,6 +69,25 @@ interface MultipartLogContext {
   sizeBytes?: number
 }
 
+interface MultipartCleanupTarget {
+  key: string
+  uploadId: string
+}
+
+function privateJson(body: unknown, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: PRIVATE_NO_STORE_HEADERS,
+  })
+}
+
+function accountUnavailableResponse() {
+  return privateJson(
+    { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+    401,
+  )
+}
+
 function contentTypeFor(type: RecordingType): string {
   return type === 'audio-recording' ? 'audio/webm' : 'video/webm'
 }
@@ -62,20 +96,6 @@ function keyFor(type: RecordingType, userId: string, sessionId: string): string 
   if (type === 'screen-recording') return screenRecordingKey(userId, sessionId)
   if (type === 'audio-recording') return audioRecordingKey(userId, sessionId)
   return recordingKey(userId, sessionId)
-}
-
-function patchFor(type: RecordingType, key: string, sizeBytes: number, durationSeconds?: number) {
-  if (type === 'screen-recording') {
-    return { screenRecordingR2Key: key, screenRecordingSizeBytes: sizeBytes }
-  }
-  if (type === 'audio-recording') {
-    return { audioRecordingR2Key: key, audioRecordingSizeBytes: sizeBytes }
-  }
-  return {
-    recordingR2Key: key,
-    recordingSizeBytes: sizeBytes,
-    ...(durationSeconds !== undefined ? { recordingDurationSeconds: durationSeconds } : {}),
-  }
 }
 
 function persistedFieldNames(type: RecordingType) {
@@ -89,17 +109,7 @@ function persistedFieldNames(type: RecordingType) {
 }
 
 function isOwnedRecordingKey(key: string, userId: string): boolean {
-  const segments = key.split('/')
-  return (
-    segments.length >= 3 &&
-    segments[0] === 'recordings' &&
-    segments[1] === userId &&
-    !key.includes('..')
-  )
-}
-
-function isSessionRecordingKey(key: string, userId: string, sessionId: string): boolean {
-  return isOwnedRecordingKey(key, userId) && key.startsWith(`recordings/${userId}/${sessionId}`)
+  return parseRecordingArtifactKey(key, userId) !== null
 }
 
 // R2/S3 returns NoSuchUpload when CompleteMultipartUpload is called with an
@@ -134,6 +144,42 @@ function safeErrorInfo(err: unknown): { name?: string; code?: string; message: s
   return { message: String(err) }
 }
 
+async function bestEffortAbort(
+  target: MultipartCleanupTarget,
+  logContext: MultipartLogContext,
+): Promise<void> {
+  try {
+    await abortMultipartUpload(target.key, target.uploadId)
+  } catch (err) {
+    aiLogger.warn(
+      { ...logContext, error: safeErrorInfo(err) },
+      'Multipart cleanup abort failed',
+    )
+  }
+}
+
+async function bestEffortDeleteObject(
+  key: string,
+  ownerUserId: string,
+  logContext: MultipartLogContext,
+): Promise<void> {
+  try {
+    const identity = parseRecordingArtifactKey(key, ownerUserId)
+    if (!identity) {
+      throw new RecordingArtifactKeyRejectedError()
+    }
+    await deleteFromR2(key, {
+      ownerUserId,
+      sessionId: identity.sessionId,
+    })
+  } catch (err) {
+    aiLogger.warn(
+      { ...logContext, error: safeErrorInfo(err) },
+      'Multipart completed-object cleanup failed',
+    )
+  }
+}
+
 async function requireOwnedSession(sessionId: string | undefined, userId: string) {
   if (!sessionId || !mongoose.Types.ObjectId.isValid(sessionId)) {
     return null
@@ -163,17 +209,23 @@ async function sessionAlreadyReferencesRecording(
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    return privateJson({ error: 'Unauthorized' }, 401)
   }
-  if (!isR2Configured()) {
-    return NextResponse.json({ error: 'Storage not configured' }, { status: 503 })
+  const userId = session.user.id
+  const originUserId = req.headers.get('x-origin-user-id')
+  if (originUserId !== null && originUserId !== userId) {
+    return privateJson(
+      { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
+      409,
+    )
   }
-
   const logContext: MultipartLogContext = {}
+  let cleanupTarget: MultipartCleanupTarget | undefined
+  let completedObjectKey: string | undefined
   try {
     const parsed = MultipartSchema.safeParse(await req.json())
     if (!parsed.success) {
-      return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+      return privateJson({ error: 'Invalid request' }, 400)
     }
 
     const { action, type, sessionId, key, uploadId, partNumber, parts, sizeBytes, durationSeconds } = parsed.data
@@ -186,21 +238,68 @@ export async function POST(req: NextRequest) {
       partCount: parts?.length,
       sizeBytes,
     })
-    const userId = session.user.id
+
+    // Capture cleanup authority before the admission check. Exact 401 makes
+    // the browser purge its queued upload record, so this request is the last
+    // reliable opportunity to abort parts or remove a lost-success object.
+    if (key && uploadId && isOwnedRecordingKey(key, userId)) {
+      cleanupTarget = { key, uploadId }
+    }
+
+    // Abort is cleanup-only and remains available after the durable account
+    // deletion barrier has been raised. Every action that can mint new R2
+    // authority or materialize an object is denied before that work begins.
+    if (action !== 'abort') {
+      await connectDB()
+      if (!(await isJobsAccountActive(userId))) {
+        if (cleanupTarget && action === 'complete') {
+          await Promise.all([
+            bestEffortDeleteObject(cleanupTarget.key, userId, logContext),
+            bestEffortAbort(cleanupTarget, logContext),
+          ])
+        } else if (cleanupTarget && action === 'sign-part') {
+          await bestEffortAbort(cleanupTarget, logContext)
+        }
+        return accountUnavailableResponse()
+      }
+    }
+    if (!isR2Configured()) {
+      return privateJson({ error: 'Storage not configured' }, 503)
+    }
 
     if (action === 'create') {
       if (!type || !sessionId) {
-        return NextResponse.json({ error: 'type and sessionId required' }, { status: 400 })
+        return privateJson({ error: 'type and sessionId required' }, 400)
       }
       const ownsSession = await requireOwnedSession(sessionId, userId)
       if (!ownsSession) {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        if (!(await isJobsAccountActive(userId))) {
+          return accountUnavailableResponse()
+        }
+        return privateJson({ error: 'Forbidden' }, 403)
+      }
+      if (!(await isJobsAccountActive(userId))) {
+        return accountUnavailableResponse()
       }
 
       const r2Key = keyFor(type, userId, sessionId)
       const contentType = contentTypeFor(type)
       const created = await createMultipartUpload(r2Key, contentType)
-      return NextResponse.json({
+      cleanupTarget = { key: created.key, uploadId: created.uploadId }
+
+      if (!(await requireOwnedSession(sessionId, userId))) {
+        await bestEffortAbort(cleanupTarget, logContext)
+        if (!(await isJobsAccountActive(userId))) {
+          return accountUnavailableResponse()
+        }
+        return privateJson({ error: 'Forbidden' }, 403)
+      }
+      if (!(await isJobsAccountActive(userId))) {
+        await bestEffortAbort(cleanupTarget, logContext)
+        return accountUnavailableResponse()
+      }
+
+      return privateJson({
         key: created.key,
         uploadId: created.uploadId,
         contentType,
@@ -209,24 +308,60 @@ export async function POST(req: NextRequest) {
     }
 
     if (!key || !uploadId || !isOwnedRecordingKey(key, userId)) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      return privateJson({ error: 'Forbidden' }, 403)
     }
+    cleanupTarget = { key, uploadId }
 
     if (action === 'sign-part') {
       if (!partNumber) {
-        return NextResponse.json({ error: 'partNumber required' }, { status: 400 })
+        return privateJson({ error: 'partNumber required' }, 400)
+      }
+      const keyIdentity = parseRecordingArtifactKey(key, userId)
+      if (
+        !keyIdentity ||
+        (type !== undefined && type !== keyIdentity.type) ||
+        (sessionId !== undefined && sessionId !== keyIdentity.sessionId) ||
+        !(await requireOwnedSession(keyIdentity.sessionId, userId))
+      ) {
+        if (!(await isJobsAccountActive(userId))) {
+          await bestEffortAbort(cleanupTarget, logContext)
+          return accountUnavailableResponse()
+        }
+        return privateJson({ error: 'Forbidden' }, 403)
       }
       const url = await getMultipartPartPresignedUrl(key, uploadId, partNumber)
-      return NextResponse.json({ url })
+      const stillOwnsSession = await requireOwnedSession(keyIdentity.sessionId, userId)
+      if (!(await isJobsAccountActive(userId))) {
+        // The signed URL is withheld, and aborting invalidates this multipart
+        // transaction as a best-effort compensation.
+        await bestEffortAbort(cleanupTarget, logContext)
+        return accountUnavailableResponse()
+      }
+      if (!stillOwnsSession) {
+        await bestEffortAbort(cleanupTarget, logContext)
+        return privateJson({ error: 'Forbidden' }, 403)
+      }
+      return privateJson({ url })
     }
 
     if (action === 'complete') {
       if (!type || !sessionId || !parts?.length || sizeBytes === undefined) {
-        return NextResponse.json({ error: 'type, sessionId, parts, and sizeBytes required' }, { status: 400 })
+        return privateJson({ error: 'type, sessionId, parts, and sizeBytes required' }, 400)
       }
       const ownsSession = await requireOwnedSession(sessionId, userId)
-      if (!ownsSession || !isSessionRecordingKey(key, userId, sessionId)) {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      if (!ownsSession || !isSessionRecordingKey(key, type, userId, sessionId)) {
+        await bestEffortAbort(cleanupTarget, logContext)
+        if (!(await isJobsAccountActive(userId))) {
+          return accountUnavailableResponse()
+        }
+        return privateJson({ error: 'Forbidden' }, 403)
+      }
+      // This is deliberately a compensating fence, not durable R2 atomicity:
+      // deletion can still interleave after this predicate and before R2
+      // acknowledges completion, so the egress checks below remove the object.
+      if (!(await isJobsAccountActive(userId))) {
+        await bestEffortAbort(cleanupTarget, logContext)
+        return accountUnavailableResponse()
       }
 
       try {
@@ -235,6 +370,7 @@ export async function POST(req: NextRequest) {
           uploadId,
           parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag }))
         )
+        completedObjectKey = key
       } catch (err) {
         if (!isNoSuchUploadError(err)) throw err
         // NoSuchUpload covers three cases: already-completed (object exists
@@ -246,29 +382,121 @@ export async function POST(req: NextRequest) {
         // the queued client record can stop retrying.
         if (!(await objectExists(key))) {
           if (await sessionAlreadyReferencesRecording(type, sessionId, userId, key, sizeBytes)) {
+            if (!(await isJobsAccountActive(userId))) {
+              return accountUnavailableResponse()
+            }
             aiLogger.warn(
               { ...logContext, status: 'already-persisted' },
               'Multipart complete retried after session was already patched',
             )
-            return NextResponse.json({ key })
+            return privateJson({ key })
           }
-          return NextResponse.json({ error: 'Multipart upload no longer recoverable' }, { status: 410 })
+          if (!(await isJobsAccountActive(userId))) {
+            return accountUnavailableResponse()
+          }
+          return privateJson({ error: 'Multipart upload no longer recoverable' }, 410)
         }
+        completedObjectKey = key
       }
-      await InterviewSession.findOneAndUpdate(
-        { _id: sessionId, userId },
-        { $set: patchFor(type, key, sizeBytes, durationSeconds) }
-      )
-      return NextResponse.json({ key })
+
+      if (!(await isJobsAccountActive(userId))) {
+        await bestEffortDeleteObject(key, userId, logContext)
+        return accountUnavailableResponse()
+      }
+      try {
+        const associated = await associateRecordingArtifact({
+          userId,
+          sessionId,
+          type,
+          key,
+          sizeBytes,
+          durationSeconds,
+        })
+        if (!associated.accepted) {
+          await bestEffortDeleteObject(key, userId, logContext)
+          return privateJson({ key, superseded: true })
+        }
+        await cleanupSupersededRecordingArtifact(
+          associated.previousKey,
+          key,
+          userId,
+          sessionId,
+        )
+      } catch (associationError) {
+        if (
+          associationError instanceof RecordingArtifactSessionNotFoundError ||
+          associationError instanceof RecordingArtifactKeyRejectedError
+        ) {
+          await bestEffortDeleteObject(key, userId, logContext)
+          if (!(await isJobsAccountActive(userId))) {
+            return accountUnavailableResponse()
+          }
+          return privateJson({ error: 'Forbidden' }, 403)
+        }
+        if (associationError instanceof JobsAccountInactiveError) {
+          await bestEffortDeleteObject(key, userId, logContext)
+          return accountUnavailableResponse()
+        }
+        if (associationError instanceof JobsAccountTransactionsRequiredError) {
+          await bestEffortDeleteObject(key, userId, logContext)
+          return privateJson(
+            { error: 'Recording finalization requires MongoDB transactions', code: 'TRANSACTIONS_REQUIRED' },
+            503,
+          )
+        }
+        throw associationError
+      }
+      if (!(await isJobsAccountActive(userId))) {
+        await bestEffortDeleteObject(key, userId, logContext)
+        return accountUnavailableResponse()
+      }
+      return privateJson({ key })
     }
 
     await abortMultipartUpload(key, uploadId)
-    return NextResponse.json({ ok: true })
+    await connectDB()
+    if (!(await isJobsAccountActive(userId))) {
+      return accountUnavailableResponse()
+    }
+    return privateJson({ ok: true })
   } catch (err) {
+    let accountInactive = false
+    try {
+      await connectDB()
+      accountInactive = !(await isJobsAccountActive(userId))
+    } catch (recheckError) {
+      aiLogger.warn(
+        { ...logContext, error: safeErrorInfo(recheckError) },
+        'Multipart account-state exception recheck failed',
+      )
+    }
+
+    if (logContext.action === 'create' && cleanupTarget) {
+      // A create response that fails before egress must not strand a newly
+      // created multipart transaction, even if account state is still active.
+      await bestEffortAbort(cleanupTarget, logContext)
+    } else if (accountInactive && cleanupTarget && logContext.action !== 'complete') {
+      await bestEffortAbort(cleanupTarget, logContext)
+    }
+
+    if (accountInactive && cleanupTarget && logContext.action === 'complete') {
+      try {
+        if (completedObjectKey || await objectExists(cleanupTarget.key)) {
+          await bestEffortDeleteObject(cleanupTarget.key, userId, logContext)
+        }
+      } catch (cleanupProbeError) {
+        aiLogger.warn(
+          { ...logContext, error: safeErrorInfo(cleanupProbeError) },
+          'Multipart completed-object cleanup probe failed',
+        )
+      }
+    }
+
     aiLogger.error({
       ...logContext,
       error: safeErrorInfo(err),
     }, 'Multipart upload failed')
-    return NextResponse.json({ error: 'Multipart upload failed' }, { status: 500 })
+    if (accountInactive) return accountUnavailableResponse()
+    return privateJson({ error: 'Multipart upload failed' }, 500)
   }
 }

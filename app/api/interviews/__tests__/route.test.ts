@@ -1,17 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockGetServerSession, mockCreateSession, mockResolvePracticeHandoff } = vi.hoisted(() => ({
+const {
+  mockGetServerSession,
+  mockCreateSession,
+  mockListSessions,
+  mockResolvePracticeHandoff,
+  mockConnectDB,
+  mockIsJobsAccountActive,
+  mockActiveJobsAccountIds,
+} = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockCreateSession: vi.fn(),
+  mockListSessions: vi.fn(),
   mockResolvePracticeHandoff: vi.fn(),
+  mockConnectDB: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
+  mockActiveJobsAccountIds: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@interview/services/core/interviewService', () => ({
   createSession: mockCreateSession,
-  listSessions: vi.fn(),
+  listSessions: mockListSessions,
+}))
+vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: (...args: unknown[]) => mockIsJobsAccountActive(...args),
+  activeJobsAccountIds: (...args: unknown[]) => mockActiveJobsAccountIds(...args),
 }))
 vi.mock('@jobs/services/practiceHandoff', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@jobs/services/practiceHandoff')>()),
@@ -19,7 +36,7 @@ vi.mock('@jobs/services/practiceHandoff', async (importOriginal) => ({
 }))
 vi.mock('@shared/logger', () => ({ logger: { error: vi.fn() } }))
 
-import { POST } from '../route'
+import { GET, POST } from '../route'
 import { practiceHandoffHashOf } from '@jobs/services/practiceHandoff'
 
 const USER_ID = '507f1f77bcf86cd799439010'
@@ -50,6 +67,12 @@ beforeEach(() => {
     user: { id: USER_ID, organizationId: '507f1f77bcf86cd799439020' },
   })
   mockCreateSession.mockResolvedValue({ _id: { toString: () => 'session-1' } })
+  mockListSessions.mockResolvedValue({ sessions: [], total: 0, page: 1, limit: 20 })
+  mockConnectDB.mockResolvedValue(undefined)
+  mockIsJobsAccountActive.mockResolvedValue(true)
+  mockActiveJobsAccountIds.mockImplementation(
+    (userIds: string[]) => Promise.resolve(new Set(userIds)),
+  )
   mockResolvePracticeHandoff.mockResolvedValue({
     jobId: JOB_ID,
     jobDescription: SERVER_JD,
@@ -57,6 +80,186 @@ beforeEach(() => {
     company: 'PhonePe',
     role: 'backend',
     applicationId: 'canonical-app',
+  })
+})
+
+describe('GET /api/interviews account lifecycle', () => {
+  it('returns exact account-unavailable semantics before listing sessions', async () => {
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    const response = await GET(new NextRequest('http://localhost/api/interviews'))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockListSessions).not.toHaveBeenCalled()
+  })
+
+  it('withholds a captured session list when deletion wins before response', async () => {
+    mockIsJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    mockListSessions.mockResolvedValue({
+      sessions: [{ _id: 'private-session', recordingR2Key: 'private-key' }],
+      total: 1,
+      page: 1,
+      limit: 20,
+    })
+
+    const response = await GET(new NextRequest('http://localhost/api/interviews'))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+    expect(mockActiveJobsAccountIds).not.toHaveBeenCalled()
+  })
+
+  it('withholds a sanitized list when requester deletion wins at the final disclosure check', async () => {
+    mockListSessions.mockResolvedValue({
+      sessions: [{ _id: 'captured-private-row', userId: USER_ID, feedback: { overall_score: 80 } }],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    })
+    mockActiveJobsAccountIds.mockResolvedValueOnce(new Set())
+
+    const response = await GET(new NextRequest('http://localhost/api/interviews'))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+    expect(mockActiveJobsAccountIds).toHaveBeenCalledWith([USER_ID])
+  })
+
+  it('prefers account-unavailable when the list query fails during deletion', async () => {
+    mockListSessions.mockRejectedValue(new Error('session sweep interrupted query'))
+    mockIsJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    const response = await GET(new NextRequest('http://localhost/api/interviews'))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+  })
+
+  it('preserves owner setup fields while stripping foreign-owner private context', async () => {
+    const foreignOwnerId = '507f1f77bcf86cd799439099'
+    mockGetServerSession.mockResolvedValue({
+      user: {
+        id: USER_ID,
+        role: 'recruiter',
+        organizationId: '507f1f77bcf86cd799439020',
+      },
+    })
+    mockListSessions.mockResolvedValue({
+      sessions: [
+        {
+          _id: 'owner-session',
+          userId: USER_ID,
+          resumeText: 'OWNER RESUME',
+          jobDescription: 'OWNER JD',
+          candidateEmail: 'owner@example.com',
+          userAgent: 'owner-agent',
+          recordingR2Key: 'recordings/owner.webm',
+          screenRecordingR2Key: 'recordings/owner-screen.webm',
+          audioRecordingR2Key: 'recordings/owner-audio.webm',
+          facialLandmarksR2Key: 'landmarks/owner.json',
+          resumeR2Key: 'documents/owner-resume.pdf',
+          jdR2Key: 'documents/owner-jd.pdf',
+          inviteTokenHash: 'owner-invite-secret',
+          inviteTokenExpiry: '2099-01-01T00:00:00.000Z',
+        },
+        {
+          _id: 'foreign-session',
+          userId: foreignOwnerId,
+          resumeText: 'FOREIGN RESUME',
+          jobDescription: 'FOREIGN JD',
+          candidateEmail: 'foreign@example.com',
+          userAgent: 'foreign-agent',
+          parsedResume: { name: 'Foreign Candidate' },
+          parsedJobDescription: { title: 'Foreign Role' },
+          resumeFileName: 'foreign-resume.pdf',
+          jdFileName: 'foreign-jd.pdf',
+          recordingUrl: 'https://private.example/recording',
+          shareToken: 'foreign-share-secret',
+          recordingR2Key: 'recordings/foreign.webm',
+          screenRecordingR2Key: 'recordings/foreign-screen.webm',
+          audioRecordingR2Key: 'recordings/foreign-audio.webm',
+          facialLandmarksR2Key: 'landmarks/foreign.json',
+          resumeR2Key: 'documents/foreign-resume.pdf',
+          jdR2Key: 'documents/foreign-jd.pdf',
+          inviteTokenHash: 'foreign-invite-secret',
+          inviteTokenExpiry: '2099-01-01T00:00:00.000Z',
+          feedback: { overall_score: 80 },
+        },
+      ],
+      pagination: { page: 1, limit: 20, total: 2, totalPages: 1 },
+    })
+
+    const response = await GET(new NextRequest('http://localhost/api/interviews'))
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.pagination.total).toBe(2)
+    expect(body.sessions[0]).toMatchObject({
+      resumeText: 'OWNER RESUME',
+      jobDescription: 'OWNER JD',
+      candidateEmail: 'owner@example.com',
+      userAgent: 'owner-agent',
+      hasRecording: true,
+      hasScreenRecording: true,
+    })
+    for (const privateField of [
+      'recordingR2Key',
+      'screenRecordingR2Key',
+      'audioRecordingR2Key',
+      'facialLandmarksR2Key',
+      'resumeR2Key',
+      'jdR2Key',
+      'inviteTokenHash',
+      'inviteTokenExpiry',
+    ]) {
+      expect(body.sessions[0]).not.toHaveProperty(privateField)
+      expect(body.sessions[1]).not.toHaveProperty(privateField)
+    }
+    expect(body.sessions[1]).toMatchObject({
+      _id: 'foreign-session',
+      feedback: { overall_score: 80 },
+    })
+    for (const privateField of [
+      'resumeText',
+      'jobDescription',
+      'candidateEmail',
+      'userAgent',
+      'parsedResume',
+      'parsedJobDescription',
+      'resumeFileName',
+      'jdFileName',
+      'recordingUrl',
+      'shareToken',
+    ]) {
+      expect(body.sessions[1]).not.toHaveProperty(privateField)
+    }
+    expect(mockActiveJobsAccountIds).toHaveBeenCalledWith([USER_ID, foreignOwnerId])
+  })
+
+  it('prunes a foreign row instead of failing the page when its owner starts deleting in flight', async () => {
+    const foreignOwnerId = '507f1f77bcf86cd799439099'
+    mockGetServerSession.mockResolvedValue({
+      user: {
+        id: USER_ID,
+        role: 'recruiter',
+        organizationId: '507f1f77bcf86cd799439020',
+      },
+    })
+    mockListSessions.mockResolvedValue({
+      sessions: [{ _id: 'captured-private-row', userId: foreignOwnerId, feedback: { overall_score: 80 } }],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    })
+    mockActiveJobsAccountIds.mockResolvedValueOnce(new Set([USER_ID]))
+
+    const response = await GET(new NextRequest('http://localhost/api/interviews'))
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.sessions).toEqual([])
+    expect(body.pagination).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1 })
+    expect(mockActiveJobsAccountIds).toHaveBeenCalledWith([USER_ID, foreignOwnerId])
   })
 })
 

@@ -8,8 +8,17 @@ import { jobPostingStateOf } from '@jobs/services/postingAccess'
 import { preparePracticeHandoffPosting } from '@jobs/services/practiceHandoff'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
+import { connectDB } from '@shared/db/connection'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
+
+function accountUnavailable() {
+  return NextResponse.json(
+    { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+    { status: 401 },
+  )
+}
 
 /**
  * POST /api/interviews/[id]/retake
@@ -39,6 +48,7 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let requesterUserId: string | undefined
   try {
     if (!mongoose.Types.ObjectId.isValid(params.id)) {
       return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
@@ -47,6 +57,12 @@ export async function POST(
     const authSession = await getServerSession(authOptions)
     if (!authSession?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    requesterUserId = authSession.user.id
+
+    await connectDB()
+    if (!(await isJobsAccountActive(authSession.user.id))) {
+      return accountUnavailable()
     }
 
     // Loads with ownership check baked in (throws ForbiddenError for non-owner).
@@ -122,6 +138,10 @@ export async function POST(
       'Interview retake initiated'
     )
 
+    if (!(await isJobsAccountActive(authSession.user.id))) {
+      return accountUnavailable()
+    }
+
     return NextResponse.json({
       parentSessionId: rootParentId,
       config: {
@@ -136,6 +156,15 @@ export async function POST(
       ...(verifiedJobId ? { jobsPractice: { jobId: verifiedJobId } } : {}),
     })
   } catch (err) {
+    if (requesterUserId) {
+      try {
+        if (!(await isJobsAccountActive(requesterUserId))) {
+          return accountUnavailable()
+        }
+      } catch {
+        // Preserve the original route error if the diagnostic recheck fails.
+      }
+    }
     if (err instanceof AppError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.statusCode })
     }

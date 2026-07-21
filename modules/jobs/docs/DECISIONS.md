@@ -56,7 +56,7 @@
 | `checkATS` ≈ 35s Sonnet per (resume, JD); Redis-cached by content hash | `modules/resume/services/atsCheckCache.ts:7-9,44-49` |
 | `MAX_RESUMES = 3`; updates bypass the cap | `modules/resume/services/resumeService.ts:6,111-119` |
 | Anonymous resume parse (authOptional, 10/IP/day, stateless) | `app/api/resume/parse/route.ts` |
-| `/api/documents/upload` auth-required (R2 storage) | `app/api/documents/upload/route.ts` |
+| `/api/documents/upload` auth-required, parse-only; originals are not retained in R2 | `app/api/documents/upload/route.ts` |
 | `/api/onboarding/extract` NOT feed-grade (4 coarse fields, 4-value role enum, 4k truncation) | `app/api/onboarding/extract/route.ts` |
 | Tailor page is paste-only today (no `?jobId=` support) | `app/(resume)/resume/tailor/page.tsx` |
 | `SavedJobDescription` + `/api/interview/saved-jds` = dead surfaces (zero UI consumers) | verified by critique; cleanup scheduled in product-flow package 1 |

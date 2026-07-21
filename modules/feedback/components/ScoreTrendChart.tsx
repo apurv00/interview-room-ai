@@ -10,6 +10,14 @@ interface TrendPoint {
 interface ScoreTrendChartProps {
   currentScore: number
   sessionId?: string
+  onAccountUnavailable?: () => void
+}
+
+async function isExactAccountUnavailable(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false
+  const readable = typeof response.clone === 'function' ? response.clone() : response
+  const body = await readable.json().catch(() => null) as { code?: unknown } | null
+  return body?.code === 'ACCOUNT_UNAVAILABLE'
 }
 
 // Match the rest of the redesigned feedback page: Strong ≥75, Warning <55.
@@ -41,16 +49,30 @@ function bandColor(score: number): { line: string; areaStart: string; areaEnd: s
   }
 }
 
-export default function ScoreTrendChart({ currentScore, sessionId }: ScoreTrendChartProps) {
+export default function ScoreTrendChart({
+  currentScore,
+  sessionId,
+  onAccountUnavailable,
+}: ScoreTrendChartProps) {
   const [points, setPoints] = useState<TrendPoint[]>([])
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
 
   useEffect(() => {
+    let cancelled = false
+
     async function load() {
       try {
         const res = await fetch('/api/interviews?limit=10&status=completed')
+        if (await isExactAccountUnavailable(res)) {
+          if (!cancelled) {
+            setPoints([])
+            onAccountUnavailable?.()
+          }
+          return
+        }
         if (!res.ok) return
         const data = await res.json()
+        if (cancelled) return
         const pts: TrendPoint[] = (data.sessions || [])
           .filter((s: { feedback?: { overall_score: number } }) => s.feedback?.overall_score)
           .map((s: { feedback: { overall_score: number }; createdAt: string }) => ({
@@ -64,7 +86,10 @@ export default function ScoreTrendChart({ currentScore, sessionId }: ScoreTrendC
       }
     }
     load()
-  }, [sessionId])
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, onAccountUnavailable])
 
   if (points.length < 2) {
     return (

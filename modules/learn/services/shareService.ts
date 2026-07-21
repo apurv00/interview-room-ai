@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
 import { aiLogger as logger } from '@shared/logger'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export interface PublicScorecard {
   domain: string
@@ -75,10 +76,16 @@ export async function getPublicScorecard(
       isPublic: true,
       shareExpiresAt: { $gt: new Date() },
     })
-      .select('config feedback evaluations durationActualSeconds createdAt')
+      .select('userId config feedback evaluations durationActualSeconds createdAt')
       .lean()
 
     if (!session?.feedback) return null
+    const ownerId = session.userId?.toString()
+    // Account deletion can intentionally retain a deleting User when a
+    // mandatory session sweep fails. Treat that durable lifecycle marker as
+    // revocation for existing public links instead of leaving them live for
+    // the token's remaining 90-day lifetime.
+    if (!ownerId || !(await isJobsAccountActive(ownerId))) return null
 
     const fb = session.feedback
     return {

@@ -225,7 +225,7 @@ describe('createSession — Jobs JD provider authority', () => {
   })
 })
 
-describe('updateSession — recording artifact persistence', () => {
+describe('updateSession — generic session persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockFindById.mockResolvedValue({
@@ -236,7 +236,7 @@ describe('updateSession — recording artifact persistence', () => {
     mockFindByIdAndUpdate.mockResolvedValue({ _id: { toString: () => 'session-1' } })
   })
 
-  it('persists audio, screen, live transcript, completion, and latency telemetry fields', async () => {
+  it('ignores raw artifact keys while persisting transcript, completion, and latency telemetry', async () => {
     const interviewLatencyTelemetry = {
       wrapUpListenMs: 15004,
       wrapUpSafeQaMs: 812,
@@ -259,10 +259,6 @@ describe('updateSession — recording artifact persistence', () => {
     expect(mockFindByIdAndUpdate).toHaveBeenCalledWith(
       'session-1',
       expect.objectContaining({
-        audioRecordingR2Key: 'recordings/user-1/session-1-audio.webm',
-        audioRecordingSizeBytes: 12345,
-        screenRecordingR2Key: 'recordings/user-1/session-1-screen.webm',
-        screenRecordingSizeBytes: 67890,
         liveTranscriptWords: [{ word: 'hello', start: 0, end: 0.4, confidence: 0.99 }],
         answeredCount: 3,
         endReason: 'normal',
@@ -270,5 +266,10 @@ describe('updateSession — recording artifact persistence', () => {
       }),
       { returnDocument: 'after' }
     )
+    const persisted = mockFindByIdAndUpdate.mock.calls[0]?.[1]
+    expect(persisted).not.toHaveProperty('audioRecordingR2Key')
+    expect(persisted).not.toHaveProperty('audioRecordingSizeBytes')
+    expect(persisted).not.toHaveProperty('screenRecordingR2Key')
+    expect(persisted).not.toHaveProperty('screenRecordingSizeBytes')
   })
 })
