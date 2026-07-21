@@ -330,21 +330,49 @@ export async function transitionStatus(
   now = new Date()
 ): Promise<{ ok: boolean; status?: string; from?: string }> {
   if (!(USER_SETTABLE_STATUSES as readonly string[]).includes(to)) return { ok: false }
-  // findOneAndUpdate returns the PRE-update doc — the event vocabulary
-  // promises jobs.status_changed{from,to,source}, and in a loose machine
-  // `from` is what distinguishes a forward move from a correction
-  // (Codex on #522).
-  const prev = await withActiveJobsAccountWrite(userId, (session) =>
-    JobApplication.findOneAndUpdate(
-      { userId, jobPostingId },
+  const transition = await withActiveJobsAccountWrite(userId, async (session) => {
+    // A target-status guard makes retries true no-ops: the original status
+    // timestamp/history survive and telemetry below only sees a real edge.
+    // `apply_clicked` is only evidence that a link opened, so it cannot jump
+    // directly to the user-facing "No response" state without an `applied`
+    // claim first.
+    const prev = await JobApplication.findOneAndUpdate(
+      {
+        userId,
+        jobPostingId,
+        status: { $ne: to },
+        ...(to === 'ghosted'
+          ? {
+              $or: [
+                { status: { $in: ['applied', 'interview_scheduled', 'offer', 'rejected'] } },
+                { appliedAt: { $type: 'date' } },
+              ],
+            }
+          : {}),
+      },
       {
         $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
         $push: { statusHistory: { status: to, at: now, source: 'user' } },
       },
       { new: false, session },
-    ),
-  )
-  if (!prev) return { ok: false }
+    )
+    if (prev) return { changed: true as const, from: prev.status }
+
+    // The conditional update cannot distinguish an idempotent retry from a
+    // missing/forbidden row. Resolve that distinction in the same account
+    // transaction so an already-satisfied request remains a successful no-op.
+    const current = await JobApplication.findOne(
+      { userId, jobPostingId },
+      undefined,
+      { session },
+    ).select('status').lean()
+    if (current?.status === to) {
+      return { changed: false as const, from: current.status }
+    }
+    return null
+  })
+  if (!transition) return { ok: false }
+  if (!transition.changed) return { ok: true, status: to, from: transition.from }
 
   // THE single emitter (EMAILS.md §4, Codex #530 R25): jobs.interview_scheduled
   // fires HERE on the edge (from != to) and nowhere else — the session-gated
@@ -353,24 +381,24 @@ export async function transitionStatus(
   // never breaks the transition.
   if (telemetry) {
     try {
-      const scheduledEdge = to === 'interview_scheduled' && prev.status !== 'interview_scheduled'
+      const scheduledEdge = to === 'interview_scheduled'
       await recordJobsUserEvent({
         name: to === 'applied' ? 'jobs.apply_confirmed' : scheduledEdge ? 'jobs.interview_scheduled' : 'jobs.status_changed',
         userId,
         jobPostingId,
         props:
           to === 'applied'
-            ? { latencyMs: telemetry.latencyMs, viaNudge: telemetry.viaNudge ?? false, from: prev.status, channel: telemetry.channel }
+            ? { latencyMs: telemetry.latencyMs, viaNudge: telemetry.viaNudge ?? false, from: transition.from, channel: telemetry.channel }
             : scheduledEdge
-              ? { inferredFromPrep: telemetry.inferredFromPrep ?? false, from: prev.status, channel: telemetry.channel }
-              : { from: prev.status, to, source: 'user', channel: telemetry.channel },
+              ? { inferredFromPrep: telemetry.inferredFromPrep ?? false, from: transition.from, channel: telemetry.channel }
+              : { from: transition.from, to, source: 'user', channel: telemetry.channel },
         ts: now,
       })
     } catch (err) {
       logger.warn({ err }, 'status telemetry write failed')
     }
   }
-  return { ok: true, status: to, from: prev.status }
+  return { ok: true, status: to, from: transition.from }
 }
 
 /**

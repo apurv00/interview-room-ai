@@ -248,6 +248,16 @@ const JobApplicationSchema = new Schema<IJobApplication>(
 JobApplicationSchema.index({ userId: 1, jobPostingId: 1 }, { unique: true })
 // Tracker list: grouped by status, most recently touched first.
 JobApplicationSchema.index({ userId: 1, status: 1, updatedAt: -1 })
+// Global scheduled work: confirmed applications that crossed the 35-day
+// response threshold. The partial predicate keeps clicks and terminal rows
+// out of the index entirely.
+JobApplicationSchema.index(
+  { status: 1, appliedAt: 1, _id: 1 },
+  {
+    name: 'jobs_tracker_status_sweep_due',
+    partialFilterExpression: { status: 'applied', appliedAt: { $type: 'date' } },
+  },
+)
 
 export const JobApplication: Model<IJobApplication> =
   mongoose.models.JobApplication || mongoose.model<IJobApplication>('JobApplication', JobApplicationSchema)

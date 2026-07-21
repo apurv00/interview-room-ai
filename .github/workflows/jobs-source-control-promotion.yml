@@ -72,6 +72,40 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
 
+      - name: Preview historical tracker-status repair
+        if: inputs.phase == 'verify-promotion'
+        run: npm run repair:jobs-tracker-status
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Preview tracker-status due-work index
+        if: inputs.phase == 'verify-promotion'
+        run: npm run prepare:jobs-tracker-status-index
+
+      - name: Create exact tracker-status due-work index
+        if: inputs.phase == 'verify-promotion'
+        run: npm run prepare:jobs-tracker-status-index -- --apply
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Verify tracker-status due-work index
+        if: inputs.phase == 'verify-promotion'
+        run: npm run check:jobs-tracker-status-index
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Repair unconfirmed rows incorrectly system-ghosted by legacy reads
+        if: inputs.phase == 'verify-promotion'
+        run: npm run repair:jobs-tracker-status -- --apply
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Verify tracker-status truth invariant
+        if: inputs.phase == 'verify-promotion'
+        run: npm run check:jobs-tracker-status
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
       - name: Preview retention TTL index activation
         if: inputs.phase == 'verify-promotion'
         run: npm run prepare:jobs-retention-index

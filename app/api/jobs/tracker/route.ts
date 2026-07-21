@@ -11,9 +11,9 @@ import {
 export const dynamic = 'force-dynamic'
 
 /**
- * GET /api/jobs/tracker — the grouped application list (Wave 4.2). All
- * time-derived state (nudges, the P-4 35-day lazy auto-ghost, the confirm
- * card) is computed inside getTracker at read time; no cron exists.
+ * GET /api/jobs/tracker — the grouped application list (Wave 4.2). Read-only
+ * presentation state (nudges and the confirm card) is derived by getTracker;
+ * lifecycle transitions run outside the request path.
  */
 export async function GET() {
   const session = await getServerSession(authOptions)

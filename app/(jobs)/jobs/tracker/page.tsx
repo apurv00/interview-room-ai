@@ -266,8 +266,8 @@ export default function TrackerPage() {
                     {r.postingState === 'archived' ? 'Posting no longer active · saved details available' : 'Posting unavailable · tracked history preserved'}
                   </p>
                 )}
-                {r.nudge === 'waiting' && <p className="mt-1 text-xs text-amber-700">Still waiting on {r.company}? Keep prepping — evidence carries to similar jobs.</p>}
-                {r.nudge === 'ghost-prompt' && (
+                {r.status === 'applied' && r.nudge === 'waiting' && <p className="mt-1 text-xs text-amber-700">Still waiting on {r.company}? Keep prepping — evidence carries to similar jobs.</p>}
+                {r.status === 'applied' && r.nudge === 'ghost-prompt' && (
                   <p className="mt-1 text-xs text-amber-700">
                     3 weeks quiet. <button onClick={() => transition(r.jobPostingId, r.status, 'ghosted')} className="underline">Mark “No response”?</button>
                   </p>

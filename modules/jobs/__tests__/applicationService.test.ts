@@ -434,7 +434,8 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
     mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'apply_clicked' })
     const r = await transitionStatus('u1', 'j1', 'applied', undefined, NOW)
     expect(r).toEqual({ ok: true, status: 'applied', from: 'apply_clicked' })
-    const [, update] = mockAppFindOneAndUpdate.mock.calls[0]
+    const [filter, update] = mockAppFindOneAndUpdate.mock.calls[0]
+    expect(filter).toEqual({ userId: 'u1', jobPostingId: 'j1', status: { $ne: 'applied' } })
     expect(update.$set).toEqual({ status: 'applied', appliedAt: NOW })
     expect(update.$push.statusHistory).toMatchObject({ status: 'applied', source: 'user' })
   })
@@ -451,7 +452,57 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
   it('no application row → ok:false (route 404s)', async () => {
     reset()
     mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
     expect((await transitionStatus('u1', 'j1', 'applied', undefined, NOW)).ok).toBe(false)
+  })
+
+  it('same-state retries are successful no-ops with no history, appliedAt reset, or telemetry', async () => {
+    reset()
+    const originalAppliedAt = new Date('2026-07-01T12:00:00Z')
+    mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ status: 'applied', appliedAt: originalAppliedAt }) }),
+    })
+
+    const result = await transitionStatus('u1', 'j1', 'applied', { channel: 'web' }, NOW)
+
+    expect(result).toEqual({ ok: true, status: 'applied', from: 'applied' })
+    const [filter, update, options] = mockAppFindOneAndUpdate.mock.calls[0]
+    expect(filter).toEqual({ userId: 'u1', jobPostingId: 'j1', status: { $ne: 'applied' } })
+    expect(update).toMatchObject({
+      $set: { status: 'applied', appliedAt: NOW },
+      $push: { statusHistory: { status: 'applied', at: NOW, source: 'user' } },
+    })
+    expect(options.session).toBeDefined()
+    expect(mockAppFindOne).toHaveBeenCalledWith(
+      { userId: 'u1', jobPostingId: 'j1' },
+      undefined,
+      { session: options.session },
+    )
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unconfirmed apply click becoming No response without writing or emitting', async () => {
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ status: 'apply_clicked' }) }),
+    })
+
+    const result = await transitionStatus('u1', 'j1', 'ghosted', { channel: 'web' }, NOW)
+
+    expect(result).toEqual({ ok: false })
+    const [filter] = mockAppFindOneAndUpdate.mock.calls[0]
+    expect(filter).toEqual({
+      userId: 'u1',
+      jobPostingId: 'j1',
+      status: { $ne: 'ghosted' },
+      $or: [
+        { status: { $in: ['applied', 'interview_scheduled', 'offer', 'rejected'] } },
+        { appliedAt: { $type: 'date' } },
+      ],
+    })
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('emits transition telemetry through the fenced user-event helper', async () => {

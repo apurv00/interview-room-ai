@@ -53,6 +53,7 @@ function app(over: Record<string, unknown> = {}) {
     jobSnapshot: { title: 'SDE', company: 'PhonePe', location: 'Pune' },
     status: 'applied',
     statusHistory: [{ status: 'applied', at: daysAgo(1), source: 'user' }],
+    appliedAt: daysAgo(1),
     practiceSessionIds: [],
     verifiedPracticeSessionIds: [],
     outcome: { askCount: 0 },
@@ -84,7 +85,7 @@ function reset() {
   )
 }
 
-describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
+describe('getTracker (Wave 4.2 — pure read-time derivation)', () => {
   it('groups by status in action-first order with counts', async () => {
     reset()
     chain([
@@ -103,9 +104,14 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
 
   it('7d → waiting nudge, 21d → ghost prompt; saved/terminal rows never nudge', async () => {
     reset()
+    const legacyUnconfirmed = app({
+      appliedAt: undefined,
+      statusHistory: [{ status: 'applied', at: daysAgo(30), source: 'user' }],
+    })
     chain([
       app({ statusHistory: [{ status: 'applied', at: daysAgo(8), source: 'user' }] }),
       app({ statusHistory: [{ status: 'applied', at: daysAgo(22), source: 'user' }] }),
+      legacyUnconfirmed,
       app({ status: 'saved', statusHistory: [{ status: 'saved', at: daysAgo(30), source: 'user' }] }),
       app({ status: 'offer', statusHistory: [{ status: 'offer', at: daysAgo(30), source: 'user' }] }),
     ])
@@ -113,63 +119,39 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
     const flat = v.groups.flatMap((g) => g.rows)
     expect(flat.find((r) => r.status === 'applied' && r.daysInStatus === 8)!.nudge).toBe('waiting')
     expect(flat.find((r) => r.status === 'applied' && r.daysInStatus === 22)!.nudge).toBe('ghost-prompt')
+    expect(flat.find((r) => r.jobPostingId === legacyUnconfirmed.jobPostingId)!.nudge).toBeNull()
     expect(flat.find((r) => r.status === 'saved')!.nudge).toBeNull()
     expect(flat.find((r) => r.status === 'offer')!.nudge).toBeNull()
   })
 
-  it('P-4: >35d apply_clicked/applied rows lazy-ghost in ONE status-guarded bulk write and render post-transition', async () => {
+  it('repeated GETs stay read-only and never turn an unconfirmed click into No response', async () => {
     reset()
-    const stale = app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })
-    const fresh = app({ statusHistory: [{ status: 'applied', at: daysAgo(10), source: 'user' }] })
-    const savedOld = app({ status: 'saved', statusHistory: [{ status: 'saved', at: daysAgo(90), source: 'user' }] })
-    chain([stale, fresh, savedOld])
-    const v = await getTracker('u1', NOW)
-    expect(v.autoGhosted).toBe(1)
-    const ops = mockBulkWrite.mock.calls[0][0]
-    expect(ops).toHaveLength(1)
-    // per-row OPTIMISTIC token: updatedAt from OUR snapshot, not a status re-check
-    expect(ops[0].updateOne.filter).toEqual({ _id: stale._id, updatedAt: stale.updatedAt })
-    expect(ops[0].updateOne.update.$set.status).toBe('ghosted')
-    expect(ops[0].updateOne.update.$push.statusHistory).toMatchObject({ status: 'ghosted', source: 'system' })
-    const ghostGroup = v.groups.find((g) => g.status === 'ghosted')
-    expect(ghostGroup?.count).toBe(1)
-    expect(mockRecordJobsUserEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'jobs.ghost_auto', props: { count: 1 } }),
-    )
-  })
+    const staleApplied = app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })
+    const staleClick = app({
+      status: 'apply_clicked',
+      statusHistory: [{ status: 'apply_clicked', at: daysAgo(60), source: 'system' }],
+    })
+    chain([staleApplied, staleClick])
 
-  it('keeps the auto-ghost transition when best-effort telemetry fails', async () => {
-    reset()
-    const stale = app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })
-    chain([stale])
-    mockRecordJobsUserEvent.mockRejectedValueOnce(new Error('analytics unavailable'))
+    const first = await getTracker('u1', NOW)
+    const second = await getTracker('u1', NOW)
+    const rows = first.groups.flatMap((group) => group.rows)
 
-    const view = await getTracker('u1', NOW)
-
-    expect(view.autoGhosted).toBe(1)
-    expect(view.groups.find((group) => group.status === 'ghosted')?.count).toBe(1)
-    expect(mockBulkWrite).toHaveBeenCalledOnce()
-  })
-
-  it('a CONTESTED row (user moved it mid-read) is never stomped — truth re-read, no telemetry (Codex #523)', async () => {
-    reset()
-    const contested = app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })
-    chain([contested])
-    mockBulkWrite.mockResolvedValueOnce({ modifiedCount: 0 }) // updatedAt token mismatched — a fresher move won
-    mockFind.mockReturnValueOnce({ select: () => ({ sort: () => ({ limit: () => ({ lean: () => Promise.resolve([contested]) }) }) }) })
-    mockFind.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve([{ _id: contested._id, status: 'applied', statusHistory: [{ status: 'applied', at: NOW, source: 'user' }] }]) }) })
-    const v = await getTracker('u1', NOW)
-    expect(v.autoGhosted).toBe(0)
-    expect(v.groups.find((g) => g.status === 'ghosted')).toBeUndefined()
-    expect(v.groups.find((g) => g.status === 'applied')?.count).toBe(1) // the user's fresh claim survives
-    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
-  })
-
-  it('no crossings → no bulk write at all', async () => {
-    reset()
-    chain([app()])
-    await getTracker('u1', NOW)
+    expect(second).toEqual(first)
+    expect(rows.find((row) => row.jobPostingId === staleApplied.jobPostingId)).toMatchObject({
+      status: 'applied',
+      nudge: 'ghost-prompt',
+    })
+    expect(rows.find((row) => row.jobPostingId === staleClick.jobPostingId)).toMatchObject({
+      status: 'apply_clicked',
+      nudge: null,
+      unconfirmedClick: true,
+    })
+    expect(first.groups.find((group) => group.status === 'ghosted')).toBeUndefined()
     expect(mockBulkWrite).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('propagates account unavailability without reading, writing, or emitting', async () => {
@@ -182,13 +164,15 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
-  it('propagates account unavailability when deletion wins the auto-ghost write fence', async () => {
+  it('returns no private rows when deletion starts while the read is being assembled', async () => {
     reset()
-    chain([app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })])
-    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+    chain([app()])
+    mockIsJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
 
-    await expect(getTracker('u1', NOW)).rejects.toBeInstanceOf(JobsAccountInactiveError)
+    await expect(getTracker('u1', NOW)).resolves.toEqual({ groups: [], confirmCard: null })
     expect(mockBulkWrite).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 

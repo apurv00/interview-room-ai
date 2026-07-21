@@ -146,6 +146,18 @@ least privilege, not by MongoDB collection immutability.
    npm run check:jobs-retention
    ```
 
+   Build and verify the non-dropping A06 due-work index, then repair the
+   historical tracker-status contradiction before enabling the daily sweep:
+
+   ```text
+   npm run prepare:jobs-tracker-status-index
+   npm run prepare:jobs-tracker-status-index -- --apply
+   npm run check:jobs-tracker-status-index
+   npm run repair:jobs-tracker-status
+   npm run repair:jobs-tracker-status -- --apply
+   npm run check:jobs-tracker-status
+   ```
+
 4. Repair durable lineage and stamp the readiness marker only after its final
    all-corpus verification:
 
@@ -229,7 +241,8 @@ record.
    or queued Jobs lifecycle functions before continuing.
 2. Take a PITR-capable production backup/snapshot and record its identifier and
    recovery point in the change. Deploy the code while Jobs writes remain
-   blocked. The new cron is fail-closed until the exact TTL index exists.
+   blocked. The retention cron is fail-closed until the exact TTL index exists;
+   the tracker-status cron separately requires its exact partial due-work index.
 3. Review the exact index plan, then explicitly build and self-verify it:
 
    ```text
@@ -247,6 +260,18 @@ record.
    npm run repair:jobs-retention
    npm run repair:jobs-retention -- --apply
    npm run check:jobs-retention
+   ```
+
+   Prepare its non-dropping due-work index, then repair and verify tracker
+   status truth before background schedules resume:
+
+   ```text
+   npm run prepare:jobs-tracker-status-index
+   npm run prepare:jobs-tracker-status-index -- --apply
+   npm run check:jobs-tracker-status-index
+   npm run repair:jobs-tracker-status
+   npm run repair:jobs-tracker-status -- --apply
+   npm run check:jobs-tracker-status
    ```
 
 5. Verify zero TTL values remain, then activate the exact index:
