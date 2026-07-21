@@ -1,19 +1,28 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockList, mockGet, mockSave } = vi.hoisted(() => ({ mockList: vi.fn(), mockGet: vi.fn(), mockSave: vi.fn() }))
+const { mockList, mockGet, mockSave, mockIsJobsAccountActive } = vi.hoisted(() => ({
+  mockList: vi.fn(),
+  mockGet: vi.fn(),
+  mockSave: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
+}))
 // Partial mock: the REAL ResumeSchema does the validating (that behavior is
 // exactly what these tests pin); only the persistence functions are stubbed.
 vi.mock('@resume', async (importOriginal) => {
   const real = await importOriginal<typeof import('@resume')>()
   return { ...real, listResumes: mockList, getResume: mockGet, saveResume: mockSave }
 })
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
+}))
 
 import { saveBaseResume, getBaseResume } from '../services/baseResumeService'
 
 function reset() {
-  for (const m of [mockList, mockGet, mockSave]) m.mockReset()
+  for (const m of [mockList, mockGet, mockSave, mockIsJobsAccountActive]) m.mockReset()
   mockList.mockResolvedValue({ resumes: [] })
   mockSave.mockResolvedValue({ id: 'new-id' })
+  mockIsJobsAccountActive.mockResolvedValue(true)
 }
 
 const STRUCT = { contactInfo: { fullName: 'A', email: 'a@x.com' }, skills: [{ category: 'Tech', items: ['SQL'] }] }
@@ -47,6 +56,15 @@ describe('saveBaseResume (Stage-2 auto-save — cap-honest, dedup-by-role)', () 
     expect(await saveBaseResume('u1', STRUCT, 'QA')).toEqual({ saved: false, reason: 'cap' })
     mockSave.mockResolvedValue({ error: 'This resume no longer exists', code: 'NOT_FOUND' })
     expect(await saveBaseResume('u1', STRUCT, 'QA')).toEqual({ saved: false, reason: 'error' })
+  })
+
+  it('refuses to list or save after account deletion has begun', async () => {
+    reset()
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    expect(await saveBaseResume('u1', STRUCT, 'QA')).toEqual({ saved: false, reason: 'error' })
+    expect(mockList).not.toHaveBeenCalled()
+    expect(mockSave).not.toHaveBeenCalled()
   })
 })
 

@@ -8,6 +8,7 @@ const {
   mockApplicationExists,
   mockConnectDB,
   mockGetActiveCatalog,
+  mockIsJobsAccountActive,
 } = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
   mockPostingExists: vi.fn().mockResolvedValue({ _id: 'posting-authoritative' }),
@@ -15,6 +16,7 @@ const {
   mockApplicationExists: vi.fn().mockResolvedValue({ _id: 'application-authoritative' }),
   mockConnectDB: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
@@ -24,6 +26,9 @@ vi.mock('@shared/db/models', () => ({
 }))
 vi.mock('@interview/services/persona/domainCatalogService', () => ({
   getActiveInterviewDomainCatalog: mockGetActiveCatalog,
+}))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
 }))
 
 import {
@@ -62,6 +67,7 @@ beforeEach(() => {
   vi.stubEnv('NEXTAUTH_SECRET', 'test-secret-longer-than-sixteen-characters')
   mockConnectDB.mockResolvedValue(undefined)
   mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
+  mockIsJobsAccountActive.mockResolvedValue(true)
   mockPostingFindById.mockReturnValue(selectLean({
     company: 'PhonePe',
     domain: 'backend',
@@ -99,6 +105,37 @@ describe('Jobs practice handoff', () => {
     expect(await resolvePracticeHandoff(tampered, USER_ID, NOW)).toBeNull()
     expect(await resolvePracticeHandoff(token, USER_ID, expiredAt)).toBeNull()
     expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockIsJobsAccountActive).not.toHaveBeenCalled()
+  })
+
+  it('rejects an inactive stale-JWT account before reading the posting or application', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
+
+    expect(mockConnectDB).toHaveBeenCalledOnce()
+    expect(mockIsJobsAccountActive).toHaveBeenCalledWith(USER_ID)
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockApplicationFindOne).not.toHaveBeenCalled()
+    expect(mockGetActiveCatalog).not.toHaveBeenCalled()
+  })
+
+  it('discards a prepared handoff when deletion commits during CMS preparation', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
+
+    expect(mockPostingFindById).toHaveBeenCalledOnce()
+    expect(mockApplicationFindOne).toHaveBeenCalledOnce()
+    expect(mockGetActiveCatalog).toHaveBeenCalledOnce()
+    expect(mockPostingExists).toHaveBeenCalledOnce()
+    expect(mockApplicationExists).toHaveBeenCalledOnce()
+    expect(mockIsJobsAccountActive).toHaveBeenNthCalledWith(1, USER_ID)
+    expect(mockIsJobsAccountActive).toHaveBeenNthCalledWith(2, USER_ID)
   })
 
   it('normal archive owner can resolve an exact-JD historical inferred role after catalog revision drift', async () => {

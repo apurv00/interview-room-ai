@@ -2,7 +2,14 @@ import { connectDB } from '@shared/db/connection'
 import { UsageRecord } from '@shared/db/models/UsageRecord'
 import { aiLogger } from '@shared/logger'
 import type { AuthUser } from '@shared/middleware/withAuth'
-import { bufferUsage, type UsageRecordData } from '@shared/services/usageBuffer'
+import {
+  bufferUsage,
+  type UsageRecordData,
+} from '@shared/services/usageBuffer'
+import {
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 
 interface TrackUsageInput {
   user: AuthUser
@@ -63,10 +70,13 @@ export async function trackUsage(input: TrackUsageInput): Promise<void> {
 
   // When a sessionId is available, buffer the record in Redis for bulk-flush
   // at session completion. This collapses ~31 individual Mongo inserts per
-  // session into one insertMany call.
+  // session into one insertMany call. The Lua append is ordered atomically
+  // against account deletion's Redis tombstone; no Mongo read is added to
+  // this hot path.
   if (input.sessionId) {
     try {
-      await bufferUsage(input.sessionId, record)
+      const accepted = await bufferUsage(input.sessionId, record)
+      if (!accepted) return
       aiLogger.debug(
         { type: input.type, tokens: input.inputTokens + input.outputTokens, costUsd: record.costUsd },
         'Usage buffered',
@@ -81,14 +91,16 @@ export async function trackUsage(input: TrackUsageInput): Promise<void> {
   // Direct insert path: no sessionId, or Redis buffer unavailable.
   try {
     await connectDB()
-
-    await UsageRecord.create(record)
+    await withActiveJobsAccountWrite(input.user.id, (session) =>
+      UsageRecord.create([record], { session }),
+    )
 
     aiLogger.debug(
       { type: input.type, tokens: input.inputTokens + input.outputTokens, costUsd: record.costUsd },
       'Usage tracked',
     )
   } catch (err) {
+    if (err instanceof JobsAccountInactiveError) return
     aiLogger.error({ err, type: input.type }, 'Failed to track usage')
     // Fail silently — don't break the API response
   }

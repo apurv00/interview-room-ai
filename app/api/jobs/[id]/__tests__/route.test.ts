@@ -1,15 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockGetServerSession, mockConnectDB, mockGetJobDetail } = vi.hoisted(() => ({
+const {
+  mockGetServerSession,
+  mockConnectDB,
+  mockGetJobDetail,
+  mockIsJobsAccountActive,
+} = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockConnectDB: vi.fn(),
   mockGetJobDetail: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@jobs', () => ({ getJobDetail: mockGetJobDetail }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
+}))
 
 import { GET } from '../route'
 
@@ -20,9 +29,57 @@ const JD = 'Backend role requiring Node.js and MongoDB.'
 beforeEach(() => {
   vi.clearAllMocks()
   mockConnectDB.mockResolvedValue(undefined)
+  mockIsJobsAccountActive.mockResolvedValue(true)
 })
 
 describe('GET /api/jobs/[id] practice handoff', () => {
+  it('rejects an inactive stale-JWT account before reading the full detail projection', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}`), {
+      params: { id: JOB_ID },
+    })
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockGetJobDetail).not.toHaveBeenCalled()
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(1)
+  })
+
+  it('discards a prepared detail when deletion commits while the projection is in flight', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    mockGetJobDetail.mockResolvedValue({
+      id: JOB_ID,
+      gated: false,
+      title: 'Backend Engineer',
+      company: 'PhonePe',
+      jd: JD,
+      practiceRole: 'backend',
+      practiceHandoffToken: 'must-not-leak',
+    })
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}`), {
+      params: { id: JOB_ID },
+    })
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    const body = await response.json()
+    expect(body).toEqual({ error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' })
+    expect(body).not.toHaveProperty('jd')
+    expect(body).not.toHaveProperty('practiceHandoffToken')
+    expect(mockGetJobDetail).toHaveBeenCalledWith(JOB_ID, USER_ID)
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(2)
+  })
+
   it('passes through the service-issued role and token for the authenticated user', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
     mockGetJobDetail.mockResolvedValue({
@@ -42,6 +99,7 @@ describe('GET /api/jobs/[id] practice handoff', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockGetJobDetail).toHaveBeenCalledWith(JOB_ID, USER_ID)
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(2)
     expect(await response.json()).toMatchObject({
       practiceRole: 'backend',
       practiceHandoffToken: 'signed-handoff',

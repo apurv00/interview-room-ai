@@ -4,10 +4,10 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { saveTailoredVersion } from '@jobs'
-import { ProductEvent } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
 
 export const dynamic = 'force-dynamic'
 
@@ -100,7 +100,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ error: 'posting not found', code: 'JOB_NOT_FOUND' }, { status: 404 })
   }
   try {
-    await ProductEvent.create({ name: 'jobs.tailor_run', userId, jobPostingId: params.id, props: { matchScore: body.matchScore }, ts: new Date() })
+    await recordJobsUserEvent({ name: 'jobs.tailor_run', userId, jobPostingId: params.id, props: { matchScore: body.matchScore }, ts: new Date() })
   } catch (err) {
     logger.warn({ err }, 'tailor_run telemetry write failed')
   }

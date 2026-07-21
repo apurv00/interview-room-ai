@@ -1,22 +1,44 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockFind, mockPostingFind, mockBulkWrite, mockUpdateOne, mockEventCreate } = vi.hoisted(() => ({
+const {
+  mockFind,
+  mockPostingFind,
+  mockBulkWrite,
+  mockUpdateOne,
+  mockRecordJobsUserEvent,
+  mockIsJobsAccountActive,
+  mockWithActiveJobsAccountWrite,
+} = vi.hoisted(() => ({
   mockFind: vi.fn(),
   mockPostingFind: vi.fn(),
   mockBulkWrite: vi.fn(),
   mockUpdateOne: vi.fn(),
-  mockEventCreate: vi.fn(),
+  mockRecordJobsUserEvent: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
+  mockWithActiveJobsAccountWrite: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
   JobApplication: { find: mockFind, bulkWrite: mockBulkWrite, updateOne: mockUpdateOne },
   JobPosting: { find: mockPostingFind },
-  ProductEvent: { create: mockEventCreate },
 }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
+vi.mock('../services/userEventService', () => ({ recordJobsUserEvent: mockRecordJobsUserEvent }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  JobsAccountInactiveError: class JobsAccountInactiveError extends Error {
+    constructor(public readonly userId: string) {
+      super('account is missing or being deleted')
+      this.name = 'JobsAccountInactiveError'
+    }
+  },
+  isJobsAccountActive: mockIsJobsAccountActive,
+  withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
+}))
 
 import { getTracker, dismissConfirmCard, saveNotes } from '../services/trackerService'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
+const TRANSACTION_SESSION = { id: 'jobs-account-fence-session' }
 
 function daysAgo(d: number, hours = 0): Date {
   return new Date(NOW.getTime() - d * 24 * 3600_000 - hours * 3600_000)
@@ -51,10 +73,15 @@ function chain(apps: unknown[]) {
 }
 
 function reset() {
-  for (const m of [mockFind, mockPostingFind, mockBulkWrite, mockUpdateOne, mockEventCreate]) m.mockReset()
+  for (const m of [mockFind, mockPostingFind, mockBulkWrite, mockUpdateOne, mockRecordJobsUserEvent, mockIsJobsAccountActive, mockWithActiveJobsAccountWrite]) m.mockReset()
   mockBulkWrite.mockImplementation(async (ops: unknown[]) => ({ modifiedCount: (ops as unknown[]).length }))
   mockUpdateOne.mockResolvedValue({ matchedCount: 1 })
-  mockEventCreate.mockResolvedValue({})
+  mockRecordJobsUserEvent.mockResolvedValue(true)
+  mockIsJobsAccountActive.mockResolvedValue(true)
+  mockWithActiveJobsAccountWrite.mockImplementation(
+    async (_userId: string, work: (session: typeof TRANSACTION_SESSION) => Promise<unknown> | unknown) =>
+      work(TRANSACTION_SESSION),
+  )
 }
 
 describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
@@ -106,7 +133,22 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
     expect(ops[0].updateOne.update.$push.statusHistory).toMatchObject({ status: 'ghosted', source: 'system' })
     const ghostGroup = v.groups.find((g) => g.status === 'ghosted')
     expect(ghostGroup?.count).toBe(1)
-    expect(mockEventCreate.mock.calls[0][0]).toMatchObject({ name: 'jobs.ghost_auto', props: { count: 1 } })
+    expect(mockRecordJobsUserEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'jobs.ghost_auto', props: { count: 1 } }),
+    )
+  })
+
+  it('keeps the auto-ghost transition when best-effort telemetry fails', async () => {
+    reset()
+    const stale = app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })
+    chain([stale])
+    mockRecordJobsUserEvent.mockRejectedValueOnce(new Error('analytics unavailable'))
+
+    const view = await getTracker('u1', NOW)
+
+    expect(view.autoGhosted).toBe(1)
+    expect(view.groups.find((group) => group.status === 'ghosted')?.count).toBe(1)
+    expect(mockBulkWrite).toHaveBeenCalledOnce()
   })
 
   it('a CONTESTED row (user moved it mid-read) is never stomped — truth re-read, no telemetry (Codex #523)', async () => {
@@ -120,7 +162,7 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
     expect(v.autoGhosted).toBe(0)
     expect(v.groups.find((g) => g.status === 'ghosted')).toBeUndefined()
     expect(v.groups.find((g) => g.status === 'applied')?.count).toBe(1) // the user's fresh claim survives
-    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('no crossings → no bulk write at all', async () => {
@@ -128,6 +170,26 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
     chain([app()])
     await getTracker('u1', NOW)
     expect(mockBulkWrite).not.toHaveBeenCalled()
+  })
+
+  it('returns an empty tracker when the account is inactive without reading, writing, or emitting', async () => {
+    reset()
+    mockIsJobsAccountActive.mockResolvedValueOnce(false)
+
+    expect(await getTracker('u1', NOW)).toEqual({ groups: [], confirmCard: null, autoGhosted: 0 })
+    expect(mockFind).not.toHaveBeenCalled()
+    expect(mockBulkWrite).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('drops a stale tracker snapshot when deletion wins the auto-ghost write fence', async () => {
+    reset()
+    chain([app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })])
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    expect(await getTracker('u1', NOW)).toEqual({ groups: [], confirmCard: null, autoGhosted: 0 })
+    expect(mockBulkWrite).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('counts only verified practice and quarantines legacy attendance', async () => {
@@ -224,5 +286,14 @@ describe('confirm-card budget + notes', () => {
     expect(mockUpdateOne.mock.calls[0][1]).toEqual({ $inc: { 'outcome.askCount': 1 } })
     await saveNotes('u1', 'j1', 'x'.repeat(3000))
     expect(mockUpdateOne.mock.calls[1][1].$set.notes).toHaveLength(2000)
+  })
+
+  it('inactive accounts cannot spend the ask budget or write notes', async () => {
+    reset()
+    mockWithActiveJobsAccountWrite.mockRejectedValue(new JobsAccountInactiveError('u1'))
+
+    await expect(dismissConfirmCard('u1', 'j1')).resolves.toBeUndefined()
+    await expect(saveNotes('u1', 'j1', 'private note')).resolves.toBe(false)
+    expect(mockUpdateOne).not.toHaveBeenCalled()
   })
 })

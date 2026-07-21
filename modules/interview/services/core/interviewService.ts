@@ -1,5 +1,10 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
+import {
+  activeJobsAccountFilter,
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 import { InterviewSession, User } from '@shared/db/models'
 import { InterviewDepth } from '@shared/db/models/InterviewDepth'
 import type { IInterviewSession } from '@shared/db/models'
@@ -155,6 +160,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   await User.updateOne(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
+      accountState: { $ne: 'deleting' },
       $or: [
         { usageResetAt: { $exists: false } },
         { $expr: { $ne: [{ $month: '$usageResetAt' }, currentMonth + 1] } },
@@ -170,6 +176,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   await User.updateOne(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
+      accountState: { $ne: 'deleting' },
       $or: [
         { monthlyInterviewLimit: { $exists: false } },
         { monthlyInterviewLimit: null },
@@ -183,6 +190,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   await User.updateOne(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
+      accountState: { $ne: 'deleting' },
       monthlyInterviewsUsed: { $exists: false },
     },
     { $set: { monthlyInterviewsUsed: 0 } }
@@ -193,6 +201,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   const updatedUser = await User.findOneAndUpdate(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
+      accountState: { $ne: 'deleting' },
       $expr: { $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'] },
     },
     {
@@ -204,7 +213,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
 
   if (!updatedUser) {
     // Either user doesn't exist or usage limit reached
-    const exists = await User.exists({ _id: input.userId })
+    const exists = await User.exists(activeJobsAccountFilter(input.userId))
     if (!exists) throw new NotFoundError('User')
     throw new UsageLimitError()
   }
@@ -325,41 +334,46 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     }
   }
 
+  const sessionPayload = {
+    userId: new mongoose.Types.ObjectId(input.userId),
+    organizationId: input.organizationId
+      ? new mongoose.Types.ObjectId(input.organizationId)
+      : undefined,
+    config: input.config,
+    status: 'created',
+    scoringDimensions,
+    templateId: input.templateId
+      ? new mongoose.Types.ObjectId(input.templateId)
+      : undefined,
+    candidateEmail: input.candidateEmail,
+    candidateName: input.candidateName,
+    userAgent: input.userAgent,
+    jobDescription: input.jobDescription,
+    resumeText: input.resumeText,
+    jdFileName: input.jdFileName,
+    resumeFileName: input.resumeFileName,
+    privacyMode: input.config.privacyMode === true ? true : undefined,
+    attribution: input.verifiedJobsAttribution,
+    parentSessionId: rootParentId,
+    retakeNumber,
+    plannedQuestionCount,
+  }
   let session: IInterviewSession
   try {
-    session = await InterviewSession.create({
-      userId: new mongoose.Types.ObjectId(input.userId),
-      organizationId: input.organizationId
-        ? new mongoose.Types.ObjectId(input.organizationId)
-        : undefined,
-      config: input.config,
-      status: 'created',
-      scoringDimensions,
-      templateId: input.templateId
-        ? new mongoose.Types.ObjectId(input.templateId)
-        : undefined,
-      candidateEmail: input.candidateEmail,
-      candidateName: input.candidateName,
-      userAgent: input.userAgent,
-      jobDescription: input.jobDescription,
-      resumeText: input.resumeText,
-      jdFileName: input.jdFileName,
-      resumeFileName: input.resumeFileName,
-      // Privacy mode — promoted from config to a top-level field so it can
-      // be queried/audited independently of the nested config blob.
-      privacyMode: input.config.privacyMode === true ? true : undefined,
-      // Jobs attribution is promoted only after POST /api/interviews has
-      // verified the signed, user-bound handoff. Client config is advisory.
-      attribution: input.verifiedJobsAttribution,
-      parentSessionId: rootParentId,
-      retakeNumber,
-      plannedQuestionCount,
-    })
+    if (input.verifiedJobsAttribution) {
+      session = await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
+        const [created] = await InterviewSession.create([sessionPayload], { session: dbSession })
+        return created
+      })
+    } else {
+      session = await InterviewSession.create(sessionPayload)
+    }
   } catch (err) {
     // Rollback the usage increment if session creation fails
     await User.findByIdAndUpdate(input.userId, {
       $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
     })
+    if (err instanceof JobsAccountInactiveError) throw new NotFoundError('User')
     throw err
   }
 

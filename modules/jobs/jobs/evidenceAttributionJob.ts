@@ -1,7 +1,8 @@
 import { z } from 'zod'
+import type { ClientSession } from 'mongoose'
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { InterviewSession, JobApplication, JobPosting, JobPracticeEvidence, User } from '@shared/db/models'
+import { InterviewSession, JobApplication, JobPosting, JobPracticeEvidence } from '@shared/db/models'
 import { completion, resolveModel } from '@shared/services/modelRouter'
 import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 import { logger } from '@shared/logger'
@@ -14,6 +15,11 @@ import {
   isScorablePracticeEvaluation,
 } from '../services/applicationService'
 import { computeReadiness, STRENGTH_WEIGHT, type EvidenceRowLike } from '../config/readiness'
+import {
+  isJobsAccountActive,
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 
 /**
  * Per-answer → must-have attribution worker (READINESS.md §1, PR-R1).
@@ -147,14 +153,31 @@ function applicationAuthorityFilter(
 async function evidenceAuthorityIsCurrent(
   inputs: LoadedInputs,
   event: { sessionId: string; applicationId: string; jobPostingId: string },
+  dbSession?: ClientSession,
 ): Promise<boolean> {
   const postingFilter = postingAuthorityFilter(inputs, event.jobPostingId)
   if (!postingFilter) return false
+
+  // MongoDB forbids parallel operations on a single transaction session.
+  // The caller already acquired the active-User write fence, so serialize
+  // the three remaining document authorities inside that snapshot.
+  if (dbSession) {
+    const posting = await JobPosting.exists(postingFilter).session(dbSession)
+    if (!posting) return false
+    const session = await InterviewSession.exists(sessionAuthorityFilter(inputs, event)).session(dbSession)
+    if (!session) return false
+    const application = await JobApplication.exists(applicationAuthorityFilter(inputs, event)).session(dbSession)
+    return !!application
+  }
+
+  const postingQuery = JobPosting.exists(postingFilter)
+  const interviewQuery = InterviewSession.exists(sessionAuthorityFilter(inputs, event))
+  const applicationQuery = JobApplication.exists(applicationAuthorityFilter(inputs, event))
   const [posting, session, application, owner] = await Promise.all([
-    JobPosting.exists(postingFilter),
-    InterviewSession.exists(sessionAuthorityFilter(inputs, event)),
-    JobApplication.exists(applicationAuthorityFilter(inputs, event)),
-    User.exists({ _id: inputs.userId }),
+    postingQuery,
+    interviewQuery,
+    applicationQuery,
+    isJobsAccountActive(inputs.userId),
   ])
   return !!posting && !!session && !!application && !!owner
 }
@@ -188,11 +211,13 @@ ${ansLines}
  *  "processed" — a session whose answers all came back 'none' stores zero
  *  rows yet is fully processed, and the sweep would re-emit (re-billing
  *  the LLM) every day for a week. Session missing = no-op update. */
-async function markEvidenceProcessed(sessionId: string): Promise<void> {
-  await InterviewSession.updateOne(
+async function markEvidenceProcessed(sessionId: string, dbSession?: ClientSession): Promise<boolean> {
+  const write = await InterviewSession.updateOne(
     { _id: sessionId },
-    { $set: { 'attribution.evidenceProcessedAt': new Date() } }
+    { $set: { 'attribution.evidenceProcessedAt': new Date() } },
+    dbSession ? { session: dbSession } : undefined,
   )
+  return (write?.matchedCount ?? 0) === 1
 }
 
 interface VerifiedReadinessInput {
@@ -211,7 +236,10 @@ interface VerifiedReadinessInput {
  * application membership predicate is both an ownership fence and a deletion
  * fence: a legacy/browser-attributed session can never surface a snapshot.
  */
-async function writeVerifiedReadinessSnapshot(input: VerifiedReadinessInput): Promise<boolean> {
+async function writeVerifiedReadinessSnapshot(
+  input: VerifiedReadinessInput,
+  dbSession?: ClientSession,
+): Promise<boolean> {
   const baseFilter = {
     _id: input.applicationId,
     userId: input.userId,
@@ -222,19 +250,20 @@ async function writeVerifiedReadinessSnapshot(input: VerifiedReadinessInput): Pr
   // only if no other publisher or deletion invalidated that read; retrying
   // recomputes from the new durable set instead of overwriting newer truth.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const app = await JobApplication.findOne(baseFilter)
+    const app = await JobApplication.findOne(baseFilter, undefined, dbSession ? { session: dbSession } : undefined)
       .select('readinessRevision')
       .lean()
     if (!app) return false
     const rawRevision = Number((app as { readinessRevision?: number }).readinessRevision ?? 0)
     const expectedRevision = Number.isSafeInteger(rawRevision) && rawRevision >= 0 ? rawRevision : 0
-    const allRows = await JobPracticeEvidence.find({
+    const allRowsQuery = JobPracticeEvidence.find({
       applicationId: input.applicationId,
       handoffVersion: 1,
       handoffJdHash: input.handoffJdHash,
     })
       .select('requirementId xrayHash strength answerScore scoringEpoch sessionId')
-      .lean()
+    if (dbSession) allRowsQuery.session(dbSession)
+    const allRows = await allRowsQuery.lean()
     const snapshot = {
       ...computeReadiness(
         allRows.map((row) => ({ ...row, sessionId: String(row.sessionId) })) as unknown as EvidenceRowLike[],
@@ -251,7 +280,8 @@ async function writeVerifiedReadinessSnapshot(input: VerifiedReadinessInput): Pr
       {
         $set: { readiness: snapshot },
         $inc: { readinessRevision: 1 },
-      }
+      },
+      dbSession ? { session: dbSession } : undefined,
     )
     if ((write?.matchedCount ?? 0) > 0) return true
   }
@@ -485,88 +515,81 @@ export async function runEvidenceAttributionHandler(
       }
     }
     const docs = Array.from(bestByReq.values()).map((b) => b.doc)
-    const app = await JobApplication.findOne({
-      _id: applicationId,
-      userId: inputs.userId,
-      jobPostingId,
-      verifiedPracticeSessionIds: sessionId,
-    }).select('userId jobPostingId').lean()
-    if (!app) return 0
-    // Replace semantics per (session, hash): stale rows out, new set in —
-    // the unique index makes duplicate delivery inert.
-    await JobPracticeEvidence.deleteMany({ sessionId, xrayHash: inputs.xrayHash })
-    if (docs.length) {
-      await JobPracticeEvidence.insertMany(
-        docs.map((d) => ({ ...d, userId: app.userId })),
-        { ordered: false }
-      ).catch((err) => {
-        if ((err as { code?: number }).code !== 11000) throw err
-      })
-    }
+    try {
+      return await withActiveJobsAccountWrite(inputs.userId, async (dbSession) => {
+        // Recheck every authority inside the transaction that owns the User
+        // deletion fence. Session deletion and readiness writes also touch
+        // their canonical documents here, so partial evidence cannot survive
+        // either deletion order.
+        if (!(await evidenceAuthorityIsCurrent(
+          inputs,
+          { sessionId, applicationId, jobPostingId },
+          dbSession,
+        ))) return 0
 
-    // Denormalize the readiness snapshot (panel R22) — consumers never
-    // recompute. Per-application function concurrency below prevents two
-    // workers from publishing snapshots from differently aged row reads.
-    const readinessWritten = await writeVerifiedReadinessSnapshot({
-      sessionId,
-      applicationId,
-      userId: String(app.userId),
-      jobPostingId,
-      xrayHash: inputs.xrayHash,
-      handoffJdHash: inputs.handoffJdHash,
-      mustHaveIds: inputs.mustHaves.map((mustHave) => mustHave.id),
-      epoch,
-    })
-    // A preflight check is not a deletion fence. Recheck after every
-    // evidence/readiness write; deletion paths remove sessions before their
-    // evidence sweep, so every interleaving is either swept or compensated.
-    const appFilter = applicationAuthorityFilter(inputs, { sessionId, applicationId, jobPostingId })
-    const exactPostingFilter = postingAuthorityFilter(inputs, jobPostingId)
-    const [postingStillAuthorized, sessionStillAlive, userStillAlive, appStillAlive] = await Promise.all([
-      exactPostingFilter ? JobPosting.exists(exactPostingFilter) : Promise.resolve(null),
-      InterviewSession.exists(sessionAuthorityFilter(inputs, { sessionId, jobPostingId })),
-      User.exists({ _id: inputs.userId }),
-      JobApplication.exists(appFilter),
-    ])
-    if (!postingStillAuthorized || !sessionStillAlive || !userStillAlive || !appStillAlive) {
-      await JobPracticeEvidence.deleteMany({ sessionId })
-      if (!userStillAlive) {
-        await JobApplication.deleteOne(appFilter)
-      } else if (appStillAlive) {
-        await JobApplication.updateOne(appFilter, {
-          $unset: { readiness: 1 },
-          $inc: { readinessRevision: 1 },
-          ...(!sessionStillAlive
-            ? {
-                $pull: {
-                  practiceSessionIds: sessionId,
-                  verifiedPracticeSessionIds: sessionId,
-                },
-              }
-            : {}),
-        })
-      }
-      logger.warn(
-        {
+        const exactPostingFilter = postingAuthorityFilter(inputs, jobPostingId)
+        if (!exactPostingFilter) return 0
+        const postingFence = await JobPosting.updateOne(
+          exactPostingFilter,
+          { $inc: { derivedAuthorityRevision: 1 } },
+          { session: dbSession, timestamps: false },
+        )
+        if ((postingFence.matchedCount ?? 0) !== 1) return 0
+
+        const app = await JobApplication.findOne(
+          {
+            _id: applicationId,
+            userId: inputs.userId,
+            jobPostingId,
+            verifiedPracticeSessionIds: sessionId,
+          },
+          undefined,
+          { session: dbSession },
+        ).select('userId jobPostingId').lean()
+        if (!app) return 0
+
+        // Replace semantics per (session, hash): stale rows out, new set in.
+        // Per-application Inngest concurrency serializes duplicate delivery;
+        // any unexpected unique conflict aborts this whole transaction.
+        await JobPracticeEvidence.deleteMany(
+          { sessionId, xrayHash: inputs.xrayHash },
+          { session: dbSession },
+        )
+        if (docs.length) {
+          await JobPracticeEvidence.insertMany(
+            docs.map((d) => ({ ...d, userId: app.userId })),
+            { ordered: false, session: dbSession },
+          )
+        }
+
+        const readinessWritten = await writeVerifiedReadinessSnapshot({
           sessionId,
-          postingStillAuthorized: !!postingStillAuthorized,
-          sessionStillAlive: !!sessionStillAlive,
-          userStillAlive: !!userStillAlive,
-        },
-        'attribution writes compensated after authority change or deletion'
-      )
-      return 0
+          applicationId,
+          userId: String(app.userId),
+          jobPostingId,
+          xrayHash: inputs.xrayHash,
+          handoffJdHash: inputs.handoffJdHash,
+          mustHaveIds: inputs.mustHaves.map((mustHave) => mustHave.id),
+          epoch,
+        }, dbSession)
+        if (!readinessWritten) {
+          throw new Error('verified readiness snapshot write missed canonical application')
+        }
+
+        // Zero stored rows (all 'none' / belt-dropped) is still PROCESSED.
+        // This session write also serializes with single-session deletion.
+        if (!(await markEvidenceProcessed(sessionId, dbSession))) {
+          throw new Error('evidence session changed before processed marker commit')
+        }
+        return docs.length
+      })
+    } catch (error) {
+      if (error instanceof JobsAccountInactiveError) {
+        logger.warn({ sessionId }, 'account deletion fenced evidence persistence')
+        return 0
+      }
+      throw error
     }
-
-    // A surviving canonical application should always match the snapshot
-    // update. If it did not, retry rather than permanently stamping a partial
-    // evidence write as complete.
-    if (!readinessWritten) throw new Error('verified readiness snapshot write missed canonical application')
-
-    // Zero stored rows (all 'none' / belt-dropped) is still PROCESSED —
-    // without the marker the sweep re-emits and re-bills daily (Codex #538).
-    await markEvidenceProcessed(sessionId)
-    return docs.length
   })
 
   return { outcome: 'attributed', rows }

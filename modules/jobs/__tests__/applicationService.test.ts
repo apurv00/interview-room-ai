@@ -20,11 +20,17 @@ const { mockSessionFindById, mockSessionFindOne, mockSessionUpdateOne } = vi.hoi
   mockSessionFindOne: vi.fn(),
   mockSessionUpdateOne: vi.fn(),
 }))
-const { mockInngestSend, mockProductEventCreate } = vi.hoisted(() => ({
+const {
+  mockInngestSend,
+  mockIsJobsAccountActive,
+  mockWithActiveJobsAccountWrite,
+  mockRecordJobsUserEvent,
+} = vi.hoisted(() => ({
   mockInngestSend: vi.fn(),
-  mockProductEventCreate: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
+  mockWithActiveJobsAccountWrite: vi.fn(),
+  mockRecordJobsUserEvent: vi.fn(),
 }))
-const { mockUserExists } = vi.hoisted(() => ({ mockUserExists: vi.fn() }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne, exists: mockPostingExists },
   JobApplication: {
@@ -33,13 +39,21 @@ vi.mock('@shared/db/models', () => ({
     create: mockAppCreate,
     findOneAndUpdate: mockAppFindOneAndUpdate,
     deleteOne: mockAppDeleteOne,
-    db: { startSession: mockStartSession },
   },
   InterviewSession: { findById: mockSessionFindById, findOne: mockSessionFindOne, updateOne: mockSessionUpdateOne },
-  ProductEvent: { create: mockProductEventCreate },
-  User: { exists: mockUserExists },
 }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend } }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  JobsAccountInactiveError: class JobsAccountInactiveError extends Error {
+    constructor(public readonly userId: string) {
+      super('account is missing or being deleted')
+      this.name = 'JobsAccountInactiveError'
+    }
+  },
+  isJobsAccountActive: mockIsJobsAccountActive,
+  withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
+}))
+vi.mock('../services/userEventService', () => ({ recordJobsUserEvent: mockRecordJobsUserEvent }))
 
 import {
   recordApplyClick,
@@ -53,6 +67,7 @@ import {
 import { xrayHashOf } from '../services/xrayService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
 import { applyOptionIdOf } from '../services/applyOptionIdentity'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 const PRACTICE_JD = 'Backend engineer building Node.js and MongoDB payment systems. '.repeat(3)
@@ -71,9 +86,8 @@ const APPLY_OPTION_ID = applyOptionIdOf({
 })
 
 function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [APPLY_SOURCE], status: 'open', jdCompressed: PRACTICE_JD_COMPRESSED }) {
-  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockUserExists, mockStartSession, mockWithTransaction, mockEndSession]) m.mockReset()
+  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockIsJobsAccountActive, mockWithActiveJobsAccountWrite, mockRecordJobsUserEvent, mockStartSession, mockWithTransaction, mockEndSession]) m.mockReset()
   mockInngestSend.mockReset()
-  mockProductEventCreate.mockReset()
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(posting) }) })
   mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockPostingExists.mockResolvedValue({ _id: 'posting' })
@@ -81,13 +95,32 @@ function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations:
   mockAppCreate.mockResolvedValue([])
   mockAppDeleteOne.mockResolvedValue({ deletedCount: 1 })
   mockSessionUpdateOne.mockResolvedValue({})
-  mockUserExists.mockResolvedValue({ _id: 'u1' })
+  mockIsJobsAccountActive.mockResolvedValue(true)
   mockInngestSend.mockResolvedValue(undefined)
-  mockProductEventCreate.mockResolvedValue(undefined)
+  mockRecordJobsUserEvent.mockResolvedValue(true)
   mockWithTransaction.mockImplementation(async (work: () => Promise<unknown>) => work())
   mockStartSession.mockResolvedValue({
     withTransaction: mockWithTransaction,
     endSession: mockEndSession,
+  })
+  mockWithActiveJobsAccountWrite.mockImplementation(async (
+    _userId: string,
+    work: (session: unknown) => Promise<unknown> | unknown,
+  ) => {
+    const session = await mockStartSession()
+    let result: unknown
+    try {
+      await session.withTransaction(async () => {
+        result = await work(session)
+      }, {
+        readConcern: { level: 'snapshot' },
+        writeConcern: { w: 'majority' },
+        readPreference: 'primary',
+      })
+      return result
+    } finally {
+      await session.endSession()
+    }
   })
 }
 
@@ -121,8 +154,12 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
           },
         },
       },
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-      expect.objectContaining({ session: expect.anything() }),
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      expect.objectContaining({ session: expect.anything(), timestamps: false }),
     )
   })
 
@@ -184,6 +221,18 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
       expect.objectContaining({ session: expect.anything() }),
     )
     expect(mockStartSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns null when deletion wins between an Apply duplicate race and its retry', async () => {
+    reset()
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+    mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+    mockWithActiveJobsAccountWrite
+      .mockImplementationOnce(async (_userId: string, work: (session: unknown) => Promise<unknown>) => work({ id: 'first' }))
+      .mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    await expect(recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).resolves.toBeNull()
+    expect(mockAppCreate).toHaveBeenCalledOnce()
   })
 
   it('unique-index race never regresses a winner that already advanced beyond saved', async () => {
@@ -278,6 +327,18 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     expect(mockAppCreate).not.toHaveBeenCalled()
     expect(mockAppUpdateOne).not.toHaveBeenCalled()
   })
+
+  it('does not read, pin, or create when account deletion owns the write fence', async () => {
+    reset()
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toBeNull()
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockAppCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
 })
 
 describe('claimAtsRun (atomic single-enqueue claim, Codex #521)', () => {
@@ -328,6 +389,32 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
     reset()
     mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
     expect((await transitionStatus('u1', 'j1', 'applied', undefined, NOW)).ok).toBe(false)
+  })
+
+  it('emits transition telemetry through the fenced user-event helper', async () => {
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'apply_clicked' })
+
+    expect(await transitionStatus('u1', 'j1', 'applied', { channel: 'web' }, NOW)).toEqual({
+      ok: true,
+      status: 'applied',
+      from: 'apply_clicked',
+    })
+    expect(mockRecordJobsUserEvent).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'jobs.apply_confirmed',
+      userId: 'u1',
+      jobPostingId: 'j1',
+      props: expect.objectContaining({ from: 'apply_clicked', channel: 'web' }),
+    }))
+  })
+
+  it('does not update or emit when account deletion wins the transition fence', async () => {
+    reset()
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    expect(await transitionStatus('u1', 'j1', 'applied', { channel: 'web' }, NOW)).toEqual({ ok: false })
+    expect(mockAppFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 })
 
@@ -498,6 +585,20 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
   })
 
+  it('returns not-found when deletion wins between a broken-link race and its retry', async () => {
+    reset()
+    mockAppFindOne.mockReturnValueOnce(appQuery({
+      _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID], brokenLinkReports: [],
+    }))
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
+    mockWithActiveJobsAccountWrite
+      .mockImplementationOnce(async (_userId: string, work: (session: unknown) => Promise<unknown>) => work({ id: 'first' }))
+      .mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    await expect(reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).resolves.toEqual({ ok: false })
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
+
   it('bounds report history while retaining every report for a current provenance option', async () => {
     const provenance = Array.from({ length: 8 }, (_, index) => ({
       sourceId: `source-${index}`,
@@ -602,7 +703,7 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     }))
 
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
-    expect(mockUserExists).not.toHaveBeenCalled()
+    expect(mockIsJobsAccountActive).not.toHaveBeenCalled()
     expect(mockPostingFindById).not.toHaveBeenCalled()
     expect(mockAppUpdateOne).not.toHaveBeenCalled()
   })
@@ -649,7 +750,8 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     })
     expect(mockSessionUpdateOne).toHaveBeenCalledWith(
       { _id: 's1', userId: 'u1', 'attribution.source': 'jobs', 'attribution.jobId': PRACTICE_JOB_ID },
-      { $set: { 'attribution.applicationId': 'app9' } }
+      { $set: { 'attribution.applicationId': 'app9' } },
+      expect.objectContaining({ session: expect.anything() }),
     )
   })
 
@@ -696,7 +798,12 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
         closedReason: { $exists: false },
         jdCompressed: PRACTICE_JD_COMPRESSED,
       },
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } }
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      expect.objectContaining({ session: expect.anything(), timestamps: false }),
     )
     expect(mockInngestSend).toHaveBeenCalledWith({
       id: 'jobs-evidence-s1',
@@ -861,7 +968,12 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
         closedReason: 'aged-out',
         jdCompressed: PRACTICE_JD_COMPRESSED,
       },
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } }
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      expect.objectContaining({ session: expect.anything(), timestamps: false }),
     )
     expect(mockInngestSend).toHaveBeenCalledOnce()
   })
@@ -896,7 +1008,8 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
         jobPostingId: PRACTICE_JOB_ID,
         verifiedPracticeSessionIds: 's1',
       },
-      { $pull: { practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' } }
+      { $pull: { practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' } },
+      expect.objectContaining({ session: expect.anything() }),
     )
     expect(mockAppDeleteOne).not.toHaveBeenCalled()
     expect(mockInngestSend).not.toHaveBeenCalled()
@@ -925,7 +1038,7 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     })
 
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
-    expect(mockUserExists).not.toHaveBeenCalled()
+    expect(mockIsJobsAccountActive).not.toHaveBeenCalled()
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     expect(mockAppUpdateOne).not.toHaveBeenCalled()
   })
@@ -977,16 +1090,15 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     expect(validationError).toBeUndefined()
   })
 
-  it('removes a late application write when full-account deletion removes the user', async () => {
+  it('does not pin, materialize, or enqueue when account deletion wins the write fence', async () => {
     reset()
     sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID } })
-    mockUserExists
-      .mockResolvedValueOnce({ _id: 'u1' })
-      .mockResolvedValueOnce(null)
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
 
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
-    expect(mockAppDeleteOne).toHaveBeenCalledWith({ userId: 'u1', jobPostingId: PRACTICE_JOB_ID })
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppDeleteOne).not.toHaveBeenCalled()
     expect(mockInngestSend).not.toHaveBeenCalled()
   })
 
@@ -997,13 +1109,25 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     })
     mockSessionFindOne
       .mockReturnValueOnce(sessionQuery(firstRead))
+      .mockReturnValueOnce(sessionQuery({ _id: 's1' }))
       .mockReturnValueOnce(sessionQuery(null))
     mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1',
+      jobPostingId: PRACTICE_JOB_ID,
+      verifiedPracticeSessionIds: ['s1'],
+    }))
 
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
     expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
-      { userId: 'u1', jobPostingId: PRACTICE_JOB_ID },
-      { $pull: { practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' } }
+      {
+        _id: 'app1',
+        userId: 'u1',
+        jobPostingId: PRACTICE_JOB_ID,
+        verifiedPracticeSessionIds: 's1',
+      },
+      { $pull: { practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' } },
+      expect.objectContaining({ session: expect.anything() }),
     )
     expect(mockInngestSend).not.toHaveBeenCalled()
   })
@@ -1106,8 +1230,12 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     expect(created.tailoredVersion.tailoredText).toBe('TAILORED')
     expect(mockPostingUpdateOne).toHaveBeenCalledWith(
       expect.objectContaining({ _id: 'j1', status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }),
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-      expect.objectContaining({ session: expect.anything() }),
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      expect.objectContaining({ session: expect.anything(), timestamps: false }),
     )
     expect(mockAppCreate.mock.calls[0][1]).toMatchObject({ session: expect.anything() })
   })
@@ -1196,8 +1324,12 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
         closedReason: { $exists: false },
         jdCompressed: TAILOR_JD_COMPRESSED,
       },
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-      { session: transactionSession },
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      { session: transactionSession, timestamps: false },
     )
     expect(mockAppUpdateOne.mock.calls[0][2]).toMatchObject({
       session: transactionSession,
@@ -1216,5 +1348,17 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     await expect(saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).rejects.toThrow('validation failed')
     expect(mockPostingUpdateOne).toHaveBeenCalledOnce()
     expect(mockEndSession).toHaveBeenCalledOnce()
+  })
+
+  it('does not inspect, pin, or persist a tailored artifact for a deleting account', async () => {
+    reset()
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: false, reason: 'not-found' })
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppCreate).not.toHaveBeenCalled()
   })
 })

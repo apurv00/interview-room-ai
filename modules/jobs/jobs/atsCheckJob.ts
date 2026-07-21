@@ -8,6 +8,11 @@ import { getResume } from '@resume'
 import { xrayHashOf, legacyXrayHashOf } from '../services/xrayService'
 import { jobPostingStateOf } from '../services/postingAccess'
 import { preparePracticeHandoffPosting } from '../services/practiceHandoff'
+import {
+  isJobsAccountActive,
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 
 /**
  * Save-gated per-job ATS check (Wave 3.3, founder decision Q3). The ~35s
@@ -68,6 +73,7 @@ export async function runAtsCheckHandler(
   const claimedAt = event.data.claimedAt ? new Date(event.data.claimedAt) : null
 
   const outcome = await step.run('check', async () => {
+    if (!(await isJobsAccountActive(userId))) return { skipped: 'account-inactive' as const }
     const app = await JobApplication.findOne({ userId, jobPostingId })
     // Save-gated server-side too: no tracker row = nothing to attach to.
     if (!app) return { skipped: 'no-application' as const }
@@ -154,11 +160,12 @@ export async function runAtsCheckHandler(
           // adapter attempt, including fallback; checkATS reuses it for its
           // explicit larger-budget retry too.
           beforeProviderCall: async () => {
-            const [postingStillAuthoritative, claimStillOwned] = await Promise.all([
+            const [postingStillAuthoritative, claimStillOwned, accountStillActive] = await Promise.all([
               JobPosting.exists(exactPostingAuthority),
               JobApplication.exists(claimFilter),
+              isJobsAccountActive(userId),
             ])
-            return !!postingStillAuthoritative && !!claimStillOwned
+            return !!postingStillAuthoritative && !!claimStillOwned && accountStillActive
           },
         },
       )
@@ -190,21 +197,59 @@ export async function runAtsCheckHandler(
       // the run that still owns the claim. A superseded run (its claim
       // reclaimed while it executed past the stale window) matches nothing —
       // it must not overwrite the newer run's result (Codex on #521 round-5).
-      const write = await JobApplication.updateOne(
-        claimFilter,
-        {
-          $set: { atsResult: { score, missingKeywords: missing, jdHash, resumeHash, checkedAt: new Date() } },
-          $unset: { atsRequestedAt: 1 },
+      let write
+      try {
+        write = await withActiveJobsAccountWrite(userId, async (dbSession) => {
+          // Touch the exact posting in the same transaction as the artifact.
+          // Source revoke updates this document, so either the ATS result
+          // commits first and revoke follows, or the transaction retries and
+          // this stale lifecycle/JD predicate misses.
+          const postingFence = await JobPosting.updateOne(
+            exactPostingAuthority,
+            { $inc: { derivedAuthorityRevision: 1 } },
+            { session: dbSession, timestamps: false },
+          )
+          if ((postingFence.matchedCount ?? 0) !== 1) return null
+          return JobApplication.updateOne(
+            claimFilter,
+            {
+              $set: { atsResult: { score, missingKeywords: missing, jdHash, resumeHash, checkedAt: new Date() } },
+              $unset: { atsRequestedAt: 1 },
+            },
+            { session: dbSession },
+          )
+        })
+      } catch (error) {
+        if (error instanceof JobsAccountInactiveError) {
+          return { skipped: 'account-inactive' as const }
         }
-      )
+        throw error
+      }
+      if (!write) {
+        await clearOwnClaim()
+        return { skipped: 'posting-unavailable' as const }
+      }
       if ((write?.matchedCount ?? 1) === 0) {
         return { skipped: 'superseded' as const } // no result, no quota record, no event
       }
       try {
-        await UsageRecord.create({ userId, type: 'ats_check' })
-        await ProductEvent.create({ name: 'jobs.ats_score_landed', userId, jobPostingId, props: { score }, ts: new Date() })
-      } catch (err) {
-        logger.warn({ err }, 'ats-check bookkeeping write failed') // never fails the result
+        await withActiveJobsAccountWrite(userId, async (dbSession) => {
+          await UsageRecord.create([{ userId, type: 'ats_check' }], { session: dbSession })
+          await ProductEvent.create([{
+            name: 'jobs.ats_score_landed',
+            userId,
+            jobPostingId,
+            props: { score },
+            ts: new Date(),
+          }], { session: dbSession })
+        })
+      } catch (error) {
+        if (error instanceof JobsAccountInactiveError) {
+          return { skipped: 'account-inactive' as const }
+        }
+        // Preserve the pre-A04 contract: an analytics/quota outage never
+        // discards a successfully persisted ATS result or triggers rebilling.
+        logger.warn({ err: error }, 'ats-check bookkeeping write failed')
       }
       return { done: true as const, score, cached: false }
     } catch (err) {

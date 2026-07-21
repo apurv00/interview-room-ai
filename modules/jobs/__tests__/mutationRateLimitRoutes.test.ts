@@ -7,6 +7,7 @@ const {
   mockDismissConfirmCard,
   mockGetBaseResume,
   mockGetServerSession,
+  mockIsJobsAccountActive,
   mockRequestJson,
   mockSaveBaseResume,
   mockSaveNotes,
@@ -19,6 +20,7 @@ const {
   mockDismissConfirmCard: vi.fn(),
   mockGetBaseResume: vi.fn(),
   mockGetServerSession: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
   mockRequestJson: vi.fn(),
   mockSaveBaseResume: vi.fn(),
   mockSaveNotes: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
+vi.mock('@shared/services/jobsAccountFence', () => ({ isJobsAccountActive: mockIsJobsAccountActive }))
 vi.mock('@jobs', () => ({
   dateForChoice: mockDateForChoice,
   dismissConfirmCard: mockDismissConfirmCard,
@@ -54,6 +57,7 @@ const request = { json: mockRequestJson } as unknown as Request
 beforeEach(() => {
   vi.clearAllMocks()
   mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+  mockIsJobsAccountActive.mockResolvedValue(true)
   mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
     status: 429,
     headers: { 'Retry-After': '60' },

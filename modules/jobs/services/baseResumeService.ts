@@ -1,4 +1,5 @@
 import { listResumes, getResume, saveResume, ResumeSchema } from '@resume'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 /**
  * Base-resume auto-save + import door (PRODUCT_FLOW §1 Stage 2, Wave 3.2b).
@@ -24,6 +25,7 @@ export async function saveBaseResume(
   targetRole: string,
   fullText?: string
 ): Promise<BaseSaveResult> {
+  if (!(await isJobsAccountActive(userId))) return { saved: false, reason: 'error' }
   const name = `${BASE_PREFIX}${targetRole || 'General'}`.slice(0, 120)
   const listing = await listResumes(userId)
   const rows = (listing?.resumes ?? []) as unknown as Array<{ id: string; name: string; targetRole?: string; updatedAt?: string }>
@@ -34,6 +36,7 @@ export async function saveBaseResume(
   // no jobs-side truncation below that).
   const candidate = ResumeSchema.safeParse({ ...structured, id: existing?.id, name, targetRole, fullText })
   if (!candidate.success) return { saved: false, reason: 'invalid' }
+  if (!(await isJobsAccountActive(userId))) return { saved: false, reason: 'error' }
   const result = await saveResume(userId, candidate.data as never, { preserveFullText: true })
   if ('error' in result && result.error) {
     return { saved: false, reason: result.code === 'RESUME_LIMIT' ? 'cap' : 'error' }

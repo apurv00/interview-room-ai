@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
-import { deleteUserAccount } from '@shared/services/accountDeletion'
+import {
+  AccountDeletionForbiddenError,
+  AccountDeletionNotFoundError,
+  deleteUserAccount,
+} from '@shared/services/accountDeletion'
 import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
@@ -13,33 +17,32 @@ export const dynamic = 'force-dynamic'
  * piece of personal data associated with them. This is the backing
  * implementation for the deletion promise in /privacy and /terms.
  *
- * The client is expected to call NextAuth's `signOut()` immediately
- * after this returns 200; the server-side cascade also drops the
- * NextAuth session collection so the cookie will fail to validate
- * on the next request anyway, but a client-side signOut gives the
- * user immediate UI feedback.
+ * The client calls `signOut()` after success for immediate UI cleanup.
+ * NextAuth uses stateless JWT sessions, so adapter-session deletion alone
+ * does not revoke an already-issued cookie; the durable account write fence
+ * is the server-side authority after deletion begins.
  */
 export async function DELETE() {
   const session = await getServerSession(authOptions)
-  if (!session?.user?.id || !session.user.email) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Platform admins must not be able to delete themselves via this
-  // endpoint — they need a separate flow that hands off ownership of
-  // any orgs they administer. For now we just refuse and surface a
-  // clear error.
-  if (session.user.role === 'platform_admin') {
-    return NextResponse.json(
-      { error: 'Platform admins cannot self-delete via this endpoint. Contact support.' },
-      { status: 403 }
-    )
-  }
-
   try {
-    const result = await deleteUserAccount(session.user.id, session.user.email)
+    // The service loads current email/role from Mongo while claiming the
+    // deletion lifecycle. JWT snapshots are not privacy authority.
+    const result = await deleteUserAccount(session.user.id)
     return NextResponse.json({ ok: true, ...result })
   } catch (err) {
+    if (err instanceof AccountDeletionForbiddenError) {
+      return NextResponse.json(
+        { error: 'Platform admins cannot self-delete via this endpoint. Contact support.' },
+        { status: 403 },
+      )
+    }
+    if (err instanceof AccountDeletionNotFoundError) {
+      return NextResponse.json({ error: 'Account no longer exists.' }, { status: 401 })
+    }
     logger.error({ err, userId: session.user.id }, 'Account deletion failed')
     return NextResponse.json(
       { error: 'Failed to delete account. Please try again or contact support.' },

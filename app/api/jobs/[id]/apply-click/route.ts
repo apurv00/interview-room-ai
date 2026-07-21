@@ -3,10 +3,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
-import { ProductEvent } from '@shared/db/models'
 import { parseApplyOptionMutation, recordApplyClick } from '@jobs'
 import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,7 +43,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!result) return NextResponse.json({ error: 'not found' }, { status: 404 })
   const { canonicalOption, ...publicResult } = result
   try {
-    await ProductEvent.create({
+    await recordJobsUserEvent({
       name: 'jobs.apply_click',
       userId,
       jobPostingId: params.id,

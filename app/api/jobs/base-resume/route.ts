@@ -5,6 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import { saveBaseResume, getBaseResume } from '@jobs'
 import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,7 +23,19 @@ export async function GET() {
   const userId = (session?.user as { id?: string } | undefined)?.id
   if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
   await connectDB()
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   const base = await getBaseResume(userId)
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   return NextResponse.json({ base })
 }
 
@@ -42,6 +55,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'resume required' }, { status: 400 })
   }
   await connectDB()
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   try {
     const result = await saveBaseResume(
       userId,

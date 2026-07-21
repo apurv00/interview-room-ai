@@ -91,6 +91,9 @@ export async function POST(req: Request) {
     if ('error' in result && result.code === 'NOT_FOUND') {
       return NextResponse.json({ error: result.error, code: result.code }, { status: 404 })
     }
+    if ('error' in result && result.code === 'ACCOUNT_UNAVAILABLE') {
+      return NextResponse.json({ error: result.error, code: result.code }, { status: 401 })
+    }
     // `clamped` tells the client a field was shortened to fit its cap so it can
     // warn the user instead of showing "Saved!" over a silent truncation (the
     // editor still holds the un-clamped text until reload).

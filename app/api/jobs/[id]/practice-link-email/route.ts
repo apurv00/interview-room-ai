@@ -3,10 +3,12 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
-import { JobApplication, JobPosting, JobsEmailConfig, ProductEvent, User } from '@shared/db/models'
+import { JobApplication, JobPosting, JobsEmailConfig, User } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
 import { isSuppressed, jobPostingStateOf, preparePracticeHandoffPosting } from '@jobs'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,6 +30,9 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   }
 
   await connectDB()
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json({ error: 'account unavailable' }, { status: 401 })
+  }
   const [cfg, application, posting, user] = await Promise.all([
     JobsEmailConfig.getConfig(),
     JobApplication.exists({ userId, jobPostingId: params.id }),
@@ -51,13 +56,18 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ ok: false, reason: 'email-off' }, { status: 200 })
   }
 
+  // CMS preparation above is asynchronous. Close that window before the
+  // external enqueue; the E0 worker performs the same account check again.
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json({ error: 'account unavailable' }, { status: 401 })
+  }
   const requestedAt = new Date()
   await inngest.send({
     name: 'jobs/email.requested',
     data: { userId, jobPostingId: params.id, requestedAt: requestedAt.toISOString() },
   })
   try {
-    await ProductEvent.create({ name: 'jobs.prep_deferred_email', userId, jobPostingId: params.id, props: {}, ts: requestedAt })
+    await recordJobsUserEvent({ name: 'jobs.prep_deferred_email', userId, jobPostingId: params.id, props: {}, ts: requestedAt })
   } catch { /* telemetry never breaks the flow */ }
   return NextResponse.json({ ok: true })
 }

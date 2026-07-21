@@ -3,17 +3,17 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose, { type ClientSession } from 'mongoose'
-import { JobApplication, JobPosting, ProductEvent } from '@shared/db/models'
+import { JobApplication, JobPosting } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 import { jobPostingStateOf } from '@jobs/services/postingAccess'
+import {
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
 
 export const dynamic = 'force-dynamic'
-
-const SAVE_TRANSACTION_OPTIONS = {
-  readConcern: { level: 'snapshot' as const },
-  writeConcern: { w: 'majority' as const },
-}
 
 interface SavePostingSnapshot {
   title?: string
@@ -52,21 +52,10 @@ function exactSavePostingAuthorityFilter(
 }
 
 async function runSaveTransaction<T>(
+  userId: string,
   work: (session: ClientSession) => Promise<T>,
 ): Promise<T> {
-  const session = await JobApplication.db.startSession()
-  let result: T | undefined
-  let completed = false
-  try {
-    await session.withTransaction(async () => {
-      result = await work(session)
-      completed = true
-    }, SAVE_TRANSACTION_OPTIONS)
-  } finally {
-    await session.endSession()
-  }
-  if (!completed) throw new Error('save transaction completed without a result')
-  return result as T
+  return withActiveJobsAccountWrite(userId, work)
 }
 
 async function savePostingAttempt(
@@ -74,7 +63,7 @@ async function savePostingAttempt(
   jobPostingId: string,
   now: Date,
 ): Promise<SaveTransactionResult> {
-  return runSaveTransaction(async (session) => {
+  return runSaveTransaction(userId, async (session) => {
     const posting = await JobPosting.findById(jobPostingId, undefined, { session })
       .select('title company locations provenance status closedReason')
       .lean()
@@ -91,8 +80,12 @@ async function savePostingAttempt(
 
     const pin = await JobPosting.updateOne(
       exactSavePostingAuthorityFilter(jobPostingId, posting),
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-      { session },
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      { session, timestamps: false },
     )
     if ((pin?.matchedCount ?? 0) !== 1) {
       // Re-read once outside this aborted snapshot. A benign provenance
@@ -129,10 +122,12 @@ async function savePosting(
   try {
     return await savePostingAttempt(userId, jobPostingId, now)
   } catch (error) {
+    if (error instanceof JobsAccountInactiveError) return { ok: false }
     if (!isDuplicateKeyError(error) && !(error instanceof SaveAuthorityRaceError)) throw error
     try {
       return await savePostingAttempt(userId, jobPostingId, now)
     } catch (retryError) {
+      if (retryError instanceof JobsAccountInactiveError) return { ok: false }
       if (retryError instanceof SaveAuthorityRaceError) return { ok: false }
       throw retryError
     }
@@ -165,7 +160,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   // idempotent existing row or duplicate-key loser never double-counts it.
   if (!result.alreadySaved) {
     try {
-      await ProductEvent.create({ name: 'jobs.job_saved', userId, jobPostingId: params.id, props: {}, ts: result.insertedAt ?? now })
+      await recordJobsUserEvent({ name: 'jobs.job_saved', userId, jobPostingId: params.id, props: {}, ts: result.insertedAt ?? now })
     } catch (err) {
       logger.warn({ err }, 'jobs.job_saved telemetry write failed') // telemetry never breaks the flow
     }

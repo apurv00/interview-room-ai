@@ -1,13 +1,22 @@
 import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
-const { mockFindById, mockPostingExists, mockUpdateOne, mockParse, mockGetActiveCatalog, mockAppExists } = vi.hoisted(() => ({
+const {
+  mockFindById,
+  mockPostingExists,
+  mockUpdateOne,
+  mockParse,
+  mockGetActiveCatalog,
+  mockAppExists,
+  mockIsJobsAccountActive,
+} = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockPostingExists: vi.fn(),
   mockUpdateOne: vi.fn(),
   mockParse: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
   mockAppExists: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockFindById, exists: mockPostingExists, updateOne: mockUpdateOne },
@@ -17,10 +26,14 @@ vi.mock('@interview', () => ({ parseJobDescription: mockParse }))
 vi.mock('@interview/services/persona/domainCatalogService', () => ({
   getActiveInterviewDomainCatalog: mockGetActiveCatalog,
 }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
+}))
 
 import { getOrParseXray, xrayHashOf } from '../services/xrayService'
 
 const JD = 'Build and operate distributed payment services at scale. Must have Node.js.'
+const USER_ID = '507f1f77bcf86cd799439010'
 const EXTRACTED = { company: 'PhonePe', role: 'Backend Engineer', inferredDomain: 'backend', requirements: [{ id: 'req_1', category: 'technical', requirement: 'Node.js', importance: 'must-have', targetCompetencies: [] }], keyThemes: ['payments'] }
 const PARSED = { rawText: JD, ...EXTRACTED } // what the parser returns; rawText must never persist
 const ACTIVE_CATALOG = {
@@ -37,12 +50,21 @@ function chain(doc: unknown) {
 }
 
 function reset() {
-  for (const m of [mockFindById, mockPostingExists, mockUpdateOne, mockParse, mockGetActiveCatalog, mockAppExists]) m.mockReset()
+  for (const m of [
+    mockFindById,
+    mockPostingExists,
+    mockUpdateOne,
+    mockParse,
+    mockGetActiveCatalog,
+    mockAppExists,
+    mockIsJobsAccountActive,
+  ]) m.mockReset()
   mockPostingExists.mockResolvedValue({ _id: 'j1' })
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
   mockParse.mockResolvedValue(PARSED)
   mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
   mockAppExists.mockResolvedValue(null)
+  mockIsJobsAccountActive.mockResolvedValue(true)
 }
 
 describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
@@ -110,6 +132,100 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     expect(await getOrParseXray('j1')).toBeNull()
     expect(mockParse).toHaveBeenCalledOnce()
     expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('checks account authority at the provider preflight and never sends JD text for an inactive user', async () => {
+    reset()
+    const compressed = gzipSync(Buffer.from(JD))
+    chain({ _id: 'j1', status: 'open', jdCompressed: compressed })
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    expect(await getOrParseXray('j1', USER_ID)).toBeNull()
+
+    expect(mockPostingExists).toHaveBeenCalledWith({
+      _id: 'j1',
+      status: 'open',
+      jdCompressed: compressed,
+    })
+    expect(mockIsJobsAccountActive).toHaveBeenCalledWith(USER_ID)
+    expect(mockParse).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('rechecks the account inside the parser provider callback and preserves user authority on retry', async () => {
+    reset()
+    chain({ _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false)
+    mockParse.mockImplementation(async (
+      _rawText: string,
+      _catalog: unknown,
+      authorizeProvider: () => Promise<boolean>,
+    ) => {
+      if (!(await authorizeProvider())) {
+        throw Object.assign(new Error('model provider precondition failed'), {
+          name: 'ModelProviderPreconditionError',
+        })
+      }
+      return PARSED
+    })
+
+    expect(await getOrParseXray('j1', USER_ID)).toBeNull()
+
+    expect(mockParse).toHaveBeenCalledOnce()
+    expect(mockIsJobsAccountActive.mock.calls.every(([userId]) => userId === USER_ID)).toBe(true)
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('does not persist parser output when the account becomes inactive before the provider returns', async () => {
+    reset()
+    chain({ _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    expect(await getOrParseXray('j1', USER_ID)).toBeNull()
+
+    expect(mockParse).toHaveBeenCalledOnce()
+    expect(mockIsJobsAccountActive).toHaveBeenNthCalledWith(1, USER_ID)
+    expect(mockIsJobsAccountActive).toHaveBeenNthCalledWith(2, USER_ID)
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('preserves userId through a JD-version retry so deletion can stop the recursive parse', async () => {
+    reset()
+    const changedJd = `${JD} Current version requires Kotlin.`
+    const initialCompressed = gzipSync(Buffer.from(JD))
+    const changedCompressed = gzipSync(Buffer.from(changedJd))
+    mockFindById
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1', status: 'open', jdCompressed: initialCompressed,
+        }) }),
+      })
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1', status: 'open', jdCompressed: changedCompressed,
+        }) }),
+      })
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1', status: 'open', jdCompressed: changedCompressed,
+        }) }),
+      })
+    mockUpdateOne.mockResolvedValueOnce({ modifiedCount: 0 })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    expect(await getOrParseXray('j1', USER_ID)).toBeNull()
+
+    expect(mockParse).toHaveBeenCalledOnce()
+    expect(mockUpdateOne).toHaveBeenCalledOnce()
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(3)
+    expect(mockIsJobsAccountActive.mock.calls.every(([userId]) => userId === USER_ID)).toBe(true)
   })
 
   it('does not swallow an ordinary unexpected parser exception', async () => {

@@ -197,6 +197,13 @@ export interface IUser extends Document {
   monthlyInterviewLimit: number
   usageResetAt?: Date
 
+  /** A deletion request flips this before any personal-data sweep. Missing
+   *  means active for legacy and raw MongoDBAdapter-created rows. */
+  accountState?: 'active' | 'deleting'
+  accountDeletionRequestedAt?: Date
+  /** Shared Mongo write-conflict seam for user-owned Jobs data. */
+  jobsWriteRevision?: number
+
   createdAt: Date
   updatedAt: Date
 }
@@ -391,6 +398,10 @@ const UserSchema = new Schema<IUser>(
     monthlyInterviewsUsed: { type: Number, default: 0 },
     monthlyInterviewLimit: { type: Number, default: 999999 },
     usageResetAt: { type: Date },
+
+    accountState: { type: String, enum: ['active', 'deleting'], default: 'active' },
+    accountDeletionRequestedAt: { type: Date },
+    jobsWriteRevision: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 )

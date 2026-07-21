@@ -129,4 +129,19 @@ describe('POST /api/resume/save session provenance', () => {
       { preserveFullText: false },
     )
   })
+
+  it('does not report success when account deletion fences the embedded resume write', async () => {
+    mocks.saveResume.mockResolvedValueOnce({
+      error: 'Your account is unavailable. Sign in again before saving.',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+
+    const response = await POST(request(validBody))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'Your account is unavailable. Sign in again before saving.',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+  })
 })

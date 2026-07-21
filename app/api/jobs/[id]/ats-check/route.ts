@@ -13,6 +13,7 @@ import {
   jobPostingStateOf,
   preparePracticeHandoffPosting,
 } from '@jobs'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,6 +34,12 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
   await connectDB()
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
 
   const [app, posting] = await Promise.all([
     JobApplication.findOne({ userId, jobPostingId: params.id }).select('atsResult atsRequestedAt').lean(),
@@ -55,7 +62,15 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   // loser reports pending. Claim failure on a >3min-stale marker retries
   // via the same conditional.
   const { claimed, claimedAt } = await claimAtsRun(userId, params.id)
-  if (!claimed) return NextResponse.json({ status: 'pending' })
+  if (!claimed) {
+    if (!(await isJobsAccountActive(userId))) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    return NextResponse.json({ status: 'pending' })
+  }
   try {
     await inngest.send({ name: 'jobs/ats.requested', data: { userId, jobPostingId: params.id, claimedAt: claimedAt.toISOString() } })
   } catch (err) {

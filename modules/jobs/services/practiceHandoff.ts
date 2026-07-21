@@ -11,6 +11,7 @@ import { getActiveInterviewDomainCatalog } from '@interview/services/persona/dom
 import { interviewSlugForDomain } from '../config/domains'
 import { xrayHashOf } from './xrayService'
 import { jobPostingStateOf } from './postingAccess'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 const TOKEN_TYPE = 'jobs-practice'
 const TOKEN_VERSION = 1
@@ -257,6 +258,7 @@ export async function resolvePracticeHandoff(
   if (!payload) return null
 
   await connectDB()
+  if (!(await isJobsAccountActive(userId))) return null
   const posting = await JobPosting.findById(payload.jid)
     .select('company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
     .lean()
@@ -284,16 +286,21 @@ export async function resolvePracticeHandoff(
   }
 
   const exactPostingAuthority = exactPracticePostingAuthorityFilter(payload.jid, posting)
-  const [postingStillAuthoritative, applicationStillExists] = await Promise.all([
+  const [postingStillAuthoritative, applicationStillExists, accountStillActive] = await Promise.all([
     JobPosting.exists(exactPostingAuthority),
     application
       ? JobApplication.exists({ _id: application._id, userId, jobPostingId: payload.jid })
       : Promise.resolve(true),
+    isJobsAccountActive(userId),
   ])
   // Preparation awaits CMS authority and archived ownership is itself an
   // entitlement. Neither a stale token nor an earlier read may outlive a
   // committed source restriction/ownership deletion.
-  if (!postingStillAuthoritative || (postingState === 'archived' && !applicationStillExists)) return null
+  if (
+    !accountStillActive ||
+    !postingStillAuthoritative ||
+    (postingState === 'archived' && !applicationStillExists)
+  ) return null
   if (!applicationStillExists) application = null
 
   return {

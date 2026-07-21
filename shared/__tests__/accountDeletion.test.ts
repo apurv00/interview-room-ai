@@ -15,16 +15,41 @@ vi.mock('@shared/storage/r2', () => ({
   deleteFromR2: (...args: unknown[]) => mockDeleteFromR2(...args),
 }))
 
+const mockTombstoneAccountUsageBuffers = vi.fn()
+vi.mock('@shared/services/usageBuffer', () => ({
+  tombstoneAccountUsageBuffers: (...args: unknown[]) =>
+    mockTombstoneAccountUsageBuffers(...args),
+}))
+
 const mockSessionFindById = vi.fn()
 const mockSessionDeleteOne = vi.fn()
 const mockSessionFind = vi.fn()
 const mockSessionDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
+const mockUserFindOneAndUpdate = vi.fn()
+const mockUserFindById = vi.fn()
+const mockUserExists = vi.fn()
 const mockUserDeleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 })
 const mockServedProblemUpdateOne = vi.fn().mockResolvedValue({ acknowledged: true })
 const mockEvidenceDistinct = vi.fn()
 const mockEvidenceDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockJobAppUpdateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 })
 const mockJobAppDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
+const mockUsageDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
+const mockProductEventDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
+const mockJobsEmailSendDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
+const mockWaitlistDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
+const mockRawCollectionDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
+const mockRawCollection = vi.fn((name: string) => ({
+  deleteMany: (filter: unknown) => mockRawCollectionDeleteMany(name, filter),
+}))
+
+function selectLean(value: unknown) {
+  return {
+    select: vi.fn().mockReturnValue({
+      lean: vi.fn().mockImplementation(() => Promise.resolve(value)),
+    }),
+  }
+}
 vi.mock('@shared/db/models/InterviewSession', () => ({
   InterviewSession: {
     findById: (...args: unknown[]) => mockSessionFindById(...args),
@@ -39,13 +64,23 @@ vi.mock('@shared/db/models/MultimodalAnalysis', () => ({
 }))
 
 vi.mock('@shared/db/models/User', () => ({
-  User: { deleteOne: (...args: unknown[]) => mockUserDeleteOne(...args) },
+  User: {
+    findOneAndUpdate: (...args: unknown[]) => mockUserFindOneAndUpdate(...args),
+    findById: (...args: unknown[]) => mockUserFindById(...args),
+    exists: (...args: unknown[]) => mockUserExists(...args),
+    deleteOne: (...args: unknown[]) => mockUserDeleteOne(...args),
+  },
 }))
 
 // SessionSummary lives in the barrel — mock just the model
 vi.mock('@shared/db/models', () => {
   const actual = {
-    User: { findById: vi.fn(), deleteOne: (...args: unknown[]) => mockUserDeleteOne(...args) },
+    User: {
+      findOneAndUpdate: (...args: unknown[]) => mockUserFindOneAndUpdate(...args),
+      findById: (...args: unknown[]) => mockUserFindById(...args),
+      exists: (...args: unknown[]) => mockUserExists(...args),
+      deleteOne: (...args: unknown[]) => mockUserDeleteOne(...args),
+    },
     InterviewSession: {
       findById: (...args: unknown[]) => mockSessionFindById(...args),
       find: (...args: unknown[]) => mockSessionFind(...args),
@@ -56,8 +91,8 @@ vi.mock('@shared/db/models', () => {
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
       deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
     },
-    UsageRecord: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
-    WaitlistEntry: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    UsageRecord: { deleteMany: (...args: unknown[]) => mockUsageDeleteMany(...args) },
+    WaitlistEntry: { deleteMany: (...args: unknown[]) => mockWaitlistDeleteMany(...args) },
     WeaknessCluster: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     UserBadge: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
     PathwayPlan: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
@@ -67,8 +102,8 @@ vi.mock('@shared/db/models', () => {
       deleteMany: (...args: unknown[]) => mockJobAppDeleteMany(...args),
       updateMany: (...args: unknown[]) => mockJobAppUpdateMany(...args),
     },
-    ProductEvent: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
-    JobsEmailSend: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+    ProductEvent: { deleteMany: (...args: unknown[]) => mockProductEventDeleteMany(...args) },
+    JobsEmailSend: { deleteMany: (...args: unknown[]) => mockJobsEmailSendDeleteMany(...args) },
     JobPracticeEvidence: {
       deleteMany: (...args: unknown[]) => mockEvidenceDeleteMany(...args),
       distinct: (...args: unknown[]) => mockEvidenceDistinct(...args),
@@ -90,17 +125,24 @@ vi.mock('@shared/db/models', () => {
   return actual
 })
 
-vi.mock('@shared/db/mongoClient', () => ({
-  default: Promise.resolve({
+vi.mock('@shared/db/mongoClient', () => {
+  const client = {
     db: () => ({
-      collection: () => ({
-        deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }),
-      }),
+      collection: (name: string) => mockRawCollection(name),
     }),
-  }),
-}))
+  }
+  return {
+    default: Promise.resolve(client),
+    getClientPromise: vi.fn().mockResolvedValue(client),
+  }
+})
 
-import { deleteInterviewSession, deleteUserAccount } from '@shared/services/accountDeletion'
+import {
+  AccountDeletionForbiddenError,
+  AccountDeletionIncompleteError,
+  deleteInterviewSession,
+  deleteUserAccount,
+} from '@shared/services/accountDeletion'
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -153,6 +195,19 @@ describe('accountDeletion – R2 key coverage', () => {
     expect(mockDeleteFromR2).toHaveBeenCalledTimes(1)
     expect(mockDeleteFromR2).toHaveBeenCalledWith('video.webm')
     expect(result.r2KeysDeleted).toBe(1)
+  })
+
+  it('does not install an account-wide usage tombstone for a single-session deletion', async () => {
+    mockSessionFindById.mockResolvedValue({
+      _id: 'sess-one',
+      userId: { toString: () => 'user-1' },
+    })
+
+    await deleteInterviewSession('507f1f77bcf86cd799439011', 'user-1')
+
+    // A user deleting one interview remains active. An account tombstone here
+    // would reject usage writes for every other current and future session.
+    expect(mockTombstoneAccountUsageBuffers).not.toHaveBeenCalled()
   })
 
   it('redacts the served-problem body for a coding session, keeping the no-repeat row (Codex P2 on #485)', async () => {
@@ -365,10 +420,24 @@ describe('deleteUserAccount – R2 key coverage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockDeleteFromR2.mockResolvedValue(undefined)
+    mockUserFindOneAndUpdate.mockReturnValue(selectLean({
+      _id: '507f1f77bcf86cd799439011',
+      email: 'user@example.com',
+      role: 'user',
+      accountState: 'deleting',
+    }))
+    mockUserFindById.mockReturnValue(selectLean(null))
+    mockUserExists.mockResolvedValue(null)
     mockUserDeleteOne.mockResolvedValue({ deletedCount: 1 })
     mockSessionDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockJobAppDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockEvidenceDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockUsageDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockProductEventDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockJobsEmailSendDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockWaitlistDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockRawCollectionDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockTombstoneAccountUsageBuffers.mockResolvedValue(undefined)
   })
 
   it('collects audioRecordingR2Key and screenRecordingR2Key from every session and deletes them', async () => {
@@ -378,6 +447,7 @@ describe('deleteUserAccount – R2 key coverage', () => {
     mockSessionFind.mockReturnValue({
       lean: () => Promise.resolve([
         {
+          _id: 'sess-1',
           recordingR2Key: 'sess1-video.webm',
           audioRecordingR2Key: 'sess1-audio.opus',
           screenRecordingR2Key: 'sess1-screen.webm',
@@ -386,6 +456,7 @@ describe('deleteUserAccount – R2 key coverage', () => {
           jdR2Key: 'sess1-jd.txt',
         },
         {
+          _id: 'sess-2',
           recordingR2Key: 'sess2-video.webm',
           audioRecordingR2Key: 'sess2-audio.opus',
           screenRecordingR2Key: 'sess2-screen.webm',
@@ -404,6 +475,10 @@ describe('deleteUserAccount – R2 key coverage', () => {
     expect(mockDeleteFromR2).toHaveBeenCalledWith('sess2-audio.opus')
     expect(mockDeleteFromR2).toHaveBeenCalledWith('sess2-screen.webm')
     expect(mockDeleteFromR2).toHaveBeenCalledTimes(9)
+    expect(mockTombstoneAccountUsageBuffers).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439011',
+      ['sess-1', 'sess-2'],
+    )
     expect(result.r2KeysDeleted).toBe(9)
   })
 
@@ -413,6 +488,10 @@ describe('deleteUserAccount – R2 key coverage', () => {
     const result = await deleteUserAccount('507f1f77bcf86cd799439011', 'user@example.com')
 
     expect(mockDeleteFromR2).not.toHaveBeenCalled()
+    expect(mockTombstoneAccountUsageBuffers).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439011',
+      [],
+    )
     expect(result.r2KeysDeleted).toBe(0)
     expect(result.collectionsCleared['User']).toBe(1)
   })
@@ -452,7 +531,208 @@ describe('deleteUserAccount – R2 key coverage', () => {
     })
   })
 
-  it('completes session deletion and closes the user fence before the final application sweep', async () => {
+  it('orders the Redis usage fence after the lifecycle claim and before the Mongo session sweep', async () => {
+    mockSessionFind.mockReturnValue({
+      lean: () => Promise.resolve([
+        { _id: 'sess-before-delete' },
+        { _id: 'sess-legacy-buffer' },
+      ]),
+    })
+
+    await deleteUserAccount('507f1f77bcf86cd799439011', 'user@example.com')
+
+    expect(mockTombstoneAccountUsageBuffers).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439011',
+      ['sess-before-delete', 'sess-legacy-buffer'],
+    )
+    expect(mockUserFindOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTombstoneAccountUsageBuffers.mock.invocationCallOrder[0],
+    )
+    expect(mockTombstoneAccountUsageBuffers.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSessionDeleteMany.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('makes the lifecycle marker the first durable mutation', async () => {
+    let releaseMarker!: (value: unknown) => void
+    const marker = new Promise((resolve) => {
+      releaseMarker = resolve
+    })
+    mockUserFindOneAndUpdate.mockReturnValueOnce(selectLean(marker))
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+
+    const deletion = deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'stale-session@example.com',
+    )
+    await vi.waitFor(() => expect(mockUserFindOneAndUpdate).toHaveBeenCalledTimes(1))
+
+    expect(mockSessionFind).not.toHaveBeenCalled()
+    expect(mockTombstoneAccountUsageBuffers).not.toHaveBeenCalled()
+    expect(mockSessionDeleteMany).not.toHaveBeenCalled()
+    expect(mockUsageDeleteMany).not.toHaveBeenCalled()
+    expect(mockJobAppDeleteMany).not.toHaveBeenCalled()
+    expect(mockUserDeleteOne).not.toHaveBeenCalled()
+
+    releaseMarker({
+      _id: '507f1f77bcf86cd799439011',
+      email: 'current@example.com',
+      role: 'user',
+      accountState: 'deleting',
+    })
+    await deletion
+
+    expect(mockUserFindOneAndUpdate).toHaveBeenCalledWith(
+      {
+        _id: expect.anything(),
+        role: { $ne: 'platform_admin' },
+        $or: [
+          { accountState: 'active' },
+          { accountState: { $exists: false } },
+        ],
+      },
+      {
+        $set: {
+          accountState: 'deleting',
+          accountDeletionRequestedAt: expect.any(Date),
+        },
+        $inc: { jobsWriteRevision: 1 },
+      },
+      { new: true, writeConcern: { w: 'majority' } },
+    )
+    expect(mockUserFindOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTombstoneAccountUsageBuffers.mock.invocationCallOrder[0],
+    )
+    expect(mockTombstoneAccountUsageBuffers.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSessionDeleteMany.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('uses current Mongo email authority instead of the stale JWT snapshot', async () => {
+    mockUserFindOneAndUpdate.mockReturnValueOnce(selectLean({
+      _id: '507f1f77bcf86cd799439011',
+      email: 'Current.Email@Example.com ',
+      role: 'user',
+      accountState: 'deleting',
+    }))
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+
+    const result = await deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'stale-jwt@example.com',
+    )
+
+    expect(result.email).toBe('current.email@example.com')
+    expect(mockWaitlistDeleteMany).toHaveBeenCalledWith({
+      email: 'current.email@example.com',
+    })
+    expect(mockRawCollectionDeleteMany).toHaveBeenCalledWith(
+      'verification_tokens',
+      { identifier: 'current.email@example.com' },
+    )
+    expect(mockRawCollectionDeleteMany).not.toHaveBeenCalledWith(
+      'verification_tokens',
+      { identifier: 'stale-jwt@example.com' },
+    )
+  })
+
+  it('uses the current Mongo role and refuses a platform-admin deletion', async () => {
+    mockUserFindOneAndUpdate.mockReturnValueOnce(selectLean(null))
+    mockUserFindById.mockReturnValueOnce(selectLean({
+      _id: '507f1f77bcf86cd799439011',
+      email: 'admin@example.com',
+      role: 'platform_admin',
+      accountState: 'active',
+    }))
+
+    await expect(deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'ordinary-user-from-stale-jwt@example.com',
+    )).rejects.toBeInstanceOf(AccountDeletionForbiddenError)
+
+    expect(mockSessionFind).not.toHaveBeenCalled()
+    expect(mockSessionDeleteMany).not.toHaveBeenCalled()
+    expect(mockJobAppDeleteMany).not.toHaveBeenCalled()
+    expect(mockUserDeleteOne).not.toHaveBeenCalled()
+  })
+
+  it('resumes a prior deletion attempt while the durable marker is deleting', async () => {
+    mockUserFindOneAndUpdate.mockReturnValueOnce(selectLean(null))
+    mockUserFindById.mockReturnValueOnce(selectLean({
+      _id: '507f1f77bcf86cd799439011',
+      email: 'retry@example.com',
+      role: 'user',
+      accountState: 'deleting',
+    }))
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+
+    await expect(deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'stale@example.com',
+    )).resolves.toMatchObject({ email: 'retry@example.com' })
+
+    expect(mockUserFindById).toHaveBeenCalledWith(expect.anything())
+    expect(mockJobAppDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUserDeleteOne).toHaveBeenCalledWith({
+      _id: expect.anything(),
+      accountState: 'deleting',
+    })
+  })
+
+  it('keeps the deleting user fence when a mandatory Jobs sweep fails', async () => {
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockUsageDeleteMany.mockRejectedValueOnce(new Error('usage sweep unavailable'))
+
+    await expect(deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'user@example.com',
+    )).rejects.toMatchObject<AccountDeletionIncompleteError>({
+      name: 'AccountDeletionIncompleteError',
+      failedCollections: ['UsageRecord'],
+    })
+
+    expect(mockJobAppDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUserDeleteOne).not.toHaveBeenCalled()
+  })
+
+  it('keeps the deleting user fence when the mandatory Redis usage fence fails', async () => {
+    mockSessionFind.mockReturnValue({
+      lean: () => Promise.resolve([{ _id: 'sess-buffered' }]),
+    })
+    mockTombstoneAccountUsageBuffers.mockRejectedValueOnce(new Error('redis unavailable'))
+
+    await expect(deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'user@example.com',
+    )).rejects.toMatchObject<AccountDeletionIncompleteError>({
+      name: 'AccountDeletionIncompleteError',
+      failedCollections: ['UsageBuffer'],
+    })
+
+    // Mongo sweeps still make progress, while retaining the lifecycle row so
+    // a retry can re-establish the Redis tombstone safely.
+    expect(mockSessionDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockJobAppDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUserDeleteOne).not.toHaveBeenCalled()
+  })
+
+  it('keeps the deleting user fence when the interview-session sweep fails', async () => {
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockSessionDeleteMany.mockRejectedValueOnce(new Error('session sweep unavailable'))
+
+    await expect(deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'user@example.com',
+    )).rejects.toMatchObject<AccountDeletionIncompleteError>({
+      name: 'AccountDeletionIncompleteError',
+      failedCollections: ['InterviewSession'],
+    })
+
+    expect(mockJobAppDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUserDeleteOne).not.toHaveBeenCalled()
+  })
+
+  it('completes session deletion and every mandatory Jobs sweep before deleting the user fence', async () => {
     mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     let releaseSessionDelete!: (value: { deletedCount: number }) => void
     mockSessionDeleteMany.mockReturnValueOnce(new Promise((resolve) => {
@@ -471,8 +751,54 @@ describe('deleteUserAccount – R2 key coverage', () => {
     expect(mockEvidenceDeleteMany).toHaveBeenCalledTimes(1)
     expect(mockUserDeleteOne).toHaveBeenCalledTimes(1)
     expect(mockJobAppDeleteMany).toHaveBeenCalledTimes(1)
-    expect(mockUserDeleteOne.mock.invocationCallOrder[0]).toBeLessThan(
-      mockJobAppDeleteMany.mock.invocationCallOrder[0]
-    )
+    expect(mockUsageDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockProductEventDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockJobsEmailSendDeleteMany).toHaveBeenCalledTimes(1)
+    for (const mandatorySweep of [
+      mockUsageDeleteMany,
+      mockProductEventDeleteMany,
+      mockJobsEmailSendDeleteMany,
+      mockEvidenceDeleteMany,
+      mockJobAppDeleteMany,
+    ]) {
+      expect(mandatorySweep.mock.invocationCallOrder[0]).toBeLessThan(
+        mockUserDeleteOne.mock.invocationCallOrder[0],
+      )
+    }
+    expect(mockUserDeleteOne).toHaveBeenCalledWith({
+      _id: expect.anything(),
+      accountState: 'deleting',
+    })
+  })
+
+  it('fails closed when the final conditional delete misses but the lifecycle row still exists', async () => {
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockUserDeleteOne.mockResolvedValueOnce({ deletedCount: 0 })
+    mockUserExists.mockResolvedValueOnce({ _id: '507f1f77bcf86cd799439011' })
+
+    await expect(deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'user@example.com',
+    )).rejects.toMatchObject<AccountDeletionIncompleteError>({
+      name: 'AccountDeletionIncompleteError',
+      failedCollections: ['User'],
+    })
+
+    expect(mockUserExists).toHaveBeenCalledWith({ _id: expect.anything() })
+  })
+
+  it('accepts a final delete miss when a concurrent retry already removed the user', async () => {
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockUserDeleteOne.mockResolvedValueOnce({ deletedCount: 0 })
+    mockUserExists.mockResolvedValueOnce(null)
+
+    await expect(deleteUserAccount(
+      '507f1f77bcf86cd799439011',
+      'user@example.com',
+    )).resolves.toMatchObject({
+      collectionsCleared: expect.objectContaining({ User: 0 }),
+    })
+
+    expect(mockUserExists).toHaveBeenCalledWith({ _id: expect.anything() })
   })
 })

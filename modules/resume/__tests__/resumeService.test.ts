@@ -14,6 +14,9 @@ vi.mock('@shared/db/models/User', () => ({
     findById: (...args: unknown[]) => ({
       select: () => ({ lean: () => mockFindById(...args) }),
     }),
+    findOne: (...args: unknown[]) => ({
+      select: () => ({ lean: () => mockFindById(...args) }),
+    }),
     updateOne: (...args: unknown[]) => mockUpdateOne(...args),
   },
 }))
@@ -166,7 +169,11 @@ describe('resumeService', () => {
       expect(result).toEqual({ id: 'r1' })
       expect(mockUpdateOne).toHaveBeenCalledTimes(1)
       const [filter, update] = mockUpdateOne.mock.calls[0]
-      expect(filter).toEqual({ _id: 'user-1', 'savedResumes.id': 'r1' })
+      expect(filter).toEqual({
+        _id: 'user-1',
+        accountState: { $ne: 'deleting' },
+        'savedResumes.id': 'r1',
+      })
       expect(update.$set['savedResumes.$.name']).toBe('Updated')
       expect(update.$set['savedResumes.$.template']).toBe('executive')
       expect(update.$set['savedResumes.$.fullText']).toContain('Hands-on leader')
@@ -288,7 +295,7 @@ describe('resumeService', () => {
       expect((result as { id: string }).id).toBeTruthy()
       expect(mockUpdateOne).toHaveBeenCalledTimes(1)
       const [filter, update] = mockUpdateOne.mock.calls[0]
-      expect(filter).toEqual({ _id: 'user-1' })
+      expect(filter).toEqual({ _id: 'user-1', accountState: { $ne: 'deleting' } })
       expect(update.$push.savedResumes.name).toBe('Fresh')
       expect(update.$push.savedResumes.template).toBe('professional')
     })
@@ -299,6 +306,15 @@ describe('resumeService', () => {
       })
       const result = await saveResume('user-1', { name: 'Fourth' })
       expect(result).toMatchObject({ code: 'RESUME_LIMIT' })
+      expect(mockUpdateOne).not.toHaveBeenCalled()
+    })
+
+    it('returns ACCOUNT_UNAVAILABLE and never inserts when deletion has removed write authority', async () => {
+      mockFindById.mockResolvedValue(null)
+
+      const result = await saveResume('user-1', { name: 'Must not reappear' })
+
+      expect(result).toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
       expect(mockUpdateOne).not.toHaveBeenCalled()
     })
   })

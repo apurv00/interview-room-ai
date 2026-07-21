@@ -4,6 +4,7 @@ import { connectDB } from '@shared/db/connection'
 import { ProductEvent } from '@shared/db/models'
 import { ProductEventInputSchema, ANON_COOKIE, ANON_COOKIE_MAX_AGE, anonIdFromCookieHeader, mintAnonCookie, stitchAnonEventsToUser } from '@jobs'
 import { logger } from '@shared/logger'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,9 +45,8 @@ export const POST = composeApiRoute({
         // Backfill pre-signup rows to the user — idempotent, never throws.
         await stitchAnonEventsToUser(anonId, authedUserId)
       }
-      await ProductEvent.create({
+      const event = {
         name: body.name,
-        userId: authedUserId ?? undefined,
         // Authed events KEEP the anon link when the cookie is present —
         // dropping it orphans the pre-signup history (Codex #508).
         anonId: anonId ?? undefined,
@@ -55,7 +55,12 @@ export const POST = composeApiRoute({
         sessionId: body.sessionId,
         props: body.props,
         ts: new Date(),
-      })
+      }
+      if (authedUserId) {
+        await recordJobsUserEvent({ ...event, userId: authedUserId })
+      } else {
+        await ProductEvent.create(event)
+      }
     } catch (err) {
       logger.warn({ err, name: body.name }, 'ProductEvent write failed')
     }
