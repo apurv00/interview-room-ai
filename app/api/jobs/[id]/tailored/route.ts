@@ -6,6 +6,8 @@ import mongoose from 'mongoose'
 import { saveTailoredVersion } from '@jobs'
 import { ProductEvent } from '@shared/db/models'
 import { logger } from '@shared/logger'
+import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,6 +21,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
   if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
+  const rateLimitBlock = await checkJobsRateLimit(userId)
+  if (rateLimitBlock) return rateLimitBlock
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
@@ -40,6 +44,16 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (typeof body.tailoredText !== 'string' || !body.tailoredText.trim()) {
     return NextResponse.json({ error: 'tailoredText required' }, { status: 400 })
   }
+  if (body.tailoredText.length > MAX_JOB_TAILORED_TEXT_CHARS) {
+    return NextResponse.json(
+      {
+        error: `tailoredText must be ${MAX_JOB_TAILORED_TEXT_CHARS.toLocaleString('en-US')} characters or fewer`,
+        code: 'TAILORED_TEXT_TOO_LARGE',
+        identityVerified: true,
+      },
+      { status: 413 },
+    )
+  }
   if (typeof body.sourceJdHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.sourceJdHash)) {
     return NextResponse.json(
       { error: 'sourceJdHash required', code: 'SOURCE_JD_HASH_REQUIRED' },
@@ -50,7 +64,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   try {
     await connectDB()
     result = await saveTailoredVersion(userId, params.id, {
-      tailoredText: body.tailoredText.slice(0, 100_000),
+      tailoredText: body.tailoredText,
       sourceResumeId: typeof body.sourceResumeId === 'string' && body.sourceResumeId ? body.sourceResumeId.slice(0, 100) : undefined,
       matchScore: typeof body.matchScore === 'number' ? Math.max(0, Math.min(100, body.matchScore)) : undefined,
       addedKeywords: Array.isArray(body.addedKeywords) ? (body.addedKeywords as string[]).slice(0, 30).map((k) => String(k).slice(0, 60)) : [],
@@ -65,6 +79,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     )
   }
   if (!result.ok) {
+    if (result.reason === 'invalid-payload') {
+      return NextResponse.json(
+        { error: 'invalid tailored resume', code: 'INVALID_TAILORED_PAYLOAD' },
+        { status: 400 },
+      )
+    }
     if (result.reason === 'jd-mismatch') {
       return NextResponse.json(
         { error: 'job description changed', code: 'JOB_DESCRIPTION_CHANGED' },

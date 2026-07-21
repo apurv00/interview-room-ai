@@ -1,12 +1,19 @@
 import { gunzipSync } from 'zlib'
-import { isValidObjectId } from 'mongoose'
+import { isValidObjectId, type ClientSession } from 'mongoose'
 import { JobApplication, JobPosting, InterviewSession, ProductEvent, User } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { inngest } from '@shared/services/inngest'
-import { getShortFormMinAnswers } from '@interview/services/eval/sessionScoringPolicy'
+import { getShortFormMinAnswers } from '@interview'
 import { practiceHandoffHashOf } from './practiceHandoff'
 import { xrayHashOf } from './xrayService'
 import { jobPostingStateOf } from './postingAccess'
+import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
+import {
+  canonicalApplyOptionsOf,
+  resolveApplyOption,
+  type CanonicalApplyOption,
+} from './applyOptionIdentity'
+import type { ApplyTier } from '../config/spamRules'
 
 /**
  * Application state transitions (PRODUCT_FLOW §2). `apply_clicked` is a
@@ -19,6 +26,107 @@ import { jobPostingStateOf } from './postingAccess'
  * already at `applied`/`interview_scheduled`/... leaves the status alone —
  * clicking an apply link again is not evidence the pipeline moved backward.
  */
+
+const APPLICATION_TRANSACTION_OPTIONS = {
+  readConcern: { level: 'snapshot' as const },
+  writeConcern: { w: 'majority' as const },
+}
+
+async function runApplicationTransaction<T>(
+  work: (session: ClientSession) => Promise<T>,
+): Promise<T> {
+  const session = await JobApplication.db.startSession()
+  let result: T | undefined
+  let completed = false
+  try {
+    await session.withTransaction(async () => {
+      result = await work(session)
+      completed = true
+    }, APPLICATION_TRANSACTION_OPTIONS)
+  } finally {
+    await session.endSession()
+  }
+  if (!completed) throw new Error('application transaction completed without a result')
+  return result as T
+}
+
+function exactApplyOptionPostingFilter(
+  jobPostingId: string,
+  posting: { status?: unknown; closedReason?: unknown },
+  option: CanonicalApplyOption,
+): Record<string, unknown> {
+  return {
+    _id: jobPostingId,
+    status: posting.status,
+    closedReason: posting.closedReason === undefined
+      ? { $exists: false }
+      : posting.closedReason,
+    provenance: {
+      $elemMatch: {
+        sourceKey: option.sourceKey,
+        applyUrl: option.url,
+        applyTier: option.tier,
+      },
+    },
+  }
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return (error as { code?: number })?.code === 11000
+}
+
+class ApplyOptionTransactionRaceError extends Error {}
+
+// Provenance is capped at eight rungs. Keep twice that many distinct click
+// ids/reports so ordinary option replacement retains useful history without
+// letting repeated source churn grow an application document indefinitely.
+const MAX_TRACKED_APPLY_OPTIONS = 16
+const MAX_BROKEN_LINK_REPORTS = 16
+
+function boundedClickedOptionIds(
+  existing: readonly string[] | null | undefined,
+  optionId: string,
+): string[] {
+  return Array.from(new Set([...(existing ?? []).filter((id) => id !== optionId), optionId]))
+    .slice(-MAX_TRACKED_APPLY_OPTIONS)
+}
+
+interface StoredBrokenLinkReport {
+  optionId?: string
+  url: string
+  tier?: string
+  reportedAt: Date
+}
+
+function boundedBrokenLinkReports(
+  existing: readonly StoredBrokenLinkReport[] | null | undefined,
+  next: StoredBrokenLinkReport,
+  currentOptionIds: ReadonlySet<string>,
+): StoredBrokenLinkReport[] {
+  const reports = [...(existing ?? []), next]
+  const retainedCurrent: StoredBrokenLinkReport[] = []
+  const retainedCurrentIds = new Set<string>()
+  // Walk newest-first so malformed legacy duplicates cannot displace the
+  // newest canonical report for a current rung.
+  for (let index = reports.length - 1; index >= 0; index -= 1) {
+    const report = reports[index]
+    if (
+      report.optionId &&
+      currentOptionIds.has(report.optionId) &&
+      !retainedCurrentIds.has(report.optionId)
+    ) {
+      retainedCurrent.unshift(report)
+      retainedCurrentIds.add(report.optionId)
+    }
+  }
+  const historicalBudget = Math.max(0, MAX_BROKEN_LINK_REPORTS - retainedCurrent.length)
+  const historical = historicalBudget === 0
+    ? []
+    : reports
+        .filter((report) => !report.optionId || !currentOptionIds.has(report.optionId))
+        .slice(-historicalBudget)
+  return [...historical, ...retainedCurrent]
+}
 
 /**
  * Atomically claim the right to enqueue ONE ATS run (Codex on #521):
@@ -50,6 +158,8 @@ export async function releaseAtsClaim(userId: string, jobPostingId: string): Pro
   await JobApplication.updateOne({ userId, jobPostingId }, { $unset: { atsRequestedAt: 1 } }).catch(() => {})
 }
 
+class TailoredVersionTransactionRaceError extends Error {}
+
 /**
  * Tailored-version persist (§2, Wave 4.5): latest-wins on the application
  * row — NEVER counted against the 3-resume cap (savedResumes is a doc-size
@@ -72,98 +182,124 @@ export async function saveTailoredVersion(
   now = new Date()
 ): Promise<
   | { ok: true }
-  | { ok: false; reason: 'not-found' | 'context-unavailable' | 'jd-mismatch' }
+  | { ok: false; reason: 'not-found' | 'context-unavailable' | 'jd-mismatch' | 'invalid-payload' }
 > {
-  const posting = await JobPosting.findById(jobPostingId).select('title company locations provenance status closedReason jdCompressed').lean()
-  if (!posting) return { ok: false, reason: 'not-found' }
-  const postingState = jobPostingStateOf(posting)
-  const existingApp = await JobApplication.findOne({ userId, jobPostingId }).select('_id').lean()
-  // A closed id alone is not ownership proof. Preserve the same not-found
-  // boundary as detail: only an existing application may learn why its saved
-  // context can no longer accept an exact-job artifact.
-  if (postingState !== 'live' && !existingApp) return { ok: false, reason: 'not-found' }
-  if (postingState === 'restricted') return { ok: false, reason: 'context-unavailable' }
-
-  let canonicalJd = ''
-  try {
-    const buf = posting.jdCompressed as Buffer | undefined
-    canonicalJd = buf?.length
-      ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8')
-      : ''
-  } catch { /* unreadable canonical JD cannot prove Tailor provenance */ }
-  if (!canonicalJd.trim()) return { ok: false, reason: 'context-unavailable' }
-  if (payload.sourceJdHash !== practiceHandoffHashOf(canonicalJd)) {
-    return { ok: false, reason: 'jd-mismatch' }
+  if (
+    typeof payload.tailoredText !== 'string' ||
+    !payload.tailoredText.trim() ||
+    payload.tailoredText.length > MAX_JOB_TAILORED_TEXT_CHARS
+  ) {
+    return { ok: false, reason: 'invalid-payload' }
   }
+  let retriedRace = false
+  for (;;) {
+    try {
+      return await runApplicationTransaction(async (session) => {
+        const posting = await JobPosting.findById(jobPostingId, undefined, { session })
+          .select('title company locations provenance status closedReason jdCompressed')
+          .lean()
+        if (!posting) return { ok: false, reason: 'not-found' as const }
+        const postingState = jobPostingStateOf(posting)
+        const existingApp = await JobApplication.findOne(
+          { userId, jobPostingId },
+          undefined,
+          { session },
+        ).select('_id').lean()
+        // A closed id alone is not ownership proof. Preserve the same
+        // not-found boundary as detail: only an existing application may
+        // learn why its saved context cannot accept this artifact.
+        if (postingState !== 'live' && !existingApp) {
+          return { ok: false, reason: 'not-found' as const }
+        }
+        if (postingState === 'restricted') {
+          return { ok: false, reason: 'context-unavailable' as const }
+        }
 
-  // Validate the posting version and lifecycle in the same write that repairs
-  // its retention pin. A merge/closure that wins after the read prevents the
-  // application artifact from being attached to stale context.
-  const postingGuard = await JobPosting.updateOne(
-    {
-      _id: jobPostingId,
-      status: postingState === 'live' ? 'open' : 'closed',
-      ...(postingState === 'archived' ? { closedReason: posting.closedReason } : {}),
-      jdCompressed: posting.jdCompressed,
-    },
-    { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-  )
-  if ((postingGuard?.matchedCount ?? 0) !== 1) {
-    return { ok: false, reason: 'context-unavailable' }
-  }
+        let canonicalJd = ''
+        try {
+          const buf = posting.jdCompressed as Buffer | undefined
+          canonicalJd = buf?.length
+            ? gunzipSync(Buffer.isBuffer(buf) ? buf : Buffer.from((buf as { buffer: ArrayBufferLike }).buffer as ArrayBuffer)).toString('utf8')
+            : ''
+        } catch { /* unreadable canonical JD cannot prove Tailor provenance */ }
+        if (!canonicalJd.trim()) {
+          return { ok: false, reason: 'context-unavailable' as const }
+        }
+        if (payload.sourceJdHash !== practiceHandoffHashOf(canonicalJd)) {
+          return { ok: false, reason: 'jd-mismatch' as const }
+        }
 
-  // '' would fail the schema's string validation on create (Mongoose treats
-  // empty as missing) — paste/upload-sourced tailors simply have no source
-  // resume (Codex P1 on #526).
-  const tailoredVersion = {
-    tailoredText: payload.tailoredText,
-    sourceResumeId: payload.sourceResumeId || undefined,
-    matchScore: payload.matchScore,
-    addedKeywords: payload.addedKeywords,
-    missingKeywords: payload.missingKeywords,
-    jdHash: xrayHashOf(canonicalJd),
-    createdAt: now,
-  }
-  if (existingApp) {
-    const res = await JobApplication.updateOne(
-      { _id: existingApp._id, userId, jobPostingId },
-      { $set: { tailoredVersion } },
-    )
-    return (res?.matchedCount ?? 0) > 0
-      ? { ok: true }
-      : { ok: false, reason: 'context-unavailable' }
-  }
+        // The exact lifecycle/JD pin and application write share one Mongo
+        // transaction. A merge, closure, or source revoke that wins cannot
+        // leave a stale artifact or an orphan retention pin behind.
+        const postingGuard = await JobPosting.updateOne(
+          {
+            _id: jobPostingId,
+            status: posting.status,
+            closedReason: posting.closedReason === undefined
+              ? { $exists: false }
+              : posting.closedReason,
+            jdCompressed: posting.jdCompressed,
+          },
+          { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+          { session },
+        )
+        if ((postingGuard?.matchedCount ?? 0) !== 1) {
+          return { ok: false, reason: 'context-unavailable' as const }
+        }
 
-  // No row yet: implicit save (mirrors the save route's create + pin).
-  // Ownership cannot be manufactured after closure. Bind the retention pin
-  // to an open posting in the same atomic write; a close that wins this race
-  // prevents application creation.
-  if (postingState !== 'live') return { ok: false, reason: 'not-found' }
-  try {
-    await JobApplication.create({
-      userId,
-      jobPostingId,
-      jobSnapshot: {
-        title: posting.title,
-        company: posting.company,
-        location: (posting.locations ?? [])[0] ?? '',
-        source: posting.provenance?.[0]?.sourceId ?? 'unknown',
-      },
-      status: 'saved',
-      statusHistory: [{ status: 'saved', at: now, source: 'user' }],
-      tailoredVersion,
-    })
-  } catch (err) {
-    if ((err as { code?: number })?.code === 11000) {
-      const raced = await JobApplication.updateOne({ userId, jobPostingId }, { $set: { tailoredVersion } })
-      if ((raced?.matchedCount ?? 0) !== 1) {
+        // '' would fail the schema's string validation on create (Mongoose
+        // treats empty as missing); paste/upload tailors have no source row.
+        const tailoredVersion = {
+          tailoredText: payload.tailoredText,
+          sourceResumeId: payload.sourceResumeId || undefined,
+          matchScore: payload.matchScore,
+          addedKeywords: payload.addedKeywords,
+          missingKeywords: payload.missingKeywords,
+          jdHash: xrayHashOf(canonicalJd),
+          createdAt: now,
+        }
+        if (existingApp) {
+          const res = await JobApplication.updateOne(
+            { _id: existingApp._id, userId, jobPostingId },
+            { $set: { tailoredVersion } },
+            { session, runValidators: true },
+          )
+          if ((res?.matchedCount ?? 0) !== 1) {
+            throw new TailoredVersionTransactionRaceError('application changed')
+          }
+          return { ok: true as const }
+        }
+
+        await JobApplication.create([{
+          userId,
+          jobPostingId,
+          jobSnapshot: {
+            title: posting.title,
+            company: posting.company,
+            location: (posting.locations ?? [])[0] ?? '',
+            source: posting.provenance?.[0]?.sourceId ?? 'unknown',
+          },
+          status: 'saved',
+          statusHistory: [{ status: 'saved', at: now, source: 'user' }],
+          tailoredVersion,
+        }], { session })
+        return { ok: true as const }
+      })
+    } catch (error) {
+      if (
+        !retriedRace &&
+        (isDuplicateKeyError(error) || error instanceof TailoredVersionTransactionRaceError)
+      ) {
+        retriedRace = true
+        continue
+      }
+      if (error instanceof TailoredVersionTransactionRaceError) {
         return { ok: false, reason: 'context-unavailable' }
       }
-    } else {
-      throw err
+      throw error
     }
   }
-  return { ok: true }
 }
 
 /** Statuses a USER may set (loose machine: forward jumps and backward
@@ -234,33 +370,129 @@ export async function transitionStatus(
  * posting's provenance entry — one user's dead click demotes that rung for
  * everyone (heals, never hides; the ladder sort sinks rungs with reports).
  */
+export type BrokenLinkResult =
+  | {
+      ok: true
+      recorded: boolean
+      optionId: string
+      tier: ApplyTier
+      hadFailover: boolean
+    }
+  | { ok: false }
+
+async function reportBrokenLinkAttempt(
+  userId: string,
+  jobPostingId: string,
+  optionId: string,
+  now: Date,
+): Promise<BrokenLinkResult> {
+  return runApplicationTransaction(async (session) => {
+    const posting = await JobPosting.findById(jobPostingId, undefined, { session })
+      .select('provenance status closedReason')
+      .lean()
+    if (!posting || jobPostingStateOf(posting) === 'restricted') return { ok: false }
+
+    const options = canonicalApplyOptionsOf(posting.provenance)
+    const option = resolveApplyOption(posting.provenance, optionId)
+    if (!option) return { ok: false }
+    const hadFailover = options.some(
+      (candidate) => candidate.optionId !== option.optionId && candidate.url !== option.url,
+    )
+
+    const application = await JobApplication.findOne(
+      { userId, jobPostingId },
+      undefined,
+      { session },
+    ).select('clickedApplyOptionIds brokenLinkReports').lean()
+    if (!application || !(application.clickedApplyOptionIds ?? []).includes(optionId)) {
+      return { ok: false }
+    }
+    if ((application.brokenLinkReports ?? []).some((report) => report.optionId === optionId)) {
+      return {
+        ok: true,
+        recorded: false,
+        optionId,
+        tier: option.tier,
+        hadFailover,
+      }
+    }
+
+    const report = {
+      optionId,
+      url: option.url,
+      tier: option.tier,
+      reportedAt: now,
+    }
+    const boundedReports = boundedBrokenLinkReports(
+      application.brokenLinkReports,
+      report,
+      new Set(options.map((candidate) => candidate.optionId)),
+    )
+    const applicationWrite = await JobApplication.updateOne(
+      {
+        _id: application._id,
+        userId,
+        jobPostingId,
+        clickedApplyOptionIds: optionId,
+        'brokenLinkReports.optionId': { $ne: optionId },
+      },
+      {
+        $set: { brokenLinkReports: boundedReports },
+      },
+      { session },
+    )
+    if ((applicationWrite?.modifiedCount ?? 0) !== 1) {
+      // Abort, rather than risk incrementing the shared rung without the
+      // caller's unique report edge. A transaction retry will re-read a
+      // concurrently committed duplicate and return idempotently.
+      throw new ApplyOptionTransactionRaceError('application report edge changed')
+    }
+
+    const postingWrite = await JobPosting.updateOne(
+      exactApplyOptionPostingFilter(jobPostingId, posting, option),
+      { $inc: { 'provenance.$[elem].brokenReportCount': 1 } },
+      {
+        session,
+        arrayFilters: [{
+          'elem.sourceKey': option.sourceKey,
+          'elem.applyUrl': option.url,
+          'elem.applyTier': option.tier,
+        }],
+      },
+    )
+    if ((postingWrite?.modifiedCount ?? 0) !== 1) {
+      // The application write must roll back with the posting write. This is
+      // the one global crowd-healing edge, so compensation is not sufficient.
+      throw new ApplyOptionTransactionRaceError('posting option changed')
+    }
+
+    return {
+      ok: true,
+      recorded: true,
+      optionId,
+      tier: option.tier,
+      hadFailover,
+    }
+  })
+}
+
 export async function reportBrokenLink(
   userId: string,
   jobPostingId: string,
-  url: string,
-  now = new Date()
-): Promise<{ ok: boolean }> {
-  // The demotion predicate is a RECORDED DEAD CLICK, not mere row existence
-  // (Codex on #522 rounds 2+4): a saved-only row (no click ever) must not
-  // unlock posting-level demotion — the application must carry the machine
-  // fact (statusHistory contains apply_clicked) before its report counts.
-  // URL equality is deliberately NOT required: the snapshot stores only the
-  // FIRST click's URL, and reports against alternate rungs are legitimate.
-  const app = await JobApplication.updateOne(
-    { userId, jobPostingId, 'statusHistory.status': 'apply_clicked' },
-    { $push: { brokenLinkReports: { url: url.slice(0, 2000), reportedAt: now } } }
-  )
-  if ((app?.matchedCount ?? 0) === 0) return { ok: false }
-  // arrayFilters, not positional $: the merge appends provenance by
-  // sourceKey, so ONE dead URL can sit in several rungs — the positional
-  // operator updated only the first, leaving a clean twin ranked ahead of
-  // the failover (Codex on #522 round-3).
-  await JobPosting.updateOne(
-    { _id: jobPostingId, 'provenance.applyUrl': url },
-    { $inc: { 'provenance.$[elem].brokenReportCount': 1 } },
-    { arrayFilters: [{ 'elem.applyUrl': url }] }
-  )
-  return { ok: true }
+  optionId: string,
+  now = new Date(),
+): Promise<BrokenLinkResult> {
+  try {
+    return await reportBrokenLinkAttempt(userId, jobPostingId, optionId, now)
+  } catch (error) {
+    if (!(error instanceof ApplyOptionTransactionRaceError)) throw error
+    try {
+      return await reportBrokenLinkAttempt(userId, jobPostingId, optionId, now)
+    } catch (retryError) {
+      if (retryError instanceof ApplyOptionTransactionRaceError) return { ok: false }
+      throw retryError
+    }
+  }
 }
 
 export interface EnsuredPracticeApplication {
@@ -561,51 +793,93 @@ export interface ApplyClickResult {
   status: string
   created: boolean
   transitioned: boolean
+  /** Server-resolved metadata for telemetry; never sourced from the request. */
+  canonicalOption: { optionId: string; tier: ApplyTier }
 }
 
-export async function recordApplyClick(
+async function recordApplyClickAttempt(
   userId: string,
   jobPostingId: string,
-  click: { tier?: string; url?: string },
-  now = new Date()
+  optionId: string,
+  now: Date,
 ): Promise<ApplyClickResult | null> {
-  const posting = await JobPosting.findById(jobPostingId).select('title company locations provenance status').lean()
-  if (!posting) return null
+  return runApplicationTransaction(async (session) => {
+    const posting = await JobPosting.findById(jobPostingId, undefined, { session })
+      .select('title company locations provenance status closedReason')
+      .lean()
+    if (!posting || (posting.status !== 'open' && posting.status !== 'closed')) return null
+    const postingState = jobPostingStateOf(posting)
+    if (postingState === 'restricted') return null
+    const option = resolveApplyOption(posting.provenance, optionId)
+    if (!option) return null
 
-  const existing = await JobApplication.findOne({ userId, jobPostingId }).select('status').lean()
-  if (existing) {
-    // Existing ownership survives closure. Keep its retention pin healthy;
-    // a stale tab may still report the real click without granting access to
-    // anyone new.
-    await JobPosting.updateOne({ _id: jobPostingId }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
-    if (existing.status !== 'saved') {
-      return { status: existing.status, created: false, transitioned: false }
-    }
-    const transitioned = await JobApplication.updateOne(
-      { userId, jobPostingId, status: 'saved' }, // status in the filter: never race-regress a concurrent forward move
-      {
-        $set: { status: 'apply_clicked', 'jobSnapshot.applyTierAtClick': click.tier, 'jobSnapshot.applyUrlAtClick': click.url },
-        $push: { statusHistory: { status: 'apply_clicked', at: now, source: 'system' } },
-      }
+    const existing = await JobApplication.findOne(
+      { userId, jobPostingId },
+      undefined,
+      { session },
+    ).select('_id status clickedApplyOptionIds').lean()
+    // A first click may create ownership only while discovery is live. A
+    // normal archive preserves an existing owner's in-flight canonical click,
+    // but a closed id alone never manufactures ownership.
+    if (!existing && postingState !== 'live') return null
+
+    // The exact lifecycle + canonical provenance tuple is fenced in the same
+    // transaction as the application write. A source revoke or option
+    // replacement that wins forces a retry against the new truth.
+    const pin = await JobPosting.updateOne(
+      exactApplyOptionPostingFilter(jobPostingId, posting, option),
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+      { session },
     )
-    if ((transitioned?.matchedCount ?? 0) > 0) {
-      return { status: 'apply_clicked', created: false, transitioned: true }
+    if ((pin?.matchedCount ?? 0) !== 1) return null
+
+    const canonicalOption = { optionId: option.optionId, tier: option.tier }
+    if (existing) {
+      const clickedApplyOptionIds = boundedClickedOptionIds(
+        existing.clickedApplyOptionIds,
+        option.optionId,
+      )
+      if (existing.status !== 'saved') {
+        const tracked = await JobApplication.updateOne(
+          { _id: existing._id, userId, jobPostingId },
+          { $set: { clickedApplyOptionIds } },
+          { session },
+        )
+        if ((tracked?.matchedCount ?? 0) !== 1) {
+          throw new ApplyOptionTransactionRaceError('application disappeared')
+        }
+        return {
+          status: existing.status,
+          created: false,
+          transitioned: false,
+          canonicalOption,
+        }
+      }
+      const transitioned = await JobApplication.updateOne(
+        { _id: existing._id, userId, jobPostingId, status: 'saved' },
+        {
+          $set: {
+            status: 'apply_clicked',
+            'jobSnapshot.applyTierAtClick': option.tier,
+            'jobSnapshot.applyUrlAtClick': option.url,
+            clickedApplyOptionIds,
+          },
+          $push: { statusHistory: { status: 'apply_clicked', at: now, source: 'system' } },
+        },
+        { session },
+      )
+      if ((transitioned?.matchedCount ?? 0) === 1) {
+        return {
+          status: 'apply_clicked',
+          created: false,
+          transitioned: true,
+          canonicalOption,
+        }
+      }
+      throw new ApplyOptionTransactionRaceError('application status changed')
     }
-    const winner = await JobApplication.findOne({ userId, jobPostingId }).select('status').lean()
-    return winner ? { status: winner.status, created: false, transitioned: false } : null
-  }
 
-  // A first click may create ownership only while the posting is live. The
-  // status predicate closes the read→pin race atomically with retention.
-  if (posting.status !== 'open') return null
-  const pin = await JobPosting.updateOne(
-    { _id: jobPostingId, status: 'open' },
-    { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-  )
-  if ((pin?.matchedCount ?? 0) !== 1) return null
-
-  try {
-    await JobApplication.create({
+    await JobApplication.create([{
       userId,
       jobPostingId,
       jobSnapshot: {
@@ -613,31 +887,37 @@ export async function recordApplyClick(
         company: posting.company,
         location: (posting.locations ?? [])[0] ?? '',
         source: posting.provenance?.[0]?.sourceId ?? 'unknown',
-        applyTierAtClick: click.tier,
-        applyUrlAtClick: click.url,
+        applyTierAtClick: option.tier,
+        applyUrlAtClick: option.url,
       },
       status: 'apply_clicked',
       statusHistory: [{ status: 'apply_clicked', at: now, source: 'system' }],
-    })
-    return { status: 'apply_clicked', created: true, transitioned: true }
-  } catch (err) {
-    if ((err as { code?: number })?.code === 11000) {
-      // A Save/Tailor/practice create may have won. Preserve the Apply
-      // machine fact by conditionally advancing a saved winner; if a later
-      // status won too, reread it without regression.
-      const transitioned = await JobApplication.updateOne(
-        { userId, jobPostingId, status: 'saved' },
-        {
-          $set: { status: 'apply_clicked', 'jobSnapshot.applyTierAtClick': click.tier, 'jobSnapshot.applyUrlAtClick': click.url },
-          $push: { statusHistory: { status: 'apply_clicked', at: now, source: 'system' } },
-        }
-      )
-      if ((transitioned?.matchedCount ?? 0) > 0) {
-        return { status: 'apply_clicked', created: false, transitioned: true }
-      }
-      const winner = await JobApplication.findOne({ userId, jobPostingId }).select('status').lean()
-      return winner ? { status: winner.status, created: false, transitioned: false } : null
+      clickedApplyOptionIds: [option.optionId],
+    }], { session })
+    return {
+      status: 'apply_clicked',
+      created: true,
+      transitioned: true,
+      canonicalOption,
     }
-    throw err
+  })
+}
+
+export async function recordApplyClick(
+  userId: string,
+  jobPostingId: string,
+  optionId: string,
+  now = new Date(),
+): Promise<ApplyClickResult | null> {
+  try {
+    return await recordApplyClickAttempt(userId, jobPostingId, optionId, now)
+  } catch (error) {
+    if (!isDuplicateKeyError(error) && !(error instanceof ApplyOptionTransactionRaceError)) {
+      throw error
+    }
+    // A Save/Tailor/practice create or a forward status move may win the first
+    // transaction. Re-enter once so the winner gains the canonical click id
+    // without ever regressing its status.
+    return recordApplyClickAttempt(userId, jobPostingId, optionId, now)
   }
 }

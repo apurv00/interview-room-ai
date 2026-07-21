@@ -712,6 +712,62 @@ describe('Tailor tracked-job capability', () => {
     expect(mockFetch.mock.calls.some(([url]) => String(url) === `/api/jobs/${JOB_ID}/tailored`)).toBe(false)
   })
 
+  it('discards an oversized pending artifact instead of truncating and attaching it', async () => {
+    sessionState.status = 'authenticated'
+    sessionState.userId = USER_A_ID
+    const record = pendingRecord()
+    record.payload.tailoredText = 'x'.repeat(60_001)
+    record.result = { ...record.result, tailoredResume: 'x'.repeat(60_001) }
+    sessionStorage.setItem(PENDING_ASSOCIATION_KEY, JSON.stringify(record))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      return response({})
+    })
+
+    render(<TailorPage />)
+    await screen.findByText(/Using the job description for Acme/i)
+    await waitFor(() => expect(sessionStorage.getItem(PENDING_ASSOCIATION_KEY)).toBeNull())
+
+    expect(screen.queryByText('82%')).toBeNull()
+    expect(mockFetch.mock.calls.some(([url]) => String(url) === `/api/jobs/${JOB_ID}/tailored`)).toBe(false)
+  })
+
+  it('shows an oversized live result without attempting an impossible tracked-job attachment', async () => {
+    const oversizedResult = { ...RESULT, tailoredResume: 'x'.repeat(60_001) }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      if (url === '/api/resume/tailor') return response(oversizedResult)
+      return response({})
+    })
+
+    const view = render(<TailorPage />)
+    await screen.findByText(/Using the job description for Acme/i)
+    enterResume()
+    await switchSession(view, USER_A_ID)
+    fireEvent.click(screen.getByRole('button', { name: 'Tailor My Resume' }))
+
+    expect(await screen.findByText(/exceeds the tracked-job attachment limit/i)).toBeTruthy()
+    expect(screen.getByText('82%')).toBeTruthy()
+    expect(mockFetch.mock.calls.some(([url]) => String(url) === `/api/jobs/${JOB_ID}/tailored`)).toBe(false)
+    expect(sessionStorage.getItem(PENDING_ASSOCIATION_KEY)).toBeNull()
+  })
+
   it.each([
     ['401', () => response({ error: 'session refreshing' }, false, 401)],
     ['500', () => response({ error: 'temporary' }, false, 500)],

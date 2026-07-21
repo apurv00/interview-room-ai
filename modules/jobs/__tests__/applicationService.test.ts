@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 import { JobApplication as RealJobApplication } from '@shared/db/models/JobApplication'
 
-const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne } = vi.hoisted(() => ({
+const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockStartSession, mockWithTransaction, mockEndSession } = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
   mockPostingExists: vi.fn(),
@@ -11,6 +11,9 @@ const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFin
   mockAppCreate: vi.fn(),
   mockAppFindOneAndUpdate: vi.fn(),
   mockAppDeleteOne: vi.fn(),
+  mockStartSession: vi.fn(),
+  mockWithTransaction: vi.fn(),
+  mockEndSession: vi.fn(),
 }))
 const { mockSessionFindById, mockSessionFindOne, mockSessionUpdateOne } = vi.hoisted(() => ({
   mockSessionFindById: vi.fn(),
@@ -24,7 +27,14 @@ const { mockInngestSend, mockProductEventCreate } = vi.hoisted(() => ({
 const { mockUserExists } = vi.hoisted(() => ({ mockUserExists: vi.fn() }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne, exists: mockPostingExists },
-  JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne, create: mockAppCreate, findOneAndUpdate: mockAppFindOneAndUpdate, deleteOne: mockAppDeleteOne },
+  JobApplication: {
+    findOne: mockAppFindOne,
+    updateOne: mockAppUpdateOne,
+    create: mockAppCreate,
+    findOneAndUpdate: mockAppFindOneAndUpdate,
+    deleteOne: mockAppDeleteOne,
+    db: { startSession: mockStartSession },
+  },
   InterviewSession: { findById: mockSessionFindById, findOne: mockSessionFindOne, updateOne: mockSessionUpdateOne },
   ProductEvent: { create: mockProductEventCreate },
   User: { exists: mockUserExists },
@@ -42,59 +52,117 @@ import {
 } from '../services/applicationService'
 import { xrayHashOf } from '../services/xrayService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
+import { applyOptionIdOf } from '../services/applyOptionIdentity'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 const PRACTICE_JD = 'Backend engineer building Node.js and MongoDB payment systems. '.repeat(3)
 const PRACTICE_JD_COMPRESSED = gzipSync(Buffer.from(PRACTICE_JD))
 const PRACTICE_JD_HASH = practiceHandoffHashOf(PRACTICE_JD)
+const APPLY_SOURCE = {
+  sourceId: 'jsearch',
+  sourceKey: 'jsearch:1',
+  applyUrl: 'https://x.example/apply',
+  applyTier: 'direct-ats' as const,
+}
+const APPLY_OPTION_ID = applyOptionIdOf({
+  sourceKey: APPLY_SOURCE.sourceKey,
+  url: APPLY_SOURCE.applyUrl,
+  tier: APPLY_SOURCE.applyTier,
+})
 
-function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open', jdCompressed: PRACTICE_JD_COMPRESSED }) {
-  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockUserExists]) m.mockReset()
+function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [APPLY_SOURCE], status: 'open', jdCompressed: PRACTICE_JD_COMPRESSED }) {
+  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockUserExists, mockStartSession, mockWithTransaction, mockEndSession]) m.mockReset()
   mockInngestSend.mockReset()
   mockProductEventCreate.mockReset()
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(posting) }) })
-  mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockPostingExists.mockResolvedValue({ _id: 'posting' })
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
-  mockAppCreate.mockResolvedValue({})
+  mockAppCreate.mockResolvedValue([])
   mockAppDeleteOne.mockResolvedValue({ deletedCount: 1 })
   mockSessionUpdateOne.mockResolvedValue({})
   mockUserExists.mockResolvedValue({ _id: 'u1' })
   mockInngestSend.mockResolvedValue(undefined)
   mockProductEventCreate.mockResolvedValue(undefined)
+  mockWithTransaction.mockImplementation(async (work: () => Promise<unknown>) => work())
+  mockStartSession.mockResolvedValue({
+    withTransaction: mockWithTransaction,
+    endSession: mockEndSession,
+  })
 }
 
 describe('recordApplyClick (machine fact — never conflated with the user claim)', () => {
-  it('no row yet → creates at apply_clicked with the click snapshot AND pins the posting', async () => {
+  it('resolves the opaque option server-side, creates apply_clicked, and pins the exact rung', async () => {
     reset()
     mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
-    const r = await recordApplyClick('u1', 'j1', { tier: 'direct-ats', url: 'https://x/apply' }, NOW)
-    expect(r).toEqual({ status: 'apply_clicked', created: true, transitioned: true })
-    const created = mockAppCreate.mock.calls[0][0]
+    const r = await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)
+    expect(r).toEqual({
+      status: 'apply_clicked',
+      created: true,
+      transitioned: true,
+      canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+    })
+    const created = mockAppCreate.mock.calls[0][0][0]
     expect(created.status).toBe('apply_clicked')
     expect(created.statusHistory[0]).toMatchObject({ status: 'apply_clicked', source: 'system' })
     expect(created.jobSnapshot.applyTierAtClick).toBe('direct-ats')
-    expect(mockPostingUpdateOne).toHaveBeenCalledWith({ _id: 'j1', status: 'open' }, { $set: { userReferenced: true }, $unset: { purgeAt: 1 } })
+    expect(created.jobSnapshot.applyUrlAtClick).toBe(APPLY_SOURCE.applyUrl)
+    expect(created.clickedApplyOptionIds).toEqual([APPLY_OPTION_ID])
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: 'j1',
+        status: 'open',
+        closedReason: { $exists: false },
+        provenance: {
+          $elemMatch: {
+            sourceKey: APPLY_SOURCE.sourceKey,
+            applyUrl: APPLY_SOURCE.applyUrl,
+            applyTier: APPLY_SOURCE.applyTier,
+          },
+        },
+      },
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+      expect.objectContaining({ session: expect.anything() }),
+    )
   })
 
   it('saved → apply_clicked transitions with a system history entry, guarded against races', async () => {
     reset()
-    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'saved' }) }) })
-    const r = await recordApplyClick('u1', 'j1', { tier: 'employer' }, NOW)
-    expect(r).toEqual({ status: 'apply_clicked', created: false, transitioned: true })
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ _id: 'app1', status: 'saved', clickedApplyOptionIds: [] }) }) })
+    const r = await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)
+    expect(r).toEqual({
+      status: 'apply_clicked',
+      created: false,
+      transitioned: true,
+      canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+    })
     const [filter, update] = mockAppUpdateOne.mock.calls[0]
     expect(filter.status).toBe('saved') // race guard: a concurrent forward move wins
-    expect(update.$set.status).toBe('apply_clicked')
+    expect(update.$set).toMatchObject({
+      status: 'apply_clicked',
+      'jobSnapshot.applyTierAtClick': 'direct-ats',
+      'jobSnapshot.applyUrlAtClick': APPLY_SOURCE.applyUrl,
+      clickedApplyOptionIds: [APPLY_OPTION_ID],
+    })
     expect(update.$push.statusHistory).toMatchObject({ status: 'apply_clicked', source: 'system' })
   })
 
-  it('NEVER regresses a forward status — clicking again on applied/interview_scheduled is a no-op', async () => {
+  it('never regresses a forward status but still records the canonical option actually clicked', async () => {
     for (const status of ['apply_clicked', 'applied', 'interview_scheduled', 'offer']) {
       reset()
-      mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status }) }) })
-      const r = await recordApplyClick('u1', 'j1', {}, NOW)
-      expect(r).toEqual({ status, created: false, transitioned: false })
-      expect(mockAppUpdateOne).not.toHaveBeenCalled()
+      mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ _id: 'app1', status, clickedApplyOptionIds: [] }) }) })
+      const r = await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)
+      expect(r).toEqual({
+        status,
+        created: false,
+        transitioned: false,
+        canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+      })
+      expect(mockAppUpdateOne).toHaveBeenCalledWith(
+        { _id: 'app1', userId: 'u1', jobPostingId: 'j1' },
+        { $set: { clickedApplyOptionIds: [APPLY_OPTION_ID] } },
+        expect.objectContaining({ session: expect.anything() }),
+      )
       expect(mockAppCreate).not.toHaveBeenCalled()
     }
   })
@@ -103,54 +171,112 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     reset()
     mockAppFindOne
       .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'winner', status: 'saved', clickedApplyOptionIds: [] }) }) })
     mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
-    const r = await recordApplyClick('u1', 'j1', {}, NOW)
-    expect(r).toEqual({ status: 'apply_clicked', created: false, transitioned: true })
+    const r = await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)
+    expect(r).toMatchObject({ status: 'apply_clicked', created: false, transitioned: true })
     expect(mockAppUpdateOne).toHaveBeenCalledWith(
-      { userId: 'u1', jobPostingId: 'j1', status: 'saved' },
+      { _id: 'winner', userId: 'u1', jobPostingId: 'j1', status: 'saved' },
       expect.objectContaining({
-        $set: expect.objectContaining({ status: 'apply_clicked' }),
+        $set: expect.objectContaining({ status: 'apply_clicked', clickedApplyOptionIds: [APPLY_OPTION_ID] }),
         $push: { statusHistory: expect.objectContaining({ status: 'apply_clicked', source: 'system' }) },
-      })
+      }),
+      expect.objectContaining({ session: expect.anything() }),
     )
+    expect(mockStartSession).toHaveBeenCalledTimes(2)
   })
 
   it('unique-index race never regresses a winner that already advanced beyond saved', async () => {
     reset()
     mockAppFindOne
       .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
-      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ status: 'applied' }) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'winner', status: 'applied', clickedApplyOptionIds: [] }) }) })
     mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
 
-    expect(await recordApplyClick('u1', 'j1', {}, NOW)).toEqual({
-      status: 'applied', created: false, transitioned: false,
+    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({
+      status: 'applied',
+      created: false,
+      transitioned: false,
+      canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
     })
+    expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
+      { _id: 'winner', userId: 'u1', jobPostingId: 'j1' },
+      { $set: { clickedApplyOptionIds: [APPLY_OPTION_ID] } },
+      expect.objectContaining({ session: expect.anything() }),
+    )
   })
 
-  it('missing or closed unowned posting → null; a closed owner may still record a stale real click', async () => {
+  it('rejects missing/new closed ownership, but allows an existing owner on a normal archive', async () => {
     reset(null)
-    expect(await recordApplyClick('u1', 'gone', {}, NOW)).toBeNull()
-    reset({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'closed' })
+    expect(await recordApplyClick('u1', 'gone', APPLY_OPTION_ID, NOW)).toBeNull()
+    reset({ title: 'SDE', company: 'X', locations: [], provenance: [APPLY_SOURCE], status: 'closed', closedReason: 'aged-out' })
     mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
-    expect(await recordApplyClick('u1', 'j1', {}, NOW)).toBeNull()
+    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toBeNull()
     expect(mockAppCreate).not.toHaveBeenCalled()
 
-    reset({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'closed' })
-    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'saved' }) }) })
-    expect(await recordApplyClick('u1', 'j1', {}, NOW)).toEqual({
+    reset({ title: 'SDE', company: 'X', locations: [], provenance: [APPLY_SOURCE], status: 'closed', closedReason: 'aged-out' })
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ _id: 'app1', status: 'saved', clickedApplyOptionIds: [] }) }) })
+    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toMatchObject({
       status: 'apply_clicked', created: false, transitioned: true,
     })
   })
 
-  it('does not create ownership when closure wins the atomic open-posting pin', async () => {
+  it('rejects stale option ids and source-revoked closures before any application write', async () => {
+    const replacement = { ...APPLY_SOURCE, applyUrl: 'https://x.example/replaced' }
+    reset({ title: 'SDE', company: 'X', locations: [], provenance: [replacement], status: 'open' })
+    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toBeNull()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+
+    reset({ title: 'SDE', company: 'X', locations: [], provenance: [APPLY_SOURCE], status: 'closed', closedReason: 'source-revoked' })
+    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toBeNull()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('rejects an existing provenance rung whose host is now blocklisted', async () => {
+    const blockedSource = { ...APPLY_SOURCE, applyUrl: 'https://wa.me/919876543210' }
+    const blockedOptionId = applyOptionIdOf({
+      sourceKey: blockedSource.sourceKey,
+      url: blockedSource.applyUrl,
+      tier: blockedSource.applyTier,
+    })
+    reset({
+      title: 'SDE',
+      company: 'X',
+      locations: [],
+      provenance: [blockedSource],
+      status: 'open',
+    })
+
+    expect(await recordApplyClick('u1', 'j1', blockedOptionId, NOW)).toBeNull()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppCreate).not.toHaveBeenCalled()
+  })
+
+  it('bounds distinct click history and keeps the latest canonical option idempotently', async () => {
+    reset()
+    const prior = Array.from({ length: 20 }, (_, index) => `legacy-${index}`)
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app1', status: 'applied', clickedApplyOptionIds: [...prior, APPLY_OPTION_ID],
+    }) }) })
+
+    await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)
+    const next = mockAppUpdateOne.mock.calls[0][1].$set.clickedApplyOptionIds
+    expect(next).toHaveLength(16)
+    expect(next.at(-1)).toBe(APPLY_OPTION_ID)
+    expect(next.filter((id: string) => id === APPLY_OPTION_ID)).toHaveLength(1)
+  })
+
+  it('does not mutate the application when the exact provenance/lifecycle pin loses', async () => {
     reset()
     mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
     mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
 
-    expect(await recordApplyClick('u1', 'j1', {}, NOW)).toBeNull()
+    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toBeNull()
     expect(mockAppCreate).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
   })
 })
 
@@ -206,28 +332,208 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
 })
 
 describe('reportBrokenLink (§4b crowd healing)', () => {
-  it('NO recorded click (missing row OR saved-only) → rejected, demotion never fires (Codex #522)', async () => {
+  function appQuery(value: unknown) {
+    return { select: () => ({ lean: () => Promise.resolve(value) }) }
+  }
+
+  it('rejects missing/cross-user rows and options this user never clicked', async () => {
     reset()
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0 }) // covers both: no row, and a row without apply_clicked in history
-    const r = await reportBrokenLink('u1', 'j1', 'https://dead.example/apply', NOW)
-    expect(r).toEqual({ ok: false })
+    mockAppFindOne.mockReturnValue(appQuery(null))
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
-    // the filter itself demands the machine fact
-    expect(mockAppUpdateOne.mock.calls[0][0]).toMatchObject({ 'statusHistory.status': 'apply_clicked' })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+
+    reset()
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'other-users-shape-is-invisible-to-owner-query',
+      clickedApplyOptionIds: [],
+      brokenLinkReports: [],
+    }))
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
+    expect(mockAppFindOne).toHaveBeenCalledWith(
+      { userId: 'u1', jobPostingId: 'j1' },
+      undefined,
+      expect.objectContaining({ session: expect.anything() }),
+    )
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
   })
 
-  it('records on the application AND increments the matching provenance rung', async () => {
+  it('records the canonical report and increments exactly its source/url/tier rung', async () => {
     reset()
-    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
-    await reportBrokenLink('u1', 'j1', 'https://dead.example/apply', NOW)
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1',
+      clickedApplyOptionIds: [APPLY_OPTION_ID],
+      brokenLinkReports: [],
+    }))
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({
+      ok: true,
+      recorded: true,
+      optionId: APPLY_OPTION_ID,
+      tier: 'direct-ats',
+      hadFailover: false,
+    })
     const [appFilter, appUpdate] = mockAppUpdateOne.mock.calls[0]
-    expect(appFilter).toEqual({ userId: 'u1', jobPostingId: 'j1', 'statusHistory.status': 'apply_clicked' })
-    expect(appUpdate.$push.brokenLinkReports).toMatchObject({ url: 'https://dead.example/apply', reportedAt: NOW })
+    expect(appFilter).toMatchObject({
+      _id: 'app1',
+      userId: 'u1',
+      jobPostingId: 'j1',
+      clickedApplyOptionIds: APPLY_OPTION_ID,
+      'brokenLinkReports.optionId': { $ne: APPLY_OPTION_ID },
+    })
+    expect(appUpdate.$set.brokenLinkReports).toEqual([{
+      optionId: APPLY_OPTION_ID,
+      url: APPLY_SOURCE.applyUrl,
+      tier: 'direct-ats',
+      reportedAt: NOW,
+    }])
     const [postFilter, postUpdate, postOpts] = mockPostingUpdateOne.mock.calls[0]
-    expect(postFilter).toEqual({ _id: 'j1', 'provenance.applyUrl': 'https://dead.example/apply' })
-    // ALL rungs carrying the dead URL take the report (arrayFilters, not $)
+    expect(postFilter).toMatchObject({
+      _id: 'j1',
+      status: 'open',
+      closedReason: { $exists: false },
+      provenance: { $elemMatch: {
+        sourceKey: APPLY_SOURCE.sourceKey,
+        applyUrl: APPLY_SOURCE.applyUrl,
+        applyTier: APPLY_SOURCE.applyTier,
+      } },
+    })
     expect(postUpdate).toEqual({ $inc: { 'provenance.$[elem].brokenReportCount': 1 } })
-    expect(postOpts).toEqual({ arrayFilters: [{ 'elem.applyUrl': 'https://dead.example/apply' }] })
+    expect(postOpts).toMatchObject({
+      arrayFilters: [{
+        'elem.sourceKey': APPLY_SOURCE.sourceKey,
+        'elem.applyUrl': APPLY_SOURCE.applyUrl,
+        'elem.applyTier': APPLY_SOURCE.applyTier,
+      }],
+      session: expect.anything(),
+    })
+  })
+
+  it('is idempotent per user+option and does not increment a duplicate report', async () => {
+    reset()
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1',
+      clickedApplyOptionIds: [APPLY_OPTION_ID],
+      brokenLinkReports: [{
+        optionId: APPLY_OPTION_ID,
+        url: APPLY_SOURCE.applyUrl,
+        tier: APPLY_SOURCE.applyTier,
+        reportedAt: NOW,
+      }],
+    }))
+
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toMatchObject({
+      ok: true,
+      recorded: false,
+    })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('rejects an alternate until that exact current option has been clicked', async () => {
+    const alternate = {
+      sourceId: 'greenhouse',
+      sourceKey: 'greenhouse:2',
+      applyUrl: 'https://boards.example/jobs/2',
+      applyTier: 'employer' as const,
+    }
+    const alternateId = applyOptionIdOf({
+      sourceKey: alternate.sourceKey,
+      url: alternate.applyUrl,
+      tier: alternate.applyTier,
+    })
+    const posting = { title: 'SDE', company: 'X', locations: [], provenance: [APPLY_SOURCE, alternate], status: 'open' }
+    reset(posting)
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID], brokenLinkReports: [],
+    }))
+    expect(await reportBrokenLink('u1', 'j1', alternateId, NOW)).toEqual({ ok: false })
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+
+    reset(posting)
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID, alternateId], brokenLinkReports: [],
+    }))
+    expect(await reportBrokenLink('u1', 'j1', alternateId, NOW)).toMatchObject({
+      ok: true,
+      recorded: true,
+      tier: 'employer',
+      hadFailover: true,
+    })
+  })
+
+  it('rejects stale/replaced options and restricted closures before application mutation', async () => {
+    reset({
+      title: 'SDE', company: 'X', locations: [],
+      provenance: [{ ...APPLY_SOURCE, applyUrl: 'https://x.example/new' }],
+      status: 'open',
+    })
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+
+    reset({
+      title: 'SDE', company: 'X', locations: [], provenance: [APPLY_SOURCE],
+      status: 'closed', closedReason: 'source-revoked',
+    })
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+  })
+
+  it('turns a concurrent application-edge loss into an idempotent retry without a second increment', async () => {
+    reset()
+    mockAppFindOne
+      .mockReturnValueOnce(appQuery({
+        _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID], brokenLinkReports: [],
+      }))
+      .mockReturnValueOnce(appQuery({
+        _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID],
+        brokenLinkReports: [{ optionId: APPLY_OPTION_ID, url: APPLY_SOURCE.applyUrl, reportedAt: NOW }],
+      }))
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
+
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toMatchObject({
+      ok: true,
+      recorded: false,
+    })
+    expect(mockStartSession).toHaveBeenCalledTimes(2)
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('bounds report history while retaining every report for a current provenance option', async () => {
+    const provenance = Array.from({ length: 8 }, (_, index) => ({
+      sourceId: `source-${index}`,
+      sourceKey: `source:${index}`,
+      applyUrl: `https://example.com/apply/${index}`,
+      applyTier: 'employer' as const,
+    }))
+    const optionIds = provenance.map((entry) => applyOptionIdOf({
+      sourceKey: entry.sourceKey,
+      url: entry.applyUrl,
+      tier: entry.applyTier,
+    }))
+    reset({ title: 'SDE', company: 'X', locations: [], provenance, status: 'open' })
+    const currentReports = provenance.slice(0, 7).map((entry, index) => ({
+      optionId: optionIds[index],
+      url: entry.applyUrl,
+      tier: entry.applyTier,
+      reportedAt: new Date(NOW.getTime() - index - 1),
+    }))
+    const historical = Array.from({ length: 30 }, (_, index) => ({
+      optionId: `legacy-${index}`,
+      url: `https://legacy.example/${index}`,
+      reportedAt: new Date(NOW.getTime() - 100 - index),
+    }))
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1',
+      clickedApplyOptionIds: [optionIds[7]],
+      brokenLinkReports: [...historical, ...currentReports],
+    }))
+
+    expect(await reportBrokenLink('u1', 'j1', optionIds[7], NOW)).toMatchObject({ ok: true, recorded: true })
+    const reports = mockAppUpdateOne.mock.calls[0][1].$set.brokenLinkReports
+    expect(reports).toHaveLength(16)
+    for (const optionId of optionIds) {
+      expect(reports.some((report: { optionId?: string }) => report.optionId === optionId)).toBe(true)
+    }
   })
 })
 
@@ -744,11 +1050,50 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
     const r = await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)
     expect(r).toEqual({ ok: true })
-    const [filter, update] = mockAppUpdateOne.mock.calls[0]
+    const [filter, update, options] = mockAppUpdateOne.mock.calls[0]
     expect(filter).toEqual({ _id: 'app1', userId: 'u1', jobPostingId: 'j1' })
     expect(update.$set.tailoredVersion).toMatchObject({ tailoredText: 'TAILORED', matchScore: 78, createdAt: NOW })
     expect(update.$set.tailoredVersion.jdHash).toHaveLength(20)
+    expect(options).toMatchObject({ runValidators: true, session: expect.anything() })
     expect(mockAppCreate).not.toHaveBeenCalled()
+  })
+
+  it('enforces the shared text boundary before reading or pinning a posting', async () => {
+    reset()
+    postingChain({
+      title: 'SDE',
+      company: 'X',
+      locations: [],
+      provenance: [],
+      status: 'open',
+      jdCompressed: TAILOR_JD_COMPRESSED,
+    })
+
+    expect(await saveTailoredVersion(
+      'u1',
+      'j1',
+      { ...PAYLOAD, tailoredText: 'x'.repeat(60_000) },
+      NOW,
+    )).toEqual({ ok: true })
+
+    reset()
+    expect(await saveTailoredVersion(
+      'u1',
+      'j1',
+      { ...PAYLOAD, tailoredText: 'x'.repeat(60_001) },
+      NOW,
+    )).toEqual({ ok: false, reason: 'invalid-payload' })
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+
+    expect(await saveTailoredVersion(
+      'u1',
+      'j1',
+      { ...PAYLOAD, tailoredText: '   ' },
+      NOW,
+    )).toEqual({ ok: false, reason: 'invalid-payload' })
+    expect(mockPostingFindById).not.toHaveBeenCalled()
   })
 
   it('no row: implicit save — creates at saved WITH the tailored version and pins the posting', async () => {
@@ -756,13 +1101,15 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     postingChain({ title: 'SDE', company: 'X', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }, null)
     const r = await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)
     expect(r).toEqual({ ok: true })
-    const created = mockAppCreate.mock.calls[0][0]
+    const created = mockAppCreate.mock.calls[0][0][0]
     expect(created.status).toBe('saved')
     expect(created.tailoredVersion.tailoredText).toBe('TAILORED')
     expect(mockPostingUpdateOne).toHaveBeenCalledWith(
       expect.objectContaining({ _id: 'j1', status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }),
       { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+      expect.objectContaining({ session: expect.anything() }),
     )
+    expect(mockAppCreate.mock.calls[0][1]).toMatchObject({ session: expect.anything() })
   })
 
   it('paste-sourced tailors (no sourceResumeId) create cleanly — empty string never reaches Mongoose (Codex P1 #526)', async () => {
@@ -770,7 +1117,7 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }, null)
     const r = await saveTailoredVersion('u1', 'j1', PASTE_PAYLOAD, NOW)
     expect(r).toEqual({ ok: true })
-    const created = mockAppCreate.mock.calls[0][0]
+    const created = mockAppCreate.mock.calls[0][0][0]
     expect(created.tailoredVersion.sourceResumeId).toBeUndefined() // absent, not ''
     expect('sourceResumeId' in created.tailoredVersion && created.tailoredVersion.sourceResumeId === '').toBe(false)
   })
@@ -816,9 +1163,58 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     postingChain(null)
     expect(await saveTailoredVersion('u1', 'gone', PAYLOAD, NOW)).toEqual({ ok: false, reason: 'not-found' })
     reset()
-    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }, null)
+    const posting = { title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED }
+    mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(posting) }) })
+    mockAppFindOne
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'winner' }) }) })
     mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
     mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
     expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: true })
+    expect(mockStartSession).toHaveBeenCalledTimes(2)
+    expect(mockAppUpdateOne).toHaveBeenCalledWith(
+      { _id: 'winner', userId: 'u1', jobPostingId: 'j1' },
+      expect.objectContaining({ $set: expect.objectContaining({ tailoredVersion: expect.anything() }) }),
+      expect.objectContaining({ session: expect.anything(), runValidators: true }),
+    )
+  })
+
+  it('keeps the exact authority pin and application write in one transaction', async () => {
+    reset()
+    postingChain({
+      title: 'SDE', company: 'X', locations: [], provenance: [],
+      status: 'open', jdCompressed: TAILOR_JD_COMPRESSED,
+    })
+
+    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: true })
+
+    const transactionSession = await mockStartSession.mock.results[0].value
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: 'j1',
+        status: 'open',
+        closedReason: { $exists: false },
+        jdCompressed: TAILOR_JD_COMPRESSED,
+      },
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+      { session: transactionSession },
+    )
+    expect(mockAppUpdateOne.mock.calls[0][2]).toMatchObject({
+      session: transactionSession,
+      runValidators: true,
+    })
+  })
+
+  it('propagates a non-duplicate application failure so the transaction rolls back its pin', async () => {
+    reset()
+    postingChain({
+      title: 'SDE', company: 'X', locations: [], provenance: [],
+      status: 'open', jdCompressed: TAILOR_JD_COMPRESSED,
+    }, null)
+    mockAppCreate.mockRejectedValueOnce(new Error('validation failed'))
+
+    await expect(saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).rejects.toThrow('validation failed')
+    expect(mockPostingUpdateOne).toHaveBeenCalledOnce()
+    expect(mockEndSession).toHaveBeenCalledOnce()
   })
 })

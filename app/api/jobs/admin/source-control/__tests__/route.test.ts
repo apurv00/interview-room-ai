@@ -8,6 +8,7 @@ const {
   mockLoggerInfo,
   mockLoggerWarn,
   mockUserFindOne,
+  mockCheckJobsRateLimit,
 } = vi.hoisted(() => ({
   mockConnectDB: vi.fn(),
   mockControlJobSource: vi.fn(),
@@ -16,6 +17,7 @@ const {
   mockLoggerInfo: vi.fn(),
   mockLoggerWarn: vi.fn(),
   mockUserFindOne: vi.fn(),
+  mockCheckJobsRateLimit: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({
@@ -34,6 +36,9 @@ vi.mock('@shared/logger', () => ({
     info: (...args: unknown[]) => mockLoggerInfo(...args),
     warn: (...args: unknown[]) => mockLoggerWarn(...args),
   },
+}))
+vi.mock('@jobs/services/rateLimit', () => ({
+  checkJobsRateLimit: (...args: unknown[]) => mockCheckJobsRateLimit(...args),
 }))
 vi.mock('@jobs/services/sourceControl', () => {
   class SourceControlNotFoundError extends Error {
@@ -134,6 +139,7 @@ beforeEach(() => {
   mockConnectDB.mockResolvedValue(undefined)
   mockGetServerSession.mockResolvedValue({ user: { id: ACTOR_ID, role: 'platform_admin' } })
   mockCurrentAdmin()
+  mockCheckJobsRateLimit.mockResolvedValue(null)
   mockControlJobSource.mockResolvedValue({
     sourceId: validBody.sourceId,
     action: validBody.action,
@@ -150,6 +156,21 @@ beforeEach(() => {
 })
 
 describe('POST /api/jobs/admin/source-control', () => {
+  it('applies the admin command budget after session identity validation and before Mongo', async () => {
+    mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': '60' },
+    }))
+
+    const response = await POST(request())
+
+    expect(response.status).toBe(429)
+    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(ACTOR_ID, 'admin-command')
+    expect(mockConnectDB).not.toHaveBeenCalled()
+    expect(mockUserFindOne).not.toHaveBeenCalled()
+    expect(mockControlJobSource).not.toHaveBeenCalled()
+  })
+
   it('returns 401 without a session and does not touch Mongo', async () => {
     mockGetServerSession.mockResolvedValue(null)
 

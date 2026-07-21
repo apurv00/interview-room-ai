@@ -23,112 +23,150 @@ vi.mock('@shared/db/models', () => ({
   JobIngestCycle: { create: mockCycleCreate },
 }))
 
-import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS, resolvesToPublicAddress } from '../services/linkCheckService'
-
-// Tests must never hit live DNS: a stub resolver answering a public IP.
-const pubResolve = async () => [{ address: '93.184.216.34' }]
+import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS } from '../services/linkCheckService'
+import { createSafeLinkRequest, type LinkRequestImpl, type PinnedRequestImpl } from '../services/safeLinkNetwork'
 import { postingOutcome, runLinkCheckHandler } from '../jobs/linkCheckJobs'
 
 const NOW = new Date('2026-07-16T12:00:00Z')
 
-function fetchStub(status: number, body = ''): typeof fetch {
-  return vi.fn().mockResolvedValue({ status, ok: status >= 200 && status < 300, text: async () => body }) as never
+function requestStub(status: number, bodyText = '', location?: string): LinkRequestImpl {
+  return vi.fn().mockResolvedValue({ kind: 'response', status, bodyText, location }) as never
 }
-function fetchThrow(code: string): typeof fetch {
-  const err = new Error(code) as Error & { cause: { code: string } }
-  err.cause = { code }
-  return vi.fn().mockRejectedValue(err) as never
+function unavailableStub(code: string): LinkRequestImpl {
+  return vi.fn().mockResolvedValue({ kind: 'unverifiable', code }) as never
 }
+const nxdomainStub = vi.fn().mockResolvedValue({ kind: 'nxdomain' }) as LinkRequestImpl
+
+// Tests must never hit live DNS: a resolver and connector are always injected.
+const publicResolver = async () => [{ address: '93.184.216.34', family: 4 as const }]
 
 describe('checkApplyLink classifier', () => {
   it('404/410 are dead; NXDOMAIN and connection-refused are dead (the vacancy-spam class)', async () => {
-    expect(await checkApplyLink('https://x.example/a', fetchStub(404), pubResolve)).toBe('dead')
-    expect(await checkApplyLink('https://x.example/a', fetchStub(410), pubResolve)).toBe('dead')
-    expect(await checkApplyLink('https://gone.example/a', fetchThrow('ENOTFOUND'), pubResolve)).toBe('dead')
-    expect(await checkApplyLink('https://refused.example/a', fetchThrow('ECONNREFUSED'), pubResolve)).toBe('dead')
+    expect(await checkApplyLink('https://x.example/a', requestStub(404))).toBe('dead')
+    expect(await checkApplyLink('https://x.example/a', requestStub(410))).toBe('dead')
+    expect(await checkApplyLink('https://gone.example/a', nxdomainStub)).toBe('dead')
+    expect(await checkApplyLink('https://refused.example/a', unavailableStub('ECONNREFUSED'))).toBe('dead')
   })
 
   it('a 200 body announcing closure is dead — real rot hides behind 200s', async () => {
-    expect(await checkApplyLink('https://x.example/a', fetchStub(200, 'This job is no longer accepting applications.'), pubResolve)).toBe('dead')
-    expect(await checkApplyLink('https://x.example/a', fetchStub(200, 'Apply now — great role!'), pubResolve)).toBe('alive')
+    expect(await checkApplyLink('https://x.example/a', requestStub(200, 'This job is no longer accepting applications.'))).toBe('dead')
+    expect(await checkApplyLink('https://x.example/a', requestStub(200, 'Apply now — great role!'))).toBe('alive')
   })
 
   it('bot-blocks, 5xx, and network timeouts are UNVERIFIABLE — never dead (false-positive safety)', async () => {
     for (const s of [403, 406, 429, 999, 500, 503]) {
-      expect(await checkApplyLink('https://ats.example/a', fetchStub(s), pubResolve)).toBe('unverifiable')
+      expect(await checkApplyLink('https://ats.example/a', requestStub(s))).toBe('unverifiable')
     }
-    expect(await checkApplyLink('https://slow.example/a', fetchThrow('ETIMEDOUT'), pubResolve)).toBe('unverifiable')
+    expect(await checkApplyLink('https://slow.example/a', unavailableStub('ETIMEDOUT'))).toBe('unverifiable')
   })
 
   it('Codex #543 P1: a redirect to a PRIVATE target is never followed — each hop re-passes the SSRF guard', async () => {
-    const redirectRes = { status: 302, ok: false, headers: { get: (k: string) => (k === 'location' ? 'http://169.254.169.254/latest/meta-data' : null) }, text: async () => '' }
-    const fetchSpy = vi.fn().mockResolvedValue(redirectRes)
-    expect(await checkApplyLink('https://public.example/jobs/1', fetchSpy as never, pubResolve)).toBe('unverifiable')
-    expect(fetchSpy).toHaveBeenCalledTimes(1) // the private hop was NEVER fetched
+    const requestSpy = vi.fn().mockResolvedValue({ kind: 'response', status: 302, location: 'http://169.254.169.254/latest/meta-data', bodyText: '' })
+    expect(await checkApplyLink('https://public.example/jobs/1', requestSpy as never)).toBe('unverifiable')
+    expect(requestSpy).toHaveBeenCalledTimes(1) // the private hop was NEVER requested
   })
 
   it('a legitimate redirect chain still resolves: public 301 → public 404 = dead', async () => {
-    const hop = { status: 301, ok: false, headers: { get: (k: string) => (k === 'location' ? '/careers/closed' : null) }, text: async () => '' }
-    const final = { status: 404, ok: false, headers: { get: () => null }, text: async () => '' }
-    const fetchSpy = vi.fn().mockResolvedValueOnce(hop).mockResolvedValueOnce(final)
-    expect(await checkApplyLink('https://public.example/jobs/1', fetchSpy as never, pubResolve)).toBe('dead')
-    expect(fetchSpy).toHaveBeenCalledTimes(2)
-    expect(String(fetchSpy.mock.calls[1][0])).toBe('https://public.example/careers/closed')
+    const requestSpy = vi.fn()
+      .mockResolvedValueOnce({ kind: 'response', status: 301, location: '/careers/closed', bodyText: '' })
+      .mockResolvedValueOnce({ kind: 'response', status: 404, bodyText: '' })
+    expect(await checkApplyLink('https://public.example/jobs/1', requestSpy as never)).toBe('dead')
+    expect(requestSpy).toHaveBeenCalledTimes(2)
+    expect(String(requestSpy.mock.calls[1][0])).toBe('https://public.example/careers/closed')
+  })
+
+  it('rejects a redirect to a non-default port or HTTPS downgrade before another request', async () => {
+    for (const location of ['https://public.example:6379/internal', 'http://public.example/internal']) {
+      const requestSpy = requestStub(302, '', location)
+      await expect(checkApplyLink('https://public.example/jobs/1', requestSpy)).resolves.toBe('unverifiable')
+      expect(requestSpy).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('resolves and pins each redirect host afresh; a private answer stops before the second connect', async () => {
+    const resolve = vi.fn(async (hostname: string) => hostname === 'public.example'
+      ? [{ address: '93.184.216.34', family: 4 as const }]
+      : [{ address: '10.0.0.5', family: 4 as const }])
+    const pinnedRequest = vi.fn().mockResolvedValue({
+      status: 302,
+      location: 'https://private-answer.example/internal',
+      bodyText: '',
+    }) as PinnedRequestImpl
+    const request = createSafeLinkRequest({ resolve, requestPinned: pinnedRequest })
+
+    await expect(checkApplyLink('https://public.example/jobs/1', request)).resolves.toBe('unverifiable')
+    expect(resolve).toHaveBeenCalledTimes(2)
+    expect(pinnedRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('follows only 301/302/303/307/308 and enforces the five-hop boundary', async () => {
+    const unsupported = requestStub(305, '', 'https://public.example/proxy')
+    await expect(checkApplyLink('https://public.example/jobs/1', unsupported)).resolves.toBe('unverifiable')
+    expect(unsupported).toHaveBeenCalledTimes(1)
+
+    const fiveHops = vi.fn()
+    for (let hop = 1; hop <= 5; hop++) {
+      fiveHops.mockResolvedValueOnce({ kind: 'response', status: 302, location: `/hop-${hop}`, bodyText: '' })
+    }
+    fiveHops.mockResolvedValueOnce({ kind: 'response', status: 200, bodyText: 'Apply now' })
+    await expect(checkApplyLink('https://public.example/start', fiveHops as never)).resolves.toBe('alive')
+    expect(fiveHops).toHaveBeenCalledTimes(6)
+
+    const sixthRedirect = vi.fn()
+    for (let hop = 1; hop <= 6; hop++) {
+      sixthRedirect.mockResolvedValueOnce({ kind: 'response', status: 302, location: `/too-many-${hop}`, bodyText: '' })
+    }
+    await expect(checkApplyLink('https://public.example/start', sixthRedirect as never)).resolves.toBe('unverifiable')
+    expect(sixthRedirect).toHaveBeenCalledTimes(6)
   })
 
   it('rechecks authority before DNS and HTTP on every redirect hop', async () => {
-    const hop = { status: 301, ok: false, headers: { get: () => '/careers/closed' }, text: async () => '' }
-    const final = { status: 404, ok: false, headers: { get: () => null }, text: async () => '' }
-    const fetchSpy = vi.fn().mockResolvedValueOnce(hop).mockResolvedValueOnce(final)
+    const pinnedRequest = vi.fn()
+      .mockResolvedValueOnce({ status: 301, location: '/careers/closed', bodyText: '' })
+      .mockResolvedValueOnce({ status: 404, bodyText: '' }) as PinnedRequestImpl
+    const request = createSafeLinkRequest({ resolve: publicResolver, requestPinned: pinnedRequest })
     const authority = vi.fn().mockResolvedValue(true)
 
-    await expect(checkApplyLink('https://public.example/jobs/1', fetchSpy as never, pubResolve, authority)).resolves.toBe('dead')
+    await expect(checkApplyLink('https://public.example/jobs/1', request, authority)).resolves.toBe('dead')
 
     expect(authority).toHaveBeenCalledTimes(4) // DNS + HTTP for both hops
-    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(pinnedRequest).toHaveBeenCalledTimes(2)
   })
 
   it('a revoke while DNS is in flight blocks the following HTTP request', async () => {
-    const fetchSpy = vi.fn()
+    const pinnedRequest = vi.fn()
+    const request = createSafeLinkRequest({ resolve: publicResolver, requestPinned: pinnedRequest })
     const authority = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false)
 
-    await expect(checkApplyLink('https://public.example/jobs/1', fetchSpy as never, pubResolve, authority))
+    await expect(checkApplyLink('https://public.example/jobs/1', request, authority))
       .rejects.toBeInstanceOf(LinkCheckAuthorityChangedError)
 
     expect(authority).toHaveBeenCalledTimes(2)
-    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(pinnedRequest).not.toHaveBeenCalled()
   })
 
   it('a redirect loop exhausts the hop cap → unverifiable, never dead', async () => {
-    const loop = { status: 302, ok: false, headers: { get: (k: string) => (k === 'location' ? 'https://public.example/a' : null) }, text: async () => '' }
-    const fetchSpy = vi.fn().mockResolvedValue(loop)
-    expect(await checkApplyLink('https://public.example/a', fetchSpy as never, pubResolve)).toBe('unverifiable')
+    const requestSpy = requestStub(302, '', 'https://public.example/a')
+    expect(await checkApplyLink('https://public.example/a', requestSpy)).toBe('unverifiable')
+    expect(requestSpy).toHaveBeenCalledTimes(1) // canonical cycle detected before a second request
   })
 
-  it('Codex #543 r2: a HOSTNAME resolving to a private address is never fetched (DNS-rebind class)', async () => {
-    const spy = vi.fn()
-    const privResolve = async () => [{ address: '169.254.169.254' }]
-    expect(await checkApplyLink('https://evil-but-public-looking.example/a', spy as never, privResolve)).toBe('unverifiable')
-    expect(spy).not.toHaveBeenCalled()
-    // Mixed answers: ONE private address poisons the set.
-    const mixedResolve = async () => [{ address: '93.184.216.34' }, { address: '10.0.0.5' }]
-    expect(await checkApplyLink('https://mixed.example/a', spy as never, mixedResolve)).toBe('unverifiable')
-    expect(spy).not.toHaveBeenCalled()
-    // v4-mapped v6 private is caught too — dotted AND hex/compressed forms
-    // (Codex #543 r3: '::ffff:a9fe:a9fe' bypassed the dotted-only regex).
-    const mappedResolve = async () => [{ address: '::ffff:192.168.1.7' }]
-    expect(await resolvesToPublicAddress('https://mapped.example/a', mappedResolve)).toBe(false)
-    const hexMapped = async () => [{ address: '::ffff:a9fe:a9fe' }] // 169.254.169.254
-    expect(await resolvesToPublicAddress('https://hex.example/a', hexMapped)).toBe(false)
-    const hexLoop = async () => [{ address: '::ffff:7f00:1' }] // 127.0.0.1
-    expect(await resolvesToPublicAddress('https://loop.example/a', hexLoop)).toBe(false)
-    const uncompressed = async () => [{ address: '0:0:0:0:0:ffff:a9fe:a9fe' }]
-    expect(await resolvesToPublicAddress('https://unc.example/a', uncompressed)).toBe(false)
-    const hexPublic = async () => [{ address: '::ffff:5db8:d822' }] // 93.184.216.34
-    expect(await resolvesToPublicAddress('https://pub.example/a', hexPublic)).toBe(true)
-    // NXDOMAIN fails open — the fetch itself surfaces ENOTFOUND as the dead signal.
-    const nxResolve = async () => { throw Object.assign(new Error('nx'), { code: 'ENOTFOUND' }) }
-    expect(await checkApplyLink('https://gone.example/a', fetchThrow('ENOTFOUND'), nxResolve as never)).toBe('dead')
+  it('private or mixed DNS answers never reach the pinned connector', async () => {
+    const pinnedRequest = vi.fn()
+    const privateRequest = createSafeLinkRequest({
+      resolve: async () => [{ address: '169.254.169.254', family: 4 }],
+      requestPinned: pinnedRequest,
+    })
+    const mixedRequest = createSafeLinkRequest({
+      resolve: async () => [
+        { address: '93.184.216.34', family: 4 },
+        { address: '10.0.0.5', family: 4 },
+      ],
+      requestPinned: pinnedRequest,
+    })
+    await expect(checkApplyLink('https://private-answer.example/a', privateRequest)).resolves.toBe('unverifiable')
+    await expect(checkApplyLink('https://mixed-answer.example/a', mixedRequest)).resolves.toBe('unverifiable')
+    expect(pinnedRequest).not.toHaveBeenCalled()
   })
 
   it("Codex #543 r2: an unverifiable RESTRIKE keeps status 'dead' — the row must stay in the pick pool", () => {
@@ -141,43 +179,29 @@ describe('checkApplyLink classifier', () => {
     expect(r.shouldClose).toBe(false)
   })
 
-  it('Codex #543 r4: the body sniff cap binds DURING the read — a huge streaming body is cancelled at the cap', async () => {
-    const chunk = new TextEncoder().encode('x'.repeat(64 * 1024))
-    let reads = 0
-    const cancel = vi.fn()
-    const res = {
-      status: 200, ok: true,
-      body: { getReader: () => ({ read: async () => { reads += 1; return { done: false, value: chunk } }, cancel }) },
-      headers: { get: () => null },
-      text: async () => { throw new Error('text() must not be used when a stream exists') },
-    }
-    const outcome = await checkApplyLink('https://big.example/a', vi.fn().mockResolvedValue(res) as never, pubResolve)
-    expect(outcome).toBe('alive')
-    expect(reads).toBeLessThanOrEqual(3) // 100KB cap / 64KB chunks — never unbounded
-    expect(cancel).toHaveBeenCalled()
-  })
-
   it('Codex #543 r4: dead-link closes of unpinned rows enter the 7-day purge lifecycle', async () => {
     // covered in the handler suite below via the purgeAt assertion
     expect(true).toBe(true)
   })
 
-  it('Codex #543 r5: a STALLED DNS lookup is bounded by the preflight timeout — unverifiable, never a hang, never fetched', async () => {
-    const spy = vi.fn()
+  it('a stalled DNS lookup is bounded and never reaches the connector', async () => {
+    const pinnedRequest = vi.fn()
     const hangingResolve = () => new Promise<never>(() => {}) // never settles
-    const ok = await resolvesToPublicAddress('https://lame-dns.example/a', hangingResolve as never, 20)
-    expect(ok).toBe(false) // cannot verify publicness → refuse the fetch
-    expect(spy).not.toHaveBeenCalled()
-    // NXDOMAIN still fails OPEN (fetch owns the ENOTFOUND dead signal).
-    const nx = async () => { throw Object.assign(new Error('nx'), { code: 'ENOTFOUND' }) }
-    expect(await resolvesToPublicAddress('https://gone.example/a', nx as never, 20)).toBe(true)
+    const request = createSafeLinkRequest({ resolve: hangingResolve, requestPinned: pinnedRequest, dnsTimeoutMs: 20 })
+    await expect(checkApplyLink('https://lame-dns.example/a', request)).resolves.toBe('unverifiable')
+    expect(pinnedRequest).not.toHaveBeenCalled()
   })
 
-  it('SSRF guard: private/loopback/non-http targets never reach fetch', async () => {
+  it('shape gate rejects private/special targets, credentials and non-default ports before networking', async () => {
     const spy = vi.fn()
-    for (const u of ['http://localhost/x', 'http://127.0.0.1/x', 'http://10.0.0.5/x', 'http://172.20.1.1/x', 'http://192.168.1.1/x', 'http://169.254.1.1/x', 'ftp://x.example/a', 'javascript:alert(1)']) {
+    for (const u of [
+      'http://localhost/x', 'http://localhost./x', 'http://127.0.0.1/x', 'http://10.0.0.5/x',
+      'http://172.20.1.1/x', 'http://192.168.1.1/x', 'http://169.254.1.1/x',
+      'http://user:password@public.example/x', 'http://public.example:2375/x',
+      'https://public.example:8080/x', 'ftp://x.example/a', 'javascript:alert(1)',
+    ]) {
       expect(isCheckableUrl(u)).toBe(false)
-      expect(await checkApplyLink(u, spy as never, pubResolve)).toBe('unverifiable')
+      expect(await checkApplyLink(u, spy as never)).toBe('unverifiable')
     }
     expect(spy).not.toHaveBeenCalled()
     expect(isCheckableUrl('https://boards.greenhouse.io/x/1')).toBe(true)
@@ -254,7 +278,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([])) // unchecked
       .mockReturnValueOnce(chain([])) // stale unverifiable
       .mockReturnValueOnce(chain([])) // stale alive
-    const r = await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve, 0)
+    const r = await runLinkCheckHandler(step, nxdomainStub, new Date(), 0)
     expect(r.closed).toBe(1)
     const [filter, update] = mockPostingUpdateOne.mock.calls[0]
     expect(filter).toMatchObject({ _id: 'p1', status: 'open' }) // guarded
@@ -275,7 +299,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([])) // unchecked
       .mockReturnValueOnce(chain([])) // stale unverifiable
       .mockReturnValueOnce(chain([])) // stale alive
-    await runLinkCheckHandler(step, vi.fn() as never, new Date(), pubResolve, 0)
+    await runLinkCheckHandler(step, vi.fn() as never, new Date(), 0)
     expect(mockPostingFind).toHaveBeenCalledTimes(5)
     // Codex #543 r3: transient results re-enter the pool.
     const unvFilter = mockPostingFind.mock.calls[3][0] as Record<string, unknown>
@@ -297,9 +321,9 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
-    const fetchSpy = vi.fn().mockRejectedValue(Object.assign(new Error('nx'), { cause: { code: 'ENOTFOUND' } }))
-    const r = await runLinkCheckHandler(step, fetchSpy as never, new Date(), pubResolve, 0)
-    expect(fetchSpy).toHaveBeenCalledTimes(4) // ALL urls checked, none sliced away
+    const requestSpy = vi.fn().mockResolvedValue({ kind: 'nxdomain' })
+    const r = await runLinkCheckHandler(step, requestSpy as never, new Date(), 0)
+    expect(requestSpy).toHaveBeenCalledTimes(4) // ALL urls checked, none sliced away
     expect(r.closed).toBe(1)
   })
 
@@ -316,7 +340,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
-    await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve, 0)
+    await runLinkCheckHandler(step, nxdomainStub, new Date(), 0)
     const [filter] = mockPostingUpdateOne.mock.calls[0]
     expect((filter as Record<string, unknown>)['applyCheck.lastCheckedAt']).toEqual(prevChecked)
     expect(filter).toMatchObject({ status: 'open', provenance: doc.provenance })
@@ -334,12 +358,13 @@ describe('runLinkCheckHandler', () => {
     mockPostingExists
       .mockResolvedValueOnce({ _id: 'p-revoked' }) // immediately before DNS
       .mockResolvedValueOnce(null) // revoked before HTTP
-    const fetchSpy = vi.fn()
+    const pinnedRequest = vi.fn()
+    const request = createSafeLinkRequest({ resolve: publicResolver, requestPinned: pinnedRequest })
 
-    const result = await runLinkCheckHandler(step, fetchSpy as never, new Date(), pubResolve, 0)
+    const result = await runLinkCheckHandler(step, request, new Date(), 0)
 
     expect(result).toEqual({ checked: 0, closed: 0 })
-    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(pinnedRequest).not.toHaveBeenCalled()
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     expect(mockPostingExists.mock.calls[0][0]).toMatchObject({
       _id: 'p-revoked',
@@ -367,7 +392,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
     mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
 
-    const result = await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve, 0)
+    const result = await runLinkCheckHandler(step, nxdomainStub, new Date(), 0)
 
     expect(result.closed).toBe(0)
     expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
@@ -385,7 +410,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
-    const r = await runLinkCheckHandler(step, spy as never, new Date(), pubResolve, 0)
+    const r = await runLinkCheckHandler(step, spy as never, new Date(), 0)
     // r3: a malformed stored URL is excluded — outcome derives from checkable rungs only.
     void r
     expect(spy).not.toHaveBeenCalled()

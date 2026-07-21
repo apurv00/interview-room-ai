@@ -6,6 +6,7 @@ import mongoose from 'mongoose'
 import { JobApplication, JobPosting, JobsEmailConfig, ProductEvent, User } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
 import { isSuppressed, jobPostingStateOf, preparePracticeHandoffPosting } from '@jobs'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,6 +21,8 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
   if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
+  const rateLimitBlock = await checkJobsRateLimit(userId, 'practice-email')
+  if (rateLimitBlock) return rateLimitBlock
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }

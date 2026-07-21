@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
+import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 
 /**
  * JobApplication — one user's relationship with one job posting
@@ -82,7 +83,17 @@ export interface IJobApplication extends Document {
    *  Pending = atsRequestedAt set AND (no atsResult OR older checkedAt). */
   atsRequestedAt?: Date
   notes?: string
-  brokenLinkReports: Array<{ url: string; reportedAt: Date }>
+  /** Opaque ids of server-resolved provenance options this user actually
+   * clicked. Unlike the legacy URL snapshot, these are safe authorization
+   * inputs for a later broken-link report. */
+  clickedApplyOptionIds: string[]
+  brokenLinkReports: Array<{
+    /** Absent only on legacy reports written before canonical option ids. */
+    optionId?: string
+    url: string
+    tier?: string
+    reportedAt: Date
+  }>
   /** Historical attendance links, including rows created before signed Jobs
    * handoffs existed. Kept for operational/backcompat consumers only. */
   practiceSessionIds: mongoose.Types.ObjectId[]
@@ -164,7 +175,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       type: new Schema(
         {
           sourceResumeId: { type: String },
-          tailoredText: { type: String, required: true, maxlength: 60000 },
+          tailoredText: { type: String, required: true, maxlength: MAX_JOB_TAILORED_TEXT_CHARS },
           structured: { type: Schema.Types.Mixed },
           matchScore: { type: Number, min: 0, max: 100 },
           addedKeywords: { type: [String], default: [] },
@@ -189,10 +200,19 @@ const JobApplicationSchema = new Schema<IJobApplication>(
     },
     atsRequestedAt: { type: Date },
     notes: { type: String, maxlength: 5000 },
+    clickedApplyOptionIds: {
+      type: [{ type: String, maxlength: 64 }],
+      default: [],
+    },
     brokenLinkReports: {
       type: [
         new Schema(
-          { url: { type: String, required: true, maxlength: 2000 }, reportedAt: { type: Date, required: true } },
+          {
+            optionId: { type: String, maxlength: 64 },
+            url: { type: String, required: true, maxlength: 2000 },
+            tier: { type: String, maxlength: 40 },
+            reportedAt: { type: Date, required: true },
+          },
           { _id: false }
         ),
       ],

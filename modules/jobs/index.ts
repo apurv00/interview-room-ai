@@ -33,6 +33,14 @@ export { atsBoardAdapter } from './adapters/atsBoardAdapter'
 export { BOARD_REGISTRY } from './config/boardRegistry'
 export type { BoardSeed } from './config/boardRegistry'
 export { getFeed, getJobDetail, tierAScore, bestApplyTierOf, isSafeHttpUrl } from './services/feedService'
+export {
+  applyOptionIdOf,
+  canonicalApplyOptionsOf,
+  isApplyOptionId,
+  parseApplyOptionMutation,
+  resolveApplyOption,
+} from './services/applyOptionIdentity'
+export type { CanonicalApplyOption } from './services/applyOptionIdentity'
 export { recordApplyClick, claimAtsRun, releaseAtsClaim, transitionStatus, reportBrokenLink, recordPracticeEvidence, saveTailoredVersion, USER_SETTABLE_STATUSES } from './services/applicationService'
 export type { UserSettableStatus } from './services/applicationService'
 export { getOrParseXray } from './services/xrayService'

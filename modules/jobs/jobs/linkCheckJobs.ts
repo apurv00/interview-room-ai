@@ -2,7 +2,8 @@ import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { JobPosting, JobIngestCycle } from '@shared/db/models'
 import { logger } from '@shared/logger'
-import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS, type LinkOutcome, type ResolveImpl } from '../services/linkCheckService'
+import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS, type LinkOutcome } from '../services/linkCheckService'
+import { safeLinkRequest, type LinkRequestImpl } from '../services/safeLinkNetwork'
 import { isBlockedApplyUrl } from '../services/qualityGate'
 
 /**
@@ -30,8 +31,8 @@ interface StepRunner {
 
 const RUN_CAP = 150
 // Chunk math vs the route's maxDuration=300 (Codex #543 rounds 2/5/6):
-// worst case per URL = 4s DNS preflight + 12s fetch timeout + 0.4s pacing
-// ≈ 16.4s. Chunks are packed by URL COUNT (≤15 URL-slots ≈ 246s worst),
+// worst case per URL = one 12s DNS+redirect+body deadline + 0.4s pacing
+// ≈ 12.4s. Chunks are packed by URL COUNT (≤15 URL-slots ≈ 186s worst),
 // NOT by posting count — so a posting with many apply URLs gets EVERY url
 // checked in one step (round 6: always slicing the same first three made
 // 4-URL spam permanently uncloseable) while the envelope still holds.
@@ -127,9 +128,8 @@ export function postingOutcome(outcomes: LinkOutcome[]): LinkOutcome {
 
 export async function runLinkCheckHandler(
   step: StepRunner,
-  fetchImpl: typeof fetch = fetch,
+  requestImpl: LinkRequestImpl = safeLinkRequest,
   now = new Date(),
-  resolveImpl?: ResolveImpl,
   pacingMs = PACING_MS,
 ): Promise<{ checked: number; closed: number }> {
   await connectDB()
@@ -182,7 +182,7 @@ export async function runLinkCheckHandler(
         let authorityChanged = false
         for (const u of urls) {
           try {
-            outcomes.push(await checkApplyLink(u, fetchImpl, resolveImpl, async () =>
+            outcomes.push(await checkApplyLink(u, requestImpl, async () =>
               !!(await JobPosting.exists({ ...lifecycleFilter, 'provenance.applyUrl': u } as never))
             ))
           } catch (error) {

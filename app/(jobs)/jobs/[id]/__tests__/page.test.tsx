@@ -15,6 +15,7 @@ import JobDetailPage from '../page'
 
 const JOB_ID = '507f1f77bcf86cd799439011'
 const RETAKE_ID = '507f1f77bcf86cd799439099'
+const APPLY_OPTION_ID = `ao1_${'a'.repeat(43)}`
 const BASE_DETAIL = {
   id: JOB_ID,
   title: 'Frontend Engineer',
@@ -52,7 +53,7 @@ const LIVE_APPLY_DETAIL = {
     practice: false,
     atsCheck: false,
   },
-  applyOptions: [{ url: 'https://apply.example/job', tier: 'direct-ats' }],
+  applyOptions: [{ optionId: APPLY_OPTION_ID, url: 'https://apply.example/job', tier: 'direct-ats' }],
 }
 
 function jsonResponse(value: unknown, ok = true) {
@@ -407,7 +408,7 @@ describe('Job detail Practice readiness', () => {
 
   it('renders an owner archive as closed preparation context and removes every apply surface', async () => {
     localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
-      clickedAt: Date.now(), url: 'https://stale.example/apply', tier: 'direct-ats',
+      clickedAt: Date.now(), optionId: APPLY_OPTION_ID, url: 'https://stale.example/apply', tier: 'direct-ats',
     }))
     const archived = {
       ...BASE_DETAIL,
@@ -420,7 +421,7 @@ describe('Job detail Practice readiness', () => {
         practice: true,
         atsCheck: true,
       },
-      applyOptions: [{ url: 'https://must-not-render.example/apply', tier: 'direct-ats' }],
+      applyOptions: [{ optionId: APPLY_OPTION_ID, url: 'https://must-not-render.example/apply', tier: 'direct-ats' }],
       practiceRole: 'frontend',
       practiceHandoffToken: 'archived-owner-token',
       application: { applicationId: 'app1', status: 'applied', practiceCount: 1, ats: { state: 'none' as const } },
@@ -611,6 +612,62 @@ describe('Job detail Practice readiness', () => {
     ))
   })
 
+  it('opens the displayed canonical URL but sends only its opaque optionId to mutation routes', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(LIVE_APPLY_DETAIL) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply ↗' }))
+
+    expect(window.open).toHaveBeenCalledWith('https://apply.example/job', '_blank', 'noopener')
+    const arm = JSON.parse(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`) ?? '{}')
+    expect(arm).toMatchObject({
+      optionId: APPLY_OPTION_ID,
+      url: 'https://apply.example/job',
+      tier: 'direct-ats',
+    })
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith(
+      `/api/jobs/${JOB_ID}/apply-click`,
+      expect.objectContaining({ body: JSON.stringify({ optionId: APPLY_OPTION_ID }) }),
+    ))
+
+    fireEvent(document, new Event('visibilitychange'))
+    fireEvent.click(await screen.findByRole('button', { name: /Link didn.t work/i }))
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith(
+      `/api/jobs/${JOB_ID}/broken-link`,
+      expect.objectContaining({ body: JSON.stringify({ optionId: APPLY_OPTION_ID }) }),
+    ))
+  })
+
+  it('clears legacy or replaced return arms instead of authorizing a stale report sheet', async () => {
+    localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
+      clickedAt: Date.now(),
+      url: 'https://apply.example/job',
+      tier: 'direct-ats',
+    }))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(LIVE_APPLY_DETAIL) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    await screen.findByRole('button', { name: 'Apply ↗' })
+    fireEvent(document, new Event('visibilitychange'))
+
+    await waitFor(() => expect(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`)).toBeNull())
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
+      clickedAt: Date.now(),
+      optionId: APPLY_OPTION_ID,
+      url: 'https://replaced.example/apply',
+      tier: 'direct-ats',
+    }))
+    fireEvent(document, new Event('visibilitychange'))
+    await waitFor(() => expect(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`)).toBeNull())
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('moves focus into the modal return sheet, contains Tab focus, and restores the Apply invoker on Escape', async () => {
     mockFetch.mockImplementation((input: RequestInfo | URL) => (
       String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(LIVE_APPLY_DETAIL) : jsonResponse({})
@@ -641,6 +698,7 @@ describe('Job detail Practice readiness', () => {
   it('restores focus to the page heading when a persisted return sheet has no live Apply invoker', async () => {
     localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
       clickedAt: Date.now(),
+      optionId: APPLY_OPTION_ID,
       url: 'https://apply.example/job',
       tier: 'direct-ats',
     }))

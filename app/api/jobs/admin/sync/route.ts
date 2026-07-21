@@ -5,6 +5,7 @@ import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { JobSourceConfig } from '@shared/db/models'
 import { controlRevisionOf } from '@jobs/services/sourceControl'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,9 +17,12 @@ export const dynamic = 'force-dynamic'
  */
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
-  if (!session?.user || (session.user as { role?: string }).role !== 'platform_admin') {
+  const actor = session?.user as { id?: string; role?: string } | undefined
+  if (!actor || actor.role !== 'platform_admin' || !actor.id) {
     return NextResponse.json({ error: 'platform_admin required' }, { status: session?.user ? 403 : 401 })
   }
+  const rateLimitBlock = await checkJobsRateLimit(actor.id, 'admin-command')
+  if (rateLimitBlock) return rateLimitBlock
   let sourceId = 'jsearch'
   let mode = 'sync'
   let limit: number | undefined

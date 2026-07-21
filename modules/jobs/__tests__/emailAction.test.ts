@@ -10,11 +10,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * channel 'email'.
  */
 
-const { mockAppFindOne, mockAppUpdateOne, mockSendFindOne, mockTransition } = vi.hoisted(() => ({
+const { mockAppFindOne, mockAppUpdateOne, mockSendFindOne, mockTransition, mockCheckJobsRateLimit } = vi.hoisted(() => ({
   mockAppFindOne: vi.fn(),
   mockAppUpdateOne: vi.fn(),
   mockSendFindOne: vi.fn(),
   mockTransition: vi.fn(),
+  mockCheckJobsRateLimit: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
@@ -23,6 +24,7 @@ vi.mock('@shared/db/models', () => ({
   JobsEmailSend: { findOne: mockSendFindOne },
 }))
 vi.mock('@jobs', () => ({ transitionStatus: mockTransition }))
+vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
 
 import { GET, POST } from '../../../app/api/jobs/email-action/route'
 import { mintActionToken } from '@shared/services/signedActionToken'
@@ -50,9 +52,26 @@ beforeEach(() => {
   mockAppUpdateOne.mockResolvedValue({})
   mockSendFindOne.mockReturnValue(selectLean({ sentAt: SENT_AT }))
   mockTransition.mockResolvedValue({ ok: true, status: 'interview_scheduled', from: 'applied' })
+  mockCheckJobsRateLimit.mockResolvedValue(null)
 })
 
 describe('email-action route', () => {
+  it('rate-limits only after token verification and preserves the HTML response contract', async () => {
+    mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': '3600' },
+    }))
+
+    const response = await POST(req(tok('rejected')))
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('Content-Type')).toContain('text/html')
+    expect(response.headers.get('Retry-After')).toBe('3600')
+    expect(await response.text()).toContain('Too many update attempts')
+    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith('u1', 'email-action')
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+  })
+
   it('rejects invalid, expired, and wrong-purpose tokens without touching state', async () => {
     expect((await POST(req('garbage.token'))).status).toBe(200) // friendly page, no mutation
     const unsub = mintActionToken({ typ: 'unsub', uid: 'u1', action: 'e1', expDays: 30 })

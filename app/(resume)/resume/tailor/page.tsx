@@ -9,6 +9,7 @@ import FileDropzone from '@shared/ui/FileDropzone'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { Check, AlertTriangle } from 'lucide-react'
 import { tailoredResumeName } from '@resume/lib/resumeNames'
+import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 
 interface SavedResume {
   id: string
@@ -35,6 +36,7 @@ type JobAssociationState =
   | 'saved'
   | 'detached'
   | 'incomplete'
+  | 'oversized'
   | 'auth-required'
   | 'context-error'
   | 'lifecycle-error'
@@ -78,7 +80,6 @@ interface HeldTailorResult {
 
 const PENDING_ASSOCIATION_KEY = 'jobs:tailor-pending-association:v1'
 const PENDING_ASSOCIATION_TTL_MS = 10 * 60 * 1000
-const MAX_TAILORED_TEXT_CHARS = 100_000
 const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/i
 const JD_HASH_PATTERN = /^[a-f0-9]{64}$/
 
@@ -92,6 +93,12 @@ function cappedString(value: unknown, maxLength: number, required = false): stri
   const capped = value.slice(0, maxLength)
   if (required && !capped.trim()) return null
   return capped
+}
+
+/** Persistence-bound artifacts are rejected, never silently amputated. */
+function boundedArtifact(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string' || !value.trim() || value.length > maxLength) return null
+  return value
 }
 
 function cappedKeywords(value: unknown): string[] | null {
@@ -109,7 +116,7 @@ function normalizeAssociationPayload(value: unknown): JobAssociationPayload | nu
   if (typeof candidate.sourceJdHash !== 'string' || !JD_HASH_PATTERN.test(candidate.sourceJdHash)) return null
   const originUserId = validUserId(candidate.originUserId)
   if (!originUserId) return null
-  const tailoredText = cappedString(candidate.tailoredText, MAX_TAILORED_TEXT_CHARS, true)
+  const tailoredText = boundedArtifact(candidate.tailoredText, MAX_JOB_TAILORED_TEXT_CHARS)
   const addedKeywords = cappedKeywords(candidate.addedKeywords)
   const missingKeywords = cappedKeywords(candidate.missingKeywords)
   if (!tailoredText || !addedKeywords || !missingKeywords) return null
@@ -135,7 +142,7 @@ function normalizeAssociationPayload(value: unknown): JobAssociationPayload | nu
 function normalizeTailorResult(value: unknown): TailorResult | null {
   if (!value || typeof value !== 'object') return null
   const candidate = value as Partial<TailorResult>
-  const tailoredResume = cappedString(candidate.tailoredResume, MAX_TAILORED_TEXT_CHARS, true)
+  const tailoredResume = boundedArtifact(candidate.tailoredResume, MAX_JOB_TAILORED_TEXT_CHARS)
   const addedKeywords = cappedKeywords(candidate.addedKeywords)
   const missingKeywords = cappedKeywords(candidate.missingKeywords)
   if (!tailoredResume || !addedKeywords || !missingKeywords || !Array.isArray(candidate.changes)) return null
@@ -655,6 +662,12 @@ export default function TailorPage() {
         responseBody?.code === 'ATTACHMENT_TEMPORARY' &&
         responseBody.identityVerified === true) {
         setJobAssociation('transient-error')
+      } else if (association.status === 413 &&
+        responseBody?.code === 'TAILORED_TEXT_TOO_LARGE' &&
+        responseBody.identityVerified === true) {
+        clearStoredPendingAssociation(payload)
+        setPendingAssociation(null)
+        setJobAssociation('oversized')
       } else if (
         (association.status === 400 && responseBody?.code === 'SOURCE_JD_HASH_REQUIRED') ||
         (association.status === 404 && responseBody?.code === 'JOB_NOT_FOUND') ||
@@ -814,11 +827,15 @@ export default function TailorPage() {
         // Persist only the exact tracked-job input captured when this run
         // started. Edited prefills and query-param transitions remain useful
         // general Tailor runs but never create a false job association.
-        if (associationContext && !data.inputTruncated && !data.outputTruncated) {
+        const rawTailoredArtifact = data.tailoredResume ?? data.tailoredText
+        const tailoredArtifact = boundedArtifact(rawTailoredArtifact, MAX_JOB_TAILORED_TEXT_CHARS)
+        const artifactTooLarge = typeof rawTailoredArtifact === 'string' &&
+          rawTailoredArtifact.length > MAX_JOB_TAILORED_TEXT_CHARS
+        if (associationContext && !data.inputTruncated && !data.outputTruncated && tailoredArtifact) {
           const associationPayload: JobAssociationPayload = {
             jobId: associationContext.jobId,
             sourceJdHash: associationContext.sourceJdHash,
-            tailoredText: data.tailoredResume ?? data.tailoredText ?? '',
+            tailoredText: tailoredArtifact,
             originUserId,
             sourceResumeId: resumeSnapshot.sourceResumeId,
             matchScore: data.matchScore,
@@ -842,7 +859,9 @@ export default function TailorPage() {
             setPendingAssociation(associationPayload)
             setJobAssociation('auth-required')
           }
-        } else if (jobId && (data.inputTruncated || data.outputTruncated)) {
+        } else if (associationContext && artifactTooLarge) {
+          setJobAssociation('oversized')
+        } else if (jobId && (data.inputTruncated || data.outputTruncated || (associationContext && !tailoredArtifact))) {
           setJobAssociation('incomplete')
         } else if (jobId) {
           setJobAssociation('detached')
@@ -1212,6 +1231,8 @@ export default function TailorPage() {
                           ? 'Your tailored resume is ready, but a temporary service error prevented attachment.'
                           : jobAssociation === 'incomplete'
                             ? 'Your tailored resume is ready, but an incomplete result cannot be attached to the tracked job.'
+                            : jobAssociation === 'oversized'
+                              ? 'Your tailored resume is ready, but it exceeds the tracked-job attachment limit. You can copy or save it, or shorten it and rerun Tailor.'
                             : 'This is a general tailoring result and is not attached to the tracked job.'}
               </p>
               {jobAssociation === 'transient-error' && pendingAssociation && (
