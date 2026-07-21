@@ -1,6 +1,6 @@
 import { fetchJSONWithRetry } from '@shared/fetchJSONWithRetry'
 import { classifyApplyUrl } from '../services/qualityGate'
-import type { FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
+import type { AdapterFetchOptions, FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
 
 /**
  * Unstop adapter (INGESTION §6 item 6 — public API, `regn_open` filter).
@@ -80,15 +80,18 @@ export const unstopAdapter: JobSourceAdapter = {
     }]
   },
 
-  async fetch(target: FetchTarget): Promise<FetchResult> {
+  async fetch(target: FetchTarget, options?: AdapterFetchOptions): Promise<FetchResult> {
     if (target.kind !== 'feed') return { ok: false, status: 0, raw: [], attempts: 0 }
     const url = `${API}?opportunity=jobs&per_page=${target.perPage}&page=${target.page}`
     const res = await fetchJSONWithRetry<UnstopEnvelope>(
       url,
       { headers: { 'User-Agent': 'InterviewPrepGuruBot/1.0 (+https://www.interviewprep.guru/jobs-bot)' } },
-      { maxRetries: 1, timeoutMs: 15000 }
+      { maxRetries: 1, timeoutMs: 15000, beforePhysicalRequest: options?.beforePhysicalRequest }
     )
-    if (!res.ok) return { ok: false, status: res.status, raw: [], attempts: 1 }
+    if (!res.ok) {
+      if (res.authorityChanged) return { ok: false, status: 0, raw: [], attempts: res.attempts ?? 0, authorityChanged: true }
+      return { ok: false, status: res.status, raw: [], attempts: 1 }
+    }
     const items = itemsOf(res.data as UnstopEnvelope)
     // Unexpected envelope = schema drift = FAILED fetch (Codex #536): the
     // health machine must degrade, never record a clean zero-row sync.

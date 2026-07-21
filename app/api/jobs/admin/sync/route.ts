@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { inngest } from '@shared/services/inngest'
+import { connectDB } from '@shared/db/connection'
+import { JobSourceConfig } from '@shared/db/models'
+import { controlRevisionOf } from '@jobs/services/sourceControl'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,6 +37,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ dispatched: 'verdict-sweep' })
   }
 
-  await inngest.send({ name: 'jobs/source.sync', data: { sourceId } })
-  return NextResponse.json({ dispatched: sourceId })
+  await connectDB()
+  const source = await JobSourceConfig.findOne({ sourceId }).select('sourceId enabled health controlRevision').lean()
+  if (!source) return NextResponse.json({ error: 'unknown source' }, { status: 404 })
+  if (!source.enabled || !['active', 'degraded'].includes(source.health)) {
+    return NextResponse.json({ error: 'source is not eligible for sync' }, { status: 409 })
+  }
+  const controlRevision = controlRevisionOf(source)
+  await inngest.send({ name: 'jobs/source.sync', data: { sourceId, controlRevision } })
+  return NextResponse.json({ dispatched: sourceId, controlRevision })
 }

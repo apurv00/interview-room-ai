@@ -1,15 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
-const { mockFindById, mockUpdateOne, mockParse, mockGetActiveCatalog, mockAppExists } = vi.hoisted(() => ({
+const { mockFindById, mockPostingExists, mockUpdateOne, mockParse, mockGetActiveCatalog, mockAppExists } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
+  mockPostingExists: vi.fn(),
   mockUpdateOne: vi.fn(),
   mockParse: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
   mockAppExists: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findById: mockFindById, updateOne: mockUpdateOne },
+  JobPosting: { findById: mockFindById, exists: mockPostingExists, updateOne: mockUpdateOne },
   JobApplication: { exists: mockAppExists },
 }))
 vi.mock('@interview', () => ({ parseJobDescription: mockParse }))
@@ -36,7 +37,8 @@ function chain(doc: unknown) {
 }
 
 function reset() {
-  for (const m of [mockFindById, mockUpdateOne, mockParse, mockGetActiveCatalog, mockAppExists]) m.mockReset()
+  for (const m of [mockFindById, mockPostingExists, mockUpdateOne, mockParse, mockGetActiveCatalog, mockAppExists]) m.mockReset()
+  mockPostingExists.mockResolvedValue({ _id: 'j1' })
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
   mockParse.mockResolvedValue(PARSED)
   mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
@@ -50,7 +52,7 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     chain({ _id: 'j1', status: 'open', jdCompressed: compressed })
     const r = await getOrParseXray('j1')
     expect(r).toEqual({ parsed: EXTRACTED, cached: false })
-    expect(mockParse).toHaveBeenCalledWith(JD, ACTIVE_CATALOG)
+    expect(mockParse).toHaveBeenCalledWith(JD, ACTIVE_CATALOG, expect.any(Function))
     const [filter, update] = mockUpdateOne.mock.calls[0]
     expect(filter).toEqual({
       _id: 'j1',
@@ -70,6 +72,56 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     expect(update.$set.parsedJDRoleVersion).toBe(ACTIVE_CATALOG.revision)
   })
 
+  it('rechecks the exact live JD after catalog work and blocks parsing after revocation', async () => {
+    reset()
+    const compressed = gzipSync(Buffer.from(JD))
+    chain({ _id: 'j1', status: 'open', jdCompressed: compressed })
+    mockPostingExists.mockResolvedValue(null)
+
+    expect(await getOrParseXray('j1')).toBeNull()
+    expect(mockPostingExists).toHaveBeenCalledWith({
+      _id: 'j1',
+      status: 'open',
+      jdCompressed: compressed,
+    })
+    expect(mockParse).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('returns null instead of a 500 when revocation denies the parser at the provider boundary', async () => {
+    reset()
+    const compressed = gzipSync(Buffer.from(JD))
+    mockFindById
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1', status: 'open', jdCompressed: compressed,
+        }) }),
+      })
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1', status: 'closed', closedReason: 'source-revoked', jdCompressed: compressed,
+        }) }),
+      })
+    mockParse.mockRejectedValueOnce(Object.assign(
+      new Error('model provider precondition failed'),
+      { name: 'ModelProviderPreconditionError' },
+    ))
+
+    expect(await getOrParseXray('j1')).toBeNull()
+    expect(mockParse).toHaveBeenCalledOnce()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('does not swallow an ordinary unexpected parser exception', async () => {
+    reset()
+    const unexpected = new Error('unexpected parser defect')
+    chain({ _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) })
+    mockParse.mockRejectedValueOnce(unexpected)
+
+    await expect(getOrParseXray('j1')).rejects.toBe(unexpected)
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
   it('cache hit on matching hash: NO second parse, no write — the parser never runs twice for one JD', async () => {
     reset()
     chain({ _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)), parsedJD: EXTRACTED, parsedJDHash: xrayHashOf(JD), parsedJDRoleVersion: ACTIVE_CATALOG.revision })
@@ -77,6 +129,20 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     expect(r).toEqual({ parsed: EXTRACTED, cached: true })
     expect(mockParse).not.toHaveBeenCalled()
     expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('does not return a live cached X-ray when revocation wins during catalog lookup', async () => {
+    reset()
+    chain({
+      _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)),
+      parsedJD: EXTRACTED, parsedJDHash: xrayHashOf(JD),
+      parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+    })
+    mockPostingExists.mockResolvedValue(null)
+
+    expect(await getOrParseXray('j1')).toBeNull()
+    expect(mockGetActiveCatalog).toHaveBeenCalledOnce()
+    expect(mockParse).not.toHaveBeenCalled()
   })
 
   it('refreshes a legacy role revision without replacing evidence-bound requirement ids', async () => {
@@ -311,6 +377,32 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     })
   })
 
+  it('does not return a reconcile winner when revocation lands during the final catalog lookup', async () => {
+    reset()
+    const compressed = gzipSync(Buffer.from(JD))
+    mockUpdateOne.mockResolvedValue({ modifiedCount: 0 })
+    mockPostingExists
+      .mockResolvedValueOnce({ _id: 'j1' }) // parser boundary
+      .mockResolvedValueOnce(null) // exact snapshot after reconcile catalog
+    mockFindById
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1', status: 'open', jdCompressed: compressed,
+        }) }),
+      })
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1', status: 'open', jdCompressed: compressed,
+          parsedJD: EXTRACTED,
+          parsedJDHash: xrayHashOf(JD),
+          parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+        }) }),
+      })
+
+    expect(await getOrParseXray('j1')).toBeNull()
+    expect(mockPostingExists).toHaveBeenCalledTimes(2)
+  })
+
   it('returns null when the posting closes while parsing', async () => {
     reset()
     const compressed = gzipSync(Buffer.from(JD))
@@ -487,6 +579,37 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     expect(mockGetActiveCatalog).not.toHaveBeenCalled()
     expect(mockParse).not.toHaveBeenCalled()
     expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('does not return archived cached evidence when revocation wins during owner proof', async () => {
+    reset()
+    mockAppExists.mockResolvedValue({ _id: 'app1' })
+    mockPostingExists.mockResolvedValue(null)
+    chain({
+      _id: 'j1', status: 'closed', closedReason: 'aged-out',
+      jdCompressed: gzipSync(Buffer.from(JD)), parsedJD: EXTRACTED,
+      parsedJDHash: xrayHashOf(JD),
+    })
+
+    expect(await getOrParseXray('j1', 'u1')).toBeNull()
+    expect(mockAppExists).toHaveBeenCalledTimes(2)
+    expect(mockParse).not.toHaveBeenCalled()
+  })
+
+  it('does not return archived cached evidence when ownership disappears mid-read', async () => {
+    reset()
+    mockAppExists
+      .mockResolvedValueOnce({ _id: 'app1' })
+      .mockResolvedValueOnce(null)
+    chain({
+      _id: 'j1', status: 'closed', closedReason: 'aged-out',
+      jdCompressed: gzipSync(Buffer.from(JD)), parsedJD: EXTRACTED,
+      parsedJDHash: xrayHashOf(JD),
+    })
+
+    expect(await getOrParseXray('j1', 'u1')).toBeNull()
+    expect(mockAppExists).toHaveBeenCalledTimes(2)
+    expect(mockParse).not.toHaveBeenCalled()
   })
 
   it('never parses a cache miss or serves a restricted closed X-ray', async () => {

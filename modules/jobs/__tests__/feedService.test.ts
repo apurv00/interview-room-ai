@@ -1,10 +1,28 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
-const { mockFind, mockFindById, mockAppFindOne, mockGetBase, mockGetResume, mockGetActiveCatalog } = vi.hoisted(() => ({ mockFind: vi.fn(), mockFindById: vi.fn(), mockAppFindOne: vi.fn(), mockGetBase: vi.fn(), mockGetResume: vi.fn(), mockGetActiveCatalog: vi.fn() }))
+const {
+  mockFind,
+  mockFindById,
+  mockPostingExists,
+  mockAppFindOne,
+  mockAppExists,
+  mockGetBase,
+  mockGetResume,
+  mockGetActiveCatalog,
+} = vi.hoisted(() => ({
+  mockFind: vi.fn(),
+  mockFindById: vi.fn(),
+  mockPostingExists: vi.fn().mockResolvedValue({ _id: 'posting-authoritative' }),
+  mockAppFindOne: vi.fn(),
+  mockAppExists: vi.fn().mockResolvedValue({ _id: 'application-authoritative' }),
+  mockGetBase: vi.fn(),
+  mockGetResume: vi.fn(),
+  mockGetActiveCatalog: vi.fn(),
+}))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { find: mockFind, findById: mockFindById },
-  JobApplication: { findOne: mockAppFindOne },
+  JobPosting: { find: mockFind, findById: mockFindById, exists: mockPostingExists },
+  JobApplication: { findOne: mockAppFindOne, exists: mockAppExists },
 }))
 vi.mock('../services/baseResumeService', () => ({ getBaseResume: mockGetBase }))
 vi.mock('@resume', async (importOriginal) => {
@@ -239,6 +257,36 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect((d as Record<string, unknown>).applyOptions).toBeUndefined()
   })
 
+  it('anon serves no stale shell when source authority changes after the initial read', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
+    mockPostingExists.mockResolvedValueOnce(null)
+
+    expect(await getJobDetail('j1', null)).toBeNull()
+    expect(mockPostingExists.mock.calls.at(-1)?.[0]).toEqual({
+      _id: 'j1',
+      status: 'open',
+      closedReason: { $exists: false },
+    })
+  })
+
+  it('keeps serving after a benign refresh changes updatedAt without changing lifecycle authority', async () => {
+    mockFindById.mockReturnValue({
+      lean: () => Promise.resolve(doc({ updatedAt: new Date('2026-07-14T12:00:00Z') })),
+    })
+    mockPostingExists.mockImplementationOnce((filter: Record<string, unknown>) => (
+      Promise.resolve('updatedAt' in filter ? null : { _id: 'posting-authoritative' })
+    ))
+
+    const detail = await getJobDetail('j1', null)
+
+    expect(detail).toMatchObject({ id: 'j1', gated: true })
+    expect(mockPostingExists.mock.calls.at(-1)?.[0]).toEqual({
+      _id: 'j1',
+      status: 'open',
+      closedReason: { $exists: false },
+    })
+  })
+
   it('authed detail PREFERS the display twin; legacy rows fall back to the collapsed body (PR-C)', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
       jdCompressed: gzipSync(Buffer.from('para one para two')),
@@ -410,6 +458,20 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     }
   })
 
+  it('returns no stale JD/apply projection when source revocation commits during preparation', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from('source-controlled secret JD')),
+    })) })
+    mockPostingExists.mockResolvedValueOnce(null)
+
+    expect(await getJobDetail('j1', 'u1')).toBeNull()
+    expect(mockPostingExists.mock.calls.at(-1)?.[0]).toEqual({
+      _id: 'j1',
+      status: 'open',
+      closedReason: { $exists: false },
+    })
+  })
+
   it('non-http(s) apply URLs never reach a client — ladder AND badge exclude them (Codex #517)', async () => {
     const evil = doc({
       provenance: [
@@ -433,6 +495,20 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'app-1', status: 'apply_clicked', verifiedPracticeSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
     const d = await getJobDetail('j1', 'u1')
     if (!d!.gated) expect(d!.application).toMatchObject({ applicationId: 'app-1', status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
+  })
+
+  it('does not return a stale live application summary deleted during preparation', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app-deleted', status: 'saved', verifiedPracticeSessionIds: [],
+    }) }) })
+    mockAppExists.mockResolvedValueOnce(null)
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail.postingState).toBe('live')
+    expect(detail.application).toBeNull()
+    expect(detail.capabilities.atsCheck).toBe(false)
   })
 
   it('quarantines legacy attendance from the candidate-facing practice count', async () => {
@@ -565,6 +641,25 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect(JSON.stringify(detail)).not.toContain('boards.greenhouse.io')
   })
 
+  it('does not serve archived JD context when ownership disappears during preparation', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      status: 'closed',
+      closedReason: 'aged-out',
+      jdCompressed: gzipSync(Buffer.from('owner-only archived JD')),
+    })) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app-archived', status: 'saved', verifiedPracticeSessionIds: [],
+    }) }) })
+    mockAppExists.mockResolvedValueOnce(null)
+
+    expect(await getJobDetail('j1', 'u1')).toBeNull()
+    expect(mockAppExists).toHaveBeenCalledWith({
+      _id: 'app-archived',
+      userId: 'u1',
+      jobPostingId: 'j1',
+    })
+  })
+
   it.each(['source-revoked', 'llm-verdict', undefined])('restricted closure %s retains history but withholds JD-derived content', async (closedReason) => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
       status: 'closed', closedReason, title: 'Mutable unsafe title', company: 'Mutable unsafe company',
@@ -597,6 +692,23 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect(detail).not.toHaveProperty('domain')
     expect(JSON.stringify(detail)).not.toContain('sensitive removed body')
     expect(JSON.stringify(detail)).not.toContain('sensitive-JD-keyword')
+  })
+
+  it('does not return stale restricted tracker history after its ownership row is deleted', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      status: 'closed',
+      closedReason: 'source-revoked',
+      jdCompressed: gzipSync(Buffer.from('restricted source body')),
+    })) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app-restricted',
+      status: 'saved',
+      jobSnapshot: { title: 'Saved role', company: 'Saved company' },
+      verifiedPracticeSessionIds: [],
+    }) }) })
+    mockAppExists.mockResolvedValueOnce(null)
+
+    expect(await getJobDetail('j1', 'u1')).toBeNull()
   })
 
   it('missing retained posting falls back to the owner-only tracker snapshot', async () => {

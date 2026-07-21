@@ -80,6 +80,45 @@ describe('jdParserService', () => {
       )
     })
 
+    it('passes a source-authority gate through to every router provider attempt', async () => {
+      const beforeProviderCall = vi.fn().mockResolvedValue(true)
+
+      await parseJobDescription(
+        'Backend engineer role with distributed systems ownership.',
+        ACTIVE_CATALOG,
+        beforeProviderCall,
+      )
+
+      expect(mockCompletion.mock.calls[0][0]).toEqual(expect.objectContaining({
+        beforeProviderCall,
+      }))
+    })
+
+    it('propagates provider-precondition denial only for a gated source', async () => {
+      const denied = Object.assign(new Error('model provider precondition failed'), {
+        name: 'ModelProviderPreconditionError',
+      })
+      mockCompletion.mockRejectedValueOnce(denied)
+
+      await expect(parseJobDescription(
+        'Backend engineer role with distributed systems ownership.',
+        ACTIVE_CATALOG,
+        vi.fn().mockResolvedValue(false),
+      )).rejects.toBe(denied)
+    })
+
+    it('keeps the historical non-fatal fallback for an ordinary JD parse failure', async () => {
+      mockCompletion.mockRejectedValueOnce(Object.assign(
+        new Error('model provider precondition failed'),
+        { name: 'ModelProviderPreconditionError' },
+      ))
+
+      const result = await parseJobDescription('An ordinary manually supplied JD')
+
+      expect(result.rawText).toBe('An ordinary manually supplied JD')
+      expect(result.requirements).toEqual([])
+    })
+
     it('accepts active built-in/custom slugs and rejects inactive or arbitrary output', async () => {
       const response = (inferredDomain: unknown) => ({
         text: JSON.stringify({

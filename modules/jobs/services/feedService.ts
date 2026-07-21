@@ -312,6 +312,19 @@ function shellOf(doc: IJobPosting): Omit<JobDetailShell, 'gated'> {
   }
 }
 
+function exactDetailPostingLifecycleFilter(
+  id: string,
+  doc: Pick<IJobPosting, 'status' | 'closedReason'>,
+): Record<string, unknown> {
+  return {
+    _id: id,
+    status: doc.status,
+    closedReason: doc.closedReason === undefined
+      ? { $exists: false }
+      : doc.closedReason,
+  }
+}
+
 export async function getJobDetail(id: string, userId?: string | null): Promise<JobDetailShell | JobDetailFull | null> {
   const doc = await JobPosting.findById(id).lean()
   if (!doc) {
@@ -360,11 +373,15 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
   // projecting any JD-derived content; non-owners receive the same 404 as an
   // unknown posting so closure never widens the private-detail boundary.
   if (!userId) {
-    return doc.status === 'open'
+    if (doc.status !== 'open') return null
+    const postingStillAuthoritative = await JobPosting.exists(
+      exactDetailPostingLifecycleFilter(id, doc as IJobPosting),
+    )
+    return postingStillAuthoritative
       ? { ...shellOf(doc as IJobPosting), gated: true }
       : null
   }
-  const app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
+  let app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
   if (doc.status === 'closed' && !app) return null
 
   const postingState = jobPostingStateOf(doc as IJobPosting)
@@ -401,6 +418,22 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
         app.atsResult.resumeHash === legacyXrayHashOf(resumeText)
     }
   }
+  // Practice preparation and ATS-current resolution both cross long async
+  // boundaries. Re-bind the response to lifecycle authority after them;
+  // benign content refreshes may advance updatedAt, while source-revoked
+  // status/reason can never match this predicate.
+  const [postingStillAuthoritative, applicationStillExists] = await Promise.all([
+    JobPosting.exists(exactDetailPostingLifecycleFilter(id, doc as IJobPosting)),
+    app
+      ? JobApplication.exists({ _id: app._id, userId, jobPostingId: id })
+      : Promise.resolve(true),
+  ])
+  if (!postingStillAuthoritative || (doc.status === 'closed' && !applicationStillExists)) return null
+  if (!applicationStillExists) {
+    app = null
+    atsCurrent = false
+  }
+
   const fullShell = shellOf(doc as IJobPosting)
   const retainedShell = { ...fullShell }
   delete retainedShell.applyTier

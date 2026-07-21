@@ -1,7 +1,14 @@
 import { gunzipSync } from 'zlib'
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { JobPosting, JobSourceConfig, JobIngestCycle, JobsVerdictConfig, type JobsVerdictConfigValues } from '@shared/db/models'
+import {
+  JOB_SOURCE_LINEAGE_UNKNOWN,
+  JobPosting,
+  JobSourceConfig,
+  JobIngestCycle,
+  JobsVerdictConfig,
+  type JobsVerdictConfigValues,
+} from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { PROMPT_VERSION, epochOf } from '../config/verdictSchema'
@@ -181,12 +188,22 @@ export async function runEvaluatePostingsHandler(
           c.skips['attempts-cap'] = (c.skips['attempts-cap'] ?? 0) + 1
           continue
         }
-        const sources = (doc.provenance ?? []).map((e) => e.sourceId)
-        if (sources.some((s) => optedOut.has(s))) {
+        const durableSources = doc.sourceIds ?? []
+        const sources = Array.from(new Set([
+          ...durableSources,
+          ...(doc.provenance ?? []).map((entry) => entry.sourceId),
+        ]))
+        // During rolling migration, absence of durable lineage cannot prove
+        // eligibility. UNKNOWN means the old cap may have evicted a source.
+        if (
+          durableSources.length === 0 ||
+          sources.includes(JOB_SOURCE_LINEAGE_UNKNOWN) ||
+          sources.some((source) => optedOut.has(source))
+        ) {
           c.skips['opted-out'] = (c.skips['opted-out'] ?? 0) + 1
           continue
         }
-        const primarySource = sources[0] ?? 'unknown'
+        const primarySource = sources.find((source) => source !== JOB_SOURCE_LINEAGE_UNKNOWN) ?? 'unknown'
         const applyHosts = Array.from(new Set(
           (doc.provenance ?? []).map((e) => (e.applyUrl ? hostOf(e.applyUrl) : '')).filter(Boolean)
         )).sort()
@@ -235,6 +252,31 @@ export async function runEvaluatePostingsHandler(
             recordSpend: (ck, src, usd) => budget.record(ck, src, usd),
             pricing: { inputUsdPerMTok: cfg.inputUsdPerMTok, outputUsdPerMTok: cfg.outputUsdPerMTok },
             expectedModel: epochModel,
+            beforeModelCall: async () => {
+              // This is the final authorization point before each external
+              // model request (primary and JSON repair). Re-read both the
+              // exact posting snapshot and every durable source: a committed
+              // revoke advances updatedAt + closes the row in the same
+              // transaction that marks its source revoked, so either side
+              // blocks stale JD egress. Missing/unknown lineage fails closed.
+              const sourceIds = Array.from(new Set(durableSources))
+              if (sourceIds.length === 0 || sourceIds.includes(JOB_SOURCE_LINEAGE_UNKNOWN)) return false
+              const lifecycleFilter = doc.status === 'open'
+                ? { status: 'open' }
+                : { status: 'closed', closedReason: doc.closedReason }
+              const [currentPosting, currentSources] = await Promise.all([
+                JobPosting.exists({ _id: doc._id, updatedAt: doc.updatedAt, ...lifecycleFilter }),
+                JobSourceConfig.find({ sourceId: { $in: sourceIds } })
+                  .select('sourceId health llmVerdictOptOut')
+                  .lean(),
+              ])
+              if (!currentPosting) return false
+              const sourceById = new Map(currentSources.map((source) => [source.sourceId, source]))
+              return sourceIds.every((sourceId) => {
+                const source = sourceById.get(sourceId)
+                return !!source && source.health !== 'revoked' && !source.llmVerdictOptOut
+              })
+            },
           } as EvaluatorDeps
         )
 
@@ -351,14 +393,16 @@ export async function runEvaluatePostingsHandler(
           c.inputTokens += outcome.inputTokens
           c.outputTokens += outcome.outputTokens
           c.costUsd += outcome.costUsd
-        } else if (outcome.kind === 'budget') {
+        } else if (outcome.kind === 'budget' || outcome.kind === 'authority') {
           // Not the posting's fault — no attempts bump, no breaker count,
           // and NOT an error (it would pollute the shadow-exit 'error <5%'
           // metric during throttling); the backlog gauge shows the queue.
           // But it must be VISIBLE: the 2026-07-16 stall (requested-40/
           // scored-0, every other counter zero) was undiagnosable from
           // telemetry precisely because this branch counted nothing.
-          const label = `budget:${outcome.message ?? 'denied'}`
+          const label = outcome.kind === 'budget'
+            ? `budget:${outcome.message ?? 'denied'}`
+            : 'authority-changed'
           c.skips[label] = (c.skips[label] ?? 0) + 1
         } else {
           fails++
@@ -485,7 +529,20 @@ export async function runVerdictSweeperHandler(
         },
       ],
     }
-    const optOutScope = optedOut.length ? [{ 'provenance.sourceId': { $nin: optedOut } }] : []
+    const authorityScope = [
+      // Missing/empty/unknown lineage is permanently ineligible for model
+      // egress. Keep this in the oldest-first query even when no source has an
+      // explicit opt-out, otherwise skipped legacy rows pin the bounded window.
+      { 'sourceIds.0': { $exists: true } },
+      { sourceIds: { $nin: [JOB_SOURCE_LINEAGE_UNKNOWN, ...optedOut] } },
+      ...(optedOut.length
+        ? [
+            // Defense in depth for a partially repaired row. The lineage
+            // migration also verifies provenance is a subset of sourceIds.
+            { 'provenance.sourceId': { $nin: optedOut } },
+          ]
+        : []),
+    ]
     const rows = await JobPosting.find({
       $and: [
         statusScope,
@@ -497,7 +554,7 @@ export async function runVerdictSweeperHandler(
             { llmVerdict: { $exists: false } },
           ],
         },
-        ...optOutScope,
+        ...authorityScope,
       ],
     })
       .sort({ _id: 1 }) // oldest-first
@@ -516,7 +573,7 @@ export async function runVerdictSweeperHandler(
         $and: [
           statusScope,
           { 'llmVerdict.status': 'scored', 'llmVerdict.epoch': { $ne: currentEpoch } },
-          ...optOutScope,
+          ...authorityScope,
         ],
       })
         .sort({ _id: 1 })

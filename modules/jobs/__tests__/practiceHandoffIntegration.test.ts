@@ -5,14 +5,18 @@ import { NextRequest } from 'next/server'
 const {
   mockConnectDB,
   mockPostingFindById,
+  mockPostingExists,
   mockApplicationFindOne,
+  mockApplicationExists,
   mockGetServerSession,
   mockCreateSession,
   mockGetActiveCatalog,
 } = vi.hoisted(() => ({
   mockConnectDB: vi.fn(),
   mockPostingFindById: vi.fn(),
+  mockPostingExists: vi.fn().mockResolvedValue({ _id: 'posting-authoritative' }),
   mockApplicationFindOne: vi.fn(),
+  mockApplicationExists: vi.fn().mockResolvedValue({ _id: 'application-authoritative' }),
   mockGetServerSession: vi.fn(),
   mockCreateSession: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
@@ -20,8 +24,8 @@ const {
 
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findById: mockPostingFindById },
-  JobApplication: { findOne: mockApplicationFindOne },
+  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
+  JobApplication: { findOne: mockApplicationFindOne, exists: mockApplicationExists },
 }))
 vi.mock('../services/baseResumeService', () => ({ getBaseResume: vi.fn() }))
 vi.mock('@resume', () => ({ getResume: vi.fn() }))

@@ -9,7 +9,22 @@ import { unstopAdapter } from '../adapters/unstopAdapter'
 import { atsBoardAdapter } from '../adapters/atsBoardAdapter'
 import { BOARD_REGISTRY } from '../config/boardRegistry'
 import type { FetchTarget, JobSourceAdapter, NormalizedJob } from '../adapters/types'
-import { ingestBatch, makeRedisRepostCounter, type IngestCounters } from '../services/ingestPipeline'
+import {
+  ingestBatch,
+  makeRedisRepostCounter,
+  snapshotRepostCounts,
+  type IngestCounters,
+} from '../services/ingestPipeline'
+import {
+  assertSourceProbeAuthority,
+  assertSourceSyncAuthority,
+  assertSourceTransactionsReady,
+  controlRevisionFilter,
+  controlRevisionOf,
+  SourceAuthorityChangedError,
+  SourceTransactionsRequiredError,
+  withSourceWriteFence,
+} from '../services/sourceControl'
 
 /**
  * Ingestion background jobs (INGESTION §4.4; pathwayJob/analysisJob shape:
@@ -48,6 +63,9 @@ export function resolveAdapter(sourceId: string, kind?: string): JobSourceAdapte
 }
 
 const BUCKETS_PER_CHUNK = 1
+/** Keep external Redis work and posting mutations well below Mongo's normal
+ * transaction lifetime. Large SmartRecruiters boards can return 1,000 rows. */
+const SOURCE_WRITE_BATCH_SIZE = 25
 // Raised 3→4 with the country-only harvest cut (DECISIONS #23): a country query
 // carries far more fresh supply than a single metro slice did, so the known-rate
 // cutoff paginates it deeper — the extra page recovers coverage the dropped metro
@@ -88,6 +106,18 @@ function emptyCounters(): IngestCounters {
   return { processed: 0, drops: {}, flagged: {}, newCount: 0, merged: 0, refreshed: 0, fuzzyMerged: 0, saltedInserts: 0, storeErrors: 0 }
 }
 
+function accumulateCounters(into: IngestCounters, from: IngestCounters): void {
+  into.processed += from.processed
+  into.newCount += from.newCount
+  into.merged += from.merged
+  into.refreshed += from.refreshed
+  into.fuzzyMerged += from.fuzzyMerged
+  into.saltedInserts += from.saltedInserts
+  into.storeErrors += from.storeErrors
+  for (const [key, value] of Object.entries(from.drops)) into.drops[key] = (into.drops[key] ?? 0) + value
+  for (const [key, value] of Object.entries(from.flagged)) into.flagged[key] = (into.flagged[key] ?? 0) + value
+}
+
 function accumulate(into: ChunkOutcome, from: ChunkOutcome): void {
   into.fetched += from.fetched
   into.driftNulls += from.driftNulls
@@ -98,17 +128,7 @@ function accumulate(into: ChunkOutcome, from: ChunkOutcome): void {
   Object.assign(into.newestByBucket, from.newestByBucket)
   Object.assign(into.feedContinuation, from.feedContinuation)
   into.incompleteBuckets.push(...from.incompleteBuckets)
-  const c = into.counters
-  const f = from.counters
-  c.processed += f.processed
-  c.newCount += f.newCount
-  c.merged += f.merged
-  c.refreshed += f.refreshed
-  c.fuzzyMerged += f.fuzzyMerged
-  c.saltedInserts += f.saltedInserts
-  c.storeErrors += f.storeErrors
-  for (const [k, v] of Object.entries(f.drops)) c.drops[k] = (c.drops[k] ?? 0) + v
-  for (const [k, v] of Object.entries(f.flagged)) c.flagged[k] = (c.flagged[k] ?? 0) + v
+  accumulateCounters(into.counters, from.counters)
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -121,6 +141,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function processTarget(
   adapter: JobSourceAdapter,
   sourceId: string,
+  controlRevision: number,
   target: FetchTarget,
   outcome: ChunkOutcome,
   delayMs = 300,
@@ -143,8 +164,17 @@ async function processTarget(
   for (;;) {
     const t: FetchTarget =
       target.kind === 'bucket' || target.kind === 'feed' ? { ...target, page } : target
-    const res = await adapter.fetch(t)
+    // Cheap pre-fetch stop. The transaction fence around persistence is the
+    // atomic authority check; this read minimizes post-revocation requests.
+    await assertSourceSyncAuthority(sourceId, controlRevision)
+    const res = await adapter.fetch(t, {
+      beforePhysicalRequest: async () => {
+        await assertSourceSyncAuthority(sourceId, controlRevision)
+        return true
+      },
+    })
     outcome.attempts += res.attempts
+    if (res.authorityChanged) throw new SourceAuthorityChangedError(sourceId, controlRevision)
     if (!res.ok) {
       outcome.httpErrors++
       if (res.status === 429) outcome.saw429 = true
@@ -164,10 +194,27 @@ async function processTarget(
       if (n === null) outcome.driftNulls++
       else normalized.push(n)
     }
-    const counters = await ingestBatch(normalized, sourceId, {
-      registerRepost: makeRedisRepostCounter(redis),
-      initVerdictPending,
-    })
+    // Bound transactions: SmartRecruiters can return 1,000 rows and repost
+    // classification performs external Redis work. Each small persistence
+    // unit has its own config-row fence. Revoke between units closes earlier
+    // commits and prevents every later unit from starting.
+    const counters = emptyCounters()
+    const registerRepost = makeRedisRepostCounter(redis)
+    for (let offset = 0; offset < normalized.length; offset += SOURCE_WRITE_BATCH_SIZE) {
+      const batch = normalized.slice(offset, offset + SOURCE_WRITE_BATCH_SIZE)
+      const repostCounts = await snapshotRepostCounts(batch, registerRepost)
+      const persisted = await withSourceWriteFence(
+        sourceId,
+        controlRevision,
+        (session) => ingestBatch(batch, sourceId, {
+          repostCounts,
+          initVerdictPending,
+          session,
+        }),
+        { insertedPostings: (result) => result.newCount },
+      )
+      accumulateCounters(counters, persisted)
+    }
     accumulate(outcome, {
       counters, seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [], feedContinuation: {},
     })
@@ -305,26 +352,26 @@ export async function runIngestSchedulerHandler(step: StepRunner): Promise<{ dis
   await step.run('seed-configs', async () => {
     await JobSourceConfig.updateOne(
       { sourceId: 'jsearch' },
-      { $setOnInsert: { sourceId: 'jsearch', kind: 'aggregator-api', enabled: false, health: 'active', cadenceMinutes: 1440 } },
+      { $setOnInsert: { sourceId: 'jsearch', kind: 'aggregator-api', enabled: false, health: 'active', controlRevision: 0, ingestWriteSeq: 0, cadenceMinutes: 1440 } },
       { upsert: true }
     )
     // India-native sources (§6 items 5/6): seeded DISABLED — the founder's
     // ToS read (legal layer 2) gates the enable, per DECISIONS #9.
     await JobSourceConfig.updateOne(
       { sourceId: 'apna' },
-      { $setOnInsert: { sourceId: 'apna', kind: 'sitemap-jsonld', enabled: false, health: 'active', cadenceMinutes: 1440 } },
+      { $setOnInsert: { sourceId: 'apna', kind: 'sitemap-jsonld', enabled: false, health: 'active', controlRevision: 0, ingestWriteSeq: 0, cadenceMinutes: 1440 } },
       { upsert: true }
     )
     await JobSourceConfig.updateOne(
       { sourceId: 'unstop' },
-      { $setOnInsert: { sourceId: 'unstop', kind: 'public-api', enabled: false, health: 'active', cadenceMinutes: 1440 } },
+      { $setOnInsert: { sourceId: 'unstop', kind: 'public-api', enabled: false, health: 'active', controlRevision: 0, ingestWriteSeq: 0, cadenceMinutes: 1440 } },
       { upsert: true }
     )
     // ATS boards (§1 build-now): seeded DISABLED, 6h cadence per §4.4.
     for (const b of BOARD_REGISTRY) {
       await JobSourceConfig.updateOne(
         { sourceId: b.sourceId },
-        { $setOnInsert: { sourceId: b.sourceId, kind: 'ats-board', atsKind: b.atsKind, slug: b.slug, minIndiaPostings: b.minIndiaPostings, displayName: b.displayName, enabled: false, health: 'active', cadenceMinutes: 360 } },
+        { $setOnInsert: { sourceId: b.sourceId, kind: 'ats-board', atsKind: b.atsKind, slug: b.slug, minIndiaPostings: b.minIndiaPostings, displayName: b.displayName, enabled: false, health: 'active', controlRevision: 0, ingestWriteSeq: 0, cadenceMinutes: 360 } },
         { upsert: true }
       )
       // Backfill displayName ONLY where absent (rows seeded before the field
@@ -347,13 +394,13 @@ export async function runIngestSchedulerHandler(step: StepRunner): Promise<{ dis
     const now = Date.now()
     return sources
       .filter((s) => !s.lastSyncAt || now - new Date(s.lastSyncAt).getTime() >= s.cadenceMinutes * 60_000)
-      .map((s) => s.sourceId)
+      .map((s) => ({ sourceId: s.sourceId, controlRevision: controlRevisionOf(s) }))
   })
 
   let dispatched = 0
-  for (const sourceId of due) {
+  for (const { sourceId, controlRevision } of due) {
     await step.run(`dispatch-${sourceId}`, async () => {
-      await inngest.send({ name: 'jobs/source.sync', data: { sourceId } })
+      await inngest.send({ name: 'jobs/source.sync', data: { sourceId, controlRevision } })
       return true
     })
     dispatched++
@@ -367,7 +414,7 @@ export interface SyncHandlerOpts {
 }
 
 export async function runSourceSyncHandler(
-  event: { data: { sourceId: string } },
+  event: { data: { sourceId: string; controlRevision?: number } },
   step: StepRunner,
   opts: SyncHandlerOpts = {}
 ): Promise<{ skipped: true; reason: string } | { cycleWritten: true; counters: IngestCounters }> {
@@ -377,6 +424,16 @@ export async function runSourceSyncHandler(
   const config = await JobSourceConfig.findOne({ sourceId }).lean()
   if (!config || !config.enabled) return { skipped: true, reason: 'source disabled' }
   if (!['active', 'degraded'].includes(config.health)) return { skipped: true, reason: `health ${config.health}` }
+  const configRevision = controlRevisionOf(config)
+  const requestedRevision = event.data.controlRevision
+  // Rolling-deploy compatibility is limited to epoch zero. Once any control
+  // action increments the source, old queued events without an epoch fail
+  // closed forever.
+  if (requestedRevision !== undefined && (!Number.isInteger(requestedRevision) || requestedRevision < 0)) {
+    return { skipped: true, reason: 'invalid source revision' }
+  }
+  const controlRevision = requestedRevision ?? (configRevision === 0 ? 0 : -1)
+  if (controlRevision !== configRevision) return { skipped: true, reason: 'stale source revision' }
   const adapter = resolveAdapter(sourceId, config.kind)
   if (!adapter) return { skipped: true, reason: `no adapter for ${sourceId}` }
 
@@ -410,6 +467,10 @@ export async function runSourceSyncHandler(
   const haveCursor = new Set(cursors.map((c) => c.bucket))
 
   const total: ChunkOutcome = { counters: emptyCounters(), seenSourceKeys: [], fetched: 0, driftNulls: 0, attempts: 0, httpErrors: 0, saw429: false, newestByBucket: {}, incompleteBuckets: [], feedContinuation: {} }
+  try {
+  // Fail before paid provider calls when the deployed Mongo topology cannot
+  // honor A02 transactions. This also re-checks authority at run start.
+  await assertSourceTransactionsReady(sourceId, controlRevision)
   for (let i = 0; i < targets.length; i += BUCKETS_PER_CHUNK) {
     const chunk = targets.slice(i, i + BUCKETS_PER_CHUNK)
     const outcome = await step.run(`fetch-chunk-${Math.floor(i / BUCKETS_PER_CHUNK)}`, async () => {
@@ -432,7 +493,7 @@ export async function runSourceSyncHandler(
         // via the full-page + continuation logic; the #23 rename is bucket-only.
         const isFirstRunForBucket = target.kind === 'bucket' && !!distrustKey && !haveCursor.has(distrustKey)
         const distrustKnown = (!!distrustKey && distrust.has(distrustKey)) || isContinuation || isFirstRunForBucket
-        await processTarget(adapter, sourceId, target, o, delayMs, initVerdictPending, distrustKnown)
+        await processTarget(adapter, sourceId, controlRevision, target, o, delayMs, initVerdictPending, distrustKnown)
         if (delayMs) await sleep(delayMs)
       }
       // Durable checkpoint (prod first-fill incident, 2026-07-15): a
@@ -443,18 +504,22 @@ export async function runSourceSyncHandler(
       // cursors on each resume — a bucket completed ONCE keeps its narrowed
       // window across run deaths and hourly re-dispatches.
       const ops = cursorCheckpointOps(sourceId, o.newestByBucket, o.incompleteBuckets, o.feedContinuation)
-      if (ops.length) await JobIngestCursor.bulkWrite(ops)
+      if (ops.length) {
+        await withSourceWriteFence(sourceId, controlRevision, (session) =>
+          JobIngestCursor.bulkWrite(ops, { session })
+        )
+      }
       return o
     })
     accumulate(total, outcome)
   }
 
-  await step.run('finalize', async () => {
+  await step.run('finalize', () => withSourceWriteFence(sourceId, controlRevision, async (session) => {
     // Cursors: re-assert the accumulated high-water marks and incompleteness
     // flags (monotonic $max / idempotent $set — a no-op where the per-chunk
     // checkpoints already landed).
     const ops = cursorCheckpointOps(sourceId, total.newestByBucket, total.incompleteBuckets, total.feedContinuation)
-    if (ops.length) await JobIngestCursor.bulkWrite(ops)
+    if (ops.length) await JobIngestCursor.bulkWrite(ops, { session })
 
     // Health (§4.4 thresholds): drift >50% = QUARANTINED (provider schema is
     // gone — dark the source for ops; the scheduler stops dispatching it,
@@ -473,8 +538,14 @@ export async function runSourceSyncHandler(
     else if (total.saw429 || allFailed || driftRate > 0.2 || total.counters.storeErrors > 0) newHealth = 'degraded'
     else newHealth = 'active'
     await JobSourceConfig.updateOne(
-      { sourceId },
-      { $set: { lastSyncAt: new Date(), health: newHealth, ...(newHealth === 'active' ? { lastHealthyProbeAt: new Date() } : {}) } }
+      {
+        sourceId,
+        enabled: true,
+        health: { $in: ['active', 'degraded'] },
+        ...controlRevisionFilter(controlRevision),
+      },
+      { $set: { lastSyncAt: new Date(), health: newHealth, ...(newHealth === 'active' ? { lastHealthyProbeAt: new Date() } : {}) } },
+      { session }
     )
 
     // Board delisting closure (§4.3 'board-poll-miss'; Codex on #513, P2):
@@ -490,66 +561,49 @@ export async function runSourceSyncHandler(
       if (seen.length) {
         await JobPosting.updateMany(
           { status: 'open', 'provenance.sourceKey': { $in: seen }, boardPollMisses: { $gt: 0 } },
-          { $set: { boardPollMisses: 0 } }
+          { $set: { boardPollMisses: 0 } },
+          { session }
         )
       }
       const stale = await JobPosting.find({
         status: 'open',
         'provenance.sourceId': sourceId,
         ...(seen.length ? { 'provenance.sourceKey': { $nin: seen } } : {}),
-      }).limit(1000)
-      for (const doc of stale) {
-        if (!doc.provenance.every((e) => e.sourceId === sourceId)) continue
+      }, null, { session }).limit(1000)
+      const lifecycleOps = stale.flatMap((doc) => {
+        if (!doc.provenance.every((entry) => entry.sourceId === sourceId)) return []
         const misses = (doc.boardPollMisses ?? 0) + 1
         const closedAt = misses >= 2 ? new Date() : null
-        // The stale scan is only a candidate list. Lifecycle writes must be
-        // guarded by the exact version we inspected: a legal/safety close or
-        // a fresh source merge landing after find() takes precedence over a
-        // board miss. Hydrated doc.save() would otherwise overwrite that
-        // newer state with board-poll-miss.
-        const close = closedAt
-          ? {
-              $set: {
-                boardPollMisses: misses,
-                status: 'closed',
-                closedReason: 'board-poll-miss',
-                closedAt,
-              },
-              // Close first without a TTL. A crash before the conditional
-              // stamp leaks storage but cannot delete a newly owned archive.
-              $unset: { purgeAt: 1 },
-            }
+        // One lifecycle-CAS operation per row eliminates the former three
+        // sequential writes. Ownership changes conflict on updatedAt: pin
+        // first makes this miss; close first is healed by the monotonic pin.
+        const update = closedAt
+          ? doc.userReferenced
+            ? {
+                $set: { boardPollMisses: misses, status: 'closed' as const, closedReason: 'board-poll-miss' as const, closedAt },
+                $unset: { purgeAt: 1 as const },
+              }
+            : {
+                $set: {
+                  boardPollMisses: misses,
+                  status: 'closed' as const,
+                  closedReason: 'board-poll-miss' as const,
+                  closedAt,
+                  purgeAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+                },
+              }
           : { $set: { boardPollMisses: misses } }
-        const closeResult = await JobPosting.updateOne(
-          { _id: doc._id, status: 'open', updatedAt: doc.updatedAt },
-          close,
-        )
-        if ((closeResult?.matchedCount ?? 1) === 0) continue
-        if (closedAt) {
-          // Retention is a monotonic ownership invariant. Decide purge from
-          // the CURRENT pin after the close write, never from this stale
-          // hydrated document: Save/Apply/Tailor may have pinned it while the
-          // board poll was running. Whichever operation wins last either
-          // withholds purgeAt here or unsets it in the pin write.
-          const closeFilter = {
-            _id: doc._id,
-            status: 'closed',
-            closedReason: 'board-poll-miss',
-            closedAt,
-          }
-          await JobPosting.updateOne(
-            { ...closeFilter, userReferenced: true },
-            { $unset: { purgeAt: 1 } },
-          )
-          await JobPosting.updateOne(
-            { ...closeFilter, userReferenced: { $ne: true } },
-            { $set: { purgeAt: new Date(Date.now() + 7 * 24 * 3600 * 1000) } },
-          )
-        }
-      }
+        return [{
+          updateOne: {
+            filter: { _id: doc._id, status: 'open' as const, updatedAt: doc.updatedAt },
+            update,
+          },
+        }]
+      })
+      if (lifecycleOps.length) await JobPosting.bulkWrite(lifecycleOps, { session })
     }
 
-    await JobIngestCycle.create({
+    await JobIngestCycle.create([{
       kind: 'sync',
       sourceId,
       startedAt,
@@ -565,9 +619,18 @@ export async function runSourceSyncHandler(
       storeErrors: total.counters.storeErrors,
       quotaSpent: total.attempts,
       healthTransitions: newHealth !== config.health ? [`${config.health}->${newHealth}`] : [],
-    })
+    }], { session })
     return true
-  })
+  }))
+  } catch (error) {
+    if (error instanceof SourceAuthorityChangedError) {
+      return { skipped: true, reason: 'source authority changed during sync' }
+    }
+    if (error instanceof SourceTransactionsRequiredError) {
+      logger.error({ error, sourceId, controlRevision }, 'jobs source sync blocked: Mongo transactions unavailable')
+    }
+    throw error
+  }
 
   return { cycleWritten: true, counters: total.counters }
 }
@@ -591,9 +654,24 @@ export async function runBoardProbeHandler(step: StepRunner): Promise<{ probed: 
     await step.run(`probe-${board.sourceId}`, async () => {
       const adapter = resolveAdapter(board.sourceId, board.kind)
       if (!adapter) return false
+      const controlRevision = controlRevisionOf(board)
+      try {
+        await assertSourceProbeAuthority(board.sourceId, controlRevision)
+      } catch (error) {
+        if (error instanceof SourceAuthorityChangedError) return false
+        throw error
+      }
       const targets = adapter.buildTargets({ sourceId: board.sourceId, enabled: true, slug: board.slug, atsKind: board.atsKind, displayName: board.displayName }, [])
       if (!targets.length) return false
-      const res = await adapter.fetch(targets[0])
+      const res = await adapter.fetch(targets[0], {
+        beforePhysicalRequest: async () => {
+          await assertSourceProbeAuthority(board.sourceId, controlRevision)
+          return true
+        },
+      })
+      // A revoke during adapter pagination is not a provider failure and
+      // must never write health based on the now-unauthorized observation.
+      if (res.authorityChanged) return false
       const update: Record<string, unknown> = {}
       if (!res.ok && (res.status === 404 || res.status === 410)) {
         // The board itself is gone — quarantine immediately.
@@ -622,7 +700,17 @@ export async function runBoardProbeHandler(step: StepRunner): Promise<{ probed: 
         }
       }
       // Transient non-404 failures leave health to the sync job's judgment.
-      if (Object.keys(update).length) await JobSourceConfig.updateOne({ sourceId: board.sourceId }, { $set: update })
+      if (Object.keys(update).length) {
+        await JobSourceConfig.updateOne(
+          {
+            sourceId: board.sourceId,
+            enabled: board.enabled,
+            health: board.health,
+            ...controlRevisionFilter(controlRevision),
+          },
+          { $set: update }
+        )
+      }
       return true
     })
     probed++
@@ -669,5 +757,8 @@ export const jobsSourceSyncJob = inngest.createFunction(
     },
     triggers: [{ event: 'jobs/source.sync' }],
   },
-  async ({ event, step }) => runSourceSyncHandler(event as unknown as { data: { sourceId: string } }, step as StepRunner)
+  async ({ event, step }) => runSourceSyncHandler(
+    event as unknown as { data: { sourceId: string; controlRevision?: number } },
+    step as StepRunner
+  )
 )

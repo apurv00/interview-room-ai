@@ -1,0 +1,82 @@
+name: Jobs Source Control Promotion Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Prepare indexes before adoption, or run the post-adoption promotion gate
+        required: true
+        default: verify-promotion
+        type: choice
+        options:
+          - prepare-indexes
+          - verify-promotion
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jobs-source-control-jobs-staging
+  cancel-in-progress: false
+
+jobs:
+  verify-a02:
+    name: A02 ${{ inputs.phase }} on jobs-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Deliberately hard-coded: the smoke creates and drops UUID-named
+    # collections and must never be pointed at a selectable production env.
+    environment: jobs-staging
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # This is intentionally the first database step. It is read-only and
+      # rejects a production URI even if it was stored under the staging secret.
+      - name: Verify dedicated staging database identity
+        run: npx tsx scripts/verify-jobs-staging-database.ts
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          A02_STAGING_EXPECTED_DATABASE: ${{ vars.A02_STAGING_EXPECTED_DATABASE }}
+          A02_STAGING_SENTINEL_TOKEN: ${{ secrets.A02_STAGING_SENTINEL_TOKEN }}
+
+      - name: Prepare five non-dropping source-control indexes
+        run: npm run prepare:jobs-source-control-indexes -- --apply
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Verify owner-retention repair state
+        if: inputs.phase == 'verify-promotion'
+        run: npm run check:jobs-retention
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Verify durable source lineage
+        if: inputs.phase == 'verify-promotion'
+        run: npm run check:jobs-source-lineage
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Verify source-control invariants
+        if: inputs.phase == 'verify-promotion'
+        run: npm run check:jobs-source-control
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Exercise both races and production-shaped retained-corpus bound
+        if: inputs.phase == 'verify-promotion'
+        run: npm run smoke:jobs-source-control
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          A02_SMOKE_ALLOW: '1'
+          A02_SMOKE_ROWS: '25000'
+          A02_SMOKE_MAX_MS: '45000'

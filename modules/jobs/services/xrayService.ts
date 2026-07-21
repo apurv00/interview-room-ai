@@ -103,6 +103,26 @@ function exactRoleVersionCondition(
   return String(value)
 }
 
+function exactXraySnapshotFilter(doc: {
+  _id: unknown
+  status: unknown
+  closedReason?: unknown
+  domain?: unknown
+  jdCompressed?: unknown
+  parsedJDHash?: unknown
+  parsedJDRoleVersion?: unknown
+}): Record<string, unknown> {
+  return {
+    _id: doc._id,
+    status: doc.status,
+    closedReason: doc.closedReason ?? null,
+    domain: doc.domain ?? null,
+    jdCompressed: doc.jdCompressed,
+    parsedJDHash: doc.parsedJDHash ?? null,
+    parsedJDRoleVersion: doc.parsedJDRoleVersion ?? null,
+  }
+}
+
 async function getOrParseXrayVersion(
   jobPostingId: string,
   allowVersionRetry: boolean,
@@ -128,7 +148,15 @@ async function getOrParseXrayVersion(
 
   const hash = xrayHashOf(jd)
   if (postingState === 'archived') {
-    return doc.parsedJD && doc.parsedJDHash === hash
+    if (!doc.parsedJD || doc.parsedJDHash !== hash) return null
+    // Ownership and posting authority are separate mutable claims. Recheck
+    // both after the first owner lookup before returning cached evidence; a
+    // revoke or tracker deletion during that await must beat stale content.
+    const [sameApplication, samePosting] = await Promise.all([
+      JobApplication.exists({ userId, jobPostingId }),
+      JobPosting.exists(exactXraySnapshotFilter(doc)),
+    ])
+    return sameApplication && samePosting
       ? { parsed: doc.parsedJD as XrayParsed, cached: true }
       : null
   }
@@ -139,20 +167,63 @@ async function getOrParseXrayVersion(
     if (!activeCatalog.authoritative) {
       // Preserve useful evidence during a CMS outage, but never refresh or
       // authorize a role from the seeded availability fallback.
-      return { parsed: stableParsed, cached: true, retryable: true }
+      return await JobPosting.exists(exactXraySnapshotFilter(doc))
+        ? { parsed: stableParsed, cached: true, retryable: true }
+        : null
     }
     // An explicit posting domain is the Practice classification authority.
     // Whether active (ready) or inactive/malformed (unsupported), there is no
     // reason to spend an LLM call refreshing a lower-precedence inferred role.
     if (hasDeclaredDomain(doc.domain)) {
-      return { parsed: stableParsed, cached: true }
+      return await JobPosting.exists(exactXraySnapshotFilter(doc))
+        ? { parsed: stableParsed, cached: true }
+        : null
     }
     if (doc.parsedJDRoleVersion === activeCatalog.revision) {
-      return { parsed: stableParsed, cached: true }
+      return await JobPosting.exists(exactXraySnapshotFilter(doc))
+        ? { parsed: stableParsed, cached: true }
+        : null
     }
   }
 
-  const { rawText: _omit, ...extracted } = await parseJobDescription(jd, activeCatalog)
+  // Catalog lookup and cache reconciliation can yield while a legal source
+  // revoke closes the posting. Re-authorize the exact live JD immediately
+  // before the external parser call; a committed revoke or body replacement
+  // therefore blocks stale JD egress. The provider boundary itself cannot be
+  // made transactional with Mongo, so the post-parse CAS remains mandatory.
+  const authorizeParserProvider = async () => Boolean(await JobPosting.exists({
+    _id: jobPostingId,
+    status: 'open',
+    jdCompressed: doc.jdCompressed,
+  }))
+  const stillAuthorized = await authorizeParserProvider()
+  if (!stillAuthorized) {
+    return allowVersionRetry
+      ? getOrParseXrayVersion(jobPostingId, false, userId)
+      : null
+  }
+
+  let parsedByModel: Awaited<ReturnType<typeof parseJobDescription>>
+  try {
+    parsedByModel = await parseJobDescription(
+      jd,
+      activeCatalog,
+      authorizeParserProvider,
+    )
+  } catch (err) {
+    // A provider-boundary denial means the exact posting snapshot lost
+    // authority after the precheck. Re-enter the existing bounded lifecycle
+    // reconciliation once so a replacement version can win; a committed
+    // close/revoke returns null. Ordinary parser errors keep their established
+    // behavior and are never hidden here.
+    if (!(err instanceof Error) || err.name !== 'ModelProviderPreconditionError') {
+      throw err
+    }
+    return allowVersionRetry
+      ? getOrParseXrayVersion(jobPostingId, false, userId)
+      : null
+  }
+  const { rawText: _omit, ...extracted } = parsedByModel
   const parserFallback = extracted.requirements.length === 0 && extracted.keyThemes.length === 0
 
   if (hasCurrentBodyParse) {
@@ -261,7 +332,7 @@ async function reconcileCurrentXray(
   // A concurrent parser, close, or JD replacement may win while the model is
   // running. Prefer the persisted winner, including over an empty fallback.
   const current = await JobPosting.findById(jobPostingId)
-    .select('domain jdCompressed parsedJD parsedJDHash parsedJDRoleVersion status')
+    .select('domain jdCompressed parsedJD parsedJDHash parsedJDRoleVersion status closedReason')
     .lean()
   if (!current || current.status !== 'open') return null
   const currentJd = inflateCanonicalJd(current.jdCompressed)
@@ -288,6 +359,10 @@ async function reconcileCurrentXray(
         current.parsedJDRoleVersion !== latestCatalog.revision || !inferredRole
       )
     )
+    // The catalog re-read above can yield. Do not return its stale winner if a
+    // source revoke, closure-policy edit, or JD replacement committed while
+    // taxonomy was resolving.
+    if (!(await JobPosting.exists(exactXraySnapshotFilter(current)))) return null
     return {
       parsed,
       cached: true,

@@ -87,6 +87,38 @@ interface MockChunk {
 }
 
 describe('OpenAI adapter streaming', () => {
+  it('disables SDK-internal retries for authority-gated completion and stream calls', async () => {
+    const completionResponse = {
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }
+    mockCreate.mockResolvedValueOnce(completionResponse)
+    const provider = getProvider('openai')!
+
+    await provider.complete({
+      model: 'gpt-4o',
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 100,
+      disableSdkRetries: true,
+    })
+    expect(mockCreate.mock.calls[0][1]).toEqual({ maxRetries: 0 })
+
+    mockCreate.mockResolvedValueOnce(asyncIterableFrom<MockChunk>([
+      { choices: [], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } },
+    ]))
+    for await (const _ of provider.stream!({
+      model: 'gpt-4o',
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 100,
+      disableSdkRetries: true,
+    })) {
+      // drain
+    }
+    expect(mockCreate.mock.calls[1][1]).toEqual({ maxRetries: 0 })
+  })
+
   it('yields a delta per non-empty content chunk + a terminal done event', async () => {
     const chunks: MockChunk[] = [
       // First chunk — role-only, no content. MUST be skipped.

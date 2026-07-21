@@ -62,14 +62,17 @@ registerProvider({
 
   async complete(params: CompletionParams): Promise<CompletionResponse> {
     const client = getClient()
-    const message = await client.messages.create({
-      model: params.model,
-      max_tokens: params.maxTokens,
-      system: params.system,
-      messages: params.messages,
-      ...(params.temperature !== undefined && { temperature: params.temperature }),
-      ...forcedToolFor(params.responseFormat),
-    } as Parameters<Anthropic['messages']['create']>[0]) as unknown as AnthropicMessageResponse
+    const message = await client.messages.create(
+      {
+        model: params.model,
+        max_tokens: params.maxTokens,
+        system: params.system,
+        messages: params.messages,
+        ...(params.temperature !== undefined && { temperature: params.temperature }),
+        ...forcedToolFor(params.responseFormat),
+      } as Parameters<Anthropic['messages']['create']>[0],
+      params.disableSdkRetries ? { maxRetries: 0 } : undefined,
+    ) as unknown as AnthropicMessageResponse
     const text = extractText(message, params.responseFormat)
     return {
       text,

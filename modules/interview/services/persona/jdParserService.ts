@@ -1,4 +1,4 @@
-import { completion } from '@shared/services/modelRouter'
+import { completion, type CompletionOptions } from '@shared/services/modelRouter'
 import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSecurity'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { logger } from '@shared/logger'
@@ -15,6 +15,7 @@ import {
 export async function parseJobDescription(
   rawText: string,
   suppliedCatalog?: ActiveInterviewDomainCatalog,
+  beforeProviderCall?: CompletionOptions['beforeProviderCall'],
 ): Promise<IParsedJobDescription> {
   if (!isFeatureEnabled('jd_structured_parsing')) {
     return createFallbackParsedJD(rawText)
@@ -58,6 +59,7 @@ Schema:
         role: 'user',
         content: `Parse this job description:\n\n<job_description>\n${rawText.slice(0, 4000)}\n</job_description>`,
       }],
+      beforeProviderCall,
     })
 
     const text = response.text
@@ -95,6 +97,17 @@ Schema:
       keyThemes: Array.isArray(parsed.keyThemes) ? parsed.keyThemes.map(String) : [],
     }
   } catch (err) {
+    // A caller-supplied provider gate is an authorization boundary, not a
+    // parser-quality failure. Preserve the historical fallback for ordinary
+    // JDs, but let a denied gated call unwind so its caller can compensate
+    // state created for that now-invalid request.
+    if (
+      beforeProviderCall &&
+      err instanceof Error &&
+      err.name === 'ModelProviderPreconditionError'
+    ) {
+      throw err
+    }
     logger.error({ err }, 'JD parsing failed')
     return createFallbackParsedJD(rawText)
   }

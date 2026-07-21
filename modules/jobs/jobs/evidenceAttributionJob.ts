@@ -7,6 +7,7 @@ import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 import { logger } from '@shared/logger'
 import { xrayHashOf } from '../services/xrayService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
+import { jobPostingStateOf } from '../services/postingAccess'
 import {
   ensurePracticeApplication,
   hasCompletedScoredPractice,
@@ -82,12 +83,80 @@ interface LoadedInputs {
     | 'identity-mismatch' // TRANSIENT: canonical sweep repairs stale ids
     | 'not-scored' // TRANSIENT: feedback persistence must win before attribution
     | 'already-processed'
+    | 'posting-restricted' // safety/legal closure: never derive new evidence
   answers: Array<{ index: number; question: string; answer: string; answerScore: number }>
   mustHaves: Array<{ id: string; requirement: string }>
   xrayHash: string
   handoffJdHash: string
   applicationId: string
   userId: string
+  postingStatus?: 'open' | 'closed'
+  postingClosedReason?: string
+}
+
+function postingAuthorityFilter(
+  inputs: LoadedInputs,
+  jobPostingId: string,
+): Record<string, unknown> | null {
+  if (!inputs.postingStatus) return null
+  return {
+    _id: jobPostingId,
+    status: inputs.postingStatus,
+    closedReason: inputs.postingClosedReason
+      ? inputs.postingClosedReason
+      : { $exists: false },
+    parsedJDHash: inputs.xrayHash,
+  }
+}
+
+function sessionAuthorityFilter(
+  inputs: LoadedInputs,
+  event: { sessionId: string; jobPostingId: string },
+): Record<string, unknown> {
+  return {
+    _id: event.sessionId,
+    userId: inputs.userId,
+    status: 'completed',
+    feedback: { $exists: true },
+    'attribution.source': 'jobs',
+    'attribution.jobId': event.jobPostingId,
+    'attribution.handoffVersion': 1,
+    'attribution.jdHash': inputs.handoffJdHash,
+    'attribution.evidenceProcessedAt': { $exists: false },
+  }
+}
+
+function applicationAuthorityFilter(
+  inputs: LoadedInputs,
+  event: { sessionId: string; applicationId: string; jobPostingId: string },
+): Record<string, unknown> {
+  return {
+    _id: event.applicationId,
+    userId: inputs.userId,
+    jobPostingId: event.jobPostingId,
+    verifiedPracticeSessionIds: event.sessionId,
+  }
+}
+
+/**
+ * Exact durable authority for model egress and derived evidence writes.
+ * The posting lifecycle/version, completed verified session, canonical
+ * application membership, and surviving owner must all still match the
+ * snapshots loaded for this run.
+ */
+async function evidenceAuthorityIsCurrent(
+  inputs: LoadedInputs,
+  event: { sessionId: string; applicationId: string; jobPostingId: string },
+): Promise<boolean> {
+  const postingFilter = postingAuthorityFilter(inputs, event.jobPostingId)
+  if (!postingFilter) return false
+  const [posting, session, application, owner] = await Promise.all([
+    JobPosting.exists(postingFilter),
+    InterviewSession.exists(sessionAuthorityFilter(inputs, event)),
+    JobApplication.exists(applicationAuthorityFilter(inputs, event)),
+    User.exists({ _id: inputs.userId }),
+  ])
+  return !!posting && !!session && !!application && !!owner
 }
 
 export function buildAttributionPrompt(
@@ -203,7 +272,7 @@ export async function runEvidenceAttributionHandler(
     const [session, application, posting] = await Promise.all([
       InterviewSession.findById(sessionId).select('config evaluations userId jobDescription attribution status feedback').lean(),
       JobApplication.findById(applicationId).select('userId jobPostingId').lean(),
-      JobPosting.findById(jobPostingId).select('parsedJD parsedJDHash').lean(),
+      JobPosting.findById(jobPostingId).select('status closedReason parsedJD parsedJDHash').lean(),
     ])
     if (!session || !application) return none('missing-context')
     const sessionAttr = session.attribution as {
@@ -246,6 +315,9 @@ export async function runEvidenceAttributionHandler(
     // = counted skip (never cross-version, never a second parse in v1).
     const sessionHash = xrayHashOf(jd)
     if (practiceHandoffHashOf(jd) !== sessionAttr.jdHash) return none('identity-mismatch')
+    if (posting && jobPostingStateOf(posting) === 'restricted') {
+      return none('posting-restricted')
+    }
     if (!posting?.parsedJD || posting.parsedJDHash !== sessionHash) {
       return none(posting?.parsedJD ? 'jd-version-mismatch' : 'no-parse')
     }
@@ -282,6 +354,8 @@ export async function runEvidenceAttributionHandler(
       handoffJdHash: sessionAttr.jdHash,
       applicationId,
       userId: String(session.userId),
+      postingStatus: posting.status,
+      postingClosedReason: posting.closedReason,
     }
   })
   if (inputs.outcome !== 'ok') {
@@ -304,56 +378,77 @@ export async function runEvidenceAttributionHandler(
       inputs.outcome !== 'missing-context' &&
       inputs.outcome !== 'identity-mismatch' &&
       inputs.outcome !== 'not-scored' &&
-      inputs.outcome !== 'already-processed'
+      inputs.outcome !== 'already-processed' &&
+      inputs.outcome !== 'posting-restricted'
     ) {
       await step.run('mark-processed', () => markEvidenceProcessed(sessionId))
     }
     return { outcome: inputs.outcome }
   }
 
-  const verdicts = await step.run('llm-attribute', async () => {
-    const prompt = buildAttributionPrompt(inputs.answers, inputs.mustHaves)
-    // G.3 truncation pattern: one in-step retry at a bumped budget.
-    for (const bump of [0, 600]) {
-      const res = await completion({
-        taskSlot: 'jobs.evidence-attribution',
-        system: 'You are a precise evidence-attribution classifier. Output only the requested JSON.',
-        messages: [{ role: 'user', content: prompt }],
-        ...(bump ? { maxTokens: TASK_SLOT_DEFAULTS['jobs.evidence-attribution'].maxTokens + bump } : {}),
-      })
-      // A truncated response can still parse as VALID JSON with the tail
-      // answers silently missing (the schema cannot require one entry per
-      // answer) — accepting it would permanently undercount readiness for
-      // this session (Codex #538 r4). Retry at the bumped budget; still
-      // truncated → throw (Inngest retries, the sweep is the net).
-      if (res.truncated) {
-        if (bump) throw new Error('attribution truncated after bumped retry')
-        continue
+  let verdicts: z.infer<typeof ATTRIBUTION_SCHEMA>
+  try {
+    verdicts = await step.run('llm-attribute', async () => {
+      const prompt = buildAttributionPrompt(inputs.answers, inputs.mustHaves)
+      // G.3 truncation pattern: one in-step retry at a bumped budget.
+      for (const bump of [0, 600]) {
+        const res = await completion({
+          taskSlot: 'jobs.evidence-attribution',
+          system: 'You are a precise evidence-attribution classifier. Output only the requested JSON.',
+          messages: [{ role: 'user', content: prompt }],
+          ...(bump ? { maxTokens: TASK_SLOT_DEFAULTS['jobs.evidence-attribution'].maxTokens + bump } : {}),
+          beforeProviderCall: () => evidenceAuthorityIsCurrent(inputs, {
+            sessionId,
+            applicationId,
+            jobPostingId,
+          }),
+        })
+        // A truncated response can still parse as VALID JSON with the tail
+        // answers silently missing (the schema cannot require one entry per
+        // answer) — accepting it would permanently undercount readiness for
+        // this session (Codex #538 r4). Retry at the bumped budget; still
+        // truncated → throw (Inngest retries, the sweep is the net).
+        if (res.truncated) {
+          if (bump) throw new Error('attribution truncated after bumped retry')
+          continue
+        }
+        try {
+          const jsonText = res.text.slice(res.text.indexOf('{'), res.text.lastIndexOf('}') + 1)
+          return ATTRIBUTION_SCHEMA.parse(JSON.parse(jsonText))
+        } catch (err) {
+          if (bump) throw new Error(`attribution parse failed after bumped retry: ${(err as Error).message}`)
+        }
       }
-      try {
-        const jsonText = res.text.slice(res.text.indexOf('{'), res.text.lastIndexOf('}') + 1)
-        return ATTRIBUTION_SCHEMA.parse(JSON.parse(jsonText))
-      } catch (err) {
-        if (bump) throw new Error(`attribution parse failed after bumped retry: ${(err as Error).message}`)
-      }
+      throw new Error('unreachable')
+    })
+  } catch (err) {
+    // modelRouter uses this named error for a denied/failed precondition and
+    // must not reinterpret it as a provider failure eligible for fallback.
+    // Inngest may rehydrate step errors, so match the stable name too.
+    if (err instanceof Error && err.name === 'ModelProviderPreconditionError') {
+      logger.warn({ sessionId }, 'posting/session authority revoked before evidence model call')
+      return { outcome: 'authority-revoked' }
     }
-    throw new Error('unreachable')
-  })
+    throw err
+  }
 
   const rows = await step.run('persist', async () => {
     // Delete-race guard: if the user GDPR-deleted this session between
     // llm-attribute and persist (a window Inngest backoff can stretch to
     // minutes), inserting would RESURRECT evidence the cascade removed
     // and re-write the snapshot the delete just unset. Abort untouched.
-    const [sessionAlive, userAlive] = await Promise.all([
-      InterviewSession.exists({ _id: sessionId, userId: inputs.userId }),
-      User.exists({ _id: inputs.userId }),
-    ])
-    if (!sessionAlive || !userAlive) {
-      logger.warn({ sessionId }, 'session or owner deleted mid-attribution — persist aborted')
+    if (!(await evidenceAuthorityIsCurrent(inputs, { sessionId, applicationId, jobPostingId }))) {
+      logger.warn({ sessionId }, 'posting/session authority changed mid-attribution — persist aborted')
       return 0
     }
     const epoch = await currentScoringEpoch()
+    // resolveModel can cross an async config/cache boundary. Recheck after it
+    // so a revocation that committed during epoch resolution cannot be
+    // followed by a new evidence or readiness write.
+    if (!(await evidenceAuthorityIsCurrent(inputs, { sessionId, applicationId, jobPostingId }))) {
+      logger.warn({ sessionId }, 'posting/session authority changed before evidence persistence')
+      return 0
+    }
     const mustHaveIds = new Set(inputs.mustHaves.map((m) => m.id))
     const byIndex = new Map(inputs.answers.map((a) => [a.index, a]))
     // Two answers may evidence the SAME requirement; the unique index
@@ -425,18 +520,15 @@ export async function runEvidenceAttributionHandler(
     // A preflight check is not a deletion fence. Recheck after every
     // evidence/readiness write; deletion paths remove sessions before their
     // evidence sweep, so every interleaving is either swept or compensated.
-    const appFilter = {
-      _id: applicationId,
-      userId: inputs.userId,
-      jobPostingId,
-      verifiedPracticeSessionIds: sessionId,
-    }
-    const [sessionStillAlive, userStillAlive, appStillAlive] = await Promise.all([
-      InterviewSession.exists({ _id: sessionId, userId: inputs.userId }),
+    const appFilter = applicationAuthorityFilter(inputs, { sessionId, applicationId, jobPostingId })
+    const exactPostingFilter = postingAuthorityFilter(inputs, jobPostingId)
+    const [postingStillAuthorized, sessionStillAlive, userStillAlive, appStillAlive] = await Promise.all([
+      exactPostingFilter ? JobPosting.exists(exactPostingFilter) : Promise.resolve(null),
+      InterviewSession.exists(sessionAuthorityFilter(inputs, { sessionId, jobPostingId })),
       User.exists({ _id: inputs.userId }),
       JobApplication.exists(appFilter),
     ])
-    if (!sessionStillAlive || !userStillAlive || !appStillAlive) {
+    if (!postingStillAuthorized || !sessionStillAlive || !userStillAlive || !appStillAlive) {
       await JobPracticeEvidence.deleteMany({ sessionId })
       if (!userStillAlive) {
         await JobApplication.deleteOne(appFilter)
@@ -444,15 +536,24 @@ export async function runEvidenceAttributionHandler(
         await JobApplication.updateOne(appFilter, {
           $unset: { readiness: 1 },
           $inc: { readinessRevision: 1 },
-          $pull: {
-            practiceSessionIds: sessionId,
-            verifiedPracticeSessionIds: sessionId,
-          },
+          ...(!sessionStillAlive
+            ? {
+                $pull: {
+                  practiceSessionIds: sessionId,
+                  verifiedPracticeSessionIds: sessionId,
+                },
+              }
+            : {}),
         })
       }
       logger.warn(
-        { sessionId, sessionStillAlive: !!sessionStillAlive, userStillAlive: !!userStillAlive },
-        'attribution writes compensated after concurrent deletion'
+        {
+          sessionId,
+          postingStillAuthorized: !!postingStillAuthorized,
+          sessionStillAlive: !!sessionStillAlive,
+          userStillAlive: !!userStillAlive,
+        },
+        'attribution writes compensated after authority change or deletion'
       )
       return 0
     }

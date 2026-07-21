@@ -2,12 +2,14 @@ import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
 const {
-  mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockUsageCreate, mockEventCreate,
+  mockAppFindOne, mockAppExists, mockAppUpdateOne, mockPostingFindById, mockPostingExists, mockUsageCreate, mockEventCreate,
   mockCheckATS, mockGetBase, mockGetResume, mockPreparePractice,
 } = vi.hoisted(() => ({
   mockAppFindOne: vi.fn(),
+  mockAppExists: vi.fn(),
   mockAppUpdateOne: vi.fn(),
   mockPostingFindById: vi.fn(),
+  mockPostingExists: vi.fn(),
   mockUsageCreate: vi.fn(),
   mockEventCreate: vi.fn(),
   mockCheckATS: vi.fn(),
@@ -20,8 +22,8 @@ vi.mock('@shared/services/inngest', () => ({ inngest: { send: vi.fn(), createFun
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@shared/db/models', () => ({
-  JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne },
-  JobPosting: { findById: mockPostingFindById },
+  JobApplication: { findOne: mockAppFindOne, exists: mockAppExists, updateOne: mockAppUpdateOne },
+  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
   UsageRecord: { create: mockUsageCreate },
   ProductEvent: { create: mockEventCreate },
 }))
@@ -38,10 +40,12 @@ const CLAIMED = '2026-07-14T12:00:00.000Z'
 const EVENT = { data: { userId: 'u1', jobPostingId: 'j1', claimedAt: CLAIMED } }
 
 function reset(app: unknown = { _id: 'app1', atsResult: undefined }) {
-  for (const m of [mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockUsageCreate, mockEventCreate, mockCheckATS, mockGetBase, mockGetResume, mockPreparePractice]) m.mockReset()
+  for (const m of [mockAppFindOne, mockAppExists, mockAppUpdateOne, mockPostingFindById, mockPostingExists, mockUsageCreate, mockEventCreate, mockCheckATS, mockGetBase, mockGetResume, mockPreparePractice]) m.mockReset()
   mockAppFindOne.mockResolvedValue(app)
+  mockAppExists.mockResolvedValue({ _id: 'app1' })
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) }) }) })
+  mockPostingExists.mockResolvedValue({ _id: 'j1' })
   mockPreparePractice.mockResolvedValue({ jobDescription: JD, jdHash: 'canonical-sha256', role: 'backend' })
   mockGetBase.mockResolvedValue({ id: 'base-1', name: 'Base Resume — QA', targetRole: 'QA', skills: [] })
   mockGetResume.mockResolvedValue({ fullText: 'MY RESUME TEXT' })
@@ -55,7 +59,10 @@ describe('runAtsCheckHandler (Save-gated background one-shot)', () => {
     reset()
     const r = await runAtsCheckHandler(EVENT, step)
     expect(r).toEqual({ done: true, score: 72, cached: false })
-    expect(mockCheckATS).toHaveBeenCalledWith({ resumeText: 'MY RESUME TEXT', jobDescription: JD })
+    expect(mockCheckATS).toHaveBeenCalledWith(
+      { resumeText: 'MY RESUME TEXT', jobDescription: JD },
+      { beforeProviderCall: expect.any(Function) },
+    )
     // ONE claim-scoped atomic write: result + marker clear together, filtered
     // on the claim this run owns
     const [writeFilter, update] = mockAppUpdateOne.mock.calls[0]
@@ -72,6 +79,15 @@ describe('runAtsCheckHandler (Save-gated background one-shot)', () => {
     expect(r).toEqual({ done: true, score: 61, cached: true })
     expect(mockCheckATS).not.toHaveBeenCalled()
     expect(mockAppUpdateOne.mock.calls[0][1].$unset).toEqual({ atsRequestedAt: 1 }) // marker still cleared
+  })
+
+  it('a cached ATS result does not outlive source authority lost during resume loading', async () => {
+    reset({ _id: 'app1', atsResult: { score: 61, missingKeywords: [], jdHash: xrayHashOf(JD), resumeHash: xrayHashOf('MY RESUME TEXT'), checkedAt: new Date() } })
+    mockPostingExists.mockResolvedValueOnce(null)
+
+    expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'posting-unavailable' })
+    expect(mockCheckATS).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne.mock.calls[0][1]).toEqual({ $unset: { atsRequestedAt: 1 } })
   })
 
   it('an EDITED RESUME (same JD) invalidates the result — the pair is the identity (Codex #521)', async () => {
@@ -145,5 +161,45 @@ describe('runAtsCheckHandler (Save-gated background one-shot)', () => {
     expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'posting-unavailable' })
     expect(mockCheckATS).toHaveBeenCalledOnce()
     expect(mockUsageCreate).not.toHaveBeenCalled()
+  })
+
+  it('rechecks exact posting authority before provider egress and fails closed after source revocation', async () => {
+    reset()
+    mockPostingExists.mockResolvedValueOnce(null)
+    mockCheckATS.mockImplementationOnce(async (_data, options) => {
+      if (!options?.beforeProviderCall || !(await options.beforeProviderCall())) {
+        throw new Error('provider precondition failed')
+      }
+      return { score: 99, keywords: { missing: [] } }
+    })
+
+    expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'check-failed' })
+    expect(mockCheckATS).toHaveBeenCalledOnce()
+    expect(mockPostingExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'j1',
+      status: 'open',
+      closedReason: { $exists: false },
+    }))
+    expect(mockUsageCreate).not.toHaveBeenCalled()
+    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne.mock.calls.at(-1)![1]).toEqual({ $unset: { atsRequestedAt: 1 } })
+  })
+
+  it('does not persist a model result when revocation commits during final CMS preparation', async () => {
+    reset()
+    mockPostingExists
+      .mockResolvedValueOnce({ _id: 'j1' })
+      .mockResolvedValueOnce(null)
+    mockCheckATS.mockImplementationOnce(async (_data, options) => {
+      expect(await options!.beforeProviderCall!()).toBe(true)
+      return { score: 88, keywords: { missing: ['kafka'] } }
+    })
+
+    expect(await runAtsCheckHandler(EVENT, step)).toEqual({ skipped: 'posting-unavailable' })
+    expect(mockPostingExists).toHaveBeenCalledTimes(2)
+    expect(mockUsageCreate).not.toHaveBeenCalled()
+    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).toHaveBeenCalledTimes(1)
+    expect(mockAppUpdateOne.mock.calls[0][1]).toEqual({ $unset: { atsRequestedAt: 1 } })
   })
 })

@@ -120,7 +120,45 @@ describe('POST /api/interviews Jobs handoff', () => {
         jdHash: practiceHandoffHashOf(JD),
         verifiedAt: expect.any(Date),
       }),
+      beforeJobDescriptionProviderCall: expect.any(Function),
     }))
+  })
+
+  it('returns 409 when source revocation wins after handoff but before JD model egress', async () => {
+    mockResolvePracticeHandoff
+      .mockResolvedValueOnce({
+        jobId: JOB_ID,
+        jobDescription: SERVER_JD,
+        jdHash: practiceHandoffHashOf(JD),
+        company: 'PhonePe',
+        role: 'backend',
+        applicationId: 'canonical-app',
+      })
+      // Source revocation wins after the request handoff but before the
+      // parser's first provider attempt.
+      .mockResolvedValueOnce(null)
+    mockCreateSession.mockImplementationOnce(async (input: {
+      beforeJobDescriptionProviderCall?: () => Promise<boolean>
+    }) => {
+      if (!(await input.beforeJobDescriptionProviderCall?.())) {
+        throw Object.assign(new Error('model provider precondition failed'), {
+          name: 'ModelProviderPreconditionError',
+        })
+      }
+      return { _id: { toString: () => 'session-must-not-exist' } }
+    })
+
+    const response = await POST(request({
+      config: {
+        ...baseConfig,
+        attribution: { source: 'jobs', jobId: JOB_ID },
+      },
+      jobsHandoffToken: 'signed-token',
+    }))
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ code: 'JOBS_HANDOFF_INVALID' })
+    expect(mockResolvePracticeHandoff).toHaveBeenNthCalledWith(2, 'signed-token', USER_ID)
   })
 
   it('rejects a browser role that differs from the re-resolved server role', async () => {

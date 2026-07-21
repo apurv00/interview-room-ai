@@ -1,6 +1,7 @@
 import { gzipSync, gunzipSync } from 'zlib'
 import crypto from 'crypto'
-import { JobPosting, type IJobPosting } from '@shared/db/models'
+import type { ClientSession } from 'mongoose'
+import { JOB_SOURCE_LINEAGE_UNKNOWN, JobPosting, type IJobPosting } from '@shared/db/models'
 import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, displayJdBody, bodyHashOf } from './qualityGate'
 import { companyKey, titleKey, titleTokens, locationKey, fingerprintOf, sourceKeyOf, isConfidentialCompany, titleJaccard, FUZZY_MERGE_JACCARD } from './identityResolver'
 import type { NormalizedJob } from '../adapters/types'
@@ -39,14 +40,45 @@ export interface IngestCounters {
 export interface RepostCounterDeps {
   /** Returns distinct-company count for the body hash after registering companyKey. Fail-open: null. */
   registerRepost?: (bodyHash: string, companyKeyStr: string) => Promise<number | null>
+  /** Snapshot produced before a source-authority transaction. Prevents Redis
+   * network calls from holding Mongo's config-row write lock. */
+  repostCounts?: ReadonlyMap<string, number | null>
   /** §4.5: when verdict collection is enabled (JobsVerdictConfig row, read
    *  once per sync), new survivors are stored `llmVerdict: {status:'pending'}`
    *  so the steady-state sweeper runs on the partial index. Disabled = no
    *  init, byte-identical docs. */
   initVerdictPending?: boolean
+  /** A02 source-authority transaction. When present, every canonical lookup
+   *  and write in this batch participates in the config-row write fence. */
+  session?: ClientSession
 }
 
 const PROVENANCE_CAP = 8
+
+function repostLookupKey(bodyHash: string, companyKeyStr: string): string {
+  return `${bodyHash}:${companyKeyStr}`
+}
+
+/** Resolve repost counts outside Mongo transactions. Results (including
+ * fail-open nulls) are immutable input when a transaction retries. */
+export async function snapshotRepostCounts(
+  jobs: NormalizedJob[],
+  registerRepost: (bodyHash: string, companyKeyStr: string) => Promise<number | null>,
+): Promise<ReadonlyMap<string, number | null>> {
+  const counts = new Map<string, number | null>()
+  const pending = new Map<string, Promise<number | null>>()
+  for (const job of jobs) {
+    const bodyHash = bodyHashOf(job.description)
+    if (!bodyHash) continue
+    const company = companyKey(job.company)
+    const key = repostLookupKey(bodyHash, company)
+    if (!pending.has(key)) pending.set(key, registerRepost(bodyHash, company).catch(() => null))
+  }
+  await Promise.all(Array.from(pending, async ([key, result]) => {
+    counts.set(key, await result)
+  }))
+  return counts
+}
 
 /** Defensive date parse — Mongoose rejects Invalid Date on Date paths, and
  *  classifyJob deliberately STORES bad-valid-through rows as flagged
@@ -127,6 +159,9 @@ function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedF
     // collapsed body for bodyHash/verdict/xray.
     jdDisplayCompressed: jdNorm ? gzipSync(Buffer.from(displayJdBody(p.job.description))) : undefined,
     jdLength: p.jdLen,
+    // Unlike detailed provenance, legal lineage is never capped or evicted.
+    // It also covers provider rows that have no external ID.
+    sourceIds: [sourceId],
     provenance: p.job.externalId
       ? [(() => {
           const url = bestApplyUrl(p.usableUrls)
@@ -166,6 +201,22 @@ const REOPENABLE_CLOSE_REASONS = new Set(['aged-out', 'board-poll-miss', 'valid-
 
 /** Merge an incoming posting into an existing canonical doc (§4.2 policy). */
 export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: string, now: Date): void {
+  // A02 legal lineage is monotonic and independent of the cap-8 detailed
+  // provenance array. Legacy rows hydrate with an empty sourceIds default;
+  // reconstruct what is knowable and mark empty/cap-reached history as
+  // ambiguous so any later revoke restricts it conservatively.
+  const durableSourceIds = [
+    ...(doc.sourceIds ?? []),
+    ...doc.provenance.map((entry) => entry.sourceId),
+  ]
+  const legacyLineageCouldBeTruncated =
+    !doc.sourceIds?.length && (doc.provenance.length === 0 || doc.provenance.length >= PROVENANCE_CAP)
+  doc.sourceIds = Array.from(new Set([
+    ...durableSourceIds,
+    ...(legacyLineageCouldBeTruncated ? [JOB_SOURCE_LINEAGE_UNKNOWN] : []),
+    sourceId,
+  ]))
+
   // §4.5 'input change re-enqueues': the merge is the ONLY place a stored
   // row's verdict-hash components (JD body, apply URLs) mutate, so it owns
   // invalidating a scored verdict (adversarial review of Wave 2.3 — without
@@ -297,6 +348,13 @@ function isStaleMergeSave(error: unknown): boolean {
   return name === 'DocumentNotFoundError' || name === 'VersionError'
 }
 
+function isTransactionRetryError(error: unknown): boolean {
+  const err = error as { hasErrorLabel?: (label: string) => boolean; errorLabels?: string[] }
+  return err?.hasErrorLabel?.('TransientTransactionError') === true ||
+    err?.hasErrorLabel?.('UnknownTransactionCommitResult') === true ||
+    err?.errorLabels?.some((label) => label === 'TransientTransactionError' || label === 'UnknownTransactionCommitResult') === true
+}
+
 /**
  * Persist a merge against the exact lifecycle/version that was inspected.
  *
@@ -313,6 +371,7 @@ async function mergeAndSaveWithLifecycleCas(
   prepared: PreparedPosting,
   sourceId: string,
   now: Date,
+  session?: ClientSession,
 ): Promise<void> {
   let doc = initial
   for (let attempt = 0; attempt < MERGE_SAVE_ATTEMPTS; attempt++) {
@@ -332,11 +391,13 @@ async function mergeAndSaveWithLifecycleCas(
     try {
       // Explicit acknowledgement is required for Mongoose to surface a
       // zero-match custom `$where` predicate as DocumentNotFoundError.
-      await doc.save({ w: 1 })
+      await doc.save({ w: 1, ...(session ? { session } : {}) })
       return
     } catch (error) {
       if (!isStaleMergeSave(error) || attempt + 1 >= MERGE_SAVE_ATTEMPTS) throw error
-      const latest = await JobPosting.findById(doc._id)
+      const latest = session
+        ? await JobPosting.findById(doc._id, null, { session })
+        : await JobPosting.findById(doc._id)
       if (!latest) throw error
       doc = latest
     }
@@ -353,6 +414,14 @@ export async function ingestBatch(
   }
   const now = new Date()
 
+  const createPosting = async (doc: ReturnType<typeof buildInsertDoc>): Promise<void> => {
+    if (deps.session) {
+      await JobPosting.create([doc], { session: deps.session })
+    } else {
+      await JobPosting.create(doc)
+    }
+  }
+
   for (const job of jobs) {
     counters.processed++
     const urls = job.applyOptions.map((o) => o.url)
@@ -368,8 +437,14 @@ export async function ingestBatch(
     const effectiveFlags: string[] = [...flags]
     let massRepost = false
     const bh = bodyHashOf(job.description)
-    if (bh && deps.registerRepost) {
-      const distinctCompanies = await deps.registerRepost(bh, companyKey(job.company)).catch(() => null)
+    if (bh && (deps.repostCounts || deps.registerRepost)) {
+      const cKey = companyKey(job.company)
+      const lookupKey = repostLookupKey(bh, cKey)
+      const distinctCompanies = deps.repostCounts?.has(lookupKey)
+        ? deps.repostCounts.get(lookupKey) ?? null
+        : deps.registerRepost
+          ? await deps.registerRepost(bh, cKey).catch(() => null)
+          : null
       if (distinctCompanies !== null) {
         if (distinctCompanies > 3) massRepost = true
         else if (distinctCompanies >= 2) effectiveFlags.push('repost')
@@ -402,9 +477,12 @@ export async function ingestBatch(
     // ── Identity ladder ──
     // Tier 1: sourceKey refresh.
     if (prepared.sourceKey) {
-      const bySource = await JobPosting.findOne({ 'provenance.sourceKey': prepared.sourceKey })
+      const sourceQuery = { 'provenance.sourceKey': prepared.sourceKey }
+      const bySource = deps.session
+        ? await JobPosting.findOne(sourceQuery, null, { session: deps.session })
+        : await JobPosting.findOne(sourceQuery)
       if (bySource) {
-        await mergeAndSaveWithLifecycleCas(bySource, prepared, sourceId, now)
+        await mergeAndSaveWithLifecycleCas(bySource, prepared, sourceId, now, deps.session)
         counters.refreshed++
         continue
       }
@@ -412,7 +490,10 @@ export async function ingestBatch(
 
     // Tier 2: canonical fingerprint (absent for confidential — guard #2).
     if (prepared.fp) {
-      const byFp = await JobPosting.findOne({ fingerprint: prepared.fp })
+      const fingerprintQuery = { fingerprint: prepared.fp }
+      const byFp = deps.session
+        ? await JobPosting.findOne(fingerprintQuery, null, { session: deps.session })
+        : await JobPosting.findOne(fingerprintQuery)
       if (byFp) {
         // Guard #1: same source, different externalId, both open ⇒ distinct
         // postings (multiple openings of one role) — salt, insert, never merge.
@@ -422,12 +503,12 @@ export async function ingestBatch(
           byFp.provenance.some((e) => e.sourceId === sourceId && e.externalId !== prepared.job.externalId)
         if (sameSourceDifferentExternal) {
           const salted = fingerprintOf(job.company, job.title, job.city, job.isRemote, prepared.job.externalId as string)
-          await JobPosting.create(buildInsertDoc(prepared, sourceId, now, salted, deps.initVerdictPending))
+          await createPosting(buildInsertDoc(prepared, sourceId, now, salted, deps.initVerdictPending))
           counters.saltedInserts++
           counters.newCount++
           continue
         }
-        await mergeAndSaveWithLifecycleCas(byFp, prepared, sourceId, now)
+        await mergeAndSaveWithLifecycleCas(byFp, prepared, sourceId, now, deps.session)
         counters.merged++
         continue
       }
@@ -435,7 +516,10 @@ export async function ingestBatch(
 
     // Tier 3: fuzzy — COMPANY-SCOPED only, location overlap, Jaccard ≥ 0.85.
     if (!isConfidentialCompany(job.company)) {
-      const candidates = await JobPosting.find({ companyKey: prepared.cKey, status: 'open' }).limit(20)
+      const fuzzyQuery = { companyKey: prepared.cKey, status: 'open' as const }
+      const candidates = deps.session
+        ? await JobPosting.find(fuzzyQuery, null, { session: deps.session }).limit(20)
+        : await JobPosting.find(fuzzyQuery).limit(20)
       const match = candidates.find(
         (c) =>
           c.locationKeys.includes(prepared.locKey) &&
@@ -446,7 +530,7 @@ export async function ingestBatch(
           !(prepared.job.externalId && c.provenance.some((e) => e.sourceId === sourceId && e.externalId !== prepared.job.externalId))
       )
       if (match) {
-        await mergeAndSaveWithLifecycleCas(match, prepared, sourceId, now)
+        await mergeAndSaveWithLifecycleCas(match, prepared, sourceId, now, deps.session)
         counters.fuzzyMerged++
         counters.merged++
         continue
@@ -454,9 +538,13 @@ export async function ingestBatch(
     }
 
     // Tier 4: insert.
-    await JobPosting.create(buildInsertDoc(prepared, sourceId, now, undefined, deps.initVerdictPending))
+    await createPosting(buildInsertDoc(prepared, sourceId, now, undefined, deps.initVerdictPending))
     counters.newCount++
-    } catch {
+    } catch (error) {
+      // The driver's withTransaction retry must see transaction-level
+      // conflicts. Swallowing one as a per-row store error could otherwise
+      // commit a partial callback after a concurrent legal transition.
+      if (deps.session && isTransactionRetryError(error)) throw error
       counters.storeErrors++
     }
   }

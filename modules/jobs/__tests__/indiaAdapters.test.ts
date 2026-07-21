@@ -125,6 +125,25 @@ describe('apna fetch', () => {
     expect(ua['User-Agent']).toContain('interviewprep.guru/jobs-bot')
   })
 
+  it('rechecks authority after sitemap discovery and blocks the first detail request after revocation', async () => {
+    const [, activeTarget] = apnaAdapter.buildTargets(
+      { sourceId: 'apna', enabled: true },
+      [{ bucket: 'apna:active', newestPostedAt: new Date('2026-07-10T00:00:00Z') }]
+    )
+    const beforePhysicalRequest = vi.fn()
+      .mockResolvedValueOnce(true) // sitemap index
+      .mockResolvedValueOnce(true) // job-listing shard index
+      .mockResolvedValueOnce(true) // active shard
+      .mockResolvedValueOnce(false) // first detail: revoked
+
+    const res = await apnaAdapter.fetch(activeTarget, { beforePhysicalRequest })
+
+    expect(res).toEqual({ ok: false, status: 0, raw: [], attempts: 3, authorityChanged: true })
+    expect(beforePhysicalRequest).toHaveBeenCalledTimes(4)
+    expect(urls).toHaveLength(3)
+    expect(urls.some((u) => u.includes('/job/fresh-new'))).toBe(false)
+  })
+
   it('backlog beyond the cap drains OLDEST-first so the cursor never strands unfetched URLs (Codex #536)', async () => {
     vi.mocked(fetch).mockImplementation(async (url: unknown) => {
       const u = String(url)
@@ -317,6 +336,22 @@ describe('unstop adapter', () => {
     expect((res.raw[0] as { id: number }).id).toBe(991)
     // Branded UA on the API call too.
     expect(mockFetchJSON.mock.calls[0][1].headers['User-Agent']).toContain('jobs-bot')
+  })
+
+  it('propagates an authority abort without reporting a provider failure', async () => {
+    mockFetchJSON.mockResolvedValue({
+      ok: false,
+      status: 0,
+      error: 'source-authority-changed',
+      authorityChanged: true,
+      attempts: 0,
+    })
+    const beforePhysicalRequest = vi.fn().mockResolvedValue(false)
+
+    const res = await unstopAdapter.fetch(target, { beforePhysicalRequest })
+
+    expect(res).toEqual({ ok: false, status: 0, raw: [], attempts: 0, authorityChanged: true })
+    expect(mockFetchJSON.mock.calls[0][2].beforePhysicalRequest).toBe(beforePhysicalRequest)
   })
 
   it('normalize maps items; missing public_url or core fields = null', () => {

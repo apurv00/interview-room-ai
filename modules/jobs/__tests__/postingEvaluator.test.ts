@@ -90,6 +90,25 @@ describe('postingEvaluator (§4.5 — never throws, never fabricates)', () => {
     expect(deps.completionFn).not.toHaveBeenCalled()
   })
 
+  it('a failed final authority check blocks the primary provider call without spend', async () => {
+    const beforeModelCall = vi.fn().mockResolvedValue(false)
+    const deps = makeDeps({ beforeModelCall })
+
+    const out = await evaluatePosting(INPUT, deps)
+
+    expect(out).toMatchObject({ ok: false, kind: 'authority', costUsd: 0 })
+    expect(beforeModelCall).toHaveBeenCalledTimes(1)
+    expect(deps.completionFn).not.toHaveBeenCalled()
+    expect(deps.recorded).toEqual([])
+  })
+
+  it('an authority-check outage fails closed before the primary provider call', async () => {
+    const deps = makeDeps({ beforeModelCall: vi.fn().mockRejectedValue(new Error('mongo unavailable')) })
+
+    expect(await evaluatePosting(INPUT, deps)).toMatchObject({ ok: false, kind: 'authority' })
+    expect(deps.completionFn).not.toHaveBeenCalled()
+  })
+
   it('12s timeout → kind=timeout, verdict stays pending semantics', async () => {
     vi.useFakeTimers()
     const deps = makeDeps({ completionFn: vi.fn(() => new Promise(() => {})) as never })
@@ -108,6 +127,21 @@ describe('postingEvaluator (§4.5 — never throws, never fabricates)', () => {
     expect(out.ok).toBe(true)
     expect(completionFn).toHaveBeenCalledTimes(2)
     if (out.ok) expect(out.costUsd).toBeCloseTo(2 * (4000 * 0.5 + 300 * 2.0) / 1_000_000)
+  })
+
+  it('rechecks authority before JSON repair and never sends the repair after revocation', async () => {
+    const completionFn = vi.fn().mockResolvedValue(completionOf('not json'))
+    const beforeModelCall = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    const deps = makeDeps({ completionFn: completionFn as never, beforeModelCall })
+
+    const out = await evaluatePosting(INPUT, deps)
+
+    expect(out).toMatchObject({ ok: false, kind: 'authority', message: 'posting authority changed before repair' })
+    expect(completionFn).toHaveBeenCalledTimes(1)
+    expect(beforeModelCall).toHaveBeenCalledTimes(2)
+    expect(deps.recorded).toHaveLength(1)
   })
 
   it('repair also unparseable → kind=parse, exactly two attempts, spend still recorded', async () => {

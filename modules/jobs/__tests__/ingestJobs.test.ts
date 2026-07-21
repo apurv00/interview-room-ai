@@ -3,7 +3,9 @@ import { describe, it, expect, vi } from 'vitest'
 const {
   mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne,
   mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch,
-  mockPostingUpdateOne,
+  mockPostingFindOne, mockPostingFind, mockPostingCreate, mockPostingUpdateMany,
+  mockPostingUpdateOne, mockPostingBulkWrite, mockAssertSourceSyncAuthority, mockAssertSourceTransactionsReady,
+  mockAssertSourceProbeAuthority, mockWithSourceWriteFence,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockSourceFindOne: vi.fn(),
@@ -13,7 +15,16 @@ const {
   mockCursorBulkWrite: vi.fn(),
   mockCycleCreate: vi.fn(),
   mockAdapterFetch: vi.fn(),
+  mockPostingFindOne: vi.fn(),
+  mockPostingFind: vi.fn(),
+  mockPostingCreate: vi.fn(),
+  mockPostingUpdateMany: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
+  mockPostingBulkWrite: vi.fn(),
+  mockAssertSourceSyncAuthority: vi.fn(),
+  mockAssertSourceTransactionsReady: vi.fn(),
+  mockAssertSourceProbeAuthority: vi.fn(),
+  mockWithSourceWriteFence: vi.fn(),
 }))
 
 vi.mock('@shared/services/inngest', () => ({
@@ -21,15 +32,48 @@ vi.mock('@shared/services/inngest', () => ({
 }))
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/redis', () => ({ redis: { sadd: vi.fn(), expire: vi.fn(), scard: vi.fn() } }))
-vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
+vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn() } }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findOne: vi.fn().mockResolvedValue(null), find: vi.fn(() => ({ limit: () => Promise.resolve([]) })), create: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({}), updateOne: mockPostingUpdateOne },
+  JobPosting: { findOne: mockPostingFindOne, find: mockPostingFind, create: mockPostingCreate, updateMany: mockPostingUpdateMany, updateOne: mockPostingUpdateOne, bulkWrite: mockPostingBulkWrite },
   JobSourceConfig: { findOne: mockSourceFindOne, find: mockSourceFind, updateOne: mockSourceUpdateOne },
   JobIngestCursor: { find: mockCursorFind, bulkWrite: mockCursorBulkWrite },
   JobIngestCycle: { create: mockCycleCreate },
   // §4.5 switch read once per sync — OFF keeps these tests byte-identical.
   JobsVerdictConfig: { getConfig: vi.fn().mockResolvedValue({ collectionEnabled: false, enforceEnabled: false }) },
 }))
+vi.mock('../services/sourceControl', () => {
+  class SourceAuthorityChangedError extends Error {
+    constructor(public readonly sourceId: string, public readonly expectedRevision: number) {
+      super(`source authority changed: ${sourceId}@${expectedRevision}`)
+      this.name = 'SourceAuthorityChangedError'
+    }
+  }
+  class SourceTransactionsRequiredError extends Error {
+    constructor() {
+      super('job source control requires MongoDB replica-set transactions')
+      this.name = 'SourceTransactionsRequiredError'
+    }
+  }
+  return {
+    SourceAuthorityChangedError,
+    SourceTransactionsRequiredError,
+    controlRevisionOf: (source: { controlRevision?: number | null }) =>
+      Number.isInteger(source.controlRevision) && (source.controlRevision as number) >= 0
+        ? source.controlRevision as number
+        : 0,
+    controlRevisionFilter: (revision: number) => revision === 0
+      ? { $or: [{ controlRevision: 0 }, { controlRevision: { $exists: false } }] }
+      : { controlRevision: revision },
+    assertSourceSyncAuthority: (sourceId: string, revision: number) =>
+      mockAssertSourceSyncAuthority(sourceId, revision),
+    assertSourceTransactionsReady: (sourceId: string, revision: number) =>
+      mockAssertSourceTransactionsReady(sourceId, revision),
+    assertSourceProbeAuthority: (sourceId: string, revision: number) =>
+      mockAssertSourceProbeAuthority(sourceId, revision),
+    withSourceWriteFence: <T,>(sourceId: string, revision: number, work: (session: undefined) => Promise<T>) =>
+      mockWithSourceWriteFence(sourceId, revision, work),
+  }
+})
 vi.mock('../adapters/jsearchAdapter', async (importOriginal) => {
   const real = await importOriginal<typeof import('../adapters/jsearchAdapter')>()
   return { jsearchAdapter: { ...real.jsearchAdapter, fetch: mockAdapterFetch } }
@@ -46,16 +90,35 @@ vi.mock('../adapters/atsBoardAdapter', async (importOriginal) => {
 import { runIngestSchedulerHandler, runSourceSyncHandler, runBoardProbeHandler } from '../jobs/ingestJobs'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
 import { JobPosting } from '@shared/db/models'
+import { SourceAuthorityChangedError, SourceTransactionsRequiredError } from '../services/sourceControl'
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 
 function resetAll(): void {
-  for (const m of [mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne, mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch, mockPostingUpdateOne]) m.mockReset()
+  for (const m of [
+    mockSend, mockSourceFindOne, mockSourceFind, mockSourceUpdateOne,
+    mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch,
+    mockPostingFindOne, mockPostingFind, mockPostingCreate,
+    mockPostingUpdateMany, mockPostingUpdateOne, mockPostingBulkWrite,
+    mockAssertSourceSyncAuthority, mockAssertSourceTransactionsReady, mockAssertSourceProbeAuthority,
+    mockWithSourceWriteFence,
+  ]) m.mockReset()
   mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
   mockSourceUpdateOne.mockResolvedValue({})
   mockCursorBulkWrite.mockResolvedValue({})
   mockCycleCreate.mockResolvedValue({})
+  mockPostingFindOne.mockResolvedValue(null)
+  mockPostingFind.mockReturnValue({ limit: () => Promise.resolve([]) })
+  mockPostingCreate.mockResolvedValue({})
+  mockPostingUpdateMany.mockResolvedValue({})
   mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mockPostingBulkWrite.mockResolvedValue({ matchedCount: 1 })
+  mockAssertSourceSyncAuthority.mockResolvedValue(undefined)
+  mockAssertSourceTransactionsReady.mockResolvedValue(undefined)
+  mockAssertSourceProbeAuthority.mockResolvedValue(undefined)
+  mockWithSourceWriteFence.mockImplementation(
+    (_sourceId: string, _revision: number, work: (session: undefined) => Promise<unknown>) => work(undefined)
+  )
 }
 
 describe('runIngestSchedulerHandler', () => {
@@ -72,7 +135,7 @@ describe('runIngestSchedulerHandler', () => {
     const now = Date.now()
     mockSourceFind.mockReturnValue({
       lean: () => Promise.resolve([
-        { sourceId: 'due-source', enabled: true, health: 'active', cadenceMinutes: 60, lastSyncAt: new Date(now - 2 * 3600_000) },
+        { sourceId: 'due-source', enabled: true, health: 'active', controlRevision: 7, cadenceMinutes: 60, lastSyncAt: new Date(now - 2 * 3600_000) },
         { sourceId: 'not-due', enabled: true, health: 'active', cadenceMinutes: 1440, lastSyncAt: new Date(now - 3600_000) },
       ]),
     })
@@ -82,6 +145,7 @@ describe('runIngestSchedulerHandler', () => {
     // invents an active source
     const seed = mockSourceUpdateOne.mock.calls[0]
     expect(seed[1].$setOnInsert.enabled).toBe(false)
+    expect(seed[1].$setOnInsert).toMatchObject({ controlRevision: 0, ingestWriteSeq: 0 })
     // India-native sources seed next (§6 items 5/6), also DISABLED — the
     // founder's ToS read gates their enable (DECISIONS #9).
     const apnaSeed = mockSourceUpdateOne.mock.calls[1]
@@ -99,11 +163,42 @@ describe('runIngestSchedulerHandler', () => {
     expect(backfill[0].displayName).toEqual({ $in: [null, ''] })
     expect(backfill[1].$set.displayName).toBeTruthy()
     expect(backfill[2]?.upsert).toBeUndefined()
-    expect(mockSend).toHaveBeenCalledWith({ name: 'jobs/source.sync', data: { sourceId: 'due-source' } })
+    expect(mockSend).toHaveBeenCalledWith({ name: 'jobs/source.sync', data: { sourceId: 'due-source', controlRevision: 7 } })
   })
 })
 
 describe('runSourceSyncHandler — feed continuation', () => {
+  it('persists a large provider page in bounded source-authority transactions', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    const rows = Array.from({ length: 26 }, (_, index) => ({
+      id: `u${index}`,
+      title: `Backend Developer ${index}`,
+      organisation: { name: `Acme ${index}` },
+      seo_url: `https://unstop.com/jobs/acme-${index}`,
+      details: 'Build APIs. '.repeat(50),
+      start_date: '2026-07-12T00:00:00Z',
+      regn_open: true,
+    }))
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, raw: rows, rawPageSize: 2, attempts: 1 })
+    const persistedPerFence: number[] = []
+    mockWithSourceWriteFence.mockImplementation(async (
+      _sourceId: string,
+      _revision: number,
+      work: (session: undefined) => Promise<unknown>,
+    ) => {
+      const before = mockPostingCreate.mock.calls.length
+      const result = await work(undefined)
+      persistedPerFence.push(mockPostingCreate.mock.calls.length - before)
+      return result
+    })
+
+    await runSourceSyncHandler({ data: { sourceId: 'unstop' } }, step, { interRequestDelayMs: 0 })
+
+    expect(persistedPerFence.filter((count) => count > 0)).toEqual([25, 1])
+  })
+
   it('a physically-full page with ZERO open rows keeps paging — policy filtering is not exhaustion (Codex #536)', async () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
@@ -151,6 +246,24 @@ describe('runSourceSyncHandler — feed continuation', () => {
 
 describe('runSourceSyncHandler', () => {
   const EVENT = { data: { sourceId: 'jsearch' } }
+  const CONTROL_REVISION = 4
+  const REVISION_EVENT = { data: { sourceId: 'jsearch', controlRevision: CONTROL_REVISION } }
+  const REVISION_CONFIG = {
+    sourceId: 'jsearch', enabled: true, health: 'active',
+    controlRevision: CONTROL_REVISION, cadenceMinutes: 1440,
+  }
+  const REVISION_ROW = {
+    job_id: 'revision-row', job_title: 'Backend Developer', employer_name: 'Authority Fence Ltd',
+    job_city: 'Pune', job_description: 'Build APIs. '.repeat(50),
+    job_posted_at_datetime_utc: '2026-07-12T00:00:00Z',
+    job_apply_link: 'https://careers.authority-fence.example/jobs/1',
+  }
+
+  function prepareRevisionedSync(): void {
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(REVISION_CONFIG) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [REVISION_ROW] })
+  }
 
   it('unknown adapter / disabled source / bad health all skip', async () => {
     resetAll()
@@ -167,9 +280,145 @@ describe('runSourceSyncHandler', () => {
     expect(await runSourceSyncHandler(EVENT, step)).toMatchObject({ skipped: true, reason: 'health quarantined' })
   })
 
+  it('fails transaction readiness before spending provider quota', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(REVISION_CONFIG) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAssertSourceTransactionsReady.mockRejectedValueOnce(new SourceTransactionsRequiredError())
+
+    await expect(runSourceSyncHandler(REVISION_EVENT, step, { interRequestDelayMs: 0 }))
+      .rejects.toBeInstanceOf(SourceTransactionsRequiredError)
+
+    expect(mockAdapterFetch).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [{ data: { sourceId: 'jsearch', controlRevision: CONTROL_REVISION - 1 } }, 'stale source revision'],
+    [{ data: { sourceId: 'jsearch' } }, 'stale source revision'],
+    [{ data: { sourceId: 'jsearch', controlRevision: -1 } }, 'invalid source revision'],
+  ])('rejects stale, missing, and invalid post-epoch authority before source access', async (event, reason) => {
+    resetAll()
+    prepareRevisionedSync()
+
+    const result = await runSourceSyncHandler(event, step, { interRequestDelayMs: 0 })
+
+    expect(result).toEqual({ skipped: true, reason })
+    expect(mockAssertSourceSyncAuthority).not.toHaveBeenCalled()
+    expect(mockAdapterFetch).not.toHaveBeenCalled()
+    expect(mockWithSourceWriteFence).not.toHaveBeenCalled()
+    expect(mockCursorBulkWrite).not.toHaveBeenCalled()
+    expect(mockCycleCreate).not.toHaveBeenCalled()
+  })
+
+  it('stops before fetching when the pre-fetch authority guard observes a control change', async () => {
+    resetAll()
+    prepareRevisionedSync()
+    mockAssertSourceSyncAuthority.mockRejectedValueOnce(
+      new SourceAuthorityChangedError('jsearch', CONTROL_REVISION)
+    )
+
+    const result = await runSourceSyncHandler(REVISION_EVENT, step, { interRequestDelayMs: 0 })
+
+    expect(result).toEqual({ skipped: true, reason: 'source authority changed during sync' })
+    expect(mockAssertSourceSyncAuthority).toHaveBeenCalledWith('jsearch', CONTROL_REVISION)
+    expect(mockAdapterFetch).not.toHaveBeenCalled()
+    expect(mockWithSourceWriteFence).not.toHaveBeenCalled()
+    expect(mockCursorBulkWrite).not.toHaveBeenCalled()
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+    expect(mockCycleCreate).not.toHaveBeenCalled()
+  })
+
+  it('treats revocation after adapter entry as authority loss, not provider health failure', async () => {
+    resetAll()
+    prepareRevisionedSync()
+    mockAssertSourceSyncAuthority
+      .mockResolvedValueOnce(undefined) // processTarget pre-fetch guard
+      .mockRejectedValueOnce(new SourceAuthorityChangedError('jsearch', CONTROL_REVISION)) // physical request gate
+    mockAdapterFetch.mockImplementation(async (_target, options: { beforePhysicalRequest?: () => Promise<boolean> }) => {
+      try {
+        await options.beforePhysicalRequest?.()
+        return { ok: true, status: 200, attempts: 1, raw: [REVISION_ROW] }
+      } catch {
+        return { ok: false, status: 0, attempts: 0, raw: [], authorityChanged: true }
+      }
+    })
+
+    const result = await runSourceSyncHandler(REVISION_EVENT, step, { interRequestDelayMs: 0 })
+
+    expect(result).toEqual({ skipped: true, reason: 'source authority changed during sync' })
+    expect(mockAssertSourceSyncAuthority).toHaveBeenCalledTimes(2)
+    expect(mockPostingCreate).not.toHaveBeenCalled()
+    expect(mockCursorBulkWrite).not.toHaveBeenCalled()
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+    expect(mockCycleCreate).not.toHaveBeenCalled()
+  })
+
+  it('does not persist a fetched page when authority changes at the page write fence', async () => {
+    resetAll()
+    prepareRevisionedSync()
+    mockWithSourceWriteFence.mockRejectedValueOnce(
+      new SourceAuthorityChangedError('jsearch', CONTROL_REVISION)
+    )
+
+    const result = await runSourceSyncHandler(REVISION_EVENT, step, { interRequestDelayMs: 0 })
+
+    expect(result).toEqual({ skipped: true, reason: 'source authority changed during sync' })
+    expect(mockAdapterFetch).toHaveBeenCalledTimes(1)
+    expect(mockPostingCreate).not.toHaveBeenCalled()
+    expect(mockCursorBulkWrite).not.toHaveBeenCalled()
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+    expect(mockCycleCreate).not.toHaveBeenCalled()
+  })
+
+  it('does not checkpoint or finalize when authority changes after a page write', async () => {
+    resetAll()
+    prepareRevisionedSync()
+    mockWithSourceWriteFence
+      .mockImplementationOnce(
+        (_sourceId: string, _revision: number, work: (session: undefined) => Promise<unknown>) => work(undefined)
+      )
+      .mockRejectedValueOnce(new SourceAuthorityChangedError('jsearch', CONTROL_REVISION))
+
+    const result = await runSourceSyncHandler(REVISION_EVENT, step, { interRequestDelayMs: 0 })
+
+    expect(result).toEqual({ skipped: true, reason: 'source authority changed during sync' })
+    expect(mockPostingCreate).toHaveBeenCalledTimes(1)
+    expect(mockWithSourceWriteFence).toHaveBeenCalledTimes(2)
+    expect(mockCursorBulkWrite).not.toHaveBeenCalled()
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+    expect(mockCycleCreate).not.toHaveBeenCalled()
+  })
+
+  it('keeps durable chunk checkpoints but makes no final writes when authority changes before finalize', async () => {
+    resetAll()
+    prepareRevisionedSync()
+    let checkpointsBeforeFinalize = -1
+    const finalAuthorityChangeStep = {
+      run: async <T,>(name: string, fn: () => Promise<T> | T): Promise<T> => {
+        if (name === 'finalize') {
+          checkpointsBeforeFinalize = mockCursorBulkWrite.mock.calls.length
+          mockWithSourceWriteFence.mockRejectedValueOnce(
+            new SourceAuthorityChangedError('jsearch', CONTROL_REVISION)
+          )
+        }
+        return fn()
+      },
+    }
+
+    const result = await runSourceSyncHandler(REVISION_EVENT, finalAuthorityChangeStep, { interRequestDelayMs: 0 })
+
+    expect(result).toEqual({ skipped: true, reason: 'source authority changed during sync' })
+    expect(checkpointsBeforeFinalize).toBeGreaterThan(0)
+    expect(mockCursorBulkWrite).toHaveBeenCalledTimes(checkpointsBeforeFinalize)
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateMany).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockCycleCreate).not.toHaveBeenCalled()
+  })
+
   it('runs chunks, writes cursors + cycle row, keeps health active on a clean run', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(REVISION_CONFIG) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     // Every bucket returns one fresh row (non-full page → no pagination).
     mockAdapterFetch.mockImplementation(async (t: { bucketId?: string }) => ({
@@ -180,9 +429,9 @@ describe('runSourceSyncHandler', () => {
         job_posted_at_datetime_utc: '2026-07-12T00:00:00Z', job_apply_link: 'https://careers.acme.com/1',
       }],
     }))
-    const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
+    const r = await runSourceSyncHandler(REVISION_EVENT, step, { interRequestDelayMs: 0 })
     expect(r).toMatchObject({ cycleWritten: true })
-    const cycle = mockCycleCreate.mock.calls[0][0]
+    const cycle = mockCycleCreate.mock.calls[0][0][0]
     expect(cycle.kind).toBe('sync')
     expect(cycle.fetched).toBeGreaterThan(0)
     expect(cycle.quotaSpent).toBe(cycle.fetched) // 1 attempt per bucket, 1 row each
@@ -193,6 +442,15 @@ describe('runSourceSyncHandler', () => {
     expect(op.update.$set.newestPostedAt).toBeUndefined()
     const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
     expect(health).toBe('active')
+    expect(mockSourceUpdateOne.mock.calls.at(-1)![0]).toMatchObject({
+      sourceId: 'jsearch',
+      enabled: true,
+      controlRevision: CONTROL_REVISION,
+    })
+    expect(mockCycleCreate).toHaveBeenCalledWith(
+      [expect.objectContaining({ kind: 'sync', sourceId: 'jsearch' })],
+      { session: undefined },
+    )
   })
 
   it('cursors checkpoint per chunk — durable even when the run dies before finalize (prod first-fill, 2026-07-15)', async () => {
@@ -246,7 +504,7 @@ describe('runSourceSyncHandler', () => {
     const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
     expect(r).toMatchObject({ cycleWritten: true })
     // Rows from page 1 WERE ingested (no data loss)...
-    expect(mockCycleCreate.mock.calls[0][0].fetched).toBeGreaterThan(0)
+    expect(mockCycleCreate.mock.calls[0][0][0].fetched).toBeGreaterThan(0)
     // ...but no cursor ADVANCED anywhere: every bucket died on page 2 —
     // the only writes are the durable windowIncomplete flags (#528 P1),
     // never a newestPostedAt move.
@@ -426,7 +684,7 @@ describe('runSourceSyncHandler', () => {
     const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
     expect(health).toBe('degraded')
     expect(mockSourceUpdateOne.mock.calls.at(-1)![1].$set.lastHealthyProbeAt).toBeUndefined()
-    expect(mockCycleCreate.mock.calls[0][0].storeErrors).toBeGreaterThan(0)
+    expect(mockCycleCreate.mock.calls[0][0][0].storeErrors).toBeGreaterThan(0)
     vi.mocked(JobPosting.create).mockResolvedValue({} as never)
   })
 
@@ -480,7 +738,7 @@ describe('runSourceSyncHandler', () => {
     })
     const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
     expect(r).toMatchObject({ cycleWritten: true })
-    const cycle = mockCycleCreate.mock.calls[0][0]
+    const cycle = mockCycleCreate.mock.calls[0][0][0]
     expect(cycle.driftNulls).toBeGreaterThan(0)
     const health = mockSourceUpdateOne.mock.calls.at(-1)![1].$set.health
     expect(health).toBe('degraded')
@@ -538,20 +796,15 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([staleSolo, staleShared]) } as never)
     const r = await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
     expect(r).toMatchObject({ cycleWritten: true })
-    expect(mockPostingUpdateOne.mock.calls[0][0]).toMatchObject({
+    const lifecycleOps = mockPostingBulkWrite.mock.calls[0][0]
+    expect(lifecycleOps).toHaveLength(1)
+    expect(lifecycleOps[0].updateOne.filter).toMatchObject({
       _id: 'p1', status: 'open', updatedAt: staleSolo.updatedAt,
     })
-    expect(mockPostingUpdateOne.mock.calls[0][1]).toMatchObject({
+    expect(lifecycleOps[0].updateOne.update).toMatchObject({
       $set: { status: 'closed', closedReason: 'board-poll-miss', boardPollMisses: 2 },
-      $unset: { purgeAt: 1 },
     })
-    expect(mockPostingUpdateOne.mock.calls[1][0]).toMatchObject({
-      status: 'closed', closedReason: 'board-poll-miss', userReferenced: true,
-    })
-    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({
-      status: 'closed', closedReason: 'board-poll-miss', userReferenced: { $ne: true },
-    })
-    expect(mockPostingUpdateOne.mock.calls[2][1].$set.purgeAt).toBeInstanceOf(Date)
+    expect(lifecycleOps[0].updateOne.update.$set.purgeAt).toBeInstanceOf(Date)
     expect(staleShared.status).toBe('open') // another source still lists it
     expect(staleShared.save).not.toHaveBeenCalled()
   })
@@ -566,12 +819,12 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([stale]) } as never)
     // source-revoked/llm-verdict landed and bumped the lifecycle before the
     // board close CAS. The miss must also suppress both TTL follow-up writes.
-    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+    mockPostingBulkWrite.mockResolvedValueOnce({ matchedCount: 0 })
 
     await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
 
-    expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
-    expect(mockPostingUpdateOne.mock.calls[0][0]).toMatchObject({
+    expect(mockPostingBulkWrite).toHaveBeenCalledTimes(1)
+    expect(mockPostingBulkWrite.mock.calls[0][0][0].updateOne.filter).toMatchObject({
       _id: 'p1', status: 'open', updatedAt: stale.updatedAt,
     })
     expect(stale.save).not.toHaveBeenCalled()
@@ -586,9 +839,12 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     vi.mocked(JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([stale]) } as never)
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
     await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
-    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ _id: 'p1', status: 'open', updatedAt: stale.updatedAt }),
-      { $set: { boardPollMisses: 1 } },
+    expect(mockPostingBulkWrite).toHaveBeenCalledWith(
+      [{ updateOne: {
+        filter: expect.objectContaining({ _id: 'p1', status: 'open', updatedAt: stale.updatedAt }),
+        update: { $set: { boardPollMisses: 1 } },
+      } }],
+      { session: undefined },
     )
 
     // drifted run: incomplete seen-set — the sweep must not run either
@@ -612,11 +868,12 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     const pinned = docStub({ provenance: [{ sourceId: 'gh:phonepe', sourceKey: 'gh:phonepe:z9' }], boardPollMisses: 1, userReferenced: true })
     vi.mocked((await import('@shared/db/models')).JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([pinned]) } as never)
     await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
-    expect(mockPostingUpdateOne.mock.calls[0][1]).toMatchObject({
+    const pinnedUpdate = mockPostingBulkWrite.mock.calls[0][0][0].updateOne.update
+    expect(pinnedUpdate).toMatchObject({
       $set: { status: 'closed', closedReason: 'board-poll-miss' },
       $unset: { purgeAt: 1 },
     })
-    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({ userReferenced: { $ne: true } })
+    expect(pinnedUpdate.$set.purgeAt).toBeUndefined()
 
     // Pins are monotonic in the close path: clearing one from a cross-
     // collection existence check races a concurrent first ownership write.
@@ -630,7 +887,9 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     vi.mocked(models.JobPosting.find).mockReturnValueOnce({ limit: () => Promise.resolve([orphaned]) } as never)
     await runSourceSyncHandler({ data: { sourceId: 'gh:phonepe' } }, step, { interRequestDelayMs: 0 })
     expect(orphaned.userReferenced).toBe(true)
-    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({ userReferenced: { $ne: true } })
+    expect(mockPostingBulkWrite.mock.calls[0][0][0].updateOne.update).toMatchObject({
+      $unset: { purgeAt: 1 },
+    })
     expect(orphaned.save).not.toHaveBeenCalled()
 
     // failed fetch: the sweep must not run at all
@@ -659,6 +918,66 @@ describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
     await runBoardProbeHandler(step)
     const filter = mockSourceFind.mock.calls[0][0]
     expect(filter.health).toEqual({ $in: ['active', 'degraded', 'quarantined'] })
+  })
+
+  it('does not contact a board when its authority epoch is revoked after the board list is loaded', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ controlRevision: 5 })]) })
+    mockAssertSourceProbeAuthority.mockRejectedValueOnce(
+      new SourceAuthorityChangedError('gh:phonepe', 5)
+    )
+
+    const result = await runBoardProbeHandler(step)
+
+    expect(result).toEqual({ probed: 1 })
+    expect(mockAssertSourceProbeAuthority).toHaveBeenCalledWith('gh:phonepe', 5)
+    expect(mockAdapterFetch).not.toHaveBeenCalled()
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('does not write board health when authority changes inside adapter pagination', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ controlRevision: 5 })]) })
+    mockAssertSourceProbeAuthority
+      .mockResolvedValueOnce(undefined) // before adapter entry
+      .mockRejectedValueOnce(new SourceAuthorityChangedError('gh:phonepe', 5)) // next physical request
+    mockAdapterFetch.mockImplementation(async (_target, options: { beforePhysicalRequest?: () => Promise<boolean> }) => {
+      try {
+        await options.beforePhysicalRequest?.()
+        return { ok: false, status: 404, attempts: 1, raw: [] }
+      } catch {
+        return { ok: false, status: 0, attempts: 0, raw: [], authorityChanged: true }
+      }
+    })
+
+    const result = await runBoardProbeHandler(step)
+
+    expect(result).toEqual({ probed: 1 })
+    expect(mockAssertSourceProbeAuthority).toHaveBeenCalledTimes(2)
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('binds a probe health write to the exact loaded revision and lifecycle state', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([boardRow({ controlRevision: 5 })]) })
+    mockAdapterFetch.mockResolvedValue({ ok: false, status: 404, attempts: 1, raw: [] })
+    // A concurrent revoke makes this CAS miss in Mongo; the stale probe gets
+    // no revision-free retry that could overwrite health:'revoked'.
+    mockSourceUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    await runBoardProbeHandler(step)
+
+    expect(mockSourceUpdateOne).toHaveBeenCalledOnce()
+    expect(mockSourceUpdateOne.mock.calls[0][0]).toEqual({
+      sourceId: 'gh:phonepe',
+      enabled: true,
+      health: 'active',
+      controlRevision: 5,
+    })
+    expect(mockSourceUpdateOne.mock.calls[0][1].$set).toMatchObject({
+      health: 'quarantined',
+      healthyProbeStreak: 0,
+    })
   })
 
   it('404 quarantines a dead board immediately', async () => {

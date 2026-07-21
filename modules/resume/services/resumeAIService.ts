@@ -102,7 +102,10 @@ const ATS_JD_CHARS = 8_000
 // aren't cached). Retry once with a larger budget before giving up.
 const ATS_RETRY_MAX_TOKENS = 6_000
 
-export async function checkATS(data: { resumeText: string; jobDescription?: string }) {
+export async function checkATS(
+  data: { resumeText: string; jobDescription?: string },
+  options: { beforeProviderCall?: () => Promise<boolean> } = {},
+) {
   // UAT-024: content-keyed cache layer. Same (resume, JD) pair hits in
   // <100ms instead of waiting on the ~35s LLM round-trip. Misses fall
   // through to the LLM and persist on success.
@@ -120,6 +123,7 @@ export async function checkATS(data: { resumeText: string; jobDescription?: stri
 
   const runCheck = (maxTokens?: number) => completion({
     ...(maxTokens ? { maxTokens } : {}),
+    ...(options.beforeProviderCall ? { beforeProviderCall: options.beforeProviderCall } : {}),
     taskSlot: 'resume.ats-check',
     system: `${DATA_BOUNDARY_RULE}
 

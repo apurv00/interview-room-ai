@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 
 const {
-  mockSend, mockGetConfig, mockPostingFindById, mockPostingUpdateOne, mockPostingFind,
+  mockSend, mockGetConfig, mockPostingFindById, mockPostingExists, mockPostingUpdateOne, mockPostingFind,
   mockSourceFind, mockCycleCreate, mockRedis,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockGetConfig: vi.fn(),
   mockPostingFindById: vi.fn(),
+  mockPostingExists: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
   mockPostingFind: vi.fn(),
   mockSourceFind: vi.fn(),
@@ -25,7 +26,8 @@ vi.mock('@shared/services/modelRouter', async (importOriginal) => {
   return { ...real, resolveModel: vi.fn().mockResolvedValue({ model: 'gpt-5.6-luna' }), completion: vi.fn() }
 })
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne, find: mockPostingFind },
+  JOB_SOURCE_LINEAGE_UNKNOWN: '__legacy_unknown__',
+  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists, updateOne: mockPostingUpdateOne, find: mockPostingFind },
   JobSourceConfig: { find: mockSourceFind },
   JobIngestCycle: { create: mockCycleCreate },
   JobsVerdictConfig: { getConfig: mockGetConfig },
@@ -61,6 +63,7 @@ function posting(over: Record<string, unknown> = {}) {
     title: 'Backend Engineer', company: 'PhonePe', locations: ['Bengaluru'], isRemote: false,
     salaryText: null, jdCompressed: undefined,
     flags: { staffing: false, salaryConflict: false, shortJd: false, repost: false, repostCount: 0 },
+    sourceIds: ['jsearch'],
     provenance: [{ sourceId: 'jsearch', externalId: 'x1', sourceKey: 'jsearch:x1', applyUrl: 'https://boards.greenhouse.io/x/1' }],
     llmVerdict: { status: 'pending', attempts: 0 },
     ...over,
@@ -78,10 +81,11 @@ function okOutcome(verdict = OK_VERDICT) {
 }
 
 function resetAll(): void {
-  for (const m of [mockSend, mockGetConfig, mockPostingFindById, mockPostingUpdateOne, mockPostingFind, mockSourceFind, mockCycleCreate]) m.mockReset()
+  for (const m of [mockSend, mockGetConfig, mockPostingFindById, mockPostingExists, mockPostingUpdateOne, mockPostingFind, mockSourceFind, mockCycleCreate]) m.mockReset()
   for (const m of Object.values(mockRedis)) (m as ReturnType<typeof vi.fn>).mockReset()
   mockGetConfig.mockResolvedValue({ ...CFG_ON })
   mockSourceFind.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([]) }) })
+  mockPostingExists.mockResolvedValue({ _id: 'p1' })
   mockPostingUpdateOne.mockResolvedValue({})
   mockCycleCreate.mockResolvedValue({})
   mockRedis.get.mockResolvedValue(null)
@@ -109,6 +113,58 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(set.llmVerdict).toMatchObject({ status: 'scored', verdict: 'fraud', verdictInputHash: 'h1', epoch: `gpt-5.6-luna:${PROMPT_VERSION}`, attempts: 1, disagreesWithRules: true })
     expect(set.status).toBeUndefined()
     expect(set.closedReason).toBeUndefined()
+  })
+
+  it.each([
+    [['optout-src'], []],
+    [['__legacy_unknown__'], [{ sourceId: 'jsearch', externalId: 'x1', sourceKey: 'jsearch:x1' }]],
+  ])('never sends opted-out or unknown durable lineage to the model', async (sourceIds, provenance) => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ sourceId: 'optout-src' }]) }) })
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting({ sourceIds, provenance })) })
+    const evaluateFn = vi.fn()
+
+    const result = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )
+
+    expect(result).toMatchObject({ evaluated: 0, scored: 0 })
+    expect(mockCycleCreate.mock.calls[0][0].llm.skips).toMatchObject({ 'opted-out': 1 })
+    expect(evaluateFn).not.toHaveBeenCalled()
+  })
+
+  it('blocks the provider and does not bump attempts when source authority changes before egress', async () => {
+    resetAll()
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+    mockPostingExists.mockResolvedValue(null)
+    mockSourceFind.mockImplementation((filter: Record<string, unknown>) => ({
+      select: () => ({
+        lean: () => Promise.resolve('sourceId' in filter
+          ? [{ sourceId: 'jsearch', health: 'revoked', llmVerdictOptOut: false }]
+          : []),
+      }),
+    }))
+    const providerCall = vi.fn()
+    const evaluateFn = vi.fn(async (_input, deps: { beforeModelCall?: () => Promise<boolean> }) => {
+      if (!(await deps.beforeModelCall?.())) {
+        return { ok: false, kind: 'authority', message: 'posting authority changed', inputHash: 'h', costUsd: 0 }
+      }
+      providerCall()
+      return okOutcome()
+    })
+
+    const result = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )
+
+    expect(providerCall).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockCycleCreate.mock.calls[0][0].llm.skips).toMatchObject({ 'authority-changed': 1 })
+    expect(result).toMatchObject({ evaluated: 1, scored: 0, breakerTripped: false })
   })
 
   it('enforcement: fraud + genuineness ≤ 0.2 soft-closes (closedReason llm-verdict, never delete)', async () => {
@@ -538,7 +594,9 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
       { 'llmVerdict.status': 'pending', 'llmVerdict.attempts': { $lt: 5 } },
       { llmVerdict: { $exists: false } },
     ])
-    expect(query.$and).toHaveLength(2) // no opt-outs configured → no $nin clause
+    expect(query.$and[2]).toEqual({ 'sourceIds.0': { $exists: true } })
+    expect(query.$and[3]).toEqual({ sourceIds: { $nin: ['__legacy_unknown__'] } })
+    expect(query.$and).toHaveLength(4)
     expect(mockSend.mock.calls[0][0].name).toBe('jobs/verdict.requested')
     expect(mockSend.mock.calls[0][0].data.postingIds).toHaveLength(40)
     expect(mockSend.mock.calls[1][0].data.postingIds).toHaveLength(5)
@@ -576,7 +634,14 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
     sweepChain([])
     await runVerdictSweeperHandler(step)
     const query = mockPostingFind.mock.calls[0][0]
-    expect(query.$and[2]).toEqual({ 'provenance.sourceId': { $nin: ['optout-src'] } })
+    expect(query.$and[2]).toEqual({ 'sourceIds.0': { $exists: true } })
+    expect(query.$and[3]).toEqual({
+      sourceIds: { $nin: ['__legacy_unknown__', 'optout-src'] },
+    })
+    expect(query.$and[4]).toEqual({ 'provenance.sourceId': { $nin: ['optout-src'] } })
+
+    const staleQuery = mockPostingFind.mock.calls[1][0]
+    expect(staleQuery.$and.slice(2)).toEqual(query.$and.slice(2))
   })
 
   it('≥80% budget softening HALVES the sweep limit', async () => {

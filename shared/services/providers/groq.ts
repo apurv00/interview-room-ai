@@ -27,18 +27,21 @@ registerProvider({
       throw new Error('Provider "groq" does not support enforced structured responseFormat')
     }
     const client = getClient()
-    const response = await client.chat.completions.create({
-      model: params.model,
-      max_tokens: params.maxTokens,
-      messages: [
-        { role: 'system', content: params.system },
-        ...params.messages.map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        })),
-      ],
-      ...(params.temperature !== undefined && { temperature: params.temperature }),
-    })
+    const response = await client.chat.completions.create(
+      {
+        model: params.model,
+        max_tokens: params.maxTokens,
+        messages: [
+          { role: 'system', content: params.system },
+          ...params.messages.map((m) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+          })),
+        ],
+        ...(params.temperature !== undefined && { temperature: params.temperature }),
+      },
+      params.disableSdkRetries ? { maxRetries: 0 } : undefined,
+    )
     const text = response.choices[0]?.message?.content?.trim() ?? ''
     return {
       text,

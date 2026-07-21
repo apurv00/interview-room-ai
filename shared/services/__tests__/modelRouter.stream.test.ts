@@ -56,7 +56,12 @@ vi.mock('@shared/db/connection', () => ({
   connectDB: async () => undefined,
 }))
 
-import { streamCompletion, replaceModelConfigCache } from '../modelRouter'
+import {
+  completion,
+  ModelProviderPreconditionError,
+  replaceModelConfigCache,
+  streamCompletion,
+} from '../modelRouter'
 import type { StreamEvent } from '../providers/index'
 
 /**
@@ -126,6 +131,183 @@ async function collect(iter: AsyncIterable<StreamEvent>): Promise<StreamEvent[]>
   for await (const e of iter) out.push(e)
   return out
 }
+
+describe('completion — provider precondition gate', () => {
+  it('blocks the primary adapter when the gate is already false', async () => {
+    await injectSlotConfig({
+      primaryProvider: 'primary-provider',
+      primaryModel: 'primary-model',
+    })
+    const primaryComplete = vi.fn().mockResolvedValue({
+      text: 'must not send', inputTokens: 1, outputTokens: 1,
+    })
+    mockGetProvider.mockReturnValue({
+      isConfigured: () => true,
+      complete: primaryComplete,
+    })
+
+    await expect(completion({
+      taskSlot: 'learn.drill-evaluate',
+      system: 'system',
+      messages: [{ role: 'user', content: 'sensitive input' }],
+      beforeProviderCall: vi.fn().mockResolvedValue(false),
+    })).rejects.toBeInstanceOf(ModelProviderPreconditionError)
+
+    expect(primaryComplete).not.toHaveBeenCalled()
+  })
+
+  it('wraps a gate outage and never mistakes it for a provider failure', async () => {
+    await injectSlotConfig({
+      primaryProvider: 'primary-provider',
+      primaryModel: 'primary-model',
+      fallbackProvider: 'fallback-provider',
+      fallbackModel: 'fallback-model',
+    })
+    const completeMock = vi.fn()
+    mockGetProvider.mockReturnValue({
+      isConfigured: () => true,
+      complete: completeMock,
+    })
+    const gateError = new Error('authority database unavailable')
+
+    const error = await completion({
+      taskSlot: 'learn.drill-evaluate',
+      system: 'system',
+      messages: [{ role: 'user', content: 'sensitive input' }],
+      beforeProviderCall: vi.fn().mockRejectedValue(gateError),
+    }).catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ModelProviderPreconditionError)
+    expect(error).toMatchObject({ cause: gateError })
+    expect(mockGetProvider).toHaveBeenCalledTimes(1)
+    expect(completeMock).not.toHaveBeenCalled()
+  })
+
+  it('rechecks before fallback and aborts the chain when authority changes', async () => {
+    await injectSlotConfig({
+      primaryProvider: 'primary-provider',
+      primaryModel: 'primary-model',
+      fallbackProvider: 'fallback-provider',
+      fallbackModel: 'fallback-model',
+    })
+    const primaryComplete = vi.fn().mockRejectedValue(new Error('primary unavailable'))
+    const fallbackComplete = vi.fn().mockResolvedValue({
+      text: 'must not send', inputTokens: 1, outputTokens: 1,
+    })
+    mockGetProvider.mockImplementation((provider: string) => ({
+      isConfigured: () => true,
+      complete: provider === 'primary-provider' ? primaryComplete : fallbackComplete,
+    }))
+    const beforeProviderCall = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    await expect(completion({
+      taskSlot: 'learn.drill-evaluate',
+      system: 'system',
+      messages: [{ role: 'user', content: 'sensitive input' }],
+      beforeProviderCall,
+    })).rejects.toBeInstanceOf(ModelProviderPreconditionError)
+
+    expect(beforeProviderCall).toHaveBeenCalledTimes(2)
+    expect(primaryComplete).toHaveBeenCalledOnce()
+    expect(primaryComplete.mock.calls[0][0]).toMatchObject({ disableSdkRetries: true })
+    expect(fallbackComplete).not.toHaveBeenCalled()
+  })
+
+  it('rechecks before the hardcoded slot default after a CMS primary failure', async () => {
+    await injectSlotConfig({
+      primaryProvider: 'cms-provider',
+      primaryModel: 'cms-model',
+    })
+    const primaryComplete = vi.fn().mockRejectedValue(new Error('CMS primary unavailable'))
+    const defaultComplete = vi.fn().mockResolvedValue({
+      text: 'must not send', inputTokens: 1, outputTokens: 1,
+    })
+    mockGetProvider.mockImplementation((provider: string) => ({
+      isConfigured: () => true,
+      complete: provider === 'cms-provider' ? primaryComplete : defaultComplete,
+    }))
+    const beforeProviderCall = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    await expect(completion({
+      taskSlot: 'learn.drill-evaluate',
+      system: 'system',
+      messages: [{ role: 'user', content: 'sensitive input' }],
+      beforeProviderCall,
+    })).rejects.toBeInstanceOf(ModelProviderPreconditionError)
+
+    expect(beforeProviderCall).toHaveBeenCalledTimes(2)
+    expect(primaryComplete).toHaveBeenCalledOnce()
+    expect(defaultComplete).not.toHaveBeenCalled()
+  })
+
+  it('applies the same fail-closed gate to streaming fallback attempts', async () => {
+    await injectSlotConfig({
+      primaryProvider: 'stream-primary',
+      primaryModel: 'stream-primary-model',
+      fallbackProvider: 'stream-fallback',
+      fallbackModel: 'stream-fallback-model',
+    })
+    const primaryStream = vi.fn(() => asyncIterImmediateThrow(new Error('primary stream failed')))
+    const fallbackStream = vi.fn(() => asyncIter([{ kind: 'delta', text: 'must not send' }]))
+    mockGetProvider.mockImplementation((provider: string) => ({
+      isConfigured: () => true,
+      complete: vi.fn(),
+      stream: provider === 'stream-primary' ? primaryStream : fallbackStream,
+    }))
+    const beforeProviderCall = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    await expect(collect(streamCompletion({
+      taskSlot: 'learn.drill-evaluate',
+      system: 'system',
+      messages: [{ role: 'user', content: 'sensitive input' }],
+      beforeProviderCall,
+    }))).rejects.toBeInstanceOf(ModelProviderPreconditionError)
+
+    expect(beforeProviderCall).toHaveBeenCalledTimes(2)
+    expect(primaryStream).toHaveBeenCalledOnce()
+    expect(primaryStream.mock.calls[0][0]).toMatchObject({ disableSdkRetries: true })
+    expect(fallbackStream).not.toHaveBeenCalled()
+  })
+
+  it('preserves the existing fallback chain when no gate is supplied', async () => {
+    await injectSlotConfig({
+      primaryProvider: 'primary-provider',
+      primaryModel: 'primary-model',
+      fallbackProvider: 'fallback-provider',
+      fallbackModel: 'fallback-model',
+    })
+    const primaryComplete = vi.fn().mockRejectedValue(new Error('primary unavailable'))
+    const fallbackComplete = vi.fn().mockResolvedValue({
+      text: 'fallback result', inputTokens: 2, outputTokens: 1,
+    })
+    mockGetProvider.mockImplementation((provider: string) => ({
+      isConfigured: () => true,
+      complete: provider === 'primary-provider' ? primaryComplete : fallbackComplete,
+    }))
+
+    await expect(completion({
+      taskSlot: 'learn.drill-evaluate',
+      system: 'system',
+      messages: [{ role: 'user', content: 'input' }],
+    })).resolves.toMatchObject({
+      text: 'fallback result',
+      model: 'fallback-model',
+      provider: 'fallback-provider',
+      usedFallback: true,
+    })
+
+    expect(primaryComplete).toHaveBeenCalledOnce()
+    expect(fallbackComplete).toHaveBeenCalledOnce()
+    expect(primaryComplete.mock.calls[0][0]).toMatchObject({ disableSdkRetries: false })
+    expect(fallbackComplete.mock.calls[0][0]).toMatchObject({ disableSdkRetries: false })
+  })
+})
 
 describe('streamCompletion — polyfill path', () => {
   it('synthesizes delta + done from complete() when provider has no .stream', async () => {

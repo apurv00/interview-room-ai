@@ -1,6 +1,6 @@
 import { fetchJSONWithRetry } from '@shared/fetchJSONWithRetry'
 import { classifyApplyUrl } from '../services/qualityGate'
-import type { FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
+import type { AdapterFetchOptions, FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
 
 /**
  * Unified ATS-board adapter (INGESTION §1 build-now): Greenhouse, Lever,
@@ -109,7 +109,7 @@ export const atsBoardAdapter: JobSourceAdapter = {
     }]
   },
 
-  async fetch(target: FetchTarget): Promise<FetchResult> {
+  async fetch(target: FetchTarget, options?: AdapterFetchOptions): Promise<FetchResult> {
     if (target.kind !== 'board') return { ok: false, status: 0, raw: [], attempts: 0 }
     const req = listUrl(target.atsKind, target.slug)
     if (!req) return { ok: false, status: 0, raw: [], attempts: 0 }
@@ -126,7 +126,14 @@ export const atsBoardAdapter: JobSourceAdapter = {
       const url = target.atsKind === 'smartrecruiters'
         ? `https://api.smartrecruiters.com/v1/companies/${target.slug}/postings?country=in&limit=${SR_PAGE}&offset=${offset}`
         : req.url
-      const res = await fetchJSONWithRetry<unknown>(url, req.init ?? {}, { maxRetries: 2, timeoutMs: 15000 })
+      const res = await fetchJSONWithRetry<unknown>(url, req.init ?? {}, {
+        maxRetries: 2,
+        timeoutMs: 15000,
+        beforePhysicalRequest: options?.beforePhysicalRequest,
+      })
+      if (!res.ok && res.authorityChanged) {
+        return { ok: false, status: 0, raw: [], attempts: attempts + (res.attempts ?? 0), authorityChanged: true }
+      }
       attempts++
       if (!res.ok) return { ok: false, status: res.status, raw: [], attempts }
       const pageRows = extractRows(target.atsKind as BoardKind, res.data)

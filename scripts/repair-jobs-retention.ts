@@ -53,7 +53,9 @@ export function assertRetentionInvariant({
 
 export async function runRetentionRepair(argv: string[]): Promise<void> {
   const mode = retentionRepairModeOf(argv)
-  await connectDB()
+  // Dry-run/check must be physically read-only with respect to schema. Apply
+  // uses explicit updates and likewise must not mask a missing deploy index.
+  await connectDB({ schemaInitialization: 'disabled' })
 
   const ownedIds = (await JobApplication.distinct('jobPostingId')).filter(Boolean)
   const existingOwnedRows = ownedIds.length

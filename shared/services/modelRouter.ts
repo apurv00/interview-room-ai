@@ -892,6 +892,20 @@ export interface CompletionOptions {
   temperature?: number
   reasoningEffort?: import('./providers/index').ReasoningEffort
   responseFormat?: import('./providers/index').CompletionResponseFormat
+  /**
+   * Optional fail-closed gate evaluated inside the router immediately before
+   * each configured provider-adapter attempt (primary, fallback, and slot
+   * default). A false result or exception aborts the chain; it is never
+   * treated as a provider failure eligible for fallback.
+   */
+  beforeProviderCall?: () => Promise<boolean>
+}
+
+export class ModelProviderPreconditionError extends Error {
+  constructor(public readonly cause?: unknown) {
+    super('model provider precondition failed')
+    this.name = 'ModelProviderPreconditionError'
+  }
 }
 
 export interface CompletionResult {
@@ -943,6 +957,7 @@ async function callProvider(
   temperature?: number,
   responseFormat?: import('./providers/index').CompletionResponseFormat,
   reasoningEffort?: import('./providers/index').ReasoningEffort,
+  beforeProviderCall?: CompletionOptions['beforeProviderCall'],
 ): Promise<{ text: string; inputTokens: number; outputTokens: number; truncated?: boolean }> {
   // Dynamic import to avoid pulling all provider SDKs into client bundles
   const { getProvider } = await import('./providers/index')
@@ -953,7 +968,24 @@ async function callProvider(
   if (!provider.isConfigured()) {
     throw new Error(`Provider "${providerName}" not configured (missing API key)`)
   }
-  return provider.complete({ model, system, messages, maxTokens, temperature, reasoningEffort, responseFormat })
+  if (beforeProviderCall) {
+    try {
+      if (!(await beforeProviderCall())) throw new ModelProviderPreconditionError()
+    } catch (error) {
+      if (error instanceof ModelProviderPreconditionError) throw error
+      throw new ModelProviderPreconditionError(error)
+    }
+  }
+  return provider.complete({
+    model,
+    system,
+    messages,
+    maxTokens,
+    temperature,
+    reasoningEffort,
+    responseFormat,
+    disableSdkRetries: !!beforeProviderCall,
+  })
 }
 
 /**
@@ -974,9 +1006,10 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
 
   // Attempt 1: primary model via configured provider
   try {
-    const result = await callProvider(resolved.provider, resolved.model, system, messages, maxTokens, temperature, opts.responseFormat, reasoningEffort)
+    const result = await callProvider(resolved.provider, resolved.model, system, messages, maxTokens, temperature, opts.responseFormat, reasoningEffort, opts.beforeProviderCall)
     return { ...result, model: resolved.model, provider: resolved.provider, usedFallback: false }
   } catch (primaryErr) {
+    if (primaryErr instanceof ModelProviderPreconditionError) throw primaryErr
     aiLogger.warn({ err: primaryErr, taskSlot: opts.taskSlot, model: resolved.model, provider: resolved.provider },
       'ModelRouter: primary failed, trying fallback')
   }
@@ -985,9 +1018,10 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
   if (resolved.fallbackModel) {
     const fbProvider = resolved.fallbackProvider ?? 'anthropic'
     try {
-      const result = await callProvider(fbProvider, resolved.fallbackModel, system, messages, maxTokens, temperature, opts.responseFormat, reasoningEffort)
+      const result = await callProvider(fbProvider, resolved.fallbackModel, system, messages, maxTokens, temperature, opts.responseFormat, reasoningEffort, opts.beforeProviderCall)
       return { ...result, model: resolved.fallbackModel, provider: fbProvider, usedFallback: true }
     } catch (fallbackErr) {
+      if (fallbackErr instanceof ModelProviderPreconditionError) throw fallbackErr
       aiLogger.warn({ err: fallbackErr, taskSlot: opts.taskSlot, fallbackModel: resolved.fallbackModel, fallbackProvider: fbProvider },
         'ModelRouter: fallback failed, trying hardcoded Anthropic default')
     }
@@ -1000,7 +1034,7 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
     throw new Error(`ModelRouter: all attempts failed for ${opts.taskSlot}`)
   }
 
-  const result = await callProvider(defaultProvider, defaults.model, system, messages, opts.maxTokens ?? defaults.maxTokens, temperature, opts.responseFormat, opts.reasoningEffort ?? defaults.reasoningEffort)
+  const result = await callProvider(defaultProvider, defaults.model, system, messages, opts.maxTokens ?? defaults.maxTokens, temperature, opts.responseFormat, opts.reasoningEffort ?? defaults.reasoningEffort, opts.beforeProviderCall)
   return { ...result, model: defaults.model, provider: defaultProvider, usedFallback: true }
 }
 
@@ -1057,7 +1091,15 @@ export async function* streamCompletion(
   const reasoningEffort = opts.reasoningEffort ?? resolved.reasoningEffort
   const system = typeof opts.system === 'string' ? opts.system : opts.system.map((b) => b.text).join('\n\n')
   const messages = await prepareMessages(opts, resolved)
-  const baseParams = { system, messages, maxTokens, temperature, reasoningEffort, responseFormat: opts.responseFormat }
+  const baseParams = {
+    system,
+    messages,
+    maxTokens,
+    temperature,
+    reasoningEffort,
+    responseFormat: opts.responseFormat,
+    disableSdkRetries: !!opts.beforeProviderCall,
+  }
 
   type Attempt = { provider: string; model: string }
   const attempts: Attempt[] = []
@@ -1101,6 +1143,14 @@ export async function* streamCompletion(
     }
 
     try {
+      if (opts.beforeProviderCall) {
+        try {
+          if (!(await opts.beforeProviderCall())) throw new ModelProviderPreconditionError()
+        } catch (error) {
+          if (error instanceof ModelProviderPreconditionError) throw error
+          throw new ModelProviderPreconditionError(error)
+        }
+      }
       if (provider.stream) {
         // Native streaming path — pipe events through, flipping
         // firstTextByteSeen the moment a non-empty delta lands.
@@ -1126,6 +1176,7 @@ export async function* streamCompletion(
       }
       return
     } catch (err) {
+      if (err instanceof ModelProviderPreconditionError) throw err
       lastErr = err
       if (firstTextByteSeen) {
         // Bytes already left this function — can't restart on a new

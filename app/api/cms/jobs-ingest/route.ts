@@ -3,6 +3,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { JobSourceConfig, JobIngestCycle, JobPosting, JobsVerdictConfig } from '@shared/db/models'
+import {
+  JOB_SOURCE_CONTROL_MAX_POSTINGS,
+  JOB_SOURCE_CONTROL_WARN_POSTINGS,
+} from '@jobs/config/sourceControlLimits'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,12 +26,13 @@ export async function GET() {
   if (denied) return NextResponse.json({ error: 'platform_admin required' }, { status: denied.status })
 
   await connectDB()
-  const [sources, cycles, corpus, verdictConfig, verdictCycles, verdictBacklog, verdictDist, tombstones] = await Promise.all([
+  const [sources, cycles, corpus, retainedPostings, verdictConfig, verdictCycles, verdictBacklog, verdictDist, tombstones] = await Promise.all([
     JobSourceConfig.find({}).select('-__v').lean(),
     JobIngestCycle.find({ kind: 'sync' }).sort({ createdAt: -1 }).limit(20).select('-__v').lean(),
     JobPosting.aggregate([
       { $group: { _id: '$status', n: { $sum: 1 } } },
     ]),
+    JobPosting.countDocuments({}),
     JobsVerdictConfig.getConfig(),
     JobIngestCycle.find({ kind: 'llm-verdict' }).sort({ createdAt: -1 }).limit(20).select('-__v').lean(),
     JobPosting.countDocuments({ status: 'open', 'llmVerdict.status': 'pending' }),
@@ -47,6 +52,14 @@ export async function GET() {
       kind: s.kind,
       enabled: s.enabled,
       health: s.health,
+      controlRevision: s.controlRevision ?? 0,
+      lastControl: s.lastControl
+        ? {
+            revision: s.lastControl.revision,
+            action: s.lastControl.action,
+            at: s.lastControl.at,
+          }
+        : null,
       cadenceMinutes: s.cadenceMinutes,
       lastSyncAt: s.lastSyncAt ?? null,
     })),
@@ -68,6 +81,11 @@ export async function GET() {
     corpus: {
       open: corpusByStatus.open ?? 0,
       closed: corpusByStatus.closed ?? 0,
+      retained: retainedPostings,
+      retainedWarningAt: JOB_SOURCE_CONTROL_WARN_POSTINGS,
+      retainedLimit: JOB_SOURCE_CONTROL_MAX_POSTINGS,
+      retainedHeadroom: JOB_SOURCE_CONTROL_MAX_POSTINGS - retainedPostings,
+      retainedWarning: retainedPostings >= JOB_SOURCE_CONTROL_WARN_POSTINGS,
     },
     // LLM verdict panel (§4.6): shadow-exit criteria read from here.
     verdict: {

@@ -38,6 +38,34 @@ const APP_URL = process.env.APP_URL || process.env.NEXTAUTH_URL || 'https://www.
 const E2_PER_APPLICATION_CEILING = 3
 const SENDS_PER_STEP = 20
 
+type DeliveryPostingIdentity = {
+  status?: string
+  closedReason?: string | null
+  domain?: string | null
+  parsedJDHash?: string | null
+  parsedJDRoleVersion?: string | null
+  updatedAt?: Date
+}
+
+/** Exact persisted identity checked after asynchronous Practice preparation.
+ * `updatedAt` is the row-version fence maintained by every Mongoose lifecycle
+ * write; the named fields make safety-critical state explicit as well. */
+function postingDeliveryIdentityFilter(
+  postingId: string,
+  posting: DeliveryPostingIdentity,
+): Record<string, unknown> | null {
+  if (!posting.status || !(posting.updatedAt instanceof Date)) return null
+  return {
+    _id: postingId,
+    status: posting.status,
+    closedReason: posting.closedReason ?? null,
+    domain: posting.domain ?? null,
+    parsedJDHash: posting.parsedJDHash ?? null,
+    parsedJDRoleVersion: posting.parsedJDRoleVersion ?? null,
+    updatedAt: posting.updatedAt,
+  }
+}
+
 // ── E0: user-requested practice link ────────────────────────────────────────
 
 export async function runE0Handler(
@@ -68,7 +96,7 @@ export async function runE0Handler(
       User.findById(userId).select('email emailPreferences.jobs.unsubscribedStreams').lean(),
       JobApplication.findOne({ userId, jobPostingId }).select('_id').lean(),
       JobPosting.findById(jobPostingId)
-        .select('title company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+        .select('title company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
         .lean(),
     ])
     if (!user?.email || !application || !posting) return 'missing-context'
@@ -98,6 +126,32 @@ export async function runE0Handler(
       subject,
       html,
       footer: { whyLine: '', ...footerUrls },
+      beforeDelivery: async () => {
+        // The request may sleep through quiet hours. Re-read the canonical
+        // posting at the actual provider boundary so a source revocation,
+        // JD replacement, or CMS-role withdrawal wins over prepared copy.
+        const [currentApplication, currentPosting] = await Promise.all([
+          JobApplication.exists({ _id: application._id, userId, jobPostingId }),
+          JobPosting.findById(jobPostingId)
+            .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
+            .lean(),
+        ])
+        if (!currentApplication || !currentPosting || jobPostingStateOf(currentPosting) === 'restricted') return false
+        const currentPrepared = await preparePracticeHandoffPosting(currentPosting)
+        if (!currentPrepared.role || currentPrepared.jdHash !== prepared.jdHash) return false
+
+        // CMS/Practice preparation is asynchronous. Close the window it
+        // creates with one last exact application + posting identity read;
+        // a revoke, JD replacement, or ownership deletion during preparation
+        // must win before the provider call.
+        const postingIdentity = postingDeliveryIdentityFilter(jobPostingId, currentPosting)
+        if (!postingIdentity) return false
+        const [sameApplication, samePosting] = await Promise.all([
+          JobApplication.exists({ _id: application._id, userId, jobPostingId }),
+          JobPosting.exists(postingIdentity),
+        ])
+        return !!sameApplication && !!samePosting
+      },
     })
     return sent.outcome
   })
@@ -129,7 +183,8 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
       const HARD_STOP = 500
       type Candidate = {
         applicationId: string; userId: string; jobPostingId: string
-        interviewDateISO: string; confidence: 'exact' | 'week'; practiceSessionIds: string[]
+        interviewDateISO: string; interviewDateValue: string
+        confidence: 'exact' | 'week'; practiceSessionIds: string[]
         title: string; company: string
       }
       const due: Candidate[] = []
@@ -162,6 +217,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             userId: String(r.userId),
             jobPostingId: String(r.jobPostingId),
             interviewDateISO: r.interviewDate!.toISOString().slice(0, 10),
+            interviewDateValue: r.interviewDate!.toISOString(),
             confidence: r.interviewDateConfidence as 'exact' | 'week',
             practiceSessionIds: (r.practiceSessionIds ?? []).map(String),
             title: r.jobSnapshot?.title ?? 'this role',
@@ -226,7 +282,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             if (isSuppressed(user.emailPreferences?.jobs?.unsubscribedStreams, 'e2')) continue
 
             const posting = await JobPosting.findById(c.jobPostingId)
-              .select('title company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+              .select('title company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
               .lean()
             const postingState = posting ? jobPostingStateOf(posting) : 'restricted'
             const prepared = postingState !== 'restricted' && posting
@@ -273,6 +329,48 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
               subject,
               html,
               footer: { whyLine: '', ...footerUrls },
+              beforeDelivery: async () => {
+                // The interview reminder itself is authorized by the user's
+                // still-current tracker claim. Date/status edits cancel stale
+                // copy even when the posting variant is already generic.
+                const applicationIdentity = {
+                  _id: c.applicationId,
+                  userId: c.userId,
+                  jobPostingId: c.jobPostingId,
+                  status: 'interview_scheduled',
+                  interviewDate: new Date(c.interviewDateValue),
+                  interviewDateConfidence: c.confidence,
+                }
+                const currentApplication = await JobApplication.exists(applicationIdentity)
+                if (!currentApplication) return false
+
+                // A restricted/missing posting already uses the user's saved
+                // snapshot plus a generic setup CTA, so it carries no fresh
+                // canonical content to authorize. Canonical variants re-check
+                // policy immediately before every provider attempt; a source
+                // revoke cancels this stale rendering. A later in-window sweep
+                // can derive the safe snapshot-only generic variant.
+                if (postingState === 'restricted') return true
+                const currentPosting = await JobPosting.findById(c.jobPostingId)
+                  .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
+                  .lean()
+                if (!currentPosting || jobPostingStateOf(currentPosting) === 'restricted') return false
+                if (practiceAvailable) {
+                  const currentPrepared = await preparePracticeHandoffPosting(currentPosting)
+                  if (!currentPrepared.role || currentPrepared.jdHash !== prepared?.jdHash) return false
+                }
+
+                // Re-check both exact identities after async preparation. A
+                // source revoke or tracker edit that lands during the CMS
+                // lookup cannot authorize the already-rendered canonical copy.
+                const postingIdentity = postingDeliveryIdentityFilter(c.jobPostingId, currentPosting)
+                if (!postingIdentity) return false
+                const [sameApplication, samePosting] = await Promise.all([
+                  JobApplication.exists(applicationIdentity),
+                  JobPosting.exists(postingIdentity),
+                ])
+                return !!sameApplication && !!samePosting
+              },
             })
             if (res.outcome === 'sent') n++
           } catch (err) {
@@ -294,12 +392,15 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
       applicationId: string; userId: string; jobPostingId: string
       company: string; jobTitle: string; appliedAgoDays: number
       intent: 'clicked' | 'applied'
+      applicationStatus?: string
+      applicationUpdatedAt?: Date
     }
     const work = await step.run('find-due-solicitation', async () => {
       const e1: SolicitationCandidate[] = []
       const e4: SolicitationCandidate[] = []
       type LeanRow = {
         _id: unknown; userId: unknown; jobPostingId: unknown; appliedAt?: Date; status?: string
+        updatedAt?: Date
         statusHistory?: Array<{ status: string; at?: Date; source?: string }>
         outcome?: { lastAskedAt?: Date }
         practiceSessionIds?: unknown[]
@@ -313,12 +414,14 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
         jobTitle: r.jobSnapshot?.title ?? 'this role',
         appliedAgoDays: Math.max(0, istCalendarDaysBetween(intentAt, now)),
         intent,
+        applicationStatus: r.status,
+        applicationUpdatedAt: r.updatedAt,
       })
       const paginate = async (filter: Record<string, unknown>, onRow: (r: LeanRow) => void) => {
         let cursor: string | null = null
         for (;;) {
           const batch: LeanRow[] = await JobApplication.find({ ...filter, ...(cursor ? { _id: { $gt: cursor } } : {}) })
-            .select('_id userId jobPostingId appliedAt status statusHistory outcome practiceSessionIds jobSnapshot')
+            .select('_id userId jobPostingId appliedAt status statusHistory outcome practiceSessionIds jobSnapshot updatedAt')
             .sort({ _id: 1 })
             .limit(200)
             .lean<LeanRow[]>()
@@ -467,7 +570,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
                 // may be unreadable or its role may have been deactivated in
                 // CMS since this candidate was derived.
                 const posting = await JobPosting.findById(c.jobPostingId)
-                  .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+                  .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
                   .lean()
                 if (!posting || posting.status !== 'open') continue
                 const prepared = await preparePracticeHandoffPosting(posting)
@@ -491,12 +594,29 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
                   userId, stream: 'e4', dedupeKeys: [c.applicationId],
                   to: user.email, subject, html, coarseToggle: 'nudges',
                   beforeDelivery: async () => {
+                    if (!c.applicationStatus || !(c.applicationUpdatedAt instanceof Date)) return false
+                    const applicationIdentity = {
+                      _id: c.applicationId,
+                      userId,
+                      jobPostingId: c.jobPostingId,
+                      status: c.applicationStatus,
+                      practiceSessionIds: { $size: 0 },
+                      updatedAt: c.applicationUpdatedAt,
+                    }
                     const currentPosting = await JobPosting.findById(c.jobPostingId)
-                      .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+                      .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
                       .lean()
                     if (!currentPosting || currentPosting.status !== 'open') return false
                     const currentPrepared = await preparePracticeHandoffPosting(currentPosting)
-                    return !!currentPrepared.role && !!currentPrepared.jdHash
+                    if (!currentPrepared.role || currentPrepared.jdHash !== prepared.jdHash) return false
+
+                    const postingIdentity = postingDeliveryIdentityFilter(c.jobPostingId, currentPosting)
+                    if (!postingIdentity) return false
+                    const [sameApplication, samePosting] = await Promise.all([
+                      JobApplication.exists(applicationIdentity),
+                      JobPosting.exists(postingIdentity),
+                    ])
+                    return !!sameApplication && !!samePosting
                   },
                 })
                 if (res.outcome === 'sent') {

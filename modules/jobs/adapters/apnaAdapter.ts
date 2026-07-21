@@ -1,5 +1,5 @@
 import { classifyApplyUrl } from '../services/qualityGate'
-import type { FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
+import type { AdapterFetchOptions, BeforePhysicalRequest, FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
 
 /**
  * apna adapter (INGESTION §6 item 5 — sitemapJsonLd base, ≥400-char JD
@@ -35,7 +35,20 @@ const MAX_DETAILS_PER_TARGET = 12
 const DETAIL_TIMEOUT_MS = 8000
 const SHARDS_PER_TARGET = 4
 
-async function getText(url: string, timeoutMs = 15000): Promise<{ ok: boolean; status: number; text: string }> {
+async function getText(
+  url: string,
+  timeoutMs = 15000,
+  beforePhysicalRequest?: BeforePhysicalRequest,
+): Promise<{ ok: boolean; status: number; text: string; authorityChanged?: true }> {
+  if (beforePhysicalRequest) {
+    try {
+      if ((await beforePhysicalRequest()) === false) {
+        return { ok: false, status: 0, text: '', authorityChanged: true }
+      }
+    } catch {
+      return { ok: false, status: 0, text: '', authorityChanged: true }
+    }
+  }
   try {
     const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(timeoutMs) })
     return { ok: res.ok, status: res.status, text: res.ok ? await res.text() : '' }
@@ -130,21 +143,25 @@ export const apnaAdapter: JobSourceAdapter = {
     ]
   },
 
-  async fetch(target: FetchTarget): Promise<FetchResult> {
+  async fetch(target: FetchTarget, options?: AdapterFetchOptions): Promise<FetchResult> {
     if (target.kind !== 'sitemap') return { ok: false, status: 0, raw: [], attempts: 0 }
     const wantExternal = target.shardUrl.endsWith('#external')
     const sinceIso = target.slugFilter.metros[0] || null
     const cap = target.slugFilter.maxDetailFetches
     let attempts = 0
 
-    const idx = await getText(SITEMAP_INDEX); attempts++
+    const idx = await getText(SITEMAP_INDEX, 15000, options?.beforePhysicalRequest)
+    if (idx.authorityChanged) return { ok: false, status: 0, raw: [], attempts, authorityChanged: true }
+    attempts++
     if (!idx.ok) return { ok: false, status: idx.status, raw: [], attempts }
     const jobIndex = extractLocs(idx.text).find((u) => /job-listing-sitemap\.xml/.test(u))
     // Schema drift (index no longer names the job sitemap) = FAILED fetch —
     // health must degrade, never a clean zero-row sync (Codex #536).
     if (!jobIndex) return { ok: false, status: 200, raw: [], bodyError: true, attempts }
 
-    const shardIdx = await getText(jobIndex); attempts++
+    const shardIdx = await getText(jobIndex, 15000, options?.beforePhysicalRequest)
+    if (shardIdx.authorityChanged) return { ok: false, status: 0, raw: [], attempts, authorityChanged: true }
+    attempts++
     if (!shardIdx.ok) return { ok: false, status: shardIdx.status, raw: [], attempts }
     const allShards = extractLocs(shardIdx.text)
     const shards = allShards.filter((u) =>
@@ -164,7 +181,9 @@ export const apnaAdapter: JobSourceAdapter = {
     // they only consume cap after the dated backlog drains.
     const all: Array<{ loc: string; lastmod: string | null }> = []
     for (const shard of shards.slice(0, SHARDS_PER_TARGET)) {
-      const res = await getText(shard); attempts++
+      const res = await getText(shard, 15000, options?.beforePhysicalRequest)
+      if (res.authorityChanged) return { ok: false, status: 0, raw: [], attempts, authorityChanged: true }
+      attempts++
       // A failed shard would silently drop EVERY URL it holds while the
       // successful shards advance the cursor past them (Codex #536 — the
       // same never-retried class as detail failures, one level up). Fail
@@ -187,7 +206,9 @@ export const apnaAdapter: JobSourceAdapter = {
     let failStatus = 0
     let watermark: string | null = null
     for (const c of candidates) {
-      const page = await getText(c.loc, DETAIL_TIMEOUT_MS); attempts++
+      const page = await getText(c.loc, DETAIL_TIMEOUT_MS, options?.beforePhysicalRequest)
+      if (page.authorityChanged) return { ok: false, status: 0, raw, attempts, authorityChanged: true }
+      attempts++
       if (page.ok) {
         const jsonld = extractJobPostingJsonLd(page.text)
         // Policy floor (fetch-level, like the board adapter's India scope):

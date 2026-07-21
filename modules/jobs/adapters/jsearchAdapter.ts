@@ -1,7 +1,7 @@
 import { fetchJSONWithRetry } from '@shared/fetchJSONWithRetry'
 import { classifyApplyUrl } from '../services/qualityGate'
 import { buildHarvestBuckets } from '../config/bucketMatrix'
-import type { FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
+import type { AdapterFetchOptions, FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
 
 /**
  * JSearch adapter (INGESTION §1 backbone; shapes probe-validated on PR #503).
@@ -47,7 +47,7 @@ export const jsearchAdapter: JobSourceAdapter = {
     }))
   },
 
-  async fetch(target: FetchTarget): Promise<FetchResult> {
+  async fetch(target: FetchTarget, options?: AdapterFetchOptions): Promise<FetchResult> {
     if (target.kind !== 'bucket') return { ok: false, status: 0, raw: [], attempts: 0 }
     const key = process.env.RAPIDAPI_KEY
     if (!key) return { ok: false, status: 0, raw: [], attempts: 0 }
@@ -64,9 +64,12 @@ export const jsearchAdapter: JobSourceAdapter = {
       // 15s: JSearch typically answers in 1-3s; the ceiling exists so a
       // worst-case bucket (3 pages x timeout) still fits one 60s step
       // (Codex on #511).
-      { maxRetries: 1, timeoutMs: 15000 }
+      { maxRetries: 1, timeoutMs: 15000, beforePhysicalRequest: options?.beforePhysicalRequest }
     )
-    if (!res.ok) return { ok: false, status: res.status, raw: [], attempts: 1 }
+    if (!res.ok) {
+      if (res.authorityChanged) return { ok: false, status: 0, raw: [], attempts: res.attempts ?? 0, authorityChanged: true }
+      return { ok: false, status: res.status, raw: [], attempts: 1 }
+    }
     const body = res.data
     if (!body || (body.status && body.status !== 'OK') || !Array.isArray(body.data)) {
       return { ok: false, status: res.status, raw: [], bodyError: true, attempts: 1 }

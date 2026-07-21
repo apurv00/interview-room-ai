@@ -1,5 +1,11 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
 
+/** Sentinel carried only by migrated legacy rows whose complete source set
+ * cannot be reconstructed (empty provenance or the old capped array). Any
+ * source revoke restricts these rows conservatively. */
+export const JOB_SOURCE_LINEAGE_UNKNOWN = '__legacy_unknown__'
+export const JOB_SOURCE_ID_PATTERN = /^(?:__legacy_unknown__|[a-z0-9][a-z0-9:_-]{0,99})$/
+
 /**
  * JobPosting — one canonical job in the rolling corpus (INGESTION §4.2/§4.3).
  *
@@ -94,7 +100,11 @@ export interface IJobPosting extends Document {
   /** Role-inference schema + active CMS catalog revision. Requirement IDs
    *  remain stable when only this revision changes. */
   parsedJDRoleVersion?: string | null
-  // Provenance (cap 8, eviction preserves source diversity — §4.2 guard #3)
+  /** Durable, non-evicting legal lineage. Unlike the detailed provenance
+   * array below, source IDs must survive dedupe history and tombstone slimming
+   * so a later source revoke can always find the canonical row. */
+  sourceIds: string[]
+  // Detailed provenance (cap 8, eviction preserves source diversity — §4.2 guard #3)
   provenance: IJobProvenance[]
   // Quality (deterministic layer — serving consumes as demotions, never hides)
   flags: {
@@ -129,7 +139,16 @@ export interface IJobPosting extends Document {
 
 const ProvenanceSchema = new Schema<IJobProvenance>(
   {
-    sourceId: { type: String, required: true },
+    sourceId: {
+      type: String,
+      required: true,
+      validate: {
+        validator: (sourceId: unknown) => (
+          typeof sourceId === 'string' && JOB_SOURCE_ID_PATTERN.test(sourceId)
+        ),
+        message: 'provenance sourceId must be a canonical durable source identifier',
+      },
+    },
     externalId: { type: String, required: true },
     sourceKey: { type: String, required: true },
     // Optional: a provider row may carry NO apply link (JSearch rows with
@@ -203,6 +222,21 @@ const JobPostingSchema = new Schema<IJobPosting>(
     parsedJD: { type: Schema.Types.Mixed },
     parsedJDHash: { type: String },
     parsedJDRoleVersion: { type: String },
+    sourceIds: {
+      type: [String],
+      required: true,
+      default: [],
+      validate: {
+        validator: (sourceIds: unknown) => (
+          Array.isArray(sourceIds) &&
+          sourceIds.length > 0 &&
+          sourceIds.every((sourceId) => (
+            typeof sourceId === 'string' && JOB_SOURCE_ID_PATTERN.test(sourceId)
+          ))
+        ),
+        message: 'sourceIds must contain only canonical durable source identifiers',
+      },
+    },
     provenance: { type: [ProvenanceSchema], default: [] },
     flags: {
       staffing: { type: Boolean, default: false },
@@ -235,7 +269,11 @@ const JobPostingSchema = new Schema<IJobPosting>(
   { timestamps: true }
 )
 
-// §4.3 index budget — complete; no text index.
+// §4.3 serving index budget; no text index. A02's durable lineage indexes on
+// `sourceIds` and `provenance.sourceId` are intentionally absent here: normal
+// runtime connections allow Mongoose schema automation, which would bypass the
+// mandatory rollout gate. `prepare:jobs-source-control-indexes` is their sole
+// owner and builds them explicitly before promotion.
 // Confidential rows carry no fingerprint by design; a plain unique index
 // would reject the second one.
 JobPostingSchema.index(
