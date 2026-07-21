@@ -11,7 +11,7 @@ import { renderShell, ctaButton, escapeHtml, type EmailFooterInput } from './sha
 export interface E1Row {
   company: string
   jobTitle: string
-  appliedAgoDays: number
+  markedAppliedAgoDays: number
   interviewUrl: string
   rejectedUrl: string
   nothingYetUrl: string
@@ -39,7 +39,7 @@ export function buildE1Email(input: E1Input): { subject: string; html: string } 
       (r) => `
   <div style="border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin:0 0 12px;">
     <p style="font-size:14px;margin:0 0 4px;"><strong>${escapeHtml(r.jobTitle)}</strong> at <strong>${escapeHtml(r.company)}</strong></p>
-    <p style="font-size:12px;color:#94a3b8;margin:0 0 12px;">You applied ${r.appliedAgoDays} days ago.</p>
+    <p style="font-size:12px;color:#94a3b8;margin:0 0 12px;">You marked this applied ${r.markedAppliedAgoDays} days ago.</p>
     ${rowButtons(r)}
   </div>`
     )
@@ -47,8 +47,8 @@ export function buildE1Email(input: E1Input): { subject: string; html: string } 
   const body = `
   <h1 style="font-size:20px;margin:0 0 12px;">${single ? 'Heard anything back?' : 'Quick check-in on your applications'}</h1>
   <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 20px;">
-    Keeping your tracker honest takes one tap — and it keeps your prep pointed
-    at the applications that are still alive.
+    Keeping your tracker current takes one tap — and it keeps your prep pointed
+    at applications still marked Applied on your tracker.
   </p>
   ${rowsHtml}
   <p style="font-size:13px;margin:16px 0 0;">
@@ -82,9 +82,8 @@ export function buildE4Email(input: E4Input): { subject: string; html: string } 
   const body = `
   <h1 style="font-size:20px;margin:0 0 12px;">Prep before they call 🎯</h1>
   <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 20px;">
-    ${opener} — if this turns into an interview, it usually comes fast. A
-    voice mock built from this exact posting takes 20 minutes and counts as
-    evidence toward your readiness.
+    ${opener}. A voice mock built from this exact posting is set for 20 minutes,
+    and completed practice stays with this tracked job.
   </p>
   ${ctaButton(input.practiceUrl, 'Take the practice session')}`
   return { subject, html: renderShell(body, input.footer) }

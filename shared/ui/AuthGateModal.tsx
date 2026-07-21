@@ -32,7 +32,7 @@ const REASON_COPY: Record<AuthReason, ReasonCopy> = {
   },
   apply_job: {
     title: 'Sign in to track this application',
-    subtitle: 'We open the employer link either way — signing in keeps your applications and prep evidence together.',
+    subtitle: 'We open the employer link either way — signing in keeps your tracked applications and job-specific practice together.',
   },
   view_job_detail: {
     title: 'Sign in to see the full job breakdown',

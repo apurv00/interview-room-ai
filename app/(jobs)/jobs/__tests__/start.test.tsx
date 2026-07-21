@@ -170,6 +170,8 @@ describe('/jobs/start doors', () => {
     expect(screen.getByText(/Upload your resume \(PDF\)/i)).toBeTruthy()
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     expect(input.getAttribute('accept')).toBe('.pdf,application/pdf')
+    expect(screen.getByText('One question — role, done.')).toBeTruthy()
+    expect(screen.queryByText(/Naukri|10 minutes/i)).toBeNull()
     // Question door: role only — the city question is gone (ruling #21).
     fireEvent.click(screen.getByText(/Just tell us your target role/i))
     expect(screen.getByText(/What role are you looking for\?/i)).toBeTruthy()

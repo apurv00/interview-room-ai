@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { clearAllInterviewStorage } from '@shared/storageKeys'
+import { JOB_TARGET_QUESTION_SUMMARY } from '@jobs/config/truthfulLabels'
 
 /**
  * /jobs/start — the attach chooser + confirm bar (PRODUCT_FLOW §1 Stage 1,
@@ -303,11 +304,11 @@ export default function JobsStartPage() {
           <input ref={fileRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
           <Link href="/resume/builder?return=/jobs/start" className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white">
             <span className="font-medium">No resume yet? Build one</span>
-            <span className="mt-0.5 block text-sm text-slate-500">You&apos;ll need one on Naukri anyway — 10 minutes in the builder.</span>
+            <span className="mt-0.5 block text-sm text-slate-500">Create a resume, then return to set your target role.</span>
           </Link>
           <button disabled={busy} onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white disabled:opacity-60">
             <span className="font-medium">Just tell us your target role</span>
-            <span className="mt-0.5 block text-sm text-slate-500">One question — role, done.</span>
+            <span className="mt-0.5 block text-sm text-slate-500">{JOB_TARGET_QUESTION_SUMMARY}</span>
           </button>
         </div>
       )}

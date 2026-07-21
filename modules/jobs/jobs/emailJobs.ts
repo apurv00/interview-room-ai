@@ -7,7 +7,7 @@ import { buildE2Email } from '../emails/e2'
 import { buildE1Email, buildE4Email } from '../emails/e1'
 import { buildFooterUrls, sendTransactional, sendSolicitation, solicitationSentLast7d, isSuppressed } from '../services/emailSendService'
 import { mintActionToken } from '@shared/services/signedActionToken'
-import { isInSendWindow, nextSendSlot, e2SendInstant, istCalendarDaysBetween } from '../config/emailTiming'
+import { isInSendWindow, nextSendSlot, e2SendInstant, istCalendarDaysBetween, istDateKey } from '../config/emailTiming'
 import { jobPostingStateOf } from '../services/postingAccess'
 import { preparePracticeHandoffPosting } from '../services/practiceHandoff'
 
@@ -15,7 +15,7 @@ import { preparePracticeHandoffPosting } from '../services/practiceHandoff'
  * Email jobs (EMAILS.md §1/§6): transactional E0 + E2, solicitation E1 + E4.
  *
  * jobsEmailE0Job — event-triggered ('jobs/email.requested'): the user
- * tapped "Email me tonight's practice link". Consent is the request:
+ * tapped "Email me this practice link". Consent is the request:
  * bypasses coarse prefs and the weekly cap; honors ONLY the suppression
  * gate (e0/all). Outside the 08:00–21:00 IST window the send sleeps to
  * the next 08:00 IST (step.sleepUntil — durable, survives redeploys).
@@ -78,7 +78,7 @@ export async function runE0Handler(
 
   const { userId, jobPostingId, requestedAt } = event.data
   // 24h idempotency-window bound (Codex #530): a replay arriving a day
-  // late must not send "tonight's" link tomorrow night.
+  // late must not honor a stale deferred-link request.
   if (Date.now() - new Date(requestedAt).getTime() > 24 * 3600_000) {
     logger.warn({ userId, jobPostingId }, 'E0 request older than 24h — dropped (past idempotency window)')
     return { outcome: 'past-window' }
@@ -184,7 +184,8 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
       type Candidate = {
         applicationId: string; userId: string; jobPostingId: string
         interviewDateISO: string; interviewDateValue: string
-        confidence: 'exact' | 'week'; practiceSessionIds: string[]
+        dedupeKey: string; legacyDedupeKey: string
+        confidence: 'exact'; verifiedPracticeSessionIds: string[]
         title: string; company: string
       }
       const due: Candidate[] = []
@@ -192,7 +193,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
       let cursor: string | null = null
       let truncated = false
       for (;;) {
-        type LeanApp = { _id: unknown; userId: unknown; jobPostingId: unknown; interviewDate?: Date; interviewDateConfidence?: string; practiceSessionIds?: unknown[]; jobSnapshot?: { title?: string; company?: string } }
+        type LeanApp = { _id: unknown; userId: unknown; jobPostingId: unknown; interviewDate?: Date; interviewDateConfidence?: string; verifiedPracticeSessionIds?: unknown[]; jobSnapshot?: { title?: string; company?: string } }
         const batch: LeanApp[] = await JobApplication.find({
           // Only rows STILL scheduled (Codex #532): a stale interviewDate on
           // a row the user corrected to rejected/withdrawn/ghosted must
@@ -202,24 +203,36 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             $gte: new Date(now.getTime() - 2 * 86_400_000),
             $lte: new Date(now.getTime() + 8 * 86_400_000),
           },
-          interviewDateConfidence: { $in: ['exact', 'week'] },
+          // Week answers are preferences, not event dates. Only an exact
+          // user-supplied date can authorize a date-based reminder.
+          interviewDateConfidence: 'exact',
           ...(cursor ? { _id: { $gt: cursor } } : {}),
         })
-          .select('_id userId jobPostingId interviewDate interviewDateConfidence practiceSessionIds jobSnapshot')
+          .select('_id userId jobPostingId interviewDate interviewDateConfidence verifiedPracticeSessionIds jobSnapshot')
           .sort({ _id: 1 })
           .limit(200)
           .lean<LeanApp[]>()
         for (const r of batch) {
-          const at = e2SendInstant(r.interviewDate!, r.interviewDateConfidence as 'exact' | 'week', now)
+          const at = e2SendInstant(r.interviewDate!, now)
           if (at === null || at.getTime() > now.getTime()) continue
+          const applicationId = String(r._id)
+          const interviewDateISO = istDateKey(r.interviewDate!)
+          const interviewDateValue = r.interviewDate!.toISOString()
           const c: Candidate = {
-            applicationId: String(r._id),
+            applicationId,
             userId: String(r.userId),
             jobPostingId: String(r.jobPostingId),
-            interviewDateISO: r.interviewDate!.toISOString().slice(0, 10),
-            interviewDateValue: r.interviewDate!.toISOString(),
-            confidence: r.interviewDateConfidence as 'exact' | 'week',
-            practiceSessionIds: (r.practiceSessionIds ?? []).map(String),
+            interviewDateISO,
+            interviewDateValue,
+            // Version the corrected IST identity so it cannot collide with an
+            // old UTC date key for a different user-edited interview date.
+            dedupeKey: `${applicationId}:v2:${interviewDateISO}`,
+            // Before A07, E2 used the UTC ISO date. A legacy "Tomorrow"
+            // capture retained the request clock time, so the old and new
+            // calendar keys differ after 18:30 UTC.
+            legacyDedupeKey: `${applicationId}:${interviewDateValue.slice(0, 10)}`,
+            confidence: 'exact',
+            verifiedPracticeSessionIds: (r.verifiedPracticeSessionIds ?? []).map(String),
             title: r.jobSnapshot?.title ?? 'this role',
             company: r.jobSnapshot?.company ?? 'the company',
           }
@@ -249,7 +262,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
           const recorded = await JobsEmailSend.findOne({
             userId: c.userId,
             stream: 'e2',
-            dedupeKey: `${c.applicationId}:${c.interviewDateISO}`,
+            dedupeKey: { $in: [c.dedupeKey, c.legacyDedupeKey] },
           }).lean()
           if (!recorded) {
             logger.error(
@@ -268,6 +281,16 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
         let n = 0
         for (const c of chunk) {
           try {
+            // Rollout compatibility: an accepted/burned pre-A07 send used the
+            // UTC date key. It must suppress the v2 IST key too, otherwise the
+            // same reminder can reach Resend with a fresh idempotency key.
+            const legacyReminder = await JobsEmailSend.findOne({
+              userId: c.userId,
+              stream: 'e2',
+              dedupeKey: c.legacyDedupeKey,
+            }).lean()
+            if (legacyReminder) continue
+
             // Per-application ceiling (R19): dedupeKeys are prefix-scoped by
             // application id, so a count bounds date-toggle re-arms forever.
             const priorReminders = await JobsEmailSend.countDocuments({
@@ -295,16 +318,20 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             // Logistics-only variant when a practice session happened in the
             // last 24h (R10) — the user is already warm.
             let logisticsOnly = false
-            if (c.practiceSessionIds.length) {
+            if (c.verifiedPracticeSessionIds.length) {
               const recent = await InterviewSession.exists({
-                _id: { $in: c.practiceSessionIds.slice(-5) },
-                createdAt: { $gte: new Date(now.getTime() - 24 * 3600_000) },
+                _id: { $in: c.verifiedPracticeSessionIds.slice(-5) },
+                status: 'completed',
+                completedAt: {
+                  $gte: new Date(now.getTime() - 24 * 3600_000),
+                  $lte: now,
+                },
               })
               logisticsOnly = !!recent
             }
 
-            const daysUntil = istCalendarDaysBetween(now, new Date(`${c.interviewDateISO}T00:00:00Z`))
-            const whenLabel = c.confidence === 'week' ? 'this week' : daysUntil <= 1 ? 'tomorrow' : `in ${daysUntil} days`
+            const daysUntil = istCalendarDaysBetween(now, new Date(c.interviewDateValue))
+            const whenLabel = daysUntil <= 0 ? 'today' : daysUntil === 1 ? 'tomorrow' : `in ${daysUntil} days`
             const footerUrls = buildFooterUrls(c.userId, 'e2')
             const { subject, html } = buildE2Email({
               company,
@@ -324,7 +351,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             const res = await sendTransactional({
               userId: c.userId,
               stream: 'e2',
-              dedupeKey: `${c.applicationId}:${c.interviewDateISO}`,
+              dedupeKey: c.dedupeKey,
               to: user.email,
               subject,
               html,
@@ -390,7 +417,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
   if (cfg.e1Enabled || cfg.e4Enabled) {
     type SolicitationCandidate = {
       applicationId: string; userId: string; jobPostingId: string
-      company: string; jobTitle: string; appliedAgoDays: number
+      company: string; jobTitle: string; markedAppliedAgoDays: number
       intent: 'clicked' | 'applied'
       applicationStatus?: string
       applicationUpdatedAt?: Date
@@ -412,7 +439,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
         jobPostingId: String(r.jobPostingId),
         company: r.jobSnapshot?.company ?? 'the company',
         jobTitle: r.jobSnapshot?.title ?? 'this role',
-        appliedAgoDays: Math.max(0, istCalendarDaysBetween(intentAt, now)),
+        markedAppliedAgoDays: Math.max(0, istCalendarDaysBetween(intentAt, now)),
         intent,
         applicationStatus: r.status,
         applicationUpdatedAt: r.updatedAt,
@@ -522,7 +549,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
                 const rows = group.map((c) => ({
                   company: c.company,
                   jobTitle: c.jobTitle,
-                  appliedAgoDays: c.appliedAgoDays,
+                  markedAppliedAgoDays: c.markedAppliedAgoDays,
                   interviewUrl: emailActionUrl(userId, c.applicationId, 'interview_scheduled'),
                   rejectedUrl: emailActionUrl(userId, c.applicationId, 'rejected'),
                   nothingYetUrl: emailActionUrl(userId, c.applicationId, 'nothing-yet'),
@@ -533,7 +560,7 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
                   trackerUrl: `${APP_URL}/jobs/tracker`,
                   footer: {
                     whyLine: group.length === 1
-                      ? `you applied to ${group[0].jobTitle} at ${group[0].company} on our tracker`
+                      ? `you marked ${group[0].jobTitle} at ${group[0].company} as applied on your tracker`
                       : `you have ${group.length} tracked applications awaiting a response`,
                     ...footerUrls,
                   },

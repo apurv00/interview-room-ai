@@ -13,7 +13,7 @@
  *    (same validation the API applies: JOB_DOMAIN_IDS)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 
 const { mockUseSearchParams, mockFetch } = vi.hoisted(() => ({
@@ -47,6 +47,8 @@ beforeEach(() => {
   })
   sessionStorage.clear()
 })
+
+afterEach(() => vi.useRealTimers())
 
 describe('/jobs ?domain= param (Codex #527 — press links must land on the filtered feed)', () => {
   it('forwards a valid domain to the feed API and shows a clearable filter chip', async () => {
@@ -165,5 +167,46 @@ describe('/jobs account deletion cleanup', () => {
     expect(screen.queryByText('Old Personalized Job')).toBeNull()
     expect(screen.queryByText('PrivateSkill')).toBeNull()
     expect(screen.queryByText(/Sorted for you/i)).toBeNull()
+  })
+})
+
+describe('/jobs truthful product copy', () => {
+  it('keeps the feed CTA aligned with the one-question target flow', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
+    render(<JobsPage />)
+
+    expect(await screen.findByRole('link', { name: 'Answer one question' })).toHaveAttribute('href', '/jobs/start')
+    expect(screen.queryByText(/Answer 3 questions/i)).toBeNull()
+  })
+
+  it('does not invent freshness when an unmatched card has no trustworthy date', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date('2026-07-22T06:30:00.000Z'))
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).startsWith('/api/jobs/feed')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            cards: [
+              { id: 'undated', title: 'Undated role', company: 'Acme', locations: [], isRemote: false },
+              { id: 'future', title: 'Future-dated role', company: 'Beta', locations: [], isRemote: false, postedAt: '2026-07-23T00:00:00.000Z' },
+              { id: 'listed', title: 'Listed role', company: 'Gamma', locations: [], isRemote: false, postedAt: '2026-07-21T05:00:00.000Z' },
+            ],
+            page: 1,
+            pageSize: 20,
+            hasMore: false,
+            total: 3,
+          }),
+        })
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
+    })
+
+    render(<JobsPage />)
+    expect(await screen.findByText('Undated role')).toBeTruthy()
+    expect(screen.queryByText('Recently posted')).toBeNull()
+    expect(screen.queryByText(/Posted /)).toBeNull()
+    expect(screen.getByText('Listed yesterday')).toBeTruthy()
   })
 })

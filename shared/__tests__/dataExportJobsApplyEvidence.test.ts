@@ -50,9 +50,12 @@ import { generateDataExport } from '../services/dataExportService'
 const USER_ID = '507f1f77bcf86cd799439010'
 const APP_ID = '507f1f77bcf86cd799439011'
 const LEGACY_APP_ID = '507f1f77bcf86cd799439012'
+const PREFERENCE_APP_ID = '507f1f77bcf86cd799439013'
 const OPTION_ID = `ao1_${'A'.repeat(43)}`
 const REPORTED_AT = new Date('2026-07-21T09:30:00.000Z')
 const LEGACY_REPORTED_AT = new Date('2026-06-01T10:00:00.000Z')
+const EXACT_INTERVIEW_DATE = new Date('2026-08-04T00:00:00.000Z')
+const LEGACY_SYNTHETIC_WEEK_DATE = new Date('2026-08-12T09:30:00.000Z')
 
 function queryResult<T>(value: T) {
   const query = {
@@ -98,6 +101,8 @@ beforeEach(() => {
       _id: { toString: () => APP_ID },
       jobSnapshot: { title: 'Backend Engineer', company: 'Acme' },
       status: 'apply_clicked',
+      interviewDate: EXACT_INTERVIEW_DATE,
+      interviewDateConfidence: 'exact',
       clickedApplyOptionIds: [OPTION_ID],
       brokenLinkReports: [
         {
@@ -116,6 +121,18 @@ beforeEach(() => {
       _id: { toString: () => LEGACY_APP_ID },
       jobSnapshot: { title: 'Legacy role', company: 'Acme' },
       status: 'saved',
+      // Old week captures stored a made-up event date and had no separate
+      // preference field. The export must retain the confidence while
+      // refusing to present this timestamp as an exact interview date.
+      interviewDate: LEGACY_SYNTHETIC_WEEK_DATE,
+      interviewDateConfidence: 'week',
+    },
+    {
+      _id: { toString: () => PREFERENCE_APP_ID },
+      jobSnapshot: { title: 'Preferred window role', company: 'Acme' },
+      status: 'interview_scheduled',
+      interviewDateConfidence: 'week',
+      interviewDatePreference: 'next-week',
     },
   ]))
 })
@@ -154,6 +171,10 @@ describe('GDPR Jobs apply-evidence export', () => {
     const exported = await generateDataExport(USER_ID)
     const roundTripped = JSON.parse(JSON.stringify(exported)) as {
       jobApplications: Array<{
+        id: string
+        interviewDate?: string
+        interviewDateConfidence: 'exact' | 'week' | 'unknown' | null
+        interviewDatePreference: 'this-week' | 'next-week' | 'unknown' | null
         clickedApplyOptionIds: string[]
         brokenLinkReports: Array<Record<string, unknown>>
       }>
@@ -174,5 +195,43 @@ describe('GDPR Jobs apply-evidence export', () => {
         reportedAt: LEGACY_REPORTED_AT.toISOString(),
       },
     ])
+  })
+
+  it('exports only exact interview dates and preserves range-preference semantics', async () => {
+    const exported = await generateDataExport(USER_ID)
+    const applications = exported.jobApplications as Array<Record<string, unknown>>
+    const exact = applications.find((application) => application.id === APP_ID)!
+    const legacyWeek = applications.find((application) => application.id === LEGACY_APP_ID)!
+    const preferredWeek = applications.find((application) => application.id === PREFERENCE_APP_ID)!
+
+    expect(exact).toMatchObject({
+      interviewDate: EXACT_INTERVIEW_DATE,
+      interviewDateConfidence: 'exact',
+      interviewDatePreference: null,
+    })
+    expect(legacyWeek).toMatchObject({
+      legacyInterviewDateAnchor: LEGACY_SYNTHETIC_WEEK_DATE,
+      interviewDateConfidence: 'week',
+      interviewDatePreference: null,
+    })
+    expect(legacyWeek).not.toHaveProperty('interviewDate')
+    expect(preferredWeek).toMatchObject({
+      interviewDateConfidence: 'week',
+      interviewDatePreference: 'next-week',
+    })
+    expect(preferredWeek).not.toHaveProperty('interviewDate')
+
+    const roundTripped = JSON.parse(JSON.stringify(exported)) as {
+      jobApplications: Array<Record<string, unknown>>
+    }
+    const legacyDownload = roundTripped.jobApplications.find(
+      (application) => application.id === LEGACY_APP_ID,
+    )!
+    expect(legacyDownload).not.toHaveProperty('interviewDate')
+    expect(legacyDownload).toMatchObject({
+      legacyInterviewDateAnchor: LEGACY_SYNTHETIC_WEEK_DATE.toISOString(),
+      interviewDateConfidence: 'week',
+      interviewDatePreference: null,
+    })
   })
 })

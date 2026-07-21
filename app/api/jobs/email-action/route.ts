@@ -119,7 +119,7 @@ export async function POST(req: Request) {
       throw error
     }
     return page(`<h1 style="font-size:20px;">Got it — fingers crossed 🤞</h1>
-      <p style="color:#475569;font-size:14px;">We'll stop asking about this one for a while. If news lands, one tap in the tracker updates it.</p>`)
+      <p style="color:#475569;font-size:14px;">We'll pause email check-ins for this application. If news lands, one tap in the tracker updates it.</p>`)
   }
 
   let result: Awaited<ReturnType<typeof transitionStatus>>
@@ -135,10 +135,10 @@ export async function POST(req: Request) {
     // Continue to the date sheet: the detail page shows it for scheduled
     // rows without a date; sign-in (if needed) preserves the URL.
     return page(`<h1 style="font-size:20px;">Marked — now let's get you ready 🎯</h1>
-      <p style="color:#475569;font-size:14px;">Tell us when it is and your prep plan (and a T-1 reminder) build themselves.</p>
+      <p style="color:#475569;font-size:14px;">Add the exact date for a date-based prep plan and reminder, or save a week preference.</p>
       <a href="/jobs/${app.jobPostingId}" style="display:inline-block;background:#2563eb;color:#fff;border-radius:8px;padding:12px 24px;font-size:14px;font-weight:600;text-decoration:none;">Set the date →</a>`)
   }
   return page(`<h1 style="font-size:20px;">Updated — their loss</h1>
-    <p style="color:#475569;font-size:14px;">Marked rejected. Your practice evidence stays yours — it counts toward every similar role on the feed.</p>
-    <a href="/jobs" style="color:#2563eb;font-size:14px;">See similar live jobs →</a>`)
+    <p style="color:#475569;font-size:14px;">Marked rejected. Your job-specific practice history stays with this tracked job.</p>
+    <a href="/jobs" style="color:#2563eb;font-size:14px;">Browse live jobs →</a>`)
 }

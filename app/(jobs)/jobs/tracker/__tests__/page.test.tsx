@@ -381,11 +381,68 @@ describe('Jobs tracker posting lifecycle', () => {
     const clicked = await screen.findByRole('region', { name: 'Clicked · not confirmed' })
     expect(within(clicked).getByRole('button', { name: '→ Applied' })).toBeTruthy()
     expect(within(clicked).getByRole('button', { name: '→ Withdrawn' })).toBeTruthy()
-    expect(within(clicked).queryByText(/3 weeks quiet/i)).toBeNull()
+    expect(within(clicked).queryByText(/No tracker update for 3 weeks/i)).toBeNull()
     expect(within(clicked).queryByRole('button', { name: /No response/i })).toBeNull()
 
     const applied = screen.getByRole('region', { name: 'Applied' })
-    expect(within(applied).getByText(/3 weeks quiet/i)).toBeTruthy()
+    expect(within(applied).getByText(/No tracker update for 3 weeks/i)).toBeTruthy()
     expect(within(applied).getByRole('button', { name: /Mark.*No response/i })).toBeTruthy()
+  })
+
+  it('renders the persisted click age instead of calling every old click yesterday', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        groups: [],
+        confirmCard: { jobPostingId: JOB_ID, company: 'Acme', clickedAgoHours: 72 },
+      }),
+    })
+
+    render(<TrackerPage />)
+
+    expect(await screen.findByText('You clicked Acme 3 days ago — did you apply?')).toBeTruthy()
+    expect(screen.queryByText(/yesterday/i)).toBeNull()
+  })
+
+  it('sends an explicit date separately from a saved week preference', async () => {
+    const tracker = {
+      groups: [{
+        status: 'interview_scheduled',
+        count: 1,
+        rows: [{
+          jobPostingId: JOB_ID,
+          title: 'Frontend Engineer',
+          company: 'Acme',
+          location: 'Remote',
+          status: 'interview_scheduled',
+          postingState: 'live',
+          daysInStatus: 1,
+          practiceCount: 1,
+          interviewDateConfidence: 'week',
+          interviewDatePreference: 'this-week',
+          nudge: null,
+          unconfirmedClick: false,
+        }],
+      }],
+      confirmCard: null,
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input) === '/api/jobs/tracker') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(tracker) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    })
+
+    render(<TrackerPage />)
+    expect(await screen.findByText('Preferred interview window: this week')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Add exact date' }))
+    fireEvent.change(screen.getByLabelText('Exact interview date'), { target: { value: '2026-07-30' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save exact date' }))
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith(
+      `/api/jobs/${JOB_ID}/interview-date`,
+      expect.objectContaining({ body: JSON.stringify({ date: '2026-07-30' }) }),
+    ))
   })
 })

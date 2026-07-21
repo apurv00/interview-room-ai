@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { clearAllInterviewStorage } from '@shared/storageKeys'
+import {
+  clickAgeLabel,
+  interviewDateLabel,
+  practiceProgressLabel,
+} from '@jobs/config/truthfulLabels'
+import InterviewDateControls, { type InterviewDateRequest } from '@jobs/components/InterviewDateControls'
 
 /**
  * /jobs/tracker — tracker v1 (Wave 4.2). Mobile-first single list grouped
@@ -20,6 +26,9 @@ interface Row {
   postingState: 'live' | 'archived' | 'restricted' | 'snapshot-only'
   daysInStatus: number
   practiceCount: number
+  interviewDate?: string
+  interviewDateConfidence?: 'exact' | 'week' | 'unknown'
+  interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
   notes?: string
   nudge: 'waiting' | 'ghost-prompt' | null
   unconfirmedClick: boolean
@@ -163,15 +172,16 @@ export default function TrackerPage() {
     load()
   }
 
-  async function captureDate(jobPostingId: string, choice: string) {
-    setDateSheetFor(null)
+  async function captureDate(jobPostingId: string, request: InterviewDateRequest) {
     const res = await fetch(`/api/jobs/${jobPostingId}/interview-date`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ choice }),
+      body: JSON.stringify(request),
     }).catch(() => null)
     if (await handleUnauthorized(res)) return
     if (accountUnavailableRef.current) return
+    if (!res?.ok) throw new Error('interview timing save failed')
+    setDateSheetFor(null)
     load()
   }
 
@@ -222,7 +232,7 @@ export default function TrackerPage() {
 
       {view?.confirmCard && (
         <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm">
-          <p className="font-medium">You clicked {view.confirmCard.company} {view.confirmCard.clickedAgoHours >= 24 ? 'yesterday' : 'earlier'} — did you apply?</p>
+          <p className="font-medium">You clicked {view.confirmCard.company} {clickAgeLabel(view.confirmCard.clickedAgoHours)} — did you apply?</p>
           <div className="mt-2 flex gap-2">
             <button onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, true)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white">✓ Yes, applied</button>
             <button onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, false)} className="rounded-lg border border-slate-200 px-3 py-1 text-xs bg-white">Not yet</button>
@@ -259,17 +269,25 @@ export default function TrackerPage() {
                   <span className="shrink-0 text-xs text-slate-500">{r.daysInStatus}d</span>
                 </div>
                 <p className="mt-0.5 text-sm text-slate-500">
-                  {r.company}{r.location ? ` · ${r.location}` : ''} · Evidence {r.practiceCount}/3
+                  {r.company}{r.location ? ` · ${r.location}` : ''} · {practiceProgressLabel(r.practiceCount)}
                 </p>
                 {r.postingState !== 'live' && (
                   <p className="mt-1 text-xs font-medium text-amber-700">
                     {r.postingState === 'archived' ? 'Posting no longer active · saved details available' : 'Posting unavailable · tracked history preserved'}
                   </p>
                 )}
-                {r.status === 'applied' && r.nudge === 'waiting' && <p className="mt-1 text-xs text-amber-700">Still waiting on {r.company}? Keep prepping — evidence carries to similar jobs.</p>}
+                {r.status === 'applied' && r.nudge === 'waiting' && <p className="mt-1 text-xs text-amber-700">Still marked Applied at {r.company}. Job-specific practice stays with this tracked job.</p>}
                 {r.status === 'applied' && r.nudge === 'ghost-prompt' && (
                   <p className="mt-1 text-xs text-amber-700">
-                    3 weeks quiet. <button onClick={() => transition(r.jobPostingId, r.status, 'ghosted')} className="underline">Mark “No response”?</button>
+                    No tracker update for 3 weeks. <button onClick={() => transition(r.jobPostingId, r.status, 'ghosted')} className="underline">Mark “No response”?</button>
+                  </p>
+                )}
+                {r.status === 'interview_scheduled' && (
+                  <p className="mt-1 text-xs text-slate-600">
+                    {interviewDateLabel(r.interviewDate, r.interviewDateConfidence, r.interviewDatePreference)}{' '}
+                    <button onClick={() => setDateSheetFor(r.jobPostingId)} className="text-blue-600 underline">
+                      {r.interviewDateConfidence === 'exact' ? 'Change date' : 'Add exact date'}
+                    </button>
                   </p>
                 )}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -291,12 +309,8 @@ export default function TrackerPage() {
                 </div>
                 {dateSheetFor === r.jobPostingId && r.status === 'interview_scheduled' && (
                   <div className="mt-2 rounded-lg border border-blue-300 bg-blue-50 p-2 text-xs">
-                    <p className="font-medium">🎙 You got the interview. When is it?</p>
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {[['tomorrow', 'Tomorrow'], ['this-week', 'This week'], ['next-week', 'Next week'], ['not-sure', 'Not sure yet']].map(([c, l]) => (
-                        <button key={c} onClick={() => captureDate(r.jobPostingId, c)} className="rounded-full border border-slate-200 px-2 py-0.5 hover:bg-white">{l}</button>
-                      ))}
-                    </div>
+                    <p className="font-medium">Interview timing</p>
+                    <InterviewDateControls onCapture={(request) => captureDate(r.jobPostingId, request)} />
                   </div>
                 )}
                 {r.notes && notesFor !== r.jobPostingId && <p className="mt-2 whitespace-pre-wrap text-xs text-slate-500">{r.notes}</p>}

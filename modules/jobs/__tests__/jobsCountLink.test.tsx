@@ -7,9 +7,8 @@
  *    jobs-attributed — recordPracticeEvidence only records sessions with
  *    attribution.source='jobs', so the claim was false everywhere this
  *    component renders. Locked here: NO variant's copy ever claims evidence.
- *  - The pathway header claimed "Jobs matching your prep" even when the
- *    count was unfiltered (unknown/absent domain). Locked: the match claim
- *    exists only when the feed was actually domain-filtered.
+ *  - The pathway header claimed "Jobs matching your prep" without measuring
+ *    a match. Locked: filtered counts only claim the selected practice area.
  *
  * Plus the standing Wave-5 invariants: zero jobs renders nothing; the
  * domain is named only when valid (JOB_DOMAIN_IDS).
@@ -43,11 +42,12 @@ describe('JobsCountLink honest copy (Codex #527)', () => {
     }
   })
 
-  it('pathway header claims "matching your prep" ONLY when the feed was domain-filtered', async () => {
+  it('pathway header names a filtered practice area without claiming a match', async () => {
     feedResponds(7)
     const filtered = render(<JobsCountLink domain="data-science" variant="pathway" />)
-    expect(await filtered.findByText('Jobs matching your prep')).toBeTruthy()
+    expect(await filtered.findByText('Jobs in this practice area')).toBeTruthy()
     expect(filtered.container.textContent).toContain('data-science')
+    expect(filtered.container.textContent).not.toContain('matching your prep')
     filtered.unmount()
 
     const unfiltered = render(<JobsCountLink domain="not-a-real-domain" variant="pathway" />)

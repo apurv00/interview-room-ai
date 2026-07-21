@@ -10,7 +10,7 @@ import { renderShell, ctaButton, escapeHtml, type EmailFooterInput } from './sha
 export interface E2Input {
   company: string
   jobTitle: string
-  /** Display label, already formatted ("tomorrow" / "this week"). */
+  /** Exact-date display label, already formatted ("today" / "tomorrow"). */
   whenLabel: string
   prepPlanUrl: string
   warmUpUrl: string
@@ -43,7 +43,7 @@ export function buildE2Email(input: E2Input): { subject: string; html: string } 
     : `
   <h1 style="font-size: 20px; margin: 0 0 12px;">Interview ${escapeHtml(input.whenLabel)}: ${escapeHtml(input.company)} 🎯</h1>
   <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px;">
-    Tomorrow-you will thank today-you for a 20-minute warm-up. Your prep plan
+    A 20-minute warm-up is available before the interview. Your prep plan
     for <strong>${escapeHtml(input.jobTitle)}</strong> at <strong>${escapeHtml(input.company)}</strong>
     has a session built from this exact posting.
   </p>

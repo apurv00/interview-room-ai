@@ -56,6 +56,8 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     appliedAt?: Date
     appliedWith?: { resumeId?: string; wasTailored: boolean; tailoredFromResumeId?: string }
     interviewDate?: Date
+    interviewDateConfidence?: 'exact' | 'week' | 'unknown'
+    interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
     outcome?: Record<string, unknown>
     notes?: string
     clickedApplyOptionIds?: string[]
@@ -291,7 +293,19 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       // The per-application submission record — which resume, tailored or
       // not (Codex #508).
       appliedWith: a.appliedWith ?? null,
-      interviewDate: a.interviewDate,
+      // A coarse week answer is a user-authored preference, not an event
+      // date. Historical rows may carry a synthetic date or no confidence,
+      // so an explicit `exact` confidence is required before a date can be
+      // presented as the interview date. The raw legacy value is retained
+      // separately for export completeness.
+      ...(a.interviewDateConfidence === 'exact' && a.interviewDate
+        ? { interviewDate: a.interviewDate }
+        : {}),
+      ...(a.interviewDateConfidence !== 'exact' && a.interviewDate
+        ? { legacyInterviewDateAnchor: a.interviewDate }
+        : {}),
+      interviewDateConfidence: a.interviewDateConfidence ?? null,
+      interviewDatePreference: a.interviewDatePreference ?? null,
       outcome: a.outcome,
       notes: a.notes,
       // Apply-option ids and dead-link reports are behavioral records. Keep

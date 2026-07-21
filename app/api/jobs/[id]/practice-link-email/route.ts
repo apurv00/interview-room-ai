@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic'
 
 /**
  * POST /api/jobs/[id]/practice-link-email — the E0 request (EMAILS.md §1:
- * "Email me tonight's practice link", PRODUCT_FLOW §4c's load-bearing
+ * "Email me this practice link", PRODUCT_FLOW §4c's load-bearing
  * deferred CTA). Consent is the tap. Two honest refusals instead of a
  * silent accept (review R-blocker-2 / Codex #530): stream disabled and
  * suppressed both return their reason so the UI never pretends.

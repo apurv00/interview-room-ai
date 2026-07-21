@@ -50,6 +50,8 @@ export interface IJobApplication extends Document {
   appliedWith?: { resumeId?: string; wasTailored: boolean; tailoredFromResumeId?: string }
   interviewDate?: Date
   interviewDateConfidence?: 'exact' | 'week' | 'unknown'
+  /** User-authored coarse window. It never authorizes exact-date plans or reminders. */
+  interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
   outcome: {
     passedScreen?: boolean
     interviewRounds?: number
@@ -164,6 +166,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
     },
     interviewDate: { type: Date },
     interviewDateConfidence: { type: String, enum: ['exact', 'week', 'unknown'] },
+    interviewDatePreference: { type: String, enum: ['this-week', 'next-week', 'unknown'] },
     outcome: {
       passedScreen: { type: Boolean },
       interviewRounds: { type: Number, min: 0 },

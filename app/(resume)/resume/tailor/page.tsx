@@ -1296,7 +1296,7 @@ export default function TailorPage() {
                   aria-hidden="true"
                   className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin"
                 />
-                Tailoring resume… this can take ~15s
+                Tailoring resume…
               </span>
             ) : (
               'Tailor My Resume'

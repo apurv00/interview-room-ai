@@ -511,9 +511,23 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
 
   it('authed detail carries the caller\'s own application summary (chip + ticker inputs)', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
-    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'app-1', status: 'apply_clicked', verifiedPracticeSessionIds: ['a', 'b', 'c', 'd', 'e'] }) }) })
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app-1',
+      status: 'apply_clicked',
+      verifiedPracticeSessionIds: ['a', 'b', 'c', 'd', 'e'],
+      interviewDateConfidence: 'week',
+      interviewDatePreference: 'this-week',
+    }) }) })
     const d = await getJobDetail('j1', 'u1')
-    if (!d!.gated) expect(d!.application).toMatchObject({ applicationId: 'app-1', status: 'apply_clicked', practiceCount: 3, ats: { state: 'none' } }) // practiceCount capped at 3
+    if (!d!.gated) expect(d!.application).toMatchObject({
+      applicationId: 'app-1',
+      status: 'apply_clicked',
+      practiceCount: 3,
+      interviewDate: undefined,
+      interviewDateConfidence: 'week',
+      interviewDatePreference: 'this-week',
+      ats: { state: 'none' },
+    }) // practiceCount capped at 3
   })
 
   it('does not return a stale live application summary deleted during preparation', async () => {

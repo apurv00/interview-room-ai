@@ -41,6 +41,9 @@ export interface TrackerRow {
   postingState: JobPostingState | 'snapshot-only'
   daysInStatus: number
   practiceCount: number
+  interviewDate?: string
+  interviewDateConfidence?: 'exact' | 'week' | 'unknown'
+  interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
   notes?: string
   /** Read-time derived, never persisted. */
   nudge: 'waiting' | 'ghost-prompt' | null
@@ -66,7 +69,7 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
   const empty = (): TrackerView => ({ groups: [], confirmCard: null })
   if (!(await isJobsAccountActive(userId))) throw new JobsAccountInactiveError(userId)
   const apps = await JobApplication.find({ userId })
-    .select('jobPostingId jobSnapshot status statusHistory appliedAt verifiedPracticeSessionIds notes outcome updatedAt')
+    .select('jobPostingId jobSnapshot status statusHistory appliedAt verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference notes outcome updatedAt')
     .sort({ updatedAt: -1 })
     .limit(500)
     .lean()
@@ -96,6 +99,9 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
       postingState,
       daysInStatus: ageDays,
       practiceCount: Math.min(3, a.verifiedPracticeSessionIds?.length ?? 0),
+      interviewDate: a.interviewDate ? new Date(a.interviewDate).toISOString() : undefined,
+      interviewDateConfidence: a.interviewDateConfidence,
+      interviewDatePreference: a.interviewDatePreference,
       notes: a.notes || undefined,
       nudge: canNudgePreparation && responseNudgeEligible && ageDays >= NUDGE_GHOST_PROMPT_DAYS ? 'ghost-prompt' : canNudgePreparation && responseNudgeEligible && ageDays >= NUDGE_WAITING_DAYS ? 'waiting' : null,
       unconfirmedClick: a.status === 'apply_clicked',
