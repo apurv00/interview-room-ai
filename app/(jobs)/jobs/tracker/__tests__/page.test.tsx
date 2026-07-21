@@ -331,4 +331,61 @@ describe('Jobs tracker posting lifecycle', () => {
     expect(liveStatus).toHaveAttribute('aria-atomic', 'true')
     expect(within(liveStatus).getByRole('button', { name: 'Undo' })).toBeTruthy()
   })
+
+  it('never offers a response outcome for an unconfirmed click, even with a stale nudge payload', async () => {
+    const appliedJobId = '507f1f77bcf86cd799439012'
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        groups: [
+          {
+            status: 'apply_clicked',
+            count: 1,
+            rows: [{
+              jobPostingId: JOB_ID,
+              title: 'Frontend Engineer',
+              company: 'Acme',
+              location: 'Remote',
+              status: 'apply_clicked',
+              postingState: 'live',
+              daysInStatus: 40,
+              practiceCount: 0,
+              nudge: 'ghost-prompt',
+              unconfirmedClick: true,
+            }],
+          },
+          {
+            status: 'applied',
+            count: 1,
+            rows: [{
+              jobPostingId: appliedJobId,
+              title: 'Backend Engineer',
+              company: 'Beta',
+              location: 'Remote',
+              status: 'applied',
+              postingState: 'live',
+              daysInStatus: 22,
+              practiceCount: 0,
+              nudge: 'ghost-prompt',
+              unconfirmedClick: false,
+            }],
+          },
+        ],
+        confirmCard: null,
+      }),
+    })
+
+    render(<TrackerPage />)
+
+    const clicked = await screen.findByRole('region', { name: 'Clicked · not confirmed' })
+    expect(within(clicked).getByRole('button', { name: '→ Applied' })).toBeTruthy()
+    expect(within(clicked).getByRole('button', { name: '→ Withdrawn' })).toBeTruthy()
+    expect(within(clicked).queryByText(/3 weeks quiet/i)).toBeNull()
+    expect(within(clicked).queryByRole('button', { name: /No response/i })).toBeNull()
+
+    const applied = screen.getByRole('region', { name: 'Applied' })
+    expect(within(applied).getByText(/3 weeks quiet/i)).toBeTruthy()
+    expect(within(applied).getByRole('button', { name: /Mark.*No response/i })).toBeTruthy()
+  })
 })

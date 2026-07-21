@@ -95,8 +95,9 @@ Nav: `{ href: '/jobs', label: 'Jobs' }` at index 1 in `NAV_LINKS` (`shared/layou
 }
 ```
 
-- `apply_clicked` (machine fact) vs `applied` (user claim) — never conflated; everything downstream depends on this honesty.
-- `ghosted` renders as **"No response"**; loose status machine (any forward jump, backward corrections, `ghosted`/`rejected` recoverable).
+- `apply_clicked` (machine fact) vs `applied` (user claim) — never conflated. An unconfirmed click receives only the bounded confirmation card; response nudges and automatic "No response" inference require `status:'applied'` plus `appliedAt`.
+- `ghosted` renders as **"No response"**. User corrections remain loose and `ghosted`/`rejected` remain recoverable, but an `apply_clicked` row cannot jump directly to `ghosted` without first becoming a confirmed application.
+- Tracker GET is physically read-only. Day-35 inference runs in the daily `jobs-tracker-status-sweep`, uses account-fenced optimistic predicates, appends system history, and emits the matching audit event atomically.
 - **`tailoredVersion` lives here, latest-wins, NOT counted against the 3-resume cap** — `savedResumes` is embedded in the User doc; the cap is a doc-size bound and stays meaningful for the curated library; the application record absorbs per-job volume. "Save to my resumes" escape hatch uses the normal path + existing limit UX. Truncation guards ported from the tailor page.
 - **GDPR:** `JobApplication` + `ProductEvent` land in BOTH `accountDeletion.ts` cascade and `dataExportService.ts` export (outcome self-reports are Article-20 core) + completeness test asserting every model with a `userId` path appears in both. `userReferenced` is a non-personal, monotonic retention pin in close paths: clearing it inline from a cross-collection existence check races a concurrent first Save/Apply/Tailor. Ownership writes and the idempotent `repair:jobs-retention` migration set the pin and remove `purgeAt`; conservative orphan reclamation requires a separate race-safe reconciler.
 
@@ -147,7 +148,7 @@ Two doors: tracker chip, and **the inference** — launching practice on an `app
 |---|---|---|
 | 1 | JobApplication model (+ tailoredVersion) + GDPR cascade/export/completeness test + saved-jds cleanup | 2.0 |
 | 2 | Apply moment: tier-labeled link-out, sync open, click capture, return-sheet, broken-link failover, view-posting link | 3.0 |
-| 3 | Tracker v1: grouped list, chip transitions + undo, notes, read-time nudges (7d/21d/35d lazy auto-ghost) | 3.5 |
+| 3 | Tracker v1: grouped list, chip transitions + undo, notes, read-only 7d/21d derived nudges, and audited applied-only day-35 status sweep | 3.5 |
 | 4 | Practice hand-off + attribution (`InterviewConfigSchema` field + round-trip test) + feedback-page bridge + evidence ticker | 2.0 |
 | 5 | interview_scheduled sheet + deterministic prep plan + inference ask + next-visit confirm card | 2.0 |
 | 6 | **time_up taper exemption fix** (scoring precondition — lands before the first attributed session can exist) | 1.0 |

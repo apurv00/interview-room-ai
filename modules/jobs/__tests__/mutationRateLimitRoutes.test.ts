@@ -117,7 +117,7 @@ describe('Jobs inactive-account HTTP contract', () => {
     mockCheckJobsRateLimit.mockResolvedValue(null)
     mockConnectDB.mockResolvedValue(undefined)
     mockDateForChoice.mockReturnValue({ date: null, confidence: 'unknown' })
-    mockGetTracker.mockResolvedValue({ groups: [], confirmCard: null, autoGhosted: 0 })
+    mockGetTracker.mockResolvedValue({ groups: [], confirmCard: null })
   })
 
   async function expectAccountUnavailable(response: Response) {
@@ -184,7 +184,6 @@ describe('Jobs inactive-account HTTP contract', () => {
     mockGetTracker.mockResolvedValue({
       groups: [{ status: 'saved', count: 1, rows: [{ notes: 'private' }] }],
       confirmCard: null,
-      autoGhosted: 0,
     })
 
     await expectAccountUnavailable(await getTracker())
@@ -193,7 +192,7 @@ describe('Jobs inactive-account HTTP contract', () => {
   })
 
   it('returns the tracker only after both active-account checks pass', async () => {
-    const tracker = { groups: [], confirmCard: null, autoGhosted: 0 }
+    const tracker = { groups: [], confirmCard: null }
     mockGetTracker.mockResolvedValue(tracker)
 
     const response = await getTracker()
