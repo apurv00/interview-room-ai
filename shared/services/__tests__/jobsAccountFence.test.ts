@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockObjectIdIsValid,
   mockUserExists,
+  mockUserDistinct,
   mockUserUpdateOne,
   mockStartSession,
   mockWithTransaction,
@@ -18,6 +19,7 @@ const {
   return {
     mockObjectIdIsValid: vi.fn(),
     mockUserExists: vi.fn(),
+    mockUserDistinct: vi.fn(),
     mockUserUpdateOne: vi.fn(),
     mockStartSession: vi.fn(),
     mockWithTransaction,
@@ -35,6 +37,7 @@ vi.mock('mongoose', () => ({
 vi.mock('@shared/db/models', () => ({
   User: {
     exists: mockUserExists,
+    distinct: mockUserDistinct,
     updateOne: mockUserUpdateOne,
     db: { startSession: mockStartSession },
   },
@@ -43,17 +46,20 @@ vi.mock('@shared/db/models', () => ({
 import {
   JobsAccountInactiveError,
   JobsAccountTransactionsRequiredError,
+  activeJobsAccountIds,
   activeJobsAccountFilter,
   isJobsAccountActive,
   withActiveJobsAccountWrite,
 } from '@shared/services/jobsAccountFence'
 
 const USER_ID = '507f1f77bcf86cd799439011'
+const OTHER_USER_ID = '507f1f77bcf86cd799439012'
 
 beforeEach(() => {
   vi.resetAllMocks()
   mockObjectIdIsValid.mockReturnValue(true)
   mockUserExists.mockResolvedValue({ _id: USER_ID })
+  mockUserDistinct.mockResolvedValue([USER_ID])
   mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockStartSession.mockResolvedValue(transactionSession)
   mockWithTransaction.mockImplementation(async (work: () => Promise<void>) => {
@@ -79,6 +85,33 @@ describe('Jobs account lifecycle predicate', () => {
     await expect(isJobsAccountActive('not-an-object-id')).resolves.toBe(false)
 
     expect(mockUserExists).not.toHaveBeenCalled()
+  })
+
+  it('resolves active and legacy owners in one deduplicated query', async () => {
+    mockObjectIdIsValid.mockImplementation((id: string) => id !== 'invalid')
+    mockUserDistinct.mockResolvedValue([USER_ID, OTHER_USER_ID])
+
+    await expect(activeJobsAccountIds([
+      USER_ID,
+      USER_ID,
+      OTHER_USER_ID,
+      'invalid',
+    ])).resolves.toEqual(new Set([USER_ID, OTHER_USER_ID]))
+
+    expect(mockUserDistinct).toHaveBeenCalledWith('_id', {
+      _id: { $in: [USER_ID, OTHER_USER_ID] },
+      $or: [
+        { accountState: 'active' },
+        { accountState: { $exists: false } },
+      ],
+    })
+  })
+
+  it('excludes missing and deleting owners from the active id set', async () => {
+    mockUserDistinct.mockResolvedValue([USER_ID])
+
+    await expect(activeJobsAccountIds([USER_ID, OTHER_USER_ID]))
+      .resolves.toEqual(new Set([USER_ID]))
   })
 })
 
