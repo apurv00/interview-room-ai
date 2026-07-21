@@ -195,6 +195,33 @@ describe('getTracker (Wave 4.2 — pure read-time derivation)', () => {
     expect(rows.find((row) => row.jobPostingId === legacyOnly.jobPostingId)?.practiceCount).toBe(0)
   })
 
+  it('projects exact interview dates separately from coarse preferences', async () => {
+    reset()
+    const preference = app({
+      status: 'interview_scheduled',
+      interviewDateConfidence: 'week',
+      interviewDatePreference: 'next-week',
+    })
+    const exact = app({
+      status: 'interview_scheduled',
+      interviewDate: new Date('2026-07-30T00:00:00.000Z'),
+      interviewDateConfidence: 'exact',
+    })
+    chain([preference, exact])
+
+    const rows = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)
+
+    expect(rows.find((row) => row.jobPostingId === preference.jobPostingId)).toMatchObject({
+      interviewDate: undefined,
+      interviewDateConfidence: 'week',
+      interviewDatePreference: 'next-week',
+    })
+    expect(rows.find((row) => row.jobPostingId === exact.jobPostingId)).toMatchObject({
+      interviewDate: '2026-07-30T00:00:00.000Z',
+      interviewDateConfidence: 'exact',
+    })
+  })
+
   it('batches posting lifecycle and marks closed or missing rows without changing application status', async () => {
     reset()
     const live = app({ status: 'applied' })

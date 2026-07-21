@@ -31,7 +31,8 @@ describe('buildPrepPlan (§4c — instant, deterministic, no LLM)', () => {
     const plan = buildPrepPlan(new Date(NOW.getTime() + 6 * day), NOW)
     expect(plan.mode).toBe('three-session')
     expect(plan.sessions.map((s) => s.dayOffset)).toEqual([0, 3, 5])
-    expect(plan.headline).toContain('mocks built from this JD') // Phase-1 copy, no per-session tags
+    expect(plan.headline).toContain('saved interview date')
+    expect(plan.headline).not.toMatch(/evidence|readiness/i)
   })
 
   it('1-2 days → two focused sessions; interview day → warm-up only', () => {
@@ -57,18 +58,25 @@ describe('calendar-day arithmetic (Codex #525 — Tomorrow never decays to today
     expect(plan.sessions).toHaveLength(2)
   })
 
-  it('calendarDaysBetween counts calendar days, not 24h buckets', () => {
-    expect(calendarDaysBetween(new Date('2026-07-15T23:00:00Z'), new Date('2026-07-16T01:00:00Z'))).toBe(1)
+  it('calendarDaysBetween counts IST calendar days, not 24h buckets', () => {
+    expect(calendarDaysBetween(new Date('2026-07-15T18:00:00Z'), new Date('2026-07-15T19:00:00Z'))).toBe(1)
+    expect(calendarDaysBetween(new Date('2026-07-15T23:00:00Z'), new Date('2026-07-16T01:00:00Z'))).toBe(0)
     expect(calendarDaysBetween(NOW, new Date(NOW.getTime() + 6 * day))).toBe(6)
   })
 })
 
 describe('dateForChoice (server owns the date math)', () => {
   it('maps the sheet buttons deterministically', () => {
-    expect(dateForChoice('tomorrow', NOW)).toEqual({ date: new Date(NOW.getTime() + day), confidence: 'exact' })
-    expect(dateForChoice('this-week', NOW).confidence).toBe('week')
-    expect(dateForChoice('next-week', NOW).date!.getTime()).toBe(NOW.getTime() + 9 * day)
-    expect(dateForChoice('not-sure', NOW)).toEqual({ date: null, confidence: 'unknown' })
+    expect(dateForChoice('tomorrow', NOW)).toEqual({ date: new Date('2026-07-16T00:00:00.000Z'), confidence: 'exact' })
+    expect(dateForChoice('this-week', NOW)).toEqual({ date: null, confidence: 'week', preference: 'this-week' })
+    expect(dateForChoice('next-week', NOW)).toEqual({ date: null, confidence: 'week', preference: 'next-week' })
+    expect(dateForChoice('not-sure', NOW)).toEqual({ date: null, confidence: 'unknown', preference: 'unknown' })
+  })
+
+  it('maps tomorrow across the IST Sunday-to-Monday boundary', () => {
+    expect(dateForChoice('tomorrow', new Date('2026-07-19T19:00:00.000Z')).date).toEqual(
+      new Date('2026-07-21T00:00:00.000Z'),
+    )
   })
 })
 
@@ -83,9 +91,28 @@ describe('setInterviewDate', () => {
     expect(mockUpdateOne.mock.calls[0][1].$set).toMatchObject({ interviewDateConfidence: 'exact' })
     expect(mockUpdateOne.mock.calls[0][2]).toEqual({ session: mockDbSession })
 
-    const r2 = await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW)
+    const r2 = await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown', preference: 'unknown' }, NOW)
     expect(r2).toEqual({ ok: true, daysUntil: null })
     expect(mockUpdateOne.mock.calls[1][1].$unset).toEqual({ interviewDate: 1 })
+    expect(mockUpdateOne.mock.calls[1][1].$set).toMatchObject({
+      interviewDateConfidence: 'unknown',
+      interviewDatePreference: 'unknown',
+    })
+  })
+
+  it('persists a week answer only as a preference and removes any exact date', async () => {
+    mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 })
+    mockWithActiveJobsAccountWrite.mockReset().mockImplementation(
+      async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
+    )
+
+    const result = await setInterviewDate('u1', 'j1', dateForChoice('this-week', NOW), NOW)
+
+    expect(result).toEqual({ ok: true, daysUntil: null })
+    expect(mockUpdateOne.mock.calls[0][1]).toMatchObject({
+      $set: { interviewDateConfidence: 'week', interviewDatePreference: 'this-week' },
+      $unset: { interviewDate: 1 },
+    })
   })
 
   it('rejects nonsense dates (past beyond yesterday, >1y out) and missing rows', async () => {
@@ -97,7 +124,7 @@ describe('setInterviewDate', () => {
     expect((await setInterviewDate('u1', 'j1', { date: new Date(NOW.getTime() + 400 * day), confidence: 'exact' }, NOW)).ok).toBe(false)
     expect(mockUpdateOne).not.toHaveBeenCalled()
     mockUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
-    expect((await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW)).ok).toBe(false)
+    expect((await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown', preference: 'unknown' }, NOW)).ok).toBe(false)
   })
 
   it('preserves the inactive-account signal and writes nothing when deletion owns the fence', async () => {
@@ -107,7 +134,7 @@ describe('setInterviewDate', () => {
     )
 
     await expect(
-      setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW),
+      setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown', preference: 'unknown' }, NOW),
     ).rejects.toBeInstanceOf(MockJobsAccountInactiveError)
     expect(mockUpdateOne).not.toHaveBeenCalled()
   })

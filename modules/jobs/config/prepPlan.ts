@@ -9,14 +9,27 @@
  * exists.
  */
 
-/** CALENDAR days between two instants (UTC-truncated) — 'tomorrow' is 1
+const IST_OFFSET_MS = 330 * 60_000
+
+/** CALENDAR days between two instants (IST-truncated) — 'tomorrow' is 1
  *  from capture until it arrives, never decaying to 0 within 24h of the
  *  tap (Codex on #525: ms-floor math showed the interview-day plan an hour
  *  after choosing Tomorrow). Capture and render share this convention. */
 export function calendarDaysBetween(from: Date, to: Date): number {
-  const a = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate())
-  const b = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate())
+  const fromIst = new Date(from.getTime() + IST_OFFSET_MS)
+  const toIst = new Date(to.getTime() + IST_OFFSET_MS)
+  const a = Date.UTC(fromIst.getUTCFullYear(), fromIst.getUTCMonth(), fromIst.getUTCDate())
+  const b = Date.UTC(toIst.getUTCFullYear(), toIst.getUTCMonth(), toIst.getUTCDate())
   return Math.round((b - a) / (24 * 3600_000))
+}
+
+function istDateOnly(now: Date, dayOffset: number): Date {
+  const shifted = new Date(now.getTime() + IST_OFFSET_MS)
+  return new Date(Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate() + dayOffset,
+  ))
 }
 
 export interface PrepPlanSession {
@@ -36,7 +49,7 @@ export function buildPrepPlan(interviewDate: Date | null, now = new Date()): Pre
   if (!interviewDate) {
     return {
       mode: 'start-now',
-      headline: 'Date not locked yet — start now; every session counts as evidence.',
+      headline: 'Exact interview date not set — start with one job-specific practice session.',
       sessions: [{ label: 'Session 1 — start now', dayOffset: 0 }],
     }
   }
@@ -45,7 +58,7 @@ export function buildPrepPlan(interviewDate: Date | null, now = new Date()): Pre
     const midpoint = Math.floor(daysUntil / 2)
     return {
       mode: 'three-session',
-      headline: '3 mocks built from this JD — spaced to the interview.',
+      headline: '3 job-specific practice sessions — spaced before your saved interview date.',
       sessions: [
         { label: 'Session 1 — today', dayOffset: 0 },
         { label: 'Session 2 — midpoint', dayOffset: midpoint },
@@ -56,7 +69,7 @@ export function buildPrepPlan(interviewDate: Date | null, now = new Date()): Pre
   if (daysUntil >= 1) {
     return {
       mode: 'two-session',
-      headline: '2 focused mocks built from this JD — it’s close.',
+      headline: '2 job-specific practice sessions before your saved interview date.',
       sessions: [
         { label: 'Session 1 — today', dayOffset: 0 },
         { label: 'Session 2 — day before', dayOffset: Math.max(0, daysUntil - 1) },
@@ -70,22 +83,27 @@ export function buildPrepPlan(interviewDate: Date | null, now = new Date()): Pre
   }
 }
 
-/** Named sheet buttons → concrete capture (client passes the choice; the
- *  server owns date math so clocks can't disagree). */
+export type InterviewDatePreference = 'this-week' | 'next-week' | 'unknown'
+export type InterviewDateCapture = {
+  date: Date | null
+  confidence: 'exact' | 'week' | 'unknown'
+  preference?: InterviewDatePreference
+}
+
+/** Named sheet buttons → persisted capture. Week answers are preferences,
+ *  never synthetic event dates; only "tomorrow" supplies an exact date. */
 export function dateForChoice(
   choice: 'tomorrow' | 'this-week' | 'next-week' | 'not-sure',
   now = new Date()
-): { date: Date | null; confidence: 'exact' | 'week' | 'unknown' } {
-  const day = 24 * 3600_000
+): InterviewDateCapture {
   switch (choice) {
     case 'tomorrow':
-      return { date: new Date(now.getTime() + day), confidence: 'exact' }
+      return { date: istDateOnly(now, 1), confidence: 'exact' }
     case 'this-week':
-      return { date: new Date(now.getTime() + 3 * day), confidence: 'week' }
+      return { date: null, confidence: 'week', preference: 'this-week' }
     case 'next-week':
-      return { date: new Date(now.getTime() + 9 * day), confidence: 'week' }
+      return { date: null, confidence: 'week', preference: 'next-week' }
     case 'not-sure':
-      return { date: null, confidence: 'unknown' }
+      return { date: null, confidence: 'unknown', preference: 'unknown' }
   }
 }
-

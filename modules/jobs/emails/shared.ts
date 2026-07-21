@@ -6,8 +6,8 @@
  */
 
 export interface EmailFooterInput {
-  /** The TRUE trigger fact, already phrased ("you asked for tonight's
-   *  practice link for X" / "you set an interview date for X"). */
+  /** The TRUE trigger fact, already phrased ("you asked for a practice link
+   * for X" / "you set an interview date for X"). */
   whyLine: string
   unsubscribeStreamUrl: string
   unsubscribeAllUrl: string

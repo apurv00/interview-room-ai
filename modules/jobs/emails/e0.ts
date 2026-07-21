@@ -23,7 +23,7 @@ export function buildE0Email(input: E0Input): { subject: string; html: string } 
   </p>
   ${ctaButton(input.practiceUrl, 'Start the practice session')}
   <p style="font-size: 12px; color: #94a3b8; margin: 16px 0 0;">
-    Every scored session counts as evidence toward your readiness on this job.
+    Completed practice from this link stays with this tracked job.
   </p>`
   return { subject, html: renderShell(body, input.footer) }
 }

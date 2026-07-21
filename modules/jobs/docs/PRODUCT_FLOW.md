@@ -14,13 +14,13 @@
 STRANGER ─► /jobs feed ─► UPLOAD RESUME ─► confirm bar ─► ranked feed ─► job detail
  (anon,      (Tier-A       (or BUILD via     (editable      (fit bands       │
   public)     rank)         wizard, or        target role)    on parsed)     ▼
-                            3 questions)                             ┌── VERDICT chip ──┐
+                            one question)                            ┌── VERDICT chip ──┐
                                                                      ▼                  ▼
                                                               APPLY (link-out,    PREP (JD-seeded
                                                               5-tier ladder)      20-min mock)
                                                                      │                  │
-                                                         "Did you apply?" sheet   evidence tick
-                                                                     │             ("2/3 on this job")
+                                                         "Did you apply?" sheet   practice count
+                                                                     │             ("2/3 sessions")
                                                                      ▼                  │
                                                               TRACKER row ◄────────────┘
                                                                      │
@@ -34,9 +34,9 @@ STRANGER ─► /jobs feed ─► UPLOAD RESUME ─► confirm bar ─► ranked
 
 **Geo note (standing ruling #14):** the location capture accepts ANY location — never an India-metro dropdown. Covered geos get the ranked feed; uncovered geos get the honest empty state + tracker tail, and the entry itself is recorded as expansion telemetry. The core loop (Fit, readiness, practice, tracker, tailor) is fully geo-agnostic.
 
-**Stage 1 — Upload resume.** `/jobs/start` chooser: Upload / Build (wizard) / Import profile (authed) / 3 questions. Anon upload = client-side text extraction → `/api/resume/parse` (authOptional, 10/IP/day — verified), structure held in **sessionStorage** (dies with tab; stranger PII never persists server-side — the builder's stale-draft PII modal exists precisely because localStorage outlives strangers). All doors converge on the **confirm bar**: extracted facts read-only + **editable "Role you're targeting"** (resume = past, target = future; `interviewGoal: career_switch` exists). **[AMENDED]** The 3-questions path gets no resume-flavored reveal copy (its rank is effectively Tier-A + role filter — don't claim "sorted by your resume").
+**Stage 1 — Upload resume.** `/jobs/start` chooser: Upload / Build (wizard) / Import profile (authed) / one target-role question. Anon upload = client-side text extraction → `/api/resume/parse` (authOptional, 10/IP/day — verified), structure held in **sessionStorage** (dies with tab; stranger PII never persists server-side — the builder's stale-draft PII modal exists precisely because localStorage outlives strangers). All doors converge on the **confirm bar**: extracted facts read-only + **editable "Role you're targeting"** (resume = past, target = future; `interviewGoal: career_switch` exists). The one-question path gets no resume-flavored reveal copy (its rank is effectively Tier-A + role filter — don't claim "sorted by your resume").
 
-**Stage 2 — Build resume.** Signed-in: parsed upload auto-saves as **"Base Resume — {targetRole}"** (`preserveFullText: true`). At the 3/3 `MAX_RESUMES` cap (verified `resumeService.ts:6`; updates bypass the cap, `:111-119`): no auto-save, no block — extraction still feeds ranking, dismissible notice explains. Deterministic quick-wins engine (zero LLM) renders a non-blocking feed card → builder deep-link. Background one-shot ATS check via Inngest (the ~35s Sonnet `checkATS` never runs inline). **[AMENDED]** Freshers (54%, mostly resume-less): the Resume Wizard (`fresh_grad` segment) is a **primary door** with destination-honest copy ("you'll need a resume on Naukri anyway — build one in 10 minutes"), not just an apply-time fallback. Apply is never blocked on a missing resume.
+**Stage 2 — Build resume.** Signed-in: parsed upload auto-saves as **"Base Resume — {targetRole}"** (`preserveFullText: true`). At the 3/3 `MAX_RESUMES` cap (verified `resumeService.ts:6`; updates bypass the cap, `:111-119`): no auto-save, no block — extraction still feeds ranking, dismissible notice explains. Deterministic quick-wins engine (zero LLM) renders a non-blocking feed card → builder deep-link. Background one-shot ATS check via Inngest (the ~35s Sonnet `checkATS` never runs inline). Freshers (54%, mostly resume-less) get the Resume Wizard (`fresh_grad` segment) as a primary door with destination-honest copy: create a resume, then return to set the target role. No third-party requirement or completion-time promise is made. Apply is never blocked on a missing resume.
 
 **Stage 3 — Apply (sacred).** Link-out on the 5-tier ladder; `window.open` fires synchronously in the click handler (mobile popup blockers kill async opens). Nothing ever stands between intent and the employer's page. Details in §4b.
 
@@ -44,7 +44,7 @@ STRANGER ─► /jobs feed ─► UPLOAD RESUME ─► confirm bar ─► ranked
 
 **Generic Jobs fallback boundary.** When exact-job reuse cannot be verified, the destination is always `/interview/setup?jobsFallback=1`; the URL is authoritative even if browser storage is unavailable. The client reconstructs the parent candidate-owned resume from the stored session’s top-level document fields, then strips posting-derived JD/company/attribution/token context. Because the benchmark has changed, this path is presented as a **new general practice** and intentionally carries no retake parent or comparison lineage. The retained retake intent described above applies only to the verified exact-job path.
 
-**Stage 5 — Track → outcome → loop.** Return-sheet claims, 21d ghost prompt, interview inference at practice time, post-interview check-in. Every terminal outcome routes back to the feed ("keep prepping — 3 similar live jobs").
+**Stage 5 — Track → outcome → loop.** Return-sheet claims, 21d ghost prompt, interview inference at practice time, post-interview check-in. Terminal outcomes offer a neutral route back to the live feed without claiming similarity.
 
 ### Apply-then-prep vs prep-then-apply: the verdict chip
 
@@ -52,7 +52,7 @@ Deterministic (no LLM), recommends without gating. **Apply is never disabled; "n
 
 | Condition | Verdict |
 |---|---|
-| No readiness band / below confidence floor (launch majority) | "Apply now — prep while you wait." + evidence ticker 0/3 |
+| No readiness band / below confidence floor (launch majority) | Capability-aware Apply copy + "Job-specific practice completed: 0/3 sessions" |
 | Low band with evidence, posting open >7 days | "Worth 2 sessions first — open till {date}." *(Based on your 3 {domain} sessions)* |
 | Low band, closing ≤7d or unknown | "Apply now, then prep — closes {date}." |
 | Medium/High band | **[AMENDED]** "You're interview-ready in {domain}." (domain-scoped — never job-scoped until must-have attribution ships) |
@@ -68,8 +68,8 @@ Deterministic (no LLM), recommends without gating. **Apply is never disabled; "n
 |---|---|---|
 | `/jobs` | Public (deferred-auth block, `middleware.ts:143`) | Feed. Anon-no-resume → Tier-A + attach banner; anon-resume → stateless Tier-B; authed → fit bands on parsed jobs, verdict chips. Flags render as demotions, never hidden. |
 | `/jobs/start` | Public | Attach chooser → confirm bar. Authed users with base resume skip to confirm. |
-| `/jobs/[id]` | Public shell, authed body (Open Decision P-2) | Anon: title/company/tier badge/provenance + blurred X-ray → gate. Authed: lazy JD parse → Interview X-ray (must-haves), readiness band or evidence ticker, verdict chip, Apply block, Save, Tailor. `interview_scheduled` swaps to the exact-JD Prep Plan only when the signed Practice contract is ready; otherwise it preserves interview-date capture and routes truthfully to general setup without promising JD-built mocks. **[AMENDED]** Separate low-key "View full posting ↗" link so Apply clicks aren't polluted by read-intent. |
-| `/jobs/tracker` | Authed (client-side gate) | Single mobile-first list grouped by status with counts. Row: title, company, status chip, days-in-status, evidence ticker, [Practice] [View]. Chip-strip transitions + undo toast. Nudges render here (read-time derived). |
+| `/jobs/[id]` | Public shell, authed body (Open Decision P-2) | Anon: title/company/tier badge/provenance + blurred X-ray → gate. Authed: lazy JD parse → Interview X-ray (must-haves), verified job-specific practice count, verdict chip, Apply block, Save, Tailor. `interview_scheduled` uses exact dates for spaced plans and reminders; week choices remain preferences. Separate low-key "View full posting ↗" link keeps Apply clicks distinct from read intent. |
+| `/jobs/tracker` | Authed (client-side gate) | Single mobile-first list grouped by status with counts. Row: title, company, status chip, days-in-status, job-specific practice count, [Practice] [View]. Chip-strip transitions + undo toast. Nudges render here from recorded tracker state. |
 | `/jobs/[id]/prep` | Fast-follow | Phase 1 = panel on detail. |
 
 Nav: `{ href: '/jobs', label: 'Jobs' }` at index 1 in `NAV_LINKS` (`shared/layout/AppShell.tsx:19`). Resume surfaces: `/jobs/start` → `/resume/builder?return=…`; detail → `/resume/tailor?jobId=` (Phase 1, small additive page edit — the page is paste-only today, verified).
@@ -84,11 +84,12 @@ Nav: `{ href: '/jobs', label: 'Jobs' }` at index 1 in `NAV_LINKS` (`shared/layou
   statusHistory: [{ status, at, source: 'user'|'system' }],   // append-only
   appliedAt?, appliedWith?: { resumeId?, wasTailored, tailoredFromResumeId? },
   interviewDate?, interviewDateConfidence?: 'exact'|'week'|'unknown',
+  interviewDatePreference?: 'this-week'|'next-week'|'unknown',
   outcome: { passedScreen?, interviewRounds?, offerReceived?, lastAskedAt?, askCount },   // askCount = anti-nag budget
   tailoredVersion?: { sourceResumeId, tailoredText, structured?, matchScore, addedKeywords[], missingKeywords[], jdHash, createdAt },
   notes?, brokenLinkReports: [{ url, reportedAt }],
   practiceSessionIds: ObjectId[],               // all historical attendance
-  verifiedPracticeSessionIds: ObjectId[],       // signed handoff v1; evidence ticker only
+  verifiedPracticeSessionIds: ObjectId[],       // signed handoff v1; job-specific practice count
   readinessRevision: number,                    // CAS fence; evidence deletion invalidates stale snapshots
   readiness?: { handoffVersion: 1, band, sessions, practicedCount, mustHaveTotal, quality, strongCoverage, xrayHash, scoringEpoch, at },
   ghostSuggestedAt?
@@ -135,10 +136,10 @@ Tier-honest button subtitles ("Opens {company}'s application form" / "Opens on {
 
 **Return-to-tab sheet** (`visibilitychange→visible` ≥20s after click, armed 45 min; <20s leads with "That was quick — did the link work?"): **[✓ Yes, applied] [Not yet] [⚠ Link didn't work]**. Yes → `applied`. Not yet → "Want an edge first?" → tailor CTA (highest-intent tailoring moment) — **[AMENDED]** this branch forks on resume existence → wizard CTA for the resume-less majority. Link didn't work → demote dead option, offer the next ladder rung instantly ("Try this instead: Apply on {company}'s careers page"); no rung left → "This posting's links have gone stale. [Mark as closed] [Keep saved]." One user's dead click heals the link for everyone.
 
-**Anti-nag budget:** return-sheet = ask #1; **[AMENDED]** ask #2 = in-app next-visit confirm card at top of feed/tracker ("You clicked {Company} yesterday — did you apply?") since the email digest is fast-follow and Android app deep-links (Naukri/apna open in native apps) mean the return-sheet often never fires; after that the row reads "Clicked · not confirmed" forever, one tap to flip. Re-baseline the confirm-rate threshold after 2 weeks of measured channel loss.
+**Anti-nag budget:** return-sheet = ask #1; ask #2 = in-app next-visit confirm card at top of feed/tracker ("You clicked {Company} {derived age} — did you apply?"). The age is derived from the recorded click and never collapses the full seven-day eligibility window into “yesterday.” After that the row reads "Clicked · not confirmed" forever, one tap to flip.
 
 ### 4c. `interview_scheduled` → prep plan (the peak moment)
-Two doors: tracker chip, and **the inference** — launching practice on an `applied` job asks one tap ("Prepping for a real interview at {Company}? [Yes — it's scheduled] [Just practicing]"), never delaying the session; date capture waits for the feedback page. The sheet: "🎙 You got the interview. Let's make sure you're ready. When is it? [Tomorrow] [This week] [Next week] [Pick a date] [Not sure yet]." The plan is instant and deterministic: ≥3 days → 3 sessions (today / midpoint / day-before); ≤2 days → two focused sessions; unsure → start now. **[AMENDED]** Phase-1 copy = "3 mocks built from this JD" — NO per-session must-have tags until a focus channel exists (`InterviewConfig` carries only raw `jobDescription`; generate-question's JD targeting is global; cheapest zero-hot-path option later: prepend a FOCUS header into the jobDescription text). **[AMENDED]** Unify on ONE persisted JD parse passed through the hand-off — session-create already parses `config.jobDescription` independently; two parsers on the same JD = double spend + visible disagreement between the X-ray and the interviewer. Deferred CTA is load-bearing: "Email me tonight's practice link" (voice mock needs a mic + quiet room; interview news arrives on a phone). Evidence line always visible: "Evidence toward Readiness on this job: 1/3 sessions." T-1 reminder skipped if a session happened in the last 24h. Post-date check-in leads with the outcome ask only ("How did the {Company} interview go?"); "Advanced" → `interviewRounds++` + new-date capture (multi-round is the Indian norm).
+Two doors: tracker chip, and **the inference** — launching practice on an `applied` job asks one tap ("Prepping for a real interview at {Company}? [Yes — it's scheduled] [Just practicing]"), never delaying the session; date capture waits for the feedback page. The sheet distinguishes exact dates from preferences: Tomorrow or an explicit date writes `interviewDate`; This week / Next week writes only `interviewDatePreference`; Not sure leaves the exact date unset. Only an exact date produces a spaced plan and T-1 reminder. The visible counter is attendance truth — "Job-specific practice completed: 1/3 sessions" — not readiness evidence or cross-job transfer. The deferred CTA is "Email me this practice link" and success means only "Request received." T-1 skips the warm-up CTA only after a verified completed job-specific session in the last 24h.
 
 ---
 
@@ -194,7 +195,7 @@ Every readout segmented **fresher (0–2) vs professional — never blended**; a
 | Applied → outcome reported ≤30d | ≥25% | <10% |
 | W1 return | ≥35% | <15% |
 
-Guardrails: verdict-rule-3 fire rate (never fires by wk 3 → readiness data isn't accruing) · % practicing users at 3/3 evidence on ≥1 job in 14d (re-derive per quota decision) · broken-link rate by tier (feeds ingestion QA) · JD-parse cost/user.
+Guardrails: verdict-rule-3 fire rate (never fires by wk 3 → readiness data isn't accruing) · % practicing users with 3/3 verified job-specific sessions on ≥1 job in 14d (re-derive per quota decision) · broken-link rate by tier (feeds ingestion QA) · JD-parse cost/user.
 
 **The three 60-day verdict numbers:** (1) save→practice ≥30%; (2) apply-clicked→confirmed ≥60% with absolute confirmed-applies growing week-over-week; (3) interview_scheduled absolute count with ≥half arriving via the practice-inference channel.
 

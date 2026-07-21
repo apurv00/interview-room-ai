@@ -20,4 +20,12 @@ describe('JobApplication tracker sweep index', () => {
       },
     ])
   })
+
+  it('stores coarse interview timing separately from an exact date', () => {
+    const path = JobApplication.schema.path('interviewDatePreference') as unknown as {
+      options: { enum: string[] }
+    }
+
+    expect(path.options.enum).toEqual(['this-week', 'next-week', 'unknown'])
+  })
 })

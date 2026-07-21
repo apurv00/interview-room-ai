@@ -6,6 +6,7 @@ import mongoose from 'mongoose'
 import { dateForChoice, setInterviewDate } from '@jobs'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
+import type { InterviewDateCapture } from '@jobs/config/prepPlan'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,13 +27,22 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
-  let capture: { date: Date | null; confidence: 'exact' | 'week' | 'unknown' } | null = null
+  let capture: InterviewDateCapture | null = null
   try {
     const body = await req.json()
     if (['tomorrow', 'this-week', 'next-week', 'not-sure'].includes(body?.choice)) {
       capture = dateForChoice(body.choice)
-    } else if (typeof body?.date === 'string' && !Number.isNaN(Date.parse(body.date))) {
-      capture = { date: new Date(body.date), confidence: 'exact' }
+    } else if (typeof body?.date === 'string') {
+      // The control submits a calendar date, not an instant. Reject permissive
+      // Date.parse inputs (timestamps and normalized impossible dates) so an
+      // API caller cannot manufacture timing precision the user did not set.
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(body.date)
+      if (match) {
+        const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
+        if (date.toISOString().slice(0, 10) === body.date) {
+          capture = { date, confidence: 'exact' }
+        }
+      }
     }
   } catch { /* fallthrough */ }
   if (!capture) return NextResponse.json({ error: 'choice or date required' }, { status: 400 })

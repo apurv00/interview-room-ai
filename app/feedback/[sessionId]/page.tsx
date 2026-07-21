@@ -57,6 +57,7 @@ import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner
 import { usePathwayGenerationPoll } from '@learn/hooks/usePathwayGenerationPoll'
 import { clearAllInterviewStorage, STORAGE_KEYS } from '@shared/storageKeys'
 import JobsCountLink from '@jobs/components/JobsCountLink'
+import { practiceProgressLabel } from '@jobs/config/truthfulLabels'
 import {
   persistGenericRetakeConfig,
   planRetakeNavigation,
@@ -223,7 +224,7 @@ function JobsBridge({
     <a href={`/jobs/${bridge.jobId}`} className="mt-1 inline-block text-sm text-blue-600 hover:underline">
       ← Back to {bridge.company || 'the job'}
       {typeof bridge.evidence === 'number' && (
-        <span className="ml-2 text-xs text-gray-500">Evidence toward readiness on this job: {bridge.evidence}/3</span>
+        <span className="ml-2 text-xs text-gray-500">{practiceProgressLabel(bridge.evidence)}</span>
       )}
     </a>
   )

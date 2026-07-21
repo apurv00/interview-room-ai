@@ -229,10 +229,37 @@ describe('Job detail Practice readiness', () => {
     })
 
     render(<JobDetailPage params={{ id: JOB_ID }} />)
-    fireEvent.click(await screen.findByRole('button', { name: /Email me tonight.s practice link/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /Email me this practice link/i }))
 
     expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
     expect(screen.queryByText(/Email links aren.t available yet/i)).toBeNull()
+  })
+
+  it('acknowledges only the deferred-email request, without inventing delivery timing', async () => {
+    const interviewDetail = {
+      ...BASE_DETAIL,
+      capabilities: { ...BASE_DETAIL.capabilities, xray: false, practice: true },
+      practiceRole: 'frontend',
+      practiceHandoffToken: 'server-signed-token',
+      application: {
+        applicationId: 'app1',
+        status: 'interview_scheduled',
+        practiceCount: 1,
+        ats: { state: 'none' as const },
+      },
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(interviewDetail)
+      if (url.endsWith('/practice-link-email')) return jsonResponse({ ok: true })
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Email me this practice link/i }))
+
+    expect(await screen.findByText('Request received — check your inbox.')).toBeTruthy()
+    expect(screen.queryByText(/sent|this evening|tonight/i)).toBeNull()
   })
 
   it.each([
@@ -735,7 +762,8 @@ describe('Job detail Practice readiness', () => {
 
       render(<JobDetailPage params={{ id: JOB_ID }} />)
 
-      expect(await screen.findByText('Interview status and date saved.')).toBeTruthy()
+      expect(await screen.findByText('Interview status saved.')).toBeTruthy()
+      expect(screen.getByText(/Interview date:/)).toBeTruthy()
       expect(screen.getByRole('link', { name: 'Open general interview setup' })).toHaveAttribute('href', '/interview/setup?jobsFallback=1')
       expect(screen.queryByText(/mocks built from this JD/i)).toBeNull()
       expect(screen.queryByText(/Let.s make sure you.re ready/i)).toBeNull()
@@ -773,6 +801,13 @@ describe('Job detail Practice readiness', () => {
         method: 'POST',
         body: JSON.stringify({ choice: 'tomorrow' }),
       }),
+    ))
+
+    fireEvent.change(screen.getByLabelText('Exact interview date'), { target: { value: '2026-08-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save exact date' }))
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith(
+      `/api/jobs/${JOB_ID}/interview-date`,
+      expect.objectContaining({ body: JSON.stringify({ date: '2026-08-01' }) }),
     ))
   })
 

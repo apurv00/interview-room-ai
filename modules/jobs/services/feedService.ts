@@ -291,6 +291,7 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
     practiceCount: number
     interviewDate?: string
     interviewDateConfidence?: 'exact' | 'week' | 'unknown'
+    interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[]; checkedAt?: string }
   } | null
 }
@@ -327,7 +328,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
   if (!doc) {
     if (!userId) return null
     const snapshotApp = await JobApplication.findOne({ userId, jobPostingId: id })
-      .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt')
+      .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference atsResult atsRequestedAt')
       .lean()
     if (!snapshotApp) return null
     const snapshotLocation = snapshotApp.jobSnapshot?.location?.trim() ?? ''
@@ -354,6 +355,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
         status: snapshotApp.status,
         interviewDate: snapshotApp.interviewDate ? new Date(snapshotApp.interviewDate).toISOString() : undefined,
         interviewDateConfidence: snapshotApp.interviewDateConfidence,
+        interviewDatePreference: snapshotApp.interviewDatePreference,
         practiceCount: Math.min(3, snapshotApp.verifiedPracticeSessionIds?.length ?? 0),
         ats: snapshotApp.atsResult
           ? {
@@ -378,7 +380,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
       ? { ...shellOf(doc as IJobPosting), gated: true }
       : null
   }
-  let app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence atsResult atsRequestedAt').lean()
+  let app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference atsResult atsRequestedAt').lean()
   if (doc.status === 'closed' && !app) return null
 
   const postingState = jobPostingStateOf(doc as IJobPosting)
@@ -482,6 +484,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
           status: app.status,
           interviewDate: app.interviewDate ? new Date(app.interviewDate).toISOString() : undefined,
           interviewDateConfidence: app.interviewDateConfidence,
+          interviewDatePreference: app.interviewDatePreference,
           practiceCount: Math.min(3, app.verifiedPracticeSessionIds?.length ?? 0),
           ats: postingState === 'restricted' && app.atsResult
             ? { state: 'done' as const, checkedAt: new Date(app.atsResult.checkedAt).toISOString() }

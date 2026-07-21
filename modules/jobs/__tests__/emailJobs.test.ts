@@ -72,10 +72,11 @@ vi.mock('@shared/db/models', () => ({
   ProductEvent: { create: vi.fn().mockResolvedValue({}) },
 }))
 
-import { isInSendWindow, nextSendSlot, e2SendInstant, istCalendarDaysBetween } from '../config/emailTiming'
+import { isInSendWindow, nextSendSlot, e2SendInstant, istCalendarDaysBetween, istDateKey } from '../config/emailTiming'
 import { BANNED_SUBJECT_PATTERNS } from '../emails/shared'
 import { buildE0Email } from '../emails/e0'
 import { buildE2Email } from '../emails/e2'
+import { buildE1Email, buildE4Email } from '../emails/e1'
 import { sendTransactional, isSuppressed } from '../services/emailSendService'
 import { runE0Handler, runEmailSweepHandler } from '../jobs/emailJobs'
 
@@ -137,35 +138,18 @@ describe('emailTiming (IST, fixed offset)', () => {
   it('e2SendInstant exact: T-1 09:00 IST; never after the interview day ends', () => {
     const interview = new Date('2026-07-22T00:00:00Z') // IST July 22
     const now = new Date('2026-07-20T00:00:00Z')
-    expect(e2SendInstant(interview, 'exact', now)!.toISOString()).toBe('2026-07-21T03:30:00.000Z') // Jul 21 09:00 IST
+    expect(e2SendInstant(interview, now)!.toISOString()).toBe('2026-07-21T03:30:00.000Z') // Jul 21 09:00 IST
     // Past the interview day's end → null
-    expect(e2SendInstant(interview, 'exact', new Date('2026-07-23T00:00:00Z'))).toBeNull()
-  })
-
-  it('e2SendInstant week: Monday 09:00 IST; late-armed → STABLE most-recent 09:00 (Codex #532); week over → never', () => {
-    const interview = new Date('2026-07-23T00:00:00Z') // Thursday IST
-    // Armed the prior week → Monday Jul 20 09:00 IST (03:30 UTC)
-    expect(e2SendInstant(interview, 'week', new Date('2026-07-18T00:00:00Z'))!.toISOString()).toBe('2026-07-20T03:30:00.000Z')
-    // Monday passed, derived Wednesday 14:00 IST → most recent 09:00 =
-    // Wednesday 03:30Z — ALREADY DUE, so the next in-window sweep sends.
-    expect(e2SendInstant(interview, 'week', new Date('2026-07-22T08:30:00Z'))!.toISOString()).toBe('2026-07-22T03:30:00.000Z')
-    // Tuesday 03:00 IST (hour<9) → most recent 09:00 = Monday 03:30Z.
-    expect(e2SendInstant(interview, 'week', new Date('2026-07-20T21:30:00Z'))!.toISOString()).toBe('2026-07-20T03:30:00.000Z')
-    // Week has passed → null
-    expect(e2SendInstant(interview, 'week', new Date('2026-07-27T00:00:00Z'))).toBeNull()
-  })
-
-  it('the week due instant does NOT move between hourly sweeps — reminders actually fire (Codex #532)', () => {
-    const interview = new Date('2026-07-23T00:00:00Z') // Thursday IST
-    const sweep1 = e2SendInstant(interview, 'week', new Date('2026-07-21T04:05:00Z'))! // Tue 09:35 IST
-    const sweep2 = e2SendInstant(interview, 'week', new Date('2026-07-21T05:05:00Z'))! // Tue 10:35 IST
-    expect(sweep1.toISOString()).toBe(sweep2.toISOString())
-    expect(sweep1.getTime()).toBeLessThanOrEqual(new Date('2026-07-21T04:05:00Z').getTime())
+    expect(e2SendInstant(interview, new Date('2026-07-23T00:00:00Z'))).toBeNull()
   })
 
   it('istCalendarDaysBetween counts IST calendar days', () => {
     // 23:30 IST → 00:30 IST next day = 1 calendar day apart
     expect(istCalendarDaysBetween(new Date('2026-07-20T18:00:00Z'), new Date('2026-07-20T19:00:00Z'))).toBe(1)
+  })
+
+  it('istDateKey does not use the previous UTC date after IST midnight', () => {
+    expect(istDateKey(new Date('2026-07-20T19:00:00.000Z'))).toBe('2026-07-21')
   })
 })
 
@@ -212,6 +196,29 @@ describe('templates', () => {
   it('templates escape user-influenced strings', () => {
     const { html } = buildE0Email({ company: '<script>alert(1)</script>', jobTitle: 'X', practiceUrl: 'https://x/p', footer })
     expect(html).not.toContain('<script>')
+  })
+
+  it('E1 describes tracker-mark time and E4 makes no unsupported response-speed claim', () => {
+    const e1 = buildE1Email({
+      rows: [{
+        company: 'Acme',
+        jobTitle: 'Engineer',
+        markedAppliedAgoDays: 14,
+        interviewUrl: 'https://x/interview',
+        rejectedUrl: 'https://x/rejected',
+        nothingYetUrl: 'https://x/waiting',
+      }],
+      trackerUrl: 'https://x/tracker',
+      footer,
+    })
+    expect(e1.html).toContain('You marked this applied 14 days ago.')
+    expect(e1.html).not.toContain('You applied 14 days ago.')
+
+    const e4 = buildE4Email({
+      company: 'Acme', jobTitle: 'Engineer', practiceUrl: 'https://x/practice', intent: 'applied', footer,
+    })
+    expect(e4.html).not.toMatch(/usually comes fast|evidence toward your readiness/i)
+    expect(e4.html).toContain('completed practice stays with this tracked job')
   })
 })
 
@@ -597,7 +604,7 @@ describe('runEmailSweepHandler', () => {
   const appRow = (over: Record<string, unknown> = {}) => ({
     _id: 'app1', userId: 'u1', jobPostingId: 'j1',
     interviewDate: new Date('2026-07-22T00:00:00Z'), // IST Jul 22 — T-1 is today
-    interviewDateConfidence: 'exact', practiceSessionIds: [],
+    interviewDateConfidence: 'exact', verifiedPracticeSessionIds: [],
     jobSnapshot: { title: 'Saved Backend Engineer', company: 'Saved Acme' },
     ...over,
   })
@@ -632,13 +639,49 @@ describe('runEmailSweepHandler', () => {
     mockAppFind.mockImplementation(findChain([appRow()]))
     const r = await runEmailSweepHandler(step)
     expect(r).toMatchObject({ e2Sent: 1 })
-    expect(mockSendUpdateOne.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-22')
+    expect(mockSendUpdateOne.mock.calls[0][0].dedupeKey).toBe('app1:v2:2026-07-22')
+  })
+
+  it('honors a legacy UTC ledger key when the same exact date has a different IST day', async () => {
+    // 19:00 UTC is 00:30 IST the next day. Pre-A07 burned Jul 21; the
+    // corrected date identity is Jul 22 and must not create a second send.
+    mockAppFind.mockImplementation(findChain([appRow({
+      interviewDate: new Date('2026-07-21T19:00:00.000Z'),
+    })]))
+    mockSendFindOne.mockImplementation((query: { dedupeKey?: unknown }) => (
+      lean(query.dedupeKey === 'app1:2026-07-21'
+        ? { dedupeKey: query.dedupeKey, sentAt: new Date() }
+        : null)
+    ))
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
+    expect(mockSendFindOne).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'u1',
+      stream: 'e2',
+      dedupeKey: 'app1:2026-07-21',
+    }))
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendUpdateOne).not.toHaveBeenCalled()
   })
 
   it("candidate query is scoped to status 'interview_scheduled' — a corrected row's stale date never reminds (Codex #532)", async () => {
     mockAppFind.mockImplementation(findChain([appRow()]))
     await runEmailSweepHandler(step)
     expect(mockAppFind.mock.calls[0][0].status).toBe('interview_scheduled')
+    expect(mockAppFind.mock.calls[0][0].interviewDateConfidence).toBe('exact')
+  })
+
+  it('labels a within-window interview-day recovery as today, never tomorrow', async () => {
+    vi.setSystemTime(new Date('2026-07-21T02:45:00.000Z')) // 08:15 IST, <24h after T-1 send instant
+    mockAppFind.mockImplementation(findChain([appRow({
+      interviewDate: new Date('2026-07-21T00:00:00.000Z'),
+    })]))
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 1 })
+    const email = mockSendEmail.mock.calls[0][0] as { subject: string; html: string }
+    expect(email.subject).toContain('interview is today')
+    expect(email.html).not.toContain('Tomorrow-you')
+    expect(mockSendUpdateOne.mock.calls[0][0].dedupeKey).toBe('app1:v2:2026-07-21')
   })
 
   it('not-yet-due candidates are filtered (send instant in the future)', async () => {
@@ -671,13 +714,18 @@ describe('runEmailSweepHandler', () => {
 
   it('past the 24h send window: a recorded reminder is silent, a MISSING ledger row alerts and never auto-sends (Codex #532)', async () => {
     // Interview today (Jul 21 IST): T-1 instant was Jul 20 03:30Z — 24.5h ago.
-    const stale = appRow({ interviewDate: new Date('2026-07-21T00:00:00Z') })
+    // The retained 19:00Z clock also proves the rollout lookup accepts the
+    // pre-A07 UTC key (Jul 20) alongside the v2 IST key (Jul 21).
+    const stale = appRow({ interviewDate: new Date('2026-07-20T19:00:00Z') })
     mockAppFind.mockImplementation(findChain([stale]))
     // Ledger row present → common case: sent yesterday, nothing to do.
-    mockSendFindOne.mockReturnValue(lean({ dedupeKey: 'app1:2026-07-21', sentAt: new Date() }))
+    mockSendFindOne.mockReturnValue(lean({ dedupeKey: 'app1:2026-07-20', sentAt: new Date() }))
     expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
     expect(mockSendEmail).not.toHaveBeenCalled()
     expect(mockLoggerError).not.toHaveBeenCalled()
+    expect(mockSendFindOne).toHaveBeenCalledWith(expect.objectContaining({
+      dedupeKey: { $in: ['app1:v2:2026-07-21', 'app1:2026-07-20'] },
+    }))
 
     // Ledger row MISSING → crash-recovery case: alert, refuse to send.
     vi.clearAllMocks()
@@ -693,12 +741,32 @@ describe('runEmailSweepHandler', () => {
   })
 
   it('a practice session in the last 24h switches to the logistics-only variant (R10)', async () => {
-    mockAppFind.mockImplementation(findChain([appRow({ practiceSessionIds: ['s1'] })]))
+    mockAppFind.mockImplementation(findChain([appRow({ verifiedPracticeSessionIds: ['s1'] })]))
     mockSessionExists.mockResolvedValue({ _id: 's1' })
     await runEmailSweepHandler(step)
     const html = mockSendEmail.mock.calls[0][0].html as string
     expect(html).not.toContain('practice=1') // no warm-up CTA
     expect(html).toContain('prep=1')
+    expect(mockSessionExists).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'completed',
+      completedAt: { $gte: expect.any(Date), $lte: NOW_IN_WINDOW },
+    }))
+  })
+
+  it('does not call a future completedAt recent practice', async () => {
+    mockAppFind.mockImplementation(findChain([appRow({ verifiedPracticeSessionIds: ['s1'] })]))
+    const futureCompletedAt = new Date(NOW_IN_WINDOW.getTime() + 3600_000)
+    mockSessionExists.mockImplementation((query: { completedAt?: { $lte?: Date } }) => (
+      Promise.resolve(!query.completedAt?.$lte || futureCompletedAt <= query.completedAt.$lte
+        ? { _id: 's1' }
+        : null)
+    ))
+
+    await runEmailSweepHandler(step)
+
+    const html = mockSendEmail.mock.calls[0][0].html as string
+    expect(html).toContain('practice=1')
+    expect(html).not.toContain('You practiced recently')
   })
 
   it('keeps E2 transactional but removes exact-job CTAs for restricted or no-longer-ready context', async () => {

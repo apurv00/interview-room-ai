@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { JOB_DOMAIN_IDS } from '@jobs/config/domains'
+import { JOB_TARGET_QUESTION_CTA, postedAgeLabel } from '@jobs/config/truthfulLabels'
 import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 /**
@@ -52,15 +53,6 @@ const TIER_BADGE: Record<string, string> = {
   'aggregator-deep': 'Via job board',
   'platform-funnel': 'Via platform',
   'aggregator-redirect': 'Redirect link',
-}
-
-function daysAgo(iso?: string): string | null {
-  if (!iso) return null
-  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
-  if (d <= 0) return 'Today'
-  if (d === 1) return 'Yesterday'
-  if (d > 30) return null
-  return `${d}d ago`
 }
 
 function JobsFeed() {
@@ -172,8 +164,8 @@ function JobsFeed() {
     }).catch(() => {})
   }, [page, domain, target, targetLoaded, feedRevision])
 
-  // Reveal honesty (§4a): name the evidence ONLY when matched skills exist;
-  // the 3-questions path never gets resume-flavored copy.
+  // Reveal honesty (§4a): name resume signals only when matched skills exist;
+  // the role-question path never gets resume-flavored copy.
   const revealSkills = Array.from(new Set((data?.cards ?? []).flatMap((c) => c.matchedSkills ?? []))).slice(0, 3)
   const revealLine = !target
     ? null
@@ -220,7 +212,7 @@ function JobsFeed() {
               Attach or build
             </Link>
             <Link href="/jobs/start" className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
-              Answer 3 questions
+              {JOB_TARGET_QUESTION_CTA}
             </Link>
           </div>
         </div>
@@ -229,7 +221,7 @@ function JobsFeed() {
       {quickWins && quickWins.count >= 2 && !winsDismissed && (
         <div className="mt-4 flex items-start justify-between rounded-xl border border-slate-200 p-3 text-sm bg-white">
           <p>
-            Resume: <span className="font-medium">{quickWins.count} quick wins</span> — small fixes, better matches.{' '}
+            Resume: <span className="font-medium">{quickWins.count} quick wins</span> — small fixes identified from your resume.{' '}
             <Link href={`/resume/builder${quickWins.resumeId ? `?id=${quickWins.resumeId}` : ''}`} className="text-blue-600 underline">Fix in builder</Link>
           </p>
           <button onClick={dismissWins} aria-label="Dismiss" className="ml-3 text-slate-500 hover:text-slate-600">✕</button>
@@ -251,10 +243,9 @@ function JobsFeed() {
 
       {data && data.cards.length === 0 && (
         <div className="mt-8 rounded-xl border border-slate-200 border-dashed p-6 bg-white">
-          <p className="font-medium">Your feed is warming up.</p>
+          <p className="font-medium">No live postings found for this view.</p>
           <p className="mt-1 text-sm text-slate-500">
-            Fresh postings are being gathered
-            {domain ? ` — nothing live in ${domain} right now` : ''}. Check back soon.
+            {domain ? `There are no live ${domain} listings in the current feed.` : 'Try again later or update your target.'}
           </p>
         </div>
       )}
@@ -268,7 +259,7 @@ function JobsFeed() {
             >
               <div className="flex items-baseline justify-between gap-3">
                 <span className="font-medium">{c.title}</span>
-                {daysAgo(c.postedAt) && <span className="shrink-0 text-xs text-slate-500">{daysAgo(c.postedAt)}</span>}
+                {postedAgeLabel(c.postedAt) && <span className="shrink-0 text-xs text-slate-500">{postedAgeLabel(c.postedAt)}</span>}
               </div>
               <div className="mt-1 text-sm text-slate-500">
                 {c.company}
@@ -284,9 +275,7 @@ function JobsFeed() {
                   <span className="rounded-full border border-blue-300 px-2 py-0.5 text-blue-700 bg-white">
                     Matches your resume: {c.matchedSkills.slice(0, 2).join(', ')}
                   </span>
-                ) : (
-                  <span className="rounded-full border border-slate-200 px-2 py-0.5 text-slate-500 bg-white">Recently posted</span>
-                )}
+                ) : null}
               </div>
             </Link>
           </li>

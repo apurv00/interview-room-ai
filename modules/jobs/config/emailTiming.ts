@@ -3,8 +3,8 @@
  * with no DST, so all helpers are fixed-offset arithmetic on UTC
  * timestamps; no Intl, no environment timezone.
  *
- * Send window: 08:00–21:00 IST. E2 anchors: T-1 09:00 IST for exact dates,
- * Monday 09:00 IST of the interview week for week-confidence dates.
+ * Send window: 08:00–21:00 IST. E2 anchors at 09:00 IST on the day before
+ * an exact user-supplied interview date. Week preferences never schedule.
  */
 
 const IST_OFFSET_MS = 330 * 60_000 // +5:30
@@ -49,40 +49,25 @@ export function istCalendarDaysBetween(a: Date, b: Date): number {
   return Math.round((Date.UTC(pb.y, pb.m, pb.d) - Date.UTC(pa.y, pa.m, pa.d)) / 86_400_000)
 }
 
+/** Stable IST calendar key for date-only identity and display calculations. */
+export function istDateKey(value: Date): string {
+  const p = istParts(value)
+  return `${p.y}-${String(p.m + 1).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`
+}
+
 /**
- * E2 send instant for an interview date (EMAILS.md §1):
- * - exact  → 09:00 IST the day BEFORE the interview's IST calendar day
- * - week   → Monday 09:00 IST of the interview's IST week; if that has
- *            already passed when armed, the next 09:00 IST slot; if the
- *            whole week has passed, never (null)  [R14]
- * Returns null when no send should happen (too late).
+ * E2 send instant: 09:00 IST the day before an exact interview date.
+ * Returns null once the interview day has ended.
  */
 export function e2SendInstant(
   interviewDate: Date,
-  confidence: 'exact' | 'week',
   now: Date
 ): Date | null {
   const iv = istParts(interviewDate)
-  if (confidence === 'exact') {
-    const sendAt = istInstant(iv.y, iv.m, iv.d - 1, 9)
-    // The reminder must land BEFORE the interview day ends; past that it
-    // is noise about an event that happened.
-    const interviewDayEnd = istInstant(iv.y, iv.m, iv.d, 21)
-    if (now.getTime() > interviewDayEnd.getTime()) return null
-    return sendAt
-  }
-  // week confidence: Monday of the interview's IST week (weekday 1).
-  const daysSinceMonday = (iv.weekday + 6) % 7
-  const monday = istInstant(iv.y, iv.m, iv.d - daysSinceMonday, 9)
-  const weekEnd = istInstant(iv.y, iv.m, iv.d - daysSinceMonday + 7, 0)
-  if (now.getTime() >= weekEnd.getTime()) return null // week over — never [R14]
-  if (now.getTime() <= monday.getTime()) return monday
-  // Late-armed (Monday 09:00 already passed): the due instant must be
-  // STABLE across hourly sweeps (Codex #532 — 'next 09:00 from now' moves
-  // with every derivation, so the sweep's at<=now filter chased a forever-
-  // future instant and week reminders never fired). Most recent 09:00 IST
-  // ≤ now: the first in-window sweep sends promptly — R14's 'next
-  // quiet-hours-valid slot' — and the ledger dedupes every later sweep.
-  const p = istParts(now)
-  return p.hour >= 9 ? istInstant(p.y, p.m, p.d, 9) : istInstant(p.y, p.m, p.d - 1, 9)
+  const sendAt = istInstant(iv.y, iv.m, iv.d - 1, 9)
+  // The reminder must land before the interview day ends; past that it is
+  // noise about an event that happened.
+  const interviewDayEnd = istInstant(iv.y, iv.m, iv.d, 21)
+  if (now.getTime() > interviewDayEnd.getTime()) return null
+  return sendAt
 }

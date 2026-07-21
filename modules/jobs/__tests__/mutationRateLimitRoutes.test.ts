@@ -202,3 +202,37 @@ describe('Jobs inactive-account HTTP contract', () => {
     expect(mockIsJobsAccountActive).toHaveBeenCalledOnce()
   })
 })
+
+describe('Interview-date calendar input', () => {
+  beforeEach(() => {
+    mockCheckJobsRateLimit.mockResolvedValue(null)
+    mockConnectDB.mockResolvedValue(undefined)
+    mockSetInterviewDate.mockResolvedValue({ ok: true, daysUntil: 8 })
+  })
+
+  it('accepts only a real YYYY-MM-DD calendar date', async () => {
+    mockRequestJson.mockResolvedValue({ date: '2026-07-30' })
+
+    const response = await postInterviewDate(request, { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(200)
+    expect(mockSetInterviewDate).toHaveBeenCalledWith(
+      USER_ID,
+      JOB_ID,
+      { date: new Date('2026-07-30T00:00:00.000Z'), confidence: 'exact' },
+    )
+  })
+
+  it.each(['2026-02-31', '2026-07-30T14:00:00.000Z', 'July 30, 2026'])(
+    'rejects non-calendar precision: %s',
+    async (date) => {
+      mockRequestJson.mockResolvedValue({ date })
+
+      const response = await postInterviewDate(request, { params: { id: JOB_ID } })
+
+      expect(response.status).toBe(400)
+      expect(mockSetInterviewDate).not.toHaveBeenCalled()
+      expect(mockConnectDB).not.toHaveBeenCalled()
+    },
+  )
+})

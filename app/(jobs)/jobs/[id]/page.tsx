@@ -6,6 +6,11 @@ import Link from 'next/link'
 import { clearAllInterviewStorage, STORAGE_KEYS } from '@shared/storageKeys'
 import { INTERVIEW_TARGET_COMPANY_MAX_CHARS } from '@shared/interviewContract'
 import { buildPrepPlan } from '@jobs/config/prepPlan'
+import {
+  interviewDateLabel,
+  practiceProgressLabel,
+} from '@jobs/config/truthfulLabels'
+import InterviewDateControls, { type InterviewDateRequest } from '@jobs/components/InterviewDateControls'
 import AuthGateModal from '@shared/ui/AuthGateModal'
 import { retakeParentFromSearch } from '@interview/utils/retakeNavigation'
 
@@ -53,6 +58,7 @@ interface Detail {
     practiceCount: number
     interviewDate?: string
     interviewDateConfidence?: 'exact' | 'week' | 'unknown'
+    interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[] }
   } | null
 }
@@ -114,7 +120,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [atsHint, setAtsHint] = useState<string | null>(null)
   const [sheet, setSheet] = useState<null | { kind: 'normal' | 'quick'; clicked: ApplyOption; elapsedMs: number }>(null)
   const [inference, setInference] = useState<'idle' | 'asking'>('idle')
-  const [practiceEmail, setPracticeEmail] = useState<'idle' | 'sent' | 'email-off' | 'unavailable'>('idle')
+  const [practiceEmail, setPracticeEmail] = useState<'idle' | 'requested' | 'email-off' | 'unavailable'>('idle')
   const [practiceStart, setPracticeStart] = useState<'idle' | 'loading' | 'error'>('idle')
   const [sheetDone, setSheetDone] = useState<string | null>(null)
   const [retakeParentId, setRetakeParentId] = useState<string | null>(null)
@@ -439,18 +445,19 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     onPractice()
   }
 
-  async function captureDate(choice: string) {
+  async function captureDate(request: InterviewDateRequest) {
     if (accountUnavailableRef.current) return
     const response = await fetch(`/api/jobs/${params.id}/interview-date`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ choice }),
+      body: JSON.stringify(request),
     }).catch(() => null)
     if (response && await isAccountUnavailableResponse(response)) {
       scrubAccountBoundState()
       return
     }
     if (accountUnavailableRef.current) return
+    if (!response?.ok) throw new Error('interview timing save failed')
     refetchDetail()
   }
 
@@ -470,7 +477,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       }
       const d = r.ok ? await r.json() : null
       if (accountUnavailableRef.current) return
-      if (d?.ok) setPracticeEmail('sent')
+      if (d?.ok) setPracticeEmail('requested')
       else if (d?.reason === 'email-off') setPracticeEmail('email-off')
       else setPracticeEmail('unavailable')
     } catch {
@@ -928,6 +935,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const practiceReady = detail.capabilities?.practice !== false && !!detail.practiceRole && !!detail.practiceHandoffToken
   const canTailor = !detail.gated && (detail.capabilities?.tailor ?? isLive)
   const hasRestrictedPrepContext = postingState === 'restricted' || postingState === 'snapshot-only'
+  const exactInterviewDate = detail.application?.interviewDateConfidence === 'exact'
+    ? detail.application.interviewDate
+    : undefined
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -936,7 +946,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           {isLive ? '← All jobs' : '← Job tracker'}
         </Link>
         {!isLive && (
-          <Link href="/jobs" className="text-sm text-blue-600 hover:underline">Find similar live jobs</Link>
+          <Link href="/jobs" className="text-sm text-blue-600 hover:underline">Browse live jobs</Link>
         )}
       </div>
       <h1 ref={titleRef} tabIndex={-1} className="mt-3 text-2xl font-semibold">{detail.title}</h1>
@@ -1102,31 +1112,18 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
           {detail.application?.status === 'interview_scheduled' && !practiceReady ? (
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
-              <p className="font-medium">
-                {detail.application.interviewDate
-                  ? 'Interview status and date saved.'
-                  : 'Interview status saved.'}
+              <p className="font-medium">Interview status saved.</p>
+              <p className="mt-1 text-xs text-slate-600">
+                {interviewDateLabel(
+                  detail.application.interviewDate,
+                  detail.application.interviewDateConfidence,
+                  detail.application.interviewDatePreference,
+                )}
               </p>
               {/* Date capture belongs to the tracked application, not the
-                  exact-JD Practice capability. Keep it usable when the role
-                  is unsupported, CMS is unavailable, or context is restricted. */}
-              {!detail.application.interviewDate && (
-                <div className="mt-2">
-                  <p className="text-xs text-slate-600">
-                    {detail.application.interviewDateConfidence === 'unknown' ? 'Know the date now?' : 'When is it?'}
-                  </p>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {[
-                      ['tomorrow', 'Tomorrow'],
-                      ['this-week', 'This week'],
-                      ['next-week', 'Next week'],
-                      ...(detail.application.interviewDateConfidence === 'unknown' ? [] : [['not-sure', 'Not sure yet']]),
-                    ].map(([c, l]) => (
-                      <button key={c} onClick={() => captureDate(c)} className="rounded-full border border-slate-200 px-2.5 py-1 text-xs hover:bg-white">{l}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
+                  exact-JD Practice capability. It stays editable after every
+                  selection, including coarse week preferences. */}
+              <InterviewDateControls onCapture={captureDate} />
               <p className="mt-1 text-xs text-slate-600">
                 {hasRestrictedPrepContext
                   ? 'Exact-job preparation is unavailable because the original posting context can no longer be used.'
@@ -1139,49 +1136,41 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           ) : detail.application?.status === 'interview_scheduled' ? (
             /* §4c hero swap: the chip yields to the PREP PLAN panel. */
             <div className="mt-5 rounded-lg border border-blue-300 bg-blue-50 p-4 text-sm">
-              <p className="font-medium">🎙 You got the interview. Let&apos;s make sure you&apos;re ready.</p>
-              {/* Capture stays reachable until a real date exists — 'Not sure
-                  yet' must not hide the buttons forever (Codex on #525). */}
-              {!detail.application.interviewDate && (
-                <div className="mt-2">
-                  <p className="text-xs text-slate-600">
-                    {detail.application.interviewDateConfidence === 'unknown' ? 'Know the date now?' : 'When is it?'}
-                  </p>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {[['tomorrow', 'Tomorrow'], ['this-week', 'This week'], ['next-week', 'Next week'], ...(detail.application.interviewDateConfidence === 'unknown' ? [] : [['not-sure', 'Not sure yet']])].map(([c, l]) => (
-                      <button key={c} onClick={() => captureDate(c)} className="rounded-full border border-slate-200 px-2.5 py-1 text-xs hover:bg-white">{l}</button>
-                    ))}
+              <p className="font-medium">🎙 Interview recorded. Prepare for this job when you&apos;re ready.</p>
+              <p className="mt-1 text-xs text-slate-600">
+                {interviewDateLabel(
+                  detail.application.interviewDate,
+                  detail.application.interviewDateConfidence,
+                  detail.application.interviewDatePreference,
+                )}
+              </p>
+              <InterviewDateControls onCapture={captureDate} />
+              {(() => {
+                const plan = buildPrepPlan(exactInterviewDate ? new Date(exactInterviewDate) : null)
+                return (
+                  <div className="mt-2">
+                    <p className="text-xs text-slate-600">{plan.headline}</p>
+                    <ul className="mt-2 space-y-1.5">
+                      {plan.sessions.map((sess) => (
+                        <li key={sess.label} className="flex items-center justify-between gap-2">
+                          <span className="text-sm">{sess.label}{sess.dayOffset > 0 ? ` (in ${sess.dayOffset}d)` : ''}</span>
+                          {sess.dayOffset === 0 && practiceReady && (
+                            <button
+                              onClick={onPracticeClick}
+                              disabled={practiceStart === 'loading'}
+                              className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:cursor-wait disabled:opacity-60"
+                            >
+                              {practiceStart === 'loading' ? 'Preparing…' : 'Start'}
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                </div>
-              )}
-              {(detail.application.interviewDate || detail.application.interviewDateConfidence === 'unknown') && (
-                (() => {
-                  const plan = buildPrepPlan(detail.application.interviewDate ? new Date(detail.application.interviewDate) : null)
-                  return (
-                    <div className="mt-2">
-                      <p className="text-xs text-slate-600">{plan.headline}</p>
-                      <ul className="mt-2 space-y-1.5">
-                        {plan.sessions.map((sess) => (
-                          <li key={sess.label} className="flex items-center justify-between gap-2">
-                            <span className="text-sm">{sess.label}{sess.dayOffset > 0 ? ` (in ${sess.dayOffset}d)` : ''}</span>
-                            {sess.dayOffset === 0 && practiceReady && (
-                              <button
-                                onClick={onPracticeClick}
-                                disabled={practiceStart === 'loading'}
-                                className="rounded-lg bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:cursor-wait disabled:opacity-60"
-                              >
-                                {practiceStart === 'loading' ? 'Preparing…' : 'Start'}
-                              </button>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )
-                })()
-              )}
+                )
+              })()}
               <p className="mt-2 text-xs text-slate-600">
-                Evidence toward readiness on this job: {detail.application.practiceCount}/3 sessions
+                {practiceProgressLabel(detail.application.practiceCount)}
               </p>
               {/* E0 — the load-bearing deferred CTA (PRODUCT_FLOW §4c /
                   EMAILS.md §1): voice mocks need a mic + quiet room, and
@@ -1192,11 +1181,11 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   onClick={requestPracticeEmail}
                   className="mt-2 text-xs font-medium text-blue-600 hover:underline"
                 >
-                  📩 Email me tonight&apos;s practice link
+                  📩 Email me this practice link
                 </button>
               )}
-              {practiceEmail === 'sent' && (
-                <p className="mt-2 text-xs text-emerald-700">Sent — check your inbox this evening.</p>
+              {practiceEmail === 'requested' && (
+                <p className="mt-2 text-xs text-emerald-700">Request received — check your inbox.</p>
               )}
               {practiceEmail === 'email-off' && (
                 <p className="mt-2 text-xs text-slate-600">Email is off for your account — turn it on in Settings to use this.</p>
@@ -1212,10 +1201,14 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 never disabled. */
             <div className="mt-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
               <span className="font-medium">
-                {isLive ? 'Apply now — prep while you wait.' : 'Your preparation history stays with this tracked job.'}
+                {isLive
+                  ? practiceReady
+                    ? 'Apply when ready — job-specific practice is available.'
+                    : 'Apply when ready — track your status here.'
+                  : 'Your preparation history stays with this tracked job.'}
               </span>
               <span className="ml-2 text-xs text-slate-600">
-                Evidence toward readiness on this job: {detail.application?.practiceCount ?? 0}/3 sessions
+                {practiceProgressLabel(detail.application?.practiceCount ?? 0)}
               </span>
             </div>
           )}
@@ -1259,7 +1252,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
           <section className="mt-8" aria-label="Interview X-ray">
             <h2 className="text-lg font-medium">Interview X-ray</h2>
-            <p className="mt-0.5 text-xs text-slate-500">What this JD says the interview will probe.</p>
+            <p className="mt-0.5 text-xs text-slate-500">Requirements extracted from this job description.</p>
             {detail.capabilities?.xray === false && (
               <p className="mt-3 text-sm text-slate-500">
                 {postingState === 'archived'
@@ -1355,7 +1348,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 onClick={() => {
                   closeReturnSheet()
                   setSheetDone(canTailor
-                    ? 'No rush — want an edge first? Tailor your resume for this job (~15s).'
+                    ? 'No rush — tailor your resume for this job before applying.'
                     : 'No rush — keep this job tracked and update its status when you’re ready.')
                 }}
                 className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm bg-white"
@@ -1372,7 +1365,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       {sheetDone && (
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
           <div role="status" aria-live="polite" aria-atomic="true" className="flex items-start justify-between rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg">
-            <p>{sheetDone}{canTailor && sheetDone.includes('Tailor') && <> <Link href={`/resume/tailor?jobId=${detail.id}`} className="text-blue-600 underline">Open tailor</Link></>}</p>
+            <p>{sheetDone}{canTailor && /tailor/i.test(sheetDone) && <> <Link href={`/resume/tailor?jobId=${detail.id}`} className="text-blue-600 underline">Open tailor</Link></>}</p>
             <button onClick={() => { setSheetDone(null); restoreReturnSheetFocus() }} aria-label="Dismiss" className="ml-3 text-slate-500 hover:text-slate-600">✕</button>
           </div>
         </div>
