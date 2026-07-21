@@ -1,5 +1,17 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
 
+export type JobSourceHealth = 'active' | 'degraded' | 'quarantined' | 'dead' | 'revoked'
+export type JobSourceControlAction = 'revoke' | 'restore'
+
+export interface IJobSourceLastControl {
+  revision: number
+  operationId: string
+  action: JobSourceControlAction
+  actorUserId: mongoose.Types.ObjectId
+  reason: string
+  at: Date
+}
+
 /**
  * JobSourceConfig — one row per ingestion source (INGESTION §4.1/§4.4).
  * Carries the health machine state (active → degraded → quarantined → dead,
@@ -19,7 +31,17 @@ export interface IJobSourceConfig extends Document {
    *  — feeds identity + UI; the URL slug is never user-visible. */
   displayName?: string
   enabled: boolean
-  health: 'active' | 'degraded' | 'quarantined' | 'dead' | 'revoked'
+  health: JobSourceHealth
+  /** Monotonic legal/administrative authority epoch. Every ingest event and
+   *  persistence transaction is bound to the exact value it observed. */
+  controlRevision: number
+  /** Internal write-conflict fence. Ingest transactions physically update
+   *  this field so a concurrent control transaction has a total order with
+   *  all posting writes. It has no product meaning. */
+  ingestWriteSeq: number
+  /** Latest durable control summary. The append-only history lives in
+   *  JobSourceControlAudit and is written in the same transaction. */
+  lastControl?: IJobSourceLastControl
   cadenceMinutes: number
   minIndiaPostings?: number
   emptyStreak: number
@@ -43,6 +65,21 @@ const JobSourceConfigSchema = new Schema<IJobSourceConfig>(
     displayName: { type: String },
     enabled: { type: Boolean, default: false },
     health: { type: String, enum: ['active', 'degraded', 'quarantined', 'dead', 'revoked'], default: 'active' },
+    controlRevision: { type: Number, default: 0, min: 0 },
+    ingestWriteSeq: { type: Number, default: 0, min: 0 },
+    lastControl: {
+      type: new Schema<IJobSourceLastControl>(
+        {
+          revision: { type: Number, required: true, min: 1 },
+          operationId: { type: String, required: true },
+          action: { type: String, enum: ['revoke', 'restore'], required: true },
+          actorUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+          reason: { type: String, required: true, maxlength: 1000 },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+    },
     cadenceMinutes: { type: Number, default: 1440 },
     minIndiaPostings: { type: Number },
     emptyStreak: { type: Number, default: 0 },

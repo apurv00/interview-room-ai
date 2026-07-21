@@ -70,7 +70,7 @@ describe('Jobs retention repair deploy gate', () => {
 
     await expect(runRetentionRepair(['--check'])).rejects.toThrow('owner contradictions=1')
 
-    expect(mocks.connectDB).toHaveBeenCalledOnce()
+    expect(mocks.connectDB).toHaveBeenCalledWith({ schemaInitialization: 'disabled' })
     expect(mocks.updateMany).not.toHaveBeenCalled()
   })
 

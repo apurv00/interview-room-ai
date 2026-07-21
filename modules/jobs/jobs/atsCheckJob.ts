@@ -28,6 +28,37 @@ interface StepRunner {
   run: <T>(name: string, fn: () => Promise<T> | T) => Promise<T>
 }
 
+interface AtsPostingAuthoritySnapshot {
+  status?: string
+  closedReason?: string | null
+  jdCompressed?: unknown
+  jdDisplayCompressed?: unknown
+}
+
+/**
+ * Bind every provider attempt and the eventual write to the exact legal/JD
+ * snapshot the worker prepared. Source revocation changes status/reason in
+ * the same transaction, so it cannot satisfy this predicate after commit.
+ */
+function exactAtsPostingAuthorityFilter(
+  jobPostingId: string,
+  posting: AtsPostingAuthoritySnapshot,
+): Record<string, unknown> {
+  return {
+    _id: jobPostingId,
+    status: posting.status,
+    closedReason: posting.closedReason === undefined
+      ? { $exists: false }
+      : posting.closedReason,
+    jdCompressed: posting.jdCompressed === undefined
+      ? { $exists: false }
+      : posting.jdCompressed,
+    jdDisplayCompressed: posting.jdDisplayCompressed === undefined
+      ? { $exists: false }
+      : posting.jdDisplayCompressed,
+  }
+}
+
 export async function runAtsCheckHandler(
   event: { data: { userId: string; jobPostingId: string; claimedAt?: string } },
   step: StepRunner
@@ -44,9 +75,12 @@ export async function runAtsCheckHandler(
     // A run may only clear the claim IT owns (Codex on #521): a superseded
     // slow run finishing after a fresh reclaim must not unset the newer
     // run's marker and re-enable duplicate clicks mid-flight.
+    const claimFilter = claimedAt
+      ? { _id: app._id, atsRequestedAt: claimedAt }
+      : { _id: app._id }
     const clearOwnClaim = () =>
       JobApplication.updateOne(
-        claimedAt ? { _id: app._id, atsRequestedAt: claimedAt } : { _id: app._id },
+        claimFilter,
         { $unset: { atsRequestedAt: 1 } }
       )
 
@@ -85,6 +119,13 @@ export async function runAtsCheckHandler(
       app.atsResult?.resumeHash === resumeHash ||
       app.atsResult?.resumeHash === legacyXrayHashOf(resumeText)
     if (app.atsResult && app.atsResult.jdHash === jdHash && resumeMatches) {
+      // Resume loading is an async boundary even on a cache hit. Do not let
+      // the one-shot shortcut report stale JD-derived readiness after a
+      // source restriction committed while the resume was loading.
+      if (!(await JobPosting.exists(exactAtsPostingAuthorityFilter(jobPostingId, posting)))) {
+        await clearOwnClaim()
+        return { skipped: 'posting-unavailable' as const }
+      }
       await clearOwnClaim()
       return { done: true as const, score: app.atsResult.score, cached: true }
     }
@@ -105,7 +146,22 @@ export async function runAtsCheckHandler(
         await clearOwnClaim()
         return { skipped: 'posting-changed' as const }
       }
-      const result = await checkATS({ resumeText, jobDescription: jd })
+      const exactPostingAuthority = exactAtsPostingAuthorityFilter(jobPostingId, currentPosting)
+      const result = await checkATS(
+        { resumeText, jobDescription: jd },
+        {
+          // modelRouter invokes this immediately before every configured
+          // adapter attempt, including fallback; checkATS reuses it for its
+          // explicit larger-budget retry too.
+          beforeProviderCall: async () => {
+            const [postingStillAuthoritative, claimStillOwned] = await Promise.all([
+              JobPosting.exists(exactPostingAuthority),
+              JobApplication.exists(claimFilter),
+            ])
+            return !!postingStillAuthoritative && !!claimStillOwned
+          },
+        },
+      )
       const score = (result as { score?: number })?.score ?? 0
       const missing = ((result as { keywords?: { missing?: string[] } })?.keywords?.missing ?? []).slice(0, 20)
       // A safety/legal restriction that lands during the model call must not
@@ -123,12 +179,19 @@ export async function runAtsCheckHandler(
         await clearOwnClaim()
         return { skipped: 'posting-changed' as const }
       }
+      // finalPrepared awaits the CMS catalog. Recheck after that await so a
+      // revocation that commits during preparation cannot persist an ATS
+      // artifact from the stale JD snapshot.
+      if (!(await JobPosting.exists(exactPostingAuthority))) {
+        await clearOwnClaim()
+        return { skipped: 'posting-unavailable' as const }
+      }
       // ONE claim-scoped atomic write: result + marker clear land only for
       // the run that still owns the claim. A superseded run (its claim
       // reclaimed while it executed past the stale window) matches nothing —
       // it must not overwrite the newer run's result (Codex on #521 round-5).
       const write = await JobApplication.updateOne(
-        claimedAt ? { _id: app._id, atsRequestedAt: claimedAt } : { _id: app._id },
+        claimFilter,
         {
           $set: { atsResult: { score, missingKeywords: missing, jdHash, resumeHash, checkedAt: new Date() } },
           $unset: { atsRequestedAt: 1 },

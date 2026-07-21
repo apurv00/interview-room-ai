@@ -9,8 +9,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * alive; SSRF guard rejects private targets before any fetch.
  */
 
-const { mockPostingFind, mockPostingUpdateOne, mockCycleCreate } = vi.hoisted(() => ({
+const { mockPostingFind, mockPostingExists, mockPostingUpdateOne, mockCycleCreate } = vi.hoisted(() => ({
   mockPostingFind: vi.fn(),
+  mockPostingExists: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
   mockCycleCreate: vi.fn(),
 }))
@@ -18,11 +19,11 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
 vi.mock('@shared/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { createFunction: vi.fn(() => ({})), send: vi.fn() } }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { find: mockPostingFind, updateOne: mockPostingUpdateOne },
+  JobPosting: { find: mockPostingFind, exists: mockPostingExists, updateOne: mockPostingUpdateOne },
   JobIngestCycle: { create: mockCycleCreate },
 }))
 
-import { checkApplyLink, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS, resolvesToPublicAddress } from '../services/linkCheckService'
+import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS, resolvesToPublicAddress } from '../services/linkCheckService'
 
 // Tests must never hit live DNS: a stub resolver answering a public IP.
 const pubResolve = async () => [{ address: '93.184.216.34' }]
@@ -73,6 +74,29 @@ describe('checkApplyLink classifier', () => {
     expect(await checkApplyLink('https://public.example/jobs/1', fetchSpy as never, pubResolve)).toBe('dead')
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(String(fetchSpy.mock.calls[1][0])).toBe('https://public.example/careers/closed')
+  })
+
+  it('rechecks authority before DNS and HTTP on every redirect hop', async () => {
+    const hop = { status: 301, ok: false, headers: { get: () => '/careers/closed' }, text: async () => '' }
+    const final = { status: 404, ok: false, headers: { get: () => null }, text: async () => '' }
+    const fetchSpy = vi.fn().mockResolvedValueOnce(hop).mockResolvedValueOnce(final)
+    const authority = vi.fn().mockResolvedValue(true)
+
+    await expect(checkApplyLink('https://public.example/jobs/1', fetchSpy as never, pubResolve, authority)).resolves.toBe('dead')
+
+    expect(authority).toHaveBeenCalledTimes(4) // DNS + HTTP for both hops
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('a revoke while DNS is in flight blocks the following HTTP request', async () => {
+    const fetchSpy = vi.fn()
+    const authority = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    await expect(checkApplyLink('https://public.example/jobs/1', fetchSpy as never, pubResolve, authority))
+      .rejects.toBeInstanceOf(LinkCheckAuthorityChangedError)
+
+    expect(authority).toHaveBeenCalledTimes(2)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('a redirect loop exhausts the hop cap → unverifiable, never dead', async () => {
@@ -213,6 +237,7 @@ describe('runLinkCheckHandler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockPostingExists.mockResolvedValue({ _id: 'authorized' })
     mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
     mockCycleCreate.mockResolvedValue({})
   })
@@ -229,7 +254,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([])) // unchecked
       .mockReturnValueOnce(chain([])) // stale unverifiable
       .mockReturnValueOnce(chain([])) // stale alive
-    const r = await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve)
+    const r = await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve, 0)
     expect(r.closed).toBe(1)
     const [filter, update] = mockPostingUpdateOne.mock.calls[0]
     expect(filter).toMatchObject({ _id: 'p1', status: 'open' }) // guarded
@@ -237,8 +262,8 @@ describe('runLinkCheckHandler', () => {
     // Close first clears every TTL, then current DB pin state determines
     // whether a second conditional write may stamp a new one.
     expect((update as { $unset: Record<string, unknown> }).$unset).toEqual({ purgeAt: 1 })
-    expect(mockPostingUpdateOne.mock.calls[1][0]).toMatchObject({ userReferenced: true })
-    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({ userReferenced: { $ne: true } })
+    expect(mockPostingUpdateOne.mock.calls[1][0]).toMatchObject({ provenance: doc.provenance, userReferenced: true })
+    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({ provenance: doc.provenance, userReferenced: { $ne: true } })
     expect(mockPostingUpdateOne.mock.calls[2][1].$set.purgeAt).toBeInstanceOf(Date)
     expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'link-check', linkCheck: expect.objectContaining({ checked: 1, dead: 1, closedNow: 1 }) }))
   })
@@ -250,7 +275,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([])) // unchecked
       .mockReturnValueOnce(chain([])) // stale unverifiable
       .mockReturnValueOnce(chain([])) // stale alive
-    await runLinkCheckHandler(step, vi.fn() as never, new Date(), pubResolve)
+    await runLinkCheckHandler(step, vi.fn() as never, new Date(), pubResolve, 0)
     expect(mockPostingFind).toHaveBeenCalledTimes(5)
     // Codex #543 r3: transient results re-enter the pool.
     const unvFilter = mockPostingFind.mock.calls[3][0] as Record<string, unknown>
@@ -273,7 +298,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
     const fetchSpy = vi.fn().mockRejectedValue(Object.assign(new Error('nx'), { cause: { code: 'ENOTFOUND' } }))
-    const r = await runLinkCheckHandler(step, fetchSpy as never, new Date(), pubResolve)
+    const r = await runLinkCheckHandler(step, fetchSpy as never, new Date(), pubResolve, 0)
     expect(fetchSpy).toHaveBeenCalledTimes(4) // ALL urls checked, none sliced away
     expect(r.closed).toBe(1)
   })
@@ -291,9 +316,40 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
-    await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve)
+    await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve, 0)
     const [filter] = mockPostingUpdateOne.mock.calls[0]
     expect((filter as Record<string, unknown>)['applyCheck.lastCheckedAt']).toEqual(prevChecked)
+    expect(filter).toMatchObject({ status: 'open', provenance: doc.provenance })
+  })
+
+  it('a source revoke between DNS and HTTP aborts the posting with no result write', async () => {
+    const provenance = [{ applyUrl: 'https://revoked.example/a', sourceId: 'revoked-source' }]
+    const doc = { _id: 'p-revoked', provenance }
+    mockPostingFind
+      .mockReturnValueOnce(chain([doc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    mockPostingExists
+      .mockResolvedValueOnce({ _id: 'p-revoked' }) // immediately before DNS
+      .mockResolvedValueOnce(null) // revoked before HTTP
+    const fetchSpy = vi.fn()
+
+    const result = await runLinkCheckHandler(step, fetchSpy as never, new Date(), pubResolve, 0)
+
+    expect(result).toEqual({ checked: 0, closed: 0 })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingExists.mock.calls[0][0]).toMatchObject({
+      _id: 'p-revoked',
+      status: 'open',
+      provenance,
+      'provenance.applyUrl': 'https://revoked.example/a',
+    })
+    expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
+      linkCheck: expect.objectContaining({ checked: 0, closedNow: 0 }),
+    }))
   })
 
   it('does not stamp TTL or closed telemetry when the optimistic close loses its race', async () => {
@@ -311,7 +367,7 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
     mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
 
-    const result = await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve)
+    const result = await runLinkCheckHandler(step, fetchThrow('ENOTFOUND'), new Date(), pubResolve, 0)
 
     expect(result.closed).toBe(0)
     expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
@@ -329,12 +385,13 @@ describe('runLinkCheckHandler', () => {
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
       .mockReturnValueOnce(chain([]))
-    const r = await runLinkCheckHandler(step, spy as never, new Date(), pubResolve)
+    const r = await runLinkCheckHandler(step, spy as never, new Date(), pubResolve, 0)
     // r3: a malformed stored URL is excluded — outcome derives from checkable rungs only.
     void r
     expect(spy).not.toHaveBeenCalled()
     expect(r.closed).toBe(0)
-    const [, update] = mockPostingUpdateOne.mock.calls[0]
+    const [filter, update] = mockPostingUpdateOne.mock.calls[0]
+    expect(filter).toMatchObject({ status: 'open', provenance: doc.provenance })
     expect((update as { $set: { applyCheck: { status: string } } }).$set.applyCheck.status).toBe('unverifiable')
   })
 })

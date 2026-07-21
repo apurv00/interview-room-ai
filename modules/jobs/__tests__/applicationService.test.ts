@@ -2,9 +2,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 import { JobApplication as RealJobApplication } from '@shared/db/models/JobApplication'
 
-const { mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne } = vi.hoisted(() => ({
+const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne } = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
+  mockPostingExists: vi.fn(),
   mockAppFindOne: vi.fn(),
   mockAppUpdateOne: vi.fn(),
   mockAppCreate: vi.fn(),
@@ -22,7 +23,7 @@ const { mockInngestSend, mockProductEventCreate } = vi.hoisted(() => ({
 }))
 const { mockUserExists } = vi.hoisted(() => ({ mockUserExists: vi.fn() }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne },
+  JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne, exists: mockPostingExists },
   JobApplication: { findOne: mockAppFindOne, updateOne: mockAppUpdateOne, create: mockAppCreate, findOneAndUpdate: mockAppFindOneAndUpdate, deleteOne: mockAppDeleteOne },
   InterviewSession: { findById: mockSessionFindById, findOne: mockSessionFindOne, updateOne: mockSessionUpdateOne },
   ProductEvent: { create: mockProductEventCreate },
@@ -48,11 +49,12 @@ const PRACTICE_JD_COMPRESSED = gzipSync(Buffer.from(PRACTICE_JD))
 const PRACTICE_JD_HASH = practiceHandoffHashOf(PRACTICE_JD)
 
 function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [{ sourceId: 'jsearch' }], status: 'open', jdCompressed: PRACTICE_JD_COMPRESSED }) {
-  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockUserExists]) m.mockReset()
+  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockUserExists]) m.mockReset()
   mockInngestSend.mockReset()
   mockProductEventCreate.mockReset()
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(posting) }) })
   mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mockPostingExists.mockResolvedValue({ _id: 'posting' })
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockAppCreate.mockResolvedValue({})
   mockAppDeleteOne.mockResolvedValue({ deletedCount: 1 })
@@ -382,7 +384,12 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     expect(update.$setOnInsert.statusHistory[0].at).toBeInstanceOf(Date)
     expect(options).toMatchObject({ upsert: true, setDefaultsOnInsert: true, runValidators: true })
     expect(mockPostingUpdateOne).toHaveBeenCalledWith(
-      { _id: PRACTICE_JOB_ID, jdCompressed: PRACTICE_JD_COMPRESSED },
+      {
+        _id: PRACTICE_JOB_ID,
+        status: 'open',
+        closedReason: { $exists: false },
+        jdCompressed: PRACTICE_JD_COMPRESSED,
+      },
       { $set: { userReferenced: true }, $unset: { purgeAt: 1 } }
     )
     expect(mockInngestSend).toHaveBeenCalledWith({
@@ -494,6 +501,98 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
 
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
     expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('a source-revoked posting cannot be pinned, materialized, or enqueued by practice reconciliation', async () => {
+    reset({
+      title: 'SDE',
+      company: 'PhonePe',
+      locations: ['Pune'],
+      provenance: [{ sourceId: 'jsearch' }],
+      status: 'closed',
+      closedReason: 'source-revoked',
+      jdCompressed: PRACTICE_JD_COMPRESSED,
+    })
+    sessionChain({
+      _id: 's1',
+      userId: 'u1',
+      attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID },
+    })
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('preserves verified practice evidence for a normal retained archive', async () => {
+    reset({
+      title: 'SDE',
+      company: 'PhonePe',
+      locations: ['Pune'],
+      provenance: [{ sourceId: 'jsearch' }],
+      status: 'closed',
+      closedReason: 'aged-out',
+      jdCompressed: PRACTICE_JD_COMPRESSED,
+    })
+    sessionChain({
+      _id: 's1',
+      userId: 'u1',
+      attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID, applicationId: 'app1' },
+    })
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1',
+      jobPostingId: PRACTICE_JOB_ID,
+      verifiedPracticeSessionIds: ['s1'],
+    }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: PRACTICE_JOB_ID,
+        status: 'closed',
+        closedReason: 'aged-out',
+        jdCompressed: PRACTICE_JD_COMPRESSED,
+      },
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } }
+    )
+    expect(mockInngestSend).toHaveBeenCalledOnce()
+  })
+
+  it('removes only the session relationship and retains the tracker row when source revocation wins', async () => {
+    reset()
+    sessionChain({
+      _id: 's1',
+      userId: 'u1',
+      attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID },
+    })
+    mockAppUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, upsertedCount: 1 })
+      .mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
+    mockAppFindOne
+      .mockReturnValueOnce(appQuery(null))
+      .mockReturnValue(appQuery({
+        _id: 'auto-app',
+        jobPostingId: PRACTICE_JOB_ID,
+        verifiedPracticeSessionIds: ['s1'],
+      }))
+    mockPostingExists.mockResolvedValueOnce(null)
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: false })
+    // Save is a no-op when this row already exists, so cleanup cannot infer
+    // that a system-looking snapshot has no concurrent user ownership intent.
+    expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
+      {
+        _id: 'auto-app',
+        userId: 'u1',
+        jobPostingId: PRACTICE_JOB_ID,
+        verifiedPracticeSessionIds: 's1',
+      },
+      { $pull: { practiceSessionIds: 's1', verifiedPracticeSessionIds: 's1' } }
+    )
+    expect(mockAppDeleteOne).not.toHaveBeenCalled()
     expect(mockInngestSend).not.toHaveBeenCalled()
   })
 

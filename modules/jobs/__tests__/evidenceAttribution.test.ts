@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  */
 
 const {
-  mockSessionFindById, mockAppFindById, mockAppFindOne, mockAppUpdateOne, mockPostingFindById,
+  mockSessionFindById, mockAppFindById, mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockPostingExists,
   mockEvidenceDeleteMany, mockEvidenceInsertMany, mockEvidenceFind, mockEvidenceExists,
   mockCompletion, mockInngestSend, mockSessionFind, mockSessionUpdateOne, mockResolveModel,
   mockSessionExists, mockEnsurePracticeApplication,
@@ -21,7 +21,7 @@ const {
   mockUserExists, mockAppExists, mockAppDeleteOne, createdFunctionConfigs,
 } = vi.hoisted(() => ({
   mockSessionFindById: vi.fn(), mockAppFindById: vi.fn(), mockAppFindOne: vi.fn(), mockAppUpdateOne: vi.fn(),
-  mockPostingFindById: vi.fn(), mockEvidenceDeleteMany: vi.fn(), mockEvidenceInsertMany: vi.fn(),
+  mockPostingFindById: vi.fn(), mockPostingExists: vi.fn(), mockEvidenceDeleteMany: vi.fn(), mockEvidenceInsertMany: vi.fn(),
   mockEvidenceFind: vi.fn(), mockEvidenceExists: vi.fn(), mockCompletion: vi.fn(), mockInngestSend: vi.fn(),
   mockSessionFind: vi.fn(), mockSessionUpdateOne: vi.fn(), mockResolveModel: vi.fn(),
   mockSessionExists: vi.fn(), mockEnsurePracticeApplication: vi.fn(),
@@ -61,7 +61,7 @@ vi.mock('@shared/db/models', () => ({
     exists: mockAppExists,
     deleteOne: mockAppDeleteOne,
   },
-  JobPosting: { findById: mockPostingFindById },
+  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
   JobPracticeEvidence: { deleteMany: mockEvidenceDeleteMany, insertMany: mockEvidenceInsertMany, find: mockEvidenceFind, exists: mockEvidenceExists },
   User: { exists: mockUserExists },
 }))
@@ -126,7 +126,8 @@ beforeEach(() => {
   mockSessionFindById.mockReturnValue(selectLean({ jobDescription: JD, config: {}, evaluations: [evaluation()], userId: 'u1', attribution: ATTRIBUTION }))
   mockAppFindById.mockReturnValue(selectLean({ verifiedPracticeSessionIds: ['sess1', 's0', 'sx'], userId: 'u1', jobPostingId: 'job1' }))
   mockAppFindOne.mockReturnValue(selectLean({ userId: 'u1', jobPostingId: 'job1', readinessRevision: 0 }))
-  mockPostingFindById.mockReturnValue(selectLean({ parsedJD, parsedJDHash: HASH }))
+  mockPostingFindById.mockReturnValue(selectLean({ status: 'open', parsedJD, parsedJDHash: HASH }))
+  mockPostingExists.mockResolvedValue({ _id: 'job1' })
   mockCompletion.mockResolvedValue({ text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay","req-nice","invented-id"],"strength":"strong"}]}' })
   mockEvidenceDeleteMany.mockResolvedValue({})
   mockEvidenceInsertMany.mockResolvedValue({})
@@ -234,13 +235,77 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it('JD-version mismatch = counted skip, never cross-version attribution — and NEVER stamped (stale cache heals, Codex #538 r4)', async () => {
-    mockPostingFindById.mockReturnValue(selectLean({ parsedJD, parsedJDHash: 'different-hash' }))
+    mockPostingFindById.mockReturnValue(selectLean({ status: 'open', parsedJD, parsedJDHash: 'different-hash' }))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('jd-version-mismatch')
     expect(mockCompletion).not.toHaveBeenCalled()
     expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
     // A session practiced against the UPDATED JD looks mismatched until
     // /xray reparses the posting — the sweep must be able to retry it.
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('a restricted source closure stops before model egress and derived persistence', async () => {
+    mockPostingFindById.mockReturnValue(selectLean({
+      status: 'closed',
+      closedReason: 'source-revoked',
+      parsedJD,
+      parsedJDHash: HASH,
+    }))
+
+    const result = await runEvidenceAttributionHandler(EVENT, step)
+
+    expect(result.outcome).toBe('posting-restricted')
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('rechecks exact posting/session authority inside the model boundary', async () => {
+    mockPostingExists.mockResolvedValueOnce(null)
+    mockCompletion.mockImplementationOnce(async (options: {
+      beforeProviderCall?: () => Promise<boolean>
+    }) => {
+      expect(await options.beforeProviderCall?.()).toBe(false)
+      throw Object.assign(new Error('model provider precondition failed'), {
+        name: 'ModelProviderPreconditionError',
+      })
+    })
+
+    const result = await runEvidenceAttributionHandler(EVENT, step)
+
+    expect(result.outcome).toBe('authority-revoked')
+    expect(mockPostingExists).toHaveBeenCalledWith({
+      _id: 'job1',
+      status: 'open',
+      closedReason: { $exists: false },
+      parsedJDHash: HASH,
+    })
+    expect(mockSessionExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'sess1',
+      userId: 'u1',
+      status: 'completed',
+      'attribution.source': 'jobs',
+      'attribution.jobId': 'job1',
+      'attribution.handoffVersion': 1,
+      'attribution.jdHash': ATTRIBUTION.jdHash,
+      'attribution.evidenceProcessedAt': { $exists: false },
+    }))
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('aborts persistence when source revocation commits after model completion', async () => {
+    mockPostingExists.mockResolvedValueOnce(null)
+
+    const result = await runEvidenceAttributionHandler(EVENT, step)
+
+    expect(result).toEqual({ outcome: 'attributed', rows: 0 })
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
     expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 
@@ -256,6 +321,9 @@ describe('runEvidenceAttributionHandler', () => {
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('attributed')
     expect(mockCompletion).toHaveBeenCalledTimes(2)
+    expect(mockCompletion.mock.calls.every(([options]) =>
+      typeof (options as { beforeProviderCall?: unknown }).beforeProviderCall === 'function'
+    )).toBe(true)
     const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
     expect(docs.map((d) => d.requirementId).sort()).toEqual(['req-node', 'req-pay'])
   })
@@ -388,7 +456,7 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it("transient 'no-parse' (X-ray not cached yet) is NEVER stamped — the sweep must retry it (Codex #538 r3)", async () => {
-    mockPostingFindById.mockReturnValue(selectLean({ parsedJD: null, parsedJDHash: null }))
+    mockPostingFindById.mockReturnValue(selectLean({ status: 'open', parsedJD: null, parsedJDHash: null }))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('no-parse')
     expect(mockCompletion).not.toHaveBeenCalled()
@@ -397,6 +465,7 @@ describe('runEvidenceAttributionHandler', () => {
 
   it("parse with zero must-haves = terminal 'no-must-haves', stamped", async () => {
     mockPostingFindById.mockReturnValue(selectLean({
+      status: 'open',
       parsedJD: { requirements: [{ id: 'req-nice', requirement: 'GraphQL', importance: 'nice-to-have' }] },
       parsedJDHash: HASH,
     }))
@@ -436,6 +505,7 @@ describe('runEvidenceAttributionHandler', () => {
   it('compensates evidence/readiness when a per-session delete wins after the preflight', async () => {
     mockSessionExists
       .mockResolvedValueOnce({ _id: 'sess1' })
+      .mockResolvedValueOnce({ _id: 'sess1' })
       .mockResolvedValueOnce(null)
 
     const r = await runEvidenceAttributionHandler(EVENT, step)
@@ -459,6 +529,7 @@ describe('runEvidenceAttributionHandler', () => {
   it('compensates a full-account deletion that removes the owner after writes', async () => {
     mockUserExists
       .mockResolvedValueOnce({ _id: 'u1' })
+      .mockResolvedValueOnce({ _id: 'u1' })
       .mockResolvedValueOnce(null)
 
     const r = await runEvidenceAttributionHandler(EVENT, step)
@@ -471,6 +542,30 @@ describe('runEvidenceAttributionHandler', () => {
       jobPostingId: 'job1',
       verifiedPracticeSessionIds: 'sess1',
     })
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('removes newly written evidence/readiness when source revocation wins during persistence', async () => {
+    mockPostingExists
+      .mockResolvedValueOnce({ _id: 'job1' })
+      .mockResolvedValueOnce({ _id: 'job1' })
+      .mockResolvedValueOnce(null)
+
+    const result = await runEvidenceAttributionHandler(EVENT, step)
+
+    expect(result).toEqual({ outcome: 'attributed', rows: 0 })
+    expect(mockEvidenceInsertMany).toHaveBeenCalledOnce()
+    expect(mockEvidenceDeleteMany).toHaveBeenLastCalledWith({ sessionId: 'sess1' })
+    expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
+      {
+        _id: 'app1', userId: 'u1', jobPostingId: 'job1',
+        verifiedPracticeSessionIds: 'sess1',
+      },
+      {
+        $unset: { readiness: 1 },
+        $inc: { readinessRevision: 1 },
+      }
+    )
     expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 

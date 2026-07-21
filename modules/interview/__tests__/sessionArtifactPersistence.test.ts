@@ -6,17 +6,30 @@ vi.mock('@shared/db/connection', () => ({
 
 const mockFindById = vi.fn()
 const mockFindByIdAndUpdate = vi.fn()
+const mockSessionCreate = vi.fn()
+const mockUserUpdateOne = vi.fn()
+const mockUserFindOneAndUpdate = vi.fn()
+const mockUserExists = vi.fn()
+const mockUserFindByIdAndUpdate = vi.fn()
+const mockDepthFindOne = vi.fn()
+const mockParseJobDescription = vi.fn()
 
 vi.mock('@shared/db/models', () => ({
   InterviewSession: {
     findById: (...args: unknown[]) => mockFindById(...args),
     findByIdAndUpdate: (...args: unknown[]) => mockFindByIdAndUpdate(...args),
+    create: (...args: unknown[]) => mockSessionCreate(...args),
   },
-  User: {},
+  User: {
+    updateOne: (...args: unknown[]) => mockUserUpdateOne(...args),
+    findOneAndUpdate: (...args: unknown[]) => mockUserFindOneAndUpdate(...args),
+    exists: (...args: unknown[]) => mockUserExists(...args),
+    findByIdAndUpdate: (...args: unknown[]) => mockUserFindByIdAndUpdate(...args),
+  },
 }))
 
 vi.mock('@shared/db/models/InterviewDepth', () => ({
-  InterviewDepth: {},
+  InterviewDepth: { findOne: (...args: unknown[]) => mockDepthFindOne(...args) },
 }))
 
 vi.mock('@shared/auth/permissions', () => ({
@@ -30,7 +43,7 @@ vi.mock('@shared/logger', () => ({
 }))
 
 vi.mock('@interview/services/persona/jdParserService', () => ({
-  parseJobDescription: vi.fn(),
+  parseJobDescription: (...args: unknown[]) => mockParseJobDescription(...args),
   buildParsedJDContext: vi.fn(),
 }))
 
@@ -48,7 +61,74 @@ vi.mock('@interview/services/core/sessionConfigCache', () => ({
   warmSessionConfigCache: vi.fn(),
 }))
 
-import { updateSession } from '@interview/services/core/interviewService'
+import { createSession, updateSession } from '@interview/services/core/interviewService'
+
+describe('createSession — Jobs JD provider authority', () => {
+  it('forwards the optional authority callback to structured JD parsing', async () => {
+    const beforeProviderCall = vi.fn().mockResolvedValue(true)
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockUserExists.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockSessionCreate.mockResolvedValue({ _id: { toString: () => 'session-1' } })
+    mockParseJobDescription.mockResolvedValue({
+      rawText: 'A sufficiently detailed backend job description',
+      company: '',
+      role: '',
+      inferredDomain: '',
+      requirements: [],
+      keyThemes: [],
+    })
+
+    await createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 20,
+      },
+      jobDescription: 'A sufficiently detailed backend job description',
+      beforeJobDescriptionProviderCall: beforeProviderCall,
+    })
+
+    expect(mockParseJobDescription).toHaveBeenCalledWith(
+      'A sufficiently detailed backend job description',
+      undefined,
+      beforeProviderCall
+    )
+  })
+
+  it('rolls back quota and creates no session when the provider gate is revoked', async () => {
+    vi.clearAllMocks()
+    const denied = Object.assign(new Error('model provider precondition failed'), {
+      name: 'ModelProviderPreconditionError',
+    })
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockUserFindByIdAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockParseJobDescription.mockRejectedValueOnce(denied)
+
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 20,
+      },
+      jobDescription: 'A source-controlled backend job description',
+      beforeJobDescriptionProviderCall: vi.fn().mockResolvedValue(false),
+    })).rejects.toBe(denied)
+
+    expect(mockSessionCreate).not.toHaveBeenCalled()
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439010',
+      { $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 } }
+    )
+  })
+})
 
 describe('updateSession — recording artifact persistence', () => {
   beforeEach(() => {

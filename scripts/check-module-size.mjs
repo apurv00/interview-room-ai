@@ -111,7 +111,12 @@ const BUDGETS = {
   // counted file — the JobPracticeEvidence model (own collection so the
   // replace-not-duplicate unique index is real). See
   // docs/adr/0018-readiness-wave-budgets.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 149 },
+  // Bumped maxFiles 149 → 152 on 2026-07-21 (Jobs audit A02): adds TWO
+  // counted persistence models — the permanent source-control audit and its
+  // global lineage/control fence. They follow the shared-model convention;
+  // +1 headroom keeps the tripwire tight. See
+  // docs/adr/0019-shared-budget-bump-jobs-source-control.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 152 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   'modules/jobs':      { maxLOC: 14_000, maxFiles: 70 },

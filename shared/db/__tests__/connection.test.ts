@@ -42,7 +42,7 @@ vi.mock('@shared/logger', () => ({
 // the SAME module (lexical reference, not re-imported), so we have to
 // test via observable side effects of the wrapper — did `mongoose.connect`
 // get called or not?
-import { connectDBIfNeeded } from '@shared/db/connection'
+import { connectDB, connectDBIfNeeded } from '@shared/db/connection'
 import mongoose from 'mongoose'
 
 describe('connectDBIfNeeded (Phase 1 PR C)', () => {
@@ -56,10 +56,13 @@ describe('connectDBIfNeeded (Phase 1 PR C)', () => {
     // object but the module's `cached` still points at the old one, so
     // the cache leaks across tests (conn stays populated). Mutate the
     // existing object in place so the same reference is cleared.
-    const cache = (global as unknown as { mongoose?: { conn: unknown; promise: unknown } }).mongoose
+    const cache = (global as unknown as {
+      mongoose?: { conn: unknown; promise: unknown; schemaInitialization: unknown }
+    }).mongoose
     if (cache) {
       cache.conn = null
       cache.promise = null
+      cache.schemaInitialization = null
     }
     // MONGODB_URI must be present for connectDB to attempt a connect.
     process.env.MONGODB_URI = 'mongodb://localhost/test'
@@ -146,5 +149,36 @@ describe('connectDBIfNeeded (Phase 1 PR C)', () => {
       ([p]) => (p as { event?: string }).event === 'connectdb_needed',
     )
     expect(needed).toBeUndefined()
+  })
+
+  it('can disable schema/index initialization for physically read-only checks', async () => {
+    await connectDB({ schemaInitialization: 'disabled' })
+
+    expect(mongoose.connect).toHaveBeenCalledWith(
+      'mongodb://localhost/test',
+      expect.objectContaining({
+        autoIndex: false,
+        autoCreate: false,
+        readPreference: 'primary',
+      }),
+    )
+  })
+
+  it('forces primary reads even when the deployment URI requests a secondary', async () => {
+    process.env.MONGODB_URI = 'mongodb://localhost/test?readPreference=secondaryPreferred'
+
+    await connectDB()
+
+    expect(mongoose.connect).toHaveBeenCalledWith(
+      process.env.MONGODB_URI,
+      expect.objectContaining({ readPreference: 'primary' }),
+    )
+  })
+
+  it('refuses to reuse a connection initialized with a different schema mode', async () => {
+    await connectDB({ schemaInitialization: 'disabled' })
+
+    await expect(connectDB()).rejects.toThrow(/already initialized in disabled schema mode/)
+    expect(mongoose.connect).toHaveBeenCalledOnce()
   })
 })

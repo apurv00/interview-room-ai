@@ -8,8 +8,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
  */
 
 const {
-  mockGetConfig, mockSendEmail, mockSendFindOne, mockSendCreate, mockSendCount,
-  mockUserFindById, mockAppFindOne, mockAppFind, mockAppExists, mockPostingFindById,
+  mockGetConfig, mockSendEmail, mockSendFindOne, mockSendCreate, mockSendCount, mockSendUpdateOne,
+  mockUserFindById, mockAppFindOne, mockAppFind, mockAppExists, mockPostingFindById, mockPostingExists,
   mockSessionExists, mockInngestSend, mockLoggerError, mockSendUpdateMany, mockAppUpdateMany, mockSendAggregate, mockSendDeleteMany,
   mockPreparePractice,
 } = vi.hoisted(() => ({
@@ -18,11 +18,13 @@ const {
   mockSendFindOne: vi.fn(),
   mockSendCreate: vi.fn(),
   mockSendCount: vi.fn(),
+  mockSendUpdateOne: vi.fn(),
   mockUserFindById: vi.fn(),
   mockAppFindOne: vi.fn(),
   mockAppFind: vi.fn(),
   mockAppExists: vi.fn(),
   mockPostingFindById: vi.fn(),
+  mockPostingExists: vi.fn(),
   mockSessionExists: vi.fn(),
   mockInngestSend: vi.fn(),
   mockSendUpdateMany: vi.fn(),
@@ -45,10 +47,10 @@ vi.mock('@shared/services/signedActionToken', () => ({
 }))
 vi.mock('@shared/db/models', () => ({
   JobsEmailConfig: { getConfig: mockGetConfig },
-  JobsEmailSend: { findOne: mockSendFindOne, create: mockSendCreate, countDocuments: mockSendCount, updateMany: mockSendUpdateMany, aggregate: mockSendAggregate, deleteMany: mockSendDeleteMany },
+  JobsEmailSend: { findOne: mockSendFindOne, create: mockSendCreate, countDocuments: mockSendCount, updateOne: mockSendUpdateOne, updateMany: mockSendUpdateMany, aggregate: mockSendAggregate, deleteMany: mockSendDeleteMany },
   User: { findById: mockUserFindById },
   JobApplication: { findOne: mockAppFindOne, find: mockAppFind, exists: mockAppExists, updateMany: mockAppUpdateMany },
-  JobPosting: { findById: mockPostingFindById },
+  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
   InterviewSession: { exists: mockSessionExists },
   ProductEvent: { create: vi.fn().mockResolvedValue({}) },
 }))
@@ -66,6 +68,10 @@ const step = {
 }
 const lean = (v: unknown) => ({ lean: () => Promise.resolve(v), select: function () { return this } })
 const selectLean = (v: unknown) => ({ select: () => ({ lean: () => Promise.resolve(v) }) })
+const POSTING_UPDATED_AT = new Date('2026-07-21T03:00:00.000Z')
+const posting = (over: Record<string, unknown> = {}) => ({
+  title: 'Backend Engineer', company: 'Acme', status: 'open', updatedAt: POSTING_UPDATED_AT, ...over,
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -73,9 +79,12 @@ beforeEach(() => {
   mockSendFindOne.mockReturnValue(lean(null))
   mockSendCreate.mockResolvedValue({})
   mockSendCount.mockResolvedValue(0)
+  mockSendUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockSendEmail.mockResolvedValue({ ok: true, id: 're-1' })
   mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } } }))
-  mockPostingFindById.mockReturnValue(selectLean({ title: 'Backend Engineer', company: 'Acme', status: 'open' }))
+  mockAppExists.mockResolvedValue({ _id: 'app1' })
+  mockPostingFindById.mockReturnValue(selectLean(posting()))
+  mockPostingExists.mockResolvedValue({ _id: 'j1' })
   mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash', role: 'backend' })
   mockSessionExists.mockResolvedValue(null)
   mockSendUpdateMany.mockResolvedValue({})
@@ -199,19 +208,180 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     expect(r).toEqual({ outcome: 'sent', resendId: 're-1' })
     expect(mockSendEmail.mock.calls[0][0].idempotencyKey).toBe('e2/app1:2026-07-22')
     expect(mockSendEmail.mock.calls[0][0].headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click')
-    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: 'app1:2026-07-22', resendId: 're-1' }))
+    expect(mockSendUpdateOne).toHaveBeenCalledWith(
+      { userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22' },
+      { $set: { sentAt: expect.any(Date), resendId: 're-1' } },
+      { upsert: true },
+    )
+    expect(mockSendCreate).not.toHaveBeenCalled()
+  })
+
+  it('stamps a concurrent unstamped burn winner after a success-upsert E11000 race', async () => {
+    const duplicate = Object.assign(new Error('duplicate key'), { code: 11000 })
+    mockSendUpdateOne
+      .mockRejectedValueOnce(duplicate)
+      .mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
+
+    expect(await sendTransactional(input)).toEqual({ outcome: 'sent', resendId: 're-1' })
+    expect(mockSendEmail).toHaveBeenCalledOnce()
+    expect(mockSendUpdateOne).toHaveBeenCalledTimes(2)
+    expect(mockSendUpdateOne.mock.calls[0][2]).toEqual({ upsert: true })
+    expect(mockSendUpdateOne.mock.calls[1]).toEqual([
+      { userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22' },
+      { $set: { sentAt: expect.any(Date), resendId: 're-1' } },
+    ])
+    expect(mockSendCreate).not.toHaveBeenCalled()
   })
 
   it('an existing ledger row (stamped OR unstamped) skips — the key is burned', async () => {
+    const beforeDelivery = vi.fn().mockResolvedValue(true)
     mockSendFindOne.mockReturnValue(lean({ dedupeKey: 'app1:2026-07-22' }))
-    expect(await sendTransactional(input)).toEqual({ outcome: 'already-sent' })
+    expect(await sendTransactional({ ...input, beforeDelivery })).toEqual({ outcome: 'already-sent' })
+    expect(beforeDelivery).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
   it('suppression re-checked immediately before send (R24): e2 or all blocks', async () => {
+    const beforeDelivery = vi.fn().mockResolvedValue(true)
     mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: ['all'] } } }))
-    expect(await sendTransactional(input)).toEqual({ outcome: 'suppressed' })
+    expect(await sendTransactional({ ...input, beforeDelivery })).toEqual({ outcome: 'suppressed' })
+    expect(beforeDelivery).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('a changed delivery precondition skips without burning the transactional key', async () => {
+    const beforeDelivery = vi.fn().mockResolvedValue(false)
+
+    expect(await sendTransactional({ ...input, beforeDelivery })).toEqual({
+      outcome: 'precondition-failed',
+    })
+    expect(beforeDelivery).toHaveBeenCalledOnce()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
+
+    // A policy cancellation is not a burned key; a later authorized
+    // derivation can still deliver within the provider's 24-hour window.
+    expect(await sendTransactional({
+      ...input,
+      beforeDelivery: vi.fn().mockResolvedValue(true),
+    })).toEqual({ outcome: 'sent', resendId: 're-1' })
+  })
+
+  it('blocks an unsubscribe or recipient change that lands during the delivery callback', async () => {
+    mockUserFindById
+      .mockReturnValueOnce(selectLean({
+        email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } },
+      }))
+      .mockReturnValueOnce(selectLean({
+        email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: ['e2'] } },
+      }))
+
+    expect(await sendTransactional({
+      ...input,
+      beforeDelivery: vi.fn().mockResolvedValue(true),
+    })).toEqual({ outcome: 'suppressed' })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+
+    mockUserFindById
+      .mockReturnValueOnce(selectLean({
+        email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } },
+      }))
+      .mockReturnValueOnce(selectLean({
+        email: 'new@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } },
+      }))
+
+    expect(await sendTransactional({
+      ...input,
+      dedupeKey: 'app1:recipient-change',
+      beforeDelivery: vi.fn().mockResolvedValue(true),
+    })).toEqual({ outcome: 'precondition-failed' })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('re-checks authority before every provider retry', async () => {
+    const beforeDelivery = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    mockSendEmail.mockResolvedValue({ ok: false })
+
+    expect(await sendTransactional({ ...input, beforeDelivery })).toEqual({
+      outcome: 'delivery-uncertain-alerted',
+    })
+    expect(beforeDelivery).toHaveBeenCalledTimes(2)
+    expect(mockSendEmail).toHaveBeenCalledOnce()
+    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22',
+    }))
+  })
+
+  it('propagates an unavailable delivery gate so durable transactional work can retry', async () => {
+    const gateError = new Error('Mongo unavailable')
+
+    await expect(sendTransactional({
+      ...input,
+      beforeDelivery: vi.fn().mockRejectedValue(gateError),
+    })).rejects.toBe(gateError)
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
+  })
+
+  it('burns an alert row when the delivery gate errors after an uncertain provider attempt', async () => {
+    const gateError = new Error('Mongo unavailable')
+    const beforeDelivery = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(gateError)
+    mockSendEmail.mockResolvedValue({ ok: false })
+
+    expect(await sendTransactional({ ...input, beforeDelivery })).toEqual({
+      outcome: 'delivery-uncertain-alerted',
+    })
+    expect(mockSendEmail).toHaveBeenCalledOnce()
+    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22',
+    }))
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ err: gateError }),
+      expect.stringContaining('delivery uncertain'),
+    )
+  })
+
+  it('fails closed before the first provider call when the account is missing or recipient changed', async () => {
+    mockUserFindById.mockReturnValueOnce(selectLean(null))
+    expect(await sendTransactional(input)).toEqual({ outcome: 'precondition-failed' })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
+
+    mockUserFindById.mockReturnValueOnce(selectLean({
+      email: 'new-address@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } },
+    }))
+    expect(await sendTransactional(input)).toEqual({ outcome: 'precondition-failed' })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
+  })
+
+  it('freezes signed headers across same-run provider retries', async () => {
+    mockSendEmail.mockResolvedValue({ ok: false })
+
+    expect(await sendTransactional(input)).toEqual({ outcome: 'failed-alerted' })
+    expect(mockSendEmail).toHaveBeenCalledTimes(2)
+    expect(mockSendEmail.mock.calls[0][0].headers).toBe(mockSendEmail.mock.calls[1][0].headers)
+  })
+
+  it('re-checks suppression before retry and alerts because the first delivery is uncertain', async () => {
+    mockUserFindById
+      .mockReturnValueOnce(selectLean({
+        email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } },
+      }))
+      .mockReturnValueOnce(selectLean({
+        email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: ['e2'] } },
+      }))
+    mockSendEmail.mockResolvedValue({ ok: false })
+
+    expect(await sendTransactional(input)).toEqual({ outcome: 'delivery-uncertain-alerted' })
+    expect(mockSendEmail).toHaveBeenCalledOnce()
+    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({
+      stream: 'e2', dedupeKey: 'app1:2026-07-22',
+    }))
   })
 
   it('double failure writes an UNSTAMPED row (alert-now) and logs at error level', async () => {
@@ -257,7 +427,7 @@ describe('runE0Handler', () => {
     const requestedAt = '2026-07-20T05:15:00.000Z' // 10:45 IST — in window
     const r = await runE0Handler(evt(requestedAt), { ...step, sleepUntil: undefined })
     expect(r.outcome).toBe('sent')
-    expect(mockSendCreate.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-20T05')
+    expect(mockSendUpdateOne.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-20T05')
   })
 
   it('suppressed user (e0 or all) → visible refusal, no send', async () => {
@@ -268,9 +438,9 @@ describe('runE0Handler', () => {
   })
 
   it('drops a deferred Practice promise when the posting becomes restricted before send', async () => {
-    mockPostingFindById.mockReturnValue(selectLean({
-      title: 'Backend Engineer', company: 'Acme', status: 'closed', closedReason: 'source-revoked',
-    }))
+    mockPostingFindById.mockReturnValue(selectLean(posting({
+      status: 'closed', closedReason: 'source-revoked',
+    })))
 
     expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
       outcome: 'posting-restricted',
@@ -278,10 +448,80 @@ describe('runE0Handler', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('cancels already-rendered E0 content when source revocation wins at provider delivery', async () => {
+    mockPostingFindById
+      .mockReturnValueOnce(selectLean(posting()))
+      .mockReturnValueOnce(selectLean(posting({
+        status: 'closed', closedReason: 'source-revoked',
+      })))
+
+    expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
+      outcome: 'precondition-failed',
+    })
+    expect(mockPreparePractice).toHaveBeenCalledOnce()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
+  })
+
+  it('cancels E0 when its exact JD changes after rendering', async () => {
+    mockPreparePractice
+      .mockResolvedValueOnce({ jobDescription: 'JD v1', jdHash: 'hash-v1', role: 'backend' })
+      .mockResolvedValueOnce({ jobDescription: 'JD v2', jdHash: 'hash-v2', role: 'backend' })
+
+    expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
+      outcome: 'precondition-failed',
+    })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('cancels E0 when the posting changes during asynchronous Practice preparation', async () => {
+    mockPostingExists.mockResolvedValue(null)
+
+    expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
+      outcome: 'precondition-failed',
+    })
+    expect(mockPreparePractice).toHaveBeenCalledTimes(2)
+    expect(mockPostingExists).toHaveBeenCalledWith({
+      _id: 'j1',
+      status: 'open',
+      closedReason: null,
+      domain: null,
+      parsedJDHash: null,
+      parsedJDRoleVersion: null,
+      updatedAt: POSTING_UPDATED_AT,
+    })
+    expect(mockPreparePractice.mock.invocationCallOrder[1]).toBeLessThan(
+      mockPostingExists.mock.invocationCallOrder[0],
+    )
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('cancels E0 when ownership disappears during asynchronous Practice preparation', async () => {
+    mockAppExists
+      .mockResolvedValueOnce({ _id: 'app1' })
+      .mockResolvedValueOnce(null)
+
+    expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
+      outcome: 'precondition-failed',
+    })
+    expect(mockPreparePractice).toHaveBeenCalledTimes(2)
+    expect(mockAppExists).toHaveBeenCalledTimes(2)
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('cancels E0 when the owning tracker relationship disappears before delivery', async () => {
+    mockAppExists.mockResolvedValue(null)
+
+    expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
+      outcome: 'precondition-failed',
+    })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('honors a deferred Practice promise for an owned, normally archived posting', async () => {
-    mockPostingFindById.mockReturnValue(selectLean({
-      title: 'Backend Engineer', company: 'Acme', status: 'closed', closedReason: 'aged-out',
-    }))
+    mockPostingFindById.mockReturnValue(selectLean(posting({
+      status: 'closed', closedReason: 'aged-out',
+    })))
 
     expect(await runE0Handler(evt(new Date().toISOString()), { ...step, sleepUntil: undefined })).toEqual({
       outcome: 'sent',
@@ -347,7 +587,7 @@ describe('runEmailSweepHandler', () => {
     mockAppFind.mockImplementation(findChain([appRow()]))
     const r = await runEmailSweepHandler(step)
     expect(r).toMatchObject({ e2Sent: 1 })
-    expect(mockSendCreate.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-22')
+    expect(mockSendUpdateOne.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-22')
   })
 
   it("candidate query is scoped to status 'interview_scheduled' — a corrected row's stale date never reminds (Codex #532)", async () => {
@@ -418,9 +658,9 @@ describe('runEmailSweepHandler', () => {
 
   it('keeps E2 transactional but removes exact-job CTAs for restricted or no-longer-ready context', async () => {
     mockAppFind.mockImplementation(findChain([appRow()]))
-    mockPostingFindById.mockReturnValue(selectLean({
+    mockPostingFindById.mockReturnValue(selectLean(posting({
       title: 'Untrusted title', company: 'Untrusted company', status: 'closed', closedReason: 'source-revoked',
-    }))
+    })))
 
     await runEmailSweepHandler(step)
 
@@ -438,7 +678,8 @@ describe('runEmailSweepHandler', () => {
     mockSendCount.mockResolvedValue(0)
     mockSendEmail.mockResolvedValue({ ok: true, id: 're-2' })
     mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: [] } } }))
-    mockPostingFindById.mockReturnValue(selectLean({ title: 'Backend Engineer', company: 'Acme', status: 'open' }))
+    mockPostingFindById.mockReturnValue(selectLean(posting()))
+    mockPostingExists.mockResolvedValue({ _id: 'j1' })
     mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash' })
     mockSessionExists.mockResolvedValue(null)
     mockAppFind.mockImplementation(findChain([appRow()]))
@@ -447,6 +688,69 @@ describe('runEmailSweepHandler', () => {
     html = mockSendEmail.mock.calls[0][0].html as string
     expect(html).toContain('/interview/setup')
     expect(html).not.toContain('practice=1')
+  })
+
+  it('cancels an already-rendered canonical E2 when source revocation wins at delivery', async () => {
+    mockAppFind.mockImplementation(findChain([appRow()]))
+    mockPostingFindById
+      .mockReturnValueOnce(selectLean(posting()))
+      .mockReturnValueOnce(selectLean(posting({
+        status: 'closed', closedReason: 'source-revoked',
+      })))
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
+  })
+
+  it('cancels E2 when the posting changes during asynchronous Practice preparation', async () => {
+    mockAppFind.mockImplementation(findChain([appRow()]))
+    mockPostingExists.mockResolvedValue(null)
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
+    expect(mockPreparePractice).toHaveBeenCalledTimes(2)
+    expect(mockPostingExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'j1', status: 'open', updatedAt: POSTING_UPDATED_AT,
+    }))
+    expect(mockPreparePractice.mock.invocationCallOrder[1]).toBeLessThan(
+      mockPostingExists.mock.invocationCallOrder[0],
+    )
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('cancels E2 when the exact tracker row changes during asynchronous Practice preparation', async () => {
+    mockAppFind.mockImplementation(findChain([appRow()]))
+    mockAppExists
+      .mockResolvedValueOnce({ _id: 'app1' })
+      .mockResolvedValueOnce(null)
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
+    expect(mockPreparePractice).toHaveBeenCalledTimes(2)
+    expect(mockAppExists).toHaveBeenCalledTimes(2)
+    expect(mockAppExists.mock.calls[1][0]).toEqual(expect.objectContaining({
+      _id: 'app1',
+      userId: 'u1',
+      jobPostingId: 'j1',
+      status: 'interview_scheduled',
+      interviewDate: new Date('2026-07-22T00:00:00.000Z'),
+      interviewDateConfidence: 'exact',
+    }))
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('cancels E2 when the tracker status or interview date changes after derivation', async () => {
+    mockAppFind.mockImplementation(findChain([appRow()]))
+    mockAppExists.mockResolvedValue(null)
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e2Sent: 0 })
+    expect(mockAppExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'app1',
+      status: 'interview_scheduled',
+      interviewDate: new Date('2026-07-22T00:00:00.000Z'),
+      interviewDateConfidence: 'exact',
+    }))
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
   })
 })
 
@@ -459,13 +763,14 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     vi.setSystemTime(NOW)
     mockGetConfig.mockResolvedValue({ e0Enabled: false, e1Enabled: true, e2Enabled: false, e3Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
     mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
-    mockPostingFindById.mockReturnValue(selectLean({ status: 'open' }))
+    mockPostingFindById.mockReturnValue(selectLean(posting()))
   })
   afterEach(() => vi.useRealTimers())
 
   const daysAgo = (d: number) => new Date(NOW.getTime() - d * 86_400_000)
   const e1Row = (id: string, over: Record<string, unknown> = {}) => ({
     _id: id, userId: '507f1f77bcf86cd799439011', jobPostingId: `j-${id}`,
+    status: 'applied', updatedAt: new Date('2026-07-21T03:30:00.000Z'),
     appliedAt: daysAgo(15),
     statusHistory: [{ status: 'applied', at: daysAgo(15), source: 'user' }],
     outcome: {}, practiceSessionIds: ['s1'],
@@ -474,6 +779,7 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
   })
   const e4Row = (id: string, over: Record<string, unknown> = {}) => ({
     _id: id, userId: '507f1f77bcf86cd799439011', jobPostingId: `j-${id}`,
+    status: 'apply_clicked', updatedAt: new Date('2026-07-21T03:30:00.000Z'),
     statusHistory: [{ status: 'apply_clicked', at: daysAgo(5), source: 'system' }],
     outcome: {}, practiceSessionIds: [],
     jobSnapshot: { title: 'Backend Engineer', company: `Acme-${id}` },
@@ -609,6 +915,39 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('E4 cancels when source authority or tracker eligibility changes during Practice preparation', async () => {
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockPostingExists.mockResolvedValue(null)
+    feed([e4Row('b1')], [])
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockPreparePractice).toHaveBeenCalledTimes(2)
+    expect(mockPostingExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'j-b1', status: 'open', updatedAt: POSTING_UPDATED_AT,
+    }))
+    expect(mockSendEmail).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
+    mockPostingFindById.mockReturnValue(selectLean(posting()))
+    mockPostingExists.mockResolvedValue({ _id: 'j-b2' })
+    mockAppExists.mockResolvedValue(null)
+    mockSendFindOne.mockReturnValue(lean(null))
+    mockSendCreate.mockResolvedValue({})
+    mockSendDeleteMany.mockResolvedValue({})
+    mockSendAggregate.mockResolvedValue([])
+    mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash', role: 'backend' })
+    feed([e4Row('b2')], [])
+
+    expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
+    expect(mockAppExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'b2', status: 'apply_clicked', practiceSessionIds: { $size: 0 },
+      updatedAt: new Date('2026-07-21T03:30:00.000Z'),
+    }))
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('the cap counts EMAILS, not ledger rows: the pipeline groups on resendId (Codex #533)', async () => {
     feed([e1Row('a1')], [])
     await runEmailSweepHandler(step)
@@ -673,7 +1012,7 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     vi.clearAllMocks()
     mockGetConfig.mockResolvedValue({ e1Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
     mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
-    mockPostingFindById.mockReturnValue(selectLean({ status: 'open' }))
+    mockPostingFindById.mockReturnValue(selectLean(posting()))
     mockSendFindOne.mockReturnValue(lean(null))
     mockSendCreate.mockResolvedValue({})
     mockSendUpdateMany.mockResolvedValue({})

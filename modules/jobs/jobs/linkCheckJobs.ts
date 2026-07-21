@@ -2,7 +2,7 @@ import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { JobPosting, JobIngestCycle } from '@shared/db/models'
 import { logger } from '@shared/logger'
-import { checkApplyLink, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS, type LinkOutcome, type ResolveImpl } from '../services/linkCheckService'
+import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS, type LinkOutcome, type ResolveImpl } from '../services/linkCheckService'
 import { isBlockedApplyUrl } from '../services/qualityGate'
 
 /**
@@ -129,7 +129,8 @@ export async function runLinkCheckHandler(
   step: StepRunner,
   fetchImpl: typeof fetch = fetch,
   now = new Date(),
-  resolveImpl?: ResolveImpl
+  resolveImpl?: ResolveImpl,
+  pacingMs = PACING_MS,
 ): Promise<{ checked: number; closed: number }> {
   await connectDB()
   const picked = await step.run('pick', () => pickPostingsToCheck(now))
@@ -170,10 +171,30 @@ export async function runLinkCheckHandler(
       for (const doc of chunk) {
         const urls = urlsOf(doc)
         const outcomes: LinkOutcome[] = []
-        for (const u of urls) {
-          outcomes.push(await checkApplyLink(u, fetchImpl, resolveImpl))
-          await new Promise((r) => setTimeout(r, PACING_MS))
+        // Exact provenance snapshot binds every DNS/HTTP authorization and
+        // the eventual result write to the lifecycle that was picked. A
+        // source revoke, URL replacement/addition, or closure makes it miss.
+        const lifecycleFilter = {
+          _id: doc._id as never,
+          status: 'open',
+          provenance: doc.provenance ?? [],
         }
+        let authorityChanged = false
+        for (const u of urls) {
+          try {
+            outcomes.push(await checkApplyLink(u, fetchImpl, resolveImpl, async () =>
+              !!(await JobPosting.exists({ ...lifecycleFilter, 'provenance.applyUrl': u } as never))
+            ))
+          } catch (error) {
+            if (!(error instanceof LinkCheckAuthorityChangedError)) throw error
+            authorityChanged = true
+            break
+          }
+          if (pacingMs > 0) await new Promise((r) => setTimeout(r, pacingMs))
+        }
+        // Never derive or persist a posting-level result from a partial URL
+        // set after authority has been withdrawn.
+        if (authorityChanged) continue
         const outcome = postingOutcome(outcomes)
         counters.checked += 1
         counters[outcome] += 1
@@ -199,7 +220,7 @@ export async function runLinkCheckHandler(
           ? { 'applyCheck.lastCheckedAt': prev.lastCheckedAt }
           : { applyCheck: { $exists: false } }
         const write = await JobPosting.updateOne(
-          { _id: doc._id as never, ...token, ...(shouldClose ? { status: 'open' } : {}) } as never,
+          { ...lifecycleFilter, ...token } as never,
           update
         )
         if (closedAt && (write?.matchedCount ?? 0) > 0) {
@@ -211,6 +232,7 @@ export async function runLinkCheckHandler(
             status: 'closed',
             closedReason: 'dead-apply-link',
             closedAt,
+            provenance: doc.provenance ?? [],
           }
           await JobPosting.updateOne(
             { ...closeFilter, userReferenced: true } as never,

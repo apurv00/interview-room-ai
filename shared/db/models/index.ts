@@ -129,11 +129,17 @@ export type {
 
 // ── Jobs (ingestion corpus — INGESTION.md §4.3; owned by modules/jobs) ──
 
-export { JobPosting } from './JobPosting'
+export { JobPosting, JOB_SOURCE_ID_PATTERN, JOB_SOURCE_LINEAGE_UNKNOWN } from './JobPosting'
 export type { IJobPosting, IJobProvenance, IJobLlmVerdict } from './JobPosting'
 
 export { JobSourceConfig } from './JobSourceConfig'
-export type { IJobSourceConfig } from './JobSourceConfig'
+export type { IJobSourceConfig, IJobSourceLastControl, JobSourceControlAction, JobSourceHealth } from './JobSourceConfig'
+
+export { JobSourceControlAudit } from './JobSourceControlAudit'
+export type { IJobSourceControlAudit, IJobSourceControlState } from './JobSourceControlAudit'
+
+export { JobSourceControlMeta, JOB_SOURCE_CONTROL_META_ID } from './JobSourceControlMeta'
+export type { IJobSourceControlMeta } from './JobSourceControlMeta'
 
 export { JobIngestCursor } from './JobIngestCursor'
 export type { IJobIngestCursor } from './JobIngestCursor'

@@ -25,8 +25,8 @@ Two classes with different rules [R1]:
 
 | # | Stream | Trigger | Discipline |
 |---|--------|---------|------------|
-| E0 | Tonight's practice link | User taps "Email me tonight's practice link" (PRODUCT_FLOW §4c, `jobs.prep_deferred_email`) | Accepted and re-validated at send time only when the owned posting can still mint exact-JD Practice (normal archived postings qualify; restricted/missing/corrupt/oversized/unsupported/CMS-unavailable context does not). Sent immediately (shifted into quiet hours only if outside 08:00–21:00 IST). Bypasses prefs and the weekly cap. dedupeKey `applicationId:requestedAtISO-hour` (double-tap safe, re-request tomorrow works). An honored E0 consumes the automatic E4 for that application. |
-| E2 | T-1 interview reminder | `interviewDate` set (exact/week confidence). Setting the date IS the request. | Send T-1 09:00 IST (exact) / Monday 09:00 IST of interview week (week; if that has passed at arming time, next 09:00 IST slot; if the week passed, never) [R14]. Cap-exempt. Ceiling: max 3 E2s per application ever; a date edit re-arms only if the new date differs by ≥1 calendar day [R19]. Skips the warm-up CTA (logistics-only variant) if a practice session happened in the last 24h [R10]. If exact-posting Practice is unavailable at send time, the transactional reminder remains but uses a generic interview-setup CTA and never promises a posting-bound warm-up. |
+| E0 | Tonight's practice link | User taps "Email me tonight's practice link" (PRODUCT_FLOW §4c, `jobs.prep_deferred_email`) | Accepted and re-validated immediately before every provider attempt only when the owned posting can still mint the same exact-JD Practice (normal archived postings qualify; restricted/missing/corrupt/changed/oversized/unsupported/CMS-unavailable context does not). Sent immediately (shifted into quiet hours only if outside 08:00–21:00 IST). Bypasses prefs and the weekly cap. dedupeKey `applicationId:requestedAtISO-hour` (double-tap safe, re-request tomorrow works). An honored E0 consumes the automatic E4 for that application. |
+| E2 | T-1 interview reminder | `interviewDate` set (exact/week confidence). Setting the date IS the request. | Send T-1 09:00 IST (exact) / Monday 09:00 IST of interview week (week; if that has passed at arming time, next 09:00 IST slot; if the week passed, never) [R14]. Cap-exempt. Ceiling: max 3 E2s per application ever; a date edit re-arms only if the new date differs by ≥1 calendar day [R19]. Skips the warm-up CTA (logistics-only variant) if a practice session happened in the last 24h [R10]. If exact-posting Practice is unavailable at send time, the transactional reminder remains but uses a generic interview-setup CTA and never promises a posting-bound warm-up. Every provider attempt re-checks that the same tracker row is still interview-scheduled for the same date/confidence. A canonical-content variant also re-checks posting policy; if it became restricted, that stale rendering is cancelled and a later in-window sweep may derive the snapshot-only generic variant. |
 
 **Solicitation (system-initiated — strict budgets):**
 
@@ -63,7 +63,16 @@ when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
      natural (T-1 → interview date, never re-derived after the date
      passes); E0's dedupeKey embeds the request hour, bounding it the
      same way. Manual dashboard kicks check the ledger first and refuse
-     past-window sends.
+     past-window sends. Resend binds a key to the complete payload: signed
+     one-click headers are therefore minted once and frozen across same-run
+     attempts. Before **each** provider call, account existence, unchanged
+     recipient, suppression, tracker authority, and posting/content policy
+     are re-read. A confirmed failure before attempt 1 sends nothing and
+     leaves the key reusable; a gate change or gate error after any provider
+     call burns an unstamped alert row because delivery/key consumption is
+     uncertain. A later durable render that differs under the same key may
+     be rejected by Resend and is dashboard-alerted, never worked around with
+     a new key that could duplicate the original delivery.
    - *Ordering*: any content-dependent skip (E3's zero-content rule) is
      decided BEFORE reservation — a skipped digest is not a false alarm
      [R32].
@@ -163,7 +172,8 @@ when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
   ledger step); `jobsDigestJob` (`30 4 * * 2` UTC = Tue 10:00 IST). Guard
   pipeline order: config switch → IST quiet-hours gate → prefs query →
   staleness ceilings → cap + priority → content build & skip decision →
-  ledger (per §2 class) → final pref re-check → send → stamp [R24][R30][R32].
+  ledger (per §2 class) → per-attempt account/recipient/pref + content-
+  authority re-check → send → stamp [R24][R30][R32].
   E0 is event-triggered (`jobs/email.requested`), not swept. 20 sends per
   `step.run`.
 - Templates: pure functions `modules/jobs/emails/{e0..e4}.ts` →

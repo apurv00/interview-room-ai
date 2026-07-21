@@ -38,6 +38,10 @@ export interface CompletionParams {
   temperature?: number
   reasoningEffort?: ReasoningEffort
   responseFormat?: CompletionResponseFormat
+  /** Disable retries hidden inside a provider SDK. Legal/source-authority
+   * gates are evaluated by the router per adapter attempt, so an SDK retry
+   * after that gate would otherwise outlive the authority snapshot. */
+  disableSdkRetries?: boolean
 }
 
 export type JsonSchema = Record<string, unknown>

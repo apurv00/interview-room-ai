@@ -7,6 +7,7 @@ const { mockFindOne, mockFindById, mockFind, mockCreate } = vi.hoisted(() => ({
   mockCreate: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
+  JOB_SOURCE_LINEAGE_UNKNOWN: '__legacy_unknown__',
   JobPosting: { findOne: mockFindOne, findById: mockFindById, find: mockFind, create: mockCreate },
 }))
 
@@ -44,6 +45,7 @@ function docStub(overrides: Record<string, unknown> = {}) {
     _id: 'p1',
     updatedAt: new Date('2026-07-20T00:00:00Z'),
     status: 'open',
+    sourceIds: [] as string[],
     provenance: [] as Array<Record<string, unknown>>,
     locationKeys: [] as string[],
     locations: [] as string[],
@@ -62,9 +64,47 @@ describe('ingestBatch — identity ladder', () => {
     expect(mockCreate).toHaveBeenCalledTimes(1)
     const doc = mockCreate.mock.calls[0][0]
     expect(doc.fingerprint).toMatch(/^[0-9a-f]{24}$/)
+    expect(doc.sourceIds).toEqual(['jsearch'])
     expect(doc.provenance[0].sourceKey).toBe('jsearch:ext-1')
     expect(doc.provenance[0].applyTier).toBe('employer')
     expect(doc.domain).toBe('backend')
+  })
+
+  it('retains source lineage when the provider row has no external id', async () => {
+    reset()
+
+    const c = await ingestBatch([job({ externalId: null })], 'jsearch')
+
+    expect(c.newCount).toBe(1)
+    const inserted = mockCreate.mock.calls[0][0]
+    expect(inserted.sourceIds).toEqual(['jsearch'])
+    expect(inserted.provenance).toEqual([])
+  })
+
+  it('conservatively marks cap-reached legacy lineage while adding the current source', async () => {
+    reset()
+    const provenance = Array.from({ length: 8 }, (_, index) => ({
+      sourceId: index === 0 ? 'jsearch' : `source-${index}`,
+      externalId: index === 0 ? 'ext-1' : `ext-${index}`,
+      sourceKey: index === 0 ? 'jsearch:ext-1' : `source-${index}:ext-${index}`,
+      lastSeenAt: new Date('2026-07-01'),
+    }))
+    const existing = docStub({ provenance, jdLength: 999 })
+    mockFindOne.mockResolvedValueOnce(existing)
+
+    await ingestBatch([job()], 'jsearch')
+
+    expect(existing.sourceIds).toEqual([
+      'jsearch',
+      'source-1',
+      'source-2',
+      'source-3',
+      'source-4',
+      'source-5',
+      'source-6',
+      'source-7',
+      '__legacy_unknown__',
+    ])
   })
 
   it('hard drops are never stored and are counted per rule', async () => {

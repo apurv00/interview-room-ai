@@ -69,6 +69,27 @@ describe('SmartRecruiters pagination (Codex #513 P1)', () => {
     expect(res.attempts).toBe(2)
     expect(String(mockFetchJSON.mock.calls[1][0])).toContain('offset=100')
   })
+
+  it('aborts a later page as source-authority change instead of board health failure', async () => {
+    mockFetchJSON.mockReset()
+    const fullPage = { content: Array.from({ length: 100 }, (_, i) => ({ id: `p1-${i}`, name: 'Engineer', location: { city: 'Pune' } })) }
+    mockFetchJSON.mockResolvedValueOnce({ ok: true, status: 200, data: fullPage })
+    mockFetchJSON.mockResolvedValueOnce({
+      ok: false,
+      status: 0,
+      error: 'source-authority-changed',
+      authorityChanged: true,
+      attempts: 0,
+    })
+    const beforePhysicalRequest = vi.fn().mockResolvedValue(true)
+
+    const res = await atsBoardAdapter.fetch(srTarget, { beforePhysicalRequest })
+
+    expect(res).toEqual({ ok: false, status: 0, raw: [], attempts: 1, authorityChanged: true })
+    expect(mockFetchJSON).toHaveBeenCalledTimes(2)
+    expect(mockFetchJSON.mock.calls[0][2].beforePhysicalRequest).toBe(beforePhysicalRequest)
+    expect(mockFetchJSON.mock.calls[1][2].beforePhysicalRequest).toBe(beforePhysicalRequest)
+  })
 })
 
 describe('atsBoardAdapter.normalize per platform', () => {

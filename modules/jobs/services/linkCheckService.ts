@@ -13,6 +13,28 @@
 
 export type LinkOutcome = 'dead' | 'alive' | 'unverifiable'
 
+/** A posting stopped authorizing this liveness check while it was running.
+ *  Callers must discard the observation rather than persist it as a link
+ *  result. */
+export class LinkCheckAuthorityChangedError extends Error {
+  constructor() {
+    super('posting authority changed during link check')
+    this.name = 'LinkCheckAuthorityChangedError'
+  }
+}
+
+export type BeforeLinkCheckRequest = () => boolean | void | Promise<boolean | void>
+
+async function assertLinkCheckAuthority(beforePhysicalRequest?: BeforeLinkCheckRequest): Promise<void> {
+  if (!beforePhysicalRequest) return
+  try {
+    if ((await beforePhysicalRequest()) === false) throw new LinkCheckAuthorityChangedError()
+  } catch (error) {
+    if (error instanceof LinkCheckAuthorityChangedError) throw error
+    throw new LinkCheckAuthorityChangedError()
+  }
+}
+
 /** Same markers the probe's G4 gate uses — a 200 body announcing closure. */
 export const EXPIRY_MARKERS =
   /no longer accepting applications|this job (is|has been) (closed|expired)|position (has been )?filled|job (has )?expired|vacancy (is )?closed/i
@@ -170,7 +192,8 @@ async function readCappedText(res: Response): Promise<string> {
 export async function checkApplyLink(
   url: string,
   fetchImpl: typeof fetch = fetch,
-  resolveImpl?: ResolveImpl
+  resolveImpl?: ResolveImpl,
+  beforePhysicalRequest?: BeforeLinkCheckRequest,
 ): Promise<LinkOutcome> {
   if (!isCheckableUrl(url)) return 'unverifiable'
   const ctrl = new AbortController()
@@ -186,7 +209,12 @@ export async function checkApplyLink(
     let res: Response
     let hops = 0
     for (;;) {
+      // Authority is checked separately for DNS and HTTP: a revoke that
+      // lands while DNS is in flight must still prevent the subsequent
+      // provider request, and redirects repeat both checks per hop.
+      await assertLinkCheckAuthority(beforePhysicalRequest)
       if (!(await resolvesToPublicAddress(current, resolveImpl))) return 'unverifiable'
+      await assertLinkCheckAuthority(beforePhysicalRequest)
       res = await fetchImpl(current, {
         redirect: 'manual',
         signal: ctrl.signal,
@@ -223,6 +251,7 @@ export async function checkApplyLink(
     // no positive death signal — recheck later.
     return 'unverifiable'
   } catch (err) {
+    if (err instanceof LinkCheckAuthorityChangedError) throw err
     const code = causeCode(err)
     // DNS-nonexistent and refused connections are POSITIVE dead signals
     // (the vacancy-spam hosts were exactly this class). Timeouts and

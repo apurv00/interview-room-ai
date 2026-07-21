@@ -93,6 +93,14 @@ function buildRequestBody(params: CompletionParams) {
   }
 }
 
+function sdkRequestOptions(params: CompletionParams, signal?: AbortSignal) {
+  if (!signal && !params.disableSdkRetries) return undefined
+  return {
+    ...(signal ? { signal } : {}),
+    ...(params.disableSdkRetries ? { maxRetries: 0 } : {}),
+  }
+}
+
 registerProvider({
   name: 'openai',
   label: 'OpenAI (direct)',
@@ -103,7 +111,7 @@ registerProvider({
     const client = getClient()
     const response = await client.chat.completions.create(
       buildRequestBody(params),
-      signal ? { signal } : undefined,
+      sdkRequestOptions(params, signal),
     )
     const text = response.choices[0]?.message?.content?.trim() ?? ''
     const finishReason = response.choices[0]?.finish_reason
@@ -143,7 +151,7 @@ registerProvider({
     }
     const stream = await client.chat.completions.create(
       requestBody,
-      signal ? { signal } : undefined,
+      sdkRequestOptions(params, signal),
     )
 
     let usagePromptTokens = 0

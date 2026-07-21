@@ -355,8 +355,9 @@ export async function ensurePracticeApplication(
   // server persisted on the session before mutating any posting/application;
   // malformed, stale, cross-job, missing, or corrupt bodies fail closed.
   const posting = await JobPosting.findById(attr.jobId)
-    .select('title company locations provenance jdCompressed')
+    .select('title company locations provenance status closedReason jdCompressed')
     .lean()
+  if (posting && jobPostingStateOf(posting) === 'restricted') return null
   const sessionJd =
     (session as { jobDescription?: string }).jobDescription ??
     (session.config as { jobDescription?: string } | undefined)?.jobDescription
@@ -378,8 +379,16 @@ export async function ensurePracticeApplication(
   // Pin only the exact JD version just verified. If ingestion replaced or
   // removed it between the read and this write, reconciliation can retry
   // against the new server truth instead of cross-attaching stale evidence.
+  const postingGuard = {
+    _id: attr.jobId,
+    status: posting.status,
+    closedReason: posting.closedReason
+      ? posting.closedReason
+      : { $exists: false },
+    jdCompressed: posting.jdCompressed,
+  }
   const pin = await JobPosting.updateOne(
-    { _id: attr.jobId, jdCompressed: posting.jdCompressed },
+    postingGuard,
     { $set: { userReferenced: true }, $unset: { purgeAt: 1 } }
   )
   if ((pin?.matchedCount ?? 0) === 0) return null
@@ -467,6 +476,27 @@ export async function ensurePracticeApplication(
     .select('_id verifiedPracticeSessionIds jobPostingId')
     .lean()
   if (!app) return null
+
+  // Source control can close the posting after the exact pin but before the
+  // relationship write. Revalidate the same lifecycle+JD tuple before any
+  // attribution repair/event. If it lost authority, remove only the session
+  // relationship this call added. Retain the status-only tracker snapshot:
+  // a concurrent Save can express user intent without mutating that row, and
+  // source-revoked detail serving keeps the retained snapshot restricted.
+  if (!(await JobPosting.exists(postingGuard))) {
+    if (newlyAdded) {
+      await JobApplication.updateOne(
+        { _id: app._id, ...filter, verifiedPracticeSessionIds: session._id },
+        {
+          $pull: {
+            practiceSessionIds: session._id,
+            verifiedPracticeSessionIds: session._id,
+          },
+        }
+      )
+    }
+    return null
+  }
 
   // Repair stale/missing client-carried attribution so a failed immediate
   // emit remains recoverable by the canonical reconciliation sweep.

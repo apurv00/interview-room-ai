@@ -15,6 +15,7 @@ import { warmSessionConfigCache } from './sessionConfigCache'
 import { getPlannedQuestionCountForFeedback } from '../eval/sessionScoringPolicy'
 import type { InterviewLatencyTelemetryInput } from '../../validators/interview'
 import type { Duration } from '@shared/types'
+import { ModelProviderPreconditionError, type CompletionOptions } from '@shared/services/modelRouter'
 
 interface CreateSessionInput {
   userId: string
@@ -37,6 +38,8 @@ interface CreateSessionInput {
     jdHash: string
     verifiedAt: Date
   }
+  /** Revalidates Jobs posting authority at the model adapter boundary. */
+  beforeJobDescriptionProviderCall?: CompletionOptions['beforeProviderCall']
   /**
    * If set, the new session is a retake. The service resolves this id to
    * the root of the retake chain so every retake of the same original
@@ -288,6 +291,40 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     plannedQuestionCount = undefined
   }
 
+  // Jobs-derived JDs have a revocable source authority. Parse them before a
+  // session exists, then recheck once more after the provider returns. If the
+  // adapter-level gate or final check denies, roll back the quota claim and
+  // leave no stale Jobs session for the API to return. Ordinary/manual JDs
+  // retain the historical post-create, non-fatal parsing path below.
+  let gatedParsedJobDescription: Awaited<ReturnType<typeof parseJobDescription>> | undefined
+  if (input.jobDescription && input.beforeJobDescriptionProviderCall) {
+    try {
+      gatedParsedJobDescription = await parseJobDescription(
+        input.jobDescription,
+        undefined,
+        input.beforeJobDescriptionProviderCall
+      )
+      try {
+        if (!(await input.beforeJobDescriptionProviderCall())) {
+          throw new ModelProviderPreconditionError()
+        }
+      } catch (err) {
+        if (
+          err instanceof ModelProviderPreconditionError ||
+          (err instanceof Error && err.name === 'ModelProviderPreconditionError')
+        ) {
+          throw err
+        }
+        throw new ModelProviderPreconditionError(err)
+      }
+    } catch (err) {
+      await User.findByIdAndUpdate(input.userId, {
+        $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
+      })
+      throw err
+    }
+  }
+
   let session: IInterviewSession
   try {
     session = await InterviewSession.create({
@@ -338,7 +375,15 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     const domain = input.config.role
     try {
       const [jdResult, resumeResult] = await Promise.allSettled([
-        input.jobDescription ? parseJobDescription(input.jobDescription) : Promise.resolve(null),
+        gatedParsedJobDescription
+          ? Promise.resolve(gatedParsedJobDescription)
+          : input.jobDescription
+          ? parseJobDescription(
+              input.jobDescription,
+              undefined,
+              input.beforeJobDescriptionProviderCall
+            )
+          : Promise.resolve(null),
         input.resumeText ? parseAndCacheResume(sid, input.resumeText, domain) : Promise.resolve(null),
       ])
 

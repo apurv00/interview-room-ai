@@ -205,6 +205,21 @@ describe('resumeAIService', () => {
       expect(result.outputTruncated).toBe(false)
     })
 
+    it('propagates the same authority gate to the initial call and truncation retry', async () => {
+      const beforeProviderCall = vi.fn().mockResolvedValue(true)
+      mockCompletion.mockResolvedValueOnce({
+        text: '{"score": 70', truncated: true,
+        model: 'm', provider: 'anthropic', inputTokens: 1, outputTokens: 1, usedFallback: false,
+      })
+      mockTextResponse('{"score": 82}')
+
+      await checkATS({ resumeText: 'x'.repeat(200) }, { beforeProviderCall })
+
+      expect(mockCompletion).toHaveBeenCalledTimes(2)
+      expect(mockCompletion.mock.calls[0][0].beforeProviderCall).toBe(beforeProviderCall)
+      expect(mockCompletion.mock.calls[1][0].beforeProviderCall).toBe(beforeProviderCall)
+    })
+
     it('flags inputTruncated for a resume past the 24k window', async () => {
       mockTextResponse('{"score": 70}')
       const result = await checkATS({ resumeText: 'a'.repeat(30_000) })

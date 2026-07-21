@@ -44,6 +44,7 @@ interface PracticePostingSnapshot {
   parsedJDRoleVersion?: string | null
   jdCompressed?: unknown
   jdDisplayCompressed?: unknown
+  updatedAt?: Date | string | null
 }
 
 export interface PreparedPracticeHandoff {
@@ -53,6 +54,28 @@ export interface PreparedPracticeHandoff {
   jdHash?: string
   /** Present only when the canonical snapshot resolves through the closed taxonomy. */
   role?: string
+}
+
+function exactPracticePostingAuthorityFilter(
+  jobId: string,
+  posting: PracticePostingSnapshot,
+): Record<string, unknown> {
+  return {
+    _id: jobId,
+    status: posting.status,
+    closedReason: posting.closedReason === undefined
+      ? { $exists: false }
+      : posting.closedReason,
+    updatedAt: posting.updatedAt == null
+      ? { $exists: false }
+      : new Date(posting.updatedAt),
+    jdCompressed: posting.jdCompressed === undefined
+      ? { $exists: false }
+      : posting.jdCompressed,
+    jdDisplayCompressed: posting.jdDisplayCompressed === undefined
+      ? { $exists: false }
+      : posting.jdDisplayCompressed,
+  }
 }
 
 /** Full-strength identity for the signed trust boundary (cache hashes stay SHA-1). */
@@ -235,7 +258,7 @@ export async function resolvePracticeHandoff(
 
   await connectDB()
   const posting = await JobPosting.findById(payload.jid)
-    .select('company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+    .select('company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
     .lean()
   if (!posting || (posting.status !== 'open' && posting.status !== 'closed')) return null
   const postingState = jobPostingStateOf(posting)
@@ -259,6 +282,20 @@ export async function resolvePracticeHandoff(
       .select('_id')
       .lean()
   }
+
+  const exactPostingAuthority = exactPracticePostingAuthorityFilter(payload.jid, posting)
+  const [postingStillAuthoritative, applicationStillExists] = await Promise.all([
+    JobPosting.exists(exactPostingAuthority),
+    application
+      ? JobApplication.exists({ _id: application._id, userId, jobPostingId: payload.jid })
+      : Promise.resolve(true),
+  ])
+  // Preparation awaits CMS authority and archived ownership is itself an
+  // entitlement. Neither a stale token nor an earlier read may outlive a
+  // committed source restriction/ownership deletion.
+  if (!postingStillAuthoritative || (postingState === 'archived' && !applicationStillExists)) return null
+  if (!applicationStillExists) application = null
+
   return {
     jobId: payload.jid,
     jobDescription: prepared.jobDescription,

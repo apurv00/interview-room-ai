@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
 
     let config = validated.config
     let jobDescription = validated.config.jobDescription
+    let beforeJobDescriptionProviderCall: (() => Promise<boolean>) | undefined
     let verifiedJobsAttribution:
       | {
           source: 'jobs'
@@ -78,6 +79,22 @@ export async function POST(req: NextRequest) {
         jdHash: handoff.jdHash,
         verifiedAt: new Date(),
       }
+      // The handoff check above proves authority at request time. JD parsing
+      // can start later and modelRouter may try more than one adapter, so
+      // re-resolve the same server token before every provider attempt. A
+      // revoked posting, ownership change, expired token, or CMS role outage
+      // therefore closes the model boundary instead of authorizing from this
+      // stale in-memory handoff.
+      beforeJobDescriptionProviderCall = async () => {
+        const current = await resolvePracticeHandoff(
+          validated.jobsHandoffToken!,
+          session.user.id
+        )
+        return !!current &&
+          current.jobId === handoff.jobId &&
+          current.jdHash === handoff.jdHash &&
+          current.role === handoff.role
+      }
     }
 
     const interviewSession = await createSession({
@@ -85,6 +102,7 @@ export async function POST(req: NextRequest) {
       organizationId: session.user.organizationId,
       config,
       verifiedJobsAttribution,
+      beforeJobDescriptionProviderCall,
       templateId: validated.templateId,
       candidateEmail: validated.candidateEmail,
       candidateName: validated.candidateName,
@@ -103,6 +121,15 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     if (err instanceof AppError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.statusCode })
+    }
+    if (err instanceof Error && err.name === 'ModelProviderPreconditionError') {
+      return NextResponse.json(
+        {
+          error: 'This job practice link expired or changed. Return to the job and start again.',
+          code: 'JOBS_HANDOFF_INVALID',
+        },
+        { status: 409 }
+      )
     }
     if (err instanceof ZodError) {
       return NextResponse.json(

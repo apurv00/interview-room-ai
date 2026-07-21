@@ -4,11 +4,14 @@ interface RetryJSONOptions {
   maxRetries?: number
   baseDelayMs?: number
   timeoutMs?: number
+  /** Re-checked for every physical attempt, including retries. False or
+   *  throw aborts as authority loss and never reaches fetch(). */
+  beforePhysicalRequest?: () => boolean | void | Promise<boolean | void>
 }
 
 export type FetchJSONResult<T> =
   | { ok: true; data: T; status: number }
-  | { ok: false; status: number; error: string }
+  | { ok: false; status: number; error: string; authorityChanged?: true; attempts?: number }
 
 /**
  * JSON fetch with per-attempt timeout and exponential backoff. Returns a
@@ -24,7 +27,7 @@ export async function fetchJSONWithRetry<T>(
   init: RequestInit = {},
   options: RetryJSONOptions = {}
 ): Promise<FetchJSONResult<T>> {
-  const { maxRetries = 3, baseDelayMs = 1000, timeoutMs = 15000 } = options
+  const { maxRetries = 3, baseDelayMs = 1000, timeoutMs = 15000, beforePhysicalRequest } = options
   // Compose the caller's signal with the per-attempt timeout instead of
   // clobbering it (Codex on #507): upstream cancellation (Inngest step
   // deadline, route abort) must kill the in-flight request AND the retry
@@ -35,6 +38,15 @@ export async function fetchJSONWithRetry<T>(
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     if (callerSignal?.aborted) return { ok: false, status: lastStatus, error: 'aborted' }
+    if (beforePhysicalRequest) {
+      try {
+        if ((await beforePhysicalRequest()) === false) {
+          return { ok: false, status: 0, error: 'source-authority-changed', authorityChanged: true, attempts: attempt }
+        }
+      } catch {
+        return { ok: false, status: 0, error: 'source-authority-changed', authorityChanged: true, attempts: attempt }
+      }
+    }
     const controller = new AbortController()
     const onCallerAbort = () => controller.abort()
     callerSignal?.addEventListener('abort', onCallerAbort, { once: true })

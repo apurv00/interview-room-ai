@@ -33,6 +33,17 @@ export interface FetchResult {
   watermark?: string
   /** Physical request count (RapidAPI bills attempts — metered, not logical calls). */
   attempts: number
+  /** The source's exact control revision stopped authorizing outbound work.
+   *  This is a lifecycle abort, not a provider/network health failure. */
+  authorityChanged?: true
+}
+
+/** Called immediately before each provider HTTP request. False or throw =
+ *  authority was withdrawn; adapters must stop without another request. */
+export type BeforePhysicalRequest = () => boolean | void | Promise<boolean | void>
+
+export interface AdapterFetchOptions {
+  beforePhysicalRequest?: BeforePhysicalRequest
 }
 
 export interface NormalizedApplyOption {
@@ -61,7 +72,7 @@ export interface JobSourceAdapter {
   readonly sourceId: string
   readonly kind: IJobSourceConfig['kind']
   buildTargets(config: Pick<IJobSourceConfig, 'sourceId' | 'enabled'> & Partial<Pick<IJobSourceConfig, 'slug' | 'atsKind' | 'displayName'>>, cursors: Array<Pick<IJobIngestCursor, 'bucket' | 'newestPostedAt' | 'lastPage'>>): FetchTarget[]
-  fetch(target: FetchTarget): Promise<FetchResult>
+  fetch(target: FetchTarget, options?: AdapterFetchOptions): Promise<FetchResult>
   normalize(raw: unknown, target: FetchTarget): NormalizedJob | null
   classifyApplyUrl(url: string): ApplyTier
 }

@@ -12,8 +12,10 @@ import type { EmailFooterInput } from '../emails/shared'
  * all automatic re-attempts are bounded to 24h of first-due (callers
  * enforce due-window bounds; this service enforces the ledger).
  *
- * Failure semantics: two same-run attempts; still unsent → an UNSTAMPED
- * ledger row is written. That row is simultaneously the alert (the
+ * Failure semantics: two same-run, still-authorized attempts; still unsent
+ * → an UNSTAMPED ledger row is written. Authority changing after ANY
+ * provider attempt takes the same alert path because a timeout may have
+ * consumed the idempotency key. That row is simultaneously the alert (the
  * dashboard's alert-now metric counts unstamped e0/e2 at any age) and the
  * suppression (the dedupeKey is burned — no automatic resend; a human
  * decides from the dashboard). Codex #530/#531.
@@ -62,13 +64,42 @@ export interface TransactionalSendInput {
   subject: string
   html: string
   footer: EmailFooterInput
+  /** Optional source-of-truth check performed immediately before EACH
+   *  provider attempt. A confirmed false sends nothing and leaves no ledger
+   *  row only when no provider call has occurred. An exception before the
+   *  first attempt propagates so durable work can retry. Once a provider call
+   *  has happened, any later gate change is delivery-uncertain and burns an
+   *  unstamped alert row: a timeout may have consumed the idempotency key. */
+  beforeDelivery?: () => Promise<boolean>
 }
 
 export type TransactionalSendOutcome =
   | { outcome: 'sent'; resendId?: string }
   | { outcome: 'already-sent' }
   | { outcome: 'suppressed' }
+  | { outcome: 'precondition-failed' }
+  | { outcome: 'delivery-uncertain-alerted' }
   | { outcome: 'failed-alerted' }
+
+async function burnTransactionalKey(
+  input: Pick<TransactionalSendInput, 'userId' | 'stream' | 'dedupeKey'>,
+  message: string,
+  err?: unknown,
+): Promise<void> {
+  logger.error(
+    { ...(err ? { err } : {}), userId: input.userId, stream: input.stream, dedupeKey: input.dedupeKey },
+    message,
+  )
+  try {
+    await JobsEmailSend.create({
+      userId: input.userId,
+      stream: input.stream,
+      dedupeKey: input.dedupeKey,
+    })
+  } catch (createError) {
+    if ((createError as { code?: number }).code !== 11000) throw createError
+  }
+}
 
 export async function sendTransactional(input: TransactionalSendInput): Promise<TransactionalSendOutcome> {
   // Ledger first as a READ: an existing row (stamped or not) means this
@@ -80,22 +111,89 @@ export async function sendTransactional(input: TransactionalSendInput): Promise<
   }).lean()
   if (existing) return { outcome: 'already-sent' }
 
-  // Final pref re-check immediately before the send (review R24): an
-  // in-window unsubscribe wins over any earlier derivation.
-  const user = await User.findById(input.userId).select('emailPreferences.jobs.unsubscribedStreams').lean()
-  if (isSuppressed(user?.emailPreferences?.jobs?.unsubscribedStreams, input.stream)) {
-    return { outcome: 'suppressed' }
-  }
-
   // Send-first with provider idempotency; two same-run attempts.
   let sent = false
   let resendId: string | undefined
+  let headers: Record<string, string> | undefined
   for (let attempt = 0; attempt < 2 && !sent; attempt++) {
+    try {
+      // Preferences, account existence, and the exact recipient are all
+      // authority: a deletion, address change, or unsubscribe that lands
+      // between provider attempts must win before the next call.
+      const user = await User.findById(input.userId)
+        .select('email emailPreferences.jobs.unsubscribedStreams')
+        .lean()
+      let recipientChanged = !user?.email || user.email !== input.to
+      let suppressed = isSuppressed(user?.emailPreferences?.jobs?.unsubscribedStreams, input.stream)
+      if (recipientChanged || suppressed) {
+        if (attempt === 0) {
+          return { outcome: suppressed ? 'suppressed' : 'precondition-failed' }
+        }
+        await burnTransactionalKey(
+          input,
+          'transactional email recipient authority changed after provider attempt — delivery uncertain',
+        )
+        return { outcome: 'delivery-uncertain-alerted' }
+      }
+
+      // Re-check on every attempt, not merely once before the retry loop. A
+      // legal restriction can commit after a failed provider attempt and must
+      // win before the next one.
+      if (input.beforeDelivery && !(await input.beforeDelivery())) {
+        if (attempt === 0) {
+          logger.info(
+            { userId: input.userId, stream: input.stream, dedupeKey: input.dedupeKey },
+            'transactional email pre-delivery condition changed — delivery skipped',
+          )
+          return { outcome: 'precondition-failed' }
+        }
+        await burnTransactionalKey(
+          input,
+          'transactional email pre-delivery condition changed after provider attempt — delivery uncertain',
+        )
+        return { outcome: 'delivery-uncertain-alerted' }
+      }
+
+      // `beforeDelivery` may itself await CMS and Mongo. Close that window by
+      // re-reading account existence, recipient identity, and suppression
+      // after it resolves. The remaining Mongo→provider gap is irreducible,
+      // but an unsubscribe/delete/address change during policy preparation
+      // must not be missed.
+      if (input.beforeDelivery) {
+        const finalUser = await User.findById(input.userId)
+          .select('email emailPreferences.jobs.unsubscribedStreams')
+          .lean()
+        recipientChanged = !finalUser?.email || finalUser.email !== input.to
+        suppressed = isSuppressed(finalUser?.emailPreferences?.jobs?.unsubscribedStreams, input.stream)
+        if (recipientChanged || suppressed) {
+          if (attempt === 0) {
+            return { outcome: suppressed ? 'suppressed' : 'precondition-failed' }
+          }
+          await burnTransactionalKey(
+            input,
+            'transactional email recipient authority changed after provider attempt — delivery uncertain',
+          )
+          return { outcome: 'delivery-uncertain-alerted' }
+        }
+      }
+    } catch (err) {
+      if (attempt === 0) throw err
+      await burnTransactionalKey(
+        input,
+        'transactional email delivery gate failed after provider attempt — delivery uncertain',
+        err,
+      )
+      return { outcome: 'delivery-uncertain-alerted' }
+    }
+
+    // Freeze signed headers for this operation. Minting inside the retry
+    // loop changes the Resend payload while reusing one idempotency key.
+    headers ??= oneClickHeaders(input.userId, input.stream)
     const res = await sendEmail({
       to: input.to,
       subject: input.subject,
       html: input.html,
-      headers: oneClickHeaders(input.userId, input.stream),
+      headers,
       idempotencyKey: `${input.stream}/${input.dedupeKey}`,
     })
     if (res.ok) {
@@ -107,36 +205,40 @@ export async function sendTransactional(input: TransactionalSendInput): Promise<
   if (sent) {
     // Record AFTER a successful send. A crash between send and record is
     // covered by the idempotency key within 24h; callers never re-derive
-    // past the due window.
-    try {
-      await JobsEmailSend.create({
-        userId: input.userId,
-        stream: input.stream,
-        dedupeKey: input.dedupeKey,
+    // past the due window. Upsert (rather than create) also stamps an
+    // unstamped row won by a concurrent failure path. If both operations
+    // observe no row and race their inserts, Mongo's unique index rejects
+    // this upsert with E11000; the losing success path then updates the row
+    // that won, so confirmed delivery can never remain alert-unstamped.
+    const ledgerFilter = {
+      userId: input.userId,
+      stream: input.stream,
+      dedupeKey: input.dedupeKey,
+    }
+    const successStamp = {
+      $set: {
         sentAt: new Date(),
-        resendId,
-      })
+        ...(resendId ? { resendId } : {}),
+      },
+    }
+    try {
+      await JobsEmailSend.updateOne(ledgerFilter, successStamp, { upsert: true })
     } catch (err) {
-      if ((err as { code?: number }).code !== 11000) throw err // duplicate = benign race
+      if ((err as { code?: number }).code !== 11000) throw err
+      // The only unique index is the exact ledger identity above. A
+      // concurrent burn/success inserted it between our read and upsert;
+      // atomically promote that winner to confirmed delivery.
+      await JobsEmailSend.updateOne(ledgerFilter, successStamp)
     }
     return { outcome: 'sent', resendId }
   }
 
   // Both attempts failed: burn the key with an UNSTAMPED row — the
   // dashboard's alert-now class — and log at error level immediately.
-  logger.error(
-    { userId: input.userId, stream: input.stream, dedupeKey: input.dedupeKey },
-    'transactional email send failed after retries — unstamped ledger row written (alert-now)'
+  await burnTransactionalKey(
+    input,
+    'transactional email send failed after retries — unstamped ledger row written (alert-now)',
   )
-  try {
-    await JobsEmailSend.create({
-      userId: input.userId,
-      stream: input.stream,
-      dedupeKey: input.dedupeKey,
-    })
-  } catch (err) {
-    if ((err as { code?: number }).code !== 11000) throw err
-  }
   return { outcome: 'failed-alerted' }
 }
 
@@ -187,23 +289,39 @@ export async function sendSolicitation(input: SolicitationSendInput): Promise<So
   }
   if (reserved.length === 0) return { outcome: 'all-reserved' }
 
-  // Final suppression re-check between reservation and delivery (Codex
-  // #533, mirroring the transactional R24 check): an in-window one-click
-  // unsubscribe wins. Releasing the unsent reservations un-burns the keys
-  // — the next sweep's upstream suppression filter keeps them silent.
-  const user = await User.findById(input.userId).select('emailPreferences.jobs').lean()
-  const jobsPrefs = user?.emailPreferences?.jobs as { nudges?: boolean; digest?: boolean; unsubscribedStreams?: string[] } | undefined
-  if (
-    isSuppressed(jobsPrefs?.unsubscribedStreams, input.stream) ||
-    jobsPrefs?.[input.coarseToggle] === false
-  ) {
+  const releaseReservations = async () => {
     await JobsEmailSend.deleteMany({
       userId: input.userId,
       stream: input.stream,
       dedupeKey: { $in: reserved },
       sentAt: { $exists: false },
     })
-    return { outcome: 'suppressed' }
+  }
+
+  const readAuthorityFailure = async (): Promise<'suppressed' | 'precondition-failed' | null> => {
+    const currentUser = await User.findById(input.userId)
+      .select('email emailPreferences.jobs')
+      .lean()
+    if (!currentUser?.email || currentUser.email !== input.to) return 'precondition-failed'
+    const jobsPrefs = currentUser.emailPreferences?.jobs as {
+      nudges?: boolean
+      digest?: boolean
+      unsubscribedStreams?: string[]
+    } | undefined
+    return isSuppressed(jobsPrefs?.unsubscribedStreams, input.stream) ||
+      jobsPrefs?.[input.coarseToggle] === false
+      ? 'suppressed'
+      : null
+  }
+
+  // Final suppression re-check between reservation and delivery (Codex
+  // #533, mirroring the transactional R24 check): an in-window one-click
+  // unsubscribe wins. Releasing the unsent reservations un-burns the keys
+  // — the next sweep's upstream suppression filter keeps them silent.
+  const initialAuthorityFailure = await readAuthorityFailure()
+  if (initialAuthorityFailure) {
+    await releaseReservations()
+    return { outcome: initialAuthorityFailure }
   }
 
   if (input.beforeDelivery) {
@@ -217,13 +335,17 @@ export async function sendSolicitation(input: SolicitationSendInput): Promise<So
       )
     }
     if (!permitted) {
-      await JobsEmailSend.deleteMany({
-        userId: input.userId,
-        stream: input.stream,
-        dedupeKey: { $in: reserved },
-        sentAt: { $exists: false },
-      })
+      await releaseReservations()
       return { outcome: 'precondition-failed' }
+    }
+
+    // Preference and recipient authority can change while the source-of-
+    // truth callback awaits CMS/DB. Re-read them after the callback, not only
+    // before it, so the delivery address and consent match the final send.
+    const finalAuthorityFailure = await readAuthorityFailure()
+    if (finalAuthorityFailure) {
+      await releaseReservations()
+      return { outcome: finalAuthorityFailure }
     }
   }
 

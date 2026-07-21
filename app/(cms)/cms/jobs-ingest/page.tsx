@@ -9,6 +9,12 @@ interface SourceRow {
   kind: string
   enabled: boolean
   health: string
+  controlRevision: number
+  lastControl: {
+    revision: number
+    action: 'revoke' | 'restore'
+    at: string
+  } | null
   cadenceMinutes: number
   lastSyncAt: string | null
 }
@@ -59,7 +65,15 @@ interface VerdictPanel {
 interface Payload {
   sources: SourceRow[]
   cycles: CycleRow[]
-  corpus: { open: number; closed: number }
+  corpus: {
+    open: number
+    closed: number
+    retained: number
+    retainedWarningAt: number
+    retainedLimit: number
+    retainedHeadroom: number
+    retainedWarning: boolean
+  }
   verdict: VerdictPanel
 }
 
@@ -86,16 +100,48 @@ export default function JobsIngestPage() {
   if (error) return <main className="p-8 text-red-600">Failed to load: {error}</main>
   if (!data) return <main className="p-8 text-gray-500">Loading…</main>
 
+  const retainedOverLimit = data.corpus.retainedHeadroom < 0
+
   return (
     <main className="mx-auto max-w-5xl p-8">
       <h1 className="text-2xl font-semibold">Jobs Ingest</h1>
 
-      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Open corpus" value={data.corpus.open} />
         <Stat label="Closed" value={data.corpus.closed} />
+        <Stat
+          label={`Retained / ${data.corpus.retainedLimit.toLocaleString()}`}
+          value={data.corpus.retained.toLocaleString()}
+        />
+        <Stat
+          label={retainedOverLimit ? 'Over limit' : 'Headroom'}
+          value={Math.abs(data.corpus.retainedHeadroom).toLocaleString()}
+        />
         <Stat label="Sources" value={data.sources.length} />
         <Stat label="Cycles (recent)" value={data.cycles.length} />
       </div>
+
+      {data.corpus.retainedWarning ? (
+        <div
+          role="alert"
+          className={`mt-4 rounded-lg border p-4 text-sm ${
+            retainedOverLimit
+              ? 'border-red-300 bg-red-50 text-red-800'
+              : 'border-amber-300 bg-amber-50 text-amber-900'
+          }`}
+        >
+          <p className="font-medium">
+            {retainedOverLimit
+              ? 'Retained corpus exceeds the smoke-proven source-control limit.'
+              : 'Retained corpus has reached the source-control warning threshold.'}
+          </p>
+          <p className="mt-1">
+            {retainedOverLimit
+              ? `${Math.abs(data.corpus.retainedHeadroom).toLocaleString()} rows are over the ${data.corpus.retainedLimit.toLocaleString()}-row deployment invariant. Pause ingestion and remediate the retained corpus before retrying source revocation.`
+              : `${data.corpus.retainedHeadroom.toLocaleString()} rows of headroom remain before the ${data.corpus.retainedLimit.toLocaleString()}-row limit (warning at ${data.corpus.retainedWarningAt.toLocaleString()}). Review retention and capacity before headroom reaches zero.`}
+          </p>
+        </div>
+      ) : null}
 
       <h2 className="mt-10 text-lg font-medium">Sources</h2>
       <div className="mt-3 overflow-x-auto">
@@ -103,7 +149,8 @@ export default function JobsIngestPage() {
           <thead>
             <tr className="border-b text-left text-gray-500">
               <th className="py-2 pr-4">Source</th><th className="pr-4">Kind</th><th className="pr-4">Enabled</th>
-              <th className="pr-4">Health</th><th className="pr-4">Cadence</th><th>Last sync</th>
+              <th className="pr-4">Health</th><th className="pr-4">Authority</th>
+              <th className="pr-4">Last legal action</th><th className="pr-4">Cadence</th><th>Last sync</th>
             </tr>
           </thead>
           <tbody>
@@ -113,6 +160,12 @@ export default function JobsIngestPage() {
                 <td className="pr-4">{s.kind}</td>
                 <td className="pr-4">{s.enabled ? '✅' : '—'}</td>
                 <td className="pr-4">{s.health}</td>
+                <td className="pr-4 font-mono">r{s.controlRevision}</td>
+                <td className="pr-4">
+                  {s.lastControl
+                    ? `${s.lastControl.action} r${s.lastControl.revision} · ${new Date(s.lastControl.at).toLocaleString()}`
+                    : 'none'}
+                </td>
                 <td className="pr-4">{s.cadenceMinutes}m</td>
                 <td>{s.lastSyncAt ? new Date(s.lastSyncAt).toLocaleString() : 'never'}</td>
               </tr>

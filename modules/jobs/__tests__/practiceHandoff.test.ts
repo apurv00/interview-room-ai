@@ -1,17 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
-const { mockPostingFindById, mockApplicationFindOne, mockConnectDB, mockGetActiveCatalog } = vi.hoisted(() => ({
+const {
+  mockPostingFindById,
+  mockPostingExists,
+  mockApplicationFindOne,
+  mockApplicationExists,
+  mockConnectDB,
+  mockGetActiveCatalog,
+} = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
+  mockPostingExists: vi.fn().mockResolvedValue({ _id: 'posting-authoritative' }),
   mockApplicationFindOne: vi.fn(),
+  mockApplicationExists: vi.fn().mockResolvedValue({ _id: 'application-authoritative' }),
   mockConnectDB: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findById: mockPostingFindById },
-  JobApplication: { findOne: mockApplicationFindOne },
+  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
+  JobApplication: { findOne: mockApplicationFindOne, exists: mockApplicationExists },
 }))
 vi.mock('@interview/services/persona/domainCatalogService', () => ({
   getActiveInterviewDomainCatalog: mockGetActiveCatalog,
@@ -134,6 +143,47 @@ describe('Jobs practice handoff', () => {
 
     expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
     expect(mockApplicationFindOne).not.toHaveBeenCalled()
+  })
+
+  it('returns no handoff when source revocation commits during CMS preparation', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockPostingExists.mockResolvedValueOnce(null)
+
+    expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
+    expect(mockPostingExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: JOB_ID,
+      status: 'open',
+      closedReason: { $exists: false },
+    }))
+  })
+
+  it('requires archived ownership to survive the preparation await', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockPostingFindById.mockReturnValue(selectLean({
+      company: 'PhonePe',
+      domain: 'backend',
+      status: 'closed',
+      closedReason: 'aged-out',
+      jdCompressed: gzipSync(Buffer.from(JD)),
+    }))
+    mockApplicationExists.mockResolvedValueOnce(null)
+
+    expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
+    expect(mockApplicationExists).toHaveBeenCalledWith({
+      _id: 'app-canonical',
+      userId: USER_ID,
+      jobPostingId: JOB_ID,
+    })
+  })
+
+  it('omits a live application identity deleted during preparation without blocking practice', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockApplicationExists.mockResolvedValueOnce(null)
+
+    const resolved = await resolvePracticeHandoff(token, USER_ID, NOW)
+
+    expect(resolved).toMatchObject({ jobId: JOB_ID, jobDescription: DISPLAY_JD })
+    expect(resolved?.applicationId).toBeUndefined()
   })
 
   it('falls back to canonical JD when a corrupt display twin does not match the signed hash', async () => {

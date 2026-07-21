@@ -11,6 +11,7 @@ import {
 interface CachedConnection {
   conn: typeof mongoose | null
   promise: Promise<typeof mongoose> | null
+  schemaInitialization: 'default' | 'disabled' | null
 }
 
 /**
@@ -66,7 +67,7 @@ const globalWithMongoose = global as typeof globalThis & {
 }
 
 if (!globalWithMongoose.mongoose) {
-  globalWithMongoose.mongoose = { conn: null, promise: null }
+  globalWithMongoose.mongoose = { conn: null, promise: null, schemaInitialization: null }
 }
 
 const cached = globalWithMongoose.mongoose
@@ -77,7 +78,13 @@ function isConnected(): boolean {
   return mongoose.connection.readyState === 1
 }
 
-export async function connectDB(): Promise<typeof mongoose> {
+export interface ConnectDBOptions {
+  /** Disable Mongoose collection/index initialization for repair dry-runs and
+   *  read-only promotion checks. Explicit writes still work in --apply mode. */
+  schemaInitialization?: 'default' | 'disabled'
+}
+
+export async function connectDB(options: ConnectDBOptions = {}): Promise<typeof mongoose> {
   const MONGODB_URI = process.env.MONGODB_URI
   if (!MONGODB_URI) {
     throw new Error('MONGODB_URI environment variable is not defined')
@@ -88,11 +95,22 @@ export async function connectDB(): Promise<typeof mongoose> {
   // would silently return a stale handle and the next query would fail
   // with an unhandled "(node:4) [MONGOOSE]" warning. Now we verify
   // readyState on every call and re-connect on mismatch.
-  if (cached.conn && isConnected()) return cached.conn
   if (cached.conn && !isConnected()) {
     cached.conn = null
     cached.promise = null
+    cached.schemaInitialization = null
   }
+
+  const requestedSchemaInitialization = options.schemaInitialization ?? 'default'
+  if (cached.conn || cached.promise) {
+    const activeSchemaInitialization = cached.schemaInitialization ?? 'default'
+    if (activeSchemaInitialization !== requestedSchemaInitialization) {
+      throw new Error(
+        `Mongo connection already initialized in ${activeSchemaInitialization} schema mode; refusing ${requestedSchemaInitialization}`,
+      )
+    }
+  }
+  if (cached.conn && isConnected()) return cached.conn
 
   if (!cached.promise) {
     // Timeouts + pool size come from the shared constants module so this
@@ -100,12 +118,20 @@ export async function connectDB(): Promise<typeof mongoose> {
     // `mongoClient.ts` used by NextAuth. Pre-2026-04-22 the two were
     // hardcoded separately and had drifted; see shared/db/mongoConfig.ts
     // for the incident context.
+    cached.schemaInitialization = requestedSchemaInitialization
     const pending = mongoose.connect(MONGODB_URI, {
       bufferCommands: false,
+      // Legal/source-authority gates must never inherit a stale-secondary
+      // preference from a deployment URI. This preserves Mongo's normal
+      // default while making the safety boundary explicit for every caller.
+      readPreference: 'primary',
       maxPoolSize: MONGO_MAX_POOL_SIZE,
       serverSelectionTimeoutMS: MONGO_SERVER_SELECTION_TIMEOUT_MS,
       socketTimeoutMS: MONGO_SOCKET_TIMEOUT_MS,
       connectTimeoutMS: MONGO_CONNECT_TIMEOUT_MS,
+      ...(requestedSchemaInitialization === 'disabled'
+        ? { autoIndex: false, autoCreate: false }
+        : {}),
     })
     // Attach a no-op `.catch` so that if the caller is delayed or a
     // parallel invocation doesn't await this promise, Node never logs an
@@ -120,9 +146,9 @@ export async function connectDB(): Promise<typeof mongoose> {
   } catch (e) {
     cached.promise = null
     cached.conn = null
+    cached.schemaInitialization = null
     throw e
   }
 
   return cached.conn
 }
-

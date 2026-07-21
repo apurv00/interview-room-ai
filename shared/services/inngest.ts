@@ -65,6 +65,9 @@ export type InngestEvents = {
   'jobs/source.sync': {
     data: {
       sourceId: string
+      /** A02 authority epoch: a queued event can never cross a later legal
+       *  revoke/restore transition. */
+      controlRevision: number
     }
   }
   // Jobs LLM verdict (Wave 2.3, §4.5): ids only, ≤40 per event.

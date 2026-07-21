@@ -60,6 +60,46 @@ describe('fetchJSONWithRetry', () => {
     expect(f).toHaveBeenCalledTimes(2)
   })
 
+  it('reauthorizes every retry and blocks the next physical request after revocation', async () => {
+    const f = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      body: { cancel: vi.fn().mockResolvedValue(undefined) },
+    })
+    const beforePhysicalRequest = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    vi.stubGlobal('fetch', f)
+
+    const r = await fetchJSONWithRetry('https://x.test/a', {}, {
+      baseDelayMs: 1,
+      beforePhysicalRequest,
+    })
+
+    expect(r).toEqual({
+      ok: false,
+      status: 0,
+      error: 'source-authority-changed',
+      authorityChanged: true,
+      attempts: 1,
+    })
+    expect(beforePhysicalRequest).toHaveBeenCalledTimes(2)
+    expect(f).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['false', vi.fn().mockResolvedValue(false)],
+    ['throw', vi.fn().mockRejectedValue(new Error('revision revoked'))],
+  ])('treats an authority %s as lifecycle abort, never provider failure', async (_mode, beforePhysicalRequest) => {
+    const f = vi.fn()
+    vi.stubGlobal('fetch', f)
+
+    const r = await fetchJSONWithRetry('https://x.test/a', {}, { beforePhysicalRequest })
+
+    expect(r).toMatchObject({ ok: false, authorityChanged: true, attempts: 0 })
+    expect(f).not.toHaveBeenCalled()
+  })
+
   it('[Cx-507] unread retryable bodies are cancelled before backoff (socket release)', async () => {
     const cancel503 = vi.fn().mockResolvedValue(undefined)
     const cancel404 = vi.fn().mockResolvedValue(undefined)

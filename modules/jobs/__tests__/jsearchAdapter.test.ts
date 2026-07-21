@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { jsearchAdapter, buildHarvestBuckets } from '@jobs'
 import type { FetchTarget } from '@jobs'
 
@@ -69,6 +69,24 @@ describe('jsearchAdapter.buildTargets', () => {
 
   it('disabled source emits nothing', () => {
     expect(jsearchAdapter.buildTargets({ sourceId: 'jsearch', enabled: false }, [])).toEqual([])
+  })
+
+  it('an authority revoke blocks the metered request and is not a provider-health error', async () => {
+    const previousKey = process.env.RAPIDAPI_KEY
+    process.env.RAPIDAPI_KEY = 'test-key'
+    const fetchSpy = vi.fn()
+    const beforePhysicalRequest = vi.fn().mockResolvedValue(false)
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const res = await jsearchAdapter.fetch(bucketTarget, { beforePhysicalRequest })
+      expect(res).toEqual({ ok: false, status: 0, raw: [], attempts: 0, authorityChanged: true })
+      expect(beforePhysicalRequest).toHaveBeenCalledOnce()
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+      if (previousKey === undefined) delete process.env.RAPIDAPI_KEY
+      else process.env.RAPIDAPI_KEY = previousKey
+    }
   })
 })
 
