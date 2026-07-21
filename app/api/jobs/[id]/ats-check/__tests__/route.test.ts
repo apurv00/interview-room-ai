@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockGetServerSession, mockConnectDB, mockApplicationFindOne, mockPostingFindById,
   mockGetBaseResume, mockClaimAtsRun, mockReleaseAtsClaim, mockPreparePractice, mockInngestSend,
+  mockCheckJobsRateLimit,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockConnectDB: vi.fn(),
@@ -13,12 +14,14 @@ const {
   mockReleaseAtsClaim: vi.fn(),
   mockPreparePractice: vi.fn(),
   mockInngestSend: vi.fn(),
+  mockCheckJobsRateLimit: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend } }))
+vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
 vi.mock('@shared/db/models', () => ({
   JobApplication: { findOne: mockApplicationFindOne },
   JobPosting: { findById: mockPostingFindById },
@@ -54,9 +57,24 @@ beforeEach(() => {
   mockClaimAtsRun.mockResolvedValue({ claimed: true, claimedAt: new Date('2026-07-20T12:00:00.000Z') })
   mockReleaseAtsClaim.mockResolvedValue(undefined)
   mockInngestSend.mockResolvedValue(undefined)
+  mockCheckJobsRateLimit.mockResolvedValue(null)
 })
 
 describe('POST /api/jobs/[id]/ats-check lifecycle authorization', () => {
+  it('applies the ATS budget after authentication and before database work', async () => {
+    mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': '60' },
+    }))
+
+    const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }), { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('Retry-After')).toBe('60')
+    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(USER_ID, 'ats-check')
+    expect(mockConnectDB).not.toHaveBeenCalled()
+  })
+
   it('queues a live or normally archived owner check with a canonical JD', async () => {
     let response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }), { params: { id: JOB_ID } })
     expect(response.status).toBe(200)

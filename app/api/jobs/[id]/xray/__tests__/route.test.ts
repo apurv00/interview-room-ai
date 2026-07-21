@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockGetServerSession, mockConnectDB, mockGetOrParseXray } = vi.hoisted(() => ({
+const { mockGetServerSession, mockConnectDB, mockGetOrParseXray, mockCheckJobsRateLimit } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockConnectDB: vi.fn(),
   mockGetOrParseXray: vi.fn(),
+  mockCheckJobsRateLimit: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@jobs', () => ({ getOrParseXray: mockGetOrParseXray }))
+vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
 
 import { GET } from '../route'
 
@@ -19,9 +21,27 @@ const JOB_ID = '507f1f77bcf86cd799439011'
 beforeEach(() => {
   vi.clearAllMocks()
   mockConnectDB.mockResolvedValue(undefined)
+  mockCheckJobsRateLimit.mockResolvedValue(null)
 })
 
 describe('GET /api/jobs/[id]/xray owner-aware cache policy', () => {
+  it('applies the X-ray budget before database or model work and keeps 429 private', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': '60' },
+    }))
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}/xray`), { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('Retry-After')).toBe('60')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(USER_ID, 'xray')
+    expect(mockConnectDB).not.toHaveBeenCalled()
+    expect(mockGetOrParseXray).not.toHaveBeenCalled()
+  })
+
   it('passes the exact session user to the service and keeps the response private', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
     mockGetOrParseXray.mockResolvedValue({

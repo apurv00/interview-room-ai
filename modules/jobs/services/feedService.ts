@@ -9,6 +9,8 @@ import {
   preparePracticeHandoffPosting,
 } from './practiceHandoff'
 import { jobPostingStateOf, type JobPostingState } from './postingAccess'
+import { canonicalApplyOptionsOf } from './applyOptionIdentity'
+import { canonicalizeCheckableLink } from './safeLinkNetwork'
 
 /**
  * Feed serving (PRODUCT_FLOW §1 Stage 0, Wave 3.1) — Tier-A DETERMINISTIC
@@ -98,17 +100,12 @@ const DEMOTION = { staffing: 10, shortJd: 8, repost: 6, confidential: 4 } as con
 const RECENCY_MAX = 25
 const RECENCY_WINDOW_DAYS = 21
 
-/** Only http(s) ever reaches a client — ingestion blocklists HOSTS, not
- *  schemes, so a provider payload carrying `javascript:`/`data:` could be
- *  stored with a tier; this projection is the last line before window.open
- *  (Codex on #517). */
+/** Browser-navigation policy shared with the production link checker: only
+ * credential-free HTTP(S) on default ports, excluding localhost and every
+ * non-global IP literal, may reach a candidate. DNS names remain subject to
+ * the server-side pinned resolver when the liveness worker checks them. */
 export function isSafeHttpUrl(u: string): boolean {
-  try {
-    const proto = new URL(u).protocol
-    return proto === 'http:' || proto === 'https:'
-  } catch {
-    return false
-  }
+  return canonicalizeCheckableLink(u) !== null
 }
 
 export function bestApplyTierOf(doc: Pick<IJobPosting, 'provenance'>): ApplyTier | undefined {
@@ -118,12 +115,12 @@ export function bestApplyTierOf(doc: Pick<IJobPosting, 'provenance'>): ApplyTier
   // reported, fall back to the best of them (demote, never hide).
   let bestClean: ApplyTier | undefined
   let bestAny: ApplyTier | undefined
-  for (const p of doc.provenance ?? []) {
-    if (!p.applyUrl || !isSafeHttpUrl(p.applyUrl)) continue // badge honesty: never advertise a path we won't serve
-    if (!p.applyTier) continue
-    const tier = p.applyTier as ApplyTier
+  for (const option of canonicalApplyOptionsOf(doc.provenance)) {
+    // Badge honesty: derive from exactly the same structurally safe,
+    // non-blocklisted canonical set the detail ladder and mutations serve.
+    const tier = option.tier
     if (!bestAny || TIER_RANK[tier] < TIER_RANK[bestAny]) bestAny = tier
-    if (!(p.brokenReportCount ?? 0) && (!bestClean || TIER_RANK[tier] < TIER_RANK[bestClean])) bestClean = tier
+    if (!option.broken && (!bestClean || TIER_RANK[tier] < TIER_RANK[bestClean])) bestClean = tier
   }
   return bestClean ?? bestAny
 }
@@ -285,7 +282,7 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
   practiceRole?: string
   practiceHandoffToken?: string
   /** Tier-honest apply ladder, best-first — subtitles are the UI's job. */
-  applyOptions: Array<{ url: string; tier: ApplyTier; viaSite?: string }>
+  applyOptions: Array<{ optionId: string; url: string; tier: ApplyTier; viaSite?: string }>
   flags: { staffing: boolean; shortJd: boolean; repost: boolean }
   /** The caller's own tracker row (chip + evidence ticker + ATS inputs). */
   application: {
@@ -390,13 +387,11 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     : await preparePracticeHandoffPosting(doc)
   const jd = practice.jobDescription
   const applyOptions = postingState === 'live'
-    ? (doc.provenance ?? [])
-        .filter((p) => p.applyUrl && p.applyTier && isSafeHttpUrl(p.applyUrl))
-        .map((p) => ({ url: p.applyUrl as string, tier: p.applyTier as ApplyTier, viaSite: p.viaSite, broken: (p.brokenReportCount ?? 0) > 0 }))
+    ? canonicalApplyOptionsOf(doc.provenance)
         // Crowd-healed ladder (§4b): rungs with dead-click reports sink below
         // clean ones — demoted, never hidden (they may still work for others).
         .sort((a, b) => Number(a.broken) - Number(b.broken) || TIER_RANK[a.tier] - TIER_RANK[b.tier])
-        .map(({ url, tier, viaSite }) => ({ url, tier, viaSite }))
+        .map(({ optionId, url, tier, viaSite }) => ({ optionId, url, tier, viaSite }))
     : []
   // An atsResult is 'done' only for the CURRENT (resume x JD) pair (Codex
   // on #521): a JD merge OR a resume edit re-opens the check. The resume

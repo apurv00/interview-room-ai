@@ -18,7 +18,8 @@ import { retakeParentFromSearch } from '@interview/utils/retakeNavigation'
  * "view full posting" link so Apply clicks aren't polluted by read intent.
  */
 
-interface ApplyOption { url: string; tier: string; viaSite?: string }
+interface ApplyOption { optionId: string; url: string; tier: string; viaSite?: string }
+interface ApplyReturnArm extends ApplyOption { clickedAt: number }
 interface XrayReq { id: string; category: string; requirement: string; importance: 'must-have' | 'nice-to-have' }
 interface Xray { role: string; inferredDomain?: string; keyThemes: string[]; requirements: XrayReq[]; retryable?: boolean }
 interface Detail {
@@ -69,6 +70,30 @@ const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
 // Practice; successful X-ray responses keep the normal bounded read retries.
 const LOST_XRAY_READINESS_DELAYS_MS = [0, 250, 750, 2_000, 4_000, 8_000, 8_000, 8_000] as const
 const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
+const APPLY_OPTION_ID_RE = /^ao1_[A-Za-z0-9_-]{43}$/
+
+function parseApplyReturnArm(raw: string | null): ApplyReturnArm | null {
+  if (!raw) return null
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>
+    if (
+      !value || typeof value !== 'object' ||
+      typeof value.clickedAt !== 'number' || !Number.isFinite(value.clickedAt) || value.clickedAt <= 0 ||
+      typeof value.optionId !== 'string' || !APPLY_OPTION_ID_RE.test(value.optionId) ||
+      typeof value.url !== 'string' || !value.url ||
+      typeof value.tier !== 'string' || !value.tier
+    ) return null
+    return {
+      clickedAt: value.clickedAt,
+      optionId: value.optionId,
+      url: value.url,
+      tier: value.tier,
+      viaSite: typeof value.viaSite === 'string' ? value.viaSite : undefined,
+    }
+  } catch {
+    return null
+  }
+}
 
 export default function JobDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter()
@@ -81,7 +106,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [xrayAttempt, setXrayAttempt] = useState(0)
   const [atsBusy, setAtsBusy] = useState(false)
   const [atsHint, setAtsHint] = useState<string | null>(null)
-  const [sheet, setSheet] = useState<null | { kind: 'normal' | 'quick'; clicked: { url: string; tier: string }; elapsedMs: number }>(null)
+  const [sheet, setSheet] = useState<null | { kind: 'normal' | 'quick'; clicked: ApplyOption; elapsedMs: number }>(null)
   const [inference, setInference] = useState<'idle' | 'asking'>('idle')
   const [practiceEmail, setPracticeEmail] = useState<'idle' | 'sent' | 'email-off' | 'unavailable'>('idle')
   const [practiceStart, setPracticeStart] = useState<'idle' | 'loading' | 'error'>('idle')
@@ -481,7 +506,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     // after the click, within 45 minutes. localStorage — survives the
     // external-tab excursion.
     try {
-      localStorage.setItem(`JOBS_RETURN_${params.id}`, JSON.stringify({ clickedAt: Date.now(), url: opt.url, tier: opt.tier }))
+      localStorage.setItem(`JOBS_RETURN_${params.id}`, JSON.stringify({
+        clickedAt: Date.now(),
+        optionId: opt.optionId,
+        url: opt.url,
+        tier: opt.tier,
+        viaSite: opt.viaSite,
+      }))
     } catch { /* private mode — no sheet, the next-visit confirm card (4.2) catches it */ }
     // Machine fact (apply_clicked) + server-side telemetry in one call —
     // the JobApplication row transitions/creates even if this tab dies
@@ -489,7 +520,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     fetch(`/api/jobs/${params.id}/apply-click`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tier: opt.tier, url: opt.url }),
+      body: JSON.stringify({ optionId: opt.optionId }),
       keepalive: true,
     }).catch(() => {})
   }
@@ -559,19 +590,34 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           return
         }
         setDetail(fresh)
-        let rec: { clickedAt: number; url: string; tier: string } | null = null
-        try {
-          const raw = localStorage.getItem(`JOBS_RETURN_${params.id}`)
-          if (raw) rec = JSON.parse(raw)
-        } catch { /* noop */ }
-        if (!rec) return
+        const rec = parseApplyReturnArm(localStorage.getItem(`JOBS_RETURN_${params.id}`))
+        if (!rec) {
+          clearArm()
+          return
+        }
         const elapsed = Date.now() - rec.clickedAt
-        if (elapsed > 45 * 60_000) {
+        if (elapsed < 0 || elapsed > 45 * 60_000) {
+          clearArm()
+          return
+        }
+        // The arm is local UX state, not authority. Re-bind it to the freshly
+        // authorized option so a replaced URL/tier cannot trigger mutations
+        // or a misleading report sheet from a stale tab.
+        const currentOption = fresh.applyOptions?.find((option) => (
+          option.optionId === rec.optionId &&
+          option.url === rec.url &&
+          option.tier === rec.tier
+        ))
+        if (!currentOption) {
           clearArm()
           return
         }
         clearArm()
-        setSheet({ kind: elapsed >= 20_000 ? 'normal' : 'quick', clicked: { url: rec.url, tier: rec.tier }, elapsedMs: elapsed })
+        setSheet({
+          kind: elapsed >= 20_000 ? 'normal' : 'quick',
+          clicked: currentOption,
+          elapsedMs: elapsed,
+        })
       } catch {
         if (!cancelled) {
           try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
@@ -647,7 +693,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       await fetch(`/api/jobs/${params.id}/apply-click`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier: clicked.tier, url: clicked.url }),
+        body: JSON.stringify({ optionId: clicked.optionId }),
       }).catch(() => {})
       res = await post()
     }
@@ -668,7 +714,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       fetch(`/api/jobs/${params.id}/broken-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: clicked.url, tier: clicked.tier, hadFailover: alternates.length > 0 }),
+        body: JSON.stringify({ optionId: clicked.optionId }),
       }).catch(() => null)
     // The apply-click keepalive creates the application row this report
     // attaches to — if it's still in flight the first POST 404s; one retry

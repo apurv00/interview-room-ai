@@ -96,6 +96,7 @@
     "framer-motion": "^11.3.0",
     "inngest": "^4.2.0",
     "ioredis": "^5.10.0",
+    "ipaddr.js": "^2.4.0",
     "lucide-react": "^1.7.0",
     "mammoth": "^1.11.0",
     "monaco-editor": "^0.55.1",

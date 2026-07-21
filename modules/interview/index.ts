@@ -4,6 +4,7 @@ export { createSession, updateSession, getSession, listSessions, isDepthAllowedF
 // ── Services: Eval ──
 export { getScoringDimensions, buildRubricPromptSection, evaluateStructured, evaluateSession } from './services/eval/evaluationEngine'
 export type { SessionEvaluationSummary } from './services/eval/evaluationEngine'
+export { getShortFormMinAnswers } from './services/eval/sessionScoringPolicy'
 
 // ── Services: Persona ──
 export { generateSessionBrief, briefToPromptContext } from './services/persona/personalizationEngine'

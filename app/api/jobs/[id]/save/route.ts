@@ -2,11 +2,142 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
-import mongoose from 'mongoose'
+import mongoose, { type ClientSession } from 'mongoose'
 import { JobApplication, JobPosting, ProductEvent } from '@shared/db/models'
 import { logger } from '@shared/logger'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { jobPostingStateOf } from '@jobs/services/postingAccess'
 
 export const dynamic = 'force-dynamic'
+
+const SAVE_TRANSACTION_OPTIONS = {
+  readConcern: { level: 'snapshot' as const },
+  writeConcern: { w: 'majority' as const },
+}
+
+interface SavePostingSnapshot {
+  title?: string
+  company?: string
+  locations?: string[]
+  provenance?: unknown[]
+  status?: unknown
+  closedReason?: unknown
+}
+
+type SaveTransactionResult =
+  | { ok: false }
+  | { ok: true; status: string; alreadySaved: boolean; insertedAt?: Date }
+
+class SaveAuthorityRaceError extends Error {}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return (error as { code?: number })?.code === 11000
+}
+
+/** Bind the pin to the exact legal/source snapshot read in this transaction. */
+function exactSavePostingAuthorityFilter(
+  jobPostingId: string,
+  posting: SavePostingSnapshot,
+): Record<string, unknown> {
+  return {
+    _id: jobPostingId,
+    status: posting.status,
+    closedReason: posting.closedReason === undefined
+      ? { $exists: false }
+      : posting.closedReason,
+    provenance: posting.provenance === undefined
+      ? { $exists: false }
+      : posting.provenance,
+  }
+}
+
+async function runSaveTransaction<T>(
+  work: (session: ClientSession) => Promise<T>,
+): Promise<T> {
+  const session = await JobApplication.db.startSession()
+  let result: T | undefined
+  let completed = false
+  try {
+    await session.withTransaction(async () => {
+      result = await work(session)
+      completed = true
+    }, SAVE_TRANSACTION_OPTIONS)
+  } finally {
+    await session.endSession()
+  }
+  if (!completed) throw new Error('save transaction completed without a result')
+  return result as T
+}
+
+async function savePostingAttempt(
+  userId: string,
+  jobPostingId: string,
+  now: Date,
+): Promise<SaveTransactionResult> {
+  return runSaveTransaction(async (session) => {
+    const posting = await JobPosting.findById(jobPostingId, undefined, { session })
+      .select('title company locations provenance status closedReason')
+      .lean()
+    if (!posting || jobPostingStateOf(posting) === 'restricted') return { ok: false }
+
+    const existing = await JobApplication.findOne(
+      { userId, jobPostingId },
+      undefined,
+      { session },
+    ).select('status').lean()
+    // A normal retained archive is durable only for an existing owner. A
+    // closed id alone must never manufacture a tracker row.
+    if (!existing && jobPostingStateOf(posting) !== 'live') return { ok: false }
+
+    const pin = await JobPosting.updateOne(
+      exactSavePostingAuthorityFilter(jobPostingId, posting),
+      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
+      { session },
+    )
+    if ((pin?.matchedCount ?? 0) !== 1) {
+      // Re-read once outside this aborted snapshot. A benign provenance
+      // refresh can still save; a close/revoke observes the new authority.
+      throw new SaveAuthorityRaceError('posting authority changed')
+    }
+
+    if (existing) {
+      return { ok: true, status: existing.status, alreadySaved: true }
+    }
+
+    await JobApplication.create([{
+      userId,
+      jobPostingId,
+      jobSnapshot: {
+        title: posting.title,
+        company: posting.company,
+        location: (posting.locations ?? [])[0] ?? '',
+        source: (posting.provenance?.[0] as { sourceId?: string } | undefined)?.sourceId ?? 'unknown',
+      },
+      status: 'saved',
+      statusHistory: [{ status: 'saved', at: now, source: 'user' }],
+    }], { session })
+
+    return { ok: true, status: 'saved', alreadySaved: false, insertedAt: now }
+  })
+}
+
+async function savePosting(
+  userId: string,
+  jobPostingId: string,
+  now: Date,
+): Promise<SaveTransactionResult> {
+  try {
+    return await savePostingAttempt(userId, jobPostingId, now)
+  } catch (error) {
+    if (!isDuplicateKeyError(error) && !(error instanceof SaveAuthorityRaceError)) throw error
+    try {
+      return await savePostingAttempt(userId, jobPostingId, now)
+    } catch (retryError) {
+      if (retryError instanceof SaveAuthorityRaceError) return { ok: false }
+      throw retryError
+    }
+  }
+}
 
 /**
  * POST /api/jobs/[id]/save — authed Save (PRODUCT_FLOW §2). Creates the
@@ -20,62 +151,28 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
   if (!userId) return NextResponse.json({ error: 'sign in to save jobs' }, { status: 401 })
+  const rateLimitBlock = await checkJobsRateLimit(userId)
+  if (rateLimitBlock) return rateLimitBlock
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
   await connectDB()
-  const existing = await JobApplication.findOne({ userId, jobPostingId: params.id }).select('status').lean()
-  if (existing) {
-    // Ownership, not discovery state, authorizes this idempotent path. A
-    // posting may have closed after the user saved/applied; keep its durable
-    // tracker context pinned without creating a new closed-posting owner.
-    const pin = await JobPosting.updateOne(
-      { _id: params.id },
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-    )
-    if ((pin?.matchedCount ?? 0) !== 1) {
-      return NextResponse.json({ error: 'not found' }, { status: 404 })
-    }
-    return NextResponse.json({ ok: true, status: existing.status, alreadySaved: true })
-  }
-
-  const posting = await JobPosting.findById(params.id).select('title company locations provenance status').lean()
-  if (!posting || posting.status !== 'open') return NextResponse.json({ error: 'not found' }, { status: 404 })
-
   const now = new Date()
-  // Retention pin (PRODUCT_FLOW §2: creation sets ingestion's userReferenced
-  // pin — the tracker needs a stable posting _id forever). $unset purgeAt in
-  // the same write: the delisting sweep can close+stamp between our open-
-  // check read and this write, and a pinned row must never carry a TTL
-  // (Codex on #517). Runs on the already-saved path too — self-healing.
-  const pin = await JobPosting.updateOne(
-    { _id: params.id, status: 'open' },
-    { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-  )
-  if ((pin?.matchedCount ?? 0) !== 1) {
-    return NextResponse.json({ error: 'not found' }, { status: 404 })
+  const result = await savePosting(userId, params.id, now)
+  if (!result.ok) return NextResponse.json({ error: 'not found' }, { status: 404 })
+
+  // Only the transaction that inserted the ownership edge emits Save. An
+  // idempotent existing row or duplicate-key loser never double-counts it.
+  if (!result.alreadySaved) {
+    try {
+      await ProductEvent.create({ name: 'jobs.job_saved', userId, jobPostingId: params.id, props: {}, ts: result.insertedAt ?? now })
+    } catch (err) {
+      logger.warn({ err }, 'jobs.job_saved telemetry write failed') // telemetry never breaks the flow
+    }
   }
-  try {
-    await JobApplication.create({
-      userId,
-      jobPostingId: params.id,
-      jobSnapshot: {
-        title: posting.title,
-        company: posting.company,
-        location: (posting.locations ?? [])[0] ?? '',
-        source: posting.provenance?.[0]?.sourceId ?? 'unknown',
-      },
-      status: 'saved',
-      statusHistory: [{ status: 'saved', at: now, source: 'user' }],
-    })
-  } catch (err) {
-    // Unique-index race with a concurrent save = already saved; anything else surfaces.
-    if ((err as { code?: number })?.code !== 11000) throw err
-  }
-  try {
-    await ProductEvent.create({ name: 'jobs.job_saved', userId, jobPostingId: params.id, props: {}, ts: now })
-  } catch (err) {
-    logger.warn({ err }, 'jobs.job_saved telemetry write failed') // telemetry never breaks the flow
-  }
-  return NextResponse.json({ ok: true, status: 'saved', alreadySaved: false })
+  return NextResponse.json({
+    ok: true,
+    status: result.status,
+    alreadySaved: result.alreadySaved,
+  })
 }

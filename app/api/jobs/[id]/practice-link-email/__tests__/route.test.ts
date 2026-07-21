@@ -4,6 +4,7 @@ const {
   mockGetServerSession, mockConnectDB, mockGetConfig, mockApplicationExists,
   mockPostingFindById, mockUserFindById, mockInngestSend, mockEventCreate,
   mockPreparePractice,
+  mockCheckJobsRateLimit,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockConnectDB: vi.fn(),
@@ -14,12 +15,14 @@ const {
   mockInngestSend: vi.fn(),
   mockEventCreate: vi.fn(),
   mockPreparePractice: vi.fn(),
+  mockCheckJobsRateLimit: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend } }))
+vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
 vi.mock('@shared/db/models', () => ({
   JobsEmailConfig: { getConfig: mockGetConfig },
   JobApplication: { exists: mockApplicationExists },
@@ -56,9 +59,25 @@ beforeEach(() => {
   mockInngestSend.mockResolvedValue(undefined)
   mockEventCreate.mockResolvedValue({})
   mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', jdHash: 'hash', role: 'backend' })
+  mockCheckJobsRateLimit.mockResolvedValue(null)
 })
 
 describe('POST /api/jobs/[id]/practice-link-email archive policy', () => {
+  it('applies the email budget before database and delivery work', async () => {
+    mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': '3600' },
+    }))
+
+    const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/practice-link-email`, { method: 'POST' }), { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('Retry-After')).toBe('3600')
+    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(USER_ID, 'practice-email')
+    expect(mockConnectDB).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
   it('keeps deferred Practice available for a normal archive owner', async () => {
     const response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/practice-link-email`, { method: 'POST' }), { params: { id: JOB_ID } })
 

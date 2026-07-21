@@ -6,12 +6,14 @@ const {
   mockGetServerSession,
   mockSend,
   mockSourceFindOne,
+  mockCheckJobsRateLimit,
 } = vi.hoisted(() => ({
   mockConnectDB: vi.fn(),
   mockControlRevisionOf: vi.fn(),
   mockGetServerSession: vi.fn(),
   mockSend: vi.fn(),
   mockSourceFindOne: vi.fn(),
+  mockCheckJobsRateLimit: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({
@@ -29,6 +31,9 @@ vi.mock('@shared/db/models', () => ({
 }))
 vi.mock('@jobs/services/sourceControl', () => ({
   controlRevisionOf: (...args: unknown[]) => mockControlRevisionOf(...args),
+}))
+vi.mock('@jobs/services/rateLimit', () => ({
+  checkJobsRateLimit: (...args: unknown[]) => mockCheckJobsRateLimit(...args),
 }))
 
 import { POST } from '../route'
@@ -56,10 +61,26 @@ beforeEach(() => {
   mockConnectDB.mockResolvedValue(undefined)
   mockSend.mockResolvedValue(undefined)
   mockControlRevisionOf.mockReturnValue(7)
+  mockCheckJobsRateLimit.mockResolvedValue(null)
   mockSource({ sourceId: 'gh:phonepe', enabled: true, health: 'active', controlRevision: 7 })
 })
 
 describe('POST /api/jobs/admin/sync', () => {
+  it('applies the admin command budget before parsing or dispatch work', async () => {
+    mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': '60' },
+    }))
+    const body = { sourceId: 'gh:phonepe' }
+
+    const response = await POST(request(body))
+
+    expect(response.status).toBe(429)
+    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith('admin-1', 'admin-command')
+    expect(mockConnectDB).not.toHaveBeenCalled()
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
   it('returns 401 for anonymous requests and dispatches nothing', async () => {
     mockGetServerSession.mockResolvedValue(null)
 

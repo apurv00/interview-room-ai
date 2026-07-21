@@ -4,6 +4,7 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { saveBaseResume, getBaseResume } from '@jobs'
 import { logger } from '@shared/logger'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,6 +30,8 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
   if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
+  const rateLimitBlock = await checkJobsRateLimit(userId)
+  if (rateLimitBlock) return rateLimitBlock
   let body: { resume?: Record<string, unknown>; targetRole?: string; fullText?: string }
   try {
     body = await req.json()

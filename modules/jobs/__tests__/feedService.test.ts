@@ -37,6 +37,7 @@ import { tierAScore, tierBScore, matchedSkillsOf, bestApplyTierOf, getFeed, getJ
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
 import { xrayHashOf } from '../services/xrayService'
 import { INTERVIEW_JOB_DESCRIPTION_MAX_CHARS } from '@shared/interviewContract'
+import { applyOptionIdOf } from '../services/applyOptionIdentity'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 const ACTIVE_CATALOG = {
@@ -454,6 +455,19 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       expect(d!.capabilities.apply).toBe(true)
       expect(d!.jd).toBe('build distributed things')
       expect(d!.applyOptions.map((o) => o.tier)).toEqual(['direct-ats', 'aggregator-redirect'])
+      expect(d!.applyOptions.map((o) => o.optionId)).toEqual([
+        applyOptionIdOf({
+          sourceKey: 'b:2',
+          url: 'https://boards.greenhouse.io/x/1',
+          tier: 'direct-ats',
+        }),
+        applyOptionIdOf({
+          sourceKey: 'a:1',
+          url: 'https://agg.example/redir',
+          tier: 'aggregator-redirect',
+        }),
+      ])
+      expect(d!.applyOptions[0].optionId).not.toContain('greenhouse')
       expect(d!.flags).toEqual({ staffing: false, shortJd: false, repost: false })
     }
   })
@@ -472,11 +486,16 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     })
   })
 
-  it('non-http(s) apply URLs never reach a client — ladder AND badge exclude them (Codex #517)', async () => {
+  it('unsafe navigation URLs never reach a client — ladder AND badge exclude them', async () => {
     const evil = doc({
       provenance: [
         { sourceId: 'a', externalId: '1', sourceKey: 'a:1', applyUrl: 'javascript:alert(document.cookie)', applyTier: 'direct-ats' },
         { sourceId: 'b', externalId: '2', sourceKey: 'b:2', applyUrl: 'data:text/html,<script>1</script>', applyTier: 'employer' },
+        { sourceId: 'd', externalId: '4', sourceKey: 'd:4', applyUrl: 'http://127.0.0.1:3000/admin', applyTier: 'direct-ats' },
+        { sourceId: 'e', externalId: '5', sourceKey: 'e:5', applyUrl: 'http://169.254.169.254/latest', applyTier: 'employer' },
+        { sourceId: 'f', externalId: '6', sourceKey: 'f:6', applyUrl: 'https://user:secret@safe.example.com/apply', applyTier: 'direct-ats' },
+        { sourceId: 'g', externalId: '7', sourceKey: 'g:7', applyUrl: 'https://safe.example.com:8443/apply', applyTier: 'employer' },
+        { sourceId: 'h', externalId: '8', sourceKey: 'h:8', applyUrl: 'https://wa.me/919876543210', applyTier: 'direct-ats' },
         { sourceId: 'c', externalId: '3', sourceKey: 'c:3', applyUrl: 'https://safe.example.com/apply', applyTier: 'aggregator-deep' },
       ],
     })

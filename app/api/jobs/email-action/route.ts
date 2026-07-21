@@ -3,6 +3,7 @@ import { connectDB } from '@shared/db/connection'
 import { JobApplication, JobsEmailSend } from '@shared/db/models'
 import { verifyActionToken } from '@shared/services/signedActionToken'
 import { transitionStatus } from '@jobs'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,6 +61,14 @@ export async function POST(req: Request) {
   const v = verifyActionToken(token, 'status')
   if (!v.ok || !v.payload.aid || !ACTIONS.has(v.payload.action)) return invalidPage()
   const { uid, aid, action, dk } = v.payload
+  const rateLimitBlock = await checkJobsRateLimit(uid, 'email-action')
+  if (rateLimitBlock) {
+    const response = page(`<h1 style="font-size:20px;">Too many update attempts</h1>
+      <p style="color:#475569;font-size:14px;">Please wait before trying this email action again. Your tracker is unchanged.</p>`, 429)
+    const retryAfter = rateLimitBlock.headers.get('Retry-After')
+    if (retryAfter) response.headers.set('Retry-After', retryAfter)
+    return response
+  }
 
   await connectDB()
   const app = await JobApplication.findOne({ _id: aid, userId: uid })

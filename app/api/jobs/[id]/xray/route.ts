@@ -4,6 +4,7 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { getOrParseXray } from '@jobs'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,6 +20,11 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const userId = (session?.user as { id?: string } | undefined)?.id
   if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
   const privateResponse = { headers: { 'Cache-Control': 'private, no-store' } }
+  const rateLimitBlock = await checkJobsRateLimit(userId, 'xray')
+  if (rateLimitBlock) {
+    rateLimitBlock.headers.set('Cache-Control', 'private, no-store')
+    return rateLimitBlock
+  }
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
     return NextResponse.json({ error: 'not found' }, { status: 404, ...privateResponse })
   }

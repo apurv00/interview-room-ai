@@ -5,6 +5,7 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
 import { logger } from '@shared/logger'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 import {
   controlJobSource,
   SourceControlCapacityError,
@@ -46,6 +47,8 @@ export async function POST(req: Request) {
   if (!actorUserId || !actorIdSchema.safeParse(actorUserId).success) {
     return NextResponse.json({ error: 'platform_admin required' }, { status: 403 })
   }
+  const rateLimitBlock = await checkJobsRateLimit(actorUserId, 'admin-command')
+  if (rateLimitBlock) return rateLimitBlock
 
   let currentAdmin: unknown
   try {

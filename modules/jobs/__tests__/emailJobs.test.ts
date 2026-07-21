@@ -424,10 +424,10 @@ describe('runE0Handler', () => {
   })
 
   it('happy path: sends with the hour-bucketed dedupeKey', async () => {
-    const requestedAt = '2026-07-20T05:15:00.000Z' // 10:45 IST — in window
+    const requestedAt = new Date().toISOString()
     const r = await runE0Handler(evt(requestedAt), { ...step, sleepUntil: undefined })
     expect(r.outcome).toBe('sent')
-    expect(mockSendUpdateOne.mock.calls[0][0].dedupeKey).toBe('app1:2026-07-20T05')
+    expect(mockSendUpdateOne.mock.calls[0][0].dedupeKey).toBe(`app1:${requestedAt.slice(0, 13)}`)
   })
 
   it('suppressed user (e0 or all) → visible refusal, no send', async () => {

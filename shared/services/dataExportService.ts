@@ -58,6 +58,13 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     interviewDate?: Date
     outcome?: Record<string, unknown>
     notes?: string
+    clickedApplyOptionIds?: string[]
+    brokenLinkReports?: Array<{
+      optionId?: string
+      url: string
+      tier?: string
+      reportedAt: Date
+    }>
     tailoredVersion?: {
       sourceResumeId: string
       tailoredText: string
@@ -287,6 +294,17 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       interviewDate: a.interviewDate,
       outcome: a.outcome,
       notes: a.notes,
+      // Apply-option ids and dead-link reports are behavioral records. Keep
+      // the stored ids for portability and make legacy reports explicit: old
+      // rows predate canonical option ids/tiers, so null means "not recorded"
+      // rather than silently dropping those fields during JSON serialization.
+      clickedApplyOptionIds: a.clickedApplyOptionIds ?? [],
+      brokenLinkReports: (a.brokenLinkReports ?? []).map((report) => ({
+        optionId: report.optionId ?? null,
+        url: report.url,
+        tier: report.tier ?? null,
+        reportedAt: report.reportedAt,
+      })),
       // The tailored resume is the user's ONLY per-job copy — export it
       // in full, not just its metadata (Codex #508).
       tailoredVersion: a.tailoredVersion ? {

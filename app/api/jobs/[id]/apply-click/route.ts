@@ -4,8 +4,9 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { ProductEvent } from '@shared/db/models'
-import { recordApplyClick } from '@jobs'
+import { parseApplyOptionMutation, recordApplyClick } from '@jobs'
 import { logger } from '@shared/logger'
+import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,29 +22,36 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
   if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
+  const rateLimitBlock = await checkJobsRateLimit(userId)
+  if (rateLimitBlock) return rateLimitBlock
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
-  let click: { tier?: string; url?: string } = {}
+  let input: unknown
   try {
-    const body = await req.json()
-    if (typeof body?.tier === 'string') click.tier = body.tier.slice(0, 40)
-    if (typeof body?.url === 'string') click.url = body.url.slice(0, 2000)
-  } catch { /* clicks without metadata still count */ }
+    input = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'invalid JSON' }, { status: 400 })
+  }
+  const parsed = parseApplyOptionMutation(input)
+  if (!parsed) {
+    return NextResponse.json({ error: 'a valid optionId is required' }, { status: 400 })
+  }
 
   await connectDB()
-  const result = await recordApplyClick(userId, params.id, click)
+  const result = await recordApplyClick(userId, params.id, parsed.optionId)
   if (!result) return NextResponse.json({ error: 'not found' }, { status: 404 })
+  const { canonicalOption, ...publicResult } = result
   try {
     await ProductEvent.create({
       name: 'jobs.apply_click',
       userId,
       jobPostingId: params.id,
-      props: { tier: click.tier, source: 'detail', transitioned: result.transitioned },
+      props: { tier: canonicalOption.tier, source: 'detail', transitioned: result.transitioned },
       ts: new Date(),
     })
   } catch (err) {
     logger.warn({ err }, 'jobs.apply_click telemetry write failed') // telemetry never breaks the flow
   }
-  return NextResponse.json({ ok: true, ...result })
+  return NextResponse.json({ ok: true, ...publicResult })
 }
