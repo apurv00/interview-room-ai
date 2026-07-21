@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Types } from 'mongoose'
 
 const {
   MockJobsAccountInactiveError,
   mockConnectDB,
   mockIndexes,
-  mockAggregate,
-  mockAggregateHint,
-  mockUpdateOne,
+  mockFind,
+  mockApplicationUpdateOne,
   mockCreateEvent,
+  mockCursorFindById,
+  mockCursorUpdateOne,
+  mockCursorDeleteOne,
+  mockActiveJobsAccountIds,
   mockWithActiveJobsAccountWrite,
   mockLoggerInfo,
   mockLoggerWarn,
@@ -17,10 +21,13 @@ const {
     MockJobsAccountInactiveError,
     mockConnectDB: vi.fn(),
     mockIndexes: vi.fn(),
-    mockAggregate: vi.fn(),
-    mockAggregateHint: vi.fn(),
-    mockUpdateOne: vi.fn(),
+    mockFind: vi.fn(),
+    mockApplicationUpdateOne: vi.fn(),
     mockCreateEvent: vi.fn(),
+    mockCursorFindById: vi.fn(),
+    mockCursorUpdateOne: vi.fn(),
+    mockCursorDeleteOne: vi.fn(),
+    mockActiveJobsAccountIds: vi.fn(),
     mockWithActiveJobsAccountWrite: vi.fn(),
     mockLoggerInfo: vi.fn(),
     mockLoggerWarn: vi.fn(),
@@ -31,20 +38,22 @@ vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/db/models', () => ({
   JobApplication: {
     collection: { indexes: mockIndexes },
-    aggregate: mockAggregate,
-    updateOne: mockUpdateOne,
+    find: mockFind,
+    updateOne: mockApplicationUpdateOne,
   },
   ProductEvent: { create: mockCreateEvent },
-  User: { collection: { name: 'users' } },
+}))
+vi.mock('../models/TrackerStatusSweepCursor', () => ({
+  TrackerStatusSweepCursor: {
+    findById: mockCursorFindById,
+    updateOne: mockCursorUpdateOne,
+    deleteOne: mockCursorDeleteOne,
+  },
+  JOBS_TRACKER_SWEEP_CURSOR_ID: 'jobs-tracker-status-sweep',
 }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
-  JOBS_ACTIVE_ACCOUNT_STATES_FILTER: {
-    $or: [
-      { accountState: 'active' },
-      { accountState: { $exists: false } },
-    ],
-  },
   JobsAccountInactiveError: MockJobsAccountInactiveError,
+  activeJobsAccountIds: mockActiveJobsAccountIds,
   withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
 }))
 vi.mock('@shared/logger', () => ({
@@ -56,9 +65,11 @@ import {
   TRACKER_STATUS_SWEEP_INDEX_KEY,
   TRACKER_STATUS_SWEEP_INDEX_NAME,
   TRACKER_STATUS_SWEEP_INDEX_PARTIAL,
+  TRACKER_STATUS_SWEEP_SCAN_LIMIT,
 } from '../services/trackerStatusSweepService'
 
 const NOW = new Date('2026-07-21T12:00:00.000Z')
+const CUTOFF = new Date('2026-06-16T12:00:00.000Z')
 const SESSION = { id: 'transaction-session' }
 
 function candidate(overrides: Record<string, unknown> = {}) {
@@ -66,14 +77,27 @@ function candidate(overrides: Record<string, unknown> = {}) {
     _id: '64b000000000000000000001',
     userId: '64b000000000000000000002',
     jobPostingId: '64b000000000000000000003',
-    appliedAt: new Date('2026-06-16T12:00:00.000Z'),
-    updatedAt: new Date('2026-06-16T12:00:00.000Z'),
+    appliedAt: CUTOFF,
+    updatedAt: CUTOFF,
     ...overrides,
   }
 }
 
+function mockStoredCursor(value: Record<string, unknown> | null) {
+  const lean = vi.fn().mockResolvedValue(value)
+  const select = vi.fn(() => ({ lean }))
+  mockCursorFindById.mockReturnValue({ select })
+  return { select, lean }
+}
+
 function mockCandidates(rows: ReturnType<typeof candidate>[]) {
-  mockAggregateHint.mockResolvedValue(rows)
+  const lean = vi.fn().mockResolvedValue(rows)
+  const hint = vi.fn(() => ({ lean }))
+  const limit = vi.fn(() => ({ hint }))
+  const sort = vi.fn(() => ({ limit }))
+  const select = vi.fn(() => ({ sort }))
+  mockFind.mockReturnValue({ select })
+  return { select, sort, limit, hint, lean }
 }
 
 describe('runTrackerStatusSweep', () => {
@@ -85,82 +109,67 @@ describe('runTrackerStatusSweep', () => {
       key: TRACKER_STATUS_SWEEP_INDEX_KEY,
       partialFilterExpression: TRACKER_STATUS_SWEEP_INDEX_PARTIAL,
     }])
-    mockAggregate.mockReturnValue({ hint: mockAggregateHint })
-    mockAggregateHint.mockResolvedValue([])
-    mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
+    mockStoredCursor(null)
+    mockApplicationUpdateOne.mockResolvedValue({ modifiedCount: 1 })
     mockCreateEvent.mockResolvedValue([])
+    mockCursorUpdateOne.mockResolvedValue({ acknowledged: true })
+    mockCursorDeleteOne.mockResolvedValue({ deletedCount: 1 })
+    mockActiveJobsAccountIds.mockImplementation(
+      async (userIds: string[]) => new Set(userIds),
+    )
     mockWithActiveJobsAccountWrite.mockImplementation(
       async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(SESSION),
     )
   })
 
-  it('selects only explicitly confirmed applications at the 35-day cutoff', async () => {
+  it('uses a bounded hinted scan for confirmed applications at the cutoff', async () => {
     const row = candidate()
-    mockCandidates([row])
+    const cursorQuery = mockStoredCursor(null)
+    const query = mockCandidates([row])
 
     const report = await runTrackerStatusSweep({ now: NOW })
 
-    const cutoff = new Date('2026-06-16T12:00:00.000Z')
-    expect(mockAggregate).toHaveBeenCalledWith([
-      {
-        $match: {
-          status: 'applied',
-          appliedAt: { $type: 'date', $lte: cutoff },
-        },
-      },
-      { $sort: { appliedAt: 1, _id: 1 } },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'userId',
-          foreignField: '_id',
-          pipeline: [
-            {
-              $match: {
-                $or: [
-                  { accountState: 'active' },
-                  { accountState: { $exists: false } },
-                ],
-              },
-            },
-            { $project: { _id: 1 } },
-          ],
-          as: 'activeOwner',
-        },
-      },
-      { $match: { 'activeOwner.0': { $exists: true } } },
-      { $limit: 501 },
-      {
-        $project: {
-          _id: 1,
-          userId: 1,
-          jobPostingId: 1,
-          appliedAt: 1,
-          updatedAt: 1,
-        },
-      },
-    ])
-    expect(mockAggregateHint).toHaveBeenCalledWith(TRACKER_STATUS_SWEEP_INDEX_NAME)
+    expect(mockCursorFindById).toHaveBeenCalledWith('jobs-tracker-status-sweep')
+    expect(cursorQuery.select).toHaveBeenCalledWith('appliedAt applicationId')
+    expect(mockFind).toHaveBeenCalledWith({
+      status: 'applied',
+      appliedAt: { $type: 'date', $lte: CUTOFF },
+    })
+    expect(query.select).toHaveBeenCalledWith('_id userId jobPostingId appliedAt updatedAt')
+    expect(query.sort).toHaveBeenCalledWith({ appliedAt: 1, _id: 1 })
+    expect(query.limit).toHaveBeenCalledWith(TRACKER_STATUS_SWEEP_SCAN_LIMIT)
+    expect(query.hint).toHaveBeenCalledWith(TRACKER_STATUS_SWEEP_INDEX_NAME)
     expect(report).toEqual({
       at: NOW.toISOString(),
-      cutoff: cutoff.toISOString(),
+      cutoff: CUTOFF.toISOString(),
       limit: 500,
+      scanLimit: TRACKER_STATUS_SWEEP_SCAN_LIMIT,
+      examined: 1,
       scanned: 1,
       ghosted: 1,
       raced: 0,
+      prefilterInactive: 0,
       accountInactive: 0,
       capped: false,
+      cursorAdvanced: false,
+      cursorBlockedByRace: false,
+      cursorMalformed: false,
+      wrapped: false,
     })
+    expect(mockCursorUpdateOne).not.toHaveBeenCalled()
+    expect(mockCursorDeleteOne).not.toHaveBeenCalled()
+    expect(mockLoggerInfo).toHaveBeenCalledOnce()
   })
 
-  it('fails before scanning when the exact due-work index is missing', async () => {
+  it('fails before cursor or application reads when the exact due-work index is missing', async () => {
     mockIndexes.mockResolvedValue([{ name: '_id_', key: { _id: 1 } }])
     mockCandidates([candidate()])
 
     await expect(runTrackerStatusSweep({ now: NOW }))
       .rejects.toThrow(TRACKER_STATUS_SWEEP_INDEX_NAME)
 
-    expect(mockAggregate).not.toHaveBeenCalled()
+    expect(mockCursorFindById).not.toHaveBeenCalled()
+    expect(mockFind).not.toHaveBeenCalled()
     expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
   })
 
@@ -171,7 +180,7 @@ describe('runTrackerStatusSweep', () => {
     await runTrackerStatusSweep({ now: NOW })
 
     expect(mockWithActiveJobsAccountWrite).toHaveBeenCalledWith(String(row.userId), expect.any(Function))
-    expect(mockUpdateOne).toHaveBeenCalledWith(
+    expect(mockApplicationUpdateOne).toHaveBeenCalledWith(
       {
         _id: row._id,
         userId: row.userId,
@@ -186,33 +195,32 @@ describe('runTrackerStatusSweep', () => {
       },
       { session: SESSION },
     )
-    expect(mockCreateEvent).toHaveBeenCalledWith([
-      {
-        name: 'jobs.ghost_auto',
-        userId: row.userId,
-        jobPostingId: row.jobPostingId,
-        applicationId: row._id,
-        props: { count: 1, reason: 'applied-silent-35d' },
-        ts: NOW,
-      },
-    ], { session: SESSION })
+    expect(mockCreateEvent).toHaveBeenCalledWith([{
+      name: 'jobs.ghost_auto',
+      userId: row.userId,
+      jobPostingId: row.jobPostingId,
+      applicationId: row._id,
+      props: { count: 1, reason: 'applied-silent-35d' },
+      ts: NOW,
+    }], { session: SESSION })
   })
 
   it('does not emit an event when a concurrent write wins the CAS', async () => {
     mockCandidates([candidate()])
-    mockUpdateOne.mockResolvedValue({ modifiedCount: 0 })
+    mockApplicationUpdateOne.mockResolvedValue({ modifiedCount: 0 })
 
     await expect(runTrackerStatusSweep({ now: NOW })).resolves.toMatchObject({
       ghosted: 0,
       raced: 1,
+      cursorBlockedByRace: true,
     })
     expect(mockCreateEvent).not.toHaveBeenCalled()
+    expect(mockLoggerWarn).toHaveBeenCalledOnce()
   })
 
   it('is idempotent when a retry replays the same candidate snapshot', async () => {
-    const row = candidate()
-    mockCandidates([row])
-    mockUpdateOne
+    mockCandidates([candidate()])
+    mockApplicationUpdateOne
       .mockResolvedValueOnce({ modifiedCount: 1 })
       .mockResolvedValueOnce({ modifiedCount: 0 })
 
@@ -224,7 +232,7 @@ describe('runTrackerStatusSweep', () => {
     expect(mockCreateEvent).toHaveBeenCalledOnce()
   })
 
-  it('fences an account that becomes inactive after selection and continues', async () => {
+  it('fences an account that becomes inactive after prefiltering and continues', async () => {
     const inactive = candidate()
     const active = candidate({
       _id: '64b000000000000000000004',
@@ -239,49 +247,318 @@ describe('runTrackerStatusSweep', () => {
       )
 
     await expect(runTrackerStatusSweep({ now: NOW })).resolves.toMatchObject({
+      examined: 2,
       scanned: 2,
       ghosted: 1,
+      prefilterInactive: 0,
       accountInactive: 1,
     })
-    expect(mockUpdateOne).toHaveBeenCalledOnce()
+    expect(mockApplicationUpdateOne).toHaveBeenCalledOnce()
     expect(mockLoggerWarn).toHaveBeenCalledOnce()
   })
 
-  it('does no transactional work when owner filtering removes every due row', async () => {
-    mockCandidates([])
+  it('bounds an inactive raw page and checkpoints past it for the next run', async () => {
+    const first = candidate({
+      _id: '64b000000000000000000004',
+      userId: '64b000000000000000000010',
+    })
+    const second = candidate({
+      _id: '64b000000000000000000005',
+      userId: '64b000000000000000000011',
+    })
+    mockCandidates([first, second])
+    mockActiveJobsAccountIds.mockResolvedValue(new Set())
 
-    const report = await runTrackerStatusSweep({ now: NOW, limit: 1 })
+    const report = await runTrackerStatusSweep({ now: NOW, limit: 1, scanLimit: 2 })
 
     expect(report).toMatchObject({
+      scanLimit: 2,
+      examined: 2,
       scanned: 0,
       ghosted: 0,
-      accountInactive: 0,
-      capped: false,
+      prefilterInactive: 2,
+      capped: true,
+      cursorAdvanced: true,
+      wrapped: false,
     })
-    expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
-    expect(mockUpdateOne).not.toHaveBeenCalled()
-    expect(mockCreateEvent).not.toHaveBeenCalled()
-  })
-
-  it('processes only the bounded window and reports deferred work', async () => {
-    mockCandidates([
-      candidate(),
-      candidate({ _id: '64b000000000000000000004' }),
-      candidate({ _id: '64b000000000000000000005' }),
-    ])
-
-    const report = await runTrackerStatusSweep({ now: NOW, limit: 2 })
-
-    expect(report).toMatchObject({ limit: 2, scanned: 2, ghosted: 2, capped: true })
-    expect(mockUpdateOne).toHaveBeenCalledTimes(2)
+    expect(mockApplicationUpdateOne).not.toHaveBeenCalled()
+    expect(mockCursorUpdateOne).toHaveBeenCalledWith(
+      { _id: 'jobs-tracker-status-sweep' },
+      {
+        $set: {
+          appliedAt: second.appliedAt,
+          applicationId: second._id,
+          lastRunAt: NOW,
+        },
+      },
+      { upsert: true },
+    )
     expect(mockLoggerWarn).toHaveBeenCalledOnce()
   })
 
-  it('propagates transaction failures other than inactive accounts', async () => {
-    mockCandidates([candidate()])
+  it('discards a malformed cursor and restarts with a bounded scan', async () => {
+    // A hex-looking BSON string is still unsafe for tuple comparison against
+    // ObjectId application keys and must not be accepted as a valid cursor.
+    mockStoredCursor({
+      appliedAt: CUTOFF,
+      applicationId: '64b000000000000000000005',
+    })
+    mockCandidates([])
+
+    const report = await runTrackerStatusSweep({ now: NOW, scanLimit: 2 })
+
+    expect(mockFind).toHaveBeenCalledWith({
+      status: 'applied',
+      appliedAt: { $type: 'date', $lte: CUTOFF },
+    })
+    expect(report).toMatchObject({
+      examined: 0,
+      cursorMalformed: true,
+      cursorAdvanced: false,
+      wrapped: true,
+    })
+    expect(mockCursorDeleteOne).toHaveBeenCalledWith({
+      _id: 'jobs-tracker-status-sweep',
+    })
+    expect(mockLoggerWarn).toHaveBeenCalledOnce()
+  })
+
+  it('resumes after the durable cursor, reaches active work, and wraps on exhaustion', async () => {
+    const stored = {
+      appliedAt: CUTOFF,
+      applicationId: new Types.ObjectId('64b000000000000000000005'),
+    }
+    const active = candidate({
+      _id: '64b000000000000000000006',
+      userId: '64b000000000000000000012',
+      jobPostingId: '64b000000000000000000013',
+    })
+    mockStoredCursor(stored)
+    mockCandidates([active])
+
+    const report = await runTrackerStatusSweep({ now: NOW, limit: 1, scanLimit: 2 })
+
+    expect(mockFind).toHaveBeenCalledWith({
+      status: 'applied',
+      appliedAt: { $type: 'date', $lte: CUTOFF },
+      $or: [
+        { appliedAt: { $gt: stored.appliedAt } },
+        { appliedAt: stored.appliedAt, _id: { $gt: stored.applicationId } },
+      ],
+    })
+    expect(report).toMatchObject({
+      examined: 1,
+      scanned: 1,
+      ghosted: 1,
+      capped: false,
+      cursorAdvanced: false,
+      wrapped: true,
+    })
+    expect(mockCursorDeleteOne).toHaveBeenCalledWith({
+      _id: 'jobs-tracker-status-sweep',
+    })
+  })
+
+  it('never checkpoints past an active row deferred by the write cap', async () => {
+    const firstActive = candidate({
+      _id: '64b000000000000000000004',
+      userId: '64b000000000000000000010',
+    })
+    const inactive = candidate({
+      _id: '64b000000000000000000005',
+      userId: '64b000000000000000000011',
+    })
+    const deferredActive = candidate({
+      _id: '64b000000000000000000006',
+      userId: '64b000000000000000000012',
+    })
+    mockCandidates([firstActive, inactive, deferredActive])
+    mockActiveJobsAccountIds.mockResolvedValue(new Set([
+      String(firstActive.userId),
+      String(deferredActive.userId),
+    ]))
+
+    const report = await runTrackerStatusSweep({ now: NOW, limit: 1, scanLimit: 3 })
+
+    expect(report).toMatchObject({
+      examined: 3,
+      scanned: 1,
+      ghosted: 1,
+      capped: true,
+      cursorAdvanced: true,
+    })
+    expect(mockApplicationUpdateOne).toHaveBeenCalledOnce()
+    expect(mockCursorUpdateOne).toHaveBeenCalledWith(
+      { _id: 'jobs-tracker-status-sweep' },
+      {
+        $set: {
+          appliedAt: inactive.appliedAt,
+          applicationId: inactive._id,
+          lastRunAt: NOW,
+        },
+      },
+      { upsert: true },
+    )
+  })
+
+  it('checkpoints before a CAS loser and retries that row on the next run', async () => {
+    const first = candidate({
+      _id: '64b000000000000000000004',
+      jobPostingId: '64b000000000000000000014',
+    })
+    const raced = candidate({
+      _id: '64b000000000000000000005',
+      jobPostingId: '64b000000000000000000015',
+    })
+    const query = mockCandidates([first, raced])
+    query.lean
+      .mockResolvedValueOnce([first, raced])
+      .mockResolvedValueOnce([raced])
+    mockApplicationUpdateOne
+      .mockResolvedValueOnce({ modifiedCount: 1 })
+      .mockResolvedValueOnce({ modifiedCount: 0 })
+      .mockResolvedValueOnce({ modifiedCount: 1 })
+
+    const firstRun = await runTrackerStatusSweep({ now: NOW, limit: 2, scanLimit: 2 })
+
+    expect(firstRun).toMatchObject({
+      ghosted: 1,
+      raced: 1,
+      cursorAdvanced: true,
+      cursorBlockedByRace: true,
+      wrapped: false,
+    })
+    expect(mockCursorUpdateOne).toHaveBeenCalledWith(
+      { _id: 'jobs-tracker-status-sweep' },
+      {
+        $set: {
+          appliedAt: first.appliedAt,
+          applicationId: first._id,
+          lastRunAt: NOW,
+        },
+      },
+      { upsert: true },
+    )
+
+    const storedApplicationId = new Types.ObjectId(first._id)
+    mockStoredCursor({ appliedAt: first.appliedAt, applicationId: storedApplicationId })
+    const retry = await runTrackerStatusSweep({ now: NOW, limit: 2, scanLimit: 2 })
+
+    expect(mockFind).toHaveBeenLastCalledWith({
+      status: 'applied',
+      appliedAt: { $type: 'date', $lte: CUTOFF },
+      $or: [
+        { appliedAt: { $gt: first.appliedAt } },
+        { appliedAt: first.appliedAt, _id: { $gt: storedApplicationId } },
+      ],
+    })
+    expect(retry).toMatchObject({
+      scanned: 1,
+      ghosted: 1,
+      raced: 0,
+      cursorBlockedByRace: false,
+      wrapped: true,
+    })
+  })
+
+  it('keeps an existing cursor when the first resumed row loses the CAS', async () => {
+    const stored = {
+      appliedAt: CUTOFF,
+      applicationId: new Types.ObjectId('64b000000000000000000004'),
+    }
+    const raced = candidate({
+      _id: '64b000000000000000000005',
+      jobPostingId: '64b000000000000000000015',
+    })
+    mockStoredCursor(stored)
+    mockCandidates([raced])
+    mockApplicationUpdateOne
+      .mockResolvedValueOnce({ modifiedCount: 0 })
+      .mockResolvedValueOnce({ modifiedCount: 1 })
+
+    const firstRun = await runTrackerStatusSweep({ now: NOW, scanLimit: 2 })
+
+    expect(firstRun).toMatchObject({
+      raced: 1,
+      cursorAdvanced: false,
+      cursorBlockedByRace: true,
+      wrapped: false,
+    })
+    expect(mockCursorUpdateOne).not.toHaveBeenCalled()
+    expect(mockCursorDeleteOne).not.toHaveBeenCalled()
+
+    const retry = await runTrackerStatusSweep({ now: NOW, scanLimit: 2 })
+
+    expect(mockFind).toHaveBeenLastCalledWith({
+      status: 'applied',
+      appliedAt: { $type: 'date', $lte: CUTOFF },
+      $or: [
+        { appliedAt: { $gt: stored.appliedAt } },
+        { appliedAt: stored.appliedAt, _id: { $gt: stored.applicationId } },
+      ],
+    })
+    expect(retry).toMatchObject({
+      ghosted: 1,
+      raced: 0,
+      wrapped: true,
+    })
+    expect(mockCursorDeleteOne).toHaveBeenCalledOnce()
+  })
+
+  it('fails on cursor upsert loss and replays without duplicating its event', async () => {
+    const row = candidate()
+    const query = mockCandidates([row])
+    query.lean
+      .mockResolvedValueOnce([row])
+      .mockResolvedValueOnce([row])
+      .mockResolvedValueOnce([])
+    mockCursorUpdateOne.mockRejectedValueOnce(new Error('cursor upsert unavailable'))
+    mockApplicationUpdateOne
+      .mockResolvedValueOnce({ modifiedCount: 1 })
+      .mockResolvedValueOnce({ modifiedCount: 0 })
+
+    await expect(runTrackerStatusSweep({ now: NOW, scanLimit: 1 }))
+      .rejects.toThrow('cursor upsert unavailable')
+
+    await expect(runTrackerStatusSweep({ now: NOW, scanLimit: 1 }))
+      .resolves.toMatchObject({ raced: 1, cursorBlockedByRace: true })
+    await expect(runTrackerStatusSweep({ now: NOW, scanLimit: 1 }))
+      .resolves.toMatchObject({ examined: 0, cursorBlockedByRace: false })
+    expect(mockCreateEvent).toHaveBeenCalledOnce()
+  })
+
+  it('fails on cursor delete loss and safely finishes deletion on retry', async () => {
+    const stored = {
+      appliedAt: CUTOFF,
+      applicationId: new Types.ObjectId('64b000000000000000000004'),
+    }
+    const row = candidate({ _id: '64b000000000000000000005' })
+    const query = mockCandidates([row])
+    query.lean
+      .mockResolvedValueOnce([row])
+      .mockResolvedValueOnce([])
+    mockStoredCursor(stored)
+    mockCursorDeleteOne
+      .mockRejectedValueOnce(new Error('cursor delete unavailable'))
+      .mockResolvedValueOnce({ deletedCount: 1 })
+
+    await expect(runTrackerStatusSweep({ now: NOW, scanLimit: 2 }))
+      .rejects.toThrow('cursor delete unavailable')
+
+    await expect(runTrackerStatusSweep({ now: NOW, scanLimit: 2 }))
+      .resolves.toMatchObject({ examined: 0, wrapped: true })
+    expect(mockCreateEvent).toHaveBeenCalledOnce()
+    expect(mockCursorDeleteOne).toHaveBeenCalledTimes(2)
+  })
+
+  it('propagates transaction failures without advancing the cursor', async () => {
+    mockCandidates([candidate(), candidate({ _id: '64b000000000000000000004' })])
     mockWithActiveJobsAccountWrite.mockRejectedValue(new Error('transactions unavailable'))
 
-    await expect(runTrackerStatusSweep({ now: NOW })).rejects.toThrow('transactions unavailable')
+    await expect(runTrackerStatusSweep({ now: NOW, scanLimit: 2 }))
+      .rejects.toThrow('transactions unavailable')
+    expect(mockCursorUpdateOne).not.toHaveBeenCalled()
+    expect(mockCursorDeleteOne).not.toHaveBeenCalled()
     expect(mockLoggerInfo).not.toHaveBeenCalled()
     expect(mockLoggerWarn).not.toHaveBeenCalled()
   })

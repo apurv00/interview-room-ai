@@ -46,6 +46,71 @@ same posting rows and retained-corpus counter cross both policies.
 - A `restore` records legal clearance only. It keeps the source disabled and
   quarantined, clears cursors for later cold validation, and reopens no job.
 
+## Tracker-status sweep cursor
+
+The bounded A06 tracker sweep creates one global continuation document whenever
+it has a safe boundary worth checkpointing. It requires no data migration or
+cursor index. A rollback can leave the singleton in place; older code does not
+read it.
+
+Use the structured daily report as follows:
+
+| Field | Operator meaning |
+| --- | --- |
+| `examined` / `scanLimit` | Raw due rows read versus the hard 2,000-row read cap. |
+| `scanned` / `limit` | Active-owner rows attempted versus the 500-row write cap. |
+| `prefilterInactive` | Rows whose owner is missing or does not match the active/legacy-active predicate. |
+| `accountInactive` | Rows whose owner became inactive after prefiltering but before the transaction fence. |
+| `capped` | A read window was full or the write window overflowed; work may remain. |
+| `cursorAdvanced` / `wrapped` | Progress was checkpointed, or the tail was reached and the next run restarts at the oldest tuple. |
+| `cursorBlockedByRace` | A snapshot CAS lost; the cursor stopped before that row so it can be retried. |
+| `cursorMalformed` | Stored BSON types were unsafe; the worker restarted from the oldest tuple and repaired or removed the cursor. |
+
+Inspect progress when the daily report repeatedly shows `capped`,
+`cursorBlockedByRace`, or `cursorMalformed`:
+
+```javascript
+db.jobs_tracker_status_sweep_cursors.findOne({ _id: 'jobs-tracker-status-sweep' })
+```
+
+The worker automatically discards a malformed cursor and safely restarts its
+bounded scan. If an operator confirms there is no active tracker-status run and
+must reset a stale but well-formed cursor, delete only this singleton:
+
+```javascript
+db.jobs_tracker_status_sweep_cursors.deleteOne({ _id: 'jobs-tracker-status-sweep' })
+```
+
+Resetting restarts from the oldest due tuple. Exact snapshot compare-and-set
+writes keep already-transitioned applications idempotent; never delete the
+whole collection or reset the cursor while a run is active.
+
+A non-zero inactive count can be normal while account deletion is in flight.
+If it persists for two daily runs or through one complete cursor wrap, inspect
+the deletion failure/retry path and sample the backlog:
+
+```javascript
+const cutoff = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000)
+db.jobapplications.aggregate([
+  { $match: { status: 'applied', appliedAt: { $type: 'date', $lte: cutoff } } },
+  { $lookup: {
+    from: 'users', localField: 'userId', foreignField: '_id',
+    pipeline: [
+      { $match: { $or: [
+        { accountState: 'active' },
+        { accountState: { $exists: false } }
+      ] } },
+      { $project: { _id: 1 } }
+    ], as: 'activeOwner'
+  } },
+  { $match: { 'activeOwner.0': { $exists: false } } },
+  { $count: 'inactiveOwnerDueRows' }
+])
+```
+
+Repair account-deletion cleanup rather than resetting the sweep cursor; a
+cursor reset only makes the same orphan prefix recur sooner.
+
 ## Staging access setup
 
 Configure the GitHub Environment named exactly `jobs-staging` with required
@@ -117,6 +182,45 @@ Production application credentials are part of the trust boundary: deny
 delete/update on `jobsourcecontrolaudits` to routine application/analyst roles
 where Atlas role separation permits it. “Append-only” is enforced by code and
 least privilege, not by MongoDB collection immutability.
+
+The deployed application Mongo identity also needs `find`, `insert`, `update`,
+and `remove` on `jobs_tracker_status_sweep_cursors`. If collection-scoped
+authorization cannot implicitly create a pre-authorized namespace, pre-create
+that empty collection. With tracker dispatch paused and zero active runs, use
+the deployed identity in staging and production to prove create, resume, and
+cleanup permissions before enabling the cron:
+
+```javascript
+(() => {
+  const cursors = db.jobs_tracker_status_sweep_cursors
+  const id = 'jobs-tracker-status-sweep-permission-smoke'
+  let sentinelWritten = false
+  try {
+    const created = cursors.updateOne(
+      { _id: id },
+      { $set: {
+        appliedAt: new Date(0), applicationId: ObjectId(), lastRunAt: new Date()
+      } },
+      { upsert: true }
+    )
+    sentinelWritten = created.acknowledged === true
+    if (!sentinelWritten || !cursors.findOne({ _id: id })) {
+      throw new Error('tracker cursor create/read smoke failed')
+    }
+    const resumed = cursors.updateOne(
+      { _id: id }, { $set: { lastRunAt: new Date() } }
+    )
+    if (!resumed.acknowledged || resumed.matchedCount !== 1) {
+      throw new Error('tracker cursor resume smoke failed')
+    }
+  } finally {
+    const removed = cursors.deleteOne({ _id: id })
+    if (!removed.acknowledged || (sentinelWritten && removed.deletedCount !== 1)) {
+      throw new Error('tracker cursor cleanup smoke failed')
+    }
+  }
+})()
+```
 
 ## Staging execution order
 
