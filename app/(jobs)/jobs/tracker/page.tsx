@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 /**
  * /jobs/tracker — tracker v1 (Wave 4.2). Mobile-first single list grouped
@@ -51,25 +52,62 @@ const CHIP_TARGETS: Record<string, string[]> = {
 
 export default function TrackerPage() {
   const [view, setView] = useState<View | null>(null)
-  const [error, setError] = useState<'auth' | 'load' | null>(null)
+  const [error, setError] = useState<'auth' | 'account-unavailable' | 'load' | null>(null)
   const [undo, setUndo] = useState<{ jobPostingId: string; from: string; label: string } | null>(null)
   const [notesFor, setNotesFor] = useState<string | null>(null)
   const [notesDraft, setNotesDraft] = useState('')
   const [dateSheetFor, setDateSheetFor] = useState<string | null>(null)
+  const accountUnavailableRef = useRef(false)
+  const loadRequestRef = useRef(0)
 
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch('/api/jobs/tracker')
-      if (r.status === 401) { setError('auth'); return }
-      if (!r.ok) { setError('load'); return }
-      setView(await r.json())
-      setError(null)
-    } catch {
-      setError('load')
-    }
+  const clearPrivateView = useCallback(() => {
+    loadRequestRef.current += 1
+    setView(null)
+    setUndo(null)
+    setNotesFor(null)
+    setNotesDraft('')
+    setDateSheetFor(null)
   }, [])
 
-  useEffect(() => { load() }, [load])
+  const handleUnauthorized = useCallback(async (response: Response | null): Promise<boolean> => {
+    if (response?.status !== 401) return false
+    const body = await response.json().catch(() => null) as { code?: unknown } | null
+    const accountUnavailable = body?.code === 'ACCOUNT_UNAVAILABLE'
+    if (accountUnavailable) {
+      accountUnavailableRef.current = true
+      clearAllInterviewStorage()
+      clearPrivateView()
+      setError('account-unavailable')
+    } else if (!accountUnavailableRef.current) {
+      // Once deletion is observed it is terminal. A slower ordinary 401 from
+      // another in-flight request must not downgrade the page to a sign-in
+      // prompt or permit an older tracker response to repopulate private rows.
+      clearPrivateView()
+      setError('auth')
+    }
+    return true
+  }, [clearPrivateView])
+
+  const load = useCallback(async () => {
+    const requestId = ++loadRequestRef.current
+    try {
+      const r = await fetch('/api/jobs/tracker')
+      if (await handleUnauthorized(r)) return
+      if (accountUnavailableRef.current || requestId !== loadRequestRef.current) return
+      if (!r.ok) { setError('load'); return }
+      const nextView = await r.json() as View
+      if (accountUnavailableRef.current || requestId !== loadRequestRef.current) return
+      setView(nextView)
+      setError(null)
+    } catch {
+      if (!accountUnavailableRef.current && requestId === loadRequestRef.current) setError('load')
+    }
+  }, [handleUnauthorized])
+
+  useEffect(() => {
+    load()
+    return () => { loadRequestRef.current += 1 }
+  }, [load])
 
   async function transition(jobPostingId: string, from: string, to: string) {
     const res = await fetch(`/api/jobs/${jobPostingId}/status`, {
@@ -77,6 +115,8 @@ export default function TrackerPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: to }),
     }).catch(() => null)
+    if (await handleUnauthorized(res)) return
+    if (accountUnavailableRef.current) return
     if (res?.ok) {
       // §4c: landing on interview_scheduled opens the date sheet.
       if (to === 'interview_scheduled') setDateSheetFor(jobPostingId)
@@ -97,43 +137,52 @@ export default function TrackerPage() {
     const { jobPostingId, from } = undo
     setUndo(null)
     setDateSheetFor(null) // an undone transition must not leave its date sheet armed (Codex #525)
-    await fetch(`/api/jobs/${jobPostingId}/status`, {
+    const res = await fetch(`/api/jobs/${jobPostingId}/status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: from }),
     }).catch(() => null)
+    if (await handleUnauthorized(res)) return
+    if (accountUnavailableRef.current) return
     load()
   }
 
   async function confirmCardAnswer(jobPostingId: string, applied: boolean) {
+    let res: Response | null
     if (applied) {
-      await fetch(`/api/jobs/${jobPostingId}/status`, {
+      res = await fetch(`/api/jobs/${jobPostingId}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'applied', viaNudge: true }),
       }).catch(() => null)
     } else {
-      await fetch(`/api/jobs/${jobPostingId}/nudge-dismiss`, { method: 'POST' }).catch(() => null)
+      res = await fetch(`/api/jobs/${jobPostingId}/nudge-dismiss`, { method: 'POST' }).catch(() => null)
     }
+    if (await handleUnauthorized(res)) return
+    if (accountUnavailableRef.current) return
     load()
   }
 
   async function captureDate(jobPostingId: string, choice: string) {
     setDateSheetFor(null)
-    await fetch(`/api/jobs/${jobPostingId}/interview-date`, {
+    const res = await fetch(`/api/jobs/${jobPostingId}/interview-date`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ choice }),
-    }).catch(() => {})
+    }).catch(() => null)
+    if (await handleUnauthorized(res)) return
+    if (accountUnavailableRef.current) return
     load()
   }
 
   async function saveNotes(jobPostingId: string) {
-    await fetch(`/api/jobs/${jobPostingId}/nudge-dismiss`, {
+    const res = await fetch(`/api/jobs/${jobPostingId}/nudge-dismiss`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ notes: notesDraft }),
     }).catch(() => null)
+    if (await handleUnauthorized(res)) return
+    if (accountUnavailableRef.current) return
     setNotesFor(null)
     load()
   }
@@ -143,6 +192,20 @@ export default function TrackerPage() {
       <main className="mx-auto max-w-3xl px-4 py-16">
         <p className="font-medium">Sign in to see your job tracker.</p>
         <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Browse jobs</Link>
+      </main>
+    )
+  }
+  if (error === 'account-unavailable') {
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-16">
+        <div role="status" aria-live="polite">
+          <h1 className="font-medium">Your account is unavailable.</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Account deletion has started or completed, so your private tracker data was cleared from this page.
+          </p>
+          <p className="mt-1 text-sm text-slate-500">If you did not request deletion, contact support.</p>
+        </div>
+        <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Browse public jobs</Link>
       </main>
     )
   }
@@ -239,7 +302,7 @@ export default function TrackerPage() {
                 {r.notes && notesFor !== r.jobPostingId && <p className="mt-2 whitespace-pre-wrap text-xs text-slate-500">{r.notes}</p>}
                 {notesFor === r.jobPostingId && (
                   <div className="mt-2">
-                    <textarea value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} rows={3} className="w-full rounded-lg border border-slate-200 p-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
+                    <textarea aria-label={`Notes for ${r.title} at ${r.company}`} value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} rows={3} className="w-full rounded-lg border border-slate-200 p-2 text-sm bg-white text-slate-900 placeholder-slate-400" />
                     <div className="mt-1 flex gap-2">
                       <button onClick={() => saveNotes(r.jobPostingId)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white">Save note</button>
                       <button onClick={() => setNotesFor(null)} className="rounded-lg border border-slate-200 px-3 py-1 text-xs bg-white">Cancel</button>

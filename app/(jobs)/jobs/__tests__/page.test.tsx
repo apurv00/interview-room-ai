@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 
 const { mockUseSearchParams, mockFetch } = vi.hoisted(() => ({
   mockUseSearchParams: vi.fn(),
@@ -80,5 +80,90 @@ describe('/jobs ?domain= param (Codex #527 — press links must land on the filt
     const url = new URL(feedCallUrls()[0], 'http://x')
     expect(url.searchParams.get('domain')).toBeNull()
     expect(screen.queryByText('Clear filter')).toBeNull()
+  })
+})
+
+describe('/jobs account deletion cleanup', () => {
+  it('clears personalization and ignores an older personalized feed response', async () => {
+    let resolveQuickWins!: (value: unknown) => void
+    let resolvePersonalizedFeed!: (value: unknown) => void
+    const quickWinsResponse = new Promise((resolve) => { resolveQuickWins = resolve })
+    const personalizedFeedResponse = new Promise((resolve) => { resolvePersonalizedFeed = resolve })
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
+      method: 'upload',
+      role: 'Secret Role',
+      skills: ['PrivateSkill'],
+    }))
+    sessionStorage.setItem('JOBS_CAP_NOTICE', '1')
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/jobs/quick-wins') return quickWinsResponse
+      if (url.startsWith('/api/jobs/feed')) {
+        const parsed = new URL(url, 'http://x')
+        if (parsed.searchParams.has('targetRole')) return personalizedFeedResponse
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            cards: [{
+              id: 'public-1',
+              title: 'Public Job',
+              company: 'Public Co',
+              locations: [],
+              isRemote: true,
+            }],
+            page: 1,
+            pageSize: 20,
+            hasMore: false,
+            total: 1,
+          }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<JobsPage />)
+    await waitFor(() => {
+      expect(feedCallUrls().some((url) => new URL(url, 'http://x').searchParams.has('targetRole'))).toBe(true)
+    })
+
+    await act(async () => {
+      resolveQuickWins({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+
+    expect(await screen.findByText(/personalized match signals were cleared/i)).toBeTruthy()
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+    expect(sessionStorage.getItem('JOBS_CAP_NOTICE')).toBeNull()
+    expect(await screen.findByText('Public Job')).toBeTruthy()
+
+    await act(async () => {
+      resolvePersonalizedFeed({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          cards: [{
+            id: 'private-1',
+            title: 'Old Personalized Job',
+            company: 'Private Co',
+            locations: [],
+            isRemote: true,
+            matchedSkills: ['PrivateSkill'],
+          }],
+          page: 1,
+          pageSize: 20,
+          hasMore: false,
+          total: 1,
+          sharpened: 1,
+        }),
+      })
+    })
+    expect(screen.queryByText('Old Personalized Job')).toBeNull()
+    expect(screen.queryByText('PrivateSkill')).toBeNull()
+    expect(screen.queryByText(/Sorted for you/i)).toBeNull()
   })
 })

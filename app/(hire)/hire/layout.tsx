@@ -6,6 +6,7 @@ import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import { LayoutDashboard, Users, FileText, Mail, Settings, Briefcase, ArrowLeft, Menu, LogOut } from 'lucide-react'
 import Skeleton from '@shared/ui/Skeleton'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 const HIRE_NAV = [
   { href: '/hire/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -86,7 +87,10 @@ export default function HireLayout({ children }: { children: React.ReactNode }) 
                 <p className="text-micro text-[var(--foreground-tertiary)] truncate">{session.user.email}</p>
               </div>
               <button
-                onClick={() => signOut({ callbackUrl: '/' })}
+                onClick={async () => {
+                  await clearAllInterviewStorage()
+                  await signOut({ callbackUrl: '/' })
+                }}
                 className="text-[var(--foreground-tertiary)] hover:text-red-500 transition-colors"
                 aria-label="Sign out"
               >

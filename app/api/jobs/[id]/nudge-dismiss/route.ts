@@ -5,6 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { dismissConfirmCard, saveNotes } from '@jobs'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,10 +31,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (typeof body?.notes === 'string') notes = body.notes
   } catch { /* plain dismiss */ }
   await connectDB()
-  if (notes !== undefined) {
-    const ok = await saveNotes(userId, params.id, notes)
-    return ok ? NextResponse.json({ ok: true }) : NextResponse.json({ error: 'no application' }, { status: 404 })
+  try {
+    if (notes !== undefined) {
+      const ok = await saveNotes(userId, params.id, notes)
+      return ok ? NextResponse.json({ ok: true }) : NextResponse.json({ error: 'no application' }, { status: 404 })
+    }
+    await dismissConfirmCard(userId, params.id)
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    throw error
   }
-  await dismissConfirmCard(userId, params.id)
   return NextResponse.json({ ok: true })
 }

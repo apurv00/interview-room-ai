@@ -4,6 +4,11 @@ import { JobApplication, JobsEmailSend } from '@shared/db/models'
 import { verifyActionToken } from '@shared/services/signedActionToken'
 import { transitionStatus } from '@jobs'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import {
+  isJobsAccountActive,
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,10 +37,10 @@ const page = (inner: string, status = 200) =>
     { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Referrer-Policy': 'no-referrer' } }
   )
 
-const invalidPage = () =>
+const invalidPage = (status = 200) =>
   page(`<h1 style="font-size:20px;">This link isn't valid anymore</h1>
     <p style="color:#475569;font-size:14px;">It may have expired. Your tracker always has the latest — sign in to update it there.</p>
-    <a href="/jobs/tracker" style="color:#2563eb;font-size:14px;">Open the tracker →</a>`)
+    <a href="/jobs/tracker" style="color:#2563eb;font-size:14px;">Open the tracker →</a>`, status)
 
 const ACTION_COPY: Record<string, { title: string; button: string }> = {
   interview_scheduled: { title: 'You got an interview — congrats! Confirm to update your tracker.', button: '🎙 Yes, I got the interview' },
@@ -71,9 +76,14 @@ export async function POST(req: Request) {
   }
 
   await connectDB()
+  // Email tokens can outlive the account. Keep this browser-facing endpoint
+  // on its friendly invalid-link contract rather than exposing an API error
+  // or reading tracker data for an account whose deletion already started.
+  if (!(await isJobsAccountActive(uid))) return invalidPage(401)
   const app = await JobApplication.findOne({ _id: aid, userId: uid })
     .select('jobPostingId status statusHistory outcome')
     .lean()
+  if (!(await isJobsAccountActive(uid))) return invalidPage(401)
   if (!app) return invalidPage()
 
   // Stale-guard (EMAILS.md §4): only a USER transition made AFTER this
@@ -81,6 +91,7 @@ export async function POST(req: Request) {
   // ledger row the dk binds to. System moves (auto-ghost) never block.
   if (dk) {
     const send = await JobsEmailSend.findOne({ userId: uid, stream: 'e1', dedupeKey: dk }).select('sentAt').lean()
+    if (!(await isJobsAccountActive(uid))) return invalidPage(401)
     const sentAt = send?.sentAt ? new Date(send.sentAt).getTime() : 0
     const laterUserMove = (app.statusHistory ?? []).some(
       (h: { source?: string; at?: Date }) => h.source === 'user' && h.at && new Date(h.at).getTime() > sentAt
@@ -95,12 +106,29 @@ export async function POST(req: Request) {
   if (action === 'nothing-yet') {
     // An ANSWER, not a transition: defer future response asks (shared
     // ledger with the in-app nudges), change nothing else.
-    await JobApplication.updateOne({ _id: aid, userId: uid }, { $set: { 'outcome.lastAskedAt': new Date() } })
+    try {
+      await withActiveJobsAccountWrite(uid, (session) =>
+        JobApplication.updateOne(
+          { _id: aid, userId: uid },
+          { $set: { 'outcome.lastAskedAt': new Date() } },
+          { session },
+        ),
+      )
+    } catch (error) {
+      if (error instanceof JobsAccountInactiveError) return invalidPage(401)
+      throw error
+    }
     return page(`<h1 style="font-size:20px;">Got it — fingers crossed 🤞</h1>
       <p style="color:#475569;font-size:14px;">We'll stop asking about this one for a while. If news lands, one tap in the tracker updates it.</p>`)
   }
 
-  const result = await transitionStatus(uid, String(app.jobPostingId), action as 'interview_scheduled' | 'rejected', { channel: 'email' })
+  let result: Awaited<ReturnType<typeof transitionStatus>>
+  try {
+    result = await transitionStatus(uid, String(app.jobPostingId), action as 'interview_scheduled' | 'rejected', { channel: 'email' })
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) return invalidPage(401)
+    throw error
+  }
   if (!result.ok) return invalidPage()
 
   if (action === 'interview_scheduled') {

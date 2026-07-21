@@ -241,7 +241,7 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
-  it('returns 404 when deletion wins between a duplicate race and its retry', async () => {
+  it('returns account unavailable when deletion wins between a duplicate race and its retry', async () => {
     mockApplicationCreate.mockRejectedValueOnce(Object.assign(new Error('duplicate'), { code: 11000 }))
     let fenceCalls = 0
     mockWithActiveJobsAccountWrite.mockImplementation(async (
@@ -258,7 +258,11 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
       { params: { id: JOB_ID } },
     )
 
-    expect(response.status).toBe(404)
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
     expect(mockApplicationCreate).toHaveBeenCalledOnce()
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
@@ -296,7 +300,7 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
     expect(mockEndSession).toHaveBeenCalledOnce()
   })
 
-  it('returns 404 when account deletion owns the fence and creates no pin, row, or event', async () => {
+  it('returns account unavailable when deletion owns the fence and creates no pin, row, or event', async () => {
     mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError(USER_ID))
 
     const response = await POST(
@@ -304,7 +308,11 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
       { params: { id: JOB_ID } },
     )
 
-    expect(response.status).toBe(404)
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
     expect(mockPostingFindById).not.toHaveBeenCalled()
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     expect(mockApplicationCreate).not.toHaveBeenCalled()

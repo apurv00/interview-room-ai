@@ -1,11 +1,21 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockList, mockGet, mockSave, mockIsJobsAccountActive } = vi.hoisted(() => ({
-  mockList: vi.fn(),
-  mockGet: vi.fn(),
-  mockSave: vi.fn(),
-  mockIsJobsAccountActive: vi.fn(),
-}))
+const {
+  mockList,
+  mockGet,
+  mockSave,
+  mockIsJobsAccountActive,
+  MockJobsAccountInactiveError,
+} = vi.hoisted(() => {
+  class MockJobsAccountInactiveError extends Error {}
+  return {
+    mockList: vi.fn(),
+    mockGet: vi.fn(),
+    mockSave: vi.fn(),
+    mockIsJobsAccountActive: vi.fn(),
+    MockJobsAccountInactiveError,
+  }
+})
 // Partial mock: the REAL ResumeSchema does the validating (that behavior is
 // exactly what these tests pin); only the persistence functions are stubbed.
 vi.mock('@resume', async (importOriginal) => {
@@ -14,6 +24,7 @@ vi.mock('@resume', async (importOriginal) => {
 })
 vi.mock('@shared/services/jobsAccountFence', () => ({
   isJobsAccountActive: mockIsJobsAccountActive,
+  JobsAccountInactiveError: MockJobsAccountInactiveError,
 }))
 
 import { saveBaseResume, getBaseResume } from '../services/baseResumeService'
@@ -58,13 +69,43 @@ describe('saveBaseResume (Stage-2 auto-save — cap-honest, dedup-by-role)', () 
     expect(await saveBaseResume('u1', STRUCT, 'QA')).toEqual({ saved: false, reason: 'error' })
   })
 
-  it('refuses to list or save after account deletion has begun', async () => {
+  it('preserves the inactive-account signal and never lists or saves after deletion begins', async () => {
     reset()
     mockIsJobsAccountActive.mockResolvedValue(false)
 
-    expect(await saveBaseResume('u1', STRUCT, 'QA')).toEqual({ saved: false, reason: 'error' })
+    await expect(saveBaseResume('u1', STRUCT, 'QA')).rejects.toBeInstanceOf(
+      MockJobsAccountInactiveError,
+    )
     expect(mockList).not.toHaveBeenCalled()
     expect(mockSave).not.toHaveBeenCalled()
+  })
+
+  it('preserves ACCOUNT_UNAVAILABLE from the embedded resume writer', async () => {
+    reset()
+    mockSave.mockResolvedValue({
+      error: 'Your account is unavailable. Sign in again before saving.',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+
+    await expect(saveBaseResume('u1', STRUCT, 'QA')).rejects.toBeInstanceOf(
+      MockJobsAccountInactiveError,
+    )
+  })
+
+  it('distinguishes deletion racing an existing-resume update from a real stale resume id', async () => {
+    reset()
+    mockList.mockResolvedValue({
+      resumes: [{ id: 'base-1', name: 'Base Resume — QA', updatedAt: '2026-07-01' }],
+    })
+    mockSave.mockResolvedValue({ error: 'This resume no longer exists', code: 'NOT_FOUND' })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    await expect(saveBaseResume('u1', STRUCT, 'QA')).rejects.toBeInstanceOf(
+      MockJobsAccountInactiveError,
+    )
   })
 })
 

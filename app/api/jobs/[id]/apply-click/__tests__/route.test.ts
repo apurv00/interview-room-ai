@@ -29,6 +29,7 @@ vi.mock('@jobs', async () => {
 
 import { POST } from '../route'
 import { applyOptionIdOf } from '@jobs/services/applyOptionIdentity'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const USER_ID = '507f1f77bcf86cd799439010'
 const JOB_ID = '507f1f77bcf86cd799439011'
@@ -95,6 +96,19 @@ describe('POST /api/jobs/[id]/apply-click canonical option boundary', () => {
 
     expect(response.status).toBe(404)
     expect(mockRecordApplyClick).toHaveBeenCalledWith(USER_ID, JOB_ID, OPTION_ID)
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('returns the account-unavailable contract when deletion owns the write fence', async () => {
+    mockRecordApplyClick.mockRejectedValueOnce(new JobsAccountInactiveError(USER_ID))
+
+    const response = await POST(request(JSON.stringify({ optionId: OPTION_ID })), { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 

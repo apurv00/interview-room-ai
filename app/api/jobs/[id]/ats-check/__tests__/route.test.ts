@@ -109,11 +109,8 @@ describe('POST /api/jobs/[id]/ats-check lifecycle authorization', () => {
     expect(mockInngestSend).toHaveBeenCalledTimes(2)
   })
 
-  it('returns account unavailable instead of pending when a failed claim races deletion', async () => {
-    mockClaimAtsRun.mockResolvedValue({
-      claimed: false,
-      claimedAt: new Date('2026-07-20T12:00:00.000Z'),
-    })
+  it('returns account unavailable when deletion removes the application during private reads', async () => {
+    mockApplicationFindOne.mockReturnValue(selectLean(null))
     mockIsJobsAccountActive
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false)
@@ -128,8 +125,78 @@ describe('POST /api/jobs/[id]/ats-check lifecycle authorization', () => {
       error: 'account unavailable',
       code: 'ACCOUNT_UNAVAILABLE',
     })
+    expect(mockPreparePractice).not.toHaveBeenCalled()
+    expect(mockGetBaseResume).not.toHaveBeenCalled()
+    expect(mockClaimAtsRun).not.toHaveBeenCalled()
+  })
+
+  it('returns account unavailable when deletion lands during canonical JD preparation', async () => {
+    mockPreparePractice.mockResolvedValue({ jobDescription: 'display-only body' })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockGetBaseResume).not.toHaveBeenCalled()
+    expect(mockClaimAtsRun).not.toHaveBeenCalled()
+  })
+
+  it('returns account unavailable when deletion removes the base resume during its read', async () => {
+    mockGetBaseResume.mockResolvedValue(null)
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockClaimAtsRun).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('returns account unavailable instead of pending when a failed claim races deletion', async () => {
+    mockClaimAtsRun.mockResolvedValue({
+      claimed: false,
+      claimedAt: new Date('2026-07-20T12:00:00.000Z'),
+    })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
     expect(mockClaimAtsRun).toHaveBeenCalledWith(USER_ID, JOB_ID)
-    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(2)
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(5)
     expect(mockInngestSend).not.toHaveBeenCalled()
   })
 
@@ -146,7 +213,7 @@ describe('POST /api/jobs/[id]/ats-check lifecycle authorization', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ status: 'pending' })
-    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(2)
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(5)
     expect(mockInngestSend).not.toHaveBeenCalled()
   })
 

@@ -38,6 +38,7 @@ import type { InterviewConfig, DesignSubmission } from '@shared/types'
 import { AVATAR_NAME, getAvatarTitle } from '@interview/config/interviewConfig'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import {
+  captureReplayUploadIntent,
   drainQueuedReplayUploads,
   uploadReplayRecording,
   type ReplayUploadResult,
@@ -201,6 +202,10 @@ export default function InterviewPage() {
 
   // Handle recording stop
   const handleRecordingStop = useCallback(async () => {
+    // Capture before recorder shutdown: Blob materialization is asynchronous,
+    // so account cleanup during stopRecording must invalidate the later upload.
+    const replayUploadIntent = captureReplayUploadIntent()
+
     // Stop the camera + audio recorders in parallel (audio runs for every
     // interview; camera unless privacy mode).
     const [cameraBlob, audioBlob] = await Promise.all([
@@ -268,7 +273,13 @@ export default function InterviewPage() {
     const replayUploads: Promise<ReplayUploadResult>[] = []
     if (cameraBlob && !privacyMode) {
       replayUploads.push(
-        uploadReplayRecording(sessionId, 'camera', cameraBlob, recordingDurationSeconds ?? undefined)
+        uploadReplayRecording(
+          sessionId,
+          'camera',
+          cameraBlob,
+          recordingDurationSeconds ?? undefined,
+          replayUploadIntent,
+        )
       )
     }
     if (audioBlob) criticalUploads.push(uploadRecordingBlob(audioBlob, sessionId, 'audio'))

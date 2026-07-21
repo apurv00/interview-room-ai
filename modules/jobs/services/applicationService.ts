@@ -6,7 +6,10 @@ import { inngest } from '@shared/services/inngest'
 import { getShortFormMinAnswers } from '@interview'
 import { practiceHandoffHashOf } from './practiceHandoff'
 import { xrayHashOf } from './xrayService'
-import { jobPostingStateOf } from './postingAccess'
+import {
+  exactOptionalPostingCondition,
+  jobPostingStateOf,
+} from './postingAccess'
 import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 import {
   isJobsAccountActive,
@@ -48,9 +51,7 @@ function exactApplyOptionPostingFilter(
   return {
     _id: jobPostingId,
     status: posting.status,
-    closedReason: posting.closedReason === undefined
-      ? { $exists: false }
-      : posting.closedReason,
+    closedReason: exactOptionalPostingCondition(posting.closedReason),
     provenance: {
       $elemMatch: {
         sourceKey: option.sourceKey,
@@ -239,9 +240,7 @@ export async function saveTailoredVersion(
           {
             _id: jobPostingId,
             status: posting.status,
-            closedReason: posting.closedReason === undefined
-              ? { $exists: false }
-              : posting.closedReason,
+            closedReason: exactOptionalPostingCondition(posting.closedReason),
             jdCompressed: posting.jdCompressed,
           },
           {
@@ -304,9 +303,6 @@ export async function saveTailoredVersion(
       if (error instanceof TailoredVersionTransactionRaceError) {
         return { ok: false, reason: 'context-unavailable' }
       }
-      if (error instanceof JobsAccountInactiveError) {
-        return { ok: false, reason: 'not-found' }
-      }
       throw error
     }
   }
@@ -338,22 +334,16 @@ export async function transitionStatus(
   // promises jobs.status_changed{from,to,source}, and in a loose machine
   // `from` is what distinguishes a forward move from a correction
   // (Codex on #522).
-  let prev
-  try {
-    prev = await withActiveJobsAccountWrite(userId, (session) =>
-      JobApplication.findOneAndUpdate(
-        { userId, jobPostingId },
-        {
-          $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
-          $push: { statusHistory: { status: to, at: now, source: 'user' } },
-        },
-        { new: false, session },
-      ),
-    )
-  } catch (error) {
-    if (error instanceof JobsAccountInactiveError) return { ok: false }
-    throw error
-  }
+  const prev = await withActiveJobsAccountWrite(userId, (session) =>
+    JobApplication.findOneAndUpdate(
+      { userId, jobPostingId },
+      {
+        $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
+        $push: { statusHistory: { status: to, at: now, source: 'user' } },
+      },
+      { new: false, session },
+    ),
+  )
   if (!prev) return { ok: false }
 
   // THE single emitter (EMAILS.md §4, Codex #530 R25): jobs.interview_scheduled
@@ -503,12 +493,10 @@ export async function reportBrokenLink(
   try {
     return await reportBrokenLinkAttempt(userId, jobPostingId, optionId, now)
   } catch (error) {
-    if (error instanceof JobsAccountInactiveError) return { ok: false }
     if (!(error instanceof ApplyOptionTransactionRaceError)) throw error
     try {
       return await reportBrokenLinkAttempt(userId, jobPostingId, optionId, now)
     } catch (retryError) {
-      if (retryError instanceof JobsAccountInactiveError) return { ok: false }
       if (retryError instanceof ApplyOptionTransactionRaceError) return { ok: false }
       throw retryError
     }
@@ -634,9 +622,7 @@ export async function ensurePracticeApplication(
   const postingGuard = {
     _id: attr.jobId,
     status: posting.status,
-    closedReason: posting.closedReason
-      ? posting.closedReason
-      : { $exists: false },
+    closedReason: exactOptionalPostingCondition(posting.closedReason),
     jdCompressed: posting.jdCompressed,
   }
   const snapshot = {
@@ -955,21 +941,19 @@ export async function recordApplyClick(
   optionId: string,
   now = new Date(),
 ): Promise<ApplyClickResult | null> {
-  try {
-    return await recordApplyClickAttempt(userId, jobPostingId, optionId, now)
-  } catch (error) {
-    if (error instanceof JobsAccountInactiveError) return null
-    if (!isDuplicateKeyError(error) && !(error instanceof ApplyOptionTransactionRaceError)) {
-      throw error
-    }
-    // A Save/Tailor/practice create or a forward status move may win the first
-    // transaction. Re-enter once so the winner gains the canonical click id
-    // without ever regressing its status.
+  // Two distinct writers may win in sequence: Save/Tailor/Practice can win
+  // the create, then a forward status transition can win the first
+  // convergence update. A third bounded attempt observes that settled status
+  // and records only the canonical click id without regressing it.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return await recordApplyClickAttempt(userId, jobPostingId, optionId, now)
-    } catch (retryError) {
-      if (retryError instanceof JobsAccountInactiveError) return null
-      throw retryError
+    } catch (error) {
+      const retryable = isDuplicateKeyError(error) ||
+        error instanceof ApplyOptionTransactionRaceError
+      if (!retryable) throw error
+      if (attempt === 2) return null
     }
   }
+  return null
 }

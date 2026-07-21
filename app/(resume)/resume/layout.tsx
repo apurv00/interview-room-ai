@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import { LayoutDashboard, FileText, Wand2, ShieldCheck, LayoutTemplate, ArrowLeft, Menu } from 'lucide-react'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 const RESUME_NAV = [
   { href: '/resume', label: 'Dashboard', Icon: LayoutDashboard },
@@ -81,7 +82,10 @@ export default function ResumeLayout({ children }: { children: React.ReactNode }
                 <p className="text-[10px] text-slate-500 truncate">{session.user.email}</p>
               </div>
               <button
-                onClick={() => signOut({ callbackUrl: '/' })}
+                onClick={async () => {
+                  await clearAllInterviewStorage()
+                  await signOut({ callbackUrl: '/' })
+                }}
                 className="text-[10px] text-slate-500 hover:text-red-500 transition-colors"
               >
                 Sign Out

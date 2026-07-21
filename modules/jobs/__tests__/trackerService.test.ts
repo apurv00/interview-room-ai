@@ -172,22 +172,22 @@ describe('getTracker (Wave 4.2 — all time logic at read time)', () => {
     expect(mockBulkWrite).not.toHaveBeenCalled()
   })
 
-  it('returns an empty tracker when the account is inactive without reading, writing, or emitting', async () => {
+  it('propagates account unavailability without reading, writing, or emitting', async () => {
     reset()
     mockIsJobsAccountActive.mockResolvedValueOnce(false)
 
-    expect(await getTracker('u1', NOW)).toEqual({ groups: [], confirmCard: null, autoGhosted: 0 })
+    await expect(getTracker('u1', NOW)).rejects.toBeInstanceOf(JobsAccountInactiveError)
     expect(mockFind).not.toHaveBeenCalled()
     expect(mockBulkWrite).not.toHaveBeenCalled()
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
-  it('drops a stale tracker snapshot when deletion wins the auto-ghost write fence', async () => {
+  it('propagates account unavailability when deletion wins the auto-ghost write fence', async () => {
     reset()
     chain([app({ statusHistory: [{ status: 'applied', at: daysAgo(36), source: 'user' }] })])
     mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
 
-    expect(await getTracker('u1', NOW)).toEqual({ groups: [], confirmCard: null, autoGhosted: 0 })
+    await expect(getTracker('u1', NOW)).rejects.toBeInstanceOf(JobsAccountInactiveError)
     expect(mockBulkWrite).not.toHaveBeenCalled()
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
@@ -292,8 +292,8 @@ describe('confirm-card budget + notes', () => {
     reset()
     mockWithActiveJobsAccountWrite.mockRejectedValue(new JobsAccountInactiveError('u1'))
 
-    await expect(dismissConfirmCard('u1', 'j1')).resolves.toBeUndefined()
-    await expect(saveNotes('u1', 'j1', 'private note')).resolves.toBe(false)
+    await expect(dismissConfirmCard('u1', 'j1')).rejects.toBeInstanceOf(JobsAccountInactiveError)
+    await expect(saveNotes('u1', 'j1', 'private note')).rejects.toBeInstanceOf(JobsAccountInactiveError)
     expect(mockUpdateOne).not.toHaveBeenCalled()
   })
 })

@@ -5,7 +5,10 @@ import { connectDB } from '@shared/db/connection'
 import { saveBaseResume, getBaseResume } from '@jobs'
 import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
-import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
+import {
+  isJobsAccountActive,
+  JobsAccountInactiveError,
+} from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -75,6 +78,12 @@ export async function POST(req: Request) {
     }
     return NextResponse.json(result)
   } catch (err) {
+    if (err instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
     logger.warn({ err }, 'base-resume auto-save failed — onboarding continues without it')
     return NextResponse.json({ saved: false, reason: 'error' })
   }

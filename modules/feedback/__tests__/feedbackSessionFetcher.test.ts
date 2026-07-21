@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { fetchFeedbackSessionSummary } from '@feedback/lib/feedbackSessionFetcher'
+import {
+  FeedbackAccountUnavailableError,
+  fetchFeedbackSessionSummary,
+} from '@feedback/lib/feedbackSessionFetcher'
 import { _resetDeduplicatedFetchCache } from '@shared/cachedFetch'
 
 describe('fetchFeedbackSessionSummary', () => {
@@ -52,6 +55,28 @@ describe('fetchFeedbackSessionSummary', () => {
     fetchSpy.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) } as Response)
     const out = await fetchFeedbackSessionSummary('sess-bad')
     expect(out).toBeNull()
+  })
+
+  it('preserves only an exact inactive-account 401 as a typed terminal error', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ code: 'ACCOUNT_UNAVAILABLE' }),
+    } as Response)
+
+    await expect(fetchFeedbackSessionSummary('sess-deleting')).rejects.toBeInstanceOf(
+      FeedbackAccountUnavailableError,
+    )
+  })
+
+  it('continues treating an ordinary 401 as a generic miss', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ code: 'SESSION_UNAVAILABLE' }),
+    } as Response)
+
+    await expect(fetchFeedbackSessionSummary('sess-unauthorized')).resolves.toBeNull()
   })
 
   it('returns null on network failure (non-abort)', async () => {

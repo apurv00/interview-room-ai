@@ -2,10 +2,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { authOptions } from '@shared/auth/authOptions'
+import { connectDB } from '@shared/db/connection'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 import { tailorResume } from '@resume/services/resumeAIService'
 import { TailorSchema } from '@resume/validators/resume'
 
 export const dynamic = 'force-dynamic'
+
+const accountUnavailableResponse = () => NextResponse.json(
+  { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+  { status: 401 },
+)
 
 // Open to anonymous users so the strongest "wow" tool of the resume funnel
 // (job-specific tailoring) is reachable from SEO landings without sign-in.
@@ -20,7 +27,7 @@ const composedPOST = composeApiRoute({
     maxRequests: 5,
     anonDailyLimit: 3,
   },
-  handler: async (_req, { body, user }) => {
+  handler: async (req, { body, user }) => {
     // Defense in depth for clients that send body provenance. The Tailor page
     // also sends x-origin-user-id so its account-switch rejection happens in
     // the wrapper below, before composeApiRoute consumes quota.
@@ -31,7 +38,14 @@ const composedPOST = composeApiRoute({
         { status: 409 },
       )
     }
+    const accountBoundOrigin = user.id !== 'anonymous' && (
+      body.originUserId !== undefined || req.headers.get('x-origin-user-id') !== null
+    )
     try {
+      if (accountBoundOrigin) {
+        await connectDB()
+        if (!(await isJobsAccountActive(user.id))) return accountUnavailableResponse()
+      }
       // Keep provenance out of the AI-service payload. It exists only to bind
       // this HTTP request to the session that originated the client run.
       const result = await tailorResume({
@@ -39,6 +53,11 @@ const composedPOST = composeApiRoute({
         jobDescription: body.jobDescription,
         ...(body.companyName !== undefined ? { companyName: body.companyName } : {}),
       })
+      // Provider work cannot be recalled if deletion starts mid-call, but its
+      // private result must never be returned to the stale authenticated tab.
+      if (accountBoundOrigin && !(await isJobsAccountActive(user.id))) {
+        return accountUnavailableResponse()
+      }
       return NextResponse.json(result)
     } catch {
       return NextResponse.json({ error: 'Failed to tailor resume' }, { status: 500 })
@@ -65,6 +84,10 @@ export async function POST(
         { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
         { status: 409 },
       )
+    }
+    await connectDB()
+    if (!(await isJobsAccountActive(currentUserId))) {
+      return accountUnavailableResponse()
     }
   }
   return composedPOST(req, context)

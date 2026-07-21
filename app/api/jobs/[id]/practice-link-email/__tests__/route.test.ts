@@ -94,6 +94,44 @@ describe('POST /api/jobs/[id]/practice-link-email archive policy', () => {
     }))
   })
 
+  it('returns the canonical account-unavailable contract before reading private state', async () => {
+    mockIsJobsAccountActive.mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/practice-link-email`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockGetConfig).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('returns account unavailable when deletion removes ownership during private reads', async () => {
+    mockApplicationExists.mockResolvedValue(null)
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/practice-link-email`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockPreparePractice).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
   it('declines restricted closures without scheduling a dead promise', async () => {
     mockPostingFindById.mockReturnValue(selectLean({ status: 'closed', closedReason: 'source-revoked' }))
 
@@ -124,6 +162,7 @@ describe('POST /api/jobs/[id]/practice-link-email archive policy', () => {
   it('does not enqueue when account deletion lands during asynchronous Practice preparation', async () => {
     mockIsJobsAccountActive
       .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false)
 
     const response = await POST(
@@ -132,6 +171,12 @@ describe('POST /api/jobs/[id]/practice-link-email archive policy', () => {
     )
 
     expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockPreparePractice).toHaveBeenCalledOnce()
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(3)
     expect(mockInngestSend).not.toHaveBeenCalled()
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })

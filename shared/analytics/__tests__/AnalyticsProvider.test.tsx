@@ -162,6 +162,33 @@ describe('AnalyticsProvider', () => {
     expect(identifyMock).toHaveBeenCalledTimes(1)
   })
 
+  it('re-identifies the same user after a confirmed sign-out and tracks the new sign-in', () => {
+    window.localStorage.setItem('ipg_distinct_id', 'user_42')
+    mockStatus = 'authenticated'
+    mockSessionData = { user: { id: 'user_42', plan: 'free' } }
+    const { rerender } = render(<AnalyticsProvider><div /></AnalyticsProvider>)
+
+    expect(identifyMock).toHaveBeenCalledTimes(1)
+    expect(
+      trackMock.mock.calls.filter(([event]) => event === 'signin_succeeded')
+    ).toHaveLength(0)
+
+    mockStatus = 'unauthenticated'
+    mockSessionData = { user: null }
+    rerender(<AnalyticsProvider><div /></AnalyticsProvider>)
+
+    mockStatus = 'authenticated'
+    mockSessionData = { user: { id: 'user_42', plan: 'free' } }
+    rerender(<AnalyticsProvider><div /></AnalyticsProvider>)
+
+    expect(identifyMock).toHaveBeenCalledTimes(2)
+    const signinCalls = trackMock.mock.calls.filter(
+      ([event]) => event === 'signin_succeeded'
+    )
+    expect(signinCalls).toHaveLength(1)
+    expect(signinCalls[0][1]).toEqual({ had_prior_session: true })
+  })
+
   it('renders children unchanged', () => {
     const { getByText } = render(
       <AnalyticsProvider>

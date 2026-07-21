@@ -47,15 +47,34 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
       .lean(),
   ])
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   if (!app) return NextResponse.json({ reason: 'save-first' }, { status: 409 })
   if (!posting || jobPostingStateOf(posting) === 'restricted') {
     return NextResponse.json({ reason: 'posting-unavailable' }, { status: 409 })
   }
   const prepared = await preparePracticeHandoffPosting(posting)
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   if (!prepared.jdHash) {
     return NextResponse.json({ reason: 'posting-unavailable' }, { status: 409 })
   }
-  if (!(await getBaseResume(userId))) return NextResponse.json({ reason: 'no-resume' }, { status: 409 })
+  const baseResume = await getBaseResume(userId)
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
+  if (!baseResume) return NextResponse.json({ reason: 'no-resume' }, { status: 409 })
 
   // ATOMIC claim (Codex on #521): concurrent POSTs must not both enqueue —
   // only the request that actually flipped the marker sends the event; the

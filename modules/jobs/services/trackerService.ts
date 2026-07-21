@@ -70,7 +70,7 @@ const GROUP_ORDER = ['interview_scheduled', 'apply_clicked', 'applied', 'saved',
 
 export async function getTracker(userId: string, now = new Date()): Promise<TrackerView> {
   const empty = (): TrackerView => ({ groups: [], confirmCard: null, autoGhosted: 0 })
-  if (!(await isJobsAccountActive(userId))) return empty()
+  if (!(await isJobsAccountActive(userId))) throw new JobsAccountInactiveError(userId)
   const apps = await JobApplication.find({ userId })
     .select('jobPostingId jobSnapshot status statusHistory verifiedPracticeSessionIds notes outcome updatedAt')
     .sort({ updatedAt: -1 })
@@ -101,26 +101,20 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
     // user confirming an old apply_clicked as `applied` mid-read leaves the
     // row still ghostable — only `updatedAt` unchanged since OUR snapshot
     // proves nothing fresher landed. Contested rows simply don't match.
-    let res
-    try {
-      res = await withActiveJobsAccountWrite(userId, (session) =>
-        JobApplication.bulkWrite(
-          toGhost.map((a) => ({
-            updateOne: {
-              filter: { _id: a._id, updatedAt: a.updatedAt },
-              update: {
-                $set: { status: 'ghosted', ghostSuggestedAt: now },
-                $push: { statusHistory: { status: 'ghosted', at: now, source: 'system' } },
-              },
+    const res = await withActiveJobsAccountWrite(userId, (session) =>
+      JobApplication.bulkWrite(
+        toGhost.map((a) => ({
+          updateOne: {
+            filter: { _id: a._id, updatedAt: a.updatedAt },
+            update: {
+              $set: { status: 'ghosted', ghostSuggestedAt: now },
+              $push: { statusHistory: { status: 'ghosted', at: now, source: 'system' } },
             },
-          })),
-          { session },
-        ),
-      )
-    } catch (error) {
-      if (error instanceof JobsAccountInactiveError) return empty()
-      throw error
-    }
+          },
+        })),
+        { session },
+      ),
+    )
     autoGhosted = res?.modifiedCount ?? 0
     if (autoGhosted > 0) {
       try {
@@ -217,23 +211,16 @@ export async function dismissConfirmCard(userId: string, jobPostingId: string): 
       { $inc: { 'outcome.askCount': 1 } },
       { session },
     ),
-  ).catch((error) => {
-    if (!(error instanceof JobsAccountInactiveError)) throw error
-  })
+  )
 }
 
 export async function saveNotes(userId: string, jobPostingId: string, notes: string): Promise<boolean> {
-  try {
-    const res = await withActiveJobsAccountWrite(userId, (session) =>
-      JobApplication.updateOne(
-        { userId, jobPostingId },
-        { $set: { notes: notes.slice(0, 2000) } },
-        { session },
-      ),
-    )
-    return (res?.matchedCount ?? 0) > 0
-  } catch (error) {
-    if (error instanceof JobsAccountInactiveError) return false
-    throw error
-  }
+  const res = await withActiveJobsAccountWrite(userId, (session) =>
+    JobApplication.updateOne(
+      { userId, jobPostingId },
+      { $set: { notes: notes.slice(0, 2000) } },
+      { session },
+    ),
+  )
+  return (res?.matchedCount ?? 0) > 0
 }

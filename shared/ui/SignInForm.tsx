@@ -2,7 +2,25 @@
 
 import { useState } from 'react'
 import { signIn, signOut, useSession } from 'next-auth/react'
-import { clearAllInterviewStorage } from '@shared/storageKeys'
+import { clearInterviewStorageForOAuthSignIn } from '@shared/storageKeys'
+
+const JOB_ID_PATTERN = /^[a-f0-9]{24}$/i
+
+function isTailorContinuationTarget(target: string): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const url = new URL(target, window.location.origin)
+    const jobId = url.searchParams.get('jobId')?.trim()
+    return (
+      url.origin === window.location.origin &&
+      url.pathname === '/resume/tailor' &&
+      !!jobId &&
+      JOB_ID_PATTERN.test(jobId)
+    )
+  } catch {
+    return false
+  }
+}
 
 interface Props {
   /** URL to return to after OAuth completes. Defaults to current page. */
@@ -27,10 +45,14 @@ export default function SignInForm({ callbackUrl, headline, subcopy, errorCode }
   async function handleOAuthSignIn(provider: 'google' | 'github') {
     setIsLoading(true)
     const target = callbackUrl ?? (typeof window !== 'undefined' ? window.location.href : '/')
-    // Clear localStorage + server session before starting a new OAuth flow.
+    // Clear account-bound browser state + server session before OAuth. The
+    // short-lived Tailor continuation is retained only for its exact return
+    // route and is still revalidated there.
     // Note: document.cookie cannot clear httpOnly cookies — signOut() handles
     // that server-side via Set-Cookie.
-    clearAllInterviewStorage()
+    await clearInterviewStorageForOAuthSignIn({
+      preserveTailorContinuation: isTailorContinuationTarget(target),
+    })
     try {
       await signOut({ redirect: false })
     } catch { /* continue even if signout fails */ }

@@ -99,6 +99,228 @@ async function switchSession(view: ReturnType<typeof render>, userId: string, wa
 }
 
 describe('Tailor tracked-job capability', () => {
+  it('scrubs account-bound inputs when the initial job context reports account deletion', async () => {
+    sessionState.status = 'authenticated'
+    sessionState.userId = USER_A_ID
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      if (url === '/api/resume/save') return response({ resumes: [] })
+      return response({})
+    })
+
+    render(<TailorPage />)
+
+    expect(await screen.findByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByLabelText('Job description')).toBeNull()
+    expect(screen.queryByLabelText('Company name')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Test upload' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Tailor My Resume' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Sign in to attach' })).toBeNull()
+    expect(screen.queryByText('82%')).toBeNull()
+  })
+
+  it('discards a held result when attachment reports account unavailability', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      if (url === '/api/resume/save') return response({ resumes: [] })
+      if (url === '/api/resume/tailor') return response(RESULT)
+      if (url === `/api/jobs/${JOB_ID}/tailored`) {
+        return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      return response({})
+    })
+
+    const view = render(<TailorPage />)
+    await screen.findByText(/Using the job description for Acme/i)
+    enterResume()
+    await switchSession(view, USER_A_ID)
+    fireEvent.click(screen.getByRole('button', { name: 'Tailor My Resume' }))
+
+    expect(await screen.findByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByText('82%')).toBeNull()
+    expect(screen.queryByText('TAILORED RESUME')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Sign in to attach' })).toBeNull()
+    expect(screen.queryByLabelText('Job description')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Test upload' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Tailor My Resume' })).toBeNull()
+    expect(sessionStorage.getItem(PENDING_ASSOCIATION_KEY)).toBeNull()
+  })
+
+  it('scrubs in-flight tracked-job inputs when the Tailor provider boundary reports account unavailability', async () => {
+    let resolveTailor!: (value: { ok: boolean; status: number; json: () => Promise<unknown> }) => void
+    const tailorResponse = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>((resolve) => {
+      resolveTailor = resolve
+    })
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      if (url === '/api/resume/save') return response({ resumes: [] })
+      if (url === '/api/resume/tailor') return tailorResponse
+      return response({})
+    })
+
+    const view = render(<TailorPage />)
+    await screen.findByText(/Using the job description for Acme/i)
+    enterResume('PRIVATE RESUME')
+    await switchSession(view, USER_A_ID)
+    fireEvent.click(screen.getByRole('button', { name: 'Tailor My Resume' }))
+
+    await act(async () => {
+      resolveTailor({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+
+    expect(await screen.findByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByLabelText('Job description')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Test upload' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Tailor My Resume' })).toBeNull()
+    expect(screen.queryByText('82%')).toBeNull()
+    expect(mockFetch.mock.calls.some(([url]) => String(url) === `/api/jobs/${JOB_ID}/tailored`)).toBe(false)
+  })
+
+  it('keeps account deletion terminal across late success, job navigation, and session changes', async () => {
+    type DeferredResponse = { ok: boolean; status: number; json: () => Promise<unknown> }
+    let resolveSavedResumes!: (value: DeferredResponse) => void
+    let resolveTailor!: (value: DeferredResponse) => void
+    const savedResumesResponse = new Promise<DeferredResponse>((resolve) => {
+      resolveSavedResumes = resolve
+    })
+    const tailorResponse = new Promise<DeferredResponse>((resolve) => {
+      resolveTailor = resolve
+    })
+    sessionState.status = 'authenticated'
+    sessionState.userId = USER_A_ID
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}` || url === `/api/jobs/${JOB_B_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      if (url === '/api/resume/save') return savedResumesResponse
+      if (url === '/api/documents/upload') return response({ text: 'PRIVATE RESUME', fileName: 'resume.pdf' })
+      if (url === '/api/resume/tailor') return tailorResponse
+      return response({})
+    })
+
+    const view = render(<TailorPage />)
+    await screen.findByText(/Using the job description for Acme/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Test upload' }))
+    await screen.findByText('resume.pdf')
+    fireEvent.click(screen.getByRole('button', { name: 'Tailor My Resume' }))
+    await waitFor(() => {
+      expect(mockFetch.mock.calls.some(([url]) => String(url) === '/api/resume/tailor')).toBe(true)
+    })
+
+    await act(async () => {
+      resolveSavedResumes({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+
+    expect(await screen.findByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Test upload' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Tailor My Resume' })).toBeNull()
+    expect(screen.queryByLabelText('Resume text')).toBeNull()
+    expect(screen.queryByLabelText('Job description')).toBeNull()
+    expect(screen.queryByText('PRIVATE RESUME')).toBeNull()
+
+    searchState.jobId = JOB_B_ID
+    sessionState.userId = USER_B_ID
+    view.rerender(<TailorPage />)
+
+    await act(async () => {
+      resolveTailor({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(RESULT),
+      })
+    })
+
+    expect(screen.getByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByText('82%')).toBeNull()
+    expect(screen.queryByText('TAILORED RESUME')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Test upload' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Tailor My Resume' })).toBeNull()
+    expect(mockFetch.mock.calls.some(([url]) => String(url) === `/api/jobs/${JOB_B_ID}`)).toBe(false)
+  })
+
+  it('does not let a superseded Tailor rejection overwrite a terminal session message', async () => {
+    type DeferredResponse = { ok: boolean; status: number; json: () => Promise<unknown> }
+    let resolveSavedResumes!: (value: DeferredResponse) => void
+    let rejectTailor!: (reason: Error) => void
+    const savedResumesResponse = new Promise<DeferredResponse>((resolve) => {
+      resolveSavedResumes = resolve
+    })
+    const tailorResponse = new Promise<DeferredResponse>((_resolve, reject) => {
+      rejectTailor = reject
+    })
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      if (url === '/api/resume/save') return savedResumesResponse
+      if (url === '/api/resume/tailor') return tailorResponse
+      return response({})
+    })
+
+    const view = render(<TailorPage />)
+    await screen.findByText(/Using the job description for Acme/i)
+    enterResume('PRIVATE RESUME')
+    await switchSession(view, USER_A_ID)
+    fireEvent.click(screen.getByRole('button', { name: 'Tailor My Resume' }))
+    await waitFor(() => {
+      expect(mockFetch.mock.calls.some(([url]) => String(url) === '/api/resume/tailor')).toBe(true)
+    })
+
+    await act(async () => {
+      resolveSavedResumes({
+        ok: false,
+        status: 409,
+        json: () => Promise.resolve({ code: 'SESSION_CHANGED' }),
+      })
+    })
+    expect(await screen.findByText(/sign-in account changed while saved resumes were loading/i)).toBeTruthy()
+
+    await act(async () => {
+      rejectTailor(new Error('late network failure'))
+    })
+    expect(screen.getByText(/sign-in account changed while saved resumes were loading/i)).toBeTruthy()
+    expect(screen.queryByText('Network error')).toBeNull()
+  })
+
   it('attaches an archived-owner result only when the server grants Tailor', async () => {
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)
@@ -430,6 +652,42 @@ describe('Tailor tracked-job capability', () => {
     })
     expect(mockPush).not.toHaveBeenCalled()
     expect(screen.queryByText('TAILORED RESUME')).toBeNull()
+  })
+
+  it('scrubs the tracked-job result when Save as New Resume reports account unavailability', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      if (url === '/api/resume/tailor') return response(RESULT)
+      if (url === `/api/jobs/${JOB_ID}/tailored`) return response({ ok: true })
+      if (url === '/api/resume/save' && init?.method === 'POST') {
+        return response({ error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      if (url === '/api/resume/save') return response({ resumes: [] })
+      return response({})
+    })
+
+    const view = render(<TailorPage />)
+    await screen.findByText(/Using the job description for Acme/i)
+    enterResume('PRIVATE RESUME')
+    await switchSession(view, USER_A_ID)
+    fireEvent.click(screen.getByRole('button', { name: 'Tailor My Resume' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save as New Resume' }))
+
+    expect(await screen.findByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByText('TAILORED RESUME')).toBeNull()
+    expect(screen.queryByLabelText('Job description')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Test upload' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Tailor My Resume' })).toBeNull()
+    expect(sessionStorage.getItem(PENDING_ASSOCIATION_KEY)).toBeNull()
+    expect(mockPush).not.toHaveBeenCalled()
   })
 
   it('synchronously masks user-A result content when the resolved client identity changes to user B', async () => {
@@ -1100,6 +1358,38 @@ describe('Tailor tracked-job capability', () => {
     expect(screen.queryByText(/Using the job description for Acme/i)).toBeNull()
   })
 
+  it('scrubs Tailor when the saved-resume list reports account deletion', async () => {
+    sessionState.status = 'authenticated'
+    sessionState.userId = USER_A_ID
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({ role: 'Private Role' }))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      if (url === '/api/resume/save') {
+        return response({
+          code: 'ACCOUNT_UNAVAILABLE',
+          resumes: [{ id: RESUME_A_ID, name: 'PRIVATE RESUME', targetRole: '' }],
+        }, false, 401)
+      }
+      return response({})
+    })
+
+    render(<TailorPage />)
+
+    expect(await screen.findByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByText('PRIVATE RESUME')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(screen.queryByText(/Using the job description for Acme/i)).toBeNull()
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+  })
+
   it('never renders server-B fullText and scrubs the user-A list on a saved-resume detail conflict', async () => {
     sessionState.status = 'authenticated'
     sessionState.userId = USER_A_ID
@@ -1135,6 +1425,40 @@ describe('Tailor tracked-job capability', () => {
     expect(detailCall?.[1]?.headers).toMatchObject({ 'x-origin-user-id': USER_A_ID })
     expect(screen.queryByText('USER B PRIVATE FULL TEXT')).toBeNull()
     expect(screen.queryByRole('option', { name: 'Resume A' })).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
+  })
+
+  it('scrubs the saved-resume list and text when resume detail reports account deletion', async () => {
+    sessionState.status = 'authenticated'
+    sessionState.userId = USER_A_ID
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+      })
+      if (url === '/api/resume/save') {
+        return response({ resumes: [{ id: RESUME_A_ID, name: 'Resume A', targetRole: '' }] })
+      }
+      if (url === `/api/resume/save?id=${RESUME_A_ID}`) {
+        return response({
+          code: 'ACCOUNT_UNAVAILABLE',
+          fullText: 'PRIVATE RESUME TEXT',
+        }, false, 401)
+      }
+      return response({})
+    })
+
+    render(<TailorPage />)
+    fireEvent.change(await screen.findByRole('combobox'), { target: { value: RESUME_A_ID } })
+
+    expect(await screen.findByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByRole('option', { name: 'Resume A' })).toBeNull()
+    expect(screen.queryByText('PRIVATE RESUME TEXT')).toBeNull()
     expect(screen.queryByRole('combobox')).toBeNull()
   })
 

@@ -1,15 +1,11 @@
 import {
   __resetForTests,
+  captureReplayUploadIntent,
   drainQueuedReplayUploads,
   getPartRange,
   uploadReplayRecording,
 } from '@interview/utils/resumableUpload'
-
-function deferredRequest<T>(result: T): IDBRequest<T> {
-  const request = { result } as IDBRequest<T>
-  setTimeout(() => request.onsuccess?.(new Event('success')), 0)
-  return request
-}
+import { cancelAndPurgeReplayUploads } from '@shared/services/replayUploadPrivacy'
 
 function installFakeIndexedDb() {
   const stores = new Map<string, Map<string, unknown>>()
@@ -20,22 +16,52 @@ function installFakeIndexedDb() {
     createObjectStore: (name: string) => {
       if (!stores.has(name)) stores.set(name, new Map())
     },
-    transaction: (name: string) => ({
-      objectStore: () => ({
-        put: (record: { id: string }) => {
-          stores.get(name)?.set(record.id, record)
-          return deferredRequest(record.id)
+    transaction: (name: string) => {
+      let aborted = false
+      const transaction = {
+        objectStore: () => {
+          function request<T>(work: () => T): IDBRequest<T> {
+            const pending = {} as IDBRequest<T>
+            setTimeout(() => {
+              if (aborted) return
+              Object.defineProperty(pending, 'result', { value: work(), configurable: true })
+              pending.onsuccess?.(new Event('success'))
+              setTimeout(() => {
+                if (!aborted) transaction.oncomplete?.(new Event('complete'))
+              }, 0)
+            }, 0)
+            return pending
+          }
+
+          return {
+            put: (record: { id: string }) => request(() => {
+              stores.get(name)?.set(record.id, record)
+              return record.id
+            }),
+            delete: (id: string) => request(() => {
+              stores.get(name)?.delete(id)
+              return undefined
+            }),
+            clear: () => request(() => {
+              stores.get(name)?.clear()
+              return undefined
+            }),
+            getAll: () => request(() => Array.from(stores.get(name)?.values() ?? [])),
+          }
         },
-        delete: (id: string) => {
-          stores.get(name)?.delete(id)
-          return deferredRequest(undefined)
+        abort: () => {
+          if (aborted) return
+          aborted = true
+          setTimeout(() => transaction.onabort?.(new Event('abort')), 0)
         },
-        getAll: () => deferredRequest(Array.from(stores.get(name)?.values() ?? [])),
-      }),
-      oncomplete: null,
-      onerror: null,
-      onabort: null,
-    }),
+        oncomplete: null as ((event: Event) => void) | null,
+        onerror: null as ((event: Event) => void) | null,
+        onabort: null as ((event: Event) => void) | null,
+      }
+      return transaction
+    },
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
     close: vi.fn(),
   }
   const indexedDB = {
@@ -110,6 +136,213 @@ describe('resumable replay upload helpers', () => {
     expect(getPartRange(1, size, partSize)).toEqual({ start: 0, end: partSize })
     expect(getPartRange(2, size, partSize)).toEqual({ start: partSize, end: partSize * 2 })
     expect(getPartRange(3, size, partSize)).toEqual({ start: partSize * 2, end: size })
+  })
+
+  it('cancels a held drain and purges queued replay Blobs without reviving the row', async () => {
+    const stores = installFakeIndexedDb()
+    await drainQueuedReplayUploads()
+
+    const record = {
+      id: 'privacy-boundary:camera:0',
+      sessionId: '507f1f77bcf86cd799439011',
+      kind: 'camera' as const,
+      blob: new Blob([new Uint8Array(8 * 1024 * 1024)], { type: 'video/webm' }),
+      sizeBytes: 8 * 1024 * 1024,
+      contentType: 'video/webm',
+      createdAt: Date.now(),
+      parts: [] as Array<{ partNumber: number; etag: string }>,
+      attempts: 0,
+      key: 'recordings/user/session-camera.webm',
+      uploadId: 'upload-privacy-boundary',
+      partSizeBytes: 8 * 1024 * 1024,
+    }
+    stores.get('uploads')!.set(record.id, record)
+
+    let markSignPartStarted: (() => void) | undefined
+    const signPartStarted = new Promise<void>((resolve) => { markSignPartStarted = resolve })
+    const actions: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url !== '/api/storage/multipart') throw new Error(`Unexpected fetch: ${url}`)
+      const body = JSON.parse(String(init?.body ?? '{}')) as { action?: string }
+      actions.push(String(body.action))
+      if (body.action !== 'sign-part') throw new Error(`Unexpected multipart action: ${body.action}`)
+      markSignPartStarted?.()
+      await new Promise<never>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'))
+        }, { once: true })
+      })
+    }))
+
+    const drain = drainQueuedReplayUploads()
+    await signPartStarted
+
+    await cancelAndPurgeReplayUploads()
+    await expect(drain).resolves.toEqual({
+      attempted: 1,
+      uploaded: 0,
+      queued: 0,
+      dropped: 0,
+      skipped: 0,
+    })
+
+    expect(stores.get('uploads')).toBeDefined()
+    expect(stores.get('uploads')?.size).toBe(0)
+    expect(actions).toEqual(['sign-part'])
+  })
+
+  it('aborts a held direct replay upload before it can patch the interview', async () => {
+    let markPutStarted: (() => void) | undefined
+    const putStarted = new Promise<void>((resolve) => { markPutStarted = resolve })
+    const urls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      urls.push(url)
+      if (url === '/api/storage/presign') {
+        return jsonResponse({
+          url: 'https://r2.example/direct',
+          key: 'recordings/user/direct.webm',
+          contentType: 'video/webm',
+        })
+      }
+      if (url === 'https://r2.example/direct') {
+        markPutStarted?.()
+        await new Promise<never>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('Aborted', 'AbortError'))
+          }, { once: true })
+        })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    const upload = uploadReplayRecording(
+      '507f1f77bcf86cd799439011',
+      'camera',
+      new Blob(['small replay'], { type: 'video/webm' }),
+    )
+    await putStarted
+
+    await cancelAndPurgeReplayUploads()
+    await expect(upload).resolves.toEqual({ status: 'dropped' })
+    expect(urls).toEqual(['/api/storage/presign', 'https://r2.example/direct'])
+  })
+
+  it('allows a new replay upload operation after a completed privacy purge', async () => {
+    await cancelAndPurgeReplayUploads()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url === '/api/storage/presign') {
+        return jsonResponse({
+          url: 'https://r2.example/new-account-direct',
+          key: 'recordings/user/new-account.webm',
+          contentType: 'video/webm',
+        })
+      }
+      if (url === 'https://r2.example/new-account-direct') return new Response('', { status: 200 })
+      if (url === '/api/interviews/507f1f77bcf86cd799439011') return jsonResponse({ ok: true })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(uploadReplayRecording(
+      '507f1f77bcf86cd799439011',
+      'camera',
+      new Blob(['new account replay'], { type: 'video/webm' }),
+    )).resolves.toEqual({ status: 'uploaded' })
+  })
+
+  it('rejects an upload whose intent predates account cleanup', async () => {
+    const intent = captureReplayUploadIntent()
+    await cancelAndPurgeReplayUploads()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(uploadReplayRecording(
+      '507f1f77bcf86cd799439011',
+      'camera',
+      new Blob(['materialized after cleanup'], { type: 'video/webm' }),
+      undefined,
+      intent,
+    )).resolves.toEqual({ status: 'dropped' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('bounds a blocked IndexedDB purge so privacy cleanup cannot hang sign-out', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.stubGlobal('indexedDB', {
+        open: () => ({} as IDBOpenDBRequest),
+      })
+
+      let completed = false
+      const purge = cancelAndPurgeReplayUploads().then(() => { completed = true })
+      await vi.advanceTimersByTimeAsync(1_999)
+      expect(completed).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(purge).resolves.toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('closes a late IndexedDB open without clearing a new account queue', async () => {
+    vi.useFakeTimers()
+    try {
+      const close = vi.fn()
+      const transaction = vi.fn()
+      const request = {} as IDBOpenDBRequest
+      Object.defineProperty(request, 'result', {
+        value: { close, transaction },
+        configurable: true,
+      })
+      vi.stubGlobal('indexedDB', { open: () => request })
+
+      const purge = cancelAndPurgeReplayUploads()
+      await vi.advanceTimersByTimeAsync(2_000)
+      await expect(purge).resolves.toBeUndefined()
+
+      request.onsuccess?.(new Event('success'))
+      expect(close).toHaveBeenCalledOnce()
+      expect(transaction).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts and closes a stalled IndexedDB clear transaction at the deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const abort = vi.fn()
+      const close = vi.fn()
+      const clear = vi.fn()
+      const clearTransaction = {
+        objectStore: () => ({ clear }),
+        abort,
+        oncomplete: null,
+        onerror: null,
+        onabort: null,
+      } as unknown as IDBTransaction
+      const db = {
+        close,
+        transaction: vi.fn(() => clearTransaction),
+      }
+      const request = {} as IDBOpenDBRequest
+      Object.defineProperty(request, 'result', { value: db, configurable: true })
+      vi.stubGlobal('indexedDB', { open: () => request })
+
+      const purge = cancelAndPurgeReplayUploads()
+      request.onsuccess?.(new Event('success'))
+      expect(clear).toHaveBeenCalledOnce()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await expect(purge).resolves.toBeUndefined()
+      expect(abort).toHaveBeenCalledOnce()
+      expect(close).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('drops queued multipart uploads permanently on 410 responses', async () => {

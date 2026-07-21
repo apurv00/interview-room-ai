@@ -19,6 +19,7 @@ vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
 
 import { POST } from '../route'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const USER_ID = '507f1f77bcf86cd799439010'
 const JOB_ID = '507f1f77bcf86cd799439011'
@@ -144,6 +145,23 @@ describe('POST /api/jobs/[id]/tailored provenance contract', () => {
       identityVerified: true,
     })
     expect(mockSaveTailoredVersion).not.toHaveBeenCalled()
+    expect(mockEventCreate).not.toHaveBeenCalled()
+  })
+
+  it('returns the account-unavailable contract when deletion owns the write fence', async () => {
+    mockSaveTailoredVersion.mockRejectedValueOnce(new JobsAccountInactiveError(USER_ID))
+
+    const response = await POST(request({
+      tailoredText: 'TAILORED',
+      sourceJdHash: SOURCE_HASH,
+      originUserId: USER_ID,
+    }), { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
     expect(mockEventCreate).not.toHaveBeenCalled()
   })
 

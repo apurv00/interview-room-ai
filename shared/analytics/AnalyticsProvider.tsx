@@ -61,6 +61,9 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
   // ── 3. Fire signin_succeeded on unauth → auth transition. ──────────
   useEffect(() => {
     if (status !== 'authenticated' || !session?.user?.id) {
+      if (status === 'unauthenticated') {
+        lastIdentifiedUserIdRef.current = null
+      }
       previousStatusRef.current = status
       return
     }

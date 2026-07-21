@@ -100,16 +100,15 @@ describe('setInterviewDate', () => {
     expect((await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW)).ok).toBe(false)
   })
 
-  it('returns a safe miss and writes nothing when deletion owns the account fence', async () => {
+  it('preserves the inactive-account signal and writes nothing when deletion owns the fence', async () => {
     mockUpdateOne.mockReset()
     mockWithActiveJobsAccountWrite.mockReset().mockRejectedValue(
       new MockJobsAccountInactiveError('account deleting'),
     )
 
-    expect(await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW)).toEqual({
-      ok: false,
-      daysUntil: null,
-    })
+    await expect(
+      setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW),
+    ).rejects.toBeInstanceOf(MockJobsAccountInactiveError)
     expect(mockUpdateOne).not.toHaveBeenCalled()
   })
 })

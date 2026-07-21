@@ -6,7 +6,10 @@ import mongoose, { type ClientSession } from 'mongoose'
 import { JobApplication, JobPosting } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
-import { jobPostingStateOf } from '@jobs/services/postingAccess'
+import {
+  exactOptionalPostingCondition,
+  jobPostingStateOf,
+} from '@jobs/services/postingAccess'
 import {
   JobsAccountInactiveError,
   withActiveJobsAccountWrite,
@@ -42,12 +45,8 @@ function exactSavePostingAuthorityFilter(
   return {
     _id: jobPostingId,
     status: posting.status,
-    closedReason: posting.closedReason === undefined
-      ? { $exists: false }
-      : posting.closedReason,
-    provenance: posting.provenance === undefined
-      ? { $exists: false }
-      : posting.provenance,
+    closedReason: exactOptionalPostingCondition(posting.closedReason),
+    provenance: exactOptionalPostingCondition(posting.provenance),
   }
 }
 
@@ -122,12 +121,10 @@ async function savePosting(
   try {
     return await savePostingAttempt(userId, jobPostingId, now)
   } catch (error) {
-    if (error instanceof JobsAccountInactiveError) return { ok: false }
     if (!isDuplicateKeyError(error) && !(error instanceof SaveAuthorityRaceError)) throw error
     try {
       return await savePostingAttempt(userId, jobPostingId, now)
     } catch (retryError) {
-      if (retryError instanceof JobsAccountInactiveError) return { ok: false }
       if (retryError instanceof SaveAuthorityRaceError) return { ok: false }
       throw retryError
     }
@@ -153,7 +150,18 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   }
   await connectDB()
   const now = new Date()
-  const result = await savePosting(userId, params.id, now)
+  let result: SaveTransactionResult
+  try {
+    result = await savePosting(userId, params.id, now)
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    throw error
+  }
   if (!result.ok) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   // Only the transaction that inserted the ownership edge emits Save. An

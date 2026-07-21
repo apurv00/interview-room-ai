@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getBaseResume: vi.fn(),
   checkJobsRateLimit: vi.fn(),
   isJobsAccountActive: vi.fn(),
+  JobsAccountInactiveError: class JobsAccountInactiveError extends Error {},
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mocks.getServerSession }))
@@ -19,6 +20,7 @@ vi.mock('@jobs', () => ({
 vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mocks.checkJobsRateLimit }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
   isJobsAccountActive: mocks.isJobsAccountActive,
+  JobsAccountInactiveError: mocks.JobsAccountInactiveError,
 }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 
@@ -50,6 +52,10 @@ describe('/api/jobs/base-resume account-state guard', () => {
     const response = await GET()
 
     expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
     expect(mocks.getBaseResume).not.toHaveBeenCalled()
   })
 
@@ -90,7 +96,23 @@ describe('/api/jobs/base-resume account-state guard', () => {
     const response = await POST(postRequest())
 
     expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
     expect(mocks.saveBaseResume).not.toHaveBeenCalled()
+  })
+
+  it('returns the same 401 contract when deletion wins inside the save service', async () => {
+    mocks.saveBaseResume.mockRejectedValueOnce(new mocks.JobsAccountInactiveError())
+
+    const response = await POST(postRequest())
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
   })
 
   it('continues the active-account save contract', async () => {

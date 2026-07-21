@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 const { mockFetch, mockPush } = vi.hoisted(() => ({
   mockFetch: vi.fn(),
@@ -9,9 +9,12 @@ const { mockFetch, mockPush } = vi.hoisted(() => ({
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
 }))
-vi.mock('@shared/ui/AuthGateModal', () => ({ default: () => null }))
+vi.mock('@shared/ui/AuthGateModal', () => ({
+  default: ({ reason }: { reason: string | null }) => reason ? <div>auth gate: {reason}</div> : null,
+}))
 
 import JobDetailPage from '../page'
+import { STORAGE_KEYS } from '@shared/storageKeys'
 
 const JOB_ID = '507f1f77bcf86cd799439011'
 const RETAKE_ID = '507f1f77bcf86cd799439099'
@@ -60,6 +63,14 @@ function jsonResponse(value: unknown, ok = true) {
   return Promise.resolve({ ok, json: () => Promise.resolve(value) })
 }
 
+function accountUnavailableResponse() {
+  return Promise.resolve({
+    ok: false,
+    status: 401,
+    json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+  })
+}
+
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch)
   mockFetch.mockReset()
@@ -71,6 +82,159 @@ beforeEach(() => {
 })
 
 describe('Job detail Practice readiness', () => {
+  it('scrubs the initial projection when account deletion makes the session unavailable', async () => {
+    localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify({
+      jobDescription: 'PRIVATE JOB DESCRIPTION',
+      jobsHandoffToken: 'signed-private-token',
+      attribution: { source: 'jobs', jobId: JOB_ID },
+    }))
+    localStorage.setItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:user-a`, 'scoped private config')
+    localStorage.setItem(STORAGE_KEYS.PENDING_RETAKE_PARENT, RETAKE_ID)
+    localStorage.setItem('unrelated-preference', 'keep-me')
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}`
+        ? Promise.resolve({
+            ok: false,
+            status: 401,
+            json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+          })
+        : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.getByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByText(/Sign in to read/i)).toBeNull()
+    expect(screen.queryByText(/couldn.t confirm this posting/i)).toBeNull()
+    expect(localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)).toBeNull()
+    expect(localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:user-a`)).toBeNull()
+    expect(localStorage.getItem(STORAGE_KEYS.PENDING_RETAKE_PARENT)).toBeNull()
+    expect(localStorage.getItem('unrelated-preference')).toBe('keep-me')
+  })
+
+  it('scrubs an already-rendered job when Save reports account unavailability', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
+      if (url.endsWith('/save')) {
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+        })
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Apply ↗' })).toBeNull()
+    expect(screen.queryByText('auth gate: save_job')).toBeNull()
+  })
+
+  it('keeps an ordinary Save 401 on the sign-in gate without discarding the job', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
+      if (url.endsWith('/save')) {
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ error: 'sign in required' }),
+        })
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText('auth gate: save_job')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeTruthy()
+    expect(screen.queryByText('Your account is unavailable.')).toBeNull()
+  })
+
+  it('scrubs the job when the post-Save detail refresh reports account unavailability', async () => {
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return detailCalls === 1
+          ? jsonResponse(LIVE_APPLY_DETAIL)
+          : Promise.resolve({
+              ok: false,
+              status: 401,
+              json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+            })
+      }
+      if (url.endsWith('/save')) return jsonResponse({ ok: true })
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeNull()
+  })
+
+  it('scrubs the job when ATS-check reports account unavailability', async () => {
+    const atsDetail = {
+      ...BASE_DETAIL,
+      capabilities: { ...BASE_DETAIL.capabilities, xray: false, atsCheck: true },
+      application: {
+        applicationId: 'app1',
+        status: 'saved',
+        practiceCount: 0,
+        ats: { state: 'none' as const },
+      },
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(atsDetail)
+      if (url.endsWith('/ats-check')) return accountUnavailableResponse()
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Check my resume against this JD' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText(/Could not start the check/i)).toBeNull()
+  })
+
+  it('scrubs the job when deferred Practice email reports account unavailability', async () => {
+    const interviewDetail = {
+      ...BASE_DETAIL,
+      capabilities: { ...BASE_DETAIL.capabilities, xray: false, practice: true },
+      practiceRole: 'frontend',
+      practiceHandoffToken: 'server-signed-token',
+      application: {
+        applicationId: 'app1',
+        status: 'interview_scheduled',
+        practiceCount: 1,
+        ats: { state: 'none' as const },
+      },
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(interviewDetail)
+      if (url.endsWith('/practice-link-email')) return accountUnavailableResponse()
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Email me tonight.s practice link/i }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText(/Email links aren.t available yet/i)).toBeNull()
+  })
+
   it.each([
     ['a server failure', () => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) })],
     ['a transport failure', () => Promise.reject(new Error('offline'))],
@@ -638,6 +802,168 @@ describe('Job detail Practice readiness', () => {
       `/api/jobs/${JOB_ID}/broken-link`,
       expect.objectContaining({ body: JSON.stringify({ optionId: APPLY_OPTION_ID }) }),
     ))
+  })
+
+  it('scrubs the job when the Apply keepalive reports account unavailability', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
+      if (url.endsWith('/apply-click')) return accountUnavailableResponse()
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply ↗' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeNull()
+    expect(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`)).toBeNull()
+  })
+
+  it.each(['server error', 'transport error'])('does not let a slower visibility %s replace terminal account-unavailable state', async (failure) => {
+    let resolveApply!: (value: unknown) => void
+    let resolveVisibility!: (value: unknown) => void
+    let rejectVisibility!: (reason: unknown) => void
+    const applyResponse = new Promise((resolve) => { resolveApply = resolve })
+    const visibilityResponse = new Promise((resolve, reject) => {
+      resolveVisibility = resolve
+      rejectVisibility = reject
+    })
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return detailCalls === 1 ? jsonResponse(LIVE_APPLY_DETAIL) : visibilityResponse
+      }
+      if (url.endsWith('/apply-click')) return applyResponse
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply ↗' }))
+    fireEvent(document, new Event('visibilitychange'))
+    await waitFor(() => expect(detailCalls).toBe(2))
+
+    await act(async () => {
+      resolveApply({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+
+    await act(async () => {
+      if (failure === 'server error') {
+        resolveVisibility({
+          ok: false,
+          status: 503,
+          json: () => Promise.resolve({ error: 'temporarily unavailable' }),
+        })
+      } else {
+        rejectVisibility(new Error('offline'))
+      }
+    })
+
+    expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText(/couldn.t confirm this posting/i)).toBeNull()
+    expect(screen.queryByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeNull()
+  })
+
+  it('does not let a slower Practice refresh replace terminal account-unavailable state', async () => {
+    let resolveApply!: (value: unknown) => void
+    let resolvePractice!: (value: unknown) => void
+    const applyResponse = new Promise((resolve) => { resolveApply = resolve })
+    const practiceResponse = new Promise((resolve) => { resolvePractice = resolve })
+    const practiceDetail = {
+      ...LIVE_APPLY_DETAIL,
+      capabilities: { ...LIVE_APPLY_DETAIL.capabilities, practice: true },
+      practiceRole: 'frontend',
+      practiceHandoffToken: 'server-signed-token',
+    }
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return detailCalls === 1 ? jsonResponse(practiceDetail) : practiceResponse
+      }
+      if (url.endsWith('/apply-click')) return applyResponse
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply ↗' }))
+    fireEvent.click(screen.getByRole('button', { name: /Practice for this job/i }))
+    await waitFor(() => expect(detailCalls).toBe(2))
+
+    await act(async () => {
+      resolveApply({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+
+    await act(async () => {
+      resolvePractice({
+        ok: false,
+        status: 503,
+        json: () => Promise.resolve({ error: 'temporarily unavailable' }),
+      })
+    })
+
+    expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText(/couldn.t prepare this job practice/i)).toBeNull()
+    expect(mockPush).not.toHaveBeenCalledWith('/lobby')
+  })
+
+  it('scrubs instead of showing generic return-sheet failure copy when a status mutation is account-unavailable', async () => {
+    localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
+      clickedAt: Date.now() - 21_000,
+      optionId: APPLY_OPTION_ID,
+      url: 'https://apply.example/job',
+      tier: 'direct-ats',
+    }))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
+      if (url.endsWith('/status')) return accountUnavailableResponse()
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    await screen.findByRole('button', { name: 'Apply ↗' })
+    fireEvent(document, new Event('visibilitychange'))
+    fireEvent.click(await screen.findByRole('button', { name: '✓ Yes, applied' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText(/Couldn.t record that just now/i)).toBeNull()
+  })
+
+  it('scrubs instead of showing stale-link fallback copy when broken-link reporting is account-unavailable', async () => {
+    localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
+      clickedAt: Date.now(),
+      optionId: APPLY_OPTION_ID,
+      url: 'https://apply.example/job',
+      tier: 'direct-ats',
+    }))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
+      if (url.endsWith('/broken-link')) return accountUnavailableResponse()
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    await screen.findByRole('button', { name: 'Apply ↗' })
+    fireEvent(document, new Event('visibilitychange'))
+    fireEvent.click(await screen.findByRole('button', { name: /Link didn.t work/i }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText(/That link may be stale/i)).toBeNull()
   })
 
   it('clears legacy or replaced return arms instead of authorizing a stale report sheet', async () => {

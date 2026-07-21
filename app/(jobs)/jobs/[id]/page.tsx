@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { STORAGE_KEYS } from '@shared/storageKeys'
+import { clearAllInterviewStorage, STORAGE_KEYS } from '@shared/storageKeys'
 import { INTERVIEW_TARGET_COMPANY_MAX_CHARS } from '@shared/interviewContract'
 import { buildPrepPlan } from '@jobs/config/prepPlan'
 import AuthGateModal from '@shared/ui/AuthGateModal'
@@ -72,6 +72,12 @@ const LOST_XRAY_READINESS_DELAYS_MS = [0, 250, 750, 2_000, 4_000, 8_000, 8_000, 
 const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
 const APPLY_OPTION_ID_RE = /^ao1_[A-Za-z0-9_-]{43}$/
 
+async function isAccountUnavailableResponse(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false
+  const body = await response.json().catch(() => null) as { code?: unknown } | null
+  return body?.code === 'ACCOUNT_UNAVAILABLE'
+}
+
 function parseApplyReturnArm(raw: string | null): ApplyReturnArm | null {
   if (!raw) return null
   try {
@@ -98,7 +104,7 @@ function parseApplyReturnArm(raw: string | null): ApplyReturnArm | null {
 export default function JobDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [detail, setDetail] = useState<Detail | null>(null)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'unavailable'>('loading')
+  const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'unavailable' | 'account-unavailable'>('loading')
   const [gate, setGate] = useState<null | 'view_job_detail' | 'save_job'>(null)
   const [saved, setSaved] = useState(false)
   const [xray, setXray] = useState<Xray | null>(null)
@@ -112,6 +118,42 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const [practiceStart, setPracticeStart] = useState<'idle' | 'loading' | 'error'>('idle')
   const [sheetDone, setSheetDone] = useState<string | null>(null)
   const [retakeParentId, setRetakeParentId] = useState<string | null>(null)
+  const xrayFetchedFor = useRef<string | null>(null)
+  const pendingPollFor = useRef<string | null>(null)
+  const practiceStartInFlight = useRef(false)
+  const practiceReadyRef = useRef(false)
+  const accountUnavailableRef = useRef(false)
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const unavailableRef = useRef<HTMLElement>(null)
+  const sheetDialogRef = useRef<HTMLDivElement>(null)
+  const sheetInvokerRef = useRef<HTMLElement | null>(null)
+
+  const scrubAccountBoundState = useCallback(() => {
+    accountUnavailableRef.current = true
+    xrayFetchedFor.current = null
+    pendingPollFor.current = null
+    practiceStartInFlight.current = false
+    sheetInvokerRef.current = null
+    // A Jobs Practice handoff stores the canonical JD, signed handoff token,
+    // attribution, and retake pointer in interview storage. Account deletion
+    // is terminal for the whole account, so leaving any scoped/unscoped copy
+    // behind could let the lobby reuse private data after this page scrubs.
+    clearAllInterviewStorage()
+    try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* unavailable */ }
+    setDetail(null)
+    setStatus('account-unavailable')
+    setGate(null)
+    setSaved(false)
+    setXray(null)
+    setXrayState('idle')
+    setAtsBusy(false)
+    setAtsHint(null)
+    setSheet(null)
+    setInference('idle')
+    setPracticeEmail('idle')
+    setPracticeStart('idle')
+    setSheetDone(null)
+  }, [params.id])
 
   useEffect(() => {
     try {
@@ -122,6 +164,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }, [params.id])
 
   useEffect(() => {
+    if (accountUnavailableRef.current) return
     let cancelled = false
     setDetail(null)
     setStatus('loading')
@@ -130,15 +173,20 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         const response = await fetch(`/api/jobs/${params.id}`)
         if (cancelled) return
         if (!response.ok) {
+          if (await isAccountUnavailableResponse(response)) {
+            if (!cancelled) scrubAccountBoundState()
+            return
+          }
+          if (cancelled || accountUnavailableRef.current) return
           setStatus(response.status === 404 ? 'missing' : 'unavailable')
           return
         }
         const nextDetail = await response.json() as Detail
-        if (cancelled) return
+        if (cancelled || accountUnavailableRef.current) return
         setDetail(nextDetail)
         setStatus('ready')
       } catch {
-        if (!cancelled) {
+        if (!cancelled && !accountUnavailableRef.current) {
           setDetail(null)
           setStatus('unavailable')
         }
@@ -151,21 +199,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       keepalive: true,
     }).catch(() => {})
     return () => { cancelled = true }
-  }, [params.id])
+  }, [params.id, scrubAccountBoundState])
 
   // X-ray loads progressively AFTER the body — the first view on a posting
   // pays a lazy LLM parse (seconds); cached thereafter. Authed only (P-2).
   // Fetch ONCE per posting: ATS polling replaces `detail` every tick, and an
   // effect keyed on the whole object re-fired the parse while the first one
   // was still uncached — concurrent LLM calls for one JD (Codex on #521).
-  const xrayFetchedFor = useRef<string | null>(null)
-  const pendingPollFor = useRef<string | null>(null)
-  const practiceStartInFlight = useRef(false)
-  const practiceReadyRef = useRef(false)
-  const titleRef = useRef<HTMLHeadingElement>(null)
-  const unavailableRef = useRef<HTMLElement>(null)
-  const sheetDialogRef = useRef<HTMLDivElement>(null)
-  const sheetInvokerRef = useRef<HTMLElement | null>(null)
   practiceReadyRef.current = !!(
     detail && !detail.gated && detail.practiceRole && detail.practiceHandoffToken
   )
@@ -205,7 +245,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       for (let i = 0; i < 5 && !cancelled; i++) {
         await new Promise((r) => setTimeout(r, 12_000))
         if (cancelled) return
-        await refetchDetail()
+        if (!(await refetchDetail())) return
       }
     })()
     return () => { cancelled = true }
@@ -248,9 +288,15 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         if (cancelled) return
         try {
           const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
-          if (!response.ok) continue
+          if (!response.ok) {
+            if (await isAccountUnavailableResponse(response)) {
+              if (!cancelled) scrubAccountBoundState()
+              return
+            }
+            continue
+          }
           const reconciled = await response.json() as Detail
-          if (!cancelled) setDetail(reconciled)
+          if (!cancelled && !accountUnavailableRef.current) setDetail(reconciled)
           const isReady = !!(reconciled.practiceRole && reconciled.practiceHandoffToken)
           if (!pollUntilReady || isReady) return
         } catch { /* bounded retry */ }
@@ -268,6 +314,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           throw error
         }
         if (!response.ok) {
+          if (await isAccountUnavailableResponse(response)) {
+            if (!cancelled) scrubAccountBoundState()
+            return
+          }
           // Gateways and server timeouts can answer before (or after) the
           // origin finishes its parse/CAS. Auth/not-found responses are
           // definitive and must not create background polling traffic.
@@ -283,7 +333,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           xrayCompletionUncertain = true
           throw error
         }
-        if (cancelled) return
+        if (cancelled || accountUnavailableRef.current) return
         setXray(nextXray)
         const hasEvidence = nextXray.keyThemes.length > 0 || nextXray.requirements.length > 0
         // Role refresh can be retryable independently of the evidence body.
@@ -291,39 +341,54 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         // temporarily unavailable.
         setXrayState(nextXray.retryable && !hasEvidence ? 'failed' : 'ready')
       } catch {
-        if (!cancelled) setXrayState('failed')
+        if (!cancelled && !accountUnavailableRef.current) setXrayState('failed')
       } finally {
         // A domain-less posting may become Practice-ready only after the
         // parse is persisted. Never trust the browser-visible parse as the
         // eligibility source, including when its response was lost.
-        if (needsPracticeReconciliation && !cancelled) {
+        if (needsPracticeReconciliation && !cancelled && !accountUnavailableRef.current) {
           await reconcilePracticeReadiness(xrayCompletionUncertain)
         }
       }
     })()
     return () => { cancelled = true }
-  }, [detailCanXray, detailIsGated, loadedDetailId, params.id, xrayAttempt])
+  }, [detailCanXray, detailIsGated, loadedDetailId, params.id, scrubAccountBoundState, xrayAttempt])
 
-  async function refetchDetail() {
+  async function refetchDetail(): Promise<boolean> {
     try {
       const r = await fetch(`/api/jobs/${params.id}`)
-      if (r.ok) setDetail(await r.json())
+      if (await isAccountUnavailableResponse(r)) {
+        scrubAccountBoundState()
+        return false
+      }
+      if (r.ok) {
+        const nextDetail = await r.json() as Detail
+        if (!accountUnavailableRef.current) setDetail(nextDetail)
+      }
     } catch { /* keep the current view */ }
+    return !accountUnavailableRef.current
   }
 
   function retryXray() {
+    if (accountUnavailableRef.current) return
     xrayFetchedFor.current = null
     setXrayAttempt((attempt) => attempt + 1)
   }
 
   async function onAtsCheck() {
-    if (detail?.capabilities?.atsCheck === false) return
+    if (accountUnavailableRef.current || detail?.capabilities?.atsCheck === false) return
     setAtsBusy(true)
     setAtsHint(null)
     try {
       const res = await fetch(`/api/jobs/${params.id}/ats-check`, { method: 'POST' })
+      if (await isAccountUnavailableResponse(res)) {
+        scrubAccountBoundState()
+        return
+      }
+      if (accountUnavailableRef.current) return
       if (res.status === 409) {
         const { reason } = await res.json().catch(() => ({ reason: '' }))
+        if (accountUnavailableRef.current) return
         setAtsHint(
           reason === 'no-resume'
             ? 'Attach a resume first — the check compares it to this JD.'
@@ -337,7 +402,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       // Background one-shot (~35s when uncached): poll the detail a few times.
       for (let i = 0; i < 5; i++) {
         await new Promise((r) => setTimeout(r, 12_000))
-        await refetchDetail()
+        if (!(await refetchDetail())) return
       }
     } finally {
       setAtsBusy(false)
@@ -345,6 +410,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   function onPracticeClick() {
+    if (accountUnavailableRef.current) return
     // The inference door (§4c): launching practice on an APPLIED job asks
     // one tap — and NEVER delays the session; both answers proceed.
     if (detail && !detail.gated && detail.application?.status === 'applied' && inference === 'idle') {
@@ -355,6 +421,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   function answerInference(scheduled: boolean) {
+    if (accountUnavailableRef.current) return
     setInference('idle')
     if (scheduled) {
       // The status route is the single jobs.interview_scheduled emitter —
@@ -364,6 +431,8 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'interview_scheduled', inferredFromPrep: true }),
         keepalive: true,
+      }).then(async (response) => {
+        if (await isAccountUnavailableResponse(response)) scrubAccountBoundState()
       }).catch(() => {})
       // Date capture waits for the feedback page (§4c) — the session comes first.
     }
@@ -371,15 +440,22 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   async function captureDate(choice: string) {
-    await fetch(`/api/jobs/${params.id}/interview-date`, {
+    if (accountUnavailableRef.current) return
+    const response = await fetch(`/api/jobs/${params.id}/interview-date`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ choice }),
-    }).catch(() => {})
+    }).catch(() => null)
+    if (response && await isAccountUnavailableResponse(response)) {
+      scrubAccountBoundState()
+      return
+    }
+    if (accountUnavailableRef.current) return
     refetchDetail()
   }
 
   async function requestPracticeEmail() {
+    if (accountUnavailableRef.current) return
     if (detail?.capabilities?.practice === false) {
       setPracticeEmail('unavailable')
       return
@@ -388,12 +464,17 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     // stream is off or the user unsubscribed — never a silent accept.
     try {
       const r = await fetch(`/api/jobs/${params.id}/practice-link-email`, { method: 'POST' })
+      if (await isAccountUnavailableResponse(r)) {
+        scrubAccountBoundState()
+        return
+      }
       const d = r.ok ? await r.json() : null
+      if (accountUnavailableRef.current) return
       if (d?.ok) setPracticeEmail('sent')
       else if (d?.reason === 'email-off') setPracticeEmail('email-off')
       else setPracticeEmail('unavailable')
     } catch {
-      setPracticeEmail('unavailable')
+      if (!accountUnavailableRef.current) setPracticeEmail('unavailable')
     }
   }
 
@@ -416,7 +497,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }, [detail, params.id])
 
   async function onPractice() {
-    if (!detail || detail.gated || practiceStartInFlight.current) return
+    if (accountUnavailableRef.current || !detail || detail.gated || practiceStartInFlight.current) return
     practiceStartInFlight.current = true
     setPracticeStart('loading')
     try {
@@ -425,6 +506,11 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       // the session API resolves all three back to server state.
       const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
       if (!response.ok) {
+        if (await isAccountUnavailableResponse(response)) {
+          scrubAccountBoundState()
+          return
+        }
+        if (accountUnavailableRef.current) return
         setDetail(null)
         setStatus(response.status === 404 ? 'missing' : 'unavailable')
         throw new Error('handoff unavailable')
@@ -433,6 +519,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       try {
         fresh = (await response.json()) as Detail
       } catch {
+        if (accountUnavailableRef.current) return
         setDetail(null)
         setStatus('unavailable')
         throw new Error('handoff unavailable')
@@ -440,6 +527,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       // Reconcile the fresh authorization projection before checking
       // readiness. A restricted/gated response must replace stale live JD,
       // X-ray, Apply, and Tailor UI even though Practice itself cannot start.
+      if (accountUnavailableRef.current) return
       setDetail(fresh)
       setStatus('ready')
       if (
@@ -480,14 +568,20 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       }).catch(() => {})
       router.push('/lobby')
     } catch {
-      setPracticeStart('error')
+      if (!accountUnavailableRef.current) setPracticeStart('error')
     } finally {
       practiceStartInFlight.current = false
     }
   }
 
   async function onSave() {
+    if (accountUnavailableRef.current) return
     const res = await fetch(`/api/jobs/${params.id}/save`, { method: 'POST' })
+    if (await isAccountUnavailableResponse(res)) {
+      scrubAccountBoundState()
+      return
+    }
+    if (accountUnavailableRef.current) return
     if (res.status === 401) { setGate('save_job'); return }
     if (res.ok) {
       setSaved(true)
@@ -499,6 +593,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   function onApply(opt: ApplyOption, invoker: HTMLElement) {
+    if (accountUnavailableRef.current) return
     sheetInvokerRef.current = invoker
     // SYNC open inside the click handler — never after an await.
     window.open(opt.url, '_blank', 'noopener')
@@ -522,12 +617,15 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ optionId: opt.optionId }),
       keepalive: true,
+    }).then(async (response) => {
+      if (await isAccountUnavailableResponse(response)) scrubAccountBoundState()
     }).catch(() => {})
   }
 
   // Return-to-tab sheet (§4b): ≥20s away = the real ask; <20s = lead with
   // "did the link work?". One-shot — the arm record clears when shown.
   useEffect(() => {
+    if (accountUnavailableRef.current) return
     if (detailIsGated === true || detailPostingState !== 'live') {
       try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
       closeReturnSheet()
@@ -564,13 +662,18 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
         if (cancelled) return
         if (!response.ok) {
+          if (await isAccountUnavailableResponse(response)) {
+            if (!cancelled) scrubAccountBoundState()
+            return
+          }
+          if (cancelled || accountUnavailableRef.current) return
           clearJobSpecificProjection()
           setDetail(null)
           setStatus('unavailable')
           return
         }
         const fresh = await response.json() as Detail
-        if (cancelled) return
+        if (cancelled || accountUnavailableRef.current) return
         if (fresh.gated) {
           clearJobSpecificProjection()
           setDetail(fresh)
@@ -619,7 +722,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           elapsedMs: elapsed,
         })
       } catch {
-        if (!cancelled) {
+        if (!cancelled && !accountUnavailableRef.current) {
           try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
           closeReturnSheet()
           setSheetDone(null)
@@ -638,7 +741,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       cancelled = true
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [closeReturnSheet, detailIsGated, detailPostingState, params.id])
+  }, [closeReturnSheet, detailIsGated, detailPostingState, params.id, scrubAccountBoundState])
 
   useEffect(() => {
     if (!sheet) return
@@ -676,6 +779,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }, [closeReturnSheet, sheet])
 
   async function sheetApplied() {
+    if (accountUnavailableRef.current) return
     const clicked = sheet?.clicked
     const elapsedMs = sheet?.elapsedMs
     closeReturnSheet()
@@ -686,17 +790,32 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         body: JSON.stringify({ status: 'applied', latencyMs: elapsedMs }),
       }).catch(() => null)
     let res = await post()
+    if (res && await isAccountUnavailableResponse(res)) {
+      scrubAccountBoundState()
+      return
+    }
+    if (accountUnavailableRef.current) return
     // 404 = the apply-click keepalive row hasn't landed (in flight or lost) —
     // recreate the machine fact, then retry the claim. The user's 'Yes,
     // applied' must never be silently dropped (Codex on #522 round-3).
     if (res && res.status === 404 && clicked) {
-      await fetch(`/api/jobs/${params.id}/apply-click`, {
+      const applyResponse = await fetch(`/api/jobs/${params.id}/apply-click`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ optionId: clicked.optionId }),
-      }).catch(() => {})
+      }).catch(() => null)
+      if (applyResponse && await isAccountUnavailableResponse(applyResponse)) {
+        scrubAccountBoundState()
+        return
+      }
+      if (accountUnavailableRef.current) return
       res = await post()
+      if (res && await isAccountUnavailableResponse(res)) {
+        scrubAccountBoundState()
+        return
+      }
     }
+    if (accountUnavailableRef.current) return
     if (res?.ok) {
       setSheetDone('Marked as applied ✓ — it’s on your tracker.')
       refetchDetail()
@@ -706,6 +825,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   async function sheetBrokenLink() {
+    if (accountUnavailableRef.current) return
     const clicked = sheet?.clicked
     closeReturnSheet()
     if (!clicked) return
@@ -721,10 +841,20 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     // covers that. A report that never lands must NOT claim global healing
     // (Codex on #522).
     let res = await post()
+    if (res && await isAccountUnavailableResponse(res)) {
+      scrubAccountBoundState()
+      return
+    }
+    if (accountUnavailableRef.current) return
     if (res && res.status === 404) {
       await new Promise((r) => setTimeout(r, 1500))
       res = await post()
+      if (res && await isAccountUnavailableResponse(res)) {
+        scrubAccountBoundState()
+        return
+      }
     }
+    if (accountUnavailableRef.current) return
     const alt = alternates.length > 0 ? `Try “${alternates[0].viaSite ?? alternates[0].tier}” below instead.` : ''
     if (res?.ok) {
       setSheetDone(alternates.length > 0
@@ -756,6 +886,20 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           </Link>
         )}
         <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Back to jobs</Link>
+      </main>
+    )
+  }
+  if (status === 'account-unavailable') {
+    return (
+      <main ref={unavailableRef} tabIndex={-1} className="mx-auto max-w-3xl px-4 py-16">
+        <div role="status" aria-live="polite">
+          <h1 className="font-medium">Your account is unavailable.</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Account deletion has started or completed, so this job&apos;s private details were removed from this page.
+          </p>
+          <p className="mt-1 text-sm text-slate-500">If you did not request deletion, contact support.</p>
+        </div>
+        <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Browse public jobs</Link>
       </main>
     )
   }
@@ -939,7 +1083,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           {isLive && alternates.length > 0 && (
             <p className="mt-2 text-xs text-slate-500">
               Also available: {alternates.map((o, i) => (
-                <button key={i} onClick={(event) => onApply(o, event.currentTarget)} className="underline decoration-dotted hover:text-slate-600">
+                <button key={o.optionId} onClick={(event) => onApply(o, event.currentTarget)} className="underline decoration-dotted hover:text-slate-600">
                   {o.viaSite ?? o.tier}{i < alternates.length - 1 ? ', ' : ''}
                 </button>
               ))}

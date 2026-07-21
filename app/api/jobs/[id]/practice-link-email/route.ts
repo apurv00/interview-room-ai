@@ -31,7 +31,10 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
 
   await connectDB()
   if (!(await isJobsAccountActive(userId))) {
-    return NextResponse.json({ error: 'account unavailable' }, { status: 401 })
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
   }
   const [cfg, application, posting, user] = await Promise.all([
     JobsEmailConfig.getConfig(),
@@ -41,11 +44,25 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       .lean(),
     User.findById(userId).select('emailPreferences.jobs.unsubscribedStreams').lean(),
   ])
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   if (!application || !posting) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
   if (jobPostingStateOf(posting) === 'restricted') {
     return NextResponse.json({ ok: false, reason: 'unavailable' }, { status: 200 })
   }
   const prepared = await preparePracticeHandoffPosting(posting)
+  // CMS preparation above is asynchronous. Close that window before any
+  // domain response or external enqueue; the E0 worker checks again too.
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   if (!prepared.role || !prepared.jdHash) {
     return NextResponse.json({ ok: false, reason: 'unavailable' }, { status: 200 })
   }
@@ -56,11 +73,6 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ ok: false, reason: 'email-off' }, { status: 200 })
   }
 
-  // CMS preparation above is asynchronous. Close that window before the
-  // external enqueue; the E0 worker performs the same account check again.
-  if (!(await isJobsAccountActive(userId))) {
-    return NextResponse.json({ error: 'account unavailable' }, { status: 401 })
-  }
   const requestedAt = new Date()
   await inngest.send({
     name: 'jobs/email.requested',

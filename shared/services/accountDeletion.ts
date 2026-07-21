@@ -203,6 +203,9 @@ export interface DeleteAccountResult {
   collectionsCleared: Record<string, number>
   r2KeysDeleted: number
   r2KeysFailed: number
+  /** True when the User row was already absent and the service completed a
+   * compensating idempotent sweep before reporting success. */
+  alreadyDeleted?: boolean
 }
 
 export class AccountDeletionForbiddenError extends Error {
@@ -268,24 +271,32 @@ export async function deleteUserAccount(
     },
     { new: true, writeConcern: { w: 'majority' } },
   ).select('_id email role accountState').lean()
+  let missingUserRecovery = false
 
   if (!deletionOwner) {
     const existing = await User.findById(userObjectId)
       .select('_id email role accountState')
       .lean()
-    if (!existing) throw new AccountDeletionNotFoundError()
-    if (existing.role === 'platform_admin') throw new AccountDeletionForbiddenError()
-    // A previous attempt may have established the durable barrier and then
-    // failed a mandatory sweep. Re-entering is the recovery path.
-    if (existing.accountState !== 'deleting') {
-      throw new AccountDeletionIncompleteError(['account lifecycle claim'])
+    if (!existing) {
+      // A lost-success retry and a legacy partial deletion are indistinguishable
+      // once User is gone. Missing User is already a durable write fence, so
+      // run the full userId-keyed cascade again. Only report idempotent success
+      // after every mandatory Jobs sweep below has completed.
+      missingUserRecovery = true
+    } else {
+      if (existing.role === 'platform_admin') throw new AccountDeletionForbiddenError()
+      // A previous attempt may have established the durable barrier and then
+      // failed a mandatory sweep. Re-entering is the recovery path.
+      if (existing.accountState !== 'deleting') {
+        throw new AccountDeletionIncompleteError(['account lifecycle claim'])
+      }
+      deletionOwner = existing
     }
-    deletionOwner = existing
   }
 
   // Email and role are account authority. JWT snapshots can be seven days
   // old, so never use the caller-supplied email for privacy deletion.
-  const email = String(deletionOwner.email ?? '').toLowerCase().trim()
+  const email = String(deletionOwner?.email ?? '').toLowerCase().trim()
 
   // 1. Collect R2 keys from all of this user's sessions before we delete the rows.
   const sessions = await InterviewSession.find(
@@ -410,12 +421,17 @@ export async function deleteUserAccount(
     const db = client.db()
     const accountsRes = await db.collection('accounts').deleteMany({ userId: userObjectId })
     const sessionsRes = await db.collection('sessions').deleteMany({ userId: userObjectId })
-    const tokensRes = await db
-      .collection('verification_tokens')
-      .deleteMany({ identifier: email })
     collectionsCleared['nextauth.accounts'] = accountsRes.deletedCount ?? 0
     collectionsCleared['nextauth.sessions'] = sessionsRes.deletedCount ?? 0
-    collectionsCleared['nextauth.verification_tokens'] = tokensRes.deletedCount ?? 0
+    // Verification tokens are keyed only by canonical email. In a
+    // missing-User recovery that authority is no longer available, and an
+    // empty identifier is not a safe proxy for the deleted account.
+    if (email) {
+      const tokensRes = await db
+        .collection('verification_tokens')
+        .deleteMany({ identifier: email })
+      collectionsCleared['nextauth.verification_tokens'] = tokensRes.deletedCount ?? 0
+    }
   } catch (err) {
     logger.warn({ err, userId }, 'NextAuth adapter cleanup failed')
   }
@@ -473,5 +489,6 @@ export async function deleteUserAccount(
     collectionsCleared,
     r2KeysDeleted,
     r2KeysFailed,
+    ...(missingUserRecovery ? { alreadyDeleted: true } : {}),
   }
 }

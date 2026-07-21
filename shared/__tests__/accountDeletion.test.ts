@@ -679,6 +679,56 @@ describe('deleteUserAccount – R2 key coverage', () => {
     })
   })
 
+  it('re-sweeps orphaned user data before treating a missing User as idempotently deleted', async () => {
+    mockUserFindOneAndUpdate.mockReturnValueOnce(selectLean(null))
+    mockUserFindById.mockReturnValueOnce(selectLean(null))
+    mockUserDeleteOne.mockResolvedValueOnce({ deletedCount: 0 })
+    mockSessionFind.mockReturnValue({
+      lean: () => Promise.resolve([{ _id: 'orphan-session', recordingR2Key: 'orphan-recording.webm' }]),
+    })
+
+    const result = await deleteUserAccount('507f1f77bcf86cd799439011')
+
+    expect(result).toMatchObject({
+      userId: '507f1f77bcf86cd799439011',
+      email: '',
+      alreadyDeleted: true,
+    })
+    expect(mockDeleteFromR2).toHaveBeenCalledWith('orphan-recording.webm')
+    expect(mockSessionDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUsageDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockProductEventDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockJobsEmailSendDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockEvidenceDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockJobAppDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUserExists).toHaveBeenCalledWith({ _id: expect.anything() })
+    expect(mockRawCollectionDeleteMany).toHaveBeenCalledWith(
+      'accounts',
+      { userId: expect.anything() },
+    )
+    expect(mockRawCollectionDeleteMany).toHaveBeenCalledWith(
+      'sessions',
+      { userId: expect.anything() },
+    )
+    expect(mockRawCollectionDeleteMany).not.toHaveBeenCalledWith(
+      'verification_tokens',
+      { identifier: '' },
+    )
+  })
+
+  it('does not claim a missing User is deleted when its compensating Jobs sweep fails', async () => {
+    mockUserFindOneAndUpdate.mockReturnValueOnce(selectLean(null))
+    mockUserFindById.mockReturnValueOnce(selectLean(null))
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockJobAppDeleteMany.mockRejectedValueOnce(new Error('orphan sweep unavailable'))
+
+    await expect(deleteUserAccount('507f1f77bcf86cd799439011')).rejects.toMatchObject({
+      name: 'AccountDeletionIncompleteError',
+      failedCollections: ['JobApplication'],
+    })
+    expect(mockUserDeleteOne).not.toHaveBeenCalled()
+  })
+
   it('keeps the deleting user fence when a mandatory Jobs sweep fails', async () => {
     mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockUsageDeleteMany.mockRejectedValueOnce(new Error('usage sweep unavailable'))

@@ -8,6 +8,7 @@ import { logger } from '@shared/logger'
 import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 import { recordJobsUserEvent } from '@jobs/services/userEventService'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,6 +73,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       sourceJdHash: body.sourceJdHash,
     })
   } catch (err) {
+    if (err instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
     logger.warn({ err }, 'tailored resume attachment failed after identity verification')
     return NextResponse.json(
       { error: 'temporary attachment failure', code: 'ATTACHMENT_TEMPORARY', identityVerified: true },

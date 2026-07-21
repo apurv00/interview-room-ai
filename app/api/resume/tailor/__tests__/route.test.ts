@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   redisIncr: vi.fn(),
   redisPexpire: vi.fn(),
   tailorResume: vi.fn(),
+  connectDB: vi.fn(),
+  isJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mocks.getServerSession }))
@@ -20,6 +22,10 @@ vi.mock('@shared/logger', () => ({
   aiLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 vi.mock('@resume/services/resumeAIService', () => ({ tailorResume: mocks.tailorResume }))
+vi.mock('@shared/db/connection', () => ({ connectDB: mocks.connectDB }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mocks.isJobsAccountActive,
+}))
 
 import { POST } from '../route'
 
@@ -55,6 +61,8 @@ beforeEach(() => {
   mocks.redisIncr.mockResolvedValue(1)
   mocks.redisPexpire.mockResolvedValue(1)
   mocks.tailorResume.mockResolvedValue(result)
+  mocks.connectDB.mockResolvedValue(undefined)
+  mocks.isJobsAccountActive.mockResolvedValue(true)
 })
 
 describe('POST /api/resume/tailor session provenance', () => {
@@ -81,6 +89,52 @@ describe('POST /api/resume/tailor session provenance', () => {
     expect(response.status).toBe(200)
     expect(mocks.redisIncr).toHaveBeenCalledTimes(1)
     expect(mocks.tailorResume).toHaveBeenCalledWith(validBody)
+    expect(mocks.isJobsAccountActive).toHaveBeenCalledTimes(3)
+  })
+
+  it('rejects an inactive exact origin before quota or model work', async () => {
+    mocks.isJobsAccountActive.mockResolvedValueOnce(false)
+
+    const response = await POST(
+      request({ ...validBody, originUserId: USER_B_ID }, USER_B_ID),
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mocks.redisIncr).not.toHaveBeenCalled()
+    expect(mocks.tailorResume).not.toHaveBeenCalled()
+  })
+
+  it('rechecks immediately before provider work when deletion starts after the outer guard', async () => {
+    mocks.isJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      request({ ...validBody, originUserId: USER_B_ID }, USER_B_ID),
+    )
+
+    expect(response.status).toBe(401)
+    expect(mocks.redisIncr).toHaveBeenCalledTimes(1)
+    expect(mocks.tailorResume).not.toHaveBeenCalled()
+  })
+
+  it('suppresses a provider result when deletion starts while the model is running', async () => {
+    mocks.isJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      request({ ...validBody, originUserId: USER_B_ID }, USER_B_ID),
+    )
+
+    expect(response.status).toBe(401)
+    expect(mocks.tailorResume).toHaveBeenCalledWith(validBody)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
   })
 
   it('preserves authenticated callers that omit originUserId', async () => {
@@ -89,6 +143,7 @@ describe('POST /api/resume/tailor session provenance', () => {
     expect(response.status).toBe(200)
     expect(mocks.redisIncr).toHaveBeenCalledTimes(1)
     expect(mocks.tailorResume).toHaveBeenCalledWith(validBody)
+    expect(mocks.isJobsAccountActive).not.toHaveBeenCalled()
   })
 
   it('preserves anonymous callers that omit originUserId', async () => {
@@ -99,5 +154,6 @@ describe('POST /api/resume/tailor session provenance', () => {
     expect(response.status).toBe(200)
     expect(mocks.redisIncr).toHaveBeenCalledTimes(2)
     expect(mocks.tailorResume).toHaveBeenCalledWith(validBody)
+    expect(mocks.isJobsAccountActive).not.toHaveBeenCalled()
   })
 })

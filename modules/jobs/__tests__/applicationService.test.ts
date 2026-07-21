@@ -223,7 +223,68 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     expect(mockStartSession).toHaveBeenCalledTimes(2)
   })
 
-  it('returns null when deletion wins between an Apply duplicate race and its retry', async () => {
+  it('converges after a create race and a status race without regressing the winner', async () => {
+    reset()
+    mockAppFindOne
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'winner', status: 'saved', clickedApplyOptionIds: [] }) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'winner', status: 'applied', clickedApplyOptionIds: [] }) }) })
+    mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
+
+    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({
+      status: 'applied',
+      created: false,
+      transitioned: false,
+      canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+    })
+    expect(mockStartSession).toHaveBeenCalledTimes(3)
+    expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
+      { _id: 'winner', userId: 'u1', jobPostingId: 'j1' },
+      { $set: { clickedApplyOptionIds: [APPLY_OPTION_ID] } },
+      expect.objectContaining({ session: expect.anything() }),
+    )
+  })
+
+  it('returns null after three retryable contention failures', async () => {
+    reset()
+    mockAppFindOne
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'winner', status: 'saved', clickedApplyOptionIds: [] }) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({ _id: 'winner', status: 'saved', clickedApplyOptionIds: [] }) }) })
+    mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+    mockAppUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
+
+    await expect(recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).resolves.toBeNull()
+    expect(mockStartSession).toHaveBeenCalledTimes(3)
+  })
+
+  it('propagates an unexpected failure without retrying', async () => {
+    reset()
+    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+    mockAppCreate.mockRejectedValueOnce(new Error('validation failed'))
+
+    await expect(recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).rejects.toThrow('validation failed')
+    expect(mockStartSession).toHaveBeenCalledOnce()
+  })
+
+  it('propagates an unexpected failure after a retryable first race', async () => {
+    reset()
+    mockAppFindOne
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+      .mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+    mockAppCreate
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+      .mockRejectedValueOnce(new Error('validation failed after retry'))
+
+    await expect(recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW))
+      .rejects.toThrow('validation failed after retry')
+    expect(mockStartSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('propagates account deletion between an Apply duplicate race and its retry', async () => {
     reset()
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
     mockAppCreate.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
@@ -231,7 +292,8 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
       .mockImplementationOnce(async (_userId: string, work: (session: unknown) => Promise<unknown>) => work({ id: 'first' }))
       .mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
 
-    await expect(recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).resolves.toBeNull()
+    await expect(recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW))
+      .rejects.toBeInstanceOf(JobsAccountInactiveError)
     expect(mockAppCreate).toHaveBeenCalledOnce()
   })
 
@@ -332,7 +394,8 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     reset()
     mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
 
-    expect(await recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW)).toBeNull()
+    await expect(recordApplyClick('u1', 'j1', APPLY_OPTION_ID, NOW))
+      .rejects.toBeInstanceOf(JobsAccountInactiveError)
     expect(mockPostingFindById).not.toHaveBeenCalled()
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     expect(mockAppFindOne).not.toHaveBeenCalled()
@@ -412,7 +475,8 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
     reset()
     mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
 
-    expect(await transitionStatus('u1', 'j1', 'applied', { channel: 'web' }, NOW)).toEqual({ ok: false })
+    await expect(transitionStatus('u1', 'j1', 'applied', { channel: 'web' }, NOW))
+      .rejects.toBeInstanceOf(JobsAccountInactiveError)
     expect(mockAppFindOneAndUpdate).not.toHaveBeenCalled()
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
@@ -422,6 +486,18 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
   function appQuery(value: unknown) {
     return { select: () => ({ lean: () => Promise.resolve(value) }) }
   }
+
+  it('propagates account deletion before reading or mutating link state', async () => {
+    reset()
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    await expect(reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW))
+      .rejects.toBeInstanceOf(JobsAccountInactiveError)
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
 
   it('rejects missing/cross-user rows and options this user never clicked', async () => {
     reset()
@@ -585,7 +661,7 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
   })
 
-  it('returns not-found when deletion wins between a broken-link race and its retry', async () => {
+  it('propagates account deletion between a broken-link race and its retry', async () => {
     reset()
     mockAppFindOne.mockReturnValueOnce(appQuery({
       _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID], brokenLinkReports: [],
@@ -595,7 +671,8 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
       .mockImplementationOnce(async (_userId: string, work: (session: unknown) => Promise<unknown>) => work({ id: 'first' }))
       .mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
 
-    await expect(reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).resolves.toEqual({ ok: false })
+    await expect(reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW))
+      .rejects.toBeInstanceOf(JobsAccountInactiveError)
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
   })
 
@@ -978,6 +1055,47 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     expect(mockInngestSend).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    [null, { $eq: null, $exists: true }],
+    ['', ''],
+  ])('pins an exact %j closedReason instead of treating it as missing', async (closedReason, expectedCondition) => {
+    reset({
+      title: 'SDE',
+      company: 'PhonePe',
+      locations: ['Pune'],
+      provenance: [{ sourceId: 'jsearch' }],
+      status: 'open',
+      closedReason,
+      jdCompressed: PRACTICE_JD_COMPRESSED,
+    })
+    sessionChain({
+      _id: 's1',
+      userId: 'u1',
+      attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID, applicationId: 'app1' },
+    })
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1',
+      jobPostingId: PRACTICE_JOB_ID,
+      verifiedPracticeSessionIds: ['s1'],
+    }))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: PRACTICE_JOB_ID,
+        status: 'open',
+        closedReason: expectedCondition,
+        jdCompressed: PRACTICE_JD_COMPRESSED,
+      },
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      expect.objectContaining({ session: expect.anything(), timestamps: false }),
+    )
+  })
+
   it('removes only the session relationship and retains the tracker row when source revocation wins', async () => {
     reset()
     sessionChain({
@@ -1354,7 +1472,8 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     reset()
     mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
 
-    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: false, reason: 'not-found' })
+    await expect(saveTailoredVersion('u1', 'j1', PAYLOAD, NOW))
+      .rejects.toBeInstanceOf(JobsAccountInactiveError)
     expect(mockPostingFindById).not.toHaveBeenCalled()
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     expect(mockAppFindOne).not.toHaveBeenCalled()

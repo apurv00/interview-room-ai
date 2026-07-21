@@ -7,6 +7,7 @@ import { parseApplyOptionMutation, reportBrokenLink } from '@jobs'
 import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 import { recordJobsUserEvent } from '@jobs/services/userEventService'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,7 +36,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!mutation) return NextResponse.json({ error: 'invalid apply option' }, { status: 400 })
 
   await connectDB()
-  const result = await reportBrokenLink(userId, params.id, mutation.optionId)
+  let result: Awaited<ReturnType<typeof reportBrokenLink>>
+  try {
+    result = await reportBrokenLink(userId, params.id, mutation.optionId)
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    throw error
+  }
   if (!result.ok) return NextResponse.json({ error: 'apply option not found' }, { status: 404 })
   if (result.recorded) {
     try {

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import {
   AccountDeletionForbiddenError,
+  AccountDeletionIncompleteError,
   AccountDeletionNotFoundError,
   deleteUserAccount,
 } from '@shared/services/accountDeletion'
@@ -41,7 +42,44 @@ export async function DELETE() {
       )
     }
     if (err instanceof AccountDeletionNotFoundError) {
-      return NextResponse.json({ error: 'Account no longer exists.' }, { status: 401 })
+      // Defensive fallback: deleteUserAccount normally converts a missing
+      // User into a compensating userId-keyed sweep. Never claim completion
+      // if that verification path was bypassed or regressed.
+      logger.error(
+        {
+          err,
+          event: 'account_deletion_unverified_missing_user',
+          code: 'ACCOUNT_DELETION_UNVERIFIED',
+          userId: session.user.id,
+        },
+        'Account deletion could not be verified after User disappeared',
+      )
+      return NextResponse.json(
+        {
+          error: 'Your account record is gone, but cleanup could not be verified. Please retry or contact support.',
+          code: 'ACCOUNT_DELETION_UNVERIFIED',
+        },
+        { status: 503 },
+      )
+    }
+    if (err instanceof AccountDeletionIncompleteError) {
+      logger.error(
+        {
+          err,
+          event: 'account_deletion_incomplete',
+          code: 'ACCOUNT_DELETION_INCOMPLETE',
+          userId: session.user.id,
+          failedCollections: err.failedCollections,
+        },
+        'Account deletion incomplete',
+      )
+      return NextResponse.json(
+        {
+          error: 'We started deleting your account but could not finish. Please try again or contact support.',
+          code: 'ACCOUNT_DELETION_INCOMPLETE',
+        },
+        { status: 503 },
+      )
     }
     logger.error({ err, userId: session.user.id }, 'Account deletion failed')
     return NextResponse.json(

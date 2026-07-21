@@ -6,10 +6,14 @@ const mocks = vi.hoisted(() => ({
   getResume: vi.fn(),
   saveResume: vi.fn(),
   deleteResume: vi.fn(),
+  connectDB: vi.fn(),
+  isJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mocks.getServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
+vi.mock('@shared/db/connection', () => ({ connectDB: mocks.connectDB }))
+vi.mock('@shared/services/jobsAccountFence', () => ({ isJobsAccountActive: mocks.isJobsAccountActive }))
 vi.mock('@resume/services/resumeService', () => ({
   listResumes: mocks.listResumes,
   getResume: mocks.getResume,
@@ -50,9 +54,44 @@ beforeEach(() => {
   mocks.listResumes.mockResolvedValue({ resumes: [{ id: 'resume-1', name: 'Resume B' }] })
   mocks.getResume.mockResolvedValue({ id: 'resume-1', name: 'Resume B', fullText: 'USER B PRIVATE RESUME' })
   mocks.saveResume.mockResolvedValue({ id: 'resume-1', created: true })
+  mocks.connectDB.mockResolvedValue(undefined)
+  mocks.isJobsAccountActive.mockResolvedValue(true)
 })
 
 describe('GET /api/resume/save session provenance', () => {
+  it.each([
+    ['list', undefined],
+    ['detail', 'resume-1'],
+  ])('returns exact account-unavailable semantics before a %s read', async (_label, id) => {
+    mocks.isJobsAccountActive.mockResolvedValueOnce(false)
+
+    const response = await GET(getRequest(id, USER_B_ID))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mocks.listResumes).not.toHaveBeenCalled()
+    expect(mocks.getResume).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['list', undefined],
+    ['detail', 'resume-1'],
+  ])('withholds a captured %s response when deletion commits during the read', async (_label, id) => {
+    mocks.isJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await GET(getRequest(id, USER_B_ID))
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+    if (id) expect(mocks.getResume).toHaveBeenCalledWith(USER_B_ID, id)
+    else expect(mocks.listResumes).toHaveBeenCalledWith(USER_B_ID)
+  })
+
   it('rejects a different list origin before any resume read', async () => {
     const response = await GET(getRequest(undefined, USER_A_ID))
 

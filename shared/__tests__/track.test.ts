@@ -207,4 +207,32 @@ describe('shared/analytics/track', () => {
       expect(() => identify('user_123', {})).not.toThrow()
     })
   })
+
+  describe('resetAnalyticsIdentity()', () => {
+    it('drops the persisted PostHog identity and clears GA user context', async () => {
+      window.localStorage.setItem('ipg_distinct_id', 'user_123')
+
+      const { resetAnalyticsIdentity } = await import('@shared/analytics/track')
+      resetAnalyticsIdentity()
+
+      expect(window.localStorage.getItem('ipg_distinct_id')).toBeNull()
+      expect(gtag).toHaveBeenCalledWith('set', { user_id: null })
+      expect(gtag).toHaveBeenCalledWith('set', 'user_properties', {
+        plan: null,
+        role: null,
+        organizationId: null,
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('still clears persisted identity when GA is unavailable', async () => {
+      window.localStorage.setItem('ipg_distinct_id', 'user_123')
+      delete (window as unknown as { gtag?: GtagMock }).gtag
+
+      const { resetAnalyticsIdentity } = await import('@shared/analytics/track')
+
+      expect(() => resetAnalyticsIdentity()).not.toThrow()
+      expect(window.localStorage.getItem('ipg_distinct_id')).toBeNull()
+    })
+  })
 })

@@ -10,6 +10,24 @@ export const NORMAL_ARCHIVE_CLOSED_REASONS = [
 ] as const
 
 /**
+ * Match an optional posting field exactly in a Mongo authority guard.
+ * Mongo's plain `null` equality also matches a missing field, so an explicit
+ * null needs an existence predicate to remain a true compare-and-swap token.
+ */
+type ExactOptionalPostingCondition<T> =
+  | Exclude<T, null | undefined>
+  | { $exists: false }
+  | { $eq: null; $exists: true }
+
+export function exactOptionalPostingCondition<T>(
+  value: T,
+): ExactOptionalPostingCondition<T> {
+  if (value === undefined) return { $exists: false }
+  if (value === null) return { $eq: null, $exists: true }
+  return value as Exclude<T, null | undefined>
+}
+
+/**
  * Server-authoritative lifecycle policy for retained postings.
  *
  * Normal expiry/delisting keeps the candidate's owned preparation context.

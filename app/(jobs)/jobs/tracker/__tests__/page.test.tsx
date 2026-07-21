@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -13,6 +13,256 @@ beforeEach(() => {
 })
 
 describe('Jobs tracker posting lifecycle', () => {
+  it('distinguishes account deletion from ordinary sign-in expiry on the initial load', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+    })
+
+    const view = render(<TrackerPage />)
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.getByText(/Account deletion has started or completed/i)).toBeTruthy()
+    expect(screen.queryByText(/Sign in to see your job tracker/i)).toBeNull()
+
+    view.unmount()
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ error: 'sign in required' }),
+    })
+    render(<TrackerPage />)
+
+    expect(await screen.findByText('Sign in to see your job tracker.')).toBeTruthy()
+    expect(screen.queryByText('Your account is unavailable.')).toBeNull()
+  })
+
+  it('clears rendered rows and open note state when a mutation reports account unavailability', async () => {
+    const tracker = {
+      groups: [{
+        status: 'applied',
+        count: 1,
+        rows: [{
+          jobPostingId: JOB_ID,
+          title: 'Frontend Engineer',
+          company: 'Acme',
+          location: 'Remote',
+          status: 'applied',
+          postingState: 'live',
+          daysInStatus: 3,
+          practiceCount: 1,
+          notes: 'private note',
+          nudge: null,
+          unconfirmedClick: false,
+        }],
+      }],
+      confirmCard: null,
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/jobs/tracker') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(tracker) })
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+
+    render(<TrackerPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit note' }))
+    expect(screen.getByRole('textbox')).toHaveValue('private note')
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText('Frontend Engineer')).toBeNull()
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  })
+
+  it('keeps account deletion terminal when a slower ordinary 401 arrives afterward', async () => {
+    let resolveNotes!: (value: unknown) => void
+    let resolveStatus!: (value: unknown) => void
+    const notesResponse = new Promise((resolve) => { resolveNotes = resolve })
+    const statusResponse = new Promise((resolve) => { resolveStatus = resolve })
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/jobs/tracker') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            groups: [{
+              status: 'applied',
+              count: 1,
+              rows: [{
+                jobPostingId: JOB_ID,
+                title: 'Frontend Engineer',
+                company: 'Acme',
+                location: 'Remote',
+                status: 'applied',
+                postingState: 'live',
+                daysInStatus: 3,
+                practiceCount: 1,
+                notes: 'private note',
+                nudge: null,
+                unconfirmedClick: false,
+              }],
+            }],
+            confirmCard: null,
+          }),
+        })
+      }
+      if (url.endsWith('/nudge-dismiss')) return notesResponse
+      if (url.endsWith('/status')) return statusResponse
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<TrackerPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit note' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    fireEvent.click(screen.getByRole('button', { name: /Interview scheduled/ }))
+
+    await act(async () => {
+      resolveNotes({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+
+    await act(async () => {
+      resolveStatus({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'sign in required' }),
+      })
+    })
+    expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText('Sign in to see your job tracker.')).toBeNull()
+    expect(screen.queryByText('Frontend Engineer')).toBeNull()
+  })
+
+  it('ignores a slower successful mutation after account deletion becomes terminal', async () => {
+    let resolveNotes!: (value: unknown) => void
+    let resolveStatus!: (value: unknown) => void
+    const notesResponse = new Promise((resolve) => { resolveNotes = resolve })
+    const statusResponse = new Promise((resolve) => { resolveStatus = resolve })
+    const tracker = {
+      groups: [{
+        status: 'applied',
+        count: 1,
+        rows: [{
+          jobPostingId: JOB_ID,
+          title: 'Frontend Engineer',
+          company: 'Acme',
+          location: 'Remote',
+          status: 'applied',
+          postingState: 'live',
+          daysInStatus: 3,
+          practiceCount: 1,
+          notes: 'private note',
+          nudge: null,
+          unconfirmedClick: false,
+        }],
+      }],
+      confirmCard: null,
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/jobs/tracker') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(tracker) })
+      }
+      if (url.endsWith('/nudge-dismiss')) return notesResponse
+      if (url.endsWith('/status')) return statusResponse
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<TrackerPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit note' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save note' }))
+    fireEvent.click(screen.getByRole('button', { name: /Interview scheduled/ }))
+
+    await act(async () => {
+      resolveNotes({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+
+    await act(async () => {
+      resolveStatus({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    })
+
+    expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText('Frontend Engineer')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+    expect(mockFetch.mock.calls.filter(([input]) => String(input) === '/api/jobs/tracker')).toHaveLength(1)
+  })
+
+  it('does not let an older tracker refresh replace a newer mutation result', async () => {
+    let resolveOlderLoad!: (value: unknown) => void
+    let resolveNewerLoad!: (value: unknown) => void
+    const olderLoad = new Promise((resolve) => { resolveOlderLoad = resolve })
+    const newerLoad = new Promise((resolve) => { resolveNewerLoad = resolve })
+    let trackerCalls = 0
+    const trackerView = (title: string) => ({
+      groups: [{
+        status: 'applied',
+        count: 1,
+        rows: [{
+          jobPostingId: JOB_ID,
+          title,
+          company: 'Acme',
+          location: 'Remote',
+          status: 'applied',
+          postingState: 'live',
+          daysInStatus: 3,
+          practiceCount: 1,
+          nudge: null,
+          unconfirmedClick: false,
+        }],
+      }],
+      confirmCard: null,
+    })
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/jobs/tracker') {
+        trackerCalls += 1
+        if (trackerCalls === 1) {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(trackerView('Initial Job')) })
+        }
+        return trackerCalls === 2 ? olderLoad : newerLoad
+      }
+      if (url.endsWith('/status')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<TrackerPage />)
+    await screen.findByText('Initial Job')
+    fireEvent.click(screen.getByRole('button', { name: '→ Rejected' }))
+    fireEvent.click(screen.getByRole('button', { name: '→ Withdrawn' }))
+    await waitFor(() => expect(trackerCalls).toBe(3))
+
+    await act(async () => {
+      resolveNewerLoad({ ok: true, status: 200, json: () => Promise.resolve(trackerView('Newest Job')) })
+    })
+    expect(await screen.findByText('Newest Job')).toBeTruthy()
+
+    await act(async () => {
+      resolveOlderLoad({ ok: true, status: 200, json: () => Promise.resolve(trackerView('Stale Job')) })
+    })
+    expect(screen.getByText('Newest Job')).toBeTruthy()
+    expect(screen.queryByText('Stale Job')).toBeNull()
+  })
+
   it('keeps application status separate from a closed-posting badge and saved-detail navigation', async () => {
     mockFetch.mockResolvedValue({
       ok: true,

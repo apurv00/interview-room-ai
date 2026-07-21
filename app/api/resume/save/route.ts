@@ -1,10 +1,17 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
+import { connectDB } from '@shared/db/connection'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 import { listResumes, getResume, saveResume, deleteResume } from '@resume/services/resumeService'
 import { ResumeSchema, resumeClampedContent } from '@resume/validators/resume'
 
 export const dynamic = 'force-dynamic'
+
+const accountUnavailableResponse = () => NextResponse.json(
+  { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+  { status: 401 },
+)
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
@@ -23,28 +30,33 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const id = searchParams.get('id')
 
-  // If id is provided, return single resume
-  if (id) {
-    try {
+  try {
+    await connectDB()
+    if (!(await isJobsAccountActive(session.user.id))) return accountUnavailableResponse()
+
+    // If id is provided, return single resume.
+    if (id) {
       const resume = await getResume(session.user.id, id)
+      // Account deletion can commit while the resume query is in flight. Do
+      // not return the captured name/text to a stale tab after that barrier.
+      if (!(await isJobsAccountActive(session.user.id))) return accountUnavailableResponse()
       if (!resume) {
         return NextResponse.json({ error: 'Resume not found' }, { status: 404 })
       }
       return NextResponse.json(resume)
-    } catch {
-      return NextResponse.json({ error: 'Failed to load resume' }, { status: 500 })
     }
-  }
 
-  // Otherwise list all resumes
-  try {
     const data = await listResumes(session.user.id)
+    if (!(await isJobsAccountActive(session.user.id))) return accountUnavailableResponse()
     if (!data) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
     return NextResponse.json(data)
   } catch {
-    return NextResponse.json({ error: 'Failed to load resumes' }, { status: 500 })
+    return NextResponse.json(
+      { error: id ? 'Failed to load resume' : 'Failed to load resumes' },
+      { status: 500 },
+    )
   }
 }
 
