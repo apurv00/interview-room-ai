@@ -68,6 +68,7 @@ describe('ingestBatch — identity ladder', () => {
     expect(doc.provenance[0].sourceKey).toBe('jsearch:ext-1')
     expect(doc.provenance[0].applyTier).toBe('employer')
     expect(doc.domain).toBe('backend')
+    expect(doc.lastSeenAt).toBeInstanceOf(Date)
   })
 
   it('retains source lineage when the provider row has no external id', async () => {
@@ -79,6 +80,7 @@ describe('ingestBatch — identity ladder', () => {
     const inserted = mockCreate.mock.calls[0][0]
     expect(inserted.sourceIds).toEqual(['jsearch'])
     expect(inserted.provenance).toEqual([])
+    expect(inserted.lastSeenAt).toBeInstanceOf(Date)
   })
 
   it('conservatively marks cap-reached legacy lineage while adding the current source', async () => {
@@ -262,6 +264,40 @@ describe('Codex #510 regressions', () => {
     expect(c.newCount).toBe(1)
     expect(c.flagged['bad-valid-through']).toBe(1)
     expect(mockCreate.mock.calls[0][0].validThrough).toBeUndefined()
+  })
+
+  it('persists date-only validThrough at end-of-day and keeps provider extensions', async () => {
+    reset()
+    await ingestBatch([job({ validThrough: '2999-07-21' })], 'jsearch')
+    expect(mockCreate.mock.calls[0][0].validThrough).toEqual(
+      new Date('2999-07-21T23:59:59.999Z'),
+    )
+
+    reset()
+    const existing = docStub({
+      validThrough: new Date('2999-07-21T23:59:59.999Z'),
+      provenance: [{
+        sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+        lastSeenAt: new Date('2026-07-01'),
+      }],
+      jdLength: 99_999,
+    })
+    mockFindOne.mockResolvedValueOnce(existing)
+    await ingestBatch([job({ validThrough: '2999-07-31' })], 'jsearch')
+    expect(existing.validThrough).toEqual(new Date('2999-07-31T23:59:59.999Z'))
+  })
+
+  it('refreshes canonical lastSeenAt even when a provider row has no externalId', async () => {
+    reset()
+    const previous = new Date('2026-06-01T00:00:00.000Z')
+    const existing = docStub({ lastSeenAt: previous, jdLength: 99_999 })
+    mockFindOne.mockResolvedValueOnce(existing) // fingerprint hit; no sourceKey tier
+
+    await ingestBatch([job({ externalId: null })], 'jsearch')
+
+    expect(existing.lastSeenAt).toBeInstanceOf(Date)
+    expect((existing.lastSeenAt as Date).getTime()).toBeGreaterThan(previous.getTime())
+    expect(existing.save).toHaveBeenCalledOnce()
   })
 
   it('[guard #1 fuzzy tier] a candidate carrying the same source under a different externalId is never fuzzy-merged', async () => {

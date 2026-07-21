@@ -128,6 +128,9 @@ export interface IJobPosting extends Document {
   }
   postedAt?: Date
   validThrough?: Date
+  /** Canonical source freshness, updated on every insert/merge even when a
+   * provider row has no externalId and therefore no provenance entry. */
+  lastSeenAt?: Date
   closedAt?: Date
   purgeAt?: Date
   userReferenced: boolean
@@ -261,6 +264,7 @@ const JobPostingSchema = new Schema<IJobPosting>(
     },
     postedAt: { type: Date },
     validThrough: { type: Date },
+    lastSeenAt: { type: Date },
     closedAt: { type: Date },
     purgeAt: { type: Date },
     userReferenced: { type: Boolean, default: false },
@@ -291,9 +295,9 @@ JobPostingSchema.index(
 JobPostingSchema.index({ 'provenance.sourceKey': 1 }, { unique: true })
 JobPostingSchema.index({ companyKey: 1, status: 1 })
 JobPostingSchema.index({ domain: 1, locationKeys: 1, status: 1, postedAt: -1 })
-// TTL on the explicit purge timestamp; docs without purgeAt never expire —
-// userReferenced and llm-verdict tombstones simply never get one.
-JobPostingSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0 })
+// The purgeAt TTL is deliberately NOT schema-owned. Creating it before the
+// pre-index lifecycle repair could immediately delete historical rows with a
+// stale TTL. `prepare:jobs-retention-index` is its sole, non-dropping owner.
 // Verdict sweeper steady-state query (Codex on #504: the sweeper ALSO scans
 // for rows missing the sub-doc entirely — that branch is bounded, not indexed).
 JobPostingSchema.index(

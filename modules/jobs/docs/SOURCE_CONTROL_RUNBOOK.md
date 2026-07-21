@@ -1,16 +1,24 @@
-# A02 source-control rollout and incident runbook
+# Jobs source-control and retention rollout runbook
 
 This runbook is the operational half of the source-authority protocol in
 [INGESTION.md](./INGESTION.md). The order is a safety invariant: a legacy
 revocation must not be adopted until its lookup and permanent-audit indexes are
-known to exist.
+known to exist. It also owns the ordered A04 retention activation because the
+same posting rows and retained-corpus counter cross both policies.
 
 ## Non-negotiable invariants
 
 - Mongo is a replica set or sharded cluster. Standalone Mongo cannot provide
   the transaction ordering A02 requires and must remain fail-closed.
-- Pause source-sync dispatch and drain every old `jobs-source-sync` run before
-  migration. Old workers do not write the A02 authority fence.
+- Enter a Jobs read-only maintenance window, pause source-sync, board/link
+  lifecycle, and retention dispatch, then drain their old runs before
+  migration. This includes `jobs-source-sync`, board probes/finalizers, link
+  checks, and `jobs-retention-sweep`; user Save/Apply/Tailor/broken-link
+  mutations must also be blocked at the application/edge during the destructive
+  window. If that is not possible, require PITR/oplog recovery with an approved
+  point-in-time target instead of assuming post-snapshot writes can be replayed
+  manually. Old workers may lack the A02 authority fence or may still write
+  historical TTL values.
 - Index preparation uses only the five enumerated `createIndex` calls. Never
   use `syncIndexes`, `dropIndex`, or `dropIndexes` during this rollout. A
   key-identical partial, sparse, hidden, TTL, collated, or otherwise duplicate
@@ -20,6 +28,10 @@ known to exist.
   `provenance.sourceId_1`; changing one is a coordinated code, preparation,
   gate, and rollout change.
 - `JobSourceControlAudit` is permanent. Any TTL index on it blocks promotion.
+- `JobPosting.purgeAt` has exactly one whole-collection, non-unique absolute
+  TTL index. The model never auto-creates it. Clear all historical `purgeAt`
+  values and verify owner pins before first activation; index preparation
+  refuses to create it while even one value remains.
 - The retained posting corpus must remain at or below 25,000 rows, including
   owner-pinned archives and tombstones. `check:jobs-source-control` enforces
   the same bound as the production-shaped staging smoke and requires the
@@ -91,6 +103,8 @@ The staging database role needs only:
 - `find`, `aggregate`, and `listIndexes` on the Jobs application collections;
 - `createIndex` on `jobpostings`, `jobsourceconfigs`, and
   `jobsourcecontrolaudits`;
+- `find`/`distinct` on `jobapplications`, plus `find` and `update` on
+  `jobpostings`, for the retention repair and lifecycle sweep;
 - create/index/read/write/drop rights in the staging database for UUID-named
   `__a02_smoke_*` collections; and
 - permission to run transactions and the topology `hello` command.
@@ -106,12 +120,14 @@ least privilege, not by MongoDB collection immutability.
 
 ## Staging execution order
 
-1. Pause the source-sync schedule/manual dispatch, wait for the Inngest
-   dashboard to show zero running or queued `jobs-source-sync` functions, and
-   record the final run IDs. Deploy the A02 code from `main` while dispatch
-   remains paused. The workflow is intentionally main-only and therefore
-   post-merge promotion evidence, not a pre-merge CI signal.
-2. Dispatch **Jobs Source Control Promotion Gate** with phase
+1. Enter the Jobs read-only window described above; pause all Jobs lifecycle
+   schedules/manual dispatch, wait for the Inngest dashboard to show zero
+   running or queued runs, and record the final run IDs. Take a restorable
+   staging snapshot before the first apply. Deploy the code from
+   `main` while dispatch remains paused. The workflow is intentionally
+   main-only and therefore post-merge promotion evidence, not a pre-merge CI
+   signal.
+2. Dispatch **Jobs Data-Lifecycle Promotion Gate** with phase
    `prepare-indexes`. The hard-coded `jobs-staging` job first verifies the URI's
    exact database name and immutable staging sentinel, then runs:
 
@@ -177,10 +193,19 @@ least privilege, not by MongoDB collection immutability.
    after the named invariant is restored. Never mint a new key merely because
    the first response timed out.
 6. Dispatch the same workflow with phase `verify-promotion`. It idempotently
-   prepares the indexes again, then runs retention, lineage, source-control,
-   and replica-set smoke gates.
-7. Re-enable dispatch only after the verify phase is green. Re-run the three
-   read-only checks after the first normal sync cycle.
+   re-prepares the source indexes; previews/applies/verifies the historical TTL
+   clear and owner repair; creates and verifies the exact retention TTL index;
+   verifies lineage and source-control invariants; runs the isolated replica-
+   set smoke; then previews/applies the lifecycle sweep and requires a second
+   dry-run to report zero pending mutations. Lifecycle runs last because Mongo
+   may asynchronously delete past-due archives and leave the serialized
+   admission counter safely stale-high until the next source preflight.
+7. Re-enable dispatch only after the verify phase is green. After TTL deletion
+   metrics and the physical posting count are stable across two TTL-monitor
+   intervals, run one serialized source preflight to reconcile the safely
+   stale-high admission counter, then immediately re-run
+   `check:jobs-retention`, `check:jobs-source-lineage`,
+   `check:jobs-source-control`, and `check:jobs-retention-sweep`.
 
 The smoke is a raw Mongo-driver proof of the target Atlas topology and tier. It
 uses isolated UUID collections to exercise page-first/revoke-first commit
@@ -199,9 +224,12 @@ The staging workflow and its smoke are forbidden against production. Use an
 approved production operator session and retain command output in the change
 record.
 
-1. Pause scheduled/manual source-sync dispatch; verify and record zero running
-   or queued source-sync functions before continuing.
-2. Deploy the A02 code while dispatch remains paused.
+1. Enter an approved Jobs read-only maintenance window; pause source-sync,
+   board/link lifecycle, and retention dispatch; verify and record zero running
+   or queued Jobs lifecycle functions before continuing.
+2. Take a PITR-capable production backup/snapshot and record its identifier and
+   recovery point in the change. Deploy the code while Jobs writes remain
+   blocked. The new cron is fail-closed until the exact TTL index exists.
 3. Review the exact index plan, then explicitly build and self-verify it:
 
    ```text
@@ -212,7 +240,8 @@ record.
    The first command is local-plan-only and makes no database connection. The
    second is the authorized database mutation. It creates no other schema and
    never removes an existing index.
-4. Repair and verify owner retention:
+4. Preview, repair, and verify owner retention. This clears every historical
+   TTL as its first mutation:
 
    ```text
    npm run repair:jobs-retention
@@ -220,7 +249,16 @@ record.
    npm run check:jobs-retention
    ```
 
-5. Repair and verify source lineage:
+5. Verify zero TTL values remain, then activate the exact index:
+
+   ```text
+   npm run prepare:jobs-retention-index
+   npm run prepare:jobs-retention-index -- --apply
+   npm run check:jobs-retention-index
+   ```
+
+   Do not continue if the dry run reports a non-zero `purgeAt` row count.
+6. Repair and verify source lineage:
 
    ```text
    npm run repair:jobs-source-lineage
@@ -228,9 +266,9 @@ record.
    npm run check:jobs-source-lineage
    ```
 
-6. Adopt every legacy revision-0 revoked source through the authenticated API
+7. Adopt every legacy revision-0 revoked source through the authenticated API
    exactly as in staging. Never edit config revisions or audit rows directly.
-7. Run the production read-only gates:
+8. Run the production read-only authority gates before scheduling any TTL:
 
    ```text
    npm run check:jobs-retention
@@ -238,16 +276,36 @@ record.
    npm run check:jobs-source-control
    ```
 
-8. Re-enable scheduled dispatch and verify one deliberately triggered healthy
+9. Preview the lifecycle counts and obtain approval for the exact closure and
+   purge-scheduling totals, then apply and prove convergence:
+
+   ```text
+   npm run sweep:jobs-retention
+   npm run sweep:jobs-retention -- --apply
+   npm run check:jobs-retention-sweep
+   ```
+
+   Run the first apply off-peak and monitor Mongo TTL-deleted documents,
+   replication lag, query latency, CPU, and I/O until quiescent. WiredTiger may
+   reuse freed space without shrinking Oracle filesystem files; OS disk-size
+   reduction is not the success criterion.
+
+10. After physical count and TTL-deletion metrics stabilize across two monitor
+    intervals, run one source preflight and `check:jobs-source-control` to
+    reconcile the safely stale-high admission counter. Then leave maintenance,
+    re-enable scheduled dispatch, and verify one deliberately triggered healthy
    source sync completes at its current revision. Within five minutes, confirm
    revoked sources have no normally accessible postings and no stale-revision
    sync is succeeding.
 
-If any step fails, leave dispatch paused. Index preparation is intentionally
-non-destructive, so do not “roll back” by dropping a partially completed index;
-resolve duplicate/integrity data, rerun the idempotent preparation, then repeat
-the gates. Preserve dry-run, apply, gate, adoption operation IDs, and affected
-row counts with the deployment evidence.
+If any step fails, leave both dispatch channels paused. Index preparation is
+intentionally non-dropping, so do not improvise with `dropIndex` or rewrite TTL
+dates. Before lifecycle apply, correct the data and rerun the idempotent gates.
+After lifecycle apply, a past-due row may already have been deleted by Mongo;
+the only rollback for unexpected deletion is the recorded PITR recovery point.
+Escalate restoration rather than attempting an in-place partial reconstruction.
+Preserve dry-run, apply, gate, snapshot/PITR, adoption operation IDs, and
+affected row counts with deployment evidence.
 
 ## Propagation and external-system boundary
 

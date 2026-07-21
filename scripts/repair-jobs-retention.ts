@@ -6,7 +6,9 @@
  * `userReferenced:false` snapshot while Save/Apply/Tailor concurrently
  * created a JobApplication. That leaves an owner-linked posting eligible
  * for TTL deletion. This migration makes every application-owned posting a
- * permanent retention pin and clears TTL from every already-pinned row.
+ * permanent retention pin and clears TTL from every already-pinned row. It
+ * also clears historical TTLs from open/restricted/unknown rows before the
+ * deployment gate is allowed to create the purge index.
  *
  * Dry-run by default:
  *   npm run repair:jobs-retention
@@ -17,12 +19,14 @@
 import { pathToFileURL } from 'node:url'
 import { connectDB } from '../shared/db/connection'
 import { JobApplication, JobPosting } from '../shared/db/models'
+import { NORMAL_ARCHIVE_CLOSED_REASONS } from '../modules/jobs/services/postingAccess'
 
 const BATCH_SIZE = 500
 
 export interface RetentionInvariantCounts {
   ownerContradictions: number
   pinnedWithTtl: number
+  nonPurgeableWithTtl: number
 }
 
 export type RetentionRepairMode = 'dry-run' | 'apply' | 'check'
@@ -43,11 +47,23 @@ export function retentionRepairModeOf(argv: string[]): RetentionRepairMode {
 export function assertRetentionInvariant({
   ownerContradictions,
   pinnedWithTtl,
+  nonPurgeableWithTtl,
 }: RetentionInvariantCounts): void {
-  if (ownerContradictions || pinnedWithTtl) {
+  if (ownerContradictions || pinnedWithTtl || nonPurgeableWithTtl) {
     throw new Error(
-      `retention invariant failed: owner contradictions=${ownerContradictions}, pinned TTL rows=${pinnedWithTtl}`,
+      `retention invariant failed: owner contradictions=${ownerContradictions}, pinned TTL rows=${pinnedWithTtl}, non-purgeable TTL rows=${nonPurgeableWithTtl}`,
     )
+  }
+}
+
+export function nonPurgeableUnpinnedTtlFilter(): Record<string, unknown> {
+  return {
+    userReferenced: { $ne: true },
+    purgeAt: { $exists: true },
+    $nor: [{
+      status: 'closed',
+      closedReason: { $in: [...NORMAL_ARCHIVE_CLOSED_REASONS] },
+    }],
   }
 }
 
@@ -75,6 +91,10 @@ export async function runRetentionRepair(argv: string[]): Promise<void> {
     userReferenced: true,
     purgeAt: { $exists: true },
   })
+  const nonPurgeableWithTtl = await JobPosting.countDocuments(
+    nonPurgeableUnpinnedTtlFilter(),
+  )
+  const allRowsWithTtl = await JobPosting.countDocuments({ purgeAt: { $exists: true } })
 
   console.log('\nJobs retention repair')
   console.log('─────────────────────')
@@ -82,10 +102,12 @@ export async function runRetentionRepair(argv: string[]): Promise<void> {
   console.log(`Already missing posting rows (snapshot-only; not repairable): ${missingOwnedRows}`)
   console.log(`Owner rows with a broken pin/TTL invariant: ${ownerContradictions}`)
   console.log(`All pinned rows still carrying purgeAt: ${pinnedWithTtl}`)
+  console.log(`Open/restricted/unknown rows still carrying purgeAt: ${nonPurgeableWithTtl}`)
+  console.log(`All rows carrying purgeAt (cleared by --apply before index preparation): ${allRowsWithTtl}`)
 
   if (mode === 'check') {
-    assertRetentionInvariant({ ownerContradictions, pinnedWithTtl })
-    console.log('\nCHECK PASSED — every retained owner row is pinned and has no TTL.')
+    assertRetentionInvariant({ ownerContradictions, pinnedWithTtl, nonPurgeableWithTtl })
+    console.log('\nCHECK PASSED — only unowned normal archives may carry a TTL.')
     return
   }
 
@@ -96,6 +118,13 @@ export async function runRetentionRepair(argv: string[]): Promise<void> {
 
   let matched = 0
   let modified = 0
+  // Clear every historical TTL as the first mutation. This also makes apply
+  // safe when an environment already has a live TTL monitor: owner batching
+  // cannot leave an expired historical value exposed while it scans.
+  const ttlRepair = await JobPosting.updateMany(
+    { purgeAt: { $exists: true } },
+    { $unset: { purgeAt: 1 } },
+  )
   for (let i = 0; i < ownedIds.length; i += BATCH_SIZE) {
     const result = await JobPosting.updateMany(
       { _id: { $in: ownedIds.slice(i, i + BATCH_SIZE) } },
@@ -104,14 +133,9 @@ export async function runRetentionRepair(argv: string[]): Promise<void> {
     matched += result.matchedCount ?? 0
     modified += result.modifiedCount ?? 0
   }
-  const pinnedRepair = await JobPosting.updateMany(
-    { userReferenced: true, purgeAt: { $exists: true } },
-    { $unset: { purgeAt: 1 } },
-  )
-
   console.log(`\nOwned rows matched: ${matched}`)
   console.log(`Owned rows modified: ${modified}`)
-  console.log(`Additional pinned TTL rows modified: ${pinnedRepair.modifiedCount ?? 0}`)
+  console.log(`Historical TTL rows cleared: ${ttlRepair.modifiedCount ?? 0}`)
 
   // Re-read ownership after the writes. Old application writers may still be
   // draining while the migration runs, so verification must not reuse the
@@ -130,11 +154,15 @@ export async function runRetentionRepair(argv: string[]): Promise<void> {
     userReferenced: true,
     purgeAt: { $exists: true },
   })
+  const remainingNonPurgeableTtl = await JobPosting.countDocuments(
+    nonPurgeableUnpinnedTtlFilter(),
+  )
   assertRetentionInvariant({
     ownerContradictions: remainingOwners,
     pinnedWithTtl: remainingPinnedTtl,
+    nonPurgeableWithTtl: remainingNonPurgeableTtl,
   })
-  console.log('\nVerified: every retained owner row is pinned and has no TTL.')
+  console.log('\nVerified: only unowned normal archives may carry a TTL.')
 }
 
 async function main() {

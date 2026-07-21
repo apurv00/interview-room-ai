@@ -261,6 +261,45 @@ describe('withSourceWriteFence', () => {
     )
   })
 
+  it('reconciles a stale-high counter after TTL deletion before admitting the freed slot', async () => {
+    mockMetaFindOne.mockImplementation(() => lean({
+      controlWriteSeq: 0,
+      ingestWriteSeq: 8,
+      retainedPostings: 25_000,
+    }))
+    mockPostingCountDocuments.mockResolvedValue(24_999)
+
+    await expect(withSourceWriteFence(
+      'jsearch',
+      0,
+      async () => ({ newCount: 1 }),
+      {
+        reconcileRetainedPostings: true,
+        insertedPostings: (result) => result.newCount,
+      },
+    )).resolves.toEqual({ newCount: 1 })
+
+    expect(mockMetaUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: 'jobs-source-control',
+        sourceLineageVersion: 1,
+        ingestWriteSeq: 9,
+      },
+      { $set: { retainedPostings: 24_999 } },
+      { session },
+    )
+    expect(mockMetaUpdateOne).toHaveBeenLastCalledWith(
+      {
+        _id: 'jobs-source-control',
+        sourceLineageVersion: 1,
+        ingestWriteSeq: 9,
+        retainedPostings: 24_999,
+      },
+      { $inc: { retainedPostings: 1 } },
+      { session },
+    )
+  })
+
   it('aborts a cross-source insert that would exceed the retained bound', async () => {
     mockMetaFindOne.mockImplementation(() => lean({
       controlWriteSeq: 0,
