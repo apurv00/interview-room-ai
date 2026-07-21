@@ -39,6 +39,8 @@ interface OverviewTabProps {
   onQuestionClick?: (questionIndex: number) => void
   /** Highest valid question index for chip range guard. */
   maxQuestionIndex?: number
+  /** Terminal account-deletion signal from nested account-bound fetches. */
+  onAccountUnavailable?: () => void
   /** Round 5a feature #2: Claude's per-session narrative confidence read,
    *  sourced from `FusionSummary.confidenceProgression`. Rendered as the
    *  qualitative twin of the existing ConfidenceTrend chart. */
@@ -48,7 +50,7 @@ interface OverviewTabProps {
   perQuestionConfidence?: ReadonlyArray<'high' | 'medium' | 'low'>
 }
 
-export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId, onQuestionClick, maxQuestionIndex, confidenceProgression, perQuestionConfidence }: OverviewTabProps) {
+export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId, onQuestionClick, maxQuestionIndex, onAccountUnavailable, confidenceProgression, perQuestionConfidence }: OverviewTabProps) {
   const { dimensions, red_flags, top_3_improvements } = feedback
   const { answer_quality, communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
@@ -140,6 +142,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
           currentTopImprovements={
             Array.isArray(top_3_improvements) ? top_3_improvements.map((t) => s(t)) : []
           }
+          onAccountUnavailable={onAccountUnavailable}
         />
       )}
 
@@ -147,7 +150,11 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
       <div className="grid md:grid-cols-2 gap-4">
         <section className="surface-card-bordered p-4 sm:p-5">
           <h3 className="text-subheading text-[#0f1419] mb-3">Score Trend</h3>
-          <ScoreTrendChart currentScore={currentScore} sessionId={sessionId} />
+          <ScoreTrendChart
+            currentScore={currentScore}
+            sessionId={sessionId}
+            onAccountUnavailable={onAccountUnavailable}
+          />
         </section>
         {currentScores && (
           <ComparisonCard
@@ -155,6 +162,7 @@ export default function OverviewTab({ data, feedback, sessionId, peerData, peerL
             overallScore={currentScore}
             domain={domain}
             parentSessionId={parentSessionId}
+            onAccountUnavailable={onAccountUnavailable}
           />
         )}
       </div>

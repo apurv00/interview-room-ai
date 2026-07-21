@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 /**
  * /jobs/start — the attach chooser + confirm bar (PRODUCT_FLOW §1 Stage 1,
@@ -46,9 +47,18 @@ function track(name: string, props: Record<string, unknown>) {
   }).catch(() => {})
 }
 
+async function isAccountUnavailableResponse(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false
+  const body = await response.json().catch(() => null) as { code?: unknown } | null
+  return body?.code === 'ACCOUNT_UNAVAILABLE'
+}
+
 export default function JobsStartPage() {
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
+  const mountedRef = useRef(true)
+  const terminalRef = useRef(false)
+  const requestGenerationRef = useRef(0)
   const [door, setDoor] = useState<'chooser' | 'paste' | 'questions' | 'confirm'>('chooser')
   const [method, setMethod] = useState<JobsTarget['method']>('paste')
   const [pasteText, setPasteText] = useState('')
@@ -64,19 +74,61 @@ export default function JobsStartPage() {
   const [parsedResume, setParsedResume] = useState<ParsedResume | null>(null)
   const [rawText, setRawText] = useState('')
   const [importDoor, setImportDoor] = useState<{ id: string; name: string; targetRole: string; latestRole?: string; skills: string[] } | null>(null)
+  const [accountUnavailable, setAccountUnavailable] = useState(false)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      requestGenerationRef.current += 1
+    }
+  }, [])
+
+  const scrubAccountBoundState = useCallback(() => {
+    terminalRef.current = true
+    requestGenerationRef.current += 1
+    clearAllInterviewStorage()
+    if (!mountedRef.current) return
+    if (fileRef.current) fileRef.current.value = ''
+    setDoor('chooser')
+    setMethod('paste')
+    setPasteText('')
+    setBusy(false)
+    setError(null)
+    setDetectedName('')
+    setSkills([])
+    setRole('')
+    setDetectedRole('')
+    setParsedResume(null)
+    setRawText('')
+    setImportDoor(null)
+    setAccountUnavailable(true)
+  }, [])
 
   // Authed import door — 401 = anon, hide silently.
   useEffect(() => {
+    let cancelled = false
     fetch('/api/jobs/base-resume')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d?.base) setImportDoor(d.base) })
+      .then(async (response) => {
+        if (await isAccountUnavailableResponse(response)) {
+          scrubAccountBoundState()
+          return null
+        }
+        return response.ok ? response.json() : null
+      })
+      .then((data) => {
+        if (!cancelled && !terminalRef.current && data?.base) setImportDoor(data.base)
+      })
       .catch(() => {})
-  }, [])
+    return () => { cancelled = true }
+  }, [scrubAccountBoundState])
 
   /** Returns false on failure so the UPLOAD path can drop the user on the
    *  paste fallback — with paste gone as a primary door, leaving them on
    *  the chooser with a "paste instead" error is a dead end (Codex #540). */
   async function parseAndConfirm(text: string, m: JobsTarget['method']): Promise<boolean> {
+    if (terminalRef.current) return false
+    const generation = requestGenerationRef.current
     setBusy(true)
     setError(null)
     setMethod(m)
@@ -87,12 +139,14 @@ export default function JobsStartPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       })
+      if (terminalRef.current || generation !== requestGenerationRef.current) return false
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         setError(body.error ?? 'Could not read that resume — try pasting the text instead.')
         return false
       }
       const { resume } = (await res.json()) as { resume: ParsedResume }
+      if (terminalRef.current || generation !== requestGenerationRef.current) return false
       setParsedResume(resume)
       setRawText(text)
       setDetectedName(resume.contact?.name ?? '')
@@ -103,15 +157,18 @@ export default function JobsStartPage() {
       setDoor('confirm')
       return true
     } catch {
-      setError('Something went wrong reading the resume. Paste the text instead?')
+      if (!terminalRef.current && generation === requestGenerationRef.current) {
+        setError('Something went wrong reading the resume. Paste the text instead?')
+      }
       return false
     } finally {
-      setBusy(false)
+      if (!terminalRef.current && generation === requestGenerationRef.current) setBusy(false)
     }
   }
 
   async function onFile(f: File | undefined) {
-    if (!f) return
+    if (!f || terminalRef.current) return
+    const generation = requestGenerationRef.current
     if (f.type !== 'application/pdf' && !/\.pdf$/i.test(f.name)) {
       setError('Upload a PDF — or paste your resume text below.')
       setDoor('paste')
@@ -124,6 +181,7 @@ export default function JobsStartPage() {
       fd.append('file', f)
       const res = await fetch('/api/jobs/parse-pdf', { method: 'POST', body: fd })
       const data = await res.json().catch(() => ({}))
+      if (terminalRef.current || generation !== requestGenerationRef.current) return
       if (!res.ok || !data.text) {
         // Founder directive: PDF failure falls back to PASTE, nothing else.
         setError(data.error ?? 'Could not read that PDF — paste your resume text instead.')
@@ -133,16 +191,20 @@ export default function JobsStartPage() {
       // Structured-parse failure after a good PDF extract is STILL a failed
       // upload — same fallback: paste, nothing else (Codex #540).
       const ok = await parseAndConfirm(data.text, 'upload')
-      if (!ok) setDoor('paste')
+      if (!terminalRef.current && generation === requestGenerationRef.current && !ok) setDoor('paste')
     } catch {
-      setError('Could not read that PDF — paste your resume text instead.')
-      setDoor('paste')
+      if (!terminalRef.current && generation === requestGenerationRef.current) {
+        setError('Could not read that PDF — paste your resume text instead.')
+        setDoor('paste')
+      }
     } finally {
-      setBusy(false)
+      if (!terminalRef.current && generation === requestGenerationRef.current) setBusy(false)
     }
   }
 
   async function confirmTarget() {
+    if (terminalRef.current) return
+    const generation = requestGenerationRef.current
     // City is deliberately NOT part of the target (founder directive
     // 2026-07-16): typed cities hard-collapsed the pool via alias-mismatched
     // location keys ('Bangalore' matched zero rows keyed 'bengaluru').
@@ -165,21 +227,32 @@ export default function JobsStartPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resume: parsedResume, targetRole: role.trim(), fullText: rawText }),
+      }).then(async (response) => {
+        if (await isAccountUnavailableResponse(response)) {
+          scrubAccountBoundState()
+          return 'account-unavailable' as const
+        }
+        if (!response.ok) return 'ignored' as const
+        const d = await response.json()
+        if (terminalRef.current || generation !== requestGenerationRef.current) return 'ignored' as const
+        if (d && d.saved === false && d.reason === 'cap') {
+          try { sessionStorage.setItem('JOBS_CAP_NOTICE', '1') } catch { /* noop */ }
+        }
+        return 'saved' as const
       })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => {
-          if (d && d.saved === false && d.reason === 'cap') {
-            try { sessionStorage.setItem('JOBS_CAP_NOTICE', '1') } catch { /* noop */ }
-          }
-        })
-        .catch(() => {})
-      await Promise.race([save, new Promise((r) => setTimeout(r, 1200))])
+        .catch(() => 'ignored' as const)
+      const outcome = await Promise.race([
+        save,
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1200)),
+      ])
+      if (outcome === 'account-unavailable' || terminalRef.current || generation !== requestGenerationRef.current) return
     }
+    if (terminalRef.current || generation !== requestGenerationRef.current) return
     router.push('/jobs')
   }
 
   function importBase() {
-    if (!importDoor) return
+    if (!importDoor || busy || terminalRef.current) return
     setMethod('import')
     setSkills(importDoor.skills)
     // Saved TARGET (future intent) wins when present; else prefill from the
@@ -195,6 +268,21 @@ export default function JobsStartPage() {
     setDoor('confirm')
   }
 
+  if (accountUnavailable) {
+    return (
+      <main className="mx-auto max-w-xl px-4 py-16">
+        <div role="status" aria-live="polite">
+          <h1 className="font-medium">Your account is unavailable.</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Account deletion has started or completed, so resume-derived targeting was cleared from this page.
+          </p>
+          <p className="mt-1 text-sm text-slate-500">If you did not request deletion, contact support.</p>
+        </div>
+        <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Browse public jobs</Link>
+      </main>
+    )
+  }
+
   return (
     <main className="mx-auto max-w-xl px-4 py-10">
       <Link href="/jobs" className="text-sm text-slate-500 hover:underline">← Jobs</Link>
@@ -203,7 +291,7 @@ export default function JobsStartPage() {
       {door === 'chooser' && (
         <div className="mt-6 space-y-3">
           {importDoor && (
-            <button onClick={importBase} className="block w-full rounded-2xl border border-blue-300 p-4 text-left shadow-sm hover:border-blue-500 bg-white">
+            <button disabled={busy} onClick={importBase} className="block w-full rounded-2xl border border-blue-300 p-4 text-left shadow-sm hover:border-blue-500 bg-white disabled:opacity-60">
               <span className="font-medium">Use my saved resume</span>
               <span className="mt-0.5 block text-sm text-slate-500">{importDoor.name}</span>
             </button>
@@ -217,7 +305,7 @@ export default function JobsStartPage() {
             <span className="font-medium">No resume yet? Build one</span>
             <span className="mt-0.5 block text-sm text-slate-500">You&apos;ll need one on Naukri anyway — 10 minutes in the builder.</span>
           </Link>
-          <button onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white">
+          <button disabled={busy} onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white disabled:opacity-60">
             <span className="font-medium">Just tell us your target role</span>
             <span className="mt-0.5 block text-sm text-slate-500">One question — role, done.</span>
           </button>
@@ -231,6 +319,7 @@ export default function JobsStartPage() {
               the user landed here. */}
           {error && <p className="mb-3 text-sm text-amber-700">{error}</p>}
           <textarea
+            aria-label="Resume text"
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
             rows={12}
@@ -245,7 +334,7 @@ export default function JobsStartPage() {
             >
               {busy ? 'Reading your resume…' : 'Continue'}
             </button>
-            <button onClick={() => { setError(null); setDoor('chooser') }} className="rounded-lg border border-slate-200 px-4 py-2 text-sm bg-white text-slate-900 hover:bg-slate-50">Back</button>
+            <button disabled={busy} onClick={() => { setError(null); setDoor('chooser') }} className="rounded-lg border border-slate-200 px-4 py-2 text-sm bg-white text-slate-900 hover:bg-slate-50 disabled:opacity-60">Back</button>
           </div>
         </div>
       )}

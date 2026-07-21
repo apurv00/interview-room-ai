@@ -11,8 +11,11 @@ const {
   mockGetConfig, mockSendEmail, mockSendFindOne, mockSendCreate, mockSendCount, mockSendUpdateOne,
   mockUserFindById, mockAppFindOne, mockAppFind, mockAppExists, mockPostingFindById, mockPostingExists,
   mockSessionExists, mockInngestSend, mockLoggerError, mockSendUpdateMany, mockAppUpdateMany, mockSendAggregate, mockSendDeleteMany,
-  mockPreparePractice,
-} = vi.hoisted(() => ({
+  mockPreparePractice, mockIsJobsAccountActive, mockWithActiveJobsAccountWrite, mockDbSession,
+  MockJobsAccountInactiveError,
+} = vi.hoisted(() => {
+  class MockJobsAccountInactiveError extends Error {}
+  return {
   mockGetConfig: vi.fn(),
   mockSendEmail: vi.fn(),
   mockSendFindOne: vi.fn(),
@@ -33,7 +36,12 @@ const {
   mockSendDeleteMany: vi.fn(),
   mockLoggerError: vi.fn(),
   mockPreparePractice: vi.fn(),
-}))
+  mockIsJobsAccountActive: vi.fn(),
+  mockWithActiveJobsAccountWrite: vi.fn(),
+  mockDbSession: { id: 'jobs-account-session' },
+  MockJobsAccountInactiveError,
+  }
+})
 
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: mockLoggerError } }))
@@ -41,6 +49,15 @@ vi.mock('@shared/services/inngest', () => ({
   inngest: { send: mockInngestSend, createFunction: vi.fn(() => ({})) },
 }))
 vi.mock('@shared/services/emailService', () => ({ sendEmail: mockSendEmail }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  activeJobsAccountFilter: (userId: string) => ({
+    _id: userId,
+    $or: [{ accountState: 'active' }, { accountState: { $exists: false } }],
+  }),
+  isJobsAccountActive: mockIsJobsAccountActive,
+  JobsAccountInactiveError: MockJobsAccountInactiveError,
+  withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
+}))
 vi.mock('../services/practiceHandoff', () => ({ preparePracticeHandoffPosting: mockPreparePractice }))
 vi.mock('@shared/services/signedActionToken', () => ({
   mintActionToken: vi.fn((input: { action: string }) => `tok-${input.action}`),
@@ -48,7 +65,7 @@ vi.mock('@shared/services/signedActionToken', () => ({
 vi.mock('@shared/db/models', () => ({
   JobsEmailConfig: { getConfig: mockGetConfig },
   JobsEmailSend: { findOne: mockSendFindOne, create: mockSendCreate, countDocuments: mockSendCount, updateOne: mockSendUpdateOne, updateMany: mockSendUpdateMany, aggregate: mockSendAggregate, deleteMany: mockSendDeleteMany },
-  User: { findById: mockUserFindById },
+  User: { findById: mockUserFindById, findOne: mockUserFindById },
   JobApplication: { findOne: mockAppFindOne, find: mockAppFind, exists: mockAppExists, updateMany: mockAppUpdateMany },
   JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
   InterviewSession: { exists: mockSessionExists },
@@ -75,6 +92,10 @@ const posting = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockIsJobsAccountActive.mockResolvedValue(true)
+  mockWithActiveJobsAccountWrite.mockImplementation(
+    async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
+  )
   mockGetConfig.mockResolvedValue({ e0Enabled: true, e2Enabled: true, globalWeeklyCap: 3 })
   mockSendFindOne.mockReturnValue(lean(null))
   mockSendCreate.mockResolvedValue({})
@@ -211,7 +232,7 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     expect(mockSendUpdateOne).toHaveBeenCalledWith(
       { userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22' },
       { $set: { sentAt: expect.any(Date), resendId: 're-1' } },
-      { upsert: true },
+      { upsert: true, session: mockDbSession },
     )
     expect(mockSendCreate).not.toHaveBeenCalled()
   })
@@ -225,10 +246,11 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     expect(await sendTransactional(input)).toEqual({ outcome: 'sent', resendId: 're-1' })
     expect(mockSendEmail).toHaveBeenCalledOnce()
     expect(mockSendUpdateOne).toHaveBeenCalledTimes(2)
-    expect(mockSendUpdateOne.mock.calls[0][2]).toEqual({ upsert: true })
+    expect(mockSendUpdateOne.mock.calls[0][2]).toEqual({ upsert: true, session: mockDbSession })
     expect(mockSendUpdateOne.mock.calls[1]).toEqual([
       { userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22' },
       { $set: { sentAt: expect.any(Date), resendId: 're-1' } },
+      { session: mockDbSession },
     ])
     expect(mockSendCreate).not.toHaveBeenCalled()
   })
@@ -309,9 +331,10 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     })
     expect(beforeDelivery).toHaveBeenCalledTimes(2)
     expect(mockSendEmail).toHaveBeenCalledOnce()
-    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({
-      userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22',
-    }))
+    expect(mockSendCreate).toHaveBeenCalledWith(
+      [expect.objectContaining({ userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22' })],
+      { session: mockDbSession },
+    )
   })
 
   it('propagates an unavailable delivery gate so durable transactional work can retry', async () => {
@@ -336,9 +359,10 @@ describe('sendTransactional (EMAILS.md §2)', () => {
       outcome: 'delivery-uncertain-alerted',
     })
     expect(mockSendEmail).toHaveBeenCalledOnce()
-    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({
-      userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22',
-    }))
+    expect(mockSendCreate).toHaveBeenCalledWith(
+      [expect.objectContaining({ userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22' })],
+      { session: mockDbSession },
+    )
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({ err: gateError }),
       expect.stringContaining('delivery uncertain'),
@@ -379,9 +403,10 @@ describe('sendTransactional (EMAILS.md §2)', () => {
 
     expect(await sendTransactional(input)).toEqual({ outcome: 'delivery-uncertain-alerted' })
     expect(mockSendEmail).toHaveBeenCalledOnce()
-    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({
-      stream: 'e2', dedupeKey: 'app1:2026-07-22',
-    }))
+    expect(mockSendCreate).toHaveBeenCalledWith(
+      [expect.objectContaining({ stream: 'e2', dedupeKey: 'app1:2026-07-22' })],
+      { session: mockDbSession },
+    )
   })
 
   it('double failure writes an UNSTAMPED row (alert-now) and logs at error level', async () => {
@@ -389,10 +414,30 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     const r = await sendTransactional(input)
     expect(r).toEqual({ outcome: 'failed-alerted' })
     expect(mockSendEmail).toHaveBeenCalledTimes(2)
-    const row = mockSendCreate.mock.calls[0][0]
+    const row = mockSendCreate.mock.calls[0][0][0]
     expect(row.sentAt).toBeUndefined()
     expect(row.resendId).toBeUndefined()
     expect(mockLoggerError).toHaveBeenCalled()
+  })
+
+  it('does not call the provider when the durable account is already deleting', async () => {
+    mockIsJobsAccountActive.mockResolvedValueOnce(false)
+
+    expect(await sendTransactional(input)).toEqual({ outcome: 'precondition-failed' })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendFindOne).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
+  })
+
+  it('does not recreate a ledger row when deletion wins after provider delivery', async () => {
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(
+      new MockJobsAccountInactiveError('account deleting'),
+    )
+
+    expect(await sendTransactional(input)).toEqual({ outcome: 'sent', resendId: 're-1' })
+    expect(mockSendEmail).toHaveBeenCalledOnce()
+    expect(mockSendUpdateOne).not.toHaveBeenCalled()
+    expect(mockSendCreate).not.toHaveBeenCalled()
   })
 
   it('isSuppressed: stream, all, and the empty default', () => {
@@ -884,11 +929,14 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
     feed([e4Row('b1')], [])
 
     expect(await runEmailSweepHandler(step)).toMatchObject({ e4Sent: 0 })
-    expect(mockSendCreate).toHaveBeenCalledWith(expect.objectContaining({
-      userId: '507f1f77bcf86cd799439011',
-      stream: 'e4',
-      dedupeKey: 'b1',
-    }))
+    expect(mockSendCreate).toHaveBeenCalledWith(
+      [expect.objectContaining({
+        userId: '507f1f77bcf86cd799439011',
+        stream: 'e4',
+        dedupeKey: 'b1',
+      })],
+      { session: mockDbSession },
+    )
     expect(mockPreparePractice).toHaveBeenCalledTimes(2)
     expect(mockSendDeleteMany).toHaveBeenCalledWith({
       userId: '507f1f77bcf86cd799439011',

@@ -26,6 +26,7 @@ export const dynamic = 'force-dynamic'
 // GET: Retrieve current pathway plan and competency summary
 export const GET = composeApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:pathway' },
+  requireActiveAccount: true,
 
   async handler(req, { user }) {
     const { searchParams } = new URL(req.url)

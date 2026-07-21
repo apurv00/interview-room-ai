@@ -13,6 +13,7 @@ import {
   jobPostingStateOf,
   preparePracticeHandoffPosting,
 } from '@jobs'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,6 +34,12 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
   await connectDB()
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
 
   const [app, posting] = await Promise.all([
     JobApplication.findOne({ userId, jobPostingId: params.id }).select('atsResult atsRequestedAt').lean(),
@@ -40,22 +47,49 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
       .lean(),
   ])
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   if (!app) return NextResponse.json({ reason: 'save-first' }, { status: 409 })
   if (!posting || jobPostingStateOf(posting) === 'restricted') {
     return NextResponse.json({ reason: 'posting-unavailable' }, { status: 409 })
   }
   const prepared = await preparePracticeHandoffPosting(posting)
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   if (!prepared.jdHash) {
     return NextResponse.json({ reason: 'posting-unavailable' }, { status: 409 })
   }
-  if (!(await getBaseResume(userId))) return NextResponse.json({ reason: 'no-resume' }, { status: 409 })
+  const baseResume = await getBaseResume(userId)
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
+  if (!baseResume) return NextResponse.json({ reason: 'no-resume' }, { status: 409 })
 
   // ATOMIC claim (Codex on #521): concurrent POSTs must not both enqueue —
   // only the request that actually flipped the marker sends the event; the
   // loser reports pending. Claim failure on a >3min-stale marker retries
   // via the same conditional.
   const { claimed, claimedAt } = await claimAtsRun(userId, params.id)
-  if (!claimed) return NextResponse.json({ status: 'pending' })
+  if (!claimed) {
+    if (!(await isJobsAccountActive(userId))) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    return NextResponse.json({ status: 'pending' })
+  }
   try {
     await inngest.send({ name: 'jobs/ats.requested', data: { userId, jobPostingId: params.id, claimedAt: claimedAt.toISOString() } })
   } catch (err) {

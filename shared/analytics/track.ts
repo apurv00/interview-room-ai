@@ -190,3 +190,31 @@ export function identify(userId: string, traits: UserTraits = {}): void {
     }
   }
 }
+
+/**
+ * Drop browser-side identity when an account is signed out, switched, or
+ * deleted. PostHog has no SDK state in this integration: removing the stored
+ * distinct id makes the next capture anonymous. GA keeps identity in its
+ * global config, so clear both the user id and the closed set of user traits.
+ */
+export function resetAnalyticsIdentity(): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.removeItem(DISTINCT_ID_KEY)
+  } catch {
+    // Storage can be unavailable; still attempt to reset GA below.
+  }
+
+  if (typeof window.gtag !== 'function') return
+  try {
+    window.gtag('set', { user_id: null })
+    window.gtag('set', 'user_properties', {
+      plan: null,
+      role: null,
+      organizationId: null,
+    })
+  } catch {
+    // Analytics cleanup must never interrupt the identity transition.
+  }
+}

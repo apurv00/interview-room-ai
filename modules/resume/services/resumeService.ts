@@ -73,7 +73,7 @@ export async function saveResume(
   if (id) {
     // Update existing resume
     const res = await User.updateOne(
-      { _id: userId, 'savedResumes.id': id },
+      { _id: userId, accountState: { $ne: 'deleting' }, 'savedResumes.id': id },
       {
         $set: {
           'savedResumes.$.name': name,
@@ -109,7 +109,15 @@ export async function saveResume(
   }
 
   // Check resume limit before creating new
-  const user = await User.findById(userId).select('savedResumes').lean()
+  const user = await User.findOne({ _id: userId, accountState: { $ne: 'deleting' } })
+    .select('savedResumes')
+    .lean()
+  if (!user) {
+    return {
+      error: 'Your account is unavailable. Sign in again before saving.',
+      code: 'ACCOUNT_UNAVAILABLE' as const,
+    }
+  }
   const currentCount = (user?.savedResumes || []).length
   if (currentCount >= MAX_RESUMES) {
     return {
@@ -143,10 +151,16 @@ export async function saveResume(
     updatedAt: now,
   }
 
-  await User.updateOne(
-    { _id: userId },
+  const created = await User.updateOne(
+    { _id: userId, accountState: { $ne: 'deleting' } },
     { $push: { savedResumes: resumeDoc } }
   )
+  if (created.matchedCount === 0) {
+    return {
+      error: 'Your account is unavailable. Sign in again before saving.',
+      code: 'ACCOUNT_UNAVAILABLE' as const,
+    }
+  }
   return { id: newId, created: true }
 }
 

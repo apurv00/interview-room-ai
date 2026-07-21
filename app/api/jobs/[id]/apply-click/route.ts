@@ -3,10 +3,11 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
-import { ProductEvent } from '@shared/db/models'
 import { parseApplyOptionMutation, recordApplyClick } from '@jobs'
 import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -39,11 +40,22 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
 
   await connectDB()
-  const result = await recordApplyClick(userId, params.id, parsed.optionId)
+  let result: Awaited<ReturnType<typeof recordApplyClick>>
+  try {
+    result = await recordApplyClick(userId, params.id, parsed.optionId)
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    throw error
+  }
   if (!result) return NextResponse.json({ error: 'not found' }, { status: 404 })
   const { canonicalOption, ...publicResult } = result
   try {
-    await ProductEvent.create({
+    await recordJobsUserEvent({
       name: 'jobs.apply_click',
       userId,
       jobPostingId: params.id,

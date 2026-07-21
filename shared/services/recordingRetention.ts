@@ -52,7 +52,7 @@ export async function cleanupExpiredReplayRecordings(
       { screenRecordingR2Key: { $exists: true, $ne: null } },
     ],
   })
-    .select('_id recordingR2Key screenRecordingR2Key')
+    .select('_id userId recordingR2Key screenRecordingR2Key')
     .limit(batchSize)
     .lean()
 
@@ -70,7 +70,10 @@ export async function cleanupExpiredReplayRecordings(
     for (const item of keys) {
       try {
         if (!options.dryRun) {
-          await deleteFromR2(item.key)
+          await deleteFromR2(item.key, {
+            ownerUserId: String(session.userId),
+            sessionId: String(session._id),
+          })
         }
         unset[item.field] = 1
         unset[item.sizeField] = 1

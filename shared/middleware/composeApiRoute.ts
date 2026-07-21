@@ -6,6 +6,8 @@ import { redis } from '@shared/redis'
 import { aiLogger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 import { getPlanLimits } from '@shared/services/stripe'
+import { connectDB } from '@shared/db/connection'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 import type { AuthUser } from './withAuth'
 
 export type { AuthUser }
@@ -41,6 +43,16 @@ export interface ComposeOptions<T> {
   handler: SecureHandler<T>
   authOptional?: boolean
   requiredRole?: string
+  /**
+   * Reject authenticated callers whose account is missing or being deleted.
+   * The second check withholds private output when deletion races the handler.
+   * Anonymous callers remain eligible when `authOptional` is enabled.
+   *
+   * This is an HTTP response/egress fence only. It does not serialize or roll
+   * back handler writes; mutation routes still need their own durable write
+   * authority against account deletion.
+   */
+  requireActiveAccount?: boolean
 }
 
 const ANONYMOUS_USER: AuthUser = {
@@ -48,6 +60,13 @@ const ANONYMOUS_USER: AuthUser = {
   role: 'candidate',
   plan: 'free',
   email: '',
+}
+
+function accountUnavailableResponse(): NextResponse {
+  return NextResponse.json(
+    { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+    { status: 401 },
+  )
 }
 
 export function composeApiRoute<T>(options: ComposeOptions<T>) {
@@ -72,6 +91,13 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
         user = ANONYMOUS_USER
       } else {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
+
+      if (options.requireActiveAccount && user.id !== 'anonymous') {
+        await connectDB()
+        if (!(await isJobsAccountActive(user.id))) {
+          return accountUnavailableResponse()
+        }
       }
 
       // QA automation bypass: a synthetic matrix run fires hundreds of
@@ -160,11 +186,40 @@ export function composeApiRoute<T>(options: ComposeOptions<T>) {
       }
 
       // 4. Call handler
-      return await options.handler(req, {
-        user,
-        body,
-        params: context?.params ?? {},
-      })
+      let response: NextResponse
+      try {
+        response = await options.handler(req, {
+          user,
+          body,
+          params: context?.params ?? {},
+        })
+      } catch (handlerError) {
+        if (options.requireActiveAccount && user.id !== 'anonymous') {
+          try {
+            if (!(await isJobsAccountActive(user.id))) {
+              return accountUnavailableResponse()
+            }
+          } catch (recheckError) {
+            // Account-state lookup availability must not replace the original
+            // handler failure or change its AppError contract.
+            aiLogger.error(
+              { err: recheckError, userId: user.id, path: req.nextUrl.pathname },
+              'Active-account exception-path recheck failed',
+            )
+          }
+        }
+        throw handlerError
+      }
+
+      if (
+        options.requireActiveAccount &&
+        user.id !== 'anonymous' &&
+        !(await isJobsAccountActive(user.id))
+      ) {
+        return accountUnavailableResponse()
+      }
+
+      return response
     } catch (err) {
       if (err instanceof ZodError) {
         const details = err.issues.map((e) => ({

@@ -31,6 +31,13 @@ vi.mock('@shared/logger', () => ({
 
 import { cleanupExpiredReplayRecordings } from '@shared/services/recordingRetention'
 
+const OWNER_USER_ID = '507f1f77bcf86cd799439010'
+const SESSION_ID = '507f1f77bcf86cd799439011'
+const FOREIGN_USER_ID = '507f1f77bcf86cd799439012'
+const TIMESTAMP = '1721500000000'
+const CAMERA_KEY = `recordings/${OWNER_USER_ID}/${SESSION_ID}-${TIMESTAMP}.webm`
+const SCREEN_KEY = `recordings/${OWNER_USER_ID}/${SESSION_ID}-screen-${TIMESTAMP}.webm`
+
 function mockFindSessions(sessions: Array<Record<string, unknown>>) {
   const lean = vi.fn().mockResolvedValue(sessions)
   const limit = vi.fn(() => ({ lean }))
@@ -47,11 +54,12 @@ describe('cleanupExpiredReplayRecordings', () => {
   })
 
   it('deletes only replay camera/screen keys and unsets their DB fields', async () => {
-    mockFindSessions([
+    const query = mockFindSessions([
       {
-        _id: 'session-1',
-        recordingR2Key: 'recordings/user/session-camera.webm',
-        screenRecordingR2Key: 'recordings/user/session-screen.webm',
+        _id: SESSION_ID,
+        userId: OWNER_USER_ID,
+        recordingR2Key: CAMERA_KEY,
+        screenRecordingR2Key: SCREEN_KEY,
       },
     ])
 
@@ -68,9 +76,13 @@ describe('cleanupExpiredReplayRecordings', () => {
         { screenRecordingR2Key: { $exists: true, $ne: null } },
       ],
     })
-    expect(mocks.deleteFromR2).toHaveBeenCalledWith('recordings/user/session-camera.webm')
-    expect(mocks.deleteFromR2).toHaveBeenCalledWith('recordings/user/session-screen.webm')
-    expect(mocks.findByIdAndUpdate).toHaveBeenCalledWith('session-1', {
+    expect(query.select).toHaveBeenCalledWith(
+      '_id userId recordingR2Key screenRecordingR2Key',
+    )
+    const authority = { ownerUserId: OWNER_USER_ID, sessionId: SESSION_ID }
+    expect(mocks.deleteFromR2).toHaveBeenCalledWith(CAMERA_KEY, authority)
+    expect(mocks.deleteFromR2).toHaveBeenCalledWith(SCREEN_KEY, authority)
+    expect(mocks.findByIdAndUpdate).toHaveBeenCalledWith(SESSION_ID, {
       $unset: {
         recordingR2Key: 1,
         recordingSizeBytes: 1,
@@ -89,9 +101,10 @@ describe('cleanupExpiredReplayRecordings', () => {
   it('keeps DB fields for keys that fail to delete', async () => {
     mockFindSessions([
       {
-        _id: 'session-1',
-        recordingR2Key: 'recordings/user/session-camera.webm',
-        screenRecordingR2Key: 'recordings/user/session-screen.webm',
+        _id: SESSION_ID,
+        userId: OWNER_USER_ID,
+        recordingR2Key: CAMERA_KEY,
+        screenRecordingR2Key: SCREEN_KEY,
       },
     ])
     mocks.deleteFromR2
@@ -100,7 +113,15 @@ describe('cleanupExpiredReplayRecordings', () => {
 
     const result = await cleanupExpiredReplayRecordings({ retentionDays: 30 })
 
-    expect(mocks.findByIdAndUpdate).toHaveBeenCalledWith('session-1', {
+    expect(mocks.deleteFromR2).toHaveBeenNthCalledWith(1, CAMERA_KEY, {
+      ownerUserId: OWNER_USER_ID,
+      sessionId: SESSION_ID,
+    })
+    expect(mocks.deleteFromR2).toHaveBeenNthCalledWith(2, SCREEN_KEY, {
+      ownerUserId: OWNER_USER_ID,
+      sessionId: SESSION_ID,
+    })
+    expect(mocks.findByIdAndUpdate).toHaveBeenCalledWith(SESSION_ID, {
       $unset: {
         screenRecordingR2Key: 1,
         screenRecordingSizeBytes: 1,
@@ -109,5 +130,37 @@ describe('cleanupExpiredReplayRecordings', () => {
     expect(result.keysDeleted).toBe(1)
     expect(result.keysFailed).toBe(1)
     expect(mocks.warn).toHaveBeenCalled()
+  })
+
+  it('fails a foreign stored key closed without clearing or counting it as deleted', async () => {
+    const poisonedKey = `recordings/${FOREIGN_USER_ID}/${SESSION_ID}-${TIMESTAMP}.webm`
+    mockFindSessions([
+      {
+        _id: SESSION_ID,
+        userId: OWNER_USER_ID,
+        recordingR2Key: poisonedKey,
+      },
+    ])
+    mocks.deleteFromR2.mockRejectedValueOnce(
+      new Error('R2 key is outside the authorized deletion scope'),
+    )
+
+    const result = await cleanupExpiredReplayRecordings({ retentionDays: 30 })
+
+    expect(mocks.deleteFromR2).toHaveBeenCalledWith(poisonedKey, {
+      ownerUserId: OWNER_USER_ID,
+      sessionId: SESSION_ID,
+    })
+    expect(mocks.findByIdAndUpdate).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      scanned: 1,
+      sessionsUpdated: 0,
+      keysDeleted: 0,
+      keysFailed: 1,
+    })
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ key: poisonedKey, sessionId: SESSION_ID }),
+      'Failed to delete expired replay recording',
+    )
   })
 })

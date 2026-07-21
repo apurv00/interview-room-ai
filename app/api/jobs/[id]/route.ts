@@ -4,6 +4,7 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { getJobDetail } from '@jobs'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,7 +28,22 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     ? { headers: { 'Cache-Control': 'private, no-store' } }
     : undefined
   await connectDB()
+  if (userId && !(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401, headers: { 'Cache-Control': 'private, no-store' } },
+    )
+  }
   const detail = await getJobDetail(params.id, userId)
+  // Detail preparation crosses CMS and resume reads and can mint a fresh
+  // Practice token. Never let a stale JWT carry personalized data across a
+  // deletion that committed while those reads were in flight.
+  if (userId && !(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401, headers: { 'Cache-Control': 'private, no-store' } },
+    )
+  }
   if (!detail) {
     return NextResponse.json(
       { error: 'not found' },

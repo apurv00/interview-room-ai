@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockGetServerSession, mockConnectDB, mockApplicationFindOne, mockPostingFindById,
   mockGetBaseResume, mockClaimAtsRun, mockReleaseAtsClaim, mockPreparePractice, mockInngestSend,
-  mockCheckJobsRateLimit,
+  mockCheckJobsRateLimit, mockIsJobsAccountActive,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockConnectDB: vi.fn(),
@@ -15,6 +15,7 @@ const {
   mockPreparePractice: vi.fn(),
   mockInngestSend: vi.fn(),
   mockCheckJobsRateLimit: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
@@ -22,6 +23,9 @@ vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend } }))
 vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
+}))
 vi.mock('@shared/db/models', () => ({
   JobApplication: { findOne: mockApplicationFindOne },
   JobPosting: { findById: mockPostingFindById },
@@ -58,9 +62,29 @@ beforeEach(() => {
   mockReleaseAtsClaim.mockResolvedValue(undefined)
   mockInngestSend.mockResolvedValue(undefined)
   mockCheckJobsRateLimit.mockResolvedValue(null)
+  mockIsJobsAccountActive.mockResolvedValue(true)
 })
 
 describe('POST /api/jobs/[id]/ats-check lifecycle authorization', () => {
+  it('rejects an inactive stale-JWT account before application or posting reads', async () => {
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockApplicationFindOne).not.toHaveBeenCalled()
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockClaimAtsRun).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
   it('applies the ATS budget after authentication and before database work', async () => {
     mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
       status: 429,
@@ -83,6 +107,114 @@ describe('POST /api/jobs/[id]/ats-check lifecycle authorization', () => {
     response = await POST(new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }), { params: { id: JOB_ID } })
     expect(response.status).toBe(200)
     expect(mockInngestSend).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns account unavailable when deletion removes the application during private reads', async () => {
+    mockApplicationFindOne.mockReturnValue(selectLean(null))
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockPreparePractice).not.toHaveBeenCalled()
+    expect(mockGetBaseResume).not.toHaveBeenCalled()
+    expect(mockClaimAtsRun).not.toHaveBeenCalled()
+  })
+
+  it('returns account unavailable when deletion lands during canonical JD preparation', async () => {
+    mockPreparePractice.mockResolvedValue({ jobDescription: 'display-only body' })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockGetBaseResume).not.toHaveBeenCalled()
+    expect(mockClaimAtsRun).not.toHaveBeenCalled()
+  })
+
+  it('returns account unavailable when deletion removes the base resume during its read', async () => {
+    mockGetBaseResume.mockResolvedValue(null)
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockClaimAtsRun).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('returns account unavailable instead of pending when a failed claim races deletion', async () => {
+    mockClaimAtsRun.mockResolvedValue({
+      claimed: false,
+      claimedAt: new Date('2026-07-20T12:00:00.000Z'),
+    })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockClaimAtsRun).toHaveBeenCalledWith(USER_ID, JOB_ID)
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(5)
+    expect(mockInngestSend).not.toHaveBeenCalled()
+  })
+
+  it('preserves the active-account pending response for a legitimate competing claim', async () => {
+    mockClaimAtsRun.mockResolvedValue({
+      claimed: false,
+      claimedAt: new Date('2026-07-20T12:00:00.000Z'),
+    })
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/ats-check`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: 'pending' })
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(5)
+    expect(mockInngestSend).not.toHaveBeenCalled()
   })
 
   it('rejects restricted lifecycle before claiming or enqueueing', async () => {

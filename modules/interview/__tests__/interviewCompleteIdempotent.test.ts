@@ -33,13 +33,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockUpdateSession, mockAwardXp, mockRecordActivity, mockUpdateStreak, mockCheckBadges, mockFlushUsageBuffer } = vi.hoisted(() => ({
+const { mockUpdateSession, mockAwardXp, mockRecordActivity, mockUpdateStreak, mockCheckBadges, mockFlushUsageBuffer, mockIsJobsAccountActive } = vi.hoisted(() => ({
   mockUpdateSession: vi.fn(),
   mockAwardXp: vi.fn(),
   mockRecordActivity: vi.fn(),
   mockUpdateStreak: vi.fn(),
   mockCheckBadges: vi.fn(),
   mockFlushUsageBuffer: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({
@@ -49,6 +50,17 @@ vi.mock('next-auth', () => ({
 }))
 
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
+vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@shared/services/jobsAccountFence', () => {
+  class JobsAccountInactiveError extends Error {}
+  class JobsAccountTransactionsRequiredError extends Error {}
+  return {
+    activeJobsAccountIds: vi.fn(),
+    isJobsAccountActive: mockIsJobsAccountActive,
+    JobsAccountInactiveError,
+    JobsAccountTransactionsRequiredError,
+  }
+})
 vi.mock('@shared/logger', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }))
@@ -96,6 +108,7 @@ describe('PATCH /api/interviews/[id] — interview_complete rewards idempotency'
     mockUpdateStreak.mockReset().mockResolvedValue({ currentStreak: 1 })
     mockCheckBadges.mockReset().mockResolvedValue([])
     mockFlushUsageBuffer.mockReset().mockResolvedValue(undefined)
+    mockIsJobsAccountActive.mockReset().mockResolvedValue(true)
   })
 
   /**
@@ -182,19 +195,9 @@ describe('PATCH /api/interviews/[id] — interview_complete rewards idempotency'
   })
 
   it('surfaces `priorStatus` from updateSession (connectDB ordering contract)', async () => {
-    // This test pins Codex's P1 concern on PR #313: the route must NOT
-    // pre-read the session before `connectDB()` runs. The contract is
-    // that `updateSession` owns the connectDB call AND returns the
-    // pre-update status, so the route handler never touches Mongo before
-    // the service. If a future refactor moves the priorStatus read back
-    // to the route, this test keeps passing only as long as that pre-read
-    // also goes through connectDB — but the cleaner invariant is simply
-    // that `updateSession` is the single source of priorStatus.
-    //
-    // We assert this by checking that the route does NOT call any Mongo
-    // mock directly (there is no mock for InterviewSession.findById in
-    // this suite) — if the route re-introduced its own pre-read, the
-    // test would fail with "Cannot read .select of undefined" or similar.
+    // The route now performs a cheap active-account admission check before
+    // the service. `updateSession` remains the single source of priorStatus;
+    // the route must not add a separate InterviewSession status read.
     mockNextUpdateSession('in_progress')
     const res = await PATCH(makeReq({ status: 'completed', completedAt: new Date().toISOString() }), { params: { id: VALID_ID } })
     expect(res.status).toBe(200)

@@ -4,6 +4,12 @@ import { sendEmail } from '@shared/services/emailService'
 import { mintActionToken } from '@shared/services/signedActionToken'
 import { logger } from '@shared/logger'
 import type { EmailFooterInput } from '../emails/shared'
+import {
+  activeJobsAccountFilter,
+  isJobsAccountActive,
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 
 /**
  * The transactional send discipline (EMAILS.md §2): send-first with a
@@ -91,17 +97,23 @@ async function burnTransactionalKey(
     message,
   )
   try {
-    await JobsEmailSend.create({
-      userId: input.userId,
-      stream: input.stream,
-      dedupeKey: input.dedupeKey,
+    await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
+      await JobsEmailSend.create([{
+        userId: input.userId,
+        stream: input.stream,
+        dedupeKey: input.dedupeKey,
+      }], { session: dbSession })
     })
   } catch (createError) {
+    if (createError instanceof JobsAccountInactiveError) return
     if ((createError as { code?: number }).code !== 11000) throw createError
   }
 }
 
 export async function sendTransactional(input: TransactionalSendInput): Promise<TransactionalSendOutcome> {
+  if (!(await isJobsAccountActive(input.userId))) {
+    return { outcome: 'precondition-failed' }
+  }
   // Ledger first as a READ: an existing row (stamped or not) means this
   // dedupeKey is done — stamped = delivered, unstamped = burned + alerted.
   const existing = await JobsEmailSend.findOne({
@@ -120,7 +132,7 @@ export async function sendTransactional(input: TransactionalSendInput): Promise<
       // Preferences, account existence, and the exact recipient are all
       // authority: a deletion, address change, or unsubscribe that lands
       // between provider attempts must win before the next call.
-      const user = await User.findById(input.userId)
+      const user = await User.findOne(activeJobsAccountFilter(input.userId))
         .select('email emailPreferences.jobs.unsubscribedStreams')
         .lean()
       let recipientChanged = !user?.email || user.email !== input.to
@@ -160,7 +172,7 @@ export async function sendTransactional(input: TransactionalSendInput): Promise<
       // but an unsubscribe/delete/address change during policy preparation
       // must not be missed.
       if (input.beforeDelivery) {
-        const finalUser = await User.findById(input.userId)
+        const finalUser = await User.findOne(activeJobsAccountFilter(input.userId))
           .select('email emailPreferences.jobs.unsubscribedStreams')
           .lean()
         recipientChanged = !finalUser?.email || finalUser.email !== input.to
@@ -222,13 +234,30 @@ export async function sendTransactional(input: TransactionalSendInput): Promise<
       },
     }
     try {
-      await JobsEmailSend.updateOne(ledgerFilter, successStamp, { upsert: true })
+      await withActiveJobsAccountWrite(input.userId, (dbSession) =>
+        JobsEmailSend.updateOne(
+          ledgerFilter,
+          successStamp,
+          { upsert: true, session: dbSession },
+        ),
+      )
     } catch (err) {
+      if (err instanceof JobsAccountInactiveError) {
+        // Delivery already happened. Deletion owns the ledger now and no
+        // future send can acquire this account fence.
+        return { outcome: 'sent', resendId }
+      }
       if ((err as { code?: number }).code !== 11000) throw err
       // The only unique index is the exact ledger identity above. A
       // concurrent burn/success inserted it between our read and upsert;
       // atomically promote that winner to confirmed delivery.
-      await JobsEmailSend.updateOne(ledgerFilter, successStamp)
+      try {
+        await withActiveJobsAccountWrite(input.userId, (dbSession) =>
+          JobsEmailSend.updateOne(ledgerFilter, successStamp, { session: dbSession }),
+        )
+      } catch (retryError) {
+        if (!(retryError instanceof JobsAccountInactiveError)) throw retryError
+      }
     }
     return { outcome: 'sent', resendId }
   }
@@ -278,12 +307,23 @@ export type SolicitationSendOutcome =
  * never auto-retried — losing a nudge is acceptable, double-sending is not.
  */
 export async function sendSolicitation(input: SolicitationSendInput): Promise<SolicitationSendOutcome> {
+  if (!(await isJobsAccountActive(input.userId))) {
+    return { outcome: 'precondition-failed' }
+  }
   const reserved: string[] = []
   for (const dedupeKey of input.dedupeKeys) {
     try {
-      await JobsEmailSend.create({ userId: input.userId, stream: input.stream, dedupeKey })
+      await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
+        await JobsEmailSend.create(
+          [{ userId: input.userId, stream: input.stream, dedupeKey }],
+          { session: dbSession },
+        )
+      })
       reserved.push(dedupeKey)
     } catch (err) {
+      if (err instanceof JobsAccountInactiveError) {
+        return { outcome: 'precondition-failed' }
+      }
       if ((err as { code?: number }).code !== 11000) throw err
     }
   }
@@ -299,7 +339,7 @@ export async function sendSolicitation(input: SolicitationSendInput): Promise<So
   }
 
   const readAuthorityFailure = async (): Promise<'suppressed' | 'precondition-failed' | null> => {
-    const currentUser = await User.findById(input.userId)
+    const currentUser = await User.findOne(activeJobsAccountFilter(input.userId))
       .select('email emailPreferences.jobs')
       .lean()
     if (!currentUser?.email || currentUser.email !== input.to) return 'precondition-failed'
@@ -349,6 +389,10 @@ export async function sendSolicitation(input: SolicitationSendInput): Promise<So
     }
   }
 
+  if (!(await isJobsAccountActive(input.userId))) {
+    await releaseReservations()
+    return { outcome: 'precondition-failed' }
+  }
   const res = await sendEmail({
     to: input.to,
     subject: input.subject,
@@ -362,10 +406,17 @@ export async function sendSolicitation(input: SolicitationSendInput): Promise<So
     )
     return { outcome: 'send-failed' }
   }
-  await JobsEmailSend.updateMany(
-    { userId: input.userId, stream: input.stream, dedupeKey: { $in: reserved } },
-    { $set: { sentAt: new Date(), resendId: res.id } }
-  )
+  try {
+    await withActiveJobsAccountWrite(input.userId, (dbSession) =>
+      JobsEmailSend.updateMany(
+        { userId: input.userId, stream: input.stream, dedupeKey: { $in: reserved } },
+        { $set: { sentAt: new Date(), resendId: res.id } },
+        { session: dbSession },
+      ),
+    )
+  } catch (error) {
+    if (!(error instanceof JobsAccountInactiveError)) throw error
+  }
   return { outcome: 'sent', resendId: res.id, reserved }
 }
 

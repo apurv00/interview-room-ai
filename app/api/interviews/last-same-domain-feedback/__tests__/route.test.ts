@@ -17,8 +17,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 import mongoose from 'mongoose'
 
-const { mockGetServerSession } = vi.hoisted(() => ({
+const { mockGetServerSession, mockIsJobsAccountActive } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
 }))
 vi.mock('next-auth', () => ({
   getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
@@ -30,6 +31,9 @@ vi.mock('@shared/auth/authOptions', () => ({
 
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: (...args: unknown[]) => mockIsJobsAccountActive(...args),
 }))
 
 const { mockFindOne } = vi.hoisted(() => ({
@@ -62,6 +66,8 @@ function buildChain(result: unknown) {
 beforeEach(() => {
   mockGetServerSession.mockReset()
   mockFindOne.mockReset()
+  mockIsJobsAccountActive.mockReset()
+  mockIsJobsAccountActive.mockResolvedValue(true)
 })
 
 describe('GET /api/interviews/last-same-domain-feedback', () => {
@@ -85,6 +91,51 @@ describe('GET /api/interviews/last-same-domain-feedback', () => {
 
     expect(res.status).toBe(400)
     expect(body.error).toMatch(/domain/i)
+  })
+
+  it('returns exact account-unavailable semantics before reading feedback', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    const res = await GET(new NextRequest(
+      'http://localhost/api/interviews/last-same-domain-feedback?domain=software-engineer',
+    ))
+
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockFindOne).not.toHaveBeenCalled()
+  })
+
+  it('withholds feedback when deletion wins after the database read', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockIsJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    mockFindOne.mockReturnValue(buildChain({
+      _id: SESSION_ID,
+      feedback: { overall_score: 72, top_3_improvements: ['Private coaching'] },
+    }))
+
+    const res = await GET(new NextRequest(
+      'http://localhost/api/interviews/last-same-domain-feedback?domain=software-engineer',
+    ))
+
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+  })
+
+  it('prefers account-unavailable when the history query fails during deletion', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockFindOne.mockImplementation(() => { throw new Error('session sweep interrupted query') })
+    mockIsJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    const res = await GET(new NextRequest(
+      'http://localhost/api/interviews/last-same-domain-feedback?domain=software-engineer',
+    ))
+
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
   })
 
   it('queries an exact CMS-boundary role without truncation and rejects one character over', async () => {

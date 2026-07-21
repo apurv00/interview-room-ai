@@ -39,7 +39,6 @@ export const OnboardingUpdateSchema = z.object({
   weakAreas: z.array(z.enum(WEAK_AREAS)).max(3).optional(),
   resumeText: z.string().optional(),
   resumeFileName: z.string().optional(),
-  resumeR2Key: z.string().optional(),
   // Extended profile fields
   targetCompanies: z.array(z.string().max(100)).max(5).optional(),
   linkedinUrl: z.string().url().max(200).optional().or(z.literal('')),

@@ -3,17 +3,20 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose, { type ClientSession } from 'mongoose'
-import { JobApplication, JobPosting, ProductEvent } from '@shared/db/models'
+import { JobApplication, JobPosting } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
-import { jobPostingStateOf } from '@jobs/services/postingAccess'
+import {
+  exactOptionalPostingCondition,
+  jobPostingStateOf,
+} from '@jobs/services/postingAccess'
+import {
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
 
 export const dynamic = 'force-dynamic'
-
-const SAVE_TRANSACTION_OPTIONS = {
-  readConcern: { level: 'snapshot' as const },
-  writeConcern: { w: 'majority' as const },
-}
 
 interface SavePostingSnapshot {
   title?: string
@@ -42,31 +45,16 @@ function exactSavePostingAuthorityFilter(
   return {
     _id: jobPostingId,
     status: posting.status,
-    closedReason: posting.closedReason === undefined
-      ? { $exists: false }
-      : posting.closedReason,
-    provenance: posting.provenance === undefined
-      ? { $exists: false }
-      : posting.provenance,
+    closedReason: exactOptionalPostingCondition(posting.closedReason),
+    provenance: exactOptionalPostingCondition(posting.provenance),
   }
 }
 
 async function runSaveTransaction<T>(
+  userId: string,
   work: (session: ClientSession) => Promise<T>,
 ): Promise<T> {
-  const session = await JobApplication.db.startSession()
-  let result: T | undefined
-  let completed = false
-  try {
-    await session.withTransaction(async () => {
-      result = await work(session)
-      completed = true
-    }, SAVE_TRANSACTION_OPTIONS)
-  } finally {
-    await session.endSession()
-  }
-  if (!completed) throw new Error('save transaction completed without a result')
-  return result as T
+  return withActiveJobsAccountWrite(userId, work)
 }
 
 async function savePostingAttempt(
@@ -74,7 +62,7 @@ async function savePostingAttempt(
   jobPostingId: string,
   now: Date,
 ): Promise<SaveTransactionResult> {
-  return runSaveTransaction(async (session) => {
+  return runSaveTransaction(userId, async (session) => {
     const posting = await JobPosting.findById(jobPostingId, undefined, { session })
       .select('title company locations provenance status closedReason')
       .lean()
@@ -91,8 +79,12 @@ async function savePostingAttempt(
 
     const pin = await JobPosting.updateOne(
       exactSavePostingAuthorityFilter(jobPostingId, posting),
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-      { session },
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      { session, timestamps: false },
     )
     if ((pin?.matchedCount ?? 0) !== 1) {
       // Re-read once outside this aborted snapshot. A benign provenance
@@ -158,14 +150,25 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   }
   await connectDB()
   const now = new Date()
-  const result = await savePosting(userId, params.id, now)
+  let result: SaveTransactionResult
+  try {
+    result = await savePosting(userId, params.id, now)
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    throw error
+  }
   if (!result.ok) return NextResponse.json({ error: 'not found' }, { status: 404 })
 
   // Only the transaction that inserted the ownership edge emits Save. An
   // idempotent existing row or duplicate-key loser never double-counts it.
   if (!result.alreadySaved) {
     try {
-      await ProductEvent.create({ name: 'jobs.job_saved', userId, jobPostingId: params.id, props: {}, ts: result.insertedAt ?? now })
+      await recordJobsUserEvent({ name: 'jobs.job_saved', userId, jobPostingId: params.id, props: {}, ts: result.insertedAt ?? now })
     } catch (err) {
       logger.warn({ err }, 'jobs.job_saved telemetry write failed') // telemetry never breaks the flow
     }

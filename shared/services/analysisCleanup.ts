@@ -31,35 +31,82 @@ export async function enforceAnalysisCap(
   for (const analysis of toDelete) {
     try {
       // Find the linked session to clean up R2 recordings
-      const session = await InterviewSession.findById(analysis.sessionId).lean()
+      const session = await InterviewSession.findOne({
+        _id: analysis.sessionId,
+        userId,
+      }).lean()
       if (session) {
-        // Delete R2 objects (best-effort — failures logged, not thrown)
-        const keysToDelete = [
-          session.recordingR2Key,
-          session.audioRecordingR2Key,
-          session.facialLandmarksR2Key,
-          session.screenRecordingR2Key,
-        ].filter(Boolean) as string[]
+        const artifacts: Array<{
+          field: string
+          key?: string
+          unset: Record<string, 1>
+        }> = [
+          {
+            field: 'recordingR2Key',
+            key: session.recordingR2Key,
+            unset: { recordingR2Key: 1, recordingDurationSeconds: 1 },
+          },
+          {
+            field: 'audioRecordingR2Key',
+            key: session.audioRecordingR2Key,
+            unset: { audioRecordingR2Key: 1 },
+          },
+          {
+            field: 'facialLandmarksR2Key',
+            key: session.facialLandmarksR2Key,
+            unset: { facialLandmarksR2Key: 1 },
+          },
+          {
+            field: 'screenRecordingR2Key',
+            key: session.screenRecordingR2Key,
+            unset: { screenRecordingR2Key: 1 },
+          },
+        ]
+        const persistedArtifacts = artifacts.filter((artifact): artifact is {
+          field: string
+          key: string
+          unset: Record<string, 1>
+        } => typeof artifact.key === 'string' && artifact.key.length > 0)
 
-        for (const key of keysToDelete) {
-          await deleteFromR2(key).catch((err) =>
-            aiLogger.warn({ err, key, sessionId: analysis.sessionId }, 'Failed to delete R2 object during analysis cap cleanup')
-          )
+        let artifactCleanupFailed = false
+        for (const artifact of persistedArtifacts) {
+          try {
+            await deleteFromR2(artifact.key, {
+              ownerUserId: userId,
+              sessionId: String(analysis.sessionId),
+            })
+            // Do not clear a newer recording that replaced this exact key
+            // while the external delete was in flight.
+            await InterviewSession.updateOne(
+              {
+                _id: analysis.sessionId,
+                userId,
+                [artifact.field]: artifact.key,
+              },
+              { $unset: artifact.unset },
+            )
+          } catch (err) {
+            artifactCleanupFailed = true
+            aiLogger.warn(
+              { err, key: artifact.key, sessionId: analysis.sessionId },
+              'Failed to delete R2 object during analysis cap cleanup',
+            )
+          }
+        }
+        if (artifactCleanupFailed) {
+          // Keep the analysis row as durable retry inventory. A later cap run
+          // retries failed objects instead of falsely reporting them deleted.
+          continue
         }
 
-        // Clear recording fields on session — keep session for transcript/feedback
-        await InterviewSession.findByIdAndUpdate(analysis.sessionId, {
-          $unset: {
-            recordingR2Key: 1,
-            recordingDurationSeconds: 1,
-            audioRecordingR2Key: 1,
-            facialLandmarksR2Key: 1,
-            screenRecordingR2Key: 1,
-            multimodalAnalysisId: 1,
+        await InterviewSession.updateOne(
+          {
+            _id: analysis.sessionId,
+            userId,
+            multimodalAnalysisId: analysis._id,
           },
-          hasRecording: false,
-          hasScreenRecording: false,
-        })
+          { $unset: { multimodalAnalysisId: 1 } },
+        )
       }
 
       // Delete the analysis document

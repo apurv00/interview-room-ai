@@ -32,6 +32,14 @@ function jsonResponse(body: unknown) {
   } as unknown as Response
 }
 
+function errorResponse(body: unknown, status = 401) {
+  return {
+    ok: false,
+    status,
+    json: () => Promise.resolve(body),
+  } as unknown as Response
+}
+
 beforeEach(() => {
   mockDeduplicatedFetch.mockReset()
 })
@@ -77,6 +85,45 @@ describe('PostInterviewDeltaCard', () => {
 
     await waitFor(() => expect(mockDeduplicatedFetch).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(container.firstChild).toBeNull())
+  })
+
+  it('reports an exact account-unavailable response to its parent', async () => {
+    const onAccountUnavailable = vi.fn()
+    mockDeduplicatedFetch.mockResolvedValue(
+      errorResponse({ code: 'ACCOUNT_UNAVAILABLE' }),
+    )
+
+    const { container } = render(
+      <PostInterviewDeltaCard
+        sessionId="sess_current"
+        domain="software-engineer"
+        currentOverallScore={75}
+        currentTopImprovements={['Sharpen STAR']}
+        onAccountUnavailable={onAccountUnavailable}
+      />,
+    )
+
+    await waitFor(() => expect(onAccountUnavailable).toHaveBeenCalledOnce())
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('does not report a generic 401 as account deletion', async () => {
+    const onAccountUnavailable = vi.fn()
+    mockDeduplicatedFetch.mockResolvedValue(errorResponse({ error: 'Unauthorized' }))
+
+    const { container } = render(
+      <PostInterviewDeltaCard
+        sessionId="sess_current"
+        domain="software-engineer"
+        currentOverallScore={75}
+        currentTopImprovements={['Sharpen STAR']}
+        onAccountUnavailable={onAccountUnavailable}
+      />,
+    )
+
+    await waitFor(() => expect(mockDeduplicatedFetch).toHaveBeenCalledOnce())
+    await waitFor(() => expect(container.firstChild).toBeNull())
+    expect(onAccountUnavailable).not.toHaveBeenCalled()
   })
 
   it('renders side-by-side focus areas + positive overall delta', async () => {

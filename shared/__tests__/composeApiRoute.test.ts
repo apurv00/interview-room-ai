@@ -11,6 +11,14 @@ vi.mock('@shared/auth/authOptions', () => ({
   authOptions: {},
 }))
 
+vi.mock('@shared/db/connection', () => ({
+  connectDB: vi.fn(),
+}))
+
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: vi.fn(),
+}))
+
 vi.mock('@shared/redis', () => ({
   redis: {
     incr: vi.fn().mockResolvedValue(1),
@@ -29,6 +37,8 @@ import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { getServerSession } from 'next-auth'
 import { redis } from '@shared/redis'
 import { AppError } from '@shared/errors'
+import { connectDB } from '@shared/db/connection'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 const TestSchema = z.object({
   name: z.string(),
@@ -51,8 +61,11 @@ const defaultOptions = {
 describe('composeApiRoute', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    vi.clearAllMocks()
     vi.mocked(redis.incr).mockResolvedValue(1)
     vi.mocked(redis.pexpire).mockResolvedValue(true)
+    vi.mocked(connectDB).mockResolvedValue(undefined)
+    vi.mocked(isJobsAccountActive).mockResolvedValue(true)
   })
 
   afterEach(() => {
@@ -94,6 +107,201 @@ describe('composeApiRoute', () => {
     const ctx = mockHandler.mock.calls[0][1]
     expect(ctx.user.id).toBe('anonymous')
     expect(ctx.user.role).toBe('candidate')
+  })
+
+  it('leaves authenticated callers unchanged when the account fence is disabled', async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },
+      expires: '',
+    })
+    vi.mocked(isJobsAccountActive).mockResolvedValue(false)
+    const mockHandler = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    )
+
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      handler: mockHandler,
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(200)
+    expect(mockHandler).toHaveBeenCalledTimes(1)
+    expect(connectDB).not.toHaveBeenCalled()
+    expect(isJobsAccountActive).not.toHaveBeenCalled()
+  })
+
+  it('rejects an inactive authenticated account before rate limiting or private work', async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },
+      expires: '',
+    })
+    vi.mocked(isJobsAccountActive).mockResolvedValue(false)
+    const mockHandler = vi.fn()
+
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      requireActiveAccount: true,
+      handler: mockHandler,
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    await expect(res.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(res.status).toBe(401)
+    expect(connectDB).toHaveBeenCalledTimes(1)
+    expect(isJobsAccountActive).toHaveBeenCalledWith('user123')
+    expect(redis.incr).not.toHaveBeenCalled()
+    expect(mockHandler).not.toHaveBeenCalled()
+  })
+
+  it('withholds a handler response when account deletion wins the final check', async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },
+      expires: '',
+    })
+    vi.mocked(isJobsAccountActive)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    const mockHandler = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ private: 'feedback' }), { status: 200 })
+    )
+
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      requireActiveAccount: true,
+      handler: mockHandler,
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    await expect(res.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(res.status).toBe(401)
+    expect(mockHandler).toHaveBeenCalledTimes(1)
+    expect(isJobsAccountActive).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns account unavailable when deletion wins while the handler is throwing', async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },
+      expires: '',
+    })
+    vi.mocked(isJobsAccountActive)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      requireActiveAccount: true,
+      handler: async () => {
+        throw new AppError('Session not found', 404, 'NOT_FOUND')
+      },
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(isJobsAccountActive).toHaveBeenCalledTimes(2)
+  })
+
+  it('also masks a generic handler failure when deletion wins the exception path', async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },
+      expires: '',
+    })
+    vi.mocked(isJobsAccountActive)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      requireActiveAccount: true,
+      handler: async () => {
+        throw new Error('private handler failure')
+      },
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+    expect(isJobsAccountActive).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves a handler AppError when the account remains active', async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },
+      expires: '',
+    })
+    vi.mocked(isJobsAccountActive).mockResolvedValue(true)
+
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      requireActiveAccount: true,
+      handler: async () => {
+        throw new AppError('Custom error', 403, 'FORBIDDEN')
+      },
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(403)
+    await expect(res.json()).resolves.toEqual({
+      error: 'Custom error',
+      code: 'FORBIDDEN',
+    })
+    expect(isJobsAccountActive).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves a handler AppError when its account recheck fails', async () => {
+    vi.mocked(getServerSession).mockResolvedValue({
+      user: { id: 'user123', role: 'candidate', plan: 'free', email: 'test@test.com' },
+      expires: '',
+    })
+    vi.mocked(isJobsAccountActive)
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error('Mongo unavailable'))
+
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      requireActiveAccount: true,
+      handler: async () => {
+        throw new AppError('Custom error', 403, 'FORBIDDEN')
+      },
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(403)
+    await expect(res.json()).resolves.toEqual({
+      error: 'Custom error',
+      code: 'FORBIDDEN',
+    })
+    expect(isJobsAccountActive).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not apply the active-account fence to an allowed anonymous caller', async () => {
+    vi.mocked(getServerSession).mockResolvedValue(null)
+    const mockHandler = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    )
+
+    const handler = composeApiRoute({
+      ...defaultOptions,
+      authOptional: true,
+      requireActiveAccount: true,
+      handler: mockHandler,
+    })
+
+    const res = await handler(createRequest({ name: 'test', value: 1 }))
+    expect(res.status).toBe(200)
+    expect(mockHandler).toHaveBeenCalledTimes(1)
+    expect(connectDB).not.toHaveBeenCalled()
+    expect(isJobsAccountActive).not.toHaveBeenCalled()
   })
 
   it('passes authenticated user to handler', async () => {

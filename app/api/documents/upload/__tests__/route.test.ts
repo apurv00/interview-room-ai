@@ -14,14 +14,17 @@ const mocks = vi.hoisted(() => ({
   getServerSession: vi.fn(),
   checkRateLimit: vi.fn(),
   parseDocument: vi.fn(),
-  isR2Configured: vi.fn(),
-  uploadToR2: vi.fn(),
-  documentKey: vi.fn(),
+  connectDB: vi.fn(),
+  isJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mocks.getServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/middleware/checkRateLimit', () => ({ checkRateLimit: mocks.checkRateLimit }))
+vi.mock('@shared/db/connection', () => ({ connectDB: mocks.connectDB }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mocks.isJobsAccountActive,
+}))
 vi.mock('@shared/services/documentParser', () => {
   // Redefine the error class instead of importOriginal — the real module
   // imports unpdf/mammoth, which this route test must not load.
@@ -33,11 +36,6 @@ vi.mock('@shared/services/documentParser', () => {
   }
   return { parseDocument: mocks.parseDocument, UnsupportedFileTypeError }
 })
-vi.mock('@shared/storage/r2', () => ({
-  isR2Configured: mocks.isR2Configured,
-  uploadToR2: mocks.uploadToR2,
-  documentKey: mocks.documentKey,
-}))
 vi.mock('@shared/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
@@ -61,7 +59,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.getServerSession.mockResolvedValue({ user: { id: 'u1' } })
   mocks.checkRateLimit.mockResolvedValue(null)
-  mocks.isR2Configured.mockReturnValue(false)
+  mocks.connectDB.mockResolvedValue(undefined)
+  mocks.isJobsAccountActive.mockResolvedValue(true)
 })
 
 describe('POST /api/documents/upload', () => {
@@ -71,6 +70,7 @@ describe('POST /api/documents/upload', () => {
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.wordCount).toBe(50)
+    expect(data).not.toHaveProperty('r2Key')
   })
 
   it('accepts an exact originating user', async () => {
@@ -83,9 +83,8 @@ describe('POST /api/documents/upload', () => {
     expect(mocks.parseDocument).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects a different originating user before limiter, parser, or R2 work', async () => {
+  it('rejects a different originating user before account, limiter, or parser work', async () => {
     mocks.getServerSession.mockResolvedValue({ user: { id: 'user-b' } })
-    mocks.isR2Configured.mockReturnValue(true)
 
     const res = await POST(makeReq('resume.pdf', 'user-a'))
 
@@ -94,10 +93,54 @@ describe('POST /api/documents/upload', () => {
       error: 'sign-in session changed',
       code: 'SESSION_CHANGED',
     })
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+    expect(mocks.isJobsAccountActive).not.toHaveBeenCalled()
     expect(mocks.checkRateLimit).not.toHaveBeenCalled()
     expect(mocks.parseDocument).not.toHaveBeenCalled()
-    expect(mocks.documentKey).not.toHaveBeenCalled()
-    expect(mocks.uploadToR2).not.toHaveBeenCalled()
+  })
+
+  it('rejects an inactive account before limiter or parser work', async () => {
+    mocks.isJobsAccountActive.mockResolvedValueOnce(false)
+
+    const res = await POST(makeReq('resume.pdf'))
+
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mocks.checkRateLimit).not.toHaveBeenCalled()
+    expect(mocks.parseDocument).not.toHaveBeenCalled()
+  })
+
+  it('withholds parsed private text when deletion commits during parsing', async () => {
+    mocks.isJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    mocks.parseDocument.mockResolvedValue({
+      text: 'PRIVATE RESUME CONTENT',
+      wordCount: 50,
+      docType: 'pdf',
+    })
+
+    const res = await POST(makeReq('resume.pdf'))
+
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mocks.parseDocument).toHaveBeenCalledTimes(1)
+  })
+
+  it('prefers account-unavailable when parsing fails during deletion', async () => {
+    mocks.parseDocument.mockRejectedValue(new Error('parser interrupted'))
+    mocks.isJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    const res = await POST(makeReq('resume.pdf'))
+
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
   })
 
   it('surfaces the actionable message for unsupported types as 415', async () => {

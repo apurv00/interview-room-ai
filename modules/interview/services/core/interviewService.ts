@@ -1,5 +1,10 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
+import {
+  activeJobsAccountFilter,
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 import { InterviewSession, User } from '@shared/db/models'
 import { InterviewDepth } from '@shared/db/models/InterviewDepth'
 import type { IInterviewSession } from '@shared/db/models'
@@ -88,13 +93,7 @@ interface UpdateSessionInput {
   durationActualSeconds?: number
   startedAt?: string
   completedAt?: string
-  recordingR2Key?: string
-  recordingSizeBytes?: number
   recordingDurationSeconds?: number
-  screenRecordingR2Key?: string
-  screenRecordingSizeBytes?: number
-  audioRecordingR2Key?: string
-  audioRecordingSizeBytes?: number
   liveTranscriptWords?: Array<{
     word: string
     start: number
@@ -155,6 +154,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   await User.updateOne(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
+      accountState: { $ne: 'deleting' },
       $or: [
         { usageResetAt: { $exists: false } },
         { $expr: { $ne: [{ $month: '$usageResetAt' }, currentMonth + 1] } },
@@ -170,6 +170,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   await User.updateOne(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
+      accountState: { $ne: 'deleting' },
       $or: [
         { monthlyInterviewLimit: { $exists: false } },
         { monthlyInterviewLimit: null },
@@ -183,6 +184,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   await User.updateOne(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
+      accountState: { $ne: 'deleting' },
       monthlyInterviewsUsed: { $exists: false },
     },
     { $set: { monthlyInterviewsUsed: 0 } }
@@ -193,6 +195,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   const updatedUser = await User.findOneAndUpdate(
     {
       _id: new mongoose.Types.ObjectId(input.userId),
+      accountState: { $ne: 'deleting' },
       $expr: { $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'] },
     },
     {
@@ -204,7 +207,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
 
   if (!updatedUser) {
     // Either user doesn't exist or usage limit reached
-    const exists = await User.exists({ _id: input.userId })
+    const exists = await User.exists(activeJobsAccountFilter(input.userId))
     if (!exists) throw new NotFoundError('User')
     throw new UsageLimitError()
   }
@@ -325,41 +328,46 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     }
   }
 
+  const sessionPayload = {
+    userId: new mongoose.Types.ObjectId(input.userId),
+    organizationId: input.organizationId
+      ? new mongoose.Types.ObjectId(input.organizationId)
+      : undefined,
+    config: input.config,
+    status: 'created',
+    scoringDimensions,
+    templateId: input.templateId
+      ? new mongoose.Types.ObjectId(input.templateId)
+      : undefined,
+    candidateEmail: input.candidateEmail,
+    candidateName: input.candidateName,
+    userAgent: input.userAgent,
+    jobDescription: input.jobDescription,
+    resumeText: input.resumeText,
+    jdFileName: input.jdFileName,
+    resumeFileName: input.resumeFileName,
+    privacyMode: input.config.privacyMode === true ? true : undefined,
+    attribution: input.verifiedJobsAttribution,
+    parentSessionId: rootParentId,
+    retakeNumber,
+    plannedQuestionCount,
+  }
   let session: IInterviewSession
   try {
-    session = await InterviewSession.create({
-      userId: new mongoose.Types.ObjectId(input.userId),
-      organizationId: input.organizationId
-        ? new mongoose.Types.ObjectId(input.organizationId)
-        : undefined,
-      config: input.config,
-      status: 'created',
-      scoringDimensions,
-      templateId: input.templateId
-        ? new mongoose.Types.ObjectId(input.templateId)
-        : undefined,
-      candidateEmail: input.candidateEmail,
-      candidateName: input.candidateName,
-      userAgent: input.userAgent,
-      jobDescription: input.jobDescription,
-      resumeText: input.resumeText,
-      jdFileName: input.jdFileName,
-      resumeFileName: input.resumeFileName,
-      // Privacy mode — promoted from config to a top-level field so it can
-      // be queried/audited independently of the nested config blob.
-      privacyMode: input.config.privacyMode === true ? true : undefined,
-      // Jobs attribution is promoted only after POST /api/interviews has
-      // verified the signed, user-bound handoff. Client config is advisory.
-      attribution: input.verifiedJobsAttribution,
-      parentSessionId: rootParentId,
-      retakeNumber,
-      plannedQuestionCount,
-    })
+    if (input.verifiedJobsAttribution) {
+      session = await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
+        const [created] = await InterviewSession.create([sessionPayload], { session: dbSession })
+        return created
+      })
+    } else {
+      session = await InterviewSession.create(sessionPayload)
+    }
   } catch (err) {
     // Rollback the usage increment if session creation fails
     await User.findByIdAndUpdate(input.userId, {
       $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
     })
+    if (err instanceof JobsAccountInactiveError) throw new NotFoundError('User')
     throw err
   }
 
@@ -479,13 +487,7 @@ export async function updateSession(
   if (input.durationActualSeconds !== undefined) updateFields.durationActualSeconds = input.durationActualSeconds
   if (input.startedAt) updateFields.startedAt = new Date(input.startedAt)
   if (input.completedAt) updateFields.completedAt = new Date(input.completedAt)
-  if (input.recordingR2Key) updateFields.recordingR2Key = input.recordingR2Key
-  if (input.recordingSizeBytes !== undefined) updateFields.recordingSizeBytes = input.recordingSizeBytes
   if (input.recordingDurationSeconds !== undefined) updateFields.recordingDurationSeconds = input.recordingDurationSeconds
-  if (input.screenRecordingR2Key) updateFields.screenRecordingR2Key = input.screenRecordingR2Key
-  if (input.screenRecordingSizeBytes !== undefined) updateFields.screenRecordingSizeBytes = input.screenRecordingSizeBytes
-  if (input.audioRecordingR2Key) updateFields.audioRecordingR2Key = input.audioRecordingR2Key
-  if (input.audioRecordingSizeBytes !== undefined) updateFields.audioRecordingSizeBytes = input.audioRecordingSizeBytes
   if (input.liveTranscriptWords) updateFields.liveTranscriptWords = input.liveTranscriptWords
   if (input.codingProblemId) updateFields.codingProblemId = input.codingProblemId
   if (input.designProblemId) updateFields.designProblemId = input.designProblemId
@@ -538,10 +540,24 @@ export async function listSessions(input: ListSessionsInput) {
   const skip = (page - 1) * limit
 
   const filter: Record<string, unknown> = {}
+  const organizationScoped = Boolean(
+    input.organizationId &&
+    ['recruiter', 'org_admin', 'platform_admin'].includes(input.role),
+  )
 
   // If recruiter/admin, show org sessions; otherwise show own sessions
-  if (input.organizationId && ['recruiter', 'org_admin', 'platform_admin'].includes(input.role)) {
-    filter.organizationId = new mongoose.Types.ObjectId(input.organizationId)
+  if (organizationScoped) {
+    const organizationId = new mongoose.Types.ObjectId(input.organizationId)
+    const { _id: _requesterId, ...activeAccountState } = activeJobsAccountFilter(input.userId)
+    // Resolve active organization members before applying skip/limit/count.
+    // Missing Users and explicit `deleting` Users therefore cannot occupy a
+    // page slot or inflate pagination for recruiter/admin history.
+    const activeOwnerIds = await User.distinct('_id', {
+      organizationId,
+      ...activeAccountState,
+    })
+    filter.organizationId = organizationId
+    filter.userId = { $in: activeOwnerIds }
   } else {
     filter.userId = new mongoose.Types.ObjectId(input.userId)
   }

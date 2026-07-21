@@ -269,6 +269,14 @@ const JobPostingSchema = new Schema<IJobPosting>(
   { timestamps: true }
 )
 
+// Internal transaction-conflict token for derived Jobs writers. Keeping this
+// path out of IJobPosting prevents it becoming part of the product/read
+// contract; it is never selected and exists only so an authority-bound write
+// conflicts with lifecycle/source-control updates to the same posting.
+JobPostingSchema.add({
+  derivedAuthorityRevision: { type: Number, default: 0, select: false },
+} as never)
+
 // §4.3 serving index budget; no text index. A02's durable lineage indexes on
 // `sourceIds` and `provenance.sourceId` are intentionally absent here: normal
 // runtime connections allow Mongoose schema automation, which would bypass the

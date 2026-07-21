@@ -5,6 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { transitionStatus, USER_SETTABLE_STATUSES, type UserSettableStatus } from '@jobs'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,12 +46,23 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   // caller: the inference door, the tracker chip, and the email-action
   // endpoint all converge on the service, so one scheduled interview is
   // one event regardless of channel (EMAILS.md §4; Codex on #525/#530).
-  const result = await transitionStatus(userId, params.id, to as UserSettableStatus, {
-    channel: 'web',
-    latencyMs,
-    viaNudge,
-    inferredFromPrep,
-  })
+  let result: Awaited<ReturnType<typeof transitionStatus>>
+  try {
+    result = await transitionStatus(userId, params.id, to as UserSettableStatus, {
+      channel: 'web',
+      latencyMs,
+      viaNudge,
+      inferredFromPrep,
+    })
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    throw error
+  }
   if (!result.ok) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
   return NextResponse.json({ ok: true, status: result.status })
 }

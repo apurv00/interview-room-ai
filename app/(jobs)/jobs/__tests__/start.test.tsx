@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 const { mockFetch, mockPush } = vi.hoisted(() => ({
   mockFetch: vi.fn(),
@@ -28,6 +28,8 @@ beforeEach(() => {
     // base-resume (anon 401) + events fire-and-forget
     return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
   })
+  mockPush.mockReset()
+  localStorage.clear()
   sessionStorage.clear()
 })
 
@@ -38,6 +40,107 @@ function pickFile(file: File) {
 }
 
 describe('/jobs/start doors', () => {
+  it('makes account deletion terminal while a resume parse is still in flight', async () => {
+    let resolveBaseResume!: (value: unknown) => void
+    let resolveResumeParse!: (value: unknown) => void
+    const baseResumeResponse = new Promise((resolve) => { resolveBaseResume = resolve })
+    const resumeParseResponse = new Promise((resolve) => { resolveResumeParse = resolve })
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({ role: 'Private Role', skills: ['SecretSkill'] }))
+    localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/base-resume' && !init?.method) return baseResumeResponse
+      if (url === '/api/jobs/parse-pdf') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: 'Private resume text' }) })
+      }
+      if (url === '/api/resume/parse') return resumeParseResponse
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<JobsStartPage />)
+    pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith(
+      '/api/resume/parse',
+      expect.objectContaining({ method: 'POST' }),
+    ))
+    expect(screen.getByRole('button', { name: /Just tell us your target role/i })).toBeDisabled()
+
+    await act(async () => {
+      resolveBaseResume({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+    expect(localStorage.getItem('interviewConfig')).toBeNull()
+
+    await act(async () => {
+      resolveResumeParse({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          resume: {
+            contact: { name: 'Private Candidate' },
+            experience: [{ title: 'Secret Role' }],
+            skills: [{ items: ['SecretSkill'] }],
+          },
+        }),
+      })
+    })
+    expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByText(/Role you.*targeting/i)).toBeNull()
+    expect(screen.queryByText('SecretSkill')).toBeNull()
+  })
+
+  it('does not navigate when the base-resume save reports account deletion', async () => {
+    let resolveBaseResumeSave!: (value: unknown) => void
+    const baseResumeSaveResponse = new Promise((resolve) => { resolveBaseResumeSave = resolve })
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/base-resume' && !init?.method) {
+        return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({ error: 'sign in required' }) })
+      }
+      if (url === '/api/jobs/base-resume' && init?.method === 'POST') return baseResumeSaveResponse
+      if (url === '/api/jobs/parse-pdf') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: 'Private resume text' }) })
+      }
+      if (url === '/api/resume/parse') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            resume: {
+              contact: { name: 'Private Candidate' },
+              experience: [{ title: 'Product Manager' }],
+              skills: [{ items: ['Roadmaps'] }],
+            },
+          }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<JobsStartPage />)
+    pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Show my jobs →' }))
+
+    await act(async () => {
+      resolveBaseResumeSave({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(mockPush).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+    expect(screen.queryByText('Roadmaps')).toBeNull()
+  })
+
   it('saved-resume door prefills the role from the latest experience when no saved target exists (founder 2026-07-19)', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (String(url) === '/api/jobs/base-resume') {

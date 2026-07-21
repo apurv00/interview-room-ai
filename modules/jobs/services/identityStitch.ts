@@ -1,4 +1,8 @@
 import { ProductEvent } from '@shared/db/models'
+import {
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 
 /**
  * Anon→user identity stitch (PRODUCT_FLOW §2): when a signed-in request
@@ -13,12 +17,16 @@ import { ProductEvent } from '@shared/db/models'
  */
 export async function stitchAnonEventsToUser(anonId: string, userId: string): Promise<number> {
   try {
-    const res = await ProductEvent.updateMany(
-      { anonId, userId: { $exists: false } },
-      { $set: { userId } }
+    const res = await withActiveJobsAccountWrite(userId, (session) =>
+      ProductEvent.updateMany(
+        { anonId, userId: { $exists: false } },
+        { $set: { userId } },
+        { session },
+      ),
     )
     return res.modifiedCount ?? 0
-  } catch {
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) return 0
     return 0
   }
 }

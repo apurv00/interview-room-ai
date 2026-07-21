@@ -1,9 +1,10 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { JOB_DOMAIN_IDS } from '@jobs/config/domains'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 /**
  * /jobs — public Tier-A feed (PRODUCT_FLOW §1 Stage 0; P-2: anon browse).
@@ -76,6 +77,9 @@ function JobsFeed() {
   const [capNotice, setCapNotice] = useState(false)
   const [quickWins, setQuickWins] = useState<{ count: number; resumeId?: string } | null>(null)
   const [winsDismissed, setWinsDismissed] = useState(false)
+  const [accountUnavailable, setAccountUnavailable] = useState(false)
+  const [feedRevision, setFeedRevision] = useState(0)
+  const feedRequestRef = useRef(0)
 
   // Domain arrives via client-side nav too (query-only change doesn't remount);
   // reset pagination in-render so the fetch effect runs once, not racing twice.
@@ -100,10 +104,37 @@ function JobsFeed() {
     try { setWinsDismissed(sessionStorage.getItem('JOBS_WINS_DISMISSED') === '1') } catch { /* noop */ }
     setTargetLoaded(true)
     // Quick wins (package 10, zero LLM): 401 = anon, card hides.
+    let cancelled = false
     fetch('/api/jobs/quick-wins')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setQuickWins(d) })
+      .then(async (response) => {
+        if (response.status === 401) {
+          const body = await response.json().catch(() => null) as { code?: unknown } | null
+          if (body?.code === 'ACCOUNT_UNAVAILABLE') {
+            return { kind: 'account-unavailable' as const }
+          }
+        }
+        if (!response.ok) return { kind: 'empty' as const }
+        return { kind: 'data' as const, data: await response.json() }
+      })
+      .then((resolution) => {
+        if (cancelled) return
+        if (resolution.kind === 'account-unavailable') {
+          feedRequestRef.current += 1
+          clearAllInterviewStorage()
+          setTarget(null)
+          setCapNotice(false)
+          setQuickWins(null)
+          setWinsDismissed(false)
+          setData(null)
+          setError(false)
+          setAccountUnavailable(true)
+          setFeedRevision((revision) => revision + 1)
+          return
+        }
+        if (resolution.kind === 'data') setQuickWins(resolution.data)
+      })
       .catch(() => {})
+    return () => { cancelled = true }
   }, [])
 
   function dismissWins() {
@@ -118,21 +149,28 @@ function JobsFeed() {
 
   useEffect(() => {
     if (!targetLoaded) return
+    const requestId = ++feedRequestRef.current
     const params = new URLSearchParams({ page: String(page) })
     if (domain) params.set('domain', domain)
     if (target?.skills.length) params.set('skills', target.skills.join(','))
     if (target?.role) params.set('targetRole', target.role)
     fetch(`/api/jobs/feed?${params}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then(setData)
-      .catch(() => setError(true))
+      .then((nextData) => {
+        if (requestId !== feedRequestRef.current) return
+        setData(nextData)
+        setError(false)
+      })
+      .catch(() => {
+        if (requestId === feedRequestRef.current) setError(true)
+      })
     fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'jobs.feed_viewed', props: { page } }),
       keepalive: true,
     }).catch(() => {})
-  }, [page, domain, target, targetLoaded])
+  }, [page, domain, target, targetLoaded, feedRevision])
 
   // Reveal honesty (§4a): name the evidence ONLY when matched skills exist;
   // the 3-questions path never gets resume-flavored copy.
@@ -160,6 +198,12 @@ function JobsFeed() {
             Showing {domain} jobs
           </span>
           <Link href="/jobs" className="text-xs text-blue-600 hover:underline">Clear filter</Link>
+        </div>
+      )}
+
+      {accountUnavailable && (
+        <div role="status" className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+          Account deletion has started or completed, so your saved target and personalized match signals were cleared. Public jobs remain available.
         </div>
       )}
 

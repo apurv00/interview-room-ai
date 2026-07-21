@@ -10,7 +10,7 @@ export default function SignUpPage() {
 
   async function handleOAuthSignIn(provider: string) {
     setIsLoading(true)
-    clearAllInterviewStorage()
+    await clearAllInterviewStorage()
     try {
       await signOut({ redirect: false })
     } catch { /* continue */ }

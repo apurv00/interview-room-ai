@@ -1,6 +1,12 @@
-import { JobApplication, JobPosting, ProductEvent } from '@shared/db/models'
+import { JobApplication, JobPosting } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { jobPostingStateOf, type JobPostingState } from './postingAccess'
+import { recordJobsUserEvent } from './userEventService'
+import {
+  isJobsAccountActive,
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 
 /**
  * Tracker v1 (PRODUCT_FLOW §2 route table + §4b anti-nag; Wave 4.2).
@@ -63,6 +69,8 @@ function lastActivityAt(app: { statusHistory?: Array<{ at: Date | string }>; upd
 const GROUP_ORDER = ['interview_scheduled', 'apply_clicked', 'applied', 'saved', 'offer', 'ghosted', 'rejected', 'withdrawn']
 
 export async function getTracker(userId: string, now = new Date()): Promise<TrackerView> {
+  const empty = (): TrackerView => ({ groups: [], confirmCard: null, autoGhosted: 0 })
+  if (!(await isJobsAccountActive(userId))) throw new JobsAccountInactiveError(userId)
   const apps = await JobApplication.find({ userId })
     .select('jobPostingId jobSnapshot status statusHistory verifiedPracticeSessionIds notes outcome updatedAt')
     .sort({ updatedAt: -1 })
@@ -93,23 +101,31 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
     // user confirming an old apply_clicked as `applied` mid-read leaves the
     // row still ghostable — only `updatedAt` unchanged since OUR snapshot
     // proves nothing fresher landed. Contested rows simply don't match.
-    const res = await JobApplication.bulkWrite(
-      toGhost.map((a) => ({
-        updateOne: {
-          filter: { _id: a._id, updatedAt: a.updatedAt },
-          update: {
-            $set: { status: 'ghosted', ghostSuggestedAt: now },
-            $push: { statusHistory: { status: 'ghosted', at: now, source: 'system' } },
+    const res = await withActiveJobsAccountWrite(userId, (session) =>
+      JobApplication.bulkWrite(
+        toGhost.map((a) => ({
+          updateOne: {
+            filter: { _id: a._id, updatedAt: a.updatedAt },
+            update: {
+              $set: { status: 'ghosted', ghostSuggestedAt: now },
+              $push: { statusHistory: { status: 'ghosted', at: now, source: 'system' } },
+            },
           },
-        },
-      }))
+        })),
+        { session },
+      ),
     )
     autoGhosted = res?.modifiedCount ?? 0
     if (autoGhosted > 0) {
       try {
-        await ProductEvent.create({ name: 'jobs.ghost_auto', userId, props: { count: autoGhosted }, ts: now })
-      } catch (err) {
-        logger.warn({ err }, 'ghost_auto telemetry write failed')
+        await recordJobsUserEvent({
+          name: 'jobs.ghost_auto',
+          userId,
+          props: { count: autoGhosted },
+          ts: now,
+        })
+      } catch (error) {
+        logger.warn({ err: error }, 'ghost_auto telemetry write failed')
       }
     }
     if (autoGhosted === toGhost.length) {
@@ -171,7 +187,7 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
     })
     .sort((a, b) => lastActivityAt(b).getTime() - lastActivityAt(a).getTime())[0]
 
-  return {
+  const view = {
     groups,
     confirmCard: candidate
       ? {
@@ -182,14 +198,29 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
       : null,
     autoGhosted,
   }
+  // Do not serve a stale in-memory tracker snapshot after deletion started
+  // while this read was assembling its bounded posting join.
+  return (await isJobsAccountActive(userId)) ? view : empty()
 }
 
 /** Ask-budget spend for a dismissed confirm card (ask #2 of 2). */
 export async function dismissConfirmCard(userId: string, jobPostingId: string): Promise<void> {
-  await JobApplication.updateOne({ userId, jobPostingId }, { $inc: { 'outcome.askCount': 1 } })
+  await withActiveJobsAccountWrite(userId, (session) =>
+    JobApplication.updateOne(
+      { userId, jobPostingId },
+      { $inc: { 'outcome.askCount': 1 } },
+      { session },
+    ),
+  )
 }
 
 export async function saveNotes(userId: string, jobPostingId: string, notes: string): Promise<boolean> {
-  const res = await JobApplication.updateOne({ userId, jobPostingId }, { $set: { notes: notes.slice(0, 2000) } })
+  const res = await withActiveJobsAccountWrite(userId, (session) =>
+    JobApplication.updateOne(
+      { userId, jobPostingId },
+      { $set: { notes: notes.slice(0, 2000) } },
+      { session },
+    ),
+  )
   return (res?.matchedCount ?? 0) > 0
 }

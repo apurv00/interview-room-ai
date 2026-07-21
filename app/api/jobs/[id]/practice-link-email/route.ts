@@ -3,10 +3,12 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
-import { JobApplication, JobPosting, JobsEmailConfig, ProductEvent, User } from '@shared/db/models'
+import { JobApplication, JobPosting, JobsEmailConfig, User } from '@shared/db/models'
 import { inngest } from '@shared/services/inngest'
 import { isSuppressed, jobPostingStateOf, preparePracticeHandoffPosting } from '@jobs'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,6 +30,12 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   }
 
   await connectDB()
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   const [cfg, application, posting, user] = await Promise.all([
     JobsEmailConfig.getConfig(),
     JobApplication.exists({ userId, jobPostingId: params.id }),
@@ -36,11 +44,25 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
       .lean(),
     User.findById(userId).select('emailPreferences.jobs.unsubscribedStreams').lean(),
   ])
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   if (!application || !posting) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
   if (jobPostingStateOf(posting) === 'restricted') {
     return NextResponse.json({ ok: false, reason: 'unavailable' }, { status: 200 })
   }
   const prepared = await preparePracticeHandoffPosting(posting)
+  // CMS preparation above is asynchronous. Close that window before any
+  // domain response or external enqueue; the E0 worker checks again too.
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
   if (!prepared.role || !prepared.jdHash) {
     return NextResponse.json({ ok: false, reason: 'unavailable' }, { status: 200 })
   }
@@ -57,7 +79,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     data: { userId, jobPostingId: params.id, requestedAt: requestedAt.toISOString() },
   })
   try {
-    await ProductEvent.create({ name: 'jobs.prep_deferred_email', userId, jobPostingId: params.id, props: {}, ts: requestedAt })
+    await recordJobsUserEvent({ name: 'jobs.prep_deferred_email', userId, jobPostingId: params.id, props: {}, ts: requestedAt })
   } catch { /* telemetry never breaks the flow */ }
   return NextResponse.json({ ok: true })
 }

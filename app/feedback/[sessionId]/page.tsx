@@ -2,6 +2,7 @@
 
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import dynamic from 'next/dynamic'
+import Link from 'next/link'
 import { useRouter, useParams } from 'next/navigation'
 import { ScoreRing } from '@shared/ui/ScoreBar'
 import AudioPlayer from '@feedback/components/AudioPlayer'
@@ -45,13 +46,16 @@ import { mergeWithLocalData, readLocalInterviewData, cleanupLocalInterviewData }
 import { buildFeedbackPrintHtml } from '@interview/utils/feedbackPrintHtml'
 import { drainQueuedReplayUploads, hasQueuedReplayUpload } from '@interview/utils/resumableUpload'
 import { fetchWithRetry } from '@shared/fetchWithRetry'
-import { fetchFeedbackSessionSummary } from '@feedback/lib/feedbackSessionFetcher'
+import {
+  fetchFeedbackSessionSummary,
+  isFeedbackAccountUnavailableError,
+} from '@feedback/lib/feedbackSessionFetcher'
 import { bisectLastLE } from '@shared/utils'
 import { PROBABILITY_COLORS } from '@interview/config/feedbackConfig'
 import ShareButton from '@learn/components/feedback/ShareButton'
 import PathwayPendingBanner from '@learn/components/pathway/PathwayPendingBanner'
 import { usePathwayGenerationPoll } from '@learn/hooks/usePathwayGenerationPoll'
-import { STORAGE_KEYS } from '@shared/storageKeys'
+import { clearAllInterviewStorage, STORAGE_KEYS } from '@shared/storageKeys'
 import JobsCountLink from '@jobs/components/JobsCountLink'
 import {
   persistGenericRetakeConfig,
@@ -131,6 +135,16 @@ function setCachedJSON<T>(key: string, data: T): void {
   }
 }
 
+async function isExactAccountUnavailable(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false
+  // Preserve the original body for the caller's ordinary error handling when
+  // a generic 401 is not the account-deletion terminal signal. Test doubles
+  // may not implement clone(), so retain the existing compatible fallback.
+  const readable = typeof response.clone === 'function' ? response.clone() : response
+  const body = await readable.json().catch(() => null) as { code?: unknown } | null
+  return body?.code === 'ACCOUNT_UNAVAILABLE'
+}
+
 type FeedbackTab = 'overview' | 'questions' | 'analysis' | 'learning'
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -141,29 +155,69 @@ type FeedbackTab = 'overview' | 'questions' | 'analysis' | 'learning'
  * attribution — render the way back + the evidence tick. Pure additive
  * banner; renders nothing for every non-jobs session.
  */
-function JobsBridge({ sessionId }: { sessionId: string }) {
+function JobsBridge({
+  sessionId,
+  onAccountUnavailable,
+}: {
+  sessionId: string
+  onAccountUnavailable: () => void
+}) {
   const [bridge, setBridge] = useState<{ jobId: string; company?: string; evidence?: number } | null>(null)
+  const requestRef = useRef(0)
+  const accountUnavailableRef = useRef(false)
   useEffect(() => {
-    if (!sessionId) return
+    if (!sessionId || accountUnavailableRef.current) return
+    const requestId = ++requestRef.current
+    setBridge(null)
+    let cancelled = false
+
+    const isCurrent = () => (
+      !cancelled &&
+      !accountUnavailableRef.current &&
+      requestId === requestRef.current
+    )
+    const handleAccountUnavailable = async (response: Response): Promise<boolean> => {
+      if (response.status !== 401) return false
+      const body = await response.json().catch(() => null) as { code?: unknown } | null
+      if (body?.code !== 'ACCOUNT_UNAVAILABLE') return false
+      if (cancelled || requestId !== requestRef.current) return true
+      accountUnavailableRef.current = true
+      requestRef.current += 1
+      setBridge(null)
+      onAccountUnavailable()
+      return true
+    }
+
     // The PERSISTED session is the source of truth: useInterview clears
     // INTERVIEW_CONFIG from localStorage before navigating here, so the
     // config is already gone on the normal flow (Codex on #524).
     fetch(`/api/interviews/${sessionId}?excludeTranscript=true`)
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (response) => {
+        if (await handleAccountUnavailable(response)) return null
+        return response.ok ? response.json() : null
+      })
       .then((session) => {
+        if (!isCurrent()) return
         const attr = session?.attribution
         if (attr?.source !== 'jobs' || !attr.jobId) return
         setBridge({ jobId: attr.jobId, company: session?.config?.targetCompany })
         return fetch(`/api/jobs/${attr.jobId}`)
-          .then((r) => (r.ok ? r.json() : null))
+          .then(async (response) => {
+            if (await handleAccountUnavailable(response)) return null
+            return response.ok ? response.json() : null
+          })
           .then((d) => {
-            if (d && d.gated === false && d.application) {
+            if (isCurrent() && d && d.gated === false && d.application) {
               setBridge((b) => (b ? { ...b, evidence: d.application.practiceCount, company: b.company || d.company } : b))
             }
           })
       })
       .catch(() => {})
-  }, [sessionId])
+    return () => {
+      cancelled = true
+      if (requestId === requestRef.current) requestRef.current += 1
+    }
+  }, [onAccountUnavailable, sessionId])
   if (!bridge) return null
   return (
     <a href={`/jobs/${bridge.jobId}`} className="mt-1 inline-block text-sm text-blue-600 hover:underline">
@@ -197,6 +251,12 @@ function FeedbackPageInner() {
   const [activeTab, setActiveTab] = useState<FeedbackTab>('questions')
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
   const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null)
+  const [accountUnavailable, setAccountUnavailable] = useState(false)
+  // This ref is the synchronous, monotonic privacy fence. State alone is not
+  // sufficient: promises that were already in flight can settle before React
+  // commits the terminal render and otherwise repopulate account-bound caches.
+  const accountUnavailableRef = useRef(false)
+  const accountAbortControllerRef = useRef(new AbortController())
 
   // Lazy transcript loading
   const [lazyTranscript, setLazyTranscript] = useState<StoredInterviewData['transcript'] | null>(null)
@@ -236,6 +296,7 @@ function FeedbackPageInner() {
   >(null)
   const [pathwayPollEpoch, setPathwayPollEpoch] = useState(0)
   const pathwayRetryTriggeredRef = useRef(false)
+  const accountUnavailableHandlerRef = useRef<() => void>(() => {})
 
   const pathwayPlanScheduled = useMemo(
     () =>
@@ -245,23 +306,31 @@ function FeedbackPageInner() {
     [feedback],
   )
   const handlePathwayPollRetried = useCallback(() => {
+    if (accountUnavailableRef.current) return
     setPathwayPollEpoch((n) => n + 1)
   }, [])
 
   const { phase: pathwayPollPhase, pollExhausted: pathwayPollExhausted } =
     usePathwayGenerationPoll({
-    sessionId: sessionId !== 'local' ? sessionId : null,
-    enabled: pathwayPlanScheduled,
+    sessionId: !accountUnavailable && sessionId !== 'local' ? sessionId : null,
+    enabled: !accountUnavailable && pathwayPlanScheduled,
     pollEpoch: pathwayPollEpoch,
+    onAccountUnavailable: () => accountUnavailableHandlerRef.current(),
     onRefresh: async () => {
-      if (!sessionId || sessionId === 'local') return
+      if (!sessionId || sessionId === 'local' || accountUnavailableRef.current) return
       try {
         const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, {
           credentials: 'include',
+          signal: accountAbortControllerRef.current.signal,
         })
+        if (accountUnavailableRef.current) return
+        if (await isExactAccountUnavailable(res)) {
+          handleAccountUnavailable()
+          return
+        }
         if (!res.ok) return
         const json = (await res.json()) as { feedback?: FeedbackData }
-        if (json.feedback) setFeedback(json.feedback)
+        if (!accountUnavailableRef.current && json.feedback) setFeedback(json.feedback)
       } catch {
         // Poll refresh is best-effort on the feedback page.
       }
@@ -280,7 +349,7 @@ function FeedbackPageInner() {
   const [enrichmentPhase, setEnrichmentPhase] = useState<'idle' | 'generating' | 'done' | 'failed'>('idle')
   const [enrichmentStatus, setEnrichmentStatus] = useState<string | null>(null)
   useEffect(() => {
-    if (!sessionId || sessionId === 'local' || !feedback) return
+    if (accountUnavailableRef.current || !sessionId || sessionId === 'local' || !feedback) return
     const hasContent =
       (feedback.ideal_answers?.length ?? 0) > 0 ||
       (feedback.drill_recommendations?.length ?? 0) > 0
@@ -301,7 +370,10 @@ function FeedbackPageInner() {
     const INTERVAL_MS = 4000
     setEnrichmentPhase('generating')
     const timer = setInterval(async () => {
-      if (cancelled) return
+      if (cancelled || accountUnavailableRef.current) {
+        clearInterval(timer)
+        return
+      }
       if (++attempts > MAX_ATTEMPTS) {
         clearInterval(timer)
         setEnrichmentPhase('failed')
@@ -311,9 +383,19 @@ function FeedbackPageInner() {
         const res = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, {
           credentials: 'include',
           cache: 'no-store',
+          signal: accountAbortControllerRef.current.signal,
         })
+        if (cancelled || accountUnavailableRef.current) return
+        const exactAccountUnavailable = await isExactAccountUnavailable(res)
+        if (cancelled || accountUnavailableRef.current) return
+        if (exactAccountUnavailable) {
+          clearInterval(timer)
+          handleAccountUnavailable()
+          return
+        }
         if (!res.ok) return
         const json = (await res.json()) as { feedback?: FeedbackData; enrichmentStatus?: string }
+        if (cancelled || accountUnavailableRef.current) return
         const arrived =
           (json.feedback?.ideal_answers?.length ?? 0) > 0 ||
           (json.feedback?.drill_recommendations?.length ?? 0) > 0
@@ -358,7 +440,7 @@ function FeedbackPageInner() {
       clearInterval(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, feedback === null, enrichmentStatus])
+  }, [accountUnavailable, sessionId, feedback === null, enrichmentStatus])
 
   // sideEffectOutcomes.pathwayPlan stays "scheduled" on persisted feedback even after
   // the pathway job finishes; hide the inline banner once polling observes completion.
@@ -407,8 +489,39 @@ function FeedbackPageInner() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [recordingDurationSeconds, setRecordingDurationSeconds] = useState<number | null>(null)
   const [recordingFallback, setRecordingFallback] = useState<RecordingFallback>('none')
+  const handleAccountUnavailable = useCallback(() => {
+    if (accountUnavailableRef.current) return
+    accountUnavailableRef.current = true
+    accountAbortControllerRef.current.abort()
+    clearAllInterviewStorage()
+    recordingUrlRef.current = null
+    recordingFetchTriggeredRef.current = true
+    audioFetchTriggeredRef.current = true
+    setAccountUnavailable(true)
+    setData(null)
+    setFeedback(null)
+    setLoading(false)
+    setFeedbackError(null)
+    setSaveWarning(null)
+    setRecordingUrl(null)
+    setLazyTranscript(null)
+    setPeerData(null)
+    setAnalysis(null)
+    setVideoSrc(null)
+    setAudioUrl(null)
+    setRetakeSetupConfig(undefined)
+    setParentSessionId(null)
+  }, [])
+  accountUnavailableHandlerRef.current = handleAccountUnavailable
+
+  const handleExactAccountUnavailableResponse = useCallback(async (response: Response) => {
+    if (!(await isExactAccountUnavailable(response))) return false
+    handleAccountUnavailable()
+    return true
+  }, [handleAccountUnavailable])
 
   const captureReplayMeta = useCallback((raw: unknown) => {
+    if (accountUnavailableRef.current) return
     if (!raw || typeof raw !== 'object') return
     const summary = raw as Record<string, unknown>
     if (typeof summary.hasAudioRecording === 'boolean') {
@@ -429,6 +542,7 @@ function FeedbackPageInner() {
   }, [])
 
   const readCachedPresign = useCallback((kind: 'camera' | 'audio'): string | null => {
+    if (accountUnavailableRef.current) return null
     // v2 per-kind cache entries carry their own expiry, derived from the
     // server's expiresInSeconds — the old fixed 10-minute constant silently
     // disagreed with the server-side presign TTL. Legacy v1 entries (un-kinded
@@ -443,12 +557,21 @@ function FeedbackPageInner() {
   }, [sessionId])
 
   const fetchPresign = useCallback(async (kind: 'camera' | 'audio'): Promise<string | null> => {
+    if (accountUnavailableRef.current) return null
     try {
-      const res = await fetch(`/api/recordings/presign?sessionId=${sessionId}&kind=${kind}`)
+      const res = await fetch(`/api/recordings/presign?sessionId=${sessionId}&kind=${kind}`, {
+        signal: accountAbortControllerRef.current.signal,
+      })
+      if (accountUnavailableRef.current) return null
+      if (await isExactAccountUnavailable(res)) {
+        handleAccountUnavailable()
+        return null
+      }
       if (!res.ok) return null
       const presignData = (await res.json()) as { url?: string; expiresInSeconds?: number }
-      if (!presignData?.url) return null
+      if (accountUnavailableRef.current || !presignData?.url) return null
       const ttlMs = Math.max(60_000, (presignData.expiresInSeconds ?? 900) * 1000 * 0.8)
+      if (accountUnavailableRef.current) return null
       setCachedJSON(`${RECORDING_URL_PREFIX}v2:${kind}:${sessionId}`, {
         url: presignData.url,
         expiresAtMs: Date.now() + ttlMs,
@@ -457,18 +580,20 @@ function FeedbackPageInner() {
     } catch {
       return null
     }
-  }, [sessionId])
+  }, [handleAccountUnavailable, sessionId])
 
   const fetchRecordingUrl = useCallback(() => {
+    if (accountUnavailableRef.current) return
     setHasRecording(true)
     if (!recordingFetchTriggeredRef.current) {
       recordingFetchTriggeredRef.current = true
       const cached = readCachedPresign('camera')
-      if (cached) {
+      if (cached && !accountUnavailableRef.current) {
         setRecordingUrl(cached)
         setVideoSrc(cached)
       } else {
         void fetchPresign('camera').then((url) => {
+          if (accountUnavailableRef.current) return
           if (url) {
             setRecordingUrl(url)
             setVideoSrc(url)
@@ -490,11 +615,11 @@ function FeedbackPageInner() {
     ) {
       audioFetchTriggeredRef.current = true
       const cached = readCachedPresign('audio')
-      if (cached) {
+      if (cached && !accountUnavailableRef.current) {
         setAudioUrl(cached)
       } else {
         void fetchPresign('audio').then((url) => {
-          if (url) setAudioUrl(url)
+          if (!accountUnavailableRef.current && url) setAudioUrl(url)
         })
       }
     }
@@ -505,11 +630,12 @@ function FeedbackPageInner() {
   // it in; the player restores its position. Only presign-derived sources
   // call this — legacy session.recordingUrl documents never do.
   const refreshReplayUrl = useCallback(async (kind: 'camera' | 'audio'): Promise<string | null> => {
+    if (accountUnavailableRef.current) return null
     try {
       sessionStorage.removeItem(`${RECORDING_URL_PREFIX}v2:${kind}:${sessionId}`)
     } catch { /* non-critical */ }
     const url = await fetchPresign(kind)
-    if (!url) return null
+    if (accountUnavailableRef.current || !url) return null
     if (kind === 'camera') {
       setRecordingUrl(url)
       setVideoSrc(url)
@@ -522,13 +648,14 @@ function FeedbackPageInner() {
   // Keep recordingUrlRef in sync with recordingUrl state for the
   // watcher's closure-safe reads.
   useEffect(() => {
-    recordingUrlRef.current = recordingUrl
+    recordingUrlRef.current = accountUnavailableRef.current ? null : recordingUrl
   }, [recordingUrl])
 
   // ── Retry queued replay uploads ────────────────────────────────────────────
   useEffect(() => {
+    if (accountUnavailableRef.current) return
     void drainQueuedReplayUploads().catch((err) =>
-      console.warn('Failed to drain queued replay uploads', err)
+      !accountUnavailableRef.current && console.warn('Failed to drain queued replay uploads', err)
     )
   }, [])
 
@@ -540,12 +667,13 @@ function FeedbackPageInner() {
   // its own atomic CAS, so a duplicate fire would just 409 — but stripping
   // the param keeps the UI consistent on reload.
   useEffect(() => {
-    if (!sessionId || sessionId === 'local') return
+    if (accountUnavailableRef.current || !sessionId || sessionId === 'local') return
     if (pathwayRetryTriggeredRef.current) return
     if (typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     if (params.get('retryPathway') !== '1') return
     pathwayRetryTriggeredRef.current = true
+    if (accountUnavailableRef.current) return
     setPathwayRetryStatus({ kind: 'pending' })
 
     // Strip the query param immediately so a manual refresh / share doesn't
@@ -556,9 +684,15 @@ function FeedbackPageInner() {
     const cleanPath = `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}`
     router.replace(cleanPath)
 
-    fetch(`/api/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}`)
-      .then((r) => (r.ok ? r.json() : null))
+    fetch(`/api/learn/pathway?fromFeedback=${encodeURIComponent(sessionId)}`, {
+      signal: accountAbortControllerRef.current.signal,
+    })
+      .then(async (r) => {
+        if (await handleExactAccountUnavailableResponse(r)) return null
+        return r.ok ? r.json() : null
+      })
       .then((vm) => {
+        if (accountUnavailableRef.current) return null
         const reason = vm?.pathwayUpdate?.reason
         if (reason === 'insufficient_answers' || reason === 'no_scored_feedback') {
           setPathwayRetryStatus({
@@ -574,10 +708,12 @@ function FeedbackPageInner() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId }),
+          signal: accountAbortControllerRef.current.signal,
         })
       })
       .then(async (res) => {
-        if (!res) return
+        if (accountUnavailableRef.current || !res) return
+        if (await handleExactAccountUnavailableResponse(res)) return
         if (res.ok) {
           setPathwayRetryStatus({ kind: 'success' })
           setPathwayPollEpoch((n) => n + 1)
@@ -604,6 +740,7 @@ function FeedbackPageInner() {
         let message = 'Could not start pathway retry.'
         try {
           const body = await res.json()
+          if (accountUnavailableRef.current) return
           if (typeof body?.error === 'string') message = body.error
         } catch {
           // Non-JSON body — keep generic message.
@@ -616,10 +753,11 @@ function FeedbackPageInner() {
         setPathwayRetryStatus({ kind: 'error', message })
       })
       .catch((err: unknown) => {
+        if (accountUnavailableRef.current) return
         const message = err instanceof Error ? err.message : 'Network error'
         setPathwayRetryStatus({ kind: 'error', message })
       })
-  }, [sessionId, router])
+  }, [accountUnavailable, sessionId, router, handleExactAccountUnavailableResponse])
 
   // ── Late-landing recording catcher (Shape B) ───────────────────────────────
   // Camera upload is fire-and-forget per app/interview/page.tsx — the
@@ -632,7 +770,7 @@ function FeedbackPageInner() {
   // ~45s, calling fetchRecordingUrl once hasRecording flips true. The
   // dedup ref makes it safe to overlap with the other paths.
   useEffect(() => {
-    if (!sessionId || sessionId === 'local') return
+    if (accountUnavailableRef.current || !sessionId || sessionId === 'local') return
     if (recordingFetchTriggeredRef.current) return
     let cancelled = false
     let attempts = 0
@@ -647,7 +785,7 @@ function FeedbackPageInner() {
 
     const resolvePlan = async () => {
       const queued = await hasQueuedReplayUpload(sessionId).catch(() => false)
-      if (cancelled) return
+      if (cancelled || accountUnavailableRef.current) return
       const plan = resolveRecordingWatch({
         privacyMode: replayMetaRef.current.privacyMode,
         completedAtMs: replayMetaRef.current.completedAtMs,
@@ -672,7 +810,7 @@ function FeedbackPageInner() {
       // latch (`recordingFetchTriggeredRef.current`) — if a presign fetch
       // fails it resets the latch, and the watcher needs to be alive to
       // retry on the next tick. (Codex P2 + Vercel Agent #239 on PR #364.)
-      if (cancelled || recordingUrlRef.current) {
+      if (cancelled || accountUnavailableRef.current || recordingUrlRef.current) {
         stop()
         return
       }
@@ -691,15 +829,21 @@ function FeedbackPageInner() {
         // recording-watcher GET shares its in-flight call with the
         // initial-load + poll-loop GETs mounted by the same page.
         const data = await fetchFeedbackSessionSummary(sessionId)
+        if (cancelled || accountUnavailableRef.current) return
         captureReplayMeta(data)
         if (!planResolved) await resolvePlan()
-        if (cancelled) return
+        if (cancelled || accountUnavailableRef.current) return
         if (data?.hasRecording || data?.hasAudioRecording) {
           // No-op if another path already triggered fetch; on its eventual
           // success the next tick observes recordingUrlRef and stops.
           fetchRecordingUrl()
         }
-      } catch {
+      } catch (error) {
+        if (isFeedbackAccountUnavailableError(error)) {
+          stop()
+          handleAccountUnavailable()
+          return
+        }
         // network/abort — keep ticking
       }
     }
@@ -708,7 +852,7 @@ function FeedbackPageInner() {
       cancelled = true
       stop()
     }
-  }, [sessionId, fetchRecordingUrl, captureReplayMeta])
+  }, [accountUnavailable, sessionId, fetchRecordingUrl, captureReplayMeta, handleAccountUnavailable])
 
   // ── Fullscreen replay overlay ──────────────────────────────────────────────
   useEffect(() => {
@@ -731,15 +875,20 @@ function FeedbackPageInner() {
   // ── Analysis fetch + auto-trigger ─────────────────────────────────────────
 
   const fetchAnalysis = useCallback(async () => {
-    if (!sessionId || sessionId === 'local') return
+    if (accountUnavailableRef.current || !sessionId || sessionId === 'local') return
     setAnalysisLoading(true)
     setAnalysisError(null)
 
     try {
       // First try to fetch existing analysis
-      const res = await fetch(`/api/analysis/${sessionId}`)
+      const res = await fetch(`/api/analysis/${sessionId}`, {
+        signal: accountAbortControllerRef.current.signal,
+      })
+      if (await handleExactAccountUnavailableResponse(res)) return
+      if (accountUnavailableRef.current) return
       if (res.ok) {
         const data = await res.json()
+        if (accountUnavailableRef.current) return
         if (data.status === 'completed') {
           setAnalysis(data)
           setAnalysisLoading(false)
@@ -760,14 +909,24 @@ function FeedbackPageInner() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId }),
+          signal: accountAbortControllerRef.current.signal,
         })
+        if (await handleExactAccountUnavailableResponse(startRes)) return
+        if (accountUnavailableRef.current) return
         if (startRes.ok) {
           const startData = await startRes.json()
+          if (accountUnavailableRef.current) return
           if (startData.status === 'completed') {
             // Pipeline completed inline
-            const analysisRes = await fetch(`/api/analysis/${sessionId}`)
+            const analysisRes = await fetch(`/api/analysis/${sessionId}`, {
+              signal: accountAbortControllerRef.current.signal,
+            })
+            if (await handleExactAccountUnavailableResponse(analysisRes)) return
+            if (accountUnavailableRef.current) return
             if (analysisRes.ok) {
-              setAnalysis(await analysisRes.json())
+              const completedAnalysis = await analysisRes.json()
+              if (accountUnavailableRef.current) return
+              setAnalysis(completedAnalysis)
               setAnalysisLoading(false)
               return
             }
@@ -776,6 +935,7 @@ function FeedbackPageInner() {
           pollAnalysis()
         } else {
           const errData = await startRes.json().catch(() => ({}))
+          if (accountUnavailableRef.current) return
           setAnalysisError(errData.error || 'Failed to start analysis')
           setAnalysisLoading(false)
         }
@@ -786,12 +946,14 @@ function FeedbackPageInner() {
         setAnalysisLoading(false)
       }
     } catch {
+      if (accountUnavailableRef.current) return
       setAnalysisError('Failed to load analysis')
       setAnalysisLoading(false)
     }
-  }, [sessionId, hasAnalysisSource]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId, hasAnalysisSource, handleExactAccountUnavailableResponse]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const pollAnalysis = useCallback(() => {
+    if (accountUnavailableRef.current) return () => {}
     const phases = [
       'Transcribing audio...',
       'Aggregating facial signals...',
@@ -800,6 +962,10 @@ function FeedbackPageInner() {
     let phaseIdx = 0
     let elapsed = 0
     const interval = setInterval(async () => {
+      if (accountUnavailableRef.current) {
+        clearInterval(interval)
+        return
+      }
       elapsed += 2000
       // Rotate progress phases every 5s
       if (elapsed % 5000 === 0 && phaseIdx < phases.length - 1) {
@@ -808,9 +974,23 @@ function FeedbackPageInner() {
       setAnalysisProgress(phases[phaseIdx])
 
       try {
-        const res = await fetch(`/api/analysis/${sessionId}`)
+        const res = await fetch(`/api/analysis/${sessionId}`, {
+          signal: accountAbortControllerRef.current.signal,
+        })
+        if (await handleExactAccountUnavailableResponse(res)) {
+          clearInterval(interval)
+          return
+        }
+        if (accountUnavailableRef.current) {
+          clearInterval(interval)
+          return
+        }
         if (res.ok) {
           const data = await res.json()
+          if (accountUnavailableRef.current) {
+            clearInterval(interval)
+            return
+          }
           if (data.status === 'completed') {
             clearInterval(interval)
             setAnalysis(data)
@@ -838,9 +1018,10 @@ function FeedbackPageInner() {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [sessionId])
+  }, [sessionId, handleExactAccountUnavailableResponse])
 
   const handleTabChange = useCallback((tab: FeedbackTab) => {
+    if (accountUnavailableRef.current) return
     setActiveTab(tab)
     // Scroll to tab content area on switch (offset for sticky headers)
     requestAnimationFrame(() => {
@@ -855,9 +1036,15 @@ function FeedbackPageInner() {
     // fallback) needs the transcript for question detail / replay.
     if ((tab === 'questions' || tab === 'analysis') && !lazyTranscript && !transcriptLoading && sessionId && sessionId !== 'local') {
       setTranscriptLoading(true)
-      fetch(`/api/interviews/${sessionId}/transcript`)
-        .then((r) => r.ok ? r.json() : null)
+      fetch(`/api/interviews/${sessionId}/transcript`, {
+        signal: accountAbortControllerRef.current.signal,
+      })
+        .then(async (r) => {
+          if (await handleExactAccountUnavailableResponse(r)) return null
+          return r.ok ? r.json() : null
+        })
         .then((d) => {
+          if (accountUnavailableRef.current) return
           if (d?.transcript) {
             setLazyTranscript(d.transcript)
             // Also update data.transcript for QuestionBreakdown
@@ -865,19 +1052,42 @@ function FeedbackPageInner() {
           }
         })
         .catch(() => {})
-        .finally(() => setTranscriptLoading(false))
+        .finally(() => {
+          if (!accountUnavailableRef.current) setTranscriptLoading(false)
+        })
     }
     // Auto-load analysis when tab is first opened
     if (tab === 'analysis' && !analysis && !analysisLoading) {
       fetchAnalysis()
     }
-  }, [lazyTranscript, transcriptLoading, sessionId, analysis, analysisLoading, fetchAnalysis])
+  }, [lazyTranscript, transcriptLoading, sessionId, analysis, analysisLoading, fetchAnalysis, handleExactAccountUnavailableResponse])
 
   // ── Data loading ────────────────────────────────────────────────────────────
 
   useEffect(() => {
     const abortCtrl = new AbortController()
     const { signal } = abortCtrl
+    const accountSignal = accountAbortControllerRef.current.signal
+    const abortForUnavailableAccount = () => abortCtrl.abort()
+    if (accountSignal.aborted) abortCtrl.abort()
+    else accountSignal.addEventListener('abort', abortForUnavailableAccount, { once: true })
+
+    const isCurrent = () => !signal.aborted && !accountUnavailableRef.current
+
+    async function fetchPrimarySessionSummary(): Promise<Record<string, unknown> | null> {
+      const response = await fetch(`/api/interviews/${sessionId}?excludeTranscript=true`, {
+        credentials: 'include',
+        signal,
+      })
+      if (!isCurrent()) return null
+      if (await isExactAccountUnavailable(response)) {
+        handleAccountUnavailable()
+        return null
+      }
+      if (!response.ok) return null
+      const summary = await response.json() as Record<string, unknown>
+      return isCurrent() ? summary : null
+    }
 
     async function loadData() {
       // Guard against null/undefined sessionIds reaching the API
@@ -892,23 +1102,28 @@ function FeedbackPageInner() {
           `${SESSION_CACHE_PREFIX}${sessionId}`, SESSION_CACHE_TTL_MS
         )
 
-        let session: Record<string, unknown> | null = cachedSession?.session ?? null
+        // Cached feedback remains a fast render source only after the server
+        // request has had a chance to establish the account fence. Otherwise
+        // a two-minute cache hit could bypass an already-started deletion.
+        let session: Record<string, unknown> | null = null
         let d = cachedSession?.d ?? null
 
-        if (!session) {
-          try {
-            // UAT-015: shared helper — same in-flight cache as the
-            // recording-watcher useEffect above and the poll loop
-            // below, so this initial-load GET fans in cleanly with the
-            // others when they all fire on mount.
-            session = await fetchFeedbackSessionSummary(sessionId, { signal }) as Record<string, unknown> | null
-          } catch (e) {
-            if ((e as Error).name === 'AbortError') return
-            // fall through to local data path
-          }
+        try {
+          // Keep the primary response observable so an exact inactive-
+          // account signal cannot be collapsed into the shared helper's
+          // generic non-OK `null`. Signal-bearing calls were never shared
+          // by that helper, so this preserves the existing request count.
+          session = await fetchPrimarySessionSummary()
+          if (!session && isCurrent()) session = cachedSession?.session ?? null
+        } catch (e) {
+          if ((e as Error).name === 'AbortError') return
+          if (isCurrent()) session = cachedSession?.session ?? null
         }
 
+        if (!isCurrent()) return
+
         if (session) {
+            if (!isCurrent()) return
             setRetakeSetupConfig(retakeConfigFromStoredSession(session))
             // Capture retake linkage for the comparison card. Sessions
             // created before the retake feature was added have no
@@ -926,9 +1141,12 @@ function FeedbackPageInner() {
               }
               d = mergeWithLocalData(d, sessionId)
               // Cache the session data for back-navigation
-              setCachedJSON(`${SESSION_CACHE_PREFIX}${sessionId}`, { session, d })
+              if (isCurrent()) {
+                setCachedJSON(`${SESSION_CACHE_PREFIX}${sessionId}`, { session, d })
+              }
             }
 
+            if (!isCurrent()) return
             setData(d)
             cleanupLocalInterviewData(sessionId)
             // Trust the server-derived flag only. `d.transcript` may include
@@ -968,7 +1186,7 @@ function FeedbackPageInner() {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ status: 'completed', completedAt: new Date().toISOString() }),
-                }).catch(() => {})
+                }, { isTerminalResponse: handleExactAccountUnavailableResponse }).catch(() => {})
               }
               return
             }
@@ -993,6 +1211,7 @@ function FeedbackPageInner() {
                 // possible on slow networks) collapses to one
                 // request, not two.
                 const pollData = await fetchFeedbackSessionSummary(sessionId, { signal })
+                if (!isCurrent()) return
                 if (pollData) {
                   captureReplayMeta(pollData)
                   if (pollData.hasRecording || pollData.hasAudioRecording) fetchRecordingUrl()
@@ -1005,12 +1224,16 @@ function FeedbackPageInner() {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ status: 'completed', completedAt: new Date().toISOString() }),
-                      }).catch(() => {})
+                      }, { isTerminalResponse: handleExactAccountUnavailableResponse }).catch(() => {})
                     }
                     return
                   }
                 }
               } catch (e) {
+                if (isFeedbackAccountUnavailableError(e)) {
+                  handleAccountUnavailable()
+                  return
+                }
                 if ((e as Error).name === 'AbortError') return
                 // Poll failed — continue to next attempt or fall through to generate
               }
@@ -1023,6 +1246,7 @@ function FeedbackPageInner() {
       }
 
       const localSid = sessionId !== 'local' ? sessionId : undefined
+      if (!isCurrent()) return
       const d = readLocalInterviewData(localSid)
       if (!d) {
         router.push('/')
@@ -1038,19 +1262,23 @@ function FeedbackPageInner() {
     }
 
     loadData()
-    return () => abortCtrl.abort()
+    return () => {
+      accountSignal.removeEventListener('abort', abortForUnavailableAccount)
+      abortCtrl.abort()
+    }
   }, [sessionId, router]) // eslint-disable-line
 
   // ── Peer data fetch with sessionStorage cache ─────────────────────────────
 
   async function fetchPeerData(config: StoredInterviewData['config'], signal?: AbortSignal) {
+    if (accountUnavailableRef.current) return
     if (!config) { setPeerLoading(false); return }
 
     const cacheKey = `${PEER_CACHE_PREFIX}${config.role}:${config.experience}`
 
     try {
       const cached = sessionStorage.getItem(cacheKey)
-      if (cached) {
+      if (cached && !accountUnavailableRef.current) {
         setPeerData(JSON.parse(cached))
         setPeerLoading(false)
         return
@@ -1062,8 +1290,10 @@ function FeedbackPageInner() {
     try {
       const searchParams = new URLSearchParams({ role: config.role, experience: config.experience })
       const res = await fetch(`/api/analytics/peer-comparison?${searchParams}`, { signal })
+      if (accountUnavailableRef.current) return
       if (res.ok) {
         const json = await res.json()
+        if (accountUnavailableRef.current) return
         setPeerData(json)
         try {
           sessionStorage.setItem(cacheKey, JSON.stringify(json))
@@ -1074,13 +1304,16 @@ function FeedbackPageInner() {
     } catch (e) {
       if ((e as Error).name === 'AbortError') return
     } finally {
-      setPeerLoading(false)
+      if (!accountUnavailableRef.current) setPeerLoading(false)
     }
   }
 
   // ── Feedback generation ───────────────────────────────────────────────────
 
   async function generateFeedback(d: StoredInterviewData, sid?: string, signal?: AbortSignal) {
+    const requestSignal = signal ?? accountAbortControllerRef.current.signal
+    const isCurrent = () => !requestSignal.aborted && !accountUnavailableRef.current
+    if (!isCurrent()) return
     setFeedbackError(null)
 
     // Pre-flight: if no evaluations were captured (e.g. interview ended
@@ -1112,14 +1345,16 @@ function FeedbackPageInner() {
               speechMetrics: d.speechMetrics,
               sessionId: sid,
             }),
-            signal,
+            signal: requestSignal,
           })
+          if (!isCurrent()) return
           // Retry on 5xx server errors and 429 rate limit
           if ((res.status >= 500 || res.status === 429) && attempt < 2) {
             lastError = new Error(`Server error (status ${res.status})`)
             // Longer backoff for rate limiting (429) to let the window reset
             const delay = res.status === 429 ? 5000 * (attempt + 1) : 1500 * (attempt + 1)
             await new Promise(r => setTimeout(r, delay))
+            if (!isCurrent()) return
             continue
           }
           break
@@ -1128,6 +1363,7 @@ function FeedbackPageInner() {
           if ((e as Error).name === 'AbortError') throw e
           if (attempt < 2) {
             await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
+            if (!isCurrent()) return
             continue
           }
         }
@@ -1137,8 +1373,13 @@ function FeedbackPageInner() {
       let fb
       try {
         fb = await res.json()
+        if (!isCurrent()) return
       } catch {
         throw new Error(`Feedback API returned non-JSON response (status ${res.status})`)
+      }
+      if (res.status === 401 && fb?.code === 'ACCOUNT_UNAVAILABLE') {
+        handleAccountUnavailable()
+        return
       }
       if (!res.ok) {
         throw new Error(fb.error || `Feedback generation failed (status ${res.status})`)
@@ -1157,15 +1398,22 @@ function FeedbackPageInner() {
         const MAX_POLLS = 15 // up to 30s — covers typical Sonnet feedback latency
         let resolved = false
         for (let poll = 0; poll < MAX_POLLS; poll++) {
-          if (signal?.aborted) return
+          if (!isCurrent()) return
           await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+          if (!isCurrent()) return
           try {
             const pollRes = await fetch(
               `/api/interviews/${sid}?excludeTranscript=true`,
-              { signal },
+              { signal: requestSignal },
             )
+            if (!isCurrent()) return
+            if (await isExactAccountUnavailable(pollRes)) {
+              handleAccountUnavailable()
+              return
+            }
             if (pollRes.ok) {
               const pollData = await pollRes.json()
+              if (!isCurrent()) return
               if (pollData.feedback) {
                 fb = pollData.feedback
                 resolved = true
@@ -1205,10 +1453,16 @@ function FeedbackPageInner() {
                 speechMetrics: d.speechMetrics,
                 sessionId: sid,
               }),
-              signal,
+              signal: requestSignal,
             })
+            if (!isCurrent()) return
+            if (await isExactAccountUnavailable(retryRes)) {
+              handleAccountUnavailable()
+              return
+            }
             if (retryRes.ok && retryRes.status !== 202) {
               fb = await retryRes.json()
+              if (!isCurrent()) return
               resolved = true
             }
           } catch (e) {
@@ -1251,6 +1505,7 @@ function FeedbackPageInner() {
         fb.confidence_level = fb.confidence_level?.toLowerCase?.().includes('high') ? 'High'
           : fb.confidence_level?.toLowerCase?.().includes('low') ? 'Low' : 'Medium'
       }
+      if (!isCurrent()) return
       setFeedback(fb as FeedbackData)
       // Fresh generation: the route persists enrichmentStatus 'pending'
       // atomically with the feedback write (local sessions never enqueue).
@@ -1282,7 +1537,9 @@ function FeedbackPageInner() {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(patchBody),
-        })
+          signal: requestSignal,
+        }, { isTerminalResponse: handleExactAccountUnavailableResponse })
+        if (!isCurrent()) return
         if (!saved) {
           setSaveWarning('Feedback generated but could not be saved. It may not appear in history.')
         }
@@ -1293,6 +1550,7 @@ function FeedbackPageInner() {
         // degraded directly) rather than rehydrating a stale synthetic
         // score.
         try {
+          if (!isCurrent()) return
           const cacheKey = `${SESSION_CACHE_PREFIX}${sid}`
           const raw = sessionStorage.getItem(cacheKey)
           if (raw) {
@@ -1310,24 +1568,25 @@ function FeedbackPageInner() {
       }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return
+      if (!isCurrent()) return
       const msg = e instanceof Error ? e.message : 'Unknown error'
       setFeedbackError(`Failed to generate feedback: ${msg}`)
     } finally {
-      setLoading(false)
+      if (isCurrent()) setLoading(false)
     }
   }
 
   // ── Retry handler ─────────────────────────────────────────────────────────
 
   function handleRetry() {
-    if (!data) return
+    if (accountUnavailableRef.current || !data) return
     setLoading(true)
     setFeedbackError(null)
     generateFeedback(data, sessionId !== 'local' ? sessionId : undefined)
   }
 
   async function handleRetrySave() {
-    if (!feedback || !sessionId || sessionId === 'local') return
+    if (accountUnavailableRef.current || !feedback || !sessionId || sessionId === 'local') return
     setSaveWarning(null)
     try {
       const fb = { ...feedback }
@@ -1357,11 +1616,14 @@ function FeedbackPageInner() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patchBody),
-      })
+        signal: accountAbortControllerRef.current.signal,
+      }, { isTerminalResponse: handleExactAccountUnavailableResponse })
+      if (accountUnavailableRef.current) return
       if (!saved) {
         setSaveWarning('Save failed again. The feedback is visible now but may not appear in history.')
       }
     } catch {
+      if (accountUnavailableRef.current) return
       setSaveWarning('Save failed again. The feedback is visible now but may not appear in history.')
     }
   }
@@ -1494,6 +1756,21 @@ function FeedbackPageInner() {
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }, [])
+
+  if (accountUnavailable) {
+    return (
+      <main className="min-h-screen bg-white flex flex-col items-center justify-center gap-4 px-4">
+        <div role="status" aria-live="polite" className="surface-card-bordered p-6 max-w-sm w-full text-center">
+          <h1 className="text-subheading text-[#0f1419]">Your account is unavailable.</h1>
+          <p className="mt-2 text-body text-[#71767b]">
+            Account deletion has started or completed, so private interview feedback was cleared from this page.
+          </p>
+          <p className="mt-1 text-body text-[#71767b]">If you did not request deletion, contact support.</p>
+        </div>
+        <Link href="/" className="text-sm text-blue-600 hover:underline">Go home</Link>
+      </main>
+    )
+  }
 
   if (loading || !data) {
     const progressSteps = [
@@ -1693,7 +1970,7 @@ function FeedbackPageInner() {
           cannot host variable-height content (Codex #527). Both children
           render null in the common case — the row collapses to nothing. */}
       <div className="max-w-5xl mx-auto px-4 flex flex-wrap items-center gap-x-4">
-        <JobsBridge sessionId={sessionId} />
+        <JobsBridge sessionId={sessionId} onAccountUnavailable={handleAccountUnavailable} />
         {data?.config?.role && <JobsCountLink domain={data.config.role} variant="feedback" />}
       </div>
 
@@ -1951,6 +2228,7 @@ function FeedbackPageInner() {
             parentSessionId={parentSessionId || undefined}
             onQuestionClick={handleQuestionRefToScoresTab}
             maxQuestionIndex={maxQuestionIndex}
+            onAccountUnavailable={handleAccountUnavailable}
             // Round 5a feature #2 — Claude's narrative arc + per-Q sparkline.
             // Both are no-ops when multimodal analysis hasn't run; the
             // ConfidenceArcCard itself renders null in that case.
@@ -2000,15 +2278,21 @@ function FeedbackPageInner() {
               type="button"
               disabled={retakeLoading || sessionId === 'local'}
               onClick={async () => {
-                if (!sessionId || sessionId === 'local') return
+                if (accountUnavailableRef.current || !sessionId || sessionId === 'local') return
                 setRetakeLoading(true)
                 try {
-                  const res = await fetch(`/api/interviews/${sessionId}/retake`, { method: 'POST' })
+                  const res = await fetch(`/api/interviews/${sessionId}/retake`, {
+                    method: 'POST',
+                    signal: accountAbortControllerRef.current.signal,
+                  })
+                  if (await handleExactAccountUnavailableResponse(res)) return
+                  if (accountUnavailableRef.current) return
                   if (!res.ok) {
                     setRetakeLoading(false)
                     return
                   }
                   const retakePayload = await res.json() as RetakeRouteResponse
+                  if (accountUnavailableRef.current) return
                   const plan = planRetakeNavigation(retakePayload, sessionId)
                   if (plan.kind === 'jobs-practice') {
                     // The original signed token was consumed. Return through
@@ -2046,7 +2330,7 @@ function FeedbackPageInner() {
                   } catch { /* ignore */ }
                   router.push(plan.href)
                 } catch {
-                  setRetakeLoading(false)
+                  if (!accountUnavailableRef.current) setRetakeLoading(false)
                 }
               }}
               className="px-5 py-2.5 bg-brand-500 hover:bg-brand-600 disabled:bg-brand-500/60 text-white rounded-[var(--radius-md)] font-semibold btn-glow transition text-sm"

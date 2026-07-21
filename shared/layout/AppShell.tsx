@@ -8,6 +8,7 @@ import { Menu, X } from 'lucide-react'
 import AuthMenu from './AuthMenu'
 import Footer from './Footer'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 // UAT-010: heavy authed routes (Interview / Pathway / Resume / History)
 // run a chunky useEffect + auth + data fetch on mount; default
@@ -64,14 +65,10 @@ export default function AppShell({
   const isHidden = isInterviewRoute || HIDDEN_PATHS.some((p) => pathname.startsWith(p))
   if (isHidden) return <>{children}</>
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
     setIsMobileMenuOpen(false)
-    try {
-      localStorage.removeItem('interviewConfig')
-      localStorage.removeItem('interviewData')
-      localStorage.removeItem('interviewActiveSession')
-    } catch { /* ignore */ }
-    signOut({ callbackUrl: '/' })
+    await clearAllInterviewStorage()
+    await signOut({ callbackUrl: '/' })
   }
 
   return (

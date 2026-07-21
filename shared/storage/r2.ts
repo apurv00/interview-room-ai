@@ -62,12 +62,94 @@ export function documentKey(userId: string, docType: string, filename: string): 
   return `documents/${userId}/${docType}/${Date.now()}-${safe}`
 }
 
+export class InvalidR2KeyError extends Error {
+  constructor(public readonly key: string) {
+    super('R2 key is not canonical')
+    this.name = 'InvalidR2KeyError'
+  }
+}
+
+export interface R2DeleteAuthority {
+  /** Mongo user id whose namespace may be deleted. */
+  ownerUserId: string
+  /** When present, recording/landmark keys must also bind to this session. */
+  sessionId?: string
+}
+
+export class R2DeleteAuthorityError extends Error {
+  constructor(public readonly key: string) {
+    super('R2 key is outside the authorized deletion scope')
+    this.name = 'R2DeleteAuthorityError'
+  }
+}
+
+/**
+ * Permit only key shapes minted by this application. AWS request signing can
+ * normalize dot segments, so namespace-prefix checks alone are not a security
+ * boundary for historical/client-provided keys.
+ */
+export function isCanonicalR2Key(key: string): boolean {
+  if (!key || key.length > 1000 || key.includes('%') || key.includes('\\')) return false
+  const segments = key.split('/')
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return false
+  const objectId = /^[a-fA-F0-9]{24}$/
+
+  if (segments[0] === 'recordings' && segments.length === 3) {
+    return objectId.test(segments[1]) &&
+      /^[a-fA-F0-9]{24}(?:-(?:screen|audio))?-\d{10,16}\.webm$/.test(segments[2])
+  }
+  if (segments[0] === 'landmarks' && segments.length === 3) {
+    return objectId.test(segments[1]) &&
+      /^[a-fA-F0-9]{24}\.json$/.test(segments[2])
+  }
+  if (segments[0] === 'documents' && segments.length === 4) {
+    return objectId.test(segments[1]) &&
+      /^(?:jd|resume)$/.test(segments[2]) &&
+      /^\d{10,16}-[a-zA-Z0-9._-]+$/.test(segments[3])
+  }
+  return false
+}
+
+function assertCanonicalR2Key(key: string): void {
+  if (!isCanonicalR2Key(key)) throw new InvalidR2KeyError(key)
+}
+
+function assertR2DeleteAuthority(
+  key: string,
+  authority: R2DeleteAuthority,
+): void {
+  const segments = key.split('/')
+  if (!authority || segments[1] !== authority.ownerUserId) {
+    throw new R2DeleteAuthorityError(key)
+  }
+  if (!authority.sessionId) return
+
+  if (segments[0] === 'recordings') {
+    const recordingSessionId = /^([a-fA-F0-9]{24})(?:-(?:screen|audio))?-\d{10,16}\.webm$/
+      .exec(segments[2])?.[1]
+    if (recordingSessionId !== authority.sessionId) {
+      throw new R2DeleteAuthorityError(key)
+    }
+    return
+  }
+  if (
+    segments[0] === 'landmarks' &&
+    segments[2] !== `${authority.sessionId}.json`
+  ) {
+    throw new R2DeleteAuthorityError(key)
+  }
+  // Document keys carry owner but not session identity. The owner namespace
+  // is still mandatory; reference-aware callers decide whether a shared
+  // document may be removed when deleting only one session.
+}
+
 /** Upload a buffer directly to R2 */
 export async function uploadToR2(
   key: string,
   body: Buffer | Uint8Array,
   contentType: string
 ): Promise<string> {
+  assertCanonicalR2Key(key)
   const client = getR2Client()
   await client.send(
     new PutObjectCommand({
@@ -86,6 +168,7 @@ export async function getUploadPresignedUrl(
   contentType: string,
   expiresIn = 3600
 ): Promise<string> {
+  assertCanonicalR2Key(key)
   const client = getR2Client()
   return getSignedUrl(
     client,
@@ -103,6 +186,7 @@ export async function createMultipartUpload(
   key: string,
   contentType: string
 ): Promise<{ key: string; uploadId: string }> {
+  assertCanonicalR2Key(key)
   const client = getR2Client()
   const result = await client.send(
     new CreateMultipartUploadCommand({
@@ -124,6 +208,7 @@ export async function getMultipartPartPresignedUrl(
   partNumber: number,
   expiresIn = 3600
 ): Promise<string> {
+  assertCanonicalR2Key(key)
   const client = getR2Client()
   return getSignedUrl(
     client,
@@ -143,6 +228,7 @@ export async function completeMultipartUpload(
   uploadId: string,
   parts: CompletedPart[]
 ): Promise<void> {
+  assertCanonicalR2Key(key)
   const client = getR2Client()
   await client.send(
     new CompleteMultipartUploadCommand({
@@ -161,6 +247,7 @@ export async function abortMultipartUpload(
   key: string,
   uploadId: string
 ): Promise<void> {
+  assertCanonicalR2Key(key)
   const client = getR2Client()
   await client.send(
     new AbortMultipartUploadCommand({
@@ -176,6 +263,7 @@ export async function getDownloadPresignedUrl(
   key: string,
   expiresIn = 900 // 15 minutes — shorter TTL limits URL sharing window
 ): Promise<string> {
+  assertCanonicalR2Key(key)
   const client = getR2Client()
   return getSignedUrl(
     client,
@@ -189,6 +277,7 @@ export async function getDownloadPresignedUrl(
 
 /** Check whether an object exists at `key`. Returns false on 404; rethrows on other errors. */
 export async function objectExists(key: string): Promise<boolean> {
+  assertCanonicalR2Key(key)
   const client = getR2Client()
   try {
     await client.send(
@@ -207,8 +296,13 @@ export async function objectExists(key: string): Promise<boolean> {
   }
 }
 
-/** Delete an object from R2 */
-export async function deleteFromR2(key: string): Promise<void> {
+/** Delete an object from R2 only within explicit owner/session authority. */
+export async function deleteFromR2(
+  key: string,
+  authority: R2DeleteAuthority,
+): Promise<void> {
+  assertCanonicalR2Key(key)
+  assertR2DeleteAuthority(key, authority)
   const client = getR2Client()
   await client.send(
     new DeleteObjectCommand({

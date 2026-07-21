@@ -18,6 +18,13 @@ interface PriorPayload {
   feedback: PriorFeedback | null
 }
 
+async function isExactAccountUnavailable(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false
+  const readable = typeof response.clone === 'function' ? response.clone() : response
+  const body = await readable.json().catch(() => null) as { code?: unknown } | null
+  return body?.code === 'ACCOUNT_UNAVAILABLE'
+}
+
 /**
  * PostInterviewDeltaCard — closes the action-anchored coaching loop
  * opened by the Setup page's Pre-interview Coach Card.
@@ -49,11 +56,13 @@ export default function PostInterviewDeltaCard({
   domain,
   currentOverallScore,
   currentTopImprovements,
+  onAccountUnavailable,
 }: {
   sessionId: string
   domain: string | undefined
   currentOverallScore: number
   currentTopImprovements: string[]
+  onAccountUnavailable?: () => void
 }) {
   const [prior, setPrior] = useState<PriorFeedback | null>(null)
   const [loading, setLoading] = useState(false)
@@ -72,12 +81,19 @@ export default function PostInterviewDeltaCard({
       `/api/interviews/last-same-domain-feedback?domain=${encodeURIComponent(domain)}&priorTo=${encodeURIComponent(sessionId)}`,
       { cache: 'no-store' },
     )
-      .then((res) => {
+      .then(async (res) => {
+        if (await isExactAccountUnavailable(res)) {
+          if (!cancelled) {
+            setPrior(null)
+            onAccountUnavailable?.()
+          }
+          return null
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return res.json() as Promise<PriorPayload>
       })
       .then((payload) => {
-        if (cancelled) return
+        if (cancelled || !payload) return
         setPrior(payload.feedback)
       })
       .catch(() => {
@@ -92,7 +108,7 @@ export default function PostInterviewDeltaCard({
     return () => {
       cancelled = true
     }
-  }, [domain, sessionId])
+  }, [domain, sessionId, onAccountUnavailable])
 
   // Silent degradation across all empty/error states — this card is
   // additive context, not a blocker.

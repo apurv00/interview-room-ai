@@ -10,6 +10,7 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { Check, AlertTriangle } from 'lucide-react'
 import { tailoredResumeName } from '@resume/lib/resumeNames'
 import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
+import { clearAllInterviewStorage, JOBS_STORAGE_KEYS } from '@shared/storageKeys'
 
 interface SavedResume {
   id: string
@@ -78,10 +79,11 @@ interface HeldTailorResult {
   resumeFileName: string
 }
 
-const PENDING_ASSOCIATION_KEY = 'jobs:tailor-pending-association:v1'
+const PENDING_ASSOCIATION_KEY = JOBS_STORAGE_KEYS.TAILOR_PENDING_ASSOCIATION
 const PENDING_ASSOCIATION_TTL_MS = 10 * 60 * 1000
 const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/i
 const JD_HASH_PATTERN = /^[a-f0-9]{64}$/
+const ACCOUNT_UNAVAILABLE_MESSAGE = 'Account deletion has started or completed, so account-bound Tailor data was cleared from this page. If you did not request deletion, contact support.'
 
 function validUserId(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim() || value.length > 128) return null
@@ -249,6 +251,7 @@ export default function TailorPage() {
   const [resultResumeFileName, setResultResumeFileName] = useState('')
   const [resultOriginUserId, setResultOriginUserId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [accountUnavailable, setAccountUnavailable] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [savingCopy, setSavingCopy] = useState(false)
   /** Controlled value for the saved-resume dropdown. The old uncontrolled
@@ -276,6 +279,7 @@ export default function TailorPage() {
   const uploadAbortRef = useRef<AbortController | null>(null)
   const saveCopyRequestRef = useRef(0)
   const heldResultRef = useRef<HeldTailorResult | null>(null)
+  const accountUnavailableRef = useRef(false)
   const selectedResumeIdRef = useRef('')
   const sessionUserIdRef = useRef<string | null>(sessionUserId)
   const previousSessionUserIdRef = useRef<string | null>(sessionUserId)
@@ -284,7 +288,17 @@ export default function TailorPage() {
   const resolvedIdentityChanged = !!previousSessionUserIdRef.current &&
     previousSessionUserIdRef.current !== sessionUserId
 
-  const scrubAccountBoundState = useCallback((message: string) => {
+  const scrubAccountBoundState = useCallback((message: string, terminalAccountUnavailable = false) => {
+    // ACCOUNT_UNAVAILABLE is an authoritative deletion fence. Once observed,
+    // this mounted page must never become interactive again: a later session,
+    // query-param transition, or stale async completion cannot revive private
+    // Tailor data or start another document upload.
+    if (accountUnavailableRef.current) return
+    if (terminalAccountUnavailable) {
+      accountUnavailableRef.current = true
+      setAccountUnavailable(true)
+    }
+    clearAllInterviewStorage()
     clearStoredPendingAssociation()
     jobFetchRequestRef.current += 1
     tailorRequestRef.current += 1
@@ -322,10 +336,15 @@ export default function TailorPage() {
     setJobPostingState(null)
     setJobTailorAllowed(false)
     setJobContextStatus('terminal')
-    setError(message)
+    setError(terminalAccountUnavailable ? ACCOUNT_UNAVAILABLE_MESSAGE : message)
   }, [])
 
+  const enterAccountUnavailableState = useCallback(() => {
+    scrubAccountBoundState(ACCOUNT_UNAVAILABLE_MESSAGE, true)
+  }, [scrubAccountBoundState])
+
   useEffect(() => {
+    if (accountUnavailableRef.current) return
     const requestId = ++jobFetchRequestRef.current
     const controller = new AbortController()
     // A query-param transition is a new provenance boundary. Invalidate every
@@ -354,6 +373,12 @@ export default function TailorPage() {
     fetch(`/api/jobs/${jobId}`, { signal: controller.signal })
       .then(async (response) => {
         if (response.status === 404) return { kind: 'terminal' as const }
+        if (response.status === 401) {
+          const body = await response.json().catch(() => null) as { code?: unknown } | null
+          if (body?.code === 'ACCOUNT_UNAVAILABLE') {
+            return { kind: 'account-unavailable' as const }
+          }
+        }
         if (!response.ok) return { kind: 'transient-error' as const }
         try {
           const data = await response.json()
@@ -375,6 +400,10 @@ export default function TailorPage() {
       })
       .then((resolution) => {
         if (controller.signal.aborted || requestId !== jobFetchRequestRef.current || activeJobIdRef.current !== jobId) return
+        if (resolution.kind === 'account-unavailable') {
+          enterAccountUnavailableState()
+          return
+        }
         if (resolution.kind === 'transient-error') {
           setJobTailorAllowed(false)
           setJobContextStatus('transient-error')
@@ -420,7 +449,7 @@ export default function TailorPage() {
         setJobAssociation('detached')
       })
     return () => controller.abort()
-  }, [jobId, jobContextRetry, jobContextSessionKey])
+  }, [enterAccountUnavailableState, jobId, jobContextRetry, jobContextSessionKey])
   useEffect(() => () => {
     savedResumeAbortRef.current?.abort()
     savedResumeListAbortRef.current?.abort()
@@ -428,11 +457,13 @@ export default function TailorPage() {
   }, [])
 
   useEffect(() => {
+    if (accountUnavailableRef.current) return
     const stored = readStoredPendingAssociation()
     if (stored && stored.payload.jobId !== jobId) clearStoredPendingAssociation()
   }, [jobId])
 
   useEffect(() => {
+    if (accountUnavailableRef.current) return
     const previousUserId = previousSessionUserIdRef.current
     const authenticatedIdentityChanged = !!previousUserId && previousUserId !== sessionUserId
     previousSessionUserIdRef.current = sessionUserId
@@ -480,6 +511,12 @@ export default function TailorPage() {
       signal: controller.signal,
     })
       .then(async (response) => {
+        if (response.status === 401) {
+          const unavailable = await response.json().catch(() => null) as { code?: unknown } | null
+          return unavailable?.code === 'ACCOUNT_UNAVAILABLE'
+            ? { kind: 'account-unavailable' as const }
+            : { kind: 'ignored' as const }
+        }
         if (response.status === 409) {
           const conflict = await response.json().catch(() => null) as { code?: unknown } | null
           return conflict?.code === 'SESSION_CHANGED'
@@ -495,15 +532,20 @@ export default function TailorPage() {
           scrubAccountBoundState('Your sign-in account changed while saved resumes were loading. Sign in again before continuing.')
           return
         }
+        if (resolution.kind === 'account-unavailable') {
+          enterAccountUnavailableState()
+          return
+        }
         if (resolution.kind === 'data') {
           setSavedResumes(Array.isArray(resolution.data?.resumes) ? resolution.data.resumes : [])
         }
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [authStatus, scrubAccountBoundState, sessionUserId])
+  }, [authStatus, enterAccountUnavailableState, scrubAccountBoundState, sessionUserId])
 
   async function handleSelectSaved(id: string) {
+    if (accountUnavailableRef.current) return
     const resume = savedResumes.find(r => r.id === id)
     if (!resume) return
     const resumeUserId = sessionUserId
@@ -528,6 +570,14 @@ export default function TailorPage() {
         signal: controller.signal,
       })
       if (controller.signal.aborted || requestId !== savedResumeRequestRef.current || selectedResumeIdRef.current !== id || resumeUserId !== sessionUserIdRef.current) return
+      if (res.status === 401) {
+        const unavailable = await res.json().catch(() => null) as { code?: unknown } | null
+        if (controller.signal.aborted || requestId !== savedResumeRequestRef.current || selectedResumeIdRef.current !== id || resumeUserId !== sessionUserIdRef.current) return
+        if (unavailable?.code === 'ACCOUNT_UNAVAILABLE') {
+          enterAccountUnavailableState()
+          return
+        }
+      }
       if (res.status === 409) {
         const conflict = await res.json().catch(() => null) as { code?: unknown } | null
         if (controller.signal.aborted || requestId !== savedResumeRequestRef.current || selectedResumeIdRef.current !== id || resumeUserId !== sessionUserIdRef.current) return
@@ -566,6 +616,7 @@ export default function TailorPage() {
   }
 
   async function handleUpload(file: File) {
+    if (accountUnavailableRef.current) return
     if (isAnonymous) { requireAuth('parse_resume'); return }
     const uploadUserId = sessionUserId
     if (!uploadUserId) {
@@ -601,6 +652,10 @@ export default function TailorPage() {
         scrubAccountBoundState('Your sign-in account changed before the upload completed. Sign in again, then upload the resume again.')
         return
       }
+      if (res.status === 401 && data?.code === 'ACCOUNT_UNAVAILABLE') {
+        enterAccountUnavailableState()
+        return
+      }
       if (res.ok) {
         setResumeText(data.text)
         setResumeFileName(data.fileName)
@@ -617,6 +672,7 @@ export default function TailorPage() {
   }
 
   const persistJobAssociation = useCallback(async (payload: JobAssociationPayload) => {
+    if (accountUnavailableRef.current) return 'stale' satisfies JobAssociationDisposition
     if (!payload.originUserId || payload.originUserId !== sessionUserIdRef.current) {
       scrubAccountBoundState('This result belongs to a different sign-in session. Sign in again, then rerun Tailor.')
       return 'discard' satisfies JobAssociationDisposition
@@ -649,6 +705,10 @@ export default function TailorPage() {
       }
       if (association.status === 409 && responseBody?.code === 'SESSION_CHANGED') {
         scrubAccountBoundState('Your sign-in account changed while Tailor was running. Sign in again, then rerun Tailor for this job.')
+        return 'discard' satisfies JobAssociationDisposition
+      }
+      if (association.status === 401 && responseBody?.code === 'ACCOUNT_UNAVAILABLE') {
+        enterAccountUnavailableState()
         return 'discard' satisfies JobAssociationDisposition
       }
       if (association.ok) {
@@ -688,9 +748,10 @@ export default function TailorPage() {
       }
       return 'stale' satisfies JobAssociationDisposition
     }
-  }, [scrubAccountBoundState])
+  }, [enterAccountUnavailableState, scrubAccountBoundState])
 
   const revealHeldTailorResult = useCallback((payload: JobAssociationPayload) => {
+    if (accountUnavailableRef.current) return false
     const held = heldResultRef.current
     if (!held ||
       held.payload.jobId !== payload.jobId ||
@@ -706,6 +767,7 @@ export default function TailorPage() {
   }, [])
 
   useEffect(() => {
+    if (accountUnavailableRef.current) return
     if (authStatus === 'loading' || jobContextStatus === 'loading') return
     const stored = readStoredPendingAssociation()
     if (!stored) return
@@ -773,6 +835,7 @@ export default function TailorPage() {
   }, [authStatus, jobId, jobTailorAllowed, jobContextStatus, loadedJobContext, persistJobAssociation, revealHeldTailorResult, sessionUserId])
 
   async function handleTailor() {
+    if (accountUnavailableRef.current) return
     if (!resumeText || !jobDescription) {
       setError('Both resume and job description are required')
       return
@@ -817,6 +880,10 @@ export default function TailorPage() {
       if (requestId !== tailorRequestRef.current || activeJobIdRef.current !== jobId) return
       if (res.status === 409 && data?.code === 'SESSION_CHANGED') {
         scrubAccountBoundState('Your sign-in account changed before tailoring completed. Sign in again, then rerun Tailor.')
+        return
+      }
+      if (res.status === 401 && data?.code === 'ACCOUNT_UNAVAILABLE') {
+        enterAccountUnavailableState()
         return
       }
       if (res.ok) {
@@ -876,13 +943,18 @@ export default function TailorPage() {
       } else {
         setError(data.error || 'Tailoring failed')
       }
-    } catch { setError('Network error') }
+    } catch {
+      if (requestId === tailorRequestRef.current && activeJobIdRef.current === jobId) {
+        setError('Network error')
+      }
+    }
     finally {
       if (requestId === tailorRequestRef.current) setTailoring(false)
     }
   }
 
   async function handleSaveAsCopy() {
+    if (accountUnavailableRef.current) return
     if (!result) return
     if (isAnonymous) { requireAuth('save_resume'); return }
     const saveOriginUserId = resultOriginUserId
@@ -928,6 +1000,10 @@ export default function TailorPage() {
         scrubAccountBoundState('Your sign-in account changed before this resume could be saved. Sign in again, then rerun Tailor.')
         return
       }
+      if (res.status === 401 && data?.code === 'ACCOUNT_UNAVAILABLE') {
+        enterAccountUnavailableState()
+        return
+      }
       if (res.ok) {
         router.push(`/resume/builder?id=${data.id}`)
       } else if (data.code === 'RESUME_LIMIT') {
@@ -945,6 +1021,7 @@ export default function TailorPage() {
   }
 
   async function retryHeldAttachment() {
+    if (accountUnavailableRef.current) return
     const held = heldResultRef.current
     if (!held || !pendingAssociation ||
       held.payload.jobId !== pendingAssociation.jobId ||
@@ -954,6 +1031,7 @@ export default function TailorPage() {
   }
 
   function handleSignInToAttach() {
+    if (accountUnavailableRef.current) return
     if (!pendingAssociation) return
     const held = heldResultRef.current
     const pendingResult = result ?? held?.result
@@ -979,6 +1057,20 @@ export default function TailorPage() {
     loadedJobContext.jobId === jobId &&
     loadedJobContext.jobDescription === jobDescription &&
     loadedJobContext.companyName === companyName
+
+  if (accountUnavailable) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <h1 className="text-2xl font-bold text-slate-900">Tailor Resume for Job</h1>
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
+          {ACCOUNT_UNAVAILABLE_MESSAGE}
+        </div>
+      </div>
+    )
+  }
 
   if (resolvedIdentityChanged) {
     return (
@@ -1144,6 +1236,7 @@ export default function TailorPage() {
                   <div className="space-y-2">
                     <label className="text-[10px] text-slate-500 uppercase tracking-wider">Paste your resume text</label>
                     <textarea
+                      aria-label="Resume text"
                       value={resumeSource === 'paste' ? resumeText : ''}
                       onChange={e => {
                         savedResumeRequestRef.current += 1
@@ -1173,6 +1266,7 @@ export default function TailorPage() {
           <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
             <h2 className="text-sm font-semibold text-slate-500">Job Description</h2>
             <input
+              aria-label="Company name"
               type="text"
               value={companyName}
               onChange={e => setCompanyName(e.target.value)}
@@ -1180,6 +1274,7 @@ export default function TailorPage() {
               className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
             <textarea
+              aria-label="Job description"
               value={jobDescription}
               onChange={e => setJobDescription(e.target.value)}
               placeholder="Paste the job description here..."
@@ -1188,7 +1283,7 @@ export default function TailorPage() {
             />
           </div>
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
 
           <button
             onClick={handleTailor}
@@ -1265,7 +1360,7 @@ export default function TailorPage() {
             </div>
           )}
           {error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 flex items-start gap-2">
+            <div role="alert" className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" strokeWidth={2} />
               <p className="text-xs text-red-400">{error}</p>
             </div>

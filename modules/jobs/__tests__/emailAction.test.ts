@@ -10,12 +10,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * channel 'email'.
  */
 
-const { mockAppFindOne, mockAppUpdateOne, mockSendFindOne, mockTransition, mockCheckJobsRateLimit } = vi.hoisted(() => ({
+const {
+  mockAppFindOne,
+  mockAppUpdateOne,
+  mockSendFindOne,
+  mockTransition,
+  mockCheckJobsRateLimit,
+  mockIsJobsAccountActive,
+  mockWithActiveJobsAccountWrite,
+} = vi.hoisted(() => ({
   mockAppFindOne: vi.fn(),
   mockAppUpdateOne: vi.fn(),
   mockSendFindOne: vi.fn(),
   mockTransition: vi.fn(),
   mockCheckJobsRateLimit: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
+  mockWithActiveJobsAccountWrite: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
@@ -25,9 +35,20 @@ vi.mock('@shared/db/models', () => ({
 }))
 vi.mock('@jobs', () => ({ transitionStatus: mockTransition }))
 vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
+  withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
+  JobsAccountInactiveError: class JobsAccountInactiveError extends Error {
+    constructor(public readonly userId: string) {
+      super('account is missing or being deleted')
+      this.name = 'JobsAccountInactiveError'
+    }
+  },
+}))
 
 import { GET, POST } from '../../../app/api/jobs/email-action/route'
 import { mintActionToken } from '@shared/services/signedActionToken'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const selectLean = (v: unknown) => ({ select: () => ({ lean: () => Promise.resolve(v) }) })
 
@@ -53,6 +74,11 @@ beforeEach(() => {
   mockSendFindOne.mockReturnValue(selectLean({ sentAt: SENT_AT }))
   mockTransition.mockResolvedValue({ ok: true, status: 'interview_scheduled', from: 'applied' })
   mockCheckJobsRateLimit.mockResolvedValue(null)
+  mockIsJobsAccountActive.mockResolvedValue(true)
+  mockWithActiveJobsAccountWrite.mockImplementation(async (
+    _userId: string,
+    work: (session: { id: string }) => Promise<unknown>,
+  ) => work({ id: 'email-action-session' }))
 })
 
 describe('email-action route', () => {
@@ -83,6 +109,19 @@ describe('email-action route', () => {
     expect(mockAppUpdateOne).not.toHaveBeenCalled()
   })
 
+  it('renders the friendly invalid-link page without reading tracker data for an inactive account', async () => {
+    mockIsJobsAccountActive.mockResolvedValueOnce(false)
+
+    const response = await POST(req(tok('rejected')))
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('Content-Type')).toContain('text/html')
+    expect(await response.text()).toContain("isn't valid")
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockTransition).not.toHaveBeenCalled()
+  })
+
   it('GET renders a confirm form and never mutates (mail scanners are robots)', async () => {
     const res = await GET(req(tok('interview_scheduled')))
     const html = await res.text()
@@ -102,10 +141,68 @@ describe('email-action route', () => {
   it('[Nothing yet] is an ANSWER: outcome touch only, never a status flip', async () => {
     await POST(req(tok('nothing-yet')))
     expect(mockTransition).not.toHaveBeenCalled()
+    expect(mockWithActiveJobsAccountWrite).toHaveBeenCalledWith('u1', expect.any(Function))
     expect(mockAppUpdateOne).toHaveBeenCalledWith(
       { _id: 'app1', userId: 'u1' },
-      { $set: { 'outcome.lastAskedAt': expect.any(Date) } }
+      { $set: { 'outcome.lastAskedAt': expect.any(Date) } },
+      { session: { id: 'email-action-session' } },
     )
+  })
+
+  it('returns 401 when deletion lands while reading the token-owned application', async () => {
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(req(tok('nothing-yet')))
+
+    expect(response.status).toBe(401)
+    expect(await response.text()).toContain("isn't valid")
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(2)
+    expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockTransition).not.toHaveBeenCalled()
+  })
+
+  it('[Nothing yet] returns 401 when deletion owns the transactional write fence', async () => {
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    const response = await POST(req(tok('nothing-yet')))
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('Content-Type')).toContain('text/html')
+    expect(await response.text()).toContain("isn't valid")
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockTransition).not.toHaveBeenCalled()
+  })
+
+  it('returns 401 when deletion lands during the stale-action ledger read', async () => {
+    mockAppFindOne.mockReturnValue(selectLean(appDoc({
+      statusHistory: [
+        { status: 'applied', at: new Date('2026-07-01T00:00:00Z'), source: 'user' },
+        { status: 'offer', at: new Date('2026-07-16T00:00:00Z'), source: 'user' },
+      ],
+    })))
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await POST(req(tok('rejected')))
+
+    expect(response.status).toBe(401)
+    expect(await response.text()).toContain("isn't valid")
+    expect(mockTransition).not.toHaveBeenCalled()
+  })
+
+  it('keeps the friendly invalid-link contract when deletion wins the transition fence', async () => {
+    mockTransition.mockRejectedValueOnce(new JobsAccountInactiveError('u1'))
+
+    const response = await POST(req(tok('rejected')))
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('Content-Type')).toContain('text/html')
+    expect(await response.text()).toContain("isn't valid")
   })
 
   it('stale-guard: a USER transition after the send blocks the token', async () => {

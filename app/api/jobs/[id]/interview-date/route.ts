@@ -5,6 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { dateForChoice, setInterviewDate } from '@jobs'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,7 +38,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!capture) return NextResponse.json({ error: 'choice or date required' }, { status: 400 })
 
   await connectDB()
-  const result = await setInterviewDate(userId, params.id, capture)
+  let result: Awaited<ReturnType<typeof setInterviewDate>>
+  try {
+    result = await setInterviewDate(userId, params.id, capture)
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
+    throw error
+  }
   if (!result.ok) return NextResponse.json({ error: 'no application, or the date looks off' }, { status: 400 })
   return NextResponse.json({ ok: true, daysUntil: result.daysUntil })
 }

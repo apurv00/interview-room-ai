@@ -1,10 +1,43 @@
 'use client'
 
+import {
+  assertReplayUploadOperationActive,
+  beginReplayUploadOperation,
+  bindReplayUploadTransaction,
+  currentReplayUploadPrivacyGeneration,
+  finishReplayUploadOperation,
+  isReplayUploadPrivacyCancellation,
+  REPLAY_UPLOAD_DB_NAME,
+  REPLAY_UPLOAD_DB_VERSION,
+  REPLAY_UPLOAD_STORE_NAME,
+  trackReplayUploadDatabase,
+  __resetReplayUploadPrivacyForTests,
+  type ReplayUploadOperation,
+} from '@shared/services/replayUploadPrivacy'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
+
 export type ReplayUploadKind = 'camera' | 'screen'
 export type ReplayUploadStatus = 'uploaded' | 'queued' | 'dropped'
 
 export interface ReplayUploadResult {
   status: ReplayUploadStatus
+}
+
+export interface ReplayUploadIntent {
+  readonly privacyGeneration: number
+  readonly originUserId?: string
+}
+
+/**
+ * Capture before recorder shutdown begins. If account cleanup occurs while
+ * the recorder is still materializing its Blob, the eventual upload inherits
+ * the old generation and is rejected instead of becoming fresh activity.
+ */
+export function captureReplayUploadIntent(originUserId?: string): ReplayUploadIntent {
+  return {
+    privacyGeneration: currentReplayUploadPrivacyGeneration(),
+    ...(originUserId ? { originUserId } : {}),
+  }
 }
 
 export interface DrainReplayUploadsResult {
@@ -28,6 +61,8 @@ interface QueuedReplayUpload {
   blob: Blob
   sizeBytes: number
   contentType: string
+  /** Account that owned the browser session when recording stopped. */
+  originUserId?: string
   // Recorder-truth span, persisted in IDB so a drain on a LATER page mount
   // (where the interview tab's own duration PATCH never ran) still delivers
   // it to the server at multipart 'complete'.
@@ -61,13 +96,24 @@ class PermanentMultipartUploadError extends Error {
   }
 }
 
+async function isTerminalAccountBoundary(response: Response): Promise<boolean> {
+  if (response.status !== 401 && response.status !== 409) return false
+  const readable = typeof response.clone === 'function' ? response.clone() : response
+  const body = await readable.json().catch(() => null) as { code?: unknown } | null
+  return (response.status === 401 && body?.code === 'ACCOUNT_UNAVAILABLE') ||
+    (response.status === 409 && body?.code === 'SESSION_CHANGED')
+}
+
+async function establishAccountUnavailableBoundary(): Promise<void> {
+  // Cancellation/generation invalidation is synchronous inside this helper;
+  // the returned promise only represents the bounded IndexedDB purge.
+  await clearAllInterviewStorage().catch(() => {})
+}
+
 function isPermanentMultipartUploadError(err: unknown): err is PermanentMultipartUploadError {
   return err instanceof PermanentMultipartUploadError
 }
 
-const DB_NAME = 'interview-replay-uploads'
-const STORE_NAME = 'uploads'
-const DB_VERSION = 1
 const DEFAULT_PART_SIZE_BYTES = 8 * 1024 * 1024
 const DIRECT_UPLOAD_LIMIT_BYTES = 20 * 1024 * 1024
 const MAX_PART_RETRIES = 3
@@ -117,6 +163,7 @@ const inFlightRecordIds = new Set<string>()
  */
 export function __resetForTests(): void {
   inFlightRecordIds.clear()
+  __resetReplayUploadPrivacyForTests()
 }
 
 function uploadTypeFor(kind: ReplayUploadKind): 'recording' | 'screen-recording' {
@@ -127,59 +174,134 @@ function isBrowserStorageAvailable(): boolean {
   return typeof window !== 'undefined' && typeof indexedDB !== 'undefined'
 }
 
-function openDb(): Promise<IDBDatabase | null> {
+interface OpenReplayUploadDb {
+  db: IDBDatabase
+  untrack: () => void
+}
+
+function openDb(operation: ReplayUploadOperation): Promise<OpenReplayUploadDb | null> {
+  assertReplayUploadOperationActive(operation)
   if (!isBrowserStorageAvailable()) return Promise.resolve(null)
-  return new Promise((resolve) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(REPLAY_UPLOAD_DB_NAME, REPLAY_UPLOAD_DB_VERSION)
     request.onupgradeneeded = () => {
       const db = request.result
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id' })
+      if (!db.objectStoreNames.contains(REPLAY_UPLOAD_STORE_NAME)) {
+        db.createObjectStore(REPLAY_UPLOAD_STORE_NAME, { keyPath: 'id' })
       }
     }
-    request.onsuccess = () => resolve(request.result)
+    request.onsuccess = () => {
+      const db = request.result
+      try {
+        assertReplayUploadOperationActive(operation)
+        resolve({ db, untrack: trackReplayUploadDatabase(db) })
+      } catch (error) {
+        db.close()
+        reject(error)
+      }
+    }
     request.onerror = () => resolve(null)
   })
 }
 
 async function withStore<T>(
   mode: IDBTransactionMode,
-  callback: (store: IDBObjectStore) => IDBRequest<T>
+  callback: (store: IDBObjectStore) => IDBRequest<T>,
+  operation: ReplayUploadOperation,
 ): Promise<T | null> {
-  const db = await openDb()
-  if (!db) return null
-  return new Promise((resolve) => {
-    const tx = db.transaction(STORE_NAME, mode)
-    const request = callback(tx.objectStore(STORE_NAME))
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => resolve(null)
-    tx.oncomplete = () => db.close()
-    tx.onerror = () => db.close()
-    tx.onabort = () => db.close()
+  assertReplayUploadOperationActive(operation)
+  const opened = await openDb(operation)
+  if (!opened) return null
+  const { db, untrack } = opened
+  return new Promise((resolve, reject) => {
+    let requestResult: T | null = null
+    let requestSucceeded = false
+    const tx = db.transaction(REPLAY_UPLOAD_STORE_NAME, mode)
+    const unbindAbort = bindReplayUploadTransaction(operation, tx)
+    const request = callback(tx.objectStore(REPLAY_UPLOAD_STORE_NAME))
+
+    const finish = (result: T | null) => {
+      unbindAbort()
+      untrack()
+      db.close()
+      resolve(result)
+    }
+    const finishCancelledOrNull = () => {
+      unbindAbort()
+      untrack()
+      db.close()
+      try {
+        assertReplayUploadOperationActive(operation)
+        resolve(null)
+      } catch (error) {
+        reject(error)
+      }
+    }
+
+    request.onsuccess = () => {
+      requestSucceeded = true
+      requestResult = request.result
+    }
+    request.onerror = () => {
+      requestSucceeded = false
+      requestResult = null
+    }
+    tx.oncomplete = () => {
+      try {
+        assertReplayUploadOperationActive(operation)
+        finish(requestSucceeded ? requestResult : null)
+      } catch (error) {
+        unbindAbort()
+        untrack()
+        db.close()
+        reject(error)
+      }
+    }
+    tx.onerror = finishCancelledOrNull
+    tx.onabort = finishCancelledOrNull
   })
 }
 
-async function putUpload(record: QueuedReplayUpload): Promise<boolean> {
-  const result = await withStore('readwrite', (store) => store.put(record))
+async function putUpload(
+  record: QueuedReplayUpload,
+  operation: ReplayUploadOperation,
+): Promise<boolean> {
+  const result = await withStore('readwrite', (store) => store.put(record), operation)
   return result !== null
 }
 
-async function deleteUpload(id: string): Promise<void> {
-  await withStore('readwrite', (store) => store.delete(id))
+async function deleteUpload(id: string, operation: ReplayUploadOperation): Promise<void> {
+  await withStore('readwrite', (store) => store.delete(id), operation)
 }
 
-async function getAllUploads(): Promise<QueuedReplayUpload[]> {
-  return (await withStore('readonly', (store) => store.getAll())) ?? []
+async function getAllUploads(operation: ReplayUploadOperation): Promise<QueuedReplayUpload[]> {
+  return (await withStore('readonly', (store) => store.getAll(), operation)) ?? []
 }
 
-async function postMultipart<T>(body: Record<string, unknown>): Promise<T> {
+async function postMultipart<T>(
+  body: Record<string, unknown>,
+  operation: ReplayUploadOperation,
+  originUserId?: string,
+): Promise<T> {
+  assertReplayUploadOperationActive(operation)
   const res = await fetch('/api/storage/multipart', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(originUserId ? { 'x-origin-user-id': originUserId } : {}),
+    },
     body: JSON.stringify(body),
+    signal: operation.signal,
   })
+  assertReplayUploadOperationActive(operation)
+  if (await isTerminalAccountBoundary(res)) {
+    await establishAccountUnavailableBoundary()
+    assertReplayUploadOperationActive(operation)
+  }
+  assertReplayUploadOperationActive(operation)
   if (!res.ok) {
     const responseText = await res.text().catch(() => '')
+    assertReplayUploadOperationActive(operation)
     const message = `Multipart API failed: ${res.status}${responseText ? ` ${responseText.slice(0, 300)}` : ''}`
     // 410 Gone (R2 multipart aborted/expired — handled by server route).
     // 401/403 mean the user is signed out: retrying with the same cookie will
@@ -191,7 +313,9 @@ async function postMultipart<T>(body: Record<string, unknown>): Promise<T> {
     }
     throw new Error(message)
   }
-  return res.json() as Promise<T>
+  const result = await res.json() as T
+  assertReplayUploadOperationActive(operation)
+  return result
 }
 
 function normaliseEtag(etag: string | null): string {
@@ -215,34 +339,53 @@ export function getPartRange(
 async function uploadPartWithRetry(
   url: string,
   chunk: Blob,
-  contentType: string
+  contentType: string,
+  operation: ReplayUploadOperation,
 ): Promise<string> {
   let lastError: unknown
   for (let attempt = 1; attempt <= MAX_PART_RETRIES; attempt++) {
     try {
+      assertReplayUploadOperationActive(operation)
       const res = await fetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': contentType },
         body: chunk,
+        signal: operation.signal,
       })
+      assertReplayUploadOperationActive(operation)
       if (!res.ok) throw new Error(`Part upload failed: ${res.status}`)
       return normaliseEtag(res.headers.get('ETag'))
     } catch (err) {
+      if (isReplayUploadPrivacyCancellation(err, operation)) throw err
       lastError = err
-      await new Promise((resolve) => setTimeout(resolve, 400 * attempt))
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          operation.signal.removeEventListener('abort', abortDelay)
+          resolve()
+        }, 400 * attempt)
+        const abortDelay = () => {
+          window.clearTimeout(timeout)
+          reject(err)
+        }
+        operation.signal.addEventListener('abort', abortDelay, { once: true })
+      })
+      assertReplayUploadOperationActive(operation)
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Part upload failed')
 }
 
-async function ensureMultipart(record: QueuedReplayUpload): Promise<QueuedReplayUpload> {
+async function ensureMultipart(
+  record: QueuedReplayUpload,
+  operation: ReplayUploadOperation,
+): Promise<QueuedReplayUpload> {
   if (record.key && record.uploadId && record.partSizeBytes) return record
 
   const created = await postMultipart<MultipartCreateResponse>({
     action: 'create',
     type: uploadTypeFor(record.kind),
     sessionId: record.sessionId,
-  })
+  }, operation, record.originUserId)
 
   const next = {
     ...record,
@@ -251,11 +394,14 @@ async function ensureMultipart(record: QueuedReplayUpload): Promise<QueuedReplay
     contentType: created.contentType,
     partSizeBytes: created.partSizeBytes,
   }
-  await putUpload(next)
+  await putUpload(next, operation)
   return next
 }
 
-async function completeMultipart(record: QueuedReplayUpload): Promise<string> {
+async function completeMultipart(
+  record: QueuedReplayUpload,
+  operation: ReplayUploadOperation,
+): Promise<string> {
   const result = await postMultipart<{ key: string }>({
     action: 'complete',
     type: uploadTypeFor(record.kind),
@@ -265,7 +411,7 @@ async function completeMultipart(record: QueuedReplayUpload): Promise<string> {
     parts: record.parts,
     sizeBytes: record.sizeBytes,
     ...(record.durationSeconds !== undefined ? { durationSeconds: record.durationSeconds } : {}),
-  })
+  }, operation, record.originUserId)
   return result.key
 }
 
@@ -304,8 +450,10 @@ function isExhaustedRetries(record: QueuedReplayUpload): boolean {
  * second `complete` without corruption.
  */
 async function tryAcquireLease(
-  record: QueuedReplayUpload
+  record: QueuedReplayUpload,
+  operation: ReplayUploadOperation,
 ): Promise<QueuedReplayUpload | null> {
+  assertReplayUploadOperationActive(operation)
   if (inFlightRecordIds.has(record.id)) return null
   if (isLeaseHeldByOther(record)) return null
   // CRITICAL: add to the in-memory Set BEFORE any await. This closes the
@@ -320,7 +468,7 @@ async function tryAcquireLease(
       leaseHolder: PROCESS_ID,
       leaseExpiresAt: Date.now() + LEASE_TTL_MS,
     }
-    const written = await putUpload(leased)
+    const written = await putUpload(leased, operation)
     if (!written) {
       inFlightRecordIds.delete(record.id)
       return null
@@ -329,7 +477,7 @@ async function tryAcquireLease(
     // Re-read to confirm our lease landed (a concurrent writer in another tab
     // would have stomped it). If the row is gone, another process completed
     // the upload and deleted it — back off.
-    const verified = (await getAllUploads()).find((r) => r.id === record.id)
+    const verified = (await getAllUploads(operation)).find((r) => r.id === record.id)
     if (!verified || verified.leaseHolder !== PROCESS_ID) {
       inFlightRecordIds.delete(record.id)
       return null
@@ -352,21 +500,29 @@ function releaseLease(recordId: string): void {
  * orphaned parts until its own multipart TTL (typically 7 days) cleans them.
  * We do not block the user-facing drain on this call.
  */
-async function serverAbort(record: QueuedReplayUpload): Promise<void> {
+async function serverAbort(
+  record: QueuedReplayUpload,
+  operation: ReplayUploadOperation,
+): Promise<void> {
   if (!record.key || !record.uploadId) return
   try {
     await postMultipart<{ ok: boolean }>({
       action: 'abort',
       key: record.key,
       uploadId: record.uploadId,
-    })
+    }, operation, record.originUserId)
   } catch (err) {
+    if (isReplayUploadPrivacyCancellation(err, operation)) throw err
     console.warn('Replay multipart abort failed (non-fatal)', err)
   }
 }
 
-async function uploadMultipartRecord(record: QueuedReplayUpload): Promise<string> {
-  let current = await ensureMultipart(record)
+async function uploadMultipartRecord(
+  record: QueuedReplayUpload,
+  operation: ReplayUploadOperation,
+): Promise<string> {
+  assertReplayUploadOperationActive(operation)
+  let current = await ensureMultipart(record, operation)
   const partSizeBytes = current.partSizeBytes ?? DEFAULT_PART_SIZE_BYTES
   const partCount = getPartCount(current.sizeBytes, partSizeBytes)
   const uploaded = new Map(current.parts.map((part) => [part.partNumber, part.etag]))
@@ -381,14 +537,17 @@ async function uploadMultipartRecord(record: QueuedReplayUpload): Promise<string
       const { start, end } = getPartRange(partNumber, current.sizeBytes, partSizeBytes)
       const { url } = await postMultipart<{ url: string }>({
         action: 'sign-part',
+        type: uploadTypeFor(current.kind),
+        sessionId: current.sessionId,
         key: current.key,
         uploadId: current.uploadId,
         partNumber,
-      })
+      }, operation, current.originUserId)
       const etag = await uploadPartWithRetry(
         url,
         current.blob.slice(start, end, current.contentType),
-        current.contentType
+        current.contentType,
+        operation,
       )
       uploaded.set(partNumber, etag)
       // Refresh the lease on every successful part. While the upload is
@@ -401,7 +560,7 @@ async function uploadMultipartRecord(record: QueuedReplayUpload): Promise<string
         leaseHolder: PROCESS_ID,
         leaseExpiresAt: Date.now() + LEASE_TTL_MS,
       }
-      await putUpload(current)
+      await putUpload(current, operation)
     }
   }
 
@@ -411,8 +570,8 @@ async function uploadMultipartRecord(record: QueuedReplayUpload): Promise<string
   current.parts = Array.from(uploaded.entries())
     .map(([partNumber, etag]) => ({ partNumber, etag }))
     .sort((a, b) => a.partNumber - b.partNumber)
-  const key = await completeMultipart(current)
-  await deleteUpload(current.id)
+  const key = await completeMultipart(current, operation)
+  await deleteUpload(current.id, operation)
   return key
 }
 
@@ -421,112 +580,158 @@ async function uploadDirect(
   kind: ReplayUploadKind,
   blob: Blob,
   contentType: string,
-  durationSeconds?: number
+  operation: ReplayUploadOperation,
+  durationSeconds?: number,
+  originUserId?: string,
 ): Promise<boolean> {
+  assertReplayUploadOperationActive(operation)
   const res = await fetch('/api/storage/presign', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(originUserId ? { 'x-origin-user-id': originUserId } : {}),
+    },
     body: JSON.stringify({
       action: 'upload',
       type: uploadTypeFor(kind),
       sessionId,
     }),
+    signal: operation.signal,
   })
+  assertReplayUploadOperationActive(operation)
+  if (await isTerminalAccountBoundary(res)) {
+    await establishAccountUnavailableBoundary()
+    assertReplayUploadOperationActive(operation)
+  }
+  assertReplayUploadOperationActive(operation)
   if (!res.ok) return false
 
   const { url, key, contentType: presignedContentType } = await res.json()
+  assertReplayUploadOperationActive(operation)
   const uploadRes = await fetch(url, {
     method: 'PUT',
     headers: { 'Content-Type': presignedContentType || contentType },
     body: blob,
+    signal: operation.signal,
   })
+  assertReplayUploadOperationActive(operation)
   if (!uploadRes.ok) return false
 
-  const patchBody = kind === 'screen'
-    ? { screenRecordingR2Key: key, screenRecordingSizeBytes: blob.size }
-    : {
-        recordingR2Key: key,
-        recordingSizeBytes: blob.size,
-        ...(durationSeconds !== undefined ? { recordingDurationSeconds: durationSeconds } : {}),
-      }
-  const patchRes = await fetch(`/api/interviews/${sessionId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patchBody),
+  const finalizeRes = await fetch('/api/recordings/finalize', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(originUserId ? { 'x-origin-user-id': originUserId } : {}),
+    },
+    body: JSON.stringify({
+      type: uploadTypeFor(kind),
+      sessionId,
+      key,
+      sizeBytes: blob.size,
+      ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    }),
+    signal: operation.signal,
   })
-  return patchRes.ok
+  assertReplayUploadOperationActive(operation)
+  if (await isTerminalAccountBoundary(finalizeRes)) {
+    await establishAccountUnavailableBoundary()
+    assertReplayUploadOperationActive(operation)
+  }
+  assertReplayUploadOperationActive(operation)
+  return finalizeRes.ok
 }
 
 export async function uploadReplayRecording(
   sessionId: string,
   kind: ReplayUploadKind,
   blob: Blob,
-  durationSeconds?: number
+  durationSeconds?: number,
+  intent?: ReplayUploadIntent,
 ): Promise<ReplayUploadResult> {
+  const operation = beginReplayUploadOperation(intent?.privacyGeneration)
   const contentType = blob.type || 'video/webm'
-  if (blob.size <= DIRECT_UPLOAD_LIMIT_BYTES) {
-    try {
-      const uploaded = await uploadDirect(sessionId, kind, blob, contentType, durationSeconds)
-      return { status: uploaded ? 'uploaded' : 'dropped' }
-    } catch (err) {
-      console.warn('Replay direct upload dropped', err)
-      return { status: 'dropped' }
-    }
-  }
-
-  const record: QueuedReplayUpload = {
-    id: `${sessionId}:${kind}:${Date.now()}:${blob.size}`,
-    sessionId,
-    kind,
-    blob,
-    sizeBytes: blob.size,
-    contentType,
-    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
-    createdAt: Date.now(),
-    parts: [],
-    attempts: 0,
-    // Layer 2 — stamp our lease BEFORE putUpload so any drainQueuedReplayUploads
-    // running concurrently in this same tab sees an active lease on the very
-    // first read. Combined with the inFlightRecordIds Set acquired below, this
-    // closes the bug where a /feedback page-mount drain raced this in-flight
-    // upload and produced duplicate sign-part rounds → 500/404 cascade.
-    leaseHolder: PROCESS_ID,
-    leaseExpiresAt: Date.now() + LEASE_TTL_MS,
-  }
-
-  inFlightRecordIds.add(record.id)
-  const queued = await putUpload(record)
   try {
-    await uploadMultipartRecord(record)
-    return { status: 'uploaded' }
-  } catch (err) {
-    if (isPermanentMultipartUploadError(err)) {
-      await deleteUpload(record.id)
-      console.warn('Replay multipart upload permanently dropped', err)
+    if (blob.size <= DIRECT_UPLOAD_LIMIT_BYTES) {
+      try {
+        const uploaded = await uploadDirect(
+          sessionId,
+          kind,
+          blob,
+          contentType,
+          operation,
+          durationSeconds,
+          intent?.originUserId,
+        )
+        return { status: uploaded ? 'uploaded' : 'dropped' }
+      } catch (err) {
+        if (!isReplayUploadPrivacyCancellation(err, operation)) {
+          console.warn('Replay direct upload dropped', err)
+        }
+        return { status: 'dropped' }
+      }
+    }
+
+    const record: QueuedReplayUpload = {
+      id: `${sessionId}:${kind}:${Date.now()}:${blob.size}`,
+      sessionId,
+      kind,
+      blob,
+      sizeBytes: blob.size,
+      contentType,
+      ...(intent?.originUserId ? { originUserId: intent.originUserId } : {}),
+      ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+      createdAt: Date.now(),
+      parts: [],
+      attempts: 0,
+      // Layer 2 — stamp our lease BEFORE putUpload so any drainQueuedReplayUploads
+      // running concurrently in this same tab sees an active lease on the very
+      // first read. Combined with the inFlightRecordIds Set acquired below, this
+      // closes the bug where a /feedback page-mount drain raced this in-flight
+      // upload and produced duplicate sign-part rounds → 500/404 cascade.
+      leaseHolder: PROCESS_ID,
+      leaseExpiresAt: Date.now() + LEASE_TTL_MS,
+    }
+
+    inFlightRecordIds.add(record.id)
+    let wasQueued = false
+    try {
+      wasQueued = await putUpload(record, operation)
+      await uploadMultipartRecord(record, operation)
+      return { status: 'uploaded' }
+    } catch (err) {
+      if (isReplayUploadPrivacyCancellation(err, operation)) {
+        return { status: 'dropped' }
+      }
+      if (isPermanentMultipartUploadError(err)) {
+        await deleteUpload(record.id, operation)
+        console.warn('Replay multipart upload permanently dropped', err)
+        return { status: 'dropped' }
+      }
+      // Transient failure path: clear the lease so a future drainer can pick
+      // this record up immediately rather than waiting for natural TTL expiry.
+      // Read latest IDB state first so worker progress (parts uploaded so far)
+      // is preserved across the retry — same invariant Codex P1 #339 enforced.
+      const latest = (await getAllUploads(operation)).find((r) => r.id === record.id)
+      if (latest) {
+        await putUpload({
+          ...latest,
+          attempts: latest.attempts + 1,
+          lastError: err instanceof Error ? err.message : String(err),
+          leaseHolder: undefined,
+          leaseExpiresAt: undefined,
+        }, operation)
+      }
+      if (wasQueued) {
+        console.warn('Replay multipart upload queued for retry', err)
+        return { status: 'queued' }
+      }
+      console.warn('Replay multipart upload failed before it could be queued', err)
       return { status: 'dropped' }
+    } finally {
+      releaseLease(record.id)
     }
-    // Transient failure path: clear the lease so a future drainer can pick
-    // this record up immediately rather than waiting for natural TTL expiry.
-    // Read latest IDB state first so worker progress (parts uploaded so far)
-    // is preserved across the retry — same invariant Codex P1 #339 enforced.
-    const latest = (await getAllUploads()).find((r) => r.id === record.id)
-    if (latest) {
-      await putUpload({
-        ...latest,
-        attempts: latest.attempts + 1,
-        lastError: err instanceof Error ? err.message : String(err),
-        leaseHolder: undefined,
-        leaseExpiresAt: undefined,
-      })
-    }
-    if (queued) {
-      console.warn('Replay multipart upload queued for retry', err)
-      return { status: 'queued' }
-    }
-    console.warn('Replay multipart upload failed before it could be queued', err)
-    return { status: 'dropped' }
   } finally {
-    releaseLease(record.id)
+    finishReplayUploadOperation(operation)
   }
 }
 
@@ -543,61 +748,73 @@ export async function hasQueuedReplayUpload(
   sessionId: string,
   kind: ReplayUploadKind = 'camera'
 ): Promise<boolean> {
-  const records = await getAllUploads()
-  return records.some(
-    (record) =>
-      record.sessionId === sessionId &&
-      record.kind === kind &&
-      !isExpiredRecord(record) &&
-      !isExhaustedRetries(record)
-  )
+  const operation = beginReplayUploadOperation()
+  try {
+    const records = await getAllUploads(operation)
+    return records.some(
+      (record) =>
+        record.sessionId === sessionId &&
+        record.kind === kind &&
+        !isExpiredRecord(record) &&
+        !isExhaustedRetries(record)
+    )
+  } catch (error) {
+    if (isReplayUploadPrivacyCancellation(error, operation)) return false
+    throw error
+  } finally {
+    finishReplayUploadOperation(operation)
+  }
 }
 
 export async function drainQueuedReplayUploads(): Promise<DrainReplayUploadsResult> {
-  const records = await getAllUploads()
+  const operation = beginReplayUploadOperation()
+  let records: QueuedReplayUpload[] = []
   let uploaded = 0
   let queued = 0
   let dropped = 0
   let skipped = 0
 
-  for (const record of records) {
-    // Layer 3 — backstop caps. A record that is older than the R2 multipart
-    // TTL or that has burned through its retry budget cannot be recovered;
-    // drop it (and best-effort tell the server to release R2 parts) instead
-    // of looping forever on every page mount.
-    if (isExpiredRecord(record) || isExhaustedRetries(record)) {
-      await serverAbort(record)
-      await deleteUpload(record.id)
-      dropped++
-      console.info('Replay upload dropped (zombie cleanup)', {
-        id: record.id,
-        attempts: record.attempts,
-        ageMs: Date.now() - record.createdAt,
-        reason: isExpiredRecord(record) ? 'age' : 'retries',
-      })
-      continue
-    }
-
-    // Layers 1 + 2 — lease check. Same-tab races resolve via the in-memory
-    // Set inside tryAcquireLease; cross-tab races resolve via the IDB
-    // leaseHolder/leaseExpiresAt fields. Both checks happen atomically with
-    // respect to a single drain iteration.
-    const leased = await tryAcquireLease(record)
-    if (!leased) {
-      skipped++
-      continue
-    }
-
-    try {
-      await uploadMultipartRecord(leased)
-      uploaded++
-    } catch (err) {
-      if (isPermanentMultipartUploadError(err)) {
-        await deleteUpload(leased.id)
+  try {
+    records = await getAllUploads(operation)
+    for (const record of records) {
+      // Layer 3 — backstop caps. A record that is older than the R2 multipart
+      // TTL or that has burned through its retry budget cannot be recovered;
+      // drop it (and best-effort tell the server to release R2 parts) instead
+      // of looping forever on every page mount.
+      if (isExpiredRecord(record) || isExhaustedRetries(record)) {
+        await serverAbort(record, operation)
+        await deleteUpload(record.id, operation)
         dropped++
-        console.warn('Queued replay upload permanently dropped', err)
-      } else {
-        queued++
+        console.info('Replay upload dropped (zombie cleanup)', {
+          id: record.id,
+          attempts: record.attempts,
+          ageMs: Date.now() - record.createdAt,
+          reason: isExpiredRecord(record) ? 'age' : 'retries',
+        })
+        continue
+      }
+
+      // Layers 1 + 2 — lease check. Same-tab races resolve via the in-memory
+      // Set inside tryAcquireLease; cross-tab races resolve via the IDB
+      // leaseHolder/leaseExpiresAt fields. Both checks happen atomically with
+      // respect to a single drain iteration.
+      const leased = await tryAcquireLease(record, operation)
+      if (!leased) {
+        skipped++
+        continue
+      }
+
+      try {
+        await uploadMultipartRecord(leased, operation)
+        uploaded++
+      } catch (err) {
+        if (isReplayUploadPrivacyCancellation(err, operation)) throw err
+        if (isPermanentMultipartUploadError(err)) {
+          await deleteUpload(leased.id, operation)
+          dropped++
+          console.warn('Queued replay upload permanently dropped', err)
+        } else {
+          queued++
         // Codex P1 on PR #339: do NOT spread `...record` here — `record` is
         // the pre-attempt snapshot, but uploadMultipartRecord persists newer
         // state (parts, key, uploadId) to IndexedDB during the attempt via
@@ -610,22 +827,27 @@ export async function drainQueuedReplayUploads(): Promise<DrainReplayUploadsResu
         // already completed the upload and called deleteUpload. Do NOT
         // resurrect it: that produced the zombie-record retry storm
         // observed in production. Just exit the catch without writing.
-        const latestAll = await getAllUploads()
-        const latest = latestAll.find((r) => r.id === leased.id)
-        if (latest) {
-          await putUpload({
-            ...latest,
-            attempts: latest.attempts + 1,
-            lastError: err instanceof Error ? err.message : String(err),
-            leaseHolder: undefined,
-            leaseExpiresAt: undefined,
-          })
+          const latestAll = await getAllUploads(operation)
+          const latest = latestAll.find((r) => r.id === leased.id)
+          if (latest) {
+            await putUpload({
+              ...latest,
+              attempts: latest.attempts + 1,
+              lastError: err instanceof Error ? err.message : String(err),
+              leaseHolder: undefined,
+              leaseExpiresAt: undefined,
+            }, operation)
+          }
+          console.warn('Queued replay upload retry failed', err)
         }
-        console.warn('Queued replay upload retry failed', err)
+      } finally {
+        releaseLease(leased.id)
       }
-    } finally {
-      releaseLease(leased.id)
     }
+  } catch (error) {
+    if (!isReplayUploadPrivacyCancellation(error, operation)) throw error
+  } finally {
+    finishReplayUploadOperation(operation)
   }
   return { attempted: records.length, uploaded, queued, dropped, skipped }
 }

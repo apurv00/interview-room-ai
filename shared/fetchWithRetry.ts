@@ -3,6 +3,12 @@ import { aiLogger } from '@shared/logger'
 interface RetryOptions {
   maxRetries?: number
   baseDelayMs?: number
+  /**
+   * Classify a non-OK response as terminal. Terminal responses return false
+   * immediately without retrying; the callback may also perform caller-owned
+   * cleanup (for example, latching an account-deletion boundary).
+   */
+  isTerminalResponse?: (response: Response) => boolean | Promise<boolean>
 }
 
 /**
@@ -14,12 +20,13 @@ export async function fetchWithRetry(
   init: RequestInit,
   options: RetryOptions = {}
 ): Promise<boolean> {
-  const { maxRetries = 3, baseDelayMs = 1000 } = options
+  const { maxRetries = 3, baseDelayMs = 1000, isTerminalResponse } = options
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const res = await fetch(url, init)
       if (res.ok) return true
+      if (isTerminalResponse && await isTerminalResponse(res)) return false
     } catch {
       // Network error — retry
     }

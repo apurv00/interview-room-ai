@@ -11,6 +11,7 @@ const {
   mockGetServerSession,
   mockCreateSession,
   mockGetActiveCatalog,
+  mockIsJobsAccountActive,
 } = vi.hoisted(() => ({
   mockConnectDB: vi.fn(),
   mockPostingFindById: vi.fn(),
@@ -20,6 +21,7 @@ const {
   mockGetServerSession: vi.fn(),
   mockCreateSession: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
@@ -38,6 +40,9 @@ vi.mock('@interview/services/core/interviewService', () => ({
 vi.mock('@shared/logger', () => ({ logger: { error: vi.fn() } }))
 vi.mock('@interview/services/persona/domainCatalogService', () => ({
   getActiveInterviewDomainCatalog: mockGetActiveCatalog,
+}))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
 }))
 
 import { getJobDetail } from '../services/feedService'
@@ -74,6 +79,7 @@ describe('authenticated Job detail → verified interview session', () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
     mockCreateSession.mockResolvedValue({ _id: { toString: () => SESSION_ID } })
     mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
+    mockIsJobsAccountActive.mockResolvedValue(true)
 
     const posting = {
       _id: JOB_ID,

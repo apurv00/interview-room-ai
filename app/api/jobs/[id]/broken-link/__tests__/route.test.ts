@@ -3,23 +3,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockCheckJobsRateLimit,
   mockConnectDB,
-  mockEventCreate,
   mockGetServerSession,
+  mockRecordJobsUserEvent,
   mockReportBrokenLink,
 } = vi.hoisted(() => ({
   mockCheckJobsRateLimit: vi.fn(),
   mockConnectDB: vi.fn(),
-  mockEventCreate: vi.fn(),
   mockGetServerSession: vi.fn(),
+  mockRecordJobsUserEvent: vi.fn(),
   mockReportBrokenLink: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
-vi.mock('@shared/db/models', () => ({ ProductEvent: { create: mockEventCreate } }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
+vi.mock('@jobs/services/userEventService', () => ({ recordJobsUserEvent: mockRecordJobsUserEvent }))
 vi.mock('@jobs', async () => {
   const identity = await vi.importActual<typeof import('@jobs/services/applyOptionIdentity')>(
     '@jobs/services/applyOptionIdentity',
@@ -29,6 +29,7 @@ vi.mock('@jobs', async () => {
 
 import { POST } from '../route'
 import { applyOptionIdOf } from '@jobs/services/applyOptionIdentity'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const USER_ID = '507f1f77bcf86cd799439010'
 const JOB_ID = '507f1f77bcf86cd799439011'
@@ -51,7 +52,7 @@ beforeEach(() => {
   mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
   mockCheckJobsRateLimit.mockResolvedValue(null)
   mockConnectDB.mockResolvedValue(undefined)
-  mockEventCreate.mockResolvedValue({})
+  mockRecordJobsUserEvent.mockResolvedValue(true)
   mockReportBrokenLink.mockResolvedValue({
     ok: true,
     recorded: true,
@@ -86,7 +87,7 @@ describe('POST /api/jobs/[id]/broken-link canonical option boundary', () => {
     expect(response.status).toBe(400)
     expect(mockConnectDB).not.toHaveBeenCalled()
     expect(mockReportBrokenLink).not.toHaveBeenCalled()
-    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('returns not-found for a stale, unclicked, or cross-user option without telemetry', async () => {
@@ -96,14 +97,27 @@ describe('POST /api/jobs/[id]/broken-link canonical option boundary', () => {
 
     expect(response.status).toBe(404)
     expect(mockReportBrokenLink).toHaveBeenCalledWith(USER_ID, JOB_ID, OPTION_ID)
-    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('returns the account-unavailable contract when deletion owns the write fence', async () => {
+    mockReportBrokenLink.mockRejectedValueOnce(new JobsAccountInactiveError(USER_ID))
+
+    const response = await POST(request(JSON.stringify({ optionId: OPTION_ID })), { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('derives tier/failover telemetry from the server result', async () => {
     const response = await POST(request(JSON.stringify({ optionId: OPTION_ID })), { params: { id: JOB_ID } })
 
     expect(await response.json()).toEqual({ ok: true, alreadyReported: false })
-    expect(mockEventCreate).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mockRecordJobsUserEvent).toHaveBeenCalledWith(expect.objectContaining({
       name: 'jobs.broken_link',
       props: { tier: 'employer', hadFailover: true },
     }))
@@ -121,6 +135,6 @@ describe('POST /api/jobs/[id]/broken-link canonical option boundary', () => {
     const response = await POST(request(JSON.stringify({ optionId: OPTION_ID })), { params: { id: JOB_ID } })
 
     expect(await response.json()).toEqual({ ok: true, alreadyReported: true })
-    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 })

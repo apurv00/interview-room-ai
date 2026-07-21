@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   mockGetServerSession, mockConnectDB, mockPostingFindById, mockPostingUpdateOne,
-  mockApplicationFindOne, mockApplicationCreate, mockEventCreate,
+  mockApplicationFindOne, mockApplicationCreate, mockRecordJobsUserEvent,
   mockCheckJobsRateLimit, mockStartSession, mockWithTransaction, mockEndSession,
+  mockWithActiveJobsAccountWrite,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockConnectDB: vi.fn(),
@@ -11,11 +12,12 @@ const {
   mockPostingUpdateOne: vi.fn(),
   mockApplicationFindOne: vi.fn(),
   mockApplicationCreate: vi.fn(),
-  mockEventCreate: vi.fn(),
+  mockRecordJobsUserEvent: vi.fn(),
   mockCheckJobsRateLimit: vi.fn(),
   mockStartSession: vi.fn(),
   mockWithTransaction: vi.fn(),
   mockEndSession: vi.fn(),
+  mockWithActiveJobsAccountWrite: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
@@ -28,12 +30,21 @@ vi.mock('@shared/db/models', () => ({
   JobApplication: {
     findOne: mockApplicationFindOne,
     create: mockApplicationCreate,
-    db: { startSession: mockStartSession },
   },
-  ProductEvent: { create: mockEventCreate },
 }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  JobsAccountInactiveError: class JobsAccountInactiveError extends Error {
+    constructor(public readonly userId: string) {
+      super('account is missing or being deleted')
+      this.name = 'JobsAccountInactiveError'
+    }
+  },
+  withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
+}))
+vi.mock('@jobs/services/userEventService', () => ({ recordJobsUserEvent: mockRecordJobsUserEvent }))
 
 import { POST } from '../route'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const USER_ID = '507f1f77bcf86cd799439010'
 const JOB_ID = '507f1f77bcf86cd799439011'
@@ -67,10 +78,29 @@ beforeEach(() => {
   mockApplicationFindOne.mockReturnValue(selectLean(null))
   mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockApplicationCreate.mockResolvedValue([])
-  mockEventCreate.mockResolvedValue({})
+  mockRecordJobsUserEvent.mockResolvedValue(true)
   mockCheckJobsRateLimit.mockResolvedValue(null)
   mockWithTransaction.mockImplementation(async (work: () => Promise<unknown>) => work())
   mockStartSession.mockResolvedValue(TRANSACTION_SESSION)
+  mockWithActiveJobsAccountWrite.mockImplementation(async (
+    _userId: string,
+    work: (session: typeof TRANSACTION_SESSION) => Promise<unknown>,
+  ) => {
+    const session = await mockStartSession()
+    let result: unknown
+    try {
+      await session.withTransaction(async () => {
+        result = await work(session)
+      }, {
+        readConcern: { level: 'snapshot' },
+        writeConcern: { w: 'majority' },
+        readPreference: 'primary',
+      })
+      return result
+    } finally {
+      await session.endSession()
+    }
+  })
 })
 
 describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
@@ -87,6 +117,7 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
     expect(mockConnectDB).not.toHaveBeenCalled()
     expect(mockApplicationFindOne).not.toHaveBeenCalled()
     expect(mockStartSession).not.toHaveBeenCalled()
+    expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
   })
 
   it('pins the exact lifecycle/provenance snapshot and inserts ownership in one transaction', async () => {
@@ -96,6 +127,7 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
     expect(mockWithTransaction).toHaveBeenCalledWith(expect.any(Function), {
       readConcern: { level: 'snapshot' },
       writeConcern: { w: 'majority' },
+      readPreference: 'primary',
     })
     expect(mockPostingUpdateOne).toHaveBeenCalledWith(
       {
@@ -104,8 +136,12 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
         closedReason: { $exists: false },
         provenance: PROVENANCE,
       },
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-      { session: TRANSACTION_SESSION },
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      { session: TRANSACTION_SESSION, timestamps: false },
     )
     expect(mockApplicationCreate).toHaveBeenCalledWith(
       [expect.objectContaining({
@@ -116,7 +152,7 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
       })],
       { session: TRANSACTION_SESSION },
     )
-    expect(mockEventCreate).toHaveBeenCalledOnce()
+    expect(mockRecordJobsUserEvent).toHaveBeenCalledOnce()
     expect(mockEndSession).toHaveBeenCalledOnce()
   })
 
@@ -133,7 +169,7 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
 
     expect(response.status).toBe(404)
     expect(mockApplicationCreate).not.toHaveBeenCalled()
-    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
     expect(mockStartSession).toHaveBeenCalledTimes(2)
   })
 
@@ -161,11 +197,15 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
           closedReason: posting.closedReason ?? { $exists: false },
           provenance: PROVENANCE,
         },
-        { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-        { session: TRANSACTION_SESSION },
+        {
+          $set: { userReferenced: true },
+          $unset: { purgeAt: 1 },
+          $inc: { derivedAuthorityRevision: 1 },
+        },
+        { session: TRANSACTION_SESSION, timestamps: false },
       )
       expect(mockApplicationCreate).not.toHaveBeenCalled()
-      expect(mockEventCreate).not.toHaveBeenCalled()
+      expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
     },
   )
 
@@ -183,7 +223,7 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
     expect(mockApplicationFindOne).not.toHaveBeenCalled()
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     expect(mockApplicationCreate).not.toHaveBeenCalled()
-    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('turns a duplicate insert race into a truthful idempotent response without telemetry', async () => {
@@ -198,7 +238,33 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
     expect(mockStartSession).toHaveBeenCalledTimes(2)
     expect(mockPostingUpdateOne).toHaveBeenCalledTimes(2)
     expect(mockApplicationCreate).toHaveBeenCalledOnce()
-    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('returns account unavailable when deletion wins between a duplicate race and its retry', async () => {
+    mockApplicationCreate.mockRejectedValueOnce(Object.assign(new Error('duplicate'), { code: 11000 }))
+    let fenceCalls = 0
+    mockWithActiveJobsAccountWrite.mockImplementation(async (
+      _userId: string,
+      work: (session: typeof TRANSACTION_SESSION) => Promise<unknown>,
+    ) => {
+      fenceCalls += 1
+      if (fenceCalls === 2) throw new JobsAccountInactiveError(USER_ID)
+      return work(TRANSACTION_SESSION)
+    })
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/save`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockApplicationCreate).toHaveBeenCalledOnce()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('lets a non-duplicate insert failure abort the pin and emits no telemetry', async () => {
@@ -222,11 +288,34 @@ describe('POST /api/jobs/[id]/save transactional ownership fence', () => {
     expect(transactionAborted).toBe(true)
     expect(mockPostingUpdateOne).toHaveBeenCalledWith(
       expect.objectContaining({ _id: JOB_ID, provenance: PROVENANCE }),
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-      { session: TRANSACTION_SESSION },
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      { session: TRANSACTION_SESSION, timestamps: false },
     )
     expect(mockApplicationCreate).toHaveBeenCalledWith(expect.any(Array), { session: TRANSACTION_SESSION })
-    expect(mockEventCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
     expect(mockEndSession).toHaveBeenCalledOnce()
+  })
+
+  it('returns account unavailable when deletion owns the fence and creates no pin, row, or event', async () => {
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(new JobsAccountInactiveError(USER_ID))
+
+    const response = await POST(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/save`, { method: 'POST' }),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockApplicationCreate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 })

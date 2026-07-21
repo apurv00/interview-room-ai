@@ -14,26 +14,34 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const {
   mockSessionFindById, mockAppFindById, mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockPostingExists,
+  mockPostingUpdateOne,
   mockEvidenceDeleteMany, mockEvidenceInsertMany, mockEvidenceFind, mockEvidenceExists,
   mockCompletion, mockInngestSend, mockSessionFind, mockSessionUpdateOne, mockResolveModel,
   mockSessionExists, mockEnsurePracticeApplication,
   mockIsScorablePracticeEvaluation, mockHasCompletedScoredPractice,
-  mockUserExists, mockAppExists, mockAppDeleteOne, createdFunctionConfigs,
-} = vi.hoisted(() => ({
+  mockAppExists, createdFunctionConfigs,
+  mockIsJobsAccountActive, mockWithActiveJobsAccountWrite, MockJobsAccountInactiveError,
+} = vi.hoisted(() => {
+  class MockJobsAccountInactiveError extends Error {}
+  return {
   mockSessionFindById: vi.fn(), mockAppFindById: vi.fn(), mockAppFindOne: vi.fn(), mockAppUpdateOne: vi.fn(),
-  mockPostingFindById: vi.fn(), mockPostingExists: vi.fn(), mockEvidenceDeleteMany: vi.fn(), mockEvidenceInsertMany: vi.fn(),
+  mockPostingFindById: vi.fn(), mockPostingExists: vi.fn(), mockPostingUpdateOne: vi.fn(), mockEvidenceDeleteMany: vi.fn(), mockEvidenceInsertMany: vi.fn(),
   mockEvidenceFind: vi.fn(), mockEvidenceExists: vi.fn(), mockCompletion: vi.fn(), mockInngestSend: vi.fn(),
   mockSessionFind: vi.fn(), mockSessionUpdateOne: vi.fn(), mockResolveModel: vi.fn(),
   mockSessionExists: vi.fn(), mockEnsurePracticeApplication: vi.fn(),
-    mockUserExists: vi.fn(), mockAppExists: vi.fn(), mockAppDeleteOne: vi.fn(),
+    mockAppExists: vi.fn(),
     createdFunctionConfigs: [] as Array<Record<string, unknown>>,
+  mockIsJobsAccountActive: vi.fn(),
+  mockWithActiveJobsAccountWrite: vi.fn(),
+  MockJobsAccountInactiveError,
   mockHasCompletedScoredPractice: vi.fn(() => true),
   mockIsScorablePracticeEvaluation: vi.fn((value: unknown) => {
     if (!value || typeof value !== 'object') return false
     const row = value as Record<string, unknown>
     return (row.status ?? 'ok') === 'ok' && typeof row.answer === 'string' && row.answer.trim().length > 0
   }),
-}))
+  }
+})
 
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
@@ -47,6 +55,11 @@ vi.mock('@shared/services/inngest', () => ({
   },
 }))
 vi.mock('@shared/services/modelRouter', () => ({ completion: mockCompletion, resolveModel: mockResolveModel }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
+  JobsAccountInactiveError: MockJobsAccountInactiveError,
+  withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
+}))
 vi.mock('../services/applicationService', () => ({
   ensurePracticeApplication: mockEnsurePracticeApplication,
   hasCompletedScoredPractice: mockHasCompletedScoredPractice,
@@ -59,11 +72,9 @@ vi.mock('@shared/db/models', () => ({
     findOne: mockAppFindOne,
     updateOne: mockAppUpdateOne,
     exists: mockAppExists,
-    deleteOne: mockAppDeleteOne,
   },
-  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
+  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists, updateOne: mockPostingUpdateOne },
   JobPracticeEvidence: { deleteMany: mockEvidenceDeleteMany, insertMany: mockEvidenceInsertMany, find: mockEvidenceFind, exists: mockEvidenceExists },
-  User: { exists: mockUserExists },
 }))
 
 import { runEvidenceAttributionHandler, runEvidenceReconcileHandler, buildAttributionPrompt } from '../jobs/evidenceAttributionJob'
@@ -128,6 +139,7 @@ beforeEach(() => {
   mockAppFindOne.mockReturnValue(selectLean({ userId: 'u1', jobPostingId: 'job1', readinessRevision: 0 }))
   mockPostingFindById.mockReturnValue(selectLean({ status: 'open', parsedJD, parsedJDHash: HASH }))
   mockPostingExists.mockResolvedValue({ _id: 'job1' })
+  mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockCompletion.mockResolvedValue({ text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay","req-nice","invented-id"],"strength":"strong"}]}' })
   mockEvidenceDeleteMany.mockResolvedValue({})
   mockEvidenceInsertMany.mockResolvedValue({})
@@ -136,13 +148,15 @@ beforeEach(() => {
     { requirementId: 'req-pay', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL, sessionId: 'sess1' },
   ]))
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1 })
-  mockSessionUpdateOne.mockResolvedValue({})
+  mockSessionUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockEvidenceExists.mockResolvedValue(null)
   mockResolveModel.mockResolvedValue({ model: RESOLVED_MODEL })
   mockSessionExists.mockResolvedValue({ _id: 'sess1' })
-  mockUserExists.mockResolvedValue({ _id: 'u1' })
+  mockIsJobsAccountActive.mockResolvedValue(true)
+  mockWithActiveJobsAccountWrite.mockImplementation(
+    async (_userId: string, work: (session: undefined) => Promise<unknown>) => work(undefined),
+  )
   mockAppExists.mockResolvedValue({ _id: 'app1' })
-  mockAppDeleteOne.mockResolvedValue({ deletedCount: 1 })
   mockHasCompletedScoredPractice.mockReturnValue(true)
   mockEnsurePracticeApplication.mockResolvedValue({
     applicationId: 'app1', jobPostingId: 'job1', sessionId: 'sess1', evidenceCount: 1, newlyAdded: false,
@@ -154,7 +168,10 @@ describe('runEvidenceAttributionHandler', () => {
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('attributed')
     expect(r.rows).toBe(2) // req-node + req-pay; req-nice and invented-id dropped
-    expect(mockEvidenceDeleteMany).toHaveBeenCalledWith({ sessionId: 'sess1', xrayHash: HASH })
+    expect(mockEvidenceDeleteMany).toHaveBeenCalledWith(
+      { sessionId: 'sess1', xrayHash: HASH },
+      { session: undefined },
+    )
     const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
     expect(docs.map((d) => d.requirementId).sort()).toEqual(['req-node', 'req-pay'])
     // Codex #538 P1+r2: live evaluations carry NO modelUsed — rows are
@@ -192,7 +209,19 @@ describe('runEvidenceAttributionHandler', () => {
     // Terminal outcome → processed marker stamped (Codex #538).
     expect(mockSessionUpdateOne).toHaveBeenCalledWith(
       { _id: 'sess1' },
-      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } },
+      undefined,
+    )
+    expect(mockWithActiveJobsAccountWrite).toHaveBeenCalledWith('u1', expect.any(Function))
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: 'job1',
+        status: 'open',
+        closedReason: { $exists: false },
+        parsedJDHash: HASH,
+      },
+      { $inc: { derivedAuthorityRevision: 1 } },
+      { session: undefined, timestamps: false },
     )
   })
 
@@ -474,7 +503,8 @@ describe('runEvidenceAttributionHandler', () => {
     expect(mockCompletion).not.toHaveBeenCalled()
     expect(mockSessionUpdateOne).toHaveBeenCalledWith(
       { _id: 'sess1' },
-      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } },
+      undefined,
     )
   })
 
@@ -488,7 +518,8 @@ describe('runEvidenceAttributionHandler', () => {
     // LLM for) this fully-processed session every day for a week.
     expect(mockSessionUpdateOne).toHaveBeenCalledWith(
       { _id: 'sess1' },
-      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } },
+      undefined,
     )
   })
 
@@ -502,7 +533,7 @@ describe('runEvidenceAttributionHandler', () => {
     expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 
-  it('compensates evidence/readiness when a per-session delete wins after the preflight', async () => {
+  it('aborts inside the transaction when a per-session delete wins after the preflight', async () => {
     mockSessionExists
       .mockResolvedValueOnce({ _id: 'sess1' })
       .mockResolvedValueOnce({ _id: 'sess1' })
@@ -511,62 +542,48 @@ describe('runEvidenceAttributionHandler', () => {
     const r = await runEvidenceAttributionHandler(EVENT, step)
 
     expect(r.rows).toBe(0)
-    expect(mockEvidenceDeleteMany).toHaveBeenCalledWith({ sessionId: 'sess1' })
-    expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
-      {
-        _id: 'app1', userId: 'u1', jobPostingId: 'job1',
-        verifiedPracticeSessionIds: 'sess1',
-      },
-      {
-        $unset: { readiness: 1 },
-        $inc: { readinessRevision: 1 },
-        $pull: { practiceSessionIds: 'sess1', verifiedPracticeSessionIds: 'sess1' },
-      }
-    )
+    expect(mockWithActiveJobsAccountWrite).toHaveBeenCalledWith('u1', expect.any(Function))
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 
-  it('compensates a full-account deletion that removes the owner after writes', async () => {
-    mockUserExists
-      .mockResolvedValueOnce({ _id: 'u1' })
-      .mockResolvedValueOnce({ _id: 'u1' })
-      .mockResolvedValueOnce(null)
+  it('returns zero and writes nothing when account deletion wins the durable writer fence', async () => {
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(
+      new MockJobsAccountInactiveError('account deleting'),
+    )
 
     const r = await runEvidenceAttributionHandler(EVENT, step)
 
     expect(r.rows).toBe(0)
-    expect(mockEvidenceDeleteMany).toHaveBeenCalledWith({ sessionId: 'sess1' })
-    expect(mockAppDeleteOne).toHaveBeenCalledWith({
-      _id: 'app1',
-      userId: 'u1',
-      jobPostingId: 'job1',
-      verifiedPracticeSessionIds: 'sess1',
-    })
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
     expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 
-  it('removes newly written evidence/readiness when source revocation wins during persistence', async () => {
-    mockPostingExists
-      .mockResolvedValueOnce({ _id: 'job1' })
-      .mockResolvedValueOnce({ _id: 'job1' })
-      .mockResolvedValueOnce(null)
+  it('aborts before evidence when the exact posting write fence misses during persistence', async () => {
+    mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
 
     const result = await runEvidenceAttributionHandler(EVENT, step)
 
     expect(result).toEqual({ outcome: 'attributed', rows: 0 })
-    expect(mockEvidenceInsertMany).toHaveBeenCalledOnce()
-    expect(mockEvidenceDeleteMany).toHaveBeenLastCalledWith({ sessionId: 'sess1' })
-    expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
-      {
-        _id: 'app1', userId: 'u1', jobPostingId: 'job1',
-        verifiedPracticeSessionIds: 'sess1',
-      },
-      {
-        $unset: { readiness: 1 },
-        $inc: { readinessRevision: 1 },
-      }
-    )
+    expect(mockPostingUpdateOne).toHaveBeenCalledOnce()
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(mockEvidenceDeleteMany).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
     expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('rejects the transaction when the processed-session marker misses after evidence/readiness writes', async () => {
+    mockSessionUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow(
+      'evidence session changed before processed marker commit',
+    )
+    expect(mockEvidenceInsertMany).toHaveBeenCalledOnce()
+    expect(mockAppUpdateOne).toHaveBeenCalled()
   })
 
   it('recomputes after deleting session A invalidates session B\'s stale application snapshot', async () => {
@@ -599,7 +616,8 @@ describe('runEvidenceAttributionHandler', () => {
     })
     expect(mockSessionUpdateOne).toHaveBeenCalledWith(
       { _id: 'sess1' },
-      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } },
+      undefined,
     )
   })
 
@@ -741,7 +759,8 @@ describe('runEvidenceReconcileHandler', () => {
     expect(mockInngestSend).not.toHaveBeenCalled()
     expect(mockSessionUpdateOne).toHaveBeenCalledWith(
       { _id: 's-unscored' },
-      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } }
+      { $set: { 'attribution.evidenceProcessedAt': expect.any(Date) } },
+      undefined,
     )
   })
 

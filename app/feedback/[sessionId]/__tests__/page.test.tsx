@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const {
   mockRouter,
   mockFetchFeedbackSessionSummary,
+  mockFetchWithRetry,
   mockHasQueuedReplayUpload,
+  mockOverviewTab,
 } = vi.hoisted(() => ({
   mockRouter: { push: vi.fn(), back: vi.fn(), replace: vi.fn() },
   mockFetchFeedbackSessionSummary: vi.fn(),
+  mockFetchWithRetry: vi.fn().mockResolvedValue(true),
   mockHasQueuedReplayUpload: vi.fn(),
+  mockOverviewTab: vi.fn(),
 }))
 
 vi.mock('next/navigation', () => ({
@@ -18,7 +22,12 @@ vi.mock('next/navigation', () => ({
 vi.mock('next/dynamic', () => ({ default: () => () => null }))
 vi.mock('@shared/ui/ScoreBar', () => ({ ScoreRing: () => <div data-testid="score-ring" /> }))
 vi.mock('@feedback/components/AudioPlayer', () => ({ default: () => null }))
-vi.mock('@feedback/components/OverviewTab', () => ({ default: () => null }))
+vi.mock('@feedback/components/OverviewTab', () => ({
+  default: (props: unknown) => {
+    mockOverviewTab(props)
+    return null
+  },
+}))
 vi.mock('@feedback/components/ScoresTab', () => ({ default: () => <div data-testid="scores-tab" /> }))
 vi.mock('@learn/components/feedback/ShareButton', () => ({ default: () => null }))
 vi.mock('@learn/components/pathway/PathwayPendingBanner', () => ({ default: () => null }))
@@ -26,17 +35,24 @@ vi.mock('@jobs/components/JobsCountLink', () => ({ default: () => null }))
 vi.mock('@learn/hooks/usePathwayGenerationPoll', () => ({
   usePathwayGenerationPoll: () => ({ phase: 'idle', pollExhausted: false }),
 }))
-vi.mock('@feedback/lib/feedbackSessionFetcher', () => ({
-  fetchFeedbackSessionSummary: (...args: unknown[]) => mockFetchFeedbackSessionSummary(...args),
-}))
+vi.mock('@feedback/lib/feedbackSessionFetcher', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@feedback/lib/feedbackSessionFetcher')>()
+  return {
+    ...actual,
+    fetchFeedbackSessionSummary: (...args: unknown[]) => mockFetchFeedbackSessionSummary(...args),
+  }
+})
 vi.mock('@interview/utils/resumableUpload', () => ({
   drainQueuedReplayUploads: vi.fn().mockResolvedValue(undefined),
   hasQueuedReplayUpload: (...args: unknown[]) => mockHasQueuedReplayUpload(...args),
 }))
-vi.mock('@shared/fetchWithRetry', () => ({ fetchWithRetry: vi.fn().mockResolvedValue(true) }))
+vi.mock('@shared/fetchWithRetry', () => ({
+  fetchWithRetry: (...args: unknown[]) => mockFetchWithRetry(...args),
+}))
 vi.mock('@interview/utils/feedbackPrintHtml', () => ({ buildFeedbackPrintHtml: vi.fn(() => '') }))
 
 import FeedbackPage from '../page'
+import { FeedbackAccountUnavailableError } from '@feedback/lib/feedbackSessionFetcher'
 
 const SESSION_ID = '507f1f77bcf86cd799439011'
 const ROOT_ID = '507f1f77bcf86cd799439012'
@@ -86,10 +102,10 @@ function storedSession(
   }
 }
 
-function response(body: unknown, ok = true) {
+function response(body: unknown, ok = true, status = ok ? 200 : 404) {
   return {
     ok,
-    status: ok ? 200 : 404,
+    status,
     json: vi.fn().mockResolvedValue(body),
   }
 }
@@ -99,6 +115,9 @@ describe('feedback retake context', () => {
     vi.clearAllMocks()
     localStorage.clear()
     sessionStorage.clear()
+    window.history.replaceState({}, '', `/feedback/${SESSION_ID}`)
+    mockFetchWithRetry.mockReset()
+    mockFetchWithRetry.mockResolvedValue(true)
     mockHasQueuedReplayUpload.mockResolvedValue(false)
   })
 
@@ -115,6 +134,13 @@ describe('feedback retake context', () => {
     }))
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(storedSession({}, {
+          jobDescription: 'Revoked canonical JD',
+          jdFileName: 'revoked-role.pdf',
+          attribution: { source: 'jobs', jobId: JOB_ID, applicationId: 'app-1' },
+        }))
+      }
       if (url.endsWith(`/api/interviews/${SESSION_ID}/retake`)) {
         return response({ parentSessionId: ROOT_ID, jobsOrigin: true })
       }
@@ -147,6 +173,14 @@ describe('feedback retake context', () => {
     }))
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(storedSession({}, {
+          jobDescription: 'Candidate-provided JD',
+          jdFileName: 'my-role.pdf',
+          resumeText: 'Candidate-owned resume',
+          resumeFileName: 'resume.pdf',
+        }))
+      }
       if (url.endsWith(`/api/interviews/${SESSION_ID}/retake`)) {
         return response({ parentSessionId: ROOT_ID })
       }
@@ -166,5 +200,443 @@ describe('feedback retake context', () => {
       resumeFileName: 'resume.pdf',
     })
     expect(localStorage.getItem('pendingRetakeParent')).toBe(ROOT_ID)
+  })
+
+  it('terminally clears rendered feedback when retake sees account deletion', async () => {
+    const initialSession = storedSession()
+    mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+    localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(initialSession)
+      }
+      if (url.endsWith(`/api/interviews/${SESSION_ID}/retake`)) {
+        return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Retake this interview' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+    expect(localStorage.getItem('interviewConfig')).toBeNull()
+    expect(mockRouter.push).not.toHaveBeenCalled()
+  })
+
+  it('terminally clears feedback when the pathway retry preflight sees account deletion', async () => {
+    const initialSession = storedSession()
+    window.history.replaceState({}, '', `/feedback/${SESSION_ID}?retryPathway=1`)
+    mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+    localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(initialSession)
+      }
+      if (url.startsWith('/api/learn/pathway?fromFeedback=')) {
+        return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+    expect(localStorage.getItem('interviewConfig')).toBeNull()
+    expect(mockRouter.replace).toHaveBeenCalledWith(`/feedback/${SESSION_ID}`)
+  })
+
+  it('removes a rendered Jobs bridge and browser state when the account becomes unavailable', async () => {
+    let resolveJob!: (value: unknown) => void
+    const jobResponse = new Promise((resolve) => { resolveJob = resolve })
+    const jobsSession = storedSession({ targetCompany: 'Private Company' }, {
+      attribution: { source: 'jobs', jobId: JOB_ID, applicationId: 'app-1' },
+    })
+    mockFetchFeedbackSessionSummary.mockResolvedValue(jobsSession)
+    localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+    localStorage.setItem('interviewData:other-session', JSON.stringify({ transcript: 'Private transcript' }))
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({ role: 'Private Role' }))
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return Promise.resolve(response(jobsSession))
+      }
+      if (url === `/api/jobs/${JOB_ID}`) return jobResponse
+      return Promise.resolve(response(null, false))
+    }))
+
+    render(<FeedbackPage />)
+
+    expect(await screen.findByRole('link', { name: /Back to Private Company/i })).toBeTruthy()
+
+    await act(async () => {
+      resolveJob({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByRole('link', { name: /Back to Private Company/i })).toBeNull()
+    })
+    expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.getByText(/private interview feedback was cleared/i)).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+    expect(screen.queryByText('Private Company')).toBeNull()
+    expect(localStorage.getItem('interviewConfig')).toBeNull()
+    expect(localStorage.getItem('interviewData:other-session')).toBeNull()
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+  })
+
+  it('treats an exact primary-loader account signal as a terminal deletion fence', async () => {
+    localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+    localStorage.setItem(`interviewData:${SESSION_ID}`, JSON.stringify({ transcript: 'Private transcript' }))
+    sessionStorage.setItem(`feedback-session:${SESSION_ID}`, JSON.stringify({ private: true }))
+    sessionStorage.setItem(`recording-url:v2:camera:${SESSION_ID}`, JSON.stringify({ private: true }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.getByText(/private interview feedback was cleared/i)).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+    expect(localStorage.getItem('interviewConfig')).toBeNull()
+    expect(localStorage.getItem(`interviewData:${SESSION_ID}`)).toBeNull()
+    expect(sessionStorage.getItem(`feedback-session:${SESSION_ID}`)).toBeNull()
+    expect(sessionStorage.getItem(`recording-url:v2:camera:${SESSION_ID}`)).toBeNull()
+    expect(mockRouter.push).not.toHaveBeenCalled()
+  })
+
+  it('does not let a deferred recording presign repopulate caches after deletion', async () => {
+    let resolvePresign!: (value: unknown) => void
+    const presignResponse = new Promise((resolve) => { resolvePresign = resolve })
+    const jobsSession = storedSession({ targetCompany: 'Private Company' }, {
+      hasRecording: true,
+      attribution: { source: 'jobs', jobId: JOB_ID, applicationId: 'app-1' },
+    })
+    localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return Promise.resolve(response(jobsSession))
+      }
+      if (url === `/api/recordings/presign?sessionId=${SESSION_ID}&kind=camera`) {
+        return presignResponse
+      }
+      if (url === `/api/jobs/${JOB_ID}`) {
+        return Promise.resolve(response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401))
+      }
+      return Promise.resolve(response(null, false))
+    }))
+
+    render(<FeedbackPage />)
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    await act(async () => {
+      resolvePresign(response({
+        url: 'https://private.example/recording.webm',
+        expiresInSeconds: 900,
+      }))
+      await presignResponse
+    })
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem(`recording-url:v2:camera:${SESSION_ID}`)).toBeNull()
+    })
+    expect(localStorage.getItem('interviewConfig')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+  })
+
+  it('terminally clears rendered feedback when a later shared poll sees exact account deletion', async () => {
+    vi.useFakeTimers()
+    try {
+      const initialSession = storedSession()
+      mockFetchFeedbackSessionSummary.mockRejectedValueOnce(
+        new FeedbackAccountUnavailableError(),
+      )
+      localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+      localStorage.setItem('interviewData:other-session', JSON.stringify({ transcript: 'Private transcript' }))
+      sessionStorage.setItem('feedback-session:other-session', JSON.stringify({ private: true }))
+      sessionStorage.setItem(`recording-url:v2:camera:${SESSION_ID}`, JSON.stringify({ private: true }))
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+          return response(initialSession)
+        }
+        return response(null, false)
+      }))
+
+      render(<FeedbackPage />)
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(screen.getByRole('heading', { name: 'Interview Feedback' })).toBeTruthy()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000)
+      })
+
+      expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+      expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+      expect(localStorage.getItem('interviewConfig')).toBeNull()
+      expect(localStorage.getItem('interviewData:other-session')).toBeNull()
+      expect(sessionStorage.getItem('feedback-session:other-session')).toBeNull()
+      expect(sessionStorage.getItem(`recording-url:v2:camera:${SESSION_ID}`)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('terminally clears rendered feedback when the enrichment poll sees exact account deletion', async () => {
+    vi.useFakeTimers()
+    try {
+      const initialSession = storedSession({}, {
+        enrichmentStatus: 'running',
+        feedback: {
+          ...storedSession().feedback,
+          ideal_answers: [],
+          drill_recommendations: [],
+        },
+      })
+      let sessionSummaryRequests = 0
+      mockFetchFeedbackSessionSummary.mockResolvedValue(null)
+      localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+      sessionStorage.setItem('feedback-session:other-session', JSON.stringify({ private: true }))
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+          sessionSummaryRequests += 1
+          // Primary load + JobsBridge establish the initially rendered page.
+          // A later direct enrichment refresh observes deletion in progress.
+          if (sessionSummaryRequests > 2) {
+            return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+          }
+          return response(initialSession)
+        }
+        return response(null, false)
+      }))
+
+      render(<FeedbackPage />)
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      expect(screen.getByRole('heading', { name: 'Interview Feedback' })).toBeTruthy()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000)
+      })
+
+      expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+      expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+      expect(localStorage.getItem('interviewConfig')).toBeNull()
+      expect(sessionStorage.getItem('feedback-session:other-session')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('terminally clears rendered feedback when the analysis read sees account deletion', async () => {
+    const initialSession = storedSession({}, { hasAnalysisSource: true })
+    mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+    localStorage.setItem('interviewConfig', JSON.stringify({ jobDescription: 'Private JD' }))
+    sessionStorage.setItem(`feedback-session:${SESSION_ID}`, JSON.stringify({ private: true }))
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(initialSession)
+      }
+      if (url === `/api/analysis/${SESSION_ID}`) {
+        return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Multimodal Analysis' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+    expect(localStorage.getItem('interviewConfig')).toBeNull()
+    expect(sessionStorage.getItem(`feedback-session:${SESSION_ID}`)).toBeNull()
+  })
+
+  it('terminally clears rendered feedback when analysis start sees account deletion', async () => {
+    const initialSession = storedSession({}, { hasAnalysisSource: true })
+    mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(initialSession)
+      }
+      if (url === `/api/analysis/${SESSION_ID}`) return response(null, false)
+      if (url === '/api/analysis/start') {
+        return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Multimodal Analysis' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+  })
+
+  it('terminally clears rendered feedback when the completed-analysis re-fetch sees account deletion', async () => {
+    const initialSession = storedSession({}, { hasAnalysisSource: true })
+    let analysisReads = 0
+    mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(initialSession)
+      }
+      if (url === `/api/analysis/${SESSION_ID}`) {
+        analysisReads += 1
+        return analysisReads === 1
+          ? response(null, false)
+          : response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      if (url === '/api/analysis/start') return response({ status: 'completed' })
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Multimodal Analysis' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(analysisReads).toBe(2)
+  })
+
+  it('terminally clears rendered feedback when analysis polling sees account deletion', async () => {
+    vi.useFakeTimers()
+    try {
+      const initialSession = storedSession({}, { hasAnalysisSource: true })
+      let analysisReads = 0
+      mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+          return response(initialSession)
+        }
+        if (url === `/api/analysis/${SESSION_ID}`) {
+          analysisReads += 1
+          return analysisReads === 1
+            ? response({ status: 'processing' })
+            : response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+        }
+        return response(null, false)
+      }))
+
+      render(<FeedbackPage />)
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Multimodal Analysis' }))
+      await act(async () => {
+        await Promise.resolve()
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+
+      expect(screen.getByText('Your account is unavailable.')).toBeTruthy()
+      expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('terminally clears rendered feedback when lazy transcript loading sees account deletion', async () => {
+    const initialSession = storedSession()
+    mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(initialSession)
+      }
+      if (url === `/api/interviews/${SESSION_ID}/transcript`) {
+        return response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401)
+      }
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Scores' }))
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+  })
+
+  it('passes the terminal account classifier to feedback PATCH retries', async () => {
+    const initialSession = storedSession({}, { status: 'in_progress' })
+    mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+    mockFetchWithRetry.mockImplementation(async (
+      _url: unknown,
+      _init: unknown,
+      options: unknown,
+    ) => {
+      const terminal = (options as {
+        isTerminalResponse?: (response: Response) => Promise<boolean>
+      })?.isTerminalResponse
+      expect(terminal).toBeTypeOf('function')
+      await terminal?.(response({ code: 'ACCOUNT_UNAVAILABLE' }, false, 401) as Response)
+      return false
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(initialSession)
+      }
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(mockFetchWithRetry).toHaveBeenCalledWith(
+      `/api/interviews/${SESSION_ID}`,
+      expect.objectContaining({ method: 'PATCH' }),
+      expect.objectContaining({ isTerminalResponse: expect.any(Function) }),
+    )
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
+  })
+
+  it('passes the monotonic account-unavailable handler to nested feedback consumers', async () => {
+    const initialSession = storedSession()
+    mockFetchFeedbackSessionSummary.mockResolvedValue(initialSession)
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/interviews/${SESSION_ID}?excludeTranscript=true`) {
+        return response(initialSession)
+      }
+      return response(null, false)
+    }))
+
+    render(<FeedbackPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Feedback' }))
+
+    await waitFor(() => expect(mockOverviewTab).toHaveBeenCalled())
+    const props = mockOverviewTab.mock.calls.at(-1)?.[0] as {
+      onAccountUnavailable?: () => void
+    }
+    expect(props.onAccountUnavailable).toBeTypeOf('function')
+
+    act(() => props.onAccountUnavailable?.())
+
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Interview Feedback' })).toBeNull()
   })
 })

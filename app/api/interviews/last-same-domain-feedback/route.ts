@@ -6,8 +6,16 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
+
+function accountUnavailable() {
+  return NextResponse.json(
+    { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+    { status: 401 },
+  )
+}
 
 /**
  * GET /api/interviews/last-same-domain-feedback?domain=<role>[&priorTo=<sessionId>]
@@ -41,11 +49,13 @@ export const dynamic = 'force-dynamic'
  *     later) without touching the broader session-list contract
  */
 export async function GET(req: NextRequest) {
+  let requesterUserId: string | undefined
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    requesterUserId = session.user.id
 
     const { searchParams } = new URL(req.url)
     const domain = searchParams.get('domain')?.trim()
@@ -63,6 +73,9 @@ export async function GET(req: NextRequest) {
     const priorToValid = priorTo && mongoose.Types.ObjectId.isValid(priorTo) ? priorTo : null
 
     await connectDB()
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailable()
+    }
 
     // Reference timestamp + which field to filter by. The reference and
     // the target row MUST be compared using the same timestamp field
@@ -124,6 +137,10 @@ export async function GET(req: NextRequest) {
         feedback?: { overall_score?: number; top_3_improvements?: string[] }
       }>()
 
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailable()
+    }
+
     if (!doc?.feedback || !Array.isArray(doc.feedback.top_3_improvements) || doc.feedback.top_3_improvements.length === 0) {
       return NextResponse.json({ feedback: null })
     }
@@ -139,6 +156,15 @@ export async function GET(req: NextRequest) {
       },
     })
   } catch (err) {
+    if (requesterUserId) {
+      try {
+        if (!(await isJobsAccountActive(requesterUserId))) {
+          return accountUnavailable()
+        }
+      } catch {
+        // Preserve the original history failure if this recheck also fails.
+      }
+    }
     logger.error({ err }, 'Failed to load last same-domain feedback')
     return NextResponse.json({ error: 'Failed to load' }, { status: 500 })
   }

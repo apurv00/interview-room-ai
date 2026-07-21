@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import mongoose from 'mongoose'
-import { ZodError } from 'zod'
+import { ZodError, z } from 'zod'
 import { authOptions } from '@shared/auth/authOptions'
+import { connectDB } from '@shared/db/connection'
 import { UpdateSessionSchema } from '@interview/validators/interview'
 import { getSession, updateSession } from '@interview/services/core/interviewService'
 import { awardXp } from '@learn/services/xpService'
@@ -14,13 +15,88 @@ import { AppError } from '@shared/errors'
 import { deleteInterviewSession } from '@shared/services/accountDeletion'
 import { flushUsageBuffer } from '@shared/services/usageBuffer'
 import { InterviewSession } from '@shared/db/models'
+import {
+  activeJobsAccountIds,
+  isJobsAccountActive,
+} from '@shared/services/jobsAccountFence'
+import {
+  JobsAccountInactiveError,
+  JobsAccountTransactionsRequiredError,
+} from '@shared/services/jobsAccountFence'
+import { deleteFromR2 } from '@shared/storage/r2'
+import {
+  associateRecordingArtifact,
+  cleanupSupersededRecordingArtifact,
+  RecordingArtifactKeyRejectedError,
+  RecordingArtifactSessionNotFoundError,
+} from '@interview/services/core/recordingArtifactService'
 
 export const dynamic = 'force-dynamic'
+
+const accountUnavailableResponse = () => NextResponse.json(
+  { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+  { status: 401 },
+)
+
+type SessionUpdateInput = Parameters<typeof updateSession>[4]
+
+const LegacyRecordingArtifactPatchSchema = z.union([
+  z.object({
+    recordingR2Key: z.string().min(1).max(1000),
+    recordingSizeBytes: z.number().int().min(0),
+    recordingDurationSeconds: z.number().min(1).max(14_400).optional(),
+  }).strict().transform((value) => ({
+    type: 'recording' as const,
+    key: value.recordingR2Key,
+    sizeBytes: value.recordingSizeBytes,
+    ...(value.recordingDurationSeconds !== undefined
+      ? { durationSeconds: value.recordingDurationSeconds }
+      : {}),
+  })),
+  z.object({
+    screenRecordingR2Key: z.string().min(1).max(1000),
+    screenRecordingSizeBytes: z.number().int().min(0),
+  }).strict().transform((value) => ({
+    type: 'screen-recording' as const,
+    key: value.screenRecordingR2Key,
+    sizeBytes: value.screenRecordingSizeBytes,
+  })),
+  z.object({
+    audioRecordingR2Key: z.string().min(1).max(1000),
+    audioRecordingSizeBytes: z.number().int().min(0),
+  }).strict().transform((value) => ({
+    type: 'audio-recording' as const,
+    key: value.audioRecordingR2Key,
+    sizeBytes: value.audioRecordingSizeBytes,
+  })),
+])
+
+const LEGACY_RECORDING_ARTIFACT_FIELDS = new Set([
+  'recordingR2Key',
+  'recordingSizeBytes',
+  'screenRecordingR2Key',
+  'screenRecordingSizeBytes',
+  'audioRecordingR2Key',
+  'audioRecordingSizeBytes',
+])
+
+async function bestEffortDeleteRecordingArtifact(
+  key: string,
+  ownerUserId: string,
+  sessionId: string,
+): Promise<void> {
+  try {
+    await deleteFromR2(key, { ownerUserId, sessionId })
+  } catch (error) {
+    logger.warn({ error, key }, 'Legacy recording finalization compensation failed')
+  }
+}
 
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let requesterUserId: string | undefined
   try {
     if (!mongoose.Types.ObjectId.isValid(params.id)) {
       return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
@@ -29,6 +105,12 @@ export async function GET(
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    requesterUserId = session.user.id
+
+    await connectDB()
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailableResponse()
     }
 
     const excludeTranscript = req.nextUrl.searchParams.get('excludeTranscript') === 'true'
@@ -39,6 +121,15 @@ export async function GET(
       session.user.organizationId,
       { excludeTranscript }
     )
+    const ownerUserId = interviewSession.userId.toString()
+    const requesterIsOwner = ownerUserId === session.user.id
+
+    // A recruiter/admin must not read a retained session after its owner has
+    // crossed the deletion fence. Use 404 so this path does not disclose the
+    // lifecycle state of another account.
+    if (!requesterIsOwner && !(await isJobsAccountActive(ownerUserId))) {
+      return NextResponse.json({ error: 'Interview session not found' }, { status: 404 })
+    }
 
     // Strip internal storage keys from response — expose a boolean flag instead
     const responseData = interviewSession.toObject ? interviewSession.toObject() : { ...interviewSession }
@@ -76,6 +167,11 @@ export async function GET(
     delete responseData.recordingR2Key
     delete responseData.screenRecordingR2Key
     delete responseData.audioRecordingR2Key
+    delete responseData.facialLandmarksR2Key
+    delete responseData.resumeR2Key
+    delete responseData.jdR2Key
+    delete responseData.inviteTokenHash
+    delete responseData.inviteTokenExpiry
     delete responseData.liveTranscriptWords
     responseData.hasRecording = hasRecording
     responseData.hasScreenRecording = hasScreenRecording
@@ -93,10 +189,37 @@ export async function GET(
       delete responseData.userAgent
       delete responseData.candidateEmail
       delete responseData.jobDescription
+      delete responseData.parsedResume
+      delete responseData.parsedJobDescription
+      delete responseData.resumeFileName
+      delete responseData.jdFileName
+      delete responseData.recordingUrl
+      delete responseData.shareToken
+    }
+
+    // Deletion may commit while getSession/aggregate is in flight. Recheck
+    // immediately before returning any captured feedback, config, or JD.
+    const finalActiveAccountIds = await activeJobsAccountIds(
+      requesterIsOwner ? [session.user.id] : [session.user.id, ownerUserId],
+    )
+    if (!finalActiveAccountIds.has(session.user.id)) {
+      return accountUnavailableResponse()
+    }
+    if (!requesterIsOwner && !finalActiveAccountIds.has(ownerUserId)) {
+      return NextResponse.json({ error: 'Interview session not found' }, { status: 404 })
     }
 
     return NextResponse.json(responseData)
   } catch (err) {
+    if (requesterUserId) {
+      try {
+        if (!(await isJobsAccountActive(requesterUserId))) {
+          return accountUnavailableResponse()
+        }
+      } catch {
+        // Preserve the original AppError/route failure if this recheck fails.
+      }
+    }
     if (err instanceof AppError) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.statusCode })
     }
@@ -109,6 +232,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let requesterUserId: string | undefined
   try {
     if (!mongoose.Types.ObjectId.isValid(params.id)) {
       return NextResponse.json({ error: 'Invalid session ID format' }, { status: 400 })
@@ -118,9 +242,114 @@ export async function PATCH(
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    requesterUserId = session.user.id
+
+    const originUserId = req.headers.get('x-origin-user-id')
+    if (originUserId !== null && originUserId !== session.user.id) {
+      return NextResponse.json(
+        { error: 'sign-in session changed', code: 'SESSION_CHANGED' },
+        { status: 409 },
+      )
+    }
+    await connectDB()
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailableResponse()
+    }
 
     const body = await req.json()
-    const validated = UpdateSessionSchema.parse(body) as Parameters<typeof updateSession>[4]
+    const bodyFields = body && typeof body === 'object' && !Array.isArray(body)
+      ? Object.keys(body as Record<string, unknown>)
+      : []
+    const isLegacyArtifactAttempt = bodyFields.some((field) =>
+      LEGACY_RECORDING_ARTIFACT_FIELDS.has(field),
+    )
+    const legacyArtifactResult = isLegacyArtifactAttempt
+      ? LegacyRecordingArtifactPatchSchema.safeParse(body)
+      : null
+    const legacyArtifact = legacyArtifactResult?.success
+      ? legacyArtifactResult.data
+      : null
+    const validated = legacyArtifact
+      ? null
+      : UpdateSessionSchema.parse(body) as SessionUpdateInput
+
+    // Cached interview clients may still finalize a direct upload through
+    // this PATCH. Keep that narrow legacy shape safe while the dedicated
+    // /api/recordings/finalize endpoint rolls out; raw storage keys never
+    // reach the generic session updater or its org-admin edit authority.
+    if (isLegacyArtifactAttempt && !legacyArtifact) {
+      return NextResponse.json(
+        { error: 'Recording artifacts must be finalized separately' },
+        { status: 400 },
+      )
+    }
+    if (legacyArtifact) {
+      try {
+        const result = await associateRecordingArtifact({
+          userId: session.user.id,
+          sessionId: params.id,
+          ...legacyArtifact,
+        })
+        if (!result.accepted) {
+          await bestEffortDeleteRecordingArtifact(
+            legacyArtifact.key,
+            session.user.id,
+            params.id,
+          )
+          return NextResponse.json({ success: true, sessionId: params.id, superseded: true })
+        }
+        await cleanupSupersededRecordingArtifact(
+          result.previousKey,
+          legacyArtifact.key,
+          session.user.id,
+          params.id,
+        )
+        if (!(await isJobsAccountActive(session.user.id))) {
+          await bestEffortDeleteRecordingArtifact(
+            legacyArtifact.key,
+            session.user.id,
+            params.id,
+          )
+          return accountUnavailableResponse()
+        }
+        return NextResponse.json({ success: true, sessionId: params.id })
+      } catch (error) {
+        if (error instanceof RecordingArtifactKeyRejectedError) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        }
+        if (error instanceof JobsAccountInactiveError) {
+          await bestEffortDeleteRecordingArtifact(
+            legacyArtifact.key,
+            session.user.id,
+            params.id,
+          )
+          return accountUnavailableResponse()
+        }
+        if (error instanceof RecordingArtifactSessionNotFoundError) {
+          await bestEffortDeleteRecordingArtifact(
+            legacyArtifact.key,
+            session.user.id,
+            params.id,
+          )
+          if (!(await isJobsAccountActive(session.user.id))) {
+            return accountUnavailableResponse()
+          }
+          return NextResponse.json({ error: 'Interview session not found' }, { status: 404 })
+        }
+        if (error instanceof JobsAccountTransactionsRequiredError) {
+          await bestEffortDeleteRecordingArtifact(
+            legacyArtifact.key,
+            session.user.id,
+            params.id,
+          )
+          return NextResponse.json(
+            { error: 'Recording finalization requires MongoDB transactions', code: 'TRANSACTIONS_REQUIRED' },
+            { status: 503 },
+          )
+        }
+        throw error
+      }
+    }
 
     // `updateSession` returns both the updated document AND the session's
     // `priorStatus` (status BEFORE this PATCH applied). We use priorStatus
@@ -139,7 +368,7 @@ export async function PATCH(
       session.user.id,
       session.user.role,
       session.user.organizationId,
-      validated
+      validated as SessionUpdateInput
     )
     const wasAlreadyCompleted = priorStatus === 'completed'
 
@@ -147,7 +376,7 @@ export async function PATCH(
     // first transition. Non-reward side effects (usage buffer flush) stay
     // unconditional — they are idempotent by nature (buffer drains on
     // first call; subsequent calls are no-ops).
-    if (validated.status === 'completed') {
+    if (validated?.status === 'completed') {
       // Flush buffered usage records to Mongo (fire-and-forget, non-fatal)
       void flushUsageBuffer(params.id).catch((err) =>
         logger.warn({ err, sessionId: params.id }, 'Failed to flush usage buffer (non-fatal)'),
@@ -176,8 +405,20 @@ export async function PATCH(
       }
     }
 
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailableResponse()
+    }
     return NextResponse.json({ success: true, sessionId: updated._id.toString() })
   } catch (err) {
+    if (requesterUserId) {
+      try {
+        if (!(await isJobsAccountActive(requesterUserId))) {
+          return accountUnavailableResponse()
+        }
+      } catch {
+        // Preserve the original validation/AppError contract when unavailable.
+      }
+    }
     if (err instanceof ZodError) {
       return NextResponse.json(
         {

@@ -1,7 +1,24 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockUpdateOne } = vi.hoisted(() => ({ mockUpdateOne: vi.fn() }))
+const {
+  mockUpdateOne,
+  mockWithActiveJobsAccountWrite,
+  mockDbSession,
+  MockJobsAccountInactiveError,
+} = vi.hoisted(() => {
+  class MockJobsAccountInactiveError extends Error {}
+  return {
+    mockUpdateOne: vi.fn(),
+    mockWithActiveJobsAccountWrite: vi.fn(),
+    mockDbSession: { id: 'jobs-account-session' },
+    MockJobsAccountInactiveError,
+  }
+})
 vi.mock('@shared/db/models', () => ({ JobApplication: { updateOne: mockUpdateOne } }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  JobsAccountInactiveError: MockJobsAccountInactiveError,
+  withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
+}))
 
 import { buildPrepPlan, dateForChoice, calendarDaysBetween } from '../config/prepPlan'
 import { setInterviewDate } from '../services/prepPlanService'
@@ -58,9 +75,13 @@ describe('dateForChoice (server owns the date math)', () => {
 describe('setInterviewDate', () => {
   it('persists date+confidence and reports daysUntil; not-sure unsets the date', async () => {
     mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 })
+    mockWithActiveJobsAccountWrite.mockReset().mockImplementation(
+      async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
+    )
     const r = await setInterviewDate('u1', 'j1', { date: new Date(NOW.getTime() + 6 * day), confidence: 'exact' }, NOW)
     expect(r).toEqual({ ok: true, daysUntil: 6 })
     expect(mockUpdateOne.mock.calls[0][1].$set).toMatchObject({ interviewDateConfidence: 'exact' })
+    expect(mockUpdateOne.mock.calls[0][2]).toEqual({ session: mockDbSession })
 
     const r2 = await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW)
     expect(r2).toEqual({ ok: true, daysUntil: null })
@@ -69,10 +90,25 @@ describe('setInterviewDate', () => {
 
   it('rejects nonsense dates (past beyond yesterday, >1y out) and missing rows', async () => {
     mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 })
+    mockWithActiveJobsAccountWrite.mockReset().mockImplementation(
+      async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
+    )
     expect((await setInterviewDate('u1', 'j1', { date: new Date(NOW.getTime() - 3 * day), confidence: 'exact' }, NOW)).ok).toBe(false)
     expect((await setInterviewDate('u1', 'j1', { date: new Date(NOW.getTime() + 400 * day), confidence: 'exact' }, NOW)).ok).toBe(false)
     expect(mockUpdateOne).not.toHaveBeenCalled()
     mockUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
     expect((await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW)).ok).toBe(false)
+  })
+
+  it('preserves the inactive-account signal and writes nothing when deletion owns the fence', async () => {
+    mockUpdateOne.mockReset()
+    mockWithActiveJobsAccountWrite.mockReset().mockRejectedValue(
+      new MockJobsAccountInactiveError('account deleting'),
+    )
+
+    await expect(
+      setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown' }, NOW),
+    ).rejects.toBeInstanceOf(MockJobsAccountInactiveError)
+    expect(mockUpdateOne).not.toHaveBeenCalled()
   })
 })

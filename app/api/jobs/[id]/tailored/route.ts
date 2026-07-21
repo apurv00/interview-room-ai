@@ -4,10 +4,11 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { saveTailoredVersion } from '@jobs'
-import { ProductEvent } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
+import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,6 +73,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       sourceJdHash: body.sourceJdHash,
     })
   } catch (err) {
+    if (err instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
     logger.warn({ err }, 'tailored resume attachment failed after identity verification')
     return NextResponse.json(
       { error: 'temporary attachment failure', code: 'ATTACHMENT_TEMPORARY', identityVerified: true },
@@ -100,7 +107,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ error: 'posting not found', code: 'JOB_NOT_FOUND' }, { status: 404 })
   }
   try {
-    await ProductEvent.create({ name: 'jobs.tailor_run', userId, jobPostingId: params.id, props: { matchScore: body.matchScore }, ts: new Date() })
+    await recordJobsUserEvent({ name: 'jobs.tailor_run', userId, jobPostingId: params.id, props: { matchScore: body.matchScore }, ts: new Date() })
   } catch (err) {
     logger.warn({ err }, 'tailor_run telemetry write failed')
   }

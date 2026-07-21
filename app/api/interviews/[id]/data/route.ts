@@ -48,47 +48,49 @@ export async function DELETE(
     ) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
+    const ownerUserId = session.userId.toString()
+    const deleteAuthority = { ownerUserId, sessionId: params.id }
 
     // Delete R2 objects (non-blocking, collect errors)
     const r2Deletions: Promise<void>[] = []
     if (session.recordingR2Key) {
       r2Deletions.push(
-        deleteFromR2(session.recordingR2Key).catch((err) =>
+        deleteFromR2(session.recordingR2Key, deleteAuthority).catch((err) =>
           logger.warn({ err, key: session.recordingR2Key }, 'Failed to delete recording from R2')
         )
       )
     }
     if (session.screenRecordingR2Key) {
       r2Deletions.push(
-        deleteFromR2(session.screenRecordingR2Key).catch((err) =>
+        deleteFromR2(session.screenRecordingR2Key, deleteAuthority).catch((err) =>
           logger.warn({ err, key: session.screenRecordingR2Key }, 'Failed to delete screen recording from R2')
         )
       )
     }
     if (session.audioRecordingR2Key) {
       r2Deletions.push(
-        deleteFromR2(session.audioRecordingR2Key).catch((err) =>
+        deleteFromR2(session.audioRecordingR2Key, deleteAuthority).catch((err) =>
           logger.warn({ err, key: session.audioRecordingR2Key }, 'Failed to delete audio recording from R2')
         )
       )
     }
     if (session.facialLandmarksR2Key) {
       r2Deletions.push(
-        deleteFromR2(session.facialLandmarksR2Key).catch((err) =>
+        deleteFromR2(session.facialLandmarksR2Key, deleteAuthority).catch((err) =>
           logger.warn({ err, key: session.facialLandmarksR2Key }, 'Failed to delete landmarks from R2')
         )
       )
     }
     if (session.resumeR2Key) {
       r2Deletions.push(
-        deleteFromR2(session.resumeR2Key).catch((err) =>
+        deleteFromR2(session.resumeR2Key, deleteAuthority).catch((err) =>
           logger.warn({ err, key: session.resumeR2Key }, 'Failed to delete resume from R2')
         )
       )
     }
     if (session.jdR2Key) {
       r2Deletions.push(
-        deleteFromR2(session.jdR2Key).catch((err) =>
+        deleteFromR2(session.jdR2Key, deleteAuthority).catch((err) =>
           logger.warn({ err, key: session.jdR2Key }, 'Failed to delete JD from R2')
         )
       )

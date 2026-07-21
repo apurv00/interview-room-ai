@@ -116,7 +116,12 @@ const BUDGETS = {
   // global lineage/control fence. They follow the shared-model convention;
   // +1 headroom keeps the tripwire tight. See
   // docs/adr/0019-shared-budget-bump-jobs-source-control.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 152 },
+  // Bumped maxFiles 152 → 154 on 2026-07-21 (Jobs audit A04): adds ONE
+  // counted cross-module account-lifecycle transaction fence. A03's shared
+  // Jobs contract consumed A02's prior headroom; 153 actual +1 headroom keeps
+  // the tripwire tight. See
+  // docs/adr/0020-shared-budget-bump-jobs-account-fence.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 154 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   'modules/jobs':      { maxLOC: 14_000, maxFiles: 70 },

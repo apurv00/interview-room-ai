@@ -9,6 +9,7 @@ import {
 } from '@interview/services/persona/domainCatalogService'
 import { interviewSlugForDomain } from '../config/domains'
 import { jobPostingStateOf } from './postingAccess'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 /**
  * Interview X-ray (PRODUCT_FLOW §2 detail route, Wave 3.1b) — ONE persisted
@@ -191,11 +192,15 @@ async function getOrParseXrayVersion(
   // before the external parser call; a committed revoke or body replacement
   // therefore blocks stale JD egress. The provider boundary itself cannot be
   // made transactional with Mongo, so the post-parse CAS remains mandatory.
-  const authorizeParserProvider = async () => Boolean(await JobPosting.exists({
-    _id: jobPostingId,
-    status: 'open',
-    jdCompressed: doc.jdCompressed,
-  }))
+  const authorizeParserProvider = async () => {
+    const postingStillAuthorized = Boolean(await JobPosting.exists({
+      _id: jobPostingId,
+      status: 'open',
+      jdCompressed: doc.jdCompressed,
+    }))
+    if (!postingStillAuthorized) return false
+    return !userId || isJobsAccountActive(userId)
+  }
   const stillAuthorized = await authorizeParserProvider()
   if (!stillAuthorized) {
     return allowVersionRetry
@@ -223,6 +228,7 @@ async function getOrParseXrayVersion(
       ? getOrParseXrayVersion(jobPostingId, false, userId)
       : null
   }
+  if (userId && !(await isJobsAccountActive(userId))) return null
   const { rawText: _omit, ...extracted } = parsedByModel
   const parserFallback = extracted.requirements.length === 0 && extracted.keyThemes.length === 0
 
@@ -236,6 +242,7 @@ async function getOrParseXrayVersion(
         jobPostingId,
         hash,
         allowVersionRetry,
+        userId,
         { parsed: stableParsed, cached: false, retryable: true },
       )
     }
@@ -261,6 +268,7 @@ async function getOrParseXrayVersion(
       jobPostingId,
       hash,
       allowVersionRetry,
+      userId,
       { parsed: stableParsed, cached: false, retryable: true },
     )
   }
@@ -315,6 +323,7 @@ async function getOrParseXrayVersion(
     jobPostingId,
     hash,
     allowVersionRetry,
+    userId,
     {
       parsed: activeCatalog.authoritative ? extracted : { ...extracted, inferredDomain: '' },
       cached: false,
@@ -327,6 +336,7 @@ async function reconcileCurrentXray(
   jobPostingId: string,
   expectedHash: string,
   allowVersionRetry: boolean,
+  userId: string | null | undefined,
   sameVersionFallback: XrayResult,
 ): Promise<XrayResult | null> {
   // A concurrent parser, close, or JD replacement may win while the model is
@@ -340,7 +350,7 @@ async function reconcileCurrentXray(
   const currentHash = xrayHashOf(currentJd)
   if (currentHash !== expectedHash) {
     return allowVersionRetry
-      ? getOrParseXrayVersion(jobPostingId, false)
+      ? getOrParseXrayVersion(jobPostingId, false, userId)
       : null
   }
   if (current.parsedJD && current.parsedJDHash === currentHash) {

@@ -84,6 +84,29 @@ describe('usePathwayGenerationPoll', () => {
     await waitFor(() => expect(result.current.phase).toBe('done'))
   })
 
+  it('reports exact account deletion and stops polling immediately', async () => {
+    const onAccountUnavailable = vi.fn()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ code: 'ACCOUNT_UNAVAILABLE' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() =>
+      usePathwayGenerationPoll({
+        sessionId: SESSION_ID,
+        enabled: true,
+        onRefresh: vi.fn(),
+        onAccountUnavailable,
+      }),
+    )
+
+    await waitFor(() => expect(result.current.phase).toBe('done'))
+    expect(onAccountUnavailable).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
   // The three cases below pin the budget fix: before it, the 120s check only
   // ran on ok-and-pending responses, so persistent non-OK responses and thrown
   // fetches polled every 3s for the tab's lifetime (~28,800 requests/night on

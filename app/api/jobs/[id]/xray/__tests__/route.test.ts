@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockGetServerSession, mockConnectDB, mockGetOrParseXray, mockCheckJobsRateLimit } = vi.hoisted(() => ({
+const {
+  mockGetServerSession,
+  mockConnectDB,
+  mockGetOrParseXray,
+  mockCheckJobsRateLimit,
+  mockIsJobsAccountActive,
+} = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockConnectDB: vi.fn(),
   mockGetOrParseXray: vi.fn(),
   mockCheckJobsRateLimit: vi.fn(),
+  mockIsJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
@@ -12,6 +19,9 @@ vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@jobs', () => ({ getOrParseXray: mockGetOrParseXray }))
 vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: mockIsJobsAccountActive,
+}))
 
 import { GET } from '../route'
 
@@ -22,9 +32,59 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockConnectDB.mockResolvedValue(undefined)
   mockCheckJobsRateLimit.mockResolvedValue(null)
+  mockIsJobsAccountActive.mockResolvedValue(true)
 })
 
 describe('GET /api/jobs/[id]/xray owner-aware cache policy', () => {
+  it('rejects an inactive stale-JWT account before reading or parsing X-ray data', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockIsJobsAccountActive.mockResolvedValue(false)
+
+    const response = await GET(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/xray`),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mockGetOrParseXray).not.toHaveBeenCalled()
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(1)
+  })
+
+  it('discards an X-ray result when deletion commits during parsing', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockIsJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+    mockGetOrParseXray.mockResolvedValue({
+      cached: false,
+      parsed: {
+        role: 'Backend Engineer',
+        inferredDomain: 'backend',
+        keyThemes: ['must-not-leak'],
+        requirements: [{ id: 'secret-requirement' }],
+      },
+    })
+
+    const response = await GET(
+      new Request(`http://localhost/api/jobs/${JOB_ID}/xray`),
+      { params: { id: JOB_ID } },
+    )
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    const body = await response.json()
+    expect(body).toEqual({ error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' })
+    expect(body).not.toHaveProperty('parsed')
+    expect(body).not.toHaveProperty('requirements')
+    expect(mockGetOrParseXray).toHaveBeenCalledWith(JOB_ID, USER_ID)
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(2)
+  })
+
   it('applies the X-ray budget before database or model work and keeps 429 private', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
     mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
@@ -54,6 +114,7 @@ describe('GET /api/jobs/[id]/xray owner-aware cache policy', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockGetOrParseXray).toHaveBeenCalledWith(JOB_ID, USER_ID)
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(2)
   })
 
   it('makes an authenticated non-owner/missing result private and non-cacheable', async () => {

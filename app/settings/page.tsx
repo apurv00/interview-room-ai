@@ -8,6 +8,7 @@ import Image from 'next/image'
 import { PLANS } from '@shared/services/stripe'
 import { ROLE_LABELS, EXPERIENCE_LABELS } from '@interview/config/interviewConfig'
 import type { Role, ExperienceLevel } from '@shared/types'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 interface OnboardingProfile {
   targetRole: string | null
@@ -87,7 +88,9 @@ export default function SettingsPage() {
         setDeleting(false)
         return
       }
-      // Server cascade succeeded — sign out client-side and redirect home.
+      // Server cascade succeeded — remove every scoped/unscoped interview
+      // cache before the stale JWT is signed out and the page redirects.
+      await clearAllInterviewStorage()
       await signOut({ redirect: false })
       window.location.href = '/?account_deleted=1'
     } catch {

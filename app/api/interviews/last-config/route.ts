@@ -4,6 +4,8 @@ import { authOptions } from '@shared/auth/authOptions'
 import { listSessions } from '@interview/services/core/interviewService'
 import { logger } from '@shared/logger'
 import type { InterviewConfig } from '@shared/types'
+import { connectDB } from '@shared/db/connection'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 interface StoredSession {
   config?: InterviewConfig
@@ -14,6 +16,11 @@ interface StoredSession {
 }
 
 export const dynamic = 'force-dynamic'
+
+const accountUnavailableResponse = () => NextResponse.json(
+  { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+  { status: 401 },
+)
 
 /**
  * GET /api/interviews/last-config
@@ -27,21 +34,34 @@ export const dynamic = 'force-dynamic'
  * localStorage is the primary source.
  */
 export async function GET(_req: NextRequest) {
+  let requesterUserId: string | undefined
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    requesterUserId = session.user.id
 
+    await connectDB()
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailableResponse()
+    }
+
+    // This endpoint restores the requester's personal setup. Passing the
+    // requester's recruiter/admin role to listSessions would widen the query
+    // to every session in their organization and could return another
+    // candidate's JD or resume. Force the owner-only list contract here.
     const result = await listSessions({
       userId: session.user.id,
-      organizationId: session.user.organizationId,
-      role: session.user.role,
+      role: 'candidate',
       page: 1,
       limit: 1,
     })
 
     const latest = result.sessions[0] as StoredSession | undefined
+    if (!(await isJobsAccountActive(session.user.id))) {
+      return accountUnavailableResponse()
+    }
     if (!latest?.config) {
       return NextResponse.json({ config: null })
     }
@@ -60,6 +80,15 @@ export async function GET(_req: NextRequest) {
 
     return NextResponse.json({ config })
   } catch (err) {
+    if (requesterUserId) {
+      try {
+        if (!(await isJobsAccountActive(requesterUserId))) {
+          return accountUnavailableResponse()
+        }
+      } catch {
+        // Preserve the original history failure if this recheck also fails.
+      }
+    }
     logger.error({ err }, 'Failed to load last interview config')
     return NextResponse.json({ error: 'Failed to load last config' }, { status: 500 })
   }

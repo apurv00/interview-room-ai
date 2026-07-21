@@ -1,13 +1,22 @@
 import { gunzipSync } from 'zlib'
 import { isValidObjectId, type ClientSession } from 'mongoose'
-import { JobApplication, JobPosting, InterviewSession, ProductEvent, User } from '@shared/db/models'
+import { JobApplication, JobPosting, InterviewSession } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { inngest } from '@shared/services/inngest'
 import { getShortFormMinAnswers } from '@interview'
 import { practiceHandoffHashOf } from './practiceHandoff'
 import { xrayHashOf } from './xrayService'
-import { jobPostingStateOf } from './postingAccess'
+import {
+  exactOptionalPostingCondition,
+  jobPostingStateOf,
+} from './postingAccess'
 import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
+import {
+  isJobsAccountActive,
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
+import { recordJobsUserEvent } from './userEventService'
 import {
   canonicalApplyOptionsOf,
   resolveApplyOption,
@@ -27,27 +36,11 @@ import type { ApplyTier } from '../config/spamRules'
  * clicking an apply link again is not evidence the pipeline moved backward.
  */
 
-const APPLICATION_TRANSACTION_OPTIONS = {
-  readConcern: { level: 'snapshot' as const },
-  writeConcern: { w: 'majority' as const },
-}
-
 async function runApplicationTransaction<T>(
+  userId: string,
   work: (session: ClientSession) => Promise<T>,
 ): Promise<T> {
-  const session = await JobApplication.db.startSession()
-  let result: T | undefined
-  let completed = false
-  try {
-    await session.withTransaction(async () => {
-      result = await work(session)
-      completed = true
-    }, APPLICATION_TRANSACTION_OPTIONS)
-  } finally {
-    await session.endSession()
-  }
-  if (!completed) throw new Error('application transaction completed without a result')
-  return result as T
+  return withActiveJobsAccountWrite(userId, work)
 }
 
 function exactApplyOptionPostingFilter(
@@ -58,9 +51,7 @@ function exactApplyOptionPostingFilter(
   return {
     _id: jobPostingId,
     status: posting.status,
-    closedReason: posting.closedReason === undefined
-      ? { $exists: false }
-      : posting.closedReason,
+    closedReason: exactOptionalPostingCondition(posting.closedReason),
     provenance: {
       $elemMatch: {
         sourceKey: option.sourceKey,
@@ -140,14 +131,21 @@ export async function claimAtsRun(
   now = new Date()
 ): Promise<{ claimed: boolean; claimedAt: Date }> {
   const staleBefore = new Date(now.getTime() - 3 * 60_000)
-  const res = await JobApplication.updateOne(
-    {
-      userId,
-      jobPostingId,
-      $or: [{ atsRequestedAt: { $exists: false } }, { atsRequestedAt: { $lt: staleBefore } }],
-    },
-    { $set: { atsRequestedAt: now } }
-  )
+  let res
+  try {
+    res = await withActiveJobsAccountWrite(userId, (session) => JobApplication.updateOne(
+      {
+        userId,
+        jobPostingId,
+        $or: [{ atsRequestedAt: { $exists: false } }, { atsRequestedAt: { $lt: staleBefore } }],
+      },
+      { $set: { atsRequestedAt: now } },
+      { session },
+    ))
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) return { claimed: false, claimedAt: now }
+    throw error
+  }
   // claimedAt travels through the event: a superseded slow run may only
   // clear the marker IT set — never a newer run's (Codex on #521).
   return { claimed: (res?.modifiedCount ?? 0) === 1, claimedAt: now }
@@ -155,7 +153,13 @@ export async function claimAtsRun(
 
 /** Rollback for a claim whose enqueue failed — the next click must work. */
 export async function releaseAtsClaim(userId: string, jobPostingId: string): Promise<void> {
-  await JobApplication.updateOne({ userId, jobPostingId }, { $unset: { atsRequestedAt: 1 } }).catch(() => {})
+  await withActiveJobsAccountWrite(userId, (session) =>
+    JobApplication.updateOne(
+      { userId, jobPostingId },
+      { $unset: { atsRequestedAt: 1 } },
+      { session },
+    ),
+  ).catch(() => {})
 }
 
 class TailoredVersionTransactionRaceError extends Error {}
@@ -194,7 +198,7 @@ export async function saveTailoredVersion(
   let retriedRace = false
   for (;;) {
     try {
-      return await runApplicationTransaction(async (session) => {
+      return await runApplicationTransaction(userId, async (session) => {
         const posting = await JobPosting.findById(jobPostingId, undefined, { session })
           .select('title company locations provenance status closedReason jdCompressed')
           .lean()
@@ -236,13 +240,15 @@ export async function saveTailoredVersion(
           {
             _id: jobPostingId,
             status: posting.status,
-            closedReason: posting.closedReason === undefined
-              ? { $exists: false }
-              : posting.closedReason,
+            closedReason: exactOptionalPostingCondition(posting.closedReason),
             jdCompressed: posting.jdCompressed,
           },
-          { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-          { session },
+          {
+            $set: { userReferenced: true },
+            $unset: { purgeAt: 1 },
+            $inc: { derivedAuthorityRevision: 1 },
+          },
+          { session, timestamps: false },
         )
         if ((postingGuard?.matchedCount ?? 0) !== 1) {
           return { ok: false, reason: 'context-unavailable' as const }
@@ -328,13 +334,15 @@ export async function transitionStatus(
   // promises jobs.status_changed{from,to,source}, and in a loose machine
   // `from` is what distinguishes a forward move from a correction
   // (Codex on #522).
-  const prev = await JobApplication.findOneAndUpdate(
-    { userId, jobPostingId },
-    {
-      $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
-      $push: { statusHistory: { status: to, at: now, source: 'user' } },
-    },
-    { new: false }
+  const prev = await withActiveJobsAccountWrite(userId, (session) =>
+    JobApplication.findOneAndUpdate(
+      { userId, jobPostingId },
+      {
+        $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
+        $push: { statusHistory: { status: to, at: now, source: 'user' } },
+      },
+      { new: false, session },
+    ),
   )
   if (!prev) return { ok: false }
 
@@ -346,7 +354,7 @@ export async function transitionStatus(
   if (telemetry) {
     try {
       const scheduledEdge = to === 'interview_scheduled' && prev.status !== 'interview_scheduled'
-      await ProductEvent.create({
+      await recordJobsUserEvent({
         name: to === 'applied' ? 'jobs.apply_confirmed' : scheduledEdge ? 'jobs.interview_scheduled' : 'jobs.status_changed',
         userId,
         jobPostingId,
@@ -386,7 +394,7 @@ async function reportBrokenLinkAttempt(
   optionId: string,
   now: Date,
 ): Promise<BrokenLinkResult> {
-  return runApplicationTransaction(async (session) => {
+  return runApplicationTransaction(userId, async (session) => {
     const posting = await JobPosting.findById(jobPostingId, undefined, { session })
       .select('provenance status closedReason')
       .lean()
@@ -574,9 +582,9 @@ export async function ensurePracticeApplication(
     !hasCompletedScoredPractice(session)
   ) return null
 
-  // Full-account deletion removes User before its final JobApplication
-  // sweep. Refuse a late side-effect after that durable deletion fence.
-  if (!(await User.exists({ _id: userId }))) return null
+  // Cheap fail-fast only. The transaction-bound User write below is the
+  // durable account-deletion authority.
+  if (!(await isJobsAccountActive(userId))) return null
 
   // applicationId originates in browser-held config and is advisory only.
   // The unique user+posting pair is the canonical identity and prevents a
@@ -614,17 +622,9 @@ export async function ensurePracticeApplication(
   const postingGuard = {
     _id: attr.jobId,
     status: posting.status,
-    closedReason: posting.closedReason
-      ? posting.closedReason
-      : { $exists: false },
+    closedReason: exactOptionalPostingCondition(posting.closedReason),
     jdCompressed: posting.jdCompressed,
   }
-  const pin = await JobPosting.updateOne(
-    postingGuard,
-    { $set: { userReferenced: true }, $unset: { purgeAt: 1 } }
-  )
-  if ((pin?.matchedCount ?? 0) === 0) return null
-
   const snapshot = {
     title: String(posting.title ?? '').slice(0, 300),
     company: String(posting.company ?? '').slice(0, 300),
@@ -641,119 +641,147 @@ export async function ensurePracticeApplication(
     },
   }
 
-  // The $ne predicate, not modifiedCount, proves this write inserted the
-  // session. Mongoose timestamps can otherwise modify updatedAt on a no-op
-  // $addToSet and falsely crown every retry as the event-emitting winner.
-  let newlyAdded = false
-  const existingAttach = await JobApplication.updateOne(evidenceFilter, attach)
-  if ((existingAttach?.matchedCount ?? 0) > 0) {
-    newlyAdded = true
-  } else {
-    const alreadyAttached = await JobApplication.findOne({ ...filter, verifiedPracticeSessionIds: session._id })
-      .select('_id')
-      .lean()
-    if (!alreadyAttached) {
-      try {
-        const result = await JobApplication.updateOne(
-          evidenceFilter,
+  type PersistedPractice = {
+    applicationId: string
+    jobPostingId: string
+    evidenceCount: number
+    newlyAdded: boolean
+  }
+  let persisted: PersistedPractice | null = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      persisted = await withActiveJobsAccountWrite(userId, async (dbSession) => {
+        // Session, exact posting pin, and ownership/evidence mutation share
+        // the deletion fence. A stale JWT can never pin the posting first.
+        const liveSession = await InterviewSession.findOne(
+          sessionFilter,
+          undefined,
+          { session: dbSession },
+        ).select('_id').lean()
+        if (!liveSession) return null
+        const pin = await JobPosting.updateOne(
+          postingGuard,
           {
-            $setOnInsert: {
-              jobSnapshot: snapshot,
-              status: 'saved',
-              statusHistory: [{ status: 'saved', at: now, source: 'system' }],
+            $set: { userReferenced: true },
+            $unset: { purgeAt: 1 },
+            $inc: { derivedAuthorityRevision: 1 },
+          },
+          { session: dbSession, timestamps: false },
+        )
+        if ((pin?.matchedCount ?? 0) === 0) return null
+
+        // The $ne predicate, not modifiedCount, proves this write inserted
+        // the session. Timestamps can modify updatedAt on a no-op $addToSet.
+        let newlyAdded = false
+        const existingAttach = await JobApplication.updateOne(
+          evidenceFilter,
+          attach,
+          { session: dbSession },
+        )
+        if ((existingAttach?.matchedCount ?? 0) > 0) {
+          newlyAdded = true
+        } else {
+          const alreadyAttached = await JobApplication.findOne(
+            { ...filter, verifiedPracticeSessionIds: session._id },
+            undefined,
+            { session: dbSession },
+          ).select('_id').lean()
+          if (!alreadyAttached) {
+            const result = await JobApplication.updateOne(
+              evidenceFilter,
+              {
+                $setOnInsert: {
+                  jobSnapshot: snapshot,
+                  status: 'saved',
+                  statusHistory: [{ status: 'saved', at: now, source: 'system' }],
+                },
+                $addToSet: {
+                  practiceSessionIds: session._id,
+                  verifiedPracticeSessionIds: session._id,
+                },
+              },
+              {
+                session: dbSession,
+                upsert: true,
+                setDefaultsOnInsert: true,
+                runValidators: true,
+              },
+            )
+            newlyAdded = (result?.upsertedCount ?? 0) > 0 || (result?.matchedCount ?? 0) > 0
+          }
+        }
+
+        const app = await JobApplication.findOne(
+          { ...filter, verifiedPracticeSessionIds: session._id },
+          undefined,
+          { session: dbSession },
+        ).select('_id verifiedPracticeSessionIds jobPostingId').lean()
+        if (!app) return null
+
+        if (String(attr.applicationId ?? '') !== String(app._id)) {
+          await InterviewSession.updateOne(
+            {
+              _id: session._id,
+              userId,
+              'attribution.source': 'jobs',
+              'attribution.jobId': attr.jobId,
             },
-            $addToSet: {
+            { $set: { 'attribution.applicationId': String(app._id) } },
+            { session: dbSession },
+          )
+        }
+        return {
+          applicationId: String(app._id),
+          jobPostingId: String(app.jobPostingId),
+          evidenceCount: Math.min(3, app.verifiedPracticeSessionIds?.length ?? 0),
+          newlyAdded,
+        }
+      })
+      break
+    } catch (error) {
+      if (error instanceof JobsAccountInactiveError) return null
+      if (attempt === 0 && isDuplicateKeyError(error)) continue
+      throw error
+    }
+  }
+  if (!persisted) return null
+
+  // Single-session deletion does not mutate the account fence. Preserve the
+  // existing post-commit compensation for that independent race; account
+  // deletion itself is already ordered by the transaction above.
+  const [sessionStillExists, accountStillActive, postingStillAuthorized] = await Promise.all([
+    InterviewSession.findOne(sessionFilter).select('_id').lean(),
+    isJobsAccountActive(userId),
+    JobPosting.exists(postingGuard),
+  ])
+  if (!accountStillActive) return null
+  if (!sessionStillExists || !postingStillAuthorized) {
+    if (persisted.newlyAdded) {
+      await withActiveJobsAccountWrite(userId, (dbSession) =>
+        JobApplication.updateOne(
+          {
+            _id: persisted!.applicationId,
+            ...filter,
+            verifiedPracticeSessionIds: session._id,
+          },
+          {
+            $pull: {
               practiceSessionIds: session._id,
               verifiedPracticeSessionIds: session._id,
             },
           },
-          { upsert: true, setDefaultsOnInsert: true, runValidators: true }
-        )
-        newlyAdded = (result?.upsertedCount ?? 0) > 0 || (result?.matchedCount ?? 0) > 0
-      } catch (err) {
-        if ((err as { code?: number })?.code !== 11000) throw err
-        // A concurrent Save/Apply/Tailor/practice won the unique tuple. Retry
-        // the conditional attach only; never overwrite the winner's state.
-        const result = await JobApplication.updateOne(evidenceFilter, attach)
-        newlyAdded = (result?.matchedCount ?? 0) > 0
-      }
-    }
-  }
-
-  // Close both single-session and full-account deletion races. Account
-  // deletion removes sessions first, User next, and applications last; a
-  // writer spanning that sequence either gets swept or observes the fence.
-  const [sessionStillExists, userStillExists] = await Promise.all([
-    InterviewSession.findOne(sessionFilter).select('_id').lean(),
-    User.exists({ _id: userId }),
-  ])
-  if (!userStillExists) {
-    await JobApplication.deleteOne(filter)
-    return null
-  }
-  if (!sessionStillExists) {
-    await JobApplication.updateOne(filter, {
-      $pull: {
-        practiceSessionIds: session._id,
-        verifiedPracticeSessionIds: session._id,
-      },
-    })
-    return null
-  }
-
-  // Prove the canonical row still exists after the write (account deletion
-  // can race this rail) and that it actually contains the evidence before an
-  // attribution event is emitted.
-  const app = await JobApplication.findOne({ ...filter, verifiedPracticeSessionIds: session._id })
-    .select('_id verifiedPracticeSessionIds jobPostingId')
-    .lean()
-  if (!app) return null
-
-  // Source control can close the posting after the exact pin but before the
-  // relationship write. Revalidate the same lifecycle+JD tuple before any
-  // attribution repair/event. If it lost authority, remove only the session
-  // relationship this call added. Retain the status-only tracker snapshot:
-  // a concurrent Save can express user intent without mutating that row, and
-  // source-revoked detail serving keeps the retained snapshot restricted.
-  if (!(await JobPosting.exists(postingGuard))) {
-    if (newlyAdded) {
-      await JobApplication.updateOne(
-        { _id: app._id, ...filter, verifiedPracticeSessionIds: session._id },
-        {
-          $pull: {
-            practiceSessionIds: session._id,
-            verifiedPracticeSessionIds: session._id,
-          },
-        }
-      )
+          { session: dbSession },
+        ),
+      ).catch((error) => {
+        if (!(error instanceof JobsAccountInactiveError)) throw error
+      })
     }
     return null
-  }
-
-  // Repair stale/missing client-carried attribution so a failed immediate
-  // emit remains recoverable by the canonical reconciliation sweep.
-  if (String(attr.applicationId ?? '') !== String(app._id)) {
-    try {
-      await InterviewSession.updateOne(
-        {
-          _id: session._id,
-          userId,
-          'attribution.source': 'jobs',
-          'attribution.jobId': attr.jobId,
-        },
-        { $set: { 'attribution.applicationId': String(app._id) } }
-      )
-    } catch (err) {
-      logger.warn({ err, sessionId }, 'practice application attribution repair failed')
-    }
   }
 
   return {
-    applicationId: String(app._id),
-    jobPostingId: String(app.jobPostingId),
+    ...persisted,
     sessionId: String(session._id),
-    evidenceCount: Math.min(3, app.verifiedPracticeSessionIds?.length ?? 0),
-    newlyAdded,
   }
 }
 
@@ -771,7 +799,7 @@ export async function recordPracticeEvidence(
   const ensured = await ensurePracticeApplication(userId, sessionId, now)
   if (!ensured) return { recorded: false }
 
-  if (ensured.newlyAdded) {
+  if (ensured.newlyAdded && await isJobsAccountActive(userId)) {
     try {
       await inngest.send({
         id: `jobs-evidence-${ensured.sessionId}`,
@@ -803,7 +831,7 @@ async function recordApplyClickAttempt(
   optionId: string,
   now: Date,
 ): Promise<ApplyClickResult | null> {
-  return runApplicationTransaction(async (session) => {
+  return runApplicationTransaction(userId, async (session) => {
     const posting = await JobPosting.findById(jobPostingId, undefined, { session })
       .select('title company locations provenance status closedReason')
       .lean()
@@ -828,8 +856,12 @@ async function recordApplyClickAttempt(
     // replacement that wins forces a retry against the new truth.
     const pin = await JobPosting.updateOne(
       exactApplyOptionPostingFilter(jobPostingId, posting, option),
-      { $set: { userReferenced: true }, $unset: { purgeAt: 1 } },
-      { session },
+      {
+        $set: { userReferenced: true },
+        $unset: { purgeAt: 1 },
+        $inc: { derivedAuthorityRevision: 1 },
+      },
+      { session, timestamps: false },
     )
     if ((pin?.matchedCount ?? 0) !== 1) return null
 
@@ -909,15 +941,19 @@ export async function recordApplyClick(
   optionId: string,
   now = new Date(),
 ): Promise<ApplyClickResult | null> {
-  try {
-    return await recordApplyClickAttempt(userId, jobPostingId, optionId, now)
-  } catch (error) {
-    if (!isDuplicateKeyError(error) && !(error instanceof ApplyOptionTransactionRaceError)) {
-      throw error
+  // Two distinct writers may win in sequence: Save/Tailor/Practice can win
+  // the create, then a forward status transition can win the first
+  // convergence update. A third bounded attempt observes that settled status
+  // and records only the canonical click id without regressing it.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await recordApplyClickAttempt(userId, jobPostingId, optionId, now)
+    } catch (error) {
+      const retryable = isDuplicateKeyError(error) ||
+        error instanceof ApplyOptionTransactionRaceError
+      if (!retryable) throw error
+      if (attempt === 2) return null
     }
-    // A Save/Tailor/practice create or a forward status move may win the first
-    // transaction. Re-enter once so the winner gains the canonical click id
-    // without ever regressing its status.
-    return recordApplyClickAttempt(userId, jobPostingId, optionId, now)
   }
+  return null
 }

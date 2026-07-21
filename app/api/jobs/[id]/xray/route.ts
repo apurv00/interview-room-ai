@@ -5,6 +5,7 @@ import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
 import { getOrParseXray } from '@jobs'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,7 +30,19 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ error: 'not found' }, { status: 404, ...privateResponse })
   }
   await connectDB()
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401, ...privateResponse },
+    )
+  }
   const xray = await getOrParseXray(params.id, userId)
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401, ...privateResponse },
+    )
+  }
   if (!xray) return NextResponse.json({ error: 'not found' }, { status: 404, ...privateResponse })
   return NextResponse.json({
     cached: xray.cached,
