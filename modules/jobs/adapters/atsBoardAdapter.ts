@@ -134,7 +134,10 @@ export const atsBoardAdapter: JobSourceAdapter = {
       if (!res.ok && res.authorityChanged) {
         return { ok: false, status: 0, raw: [], attempts: attempts + (res.attempts ?? 0), authorityChanged: true }
       }
-      attempts++
+      if (!res.ok && res.requestRejected) {
+        return { ok: false, status: 0, raw: [], attempts: attempts + (res.attempts ?? 0), requestRejected: res.requestRejected }
+      }
+      attempts += res.attempts ?? 1
       if (!res.ok) return { ok: false, status: res.status, raw: [], attempts }
       const pageRows = extractRows(target.atsKind as BoardKind, res.data)
       if (pageRows === null) return { ok: false, status: res.status, raw: [], bodyError: true, attempts }

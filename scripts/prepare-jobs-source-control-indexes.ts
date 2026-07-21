@@ -3,7 +3,7 @@
  * Explicit, non-dropping A02 index preparation.
  *
  * Mongoose schema initialization is disabled so this command can only create
- * the five indexes listed below. It never calls syncIndexes/dropIndex and is
+ * the seven indexes listed below. It never calls syncIndexes/dropIndex and is
  * safe to re-run after a partial build.
  *
  * Dry-run by default:
@@ -18,6 +18,7 @@ import {
   JobPosting,
   JobSourceConfig,
   JobSourceControlAudit,
+  JobSourceOperationAudit,
 } from '../shared/db/models'
 import {
   hasSingleSafeNamedIndex,
@@ -26,18 +27,18 @@ import {
 
 export type SourceControlIndexPreparationMode = 'dry-run' | 'apply'
 
-type IndexTarget = 'postings' | 'source-configs' | 'source-control-audits'
+type IndexTarget = 'postings' | 'source-configs' | 'source-control-audits' | 'source-operation-audits'
 
 interface SourceControlIndexDefinition {
   target: IndexTarget
   name: string
-  key: Record<string, 1>
+  key: Record<string, 1 | -1>
   unique: boolean
   purpose: string
 }
 
 interface IndexCollection {
-  createIndex(key: Record<string, 1>, options: { name: string; unique?: boolean }): Promise<string>
+  createIndex(key: Record<string, 1 | -1>, options: { name: string; unique?: boolean }): Promise<string>
   indexes(): Promise<SourceControlIndexDescription[]>
 }
 
@@ -62,6 +63,20 @@ export const JOBS_SOURCE_CONTROL_INDEX_DEFINITIONS: readonly SourceControlIndexD
     key: { sourceId: 1, revision: 1 },
     unique: true,
     purpose: 'one permanent audit row per authority revision',
+  },
+  {
+    target: 'source-operation-audits',
+    name: JOB_SOURCE_CONTROL_INDEX_NAMES.operationAuditOperationId,
+    key: { operationId: 1 },
+    unique: true,
+    purpose: 'idempotent operational commands',
+  },
+  {
+    target: 'source-operation-audits',
+    name: JOB_SOURCE_CONTROL_INDEX_NAMES.operationAuditSourceOccurredAt,
+    key: { sourceId: 1, occurredAt: -1 },
+    unique: false,
+    purpose: 'source-scoped permanent operations timeline',
   },
   {
     target: 'postings',
@@ -96,6 +111,7 @@ function collectionsByTarget(): Record<IndexTarget, IndexCollection> {
     postings: JobPosting.collection as unknown as IndexCollection,
     'source-configs': JobSourceConfig.collection as unknown as IndexCollection,
     'source-control-audits': JobSourceControlAudit.collection as unknown as IndexCollection,
+    'source-operation-audits': JobSourceOperationAudit.collection as unknown as IndexCollection,
   }
 }
 
@@ -133,7 +149,7 @@ export async function prepareJobsSourceControlIndexes(argv: string[]): Promise<v
   }
 
   const indexesByTarget = new Map<IndexTarget, SourceControlIndexDescription[]>()
-  for (const target of ['postings', 'source-configs', 'source-control-audits'] as const) {
+  for (const target of ['postings', 'source-configs', 'source-control-audits', 'source-operation-audits'] as const) {
     indexesByTarget.set(target, await collections[target].indexes())
   }
 
@@ -154,8 +170,12 @@ export async function prepareJobsSourceControlIndexes(argv: string[]): Promise<v
   if (auditIndexes.some((index) => typeof index.expireAfterSeconds === 'number')) {
     throw new Error('source-control audit collection has a TTL index; permanent evidence is unsafe')
   }
+  const operationAuditIndexes = indexesByTarget.get('source-operation-audits') ?? []
+  if (operationAuditIndexes.some((index) => typeof index.expireAfterSeconds === 'number')) {
+    throw new Error('source-operation audit collection has a TTL index; permanent evidence is unsafe')
+  }
 
-  console.log('\nINDEX PREPARATION PASSED — all five exact indexes exist; audit history has no TTL.')
+  console.log('\nINDEX PREPARATION PASSED — all seven exact indexes exist; audit histories have no TTL.')
 }
 
 async function main(): Promise<void> {

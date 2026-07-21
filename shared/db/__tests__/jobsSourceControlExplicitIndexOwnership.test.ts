@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { JOBS_SOURCE_CONTROL_INDEX_DEFINITIONS } from '../../../scripts/prepare-jobs-source-control-indexes'
 import { JobPosting } from '../models/JobPosting'
 import { JobSourceControlAudit } from '../models/JobSourceControlAudit'
+import { JobSourceOperationAudit } from '../models/JobSourceOperationAudit'
 
 function keySignature(key: Record<string, unknown>): string {
   return Object.entries(key)
@@ -9,12 +10,14 @@ function keySignature(key: Record<string, unknown>): string {
     .join(',')
 }
 
-function schemaIndexKeys(model: typeof JobPosting | typeof JobSourceControlAudit): string[] {
+function schemaIndexKeys(
+  model: typeof JobPosting | typeof JobSourceControlAudit | typeof JobSourceOperationAudit,
+): string[] {
   return model.schema.indexes().map(([key]) => keySignature(key))
 }
 
 describe('Jobs source-control explicit index ownership', () => {
-  it('keeps all five rollout indexes explicit and the four new indexes out of schema automation', () => {
+  it('keeps all seven rollout indexes explicit and the six new indexes out of schema automation', () => {
     expect(
       JOBS_SOURCE_CONTROL_INDEX_DEFINITIONS.map(({ target, name, key, unique }) => ({
         target,
@@ -42,6 +45,18 @@ describe('Jobs source-control explicit index ownership', () => {
         unique: true,
       },
       {
+        target: 'source-operation-audits',
+        name: 'operationId_1',
+        key: { operationId: 1 },
+        unique: true,
+      },
+      {
+        target: 'source-operation-audits',
+        name: 'sourceId_1_occurredAt_-1',
+        key: { sourceId: 1, occurredAt: -1 },
+        unique: false,
+      },
+      {
         target: 'postings',
         name: 'sourceIds_1',
         key: { sourceIds: 1 },
@@ -59,5 +74,7 @@ describe('Jobs source-control explicit index ownership', () => {
     expect(schemaIndexKeys(JobPosting)).not.toContain('provenance.sourceId:1')
     expect(schemaIndexKeys(JobSourceControlAudit)).not.toContain('operationId:1')
     expect(schemaIndexKeys(JobSourceControlAudit)).not.toContain('sourceId:1,revision:1')
+    expect(schemaIndexKeys(JobSourceOperationAudit)).not.toContain('operationId:1')
+    expect(schemaIndexKeys(JobSourceOperationAudit)).not.toContain('sourceId:1,occurredAt:-1')
   })
 })

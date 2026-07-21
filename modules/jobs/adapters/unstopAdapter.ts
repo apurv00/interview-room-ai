@@ -88,14 +88,16 @@ export const unstopAdapter: JobSourceAdapter = {
       { headers: { 'User-Agent': 'InterviewPrepGuruBot/1.0 (+https://www.interviewprep.guru/jobs-bot)' } },
       { maxRetries: 1, timeoutMs: 15000, beforePhysicalRequest: options?.beforePhysicalRequest }
     )
+    const attempts = res.attempts ?? 1
     if (!res.ok) {
       if (res.authorityChanged) return { ok: false, status: 0, raw: [], attempts: res.attempts ?? 0, authorityChanged: true }
-      return { ok: false, status: res.status, raw: [], attempts: 1 }
+      if (res.requestRejected) return { ok: false, status: 0, raw: [], attempts: res.attempts ?? 0, requestRejected: res.requestRejected }
+      return { ok: false, status: res.status, raw: [], attempts }
     }
     const items = itemsOf(res.data as UnstopEnvelope)
     // Unexpected envelope = schema drift = FAILED fetch (Codex #536): the
     // health machine must degrade, never record a clean zero-row sync.
-    if (!items) return { ok: false, status: res.status, raw: [], bodyError: true, attempts: 1 }
+    if (!items) return { ok: false, status: res.status, raw: [], bodyError: true, attempts }
     // Policy: only OPEN registrations enter (never advertise a closed path).
     // regn_open is AUTHORITATIVE when present; when ABSENT the probe's
     // exact fallback is status === 'LIVE' (Codex #536 — remain_days can be
@@ -107,7 +109,7 @@ export const unstopAdapter: JobSourceAdapter = {
     )
     // rawPageSize = the UNFILTERED count (Codex #536): a physically-full
     // page of mostly-closed rows must still page onward.
-    return { ok: true, status: res.status, raw: open, rawPageSize: items.length, attempts: 1 }
+    return { ok: true, status: res.status, raw: open, rawPageSize: items.length, attempts }
   },
 
   normalize(rawIn: unknown, _target: FetchTarget): NormalizedJob | null {

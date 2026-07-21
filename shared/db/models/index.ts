@@ -133,7 +133,10 @@ export { JobPosting, JOB_SOURCE_ID_PATTERN, JOB_SOURCE_LINEAGE_UNKNOWN } from '.
 export type { IJobPosting, IJobProvenance, IJobLlmVerdict } from './JobPosting'
 
 export { JobSourceConfig } from './JobSourceConfig'
-export type { IJobSourceConfig, IJobSourceLastControl, JobSourceControlAction, JobSourceHealth } from './JobSourceConfig'
+export type { IJobSourceConfig, IJobSourceLastControl, IJobSourceRequestBudget, IJobSourceValidation, JobSourceControlAction, JobSourceHealth } from './JobSourceConfig'
+
+export { JobSourceOperationAudit, JOB_SOURCE_OPERATION_ACTIONS } from './JobSourceOperationAudit'
+export type { IJobSourceOperationAudit, IJobSourceOperationState, JobSourceOperationAction } from './JobSourceOperationAudit'
 
 export { JobSourceControlAudit } from './JobSourceControlAudit'
 export type { IJobSourceControlAudit, IJobSourceControlState } from './JobSourceControlAudit'

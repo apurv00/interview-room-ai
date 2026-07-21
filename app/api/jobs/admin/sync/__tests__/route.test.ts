@@ -1,172 +1,177 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
-  mockConnectDB,
-  mockControlRevisionOf,
-  mockGetServerSession,
-  mockSend,
-  mockSourceFindOne,
+  MockSourceOperationError,
   mockCheckJobsRateLimit,
-} = vi.hoisted(() => ({
-  mockConnectDB: vi.fn(),
-  mockControlRevisionOf: vi.fn(),
-  mockGetServerSession: vi.fn(),
-  mockSend: vi.fn(),
-  mockSourceFindOne: vi.fn(),
-  mockCheckJobsRateLimit: vi.fn(),
-}))
+  mockOperateJobSource,
+  mockRequireCurrentPlatformAdmin,
+  mockSend,
+} = vi.hoisted(() => {
+  class TestSourceOperationError extends Error {
+    constructor(
+      message: string,
+      public readonly code: string,
+      public readonly status: 400 | 404 | 409 | 422 | 503,
+      public readonly currentControlRevision?: number,
+      public readonly currentOperationalRevision?: number,
+    ) {
+      super(message)
+      this.name = 'SourceOperationError'
+    }
+  }
+  return {
+    MockSourceOperationError: TestSourceOperationError,
+    mockCheckJobsRateLimit: vi.fn(),
+    mockOperateJobSource: vi.fn(),
+    mockRequireCurrentPlatformAdmin: vi.fn(),
+    mockSend: vi.fn(),
+  }
+})
 
-vi.mock('next-auth', () => ({
-  getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
-}))
-vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
-vi.mock('@shared/services/inngest', () => ({
-  inngest: { send: (...args: unknown[]) => mockSend(...args) },
-}))
-vi.mock('@shared/db/connection', () => ({
-  connectDB: (...args: unknown[]) => mockConnectDB(...args),
-}))
-vi.mock('@shared/db/models', () => ({
-  JobSourceConfig: { findOne: (...args: unknown[]) => mockSourceFindOne(...args) },
-}))
-vi.mock('@jobs/services/sourceControl', () => ({
-  controlRevisionOf: (...args: unknown[]) => mockControlRevisionOf(...args),
+vi.mock('@jobs/services/adminAuth', () => ({
+  requireCurrentPlatformAdmin: (...args: unknown[]) => mockRequireCurrentPlatformAdmin(...args),
 }))
 vi.mock('@jobs/services/rateLimit', () => ({
   checkJobsRateLimit: (...args: unknown[]) => mockCheckJobsRateLimit(...args),
 }))
+vi.mock('@jobs/services/sourceOperations', () => ({
+  operateJobSource: (...args: unknown[]) => mockOperateJobSource(...args),
+  SourceOperationError: MockSourceOperationError,
+}))
+vi.mock('@shared/services/inngest', () => ({
+  inngest: { send: (...args: unknown[]) => mockSend(...args) },
+}))
 
 import { POST } from '../route'
 
+const ACTOR_ID = '507f1f77bcf86cd799439011'
+const OPERATION_ID = '550e8400-e29b-41d4-a716-446655440000'
 const URL = 'http://localhost/api/jobs/admin/sync'
 
-function request(body: unknown) {
-  return new Request(URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+function request(body: unknown, operationId: string | null = OPERATION_ID) {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (operationId) headers['idempotency-key'] = operationId
+  return new Request(URL, { method: 'POST', headers, body: JSON.stringify(body) })
 }
 
-function mockSource(source: object | null) {
-  const lean = vi.fn().mockResolvedValue(source)
-  const select = vi.fn().mockReturnValue({ lean })
-  mockSourceFindOne.mockReturnValue({ select })
-  return { select, lean }
+const sourceCommand = {
+  sourceId: 'gh:phonepe',
+  expectedControlRevision: 11,
+  expectedOperationalRevision: 4,
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockGetServerSession.mockResolvedValue({ user: { id: 'admin-1', role: 'platform_admin' } })
-  mockConnectDB.mockResolvedValue(undefined)
-  mockSend.mockResolvedValue(undefined)
-  mockControlRevisionOf.mockReturnValue(7)
   mockCheckJobsRateLimit.mockResolvedValue(null)
-  mockSource({ sourceId: 'gh:phonepe', enabled: true, health: 'active', controlRevision: 7 })
+  mockRequireCurrentPlatformAdmin.mockImplementation(async (
+    options?: { beforeAuthorityLookup?: (actorUserId: string) => Promise<unknown> },
+  ) => {
+    const response = await options?.beforeAuthorityLookup?.(ACTOR_ID)
+    if (response) return {
+      ok: false,
+      status: (response as Response).status,
+      code: 'REQUEST_BLOCKED',
+      error: 'request blocked',
+      response,
+    }
+    return { ok: true, actorUserId: ACTOR_ID }
+  })
+  mockOperateJobSource.mockResolvedValue({
+    operationId: OPERATION_ID,
+    action: 'run-now',
+    sourceId: sourceCommand.sourceId,
+    controlRevision: 11,
+    operationalRevision: 4,
+    dispatched: true,
+    idempotent: false,
+  })
+  mockSend.mockResolvedValue(undefined)
 })
 
 describe('POST /api/jobs/admin/sync', () => {
-  it('applies the admin command budget before parsing or dispatch work', async () => {
-    mockCheckJobsRateLimit.mockResolvedValue(new Response(null, {
-      status: 429,
-      headers: { 'Retry-After': '60' },
-    }))
-    const body = { sourceId: 'gh:phonepe' }
+  it('applies the command budget before authority lookup completes', async () => {
+    mockCheckJobsRateLimit.mockResolvedValue(new Response(null, { status: 429 }))
 
-    const response = await POST(request(body))
+    const response = await POST(request(sourceCommand))
 
     expect(response.status).toBe(429)
-    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith('admin-1', 'admin-command')
-    expect(mockConnectDB).not.toHaveBeenCalled()
-    expect(mockSend).not.toHaveBeenCalled()
+    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(ACTOR_ID, 'admin-command')
+    expect(mockOperateJobSource).not.toHaveBeenCalled()
   })
 
-  it('returns 401 for anonymous requests and dispatches nothing', async () => {
-    mockGetServerSession.mockResolvedValue(null)
+  it('fails closed when the current database role rejects the caller', async () => {
+    mockRequireCurrentPlatformAdmin.mockResolvedValue({
+      ok: false,
+      status: 403,
+      code: 'ADMIN_REQUIRED',
+      error: 'platform_admin required',
+    })
 
-    const response = await POST(request({ sourceId: 'gh:phonepe' }))
-
-    expect(response.status).toBe(401)
-    expect(mockConnectDB).not.toHaveBeenCalled()
-    expect(mockSend).not.toHaveBeenCalled()
-  })
-
-  it('returns 403 for a non-platform admin and dispatches nothing', async () => {
-    mockGetServerSession.mockResolvedValue({ user: { id: 'candidate-1', role: 'candidate' } })
-
-    const response = await POST(request({ sourceId: 'gh:phonepe' }))
+    const response = await POST(request(sourceCommand))
 
     expect(response.status).toBe(403)
-    expect(mockSourceFindOne).not.toHaveBeenCalled()
-    expect(mockSend).not.toHaveBeenCalled()
+    expect(mockOperateJobSource).not.toHaveBeenCalled()
   })
 
-  it('dispatches an eligible source with its current control revision', async () => {
-    const source = { sourceId: 'gh:phonepe', enabled: true, health: 'degraded', controlRevision: 11 }
-    const chain = mockSource(source)
-    mockControlRevisionOf.mockReturnValue(11)
+  it('delegates source sync to the audited operation with both revisions', async () => {
+    const response = await POST(request(sourceCommand))
 
-    const response = await POST(request({ sourceId: source.sourceId }))
-    const payload = await response.json()
-
-    expect(response.status).toBe(200)
-    expect(mockSourceFindOne).toHaveBeenCalledWith({ sourceId: source.sourceId })
-    expect(chain.select).toHaveBeenCalledWith('sourceId enabled health controlRevision')
-    expect(mockControlRevisionOf).toHaveBeenCalledWith(source)
-    expect(mockSend).toHaveBeenCalledWith({
-      name: 'jobs/source.sync',
-      data: { sourceId: source.sourceId, controlRevision: 11 },
+    expect(response.status).toBe(202)
+    expect(mockOperateJobSource).toHaveBeenCalledWith({
+      operationId: OPERATION_ID,
+      actorUserId: ACTOR_ID,
+      action: 'run-now',
+      ...sourceCommand,
     })
-    expect(payload).toEqual({ dispatched: source.sourceId, controlRevision: 11 })
-  })
-
-  it('returns 404 and does not dispatch an unknown source', async () => {
-    mockSource(null)
-
-    const response = await POST(request({ sourceId: 'missing-source' }))
-
-    expect(response.status).toBe(404)
-    expect(mockControlRevisionOf).not.toHaveBeenCalled()
+    await expect(response.json()).resolves.toMatchObject({ ok: true, queued: true })
     expect(mockSend).not.toHaveBeenCalled()
   })
 
-  it.each([
-    [{ sourceId: 'disabled', enabled: false, health: 'active', controlRevision: 2 }, 'disabled'],
-    [{ sourceId: 'revoked', enabled: true, health: 'revoked', controlRevision: 3 }, 'revoked'],
-    [{ sourceId: 'quarantined', enabled: true, health: 'quarantined', controlRevision: 4 }, 'quarantined'],
-  ])('returns 409 for an ineligible source: %s (%s)', async (source) => {
-    mockSource(source)
+  it('rejects legacy source kicks without revision fences', async () => {
+    const response = await POST(request({ sourceId: sourceCommand.sourceId }))
 
-    const response = await POST(request({ sourceId: source.sourceId }))
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ code: 'INVALID_SOURCE_SYNC' })
+    expect(mockOperateJobSource).not.toHaveBeenCalled()
+  })
+
+  it('requires an idempotency key for source dispatch', async () => {
+    const response = await POST(request(sourceCommand, null))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ code: 'INVALID_IDEMPOTENCY_KEY' })
+  })
+
+  it('returns both current revisions on a stale command', async () => {
+    mockOperateJobSource.mockRejectedValue(new MockSourceOperationError(
+      'source changed',
+      'SOURCE_OPERATION_CONFLICT',
+      409,
+      12,
+      5,
+    ))
+
+    const response = await POST(request(sourceCommand))
 
     expect(response.status).toBe(409)
-    expect(mockControlRevisionOf).not.toHaveBeenCalled()
-    expect(mockSend).not.toHaveBeenCalled()
+    await expect(response.json()).resolves.toMatchObject({
+      currentControlRevision: 12,
+      currentOperationalRevision: 5,
+    })
   })
 
-  it('preserves the manual verdict sweep and floors a positive limit', async () => {
-    const response = await POST(request({ mode: 'verdict-sweep', limit: 12.9 }))
-    const payload = await response.json()
+  it('preserves the separate bounded verdict-sweep command', async () => {
+    const response = await POST(request({ mode: 'verdict-sweep', limit: 12.9 }, null))
 
     expect(response.status).toBe(200)
     expect(mockSend).toHaveBeenCalledWith({ name: 'jobs/verdict.sweep', data: { limit: 12 } })
-    expect(payload).toEqual({ dispatched: 'verdict-sweep' })
-    expect(mockConnectDB).not.toHaveBeenCalled()
-    expect(mockSourceFindOne).not.toHaveBeenCalled()
+    expect(mockOperateJobSource).not.toHaveBeenCalled()
   })
 
-  it('defaults an empty request body to the jsearch source', async () => {
-    mockSource({ sourceId: 'jsearch', enabled: true, health: 'active' })
-    mockControlRevisionOf.mockReturnValue(0)
-    const empty = new Request(URL, { method: 'POST' })
+  it('rejects malformed JSON', async () => {
+    const response = await POST(new Request(URL, { method: 'POST', body: '{' }))
 
-    const response = await POST(empty)
-
-    expect(response.status).toBe(200)
-    expect(mockSourceFindOne).toHaveBeenCalledWith({ sourceId: 'jsearch' })
-    expect(mockSend).toHaveBeenCalledWith({
-      name: 'jobs/source.sync',
-      data: { sourceId: 'jsearch', controlRevision: 0 },
-    })
+    expect(response.status).toBe(400)
+    expect(mockOperateJobSource).not.toHaveBeenCalled()
   })
 })

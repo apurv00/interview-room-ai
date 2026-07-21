@@ -66,15 +66,17 @@ export const jsearchAdapter: JobSourceAdapter = {
       // (Codex on #511).
       { maxRetries: 1, timeoutMs: 15000, beforePhysicalRequest: options?.beforePhysicalRequest }
     )
+    const attempts = res.attempts ?? 1
     if (!res.ok) {
       if (res.authorityChanged) return { ok: false, status: 0, raw: [], attempts: res.attempts ?? 0, authorityChanged: true }
-      return { ok: false, status: res.status, raw: [], attempts: 1 }
+      if (res.requestRejected) return { ok: false, status: 0, raw: [], attempts: res.attempts ?? 0, requestRejected: res.requestRejected }
+      return { ok: false, status: res.status, raw: [], attempts }
     }
     const body = res.data
     if (!body || (body.status && body.status !== 'OK') || !Array.isArray(body.data)) {
-      return { ok: false, status: res.status, raw: [], bodyError: true, attempts: 1 }
+      return { ok: false, status: res.status, raw: [], bodyError: true, attempts }
     }
-    return { ok: true, status: res.status, raw: body.data, attempts: 1 }
+    return { ok: true, status: res.status, raw: body.data, attempts }
   },
 
   normalize(raw: unknown, target: FetchTarget): NormalizedJob | null {

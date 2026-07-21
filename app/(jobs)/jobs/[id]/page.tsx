@@ -19,8 +19,9 @@ import { retakeParentFromSearch } from '@interview/utils/retakeNavigation'
  * The API enforces the split server-side; this page renders whatever
  * projection it was given. Anon = title/company/tier + a blurred stand-in
  * over the sign-in gate. Authed = JD, tier-honest apply ladder (sync
- * window.open — popup blockers kill async opens), Save, and a low-key
- * "view full posting" link so Apply clicks aren't polluted by read intent.
+ * window.open to the server navigation boundary — popup blockers kill async
+ * opens), Save, and a low-key "view full posting" link so Apply clicks aren't
+ * polluted by read intent.
  */
 
 interface ApplyOption { optionId: string; url: string; tier: string; viaSite?: string }
@@ -77,6 +78,11 @@ const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
 const LOST_XRAY_READINESS_DELAYS_MS = [0, 250, 750, 2_000, 4_000, 8_000, 8_000, 8_000] as const
 const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
 const APPLY_OPTION_ID_RE = /^ao1_[A-Za-z0-9_-]{43}$/
+const ACTIVE_TAB_REVALIDATION_MS = 4 * 60_000
+
+function applyRedirectHref(jobId: string, optionId: string): string {
+  return `/api/jobs/${encodeURIComponent(jobId)}/open?optionId=${encodeURIComponent(optionId)}`
+}
 
 async function isAccountUnavailableResponse(response: Response): Promise<boolean> {
   if (response.status !== 401) return false
@@ -603,7 +609,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     if (accountUnavailableRef.current) return
     sheetInvokerRef.current = invoker
     // SYNC open inside the click handler — never after an await.
-    window.open(opt.url, '_blank', 'noopener')
+    window.open(applyRedirectHref(params.id, opt.optionId), '_blank', 'noopener')
     // Arm the return-sheet (§4b): fires on visibilitychange→visible, ≥20s
     // after the click, within 45 minutes. localStorage — survives the
     // external-tab excursion.
@@ -633,6 +639,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   // "did the link work?". One-shot — the arm record clears when shown.
   useEffect(() => {
     if (accountUnavailableRef.current) return
+    if (detailIsGated == null) return
     if (detailIsGated === true || detailPostingState !== 'live') {
       try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
       closeReturnSheet()
@@ -648,7 +655,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     }
     let cancelled = false
     let validating = false
-    async function onVisible() {
+    async function revalidateVisible(allowReturnSheet: boolean) {
       if (document.visibilityState !== 'visible') return
       if (validating) return
       validating = true
@@ -700,6 +707,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           return
         }
         setDetail(fresh)
+        if (!allowReturnSheet) return
         const rec = parseApplyReturnArm(localStorage.getItem(`JOBS_RETURN_${params.id}`))
         if (!rec) {
           clearArm()
@@ -743,10 +751,15 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         validating = false
       }
     }
-    document.addEventListener('visibilitychange', onVisible)
+    const onVisibilityChange = () => { void revalidateVisible(true) }
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void revalidateVisible(false)
+    }, ACTIVE_TAB_REVALIDATION_MS)
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       cancelled = true
-      document.removeEventListener('visibilitychange', onVisible)
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [closeReturnSheet, detailIsGated, detailPostingState, params.id, scrubAccountBoundState])
 
@@ -1076,7 +1089,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             )}
             {primary && detail.capabilities?.viewSource !== false && (
               <a
-                href={primary.url}
+                href={applyRedirectHref(detail.id, primary.optionId)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-slate-500 hover:underline"

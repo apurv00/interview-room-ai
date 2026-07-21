@@ -10,12 +10,19 @@ import {
   JobSourceConfig,
   JobSourceControlAudit,
   JobSourceControlMeta,
+  JobSourceOperationAudit,
   JOB_SOURCE_ID_PATTERN,
   JOB_SOURCE_CONTROL_META_ID,
   JOB_SOURCE_LINEAGE_UNKNOWN,
   type JobSourceControlAction,
   type JobSourceHealth,
+  type IJobSourceValidation,
 } from '@shared/db/models'
+import {
+  jobSourceDefinition,
+  sourcePolicyHash,
+  type SourcePolicySnapshot,
+} from '../config/sourceCatalog'
 
 const TRANSACTION_OPTIONS = {
   readConcern: { level: 'snapshot' as const },
@@ -24,8 +31,12 @@ const TRANSACTION_OPTIONS = {
 }
 
 export class SourceAuthorityChangedError extends Error {
-  constructor(public readonly sourceId: string, public readonly expectedRevision: number) {
-    super(`source authority changed: ${sourceId}@${expectedRevision}`)
+  constructor(
+    public readonly sourceId: string,
+    public readonly expectedRevision: number,
+    public readonly expectedOperationalRevision = 0,
+  ) {
+    super(`source authority changed: ${sourceId}@${expectedRevision}/${expectedOperationalRevision}`)
     this.name = 'SourceAuthorityChangedError'
   }
 }
@@ -100,12 +111,41 @@ export function controlRevisionFilter(expectedRevision: number): Record<string, 
     : { controlRevision: expectedRevision }
 }
 
-function syncAuthorityFilter(sourceId: string, expectedRevision: number): Record<string, unknown> {
+export function operationalRevisionOf(source: { operationalRevision?: number | null }): number {
+  return Number.isInteger(source.operationalRevision) && (source.operationalRevision as number) >= 0
+    ? source.operationalRevision as number
+    : 0
+}
+
+export function operationalRevisionFilter(expectedRevision: number): Record<string, unknown> {
+  return expectedRevision === 0
+    ? { $or: [{ operationalRevision: 0 }, { operationalRevision: { $exists: false } }] }
+    : { operationalRevision: expectedRevision }
+}
+
+function syncAuthorityFilter(
+  sourceId: string,
+  expectedRevision: number,
+  expectedOperationalRevision: number,
+): Record<string, unknown> {
+  const definition = jobSourceDefinition(sourceId)
+  if (!definition) return { sourceId, kind: '__unapproved-source__' }
   return {
     sourceId,
+    kind: definition.kind,
+    displayName: definition.displayName,
     enabled: true,
     health: { $in: ['active', 'degraded'] },
     ...controlRevisionFilter(expectedRevision),
+    $and: [
+      operationalRevisionFilter(expectedOperationalRevision),
+      definition.atsKind
+        ? { atsKind: definition.atsKind }
+        : { $or: [{ atsKind: { $exists: false } }, { atsKind: null }] },
+      definition.slug
+        ? { slug: definition.slug }
+        : { $or: [{ slug: { $exists: false } }, { slug: null }] },
+    ],
   }
 }
 
@@ -135,9 +175,21 @@ async function runSourceTransaction<T>(work: (session: ClientSession) => Promise
 
 /** Fast pre-fetch guard. The transaction fence below is still authoritative;
  * this read avoids contacting a source after a control change where possible. */
-export async function assertSourceSyncAuthority(sourceId: string, expectedRevision: number): Promise<void> {
-  const exists = await JobSourceConfig.exists(syncAuthorityFilter(sourceId, expectedRevision))
-  if (!exists) throw new SourceAuthorityChangedError(sourceId, expectedRevision)
+export async function assertSourceSyncAuthority(
+  sourceId: string,
+  expectedRevision: number,
+  expectedOperationalRevision = 0,
+): Promise<void> {
+  const source = await JobSourceConfig.findOne(
+    syncAuthorityFilter(sourceId, expectedRevision, expectedOperationalRevision),
+    'sourceId kind atsKind slug displayName cadenceMinutes requestBudget minIndiaPostings llmVerdictOptOut notes',
+  ).lean()
+  const policyHash = source ? sourcePolicyHash(source as SourcePolicySnapshot) : null
+  if (!policyHash) throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+  const operation = await latestOperationalAudit(sourceId)
+  if (!operationAuthorizesEnabled(operation, expectedRevision, expectedOperationalRevision, policyHash)) {
+    throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+  }
 }
 
 type LeanAuthorityAudit = { revision: number; action: JobSourceControlAction }
@@ -162,19 +214,218 @@ function auditAuthorizesRevision(
     : latestAudit?.revision === expectedRevision && latestAudit.action === 'restore'
 }
 
-/** Board probes may inspect quarantined/disabled boards, but never a stale
+interface LeanOperationalAudit {
+  operationId: string
+  action: string
+  outcome?: 'succeeded' | 'failed'
+  to?: {
+    enabled: boolean
+    controlRevision: number
+    operationalRevision: number
+    policyHash: string
+  }
+}
+
+async function latestOperationalAudit(
+  sourceId: string,
+  session?: ClientSession,
+): Promise<LeanOperationalAudit | null> {
+  return JobSourceOperationAudit.findOne(
+    { sourceId },
+    { operationId: 1, action: 1, outcome: 1, to: 1 },
+    { ...(session ? { session } : {}), sort: { occurredAt: -1, _id: -1 } },
+  ).lean() as unknown as Promise<LeanOperationalAudit | null>
+}
+
+export async function completeSourceValidation(
+  sourceId: string,
+  expectedRevision: number,
+  expectedOperationalRevision: number,
+  operationId: string,
+  evidence: Omit<IJobSourceValidation, 'operationId' | 'controlRevision' | 'operationalRevision' | 'checkedAt'>,
+): Promise<void> {
+  const definition = jobSourceDefinition(sourceId)
+  if (!definition) throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+  await runSourceTransaction(async (session) => {
+    const latestLegal = await latestAuthorityAudit(sourceId, session)
+    if (!auditAuthorizesRevision(expectedRevision, latestLegal)) {
+      throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+    }
+    const operation = await latestOperationalAudit(sourceId, session)
+    const currentSource = await JobSourceConfig.findOne(
+      {
+        sourceId,
+        enabled: false,
+        health: { $ne: 'revoked' },
+        $and: [
+          controlRevisionFilter(expectedRevision),
+          operationalRevisionFilter(expectedOperationalRevision),
+        ],
+      },
+      'sourceId kind atsKind slug displayName cadenceMinutes requestBudget minIndiaPostings llmVerdictOptOut notes',
+      { session },
+    ).lean()
+    const policyHash = currentSource ? sourcePolicyHash(currentSource as SourcePolicySnapshot) : null
+    if (
+      operation?.operationId !== operationId || operation.action !== 'validate' ||
+      operation.to?.enabled !== false || operation.to.controlRevision !== expectedRevision ||
+      operation.to.operationalRevision !== expectedOperationalRevision ||
+      !policyHash || operation.to.policyHash !== policyHash
+    ) throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+
+    const checkedAt = new Date()
+    const validation: IJobSourceValidation = {
+      operationId,
+      controlRevision: expectedRevision,
+      operationalRevision: expectedOperationalRevision,
+      ...evidence,
+      checkedAt,
+    }
+    if (operation.outcome) {
+      const existing = await JobSourceConfig.findOne(
+        { sourceId, 'lastValidation.operationId': operationId },
+        { 'lastValidation.operationId': 1 },
+        { session },
+      ).lean()
+      if (existing) return
+      throw new SourceControlIntegrityError('validation terminal audit exists without matching source evidence')
+    }
+    const configWrite = await JobSourceConfig.updateOne(
+      {
+        sourceId,
+        kind: definition.kind,
+        displayName: definition.displayName,
+        enabled: false,
+        health: { $ne: 'revoked' },
+        $and: [
+          controlRevisionFilter(expectedRevision),
+          operationalRevisionFilter(expectedOperationalRevision),
+          definition.atsKind
+            ? { atsKind: definition.atsKind }
+            : { $or: [{ atsKind: { $exists: false } }, { atsKind: null }] },
+          definition.slug
+            ? { slug: definition.slug }
+            : { $or: [{ slug: { $exists: false } }, { slug: null }] },
+        ],
+      },
+      { $set: { lastValidation: validation } },
+      { session },
+    )
+    if ((configWrite.matchedCount ?? 0) !== 1) {
+      throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+    }
+    const outcome = evidence.status === 'healthy' ? 'succeeded' as const : 'failed' as const
+    const auditWrite = await JobSourceOperationAudit.updateOne(
+      {
+        operationId,
+        sourceId,
+        action: 'validate',
+        outcome: { $exists: false },
+        'to.controlRevision': expectedRevision,
+        'to.operationalRevision': expectedOperationalRevision,
+      },
+      {
+        $set: {
+          outcome,
+          completedAt: checkedAt,
+          ...(outcome === 'failed' ? { errorCode: evidence.errorCode ?? 'validation-failed' } : {}),
+        },
+      },
+      { session },
+    )
+    if ((auditWrite.matchedCount ?? 0) !== 1) {
+      throw new SourceControlIntegrityError('validation audit terminal update lost its operation fence')
+    }
+  })
+}
+
+function operationAuthorizesEnabled(
+  audit: LeanOperationalAudit | null,
+  controlRevision: number,
+  operationalRevision: number,
+  policyHash: string,
+): boolean {
+  return audit?.to?.enabled === true && audit.to.controlRevision === controlRevision &&
+    audit.to.operationalRevision === operationalRevision && audit.to.policyHash === policyHash
+}
+
+/** Board probes may inspect enabled quarantined boards, but never a paused/stale
  * legal-control epoch. Their final update also carries this CAS. */
-export async function assertSourceProbeAuthority(sourceId: string, expectedRevision: number): Promise<void> {
+export async function assertSourceProbeAuthority(
+  sourceId: string,
+  expectedRevision: number,
+  expectedOperationalRevision = 0,
+): Promise<void> {
+  const definition = jobSourceDefinition(sourceId)
+  if (!definition) throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
   const source = await JobSourceConfig.findOne({
     sourceId,
+    kind: definition.kind,
+    displayName: definition.displayName,
+    enabled: true,
     health: { $in: ['active', 'degraded', 'quarantined'] },
-    ...controlRevisionFilter(expectedRevision),
-  }).select('controlRevision').lean()
-  if (!source) throw new SourceAuthorityChangedError(sourceId, expectedRevision)
+    $and: [
+      controlRevisionFilter(expectedRevision),
+      operationalRevisionFilter(expectedOperationalRevision),
+      definition.atsKind
+        ? { atsKind: definition.atsKind }
+        : { $or: [{ atsKind: { $exists: false } }, { atsKind: null }] },
+      definition.slug
+        ? { slug: definition.slug }
+        : { $or: [{ slug: { $exists: false } }, { slug: null }] },
+    ],
+  }, 'sourceId kind atsKind slug displayName cadenceMinutes requestBudget minIndiaPostings llmVerdictOptOut notes').lean()
+  const policyHash = source ? sourcePolicyHash(source as SourcePolicySnapshot) : null
+  if (!policyHash) throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
   const latestAudit = await latestAuthorityAudit(sourceId)
   if (!auditAuthorizesRevision(expectedRevision, latestAudit)) {
-    throw new SourceAuthorityChangedError(sourceId, expectedRevision)
+    throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
   }
+  const operation = await latestOperationalAudit(sourceId)
+  if (!operationAuthorizesEnabled(operation, expectedRevision, expectedOperationalRevision, policyHash)) {
+    throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+  }
+}
+
+/** Operator validation is allowed while disabled and for a dead/quarantined
+ * source, but never through a revoked legal epoch. */
+export async function assertSourceValidationAuthority(
+  sourceId: string,
+  expectedRevision: number,
+  expectedOperationalRevision: number,
+): Promise<void> {
+  const definition = jobSourceDefinition(sourceId)
+  if (!definition) throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+  const source = await JobSourceConfig.findOne({
+    sourceId,
+    kind: definition.kind,
+    displayName: definition.displayName,
+    enabled: false,
+    health: { $ne: 'revoked' },
+    $and: [
+      controlRevisionFilter(expectedRevision),
+      operationalRevisionFilter(expectedOperationalRevision),
+      definition.atsKind
+        ? { atsKind: definition.atsKind }
+        : { $or: [{ atsKind: { $exists: false } }, { atsKind: null }] },
+      definition.slug
+        ? { slug: definition.slug }
+        : { $or: [{ slug: { $exists: false } }, { slug: null }] },
+    ],
+  }, 'sourceId kind atsKind slug displayName cadenceMinutes requestBudget minIndiaPostings llmVerdictOptOut notes').lean()
+  const policyHash = source ? sourcePolicyHash(source as SourcePolicySnapshot) : null
+  if (!policyHash) throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+  const latestAudit = await latestAuthorityAudit(sourceId)
+  if (!auditAuthorizesRevision(expectedRevision, latestAudit)) {
+    throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
+  }
+  const operation = await latestOperationalAudit(sourceId)
+  if (
+    operation?.action !== 'validate' || operation.to?.enabled !== false ||
+    operation.to.controlRevision !== expectedRevision ||
+    operation.to.operationalRevision !== expectedOperationalRevision ||
+    operation.to.policyHash !== policyHash
+  ) throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
 }
 
 /**
@@ -188,9 +439,19 @@ export async function assertSourceProbeAuthority(sourceId: string, expectedRevis
 export async function withSourceWriteFence<T>(
   sourceId: string,
   expectedRevision: number,
-  work: (session: ClientSession) => Promise<T>,
-  options: SourceWriteFenceOptions<T> = {},
+  operationalRevisionOrWork: number | ((session: ClientSession) => Promise<T>),
+  workOrOptions?: ((session: ClientSession) => Promise<T>) | SourceWriteFenceOptions<T>,
+  maybeOptions: SourceWriteFenceOptions<T> = {},
 ): Promise<T> {
+  const expectedOperationalRevision = typeof operationalRevisionOrWork === 'number'
+    ? operationalRevisionOrWork
+    : 0
+  const work = (typeof operationalRevisionOrWork === 'function'
+    ? operationalRevisionOrWork
+    : workOrOptions) as (session: ClientSession) => Promise<T>
+  const options = (typeof operationalRevisionOrWork === 'function'
+    ? workOrOptions
+    : maybeOptions) as SourceWriteFenceOptions<T> | undefined ?? {}
   return runSourceTransaction(async (session) => {
     // Global meta is always locked before the per-source config. Source
     // control uses the same order, so cross-source inserts cannot race the
@@ -225,12 +486,12 @@ export async function withSourceWriteFence<T>(
     }
 
     const fence = await JobSourceConfig.updateOne(
-      syncAuthorityFilter(sourceId, expectedRevision),
+      syncAuthorityFilter(sourceId, expectedRevision, expectedOperationalRevision),
       { $inc: { ingestWriteSeq: 1 } },
       { session }
     )
     if ((fence.matchedCount ?? 0) !== 1) {
-      throw new SourceAuthorityChangedError(sourceId, expectedRevision)
+      throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
     }
     // Permanent audit is an independent anti-reset rail. Deleting/reseeding a
     // config at epoch zero, or editing a revoked config back to active, cannot
@@ -238,6 +499,21 @@ export async function withSourceWriteFence<T>(
     const latestAudit = await latestAuthorityAudit(sourceId, session)
     if (!auditAuthorizesRevision(expectedRevision, latestAudit)) {
       throw new SourceAuthorityChangedError(sourceId, expectedRevision)
+    }
+    const latestOperation = await latestOperationalAudit(sourceId, session)
+    const currentSource = await JobSourceConfig.findOne(
+      syncAuthorityFilter(sourceId, expectedRevision, expectedOperationalRevision),
+      'sourceId kind atsKind slug displayName cadenceMinutes requestBudget minIndiaPostings llmVerdictOptOut notes',
+      { session },
+    ).lean()
+    const policyHash = currentSource ? sourcePolicyHash(currentSource as SourcePolicySnapshot) : null
+    if (!policyHash || !operationAuthorizesEnabled(
+      latestOperation,
+      expectedRevision,
+      expectedOperationalRevision,
+      policyHash,
+    )) {
+      throw new SourceAuthorityChangedError(sourceId, expectedRevision, expectedOperationalRevision)
     }
 
     let retainedPostings = controlMeta.retainedPostings
@@ -294,10 +570,12 @@ export async function withSourceWriteFence<T>(
 export async function assertSourceTransactionsReady(
   sourceId: string,
   expectedRevision: number,
+  expectedOperationalRevision = 0,
 ): Promise<void> {
   await withSourceWriteFence(
     sourceId,
     expectedRevision,
+    expectedOperationalRevision,
     async () => undefined,
     { reconcileRetainedPostings: true },
   )

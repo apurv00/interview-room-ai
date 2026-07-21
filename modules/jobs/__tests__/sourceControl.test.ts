@@ -15,6 +15,7 @@ const {
   mockAuditFindOne,
   mockAuditCountDocuments,
   mockAuditCreate,
+  mockOperationAuditFindOne,
   session,
 } = vi.hoisted(() => {
   const mockStartSession = vi.fn()
@@ -36,6 +37,7 @@ const {
     mockAuditFindOne: vi.fn(),
     mockAuditCountDocuments: vi.fn(),
     mockAuditCreate: vi.fn(),
+    mockOperationAuditFindOne: vi.fn(),
     session,
   }
 })
@@ -62,6 +64,7 @@ vi.mock('@shared/db/models', () => ({
     countDocuments: mockAuditCountDocuments,
     create: mockAuditCreate,
   },
+  JobSourceOperationAudit: { findOne: mockOperationAuditFindOne },
 }))
 
 import {
@@ -76,9 +79,31 @@ import {
   withSourceWriteFence,
   type SourceControlCommand,
 } from '../services/sourceControl'
+import { jobSourceDefinition, sourcePolicyHash } from '../config/sourceCatalog'
 
 function lean<T>(value: T) {
   return { lean: vi.fn().mockResolvedValue(value) }
+}
+
+function policySource(sourceId: string, overrides: Record<string, unknown> = {}) {
+  const definition = jobSourceDefinition(sourceId)
+  if (!definition) throw new Error(`missing test catalog source ${sourceId}`)
+  return {
+    sourceId,
+    kind: definition.kind,
+    atsKind: definition.atsKind,
+    slug: definition.slug,
+    displayName: definition.displayName,
+    cadenceMinutes: definition.cadenceMinutes,
+    requestBudget: definition.requestBudget,
+    minIndiaPostings: definition.minIndiaPostings,
+    llmVerdictOptOut: false,
+    enabled: true,
+    health: 'active' as const,
+    controlRevision: 0,
+    operationalRevision: 0,
+    ...overrides,
+  }
 }
 
 const BASE_COMMAND: SourceControlCommand = {
@@ -141,6 +166,7 @@ beforeEach(() => {
   })
   mockEndSession.mockResolvedValue(undefined)
   mockConnectDB.mockResolvedValue(undefined)
+  mockSourceFindOne.mockImplementation(() => lean(policySource('jsearch')))
   mockSourceUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockMetaFindOne.mockImplementation(() => lean({
     controlWriteSeq: 2,
@@ -158,6 +184,21 @@ beforeEach(() => {
   ))
   mockAuditCountDocuments.mockResolvedValue(2)
   mockAuditCreate.mockResolvedValue([])
+  mockOperationAuditFindOne.mockImplementation((filter: { sourceId?: string }) => {
+    const sourceId = filter.sourceId ?? 'jsearch'
+    const source = policySource(sourceId, {
+      controlRevision: sourceId === BASE_COMMAND.sourceId ? 2 : 0,
+    })
+    return lean({
+      action: 'enable',
+      to: {
+        enabled: true,
+        controlRevision: source.controlRevision,
+        operationalRevision: 0,
+        policyHash: sourcePolicyHash(source),
+      },
+    })
+  })
 })
 
 describe('withSourceWriteFence', () => {
@@ -192,9 +233,16 @@ describe('withSourceWriteFence', () => {
     expect(mockSourceUpdateOne).toHaveBeenCalledWith(
       {
         sourceId: 'jsearch',
+        kind: 'aggregator-api',
+        displayName: 'JSearch',
         enabled: true,
         health: { $in: ['active', 'degraded'] },
         $or: [{ controlRevision: 0 }, { controlRevision: { $exists: false } }],
+        $and: [
+          { $or: [{ operationalRevision: 0 }, { operationalRevision: { $exists: false } }] },
+          { $or: [{ atsKind: { $exists: false } }, { atsKind: null }] },
+          { $or: [{ slug: { $exists: false } }, { slug: null }] },
+        ],
       },
       { $inc: { ingestWriteSeq: 1 } },
       { session }
@@ -220,6 +268,26 @@ describe('withSourceWriteFence', () => {
     expect(error).toMatchObject({ sourceId: 'jsearch', expectedRevision: 4 })
     expect(work).not.toHaveBeenCalled()
     expect(mockEndSession).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a raw database enable that has no matching permanent operation audit', async () => {
+    mockOperationAuditFindOne.mockReturnValue(lean(null))
+    const work = vi.fn()
+
+    await expect(withSourceWriteFence('jsearch', 0, work)).rejects.toBeInstanceOf(
+      SourceAuthorityChangedError,
+    )
+    expect(work).not.toHaveBeenCalled()
+  })
+
+  it('rejects a raw policy edit that did not create a matching permanent operation snapshot', async () => {
+    mockSourceFindOne.mockImplementation(() => lean(policySource('jsearch', { cadenceMinutes: 60 })))
+    const work = vi.fn()
+
+    await expect(withSourceWriteFence('jsearch', 0, work)).rejects.toBeInstanceOf(
+      SourceAuthorityChangedError,
+    )
+    expect(work).not.toHaveBeenCalled()
   })
 
   it('fails closed with an operational error when Mongo transactions are unsupported', async () => {
@@ -325,18 +393,14 @@ describe('withSourceWriteFence', () => {
 
 describe('assertSourceProbeAuthority', () => {
   it('allows a restored epoch only when the permanent audit head matches', async () => {
-    mockSourceFindOne.mockReturnValue({
-      select: () => lean({ controlRevision: 2 }),
-    })
+    mockSourceFindOne.mockReturnValue(lean(policySource(BASE_COMMAND.sourceId, { controlRevision: 2 })))
     mockAuditFindOne.mockReturnValue(lean(PREVIOUS_RESTORE_AUDIT))
 
     await expect(assertSourceProbeAuthority(BASE_COMMAND.sourceId, 2)).resolves.toBeUndefined()
   })
 
   it('rejects a deleted/reseeded epoch-zero config while a revoke audit survives', async () => {
-    mockSourceFindOne.mockReturnValue({
-      select: () => lean({ controlRevision: 0 }),
-    })
+    mockSourceFindOne.mockReturnValue(lean(policySource(BASE_COMMAND.sourceId, { controlRevision: 0 })))
     mockAuditFindOne.mockReturnValue(lean({ ...COMMITTED_AUDIT, previousRevision: 0, revision: 1 }))
 
     await expect(assertSourceProbeAuthority(BASE_COMMAND.sourceId, 0)).rejects.toBeInstanceOf(

@@ -811,15 +811,19 @@ describe('Job detail Practice readiness', () => {
     ))
   })
 
-  it('opens the displayed canonical URL but sends only its opaque optionId to mutation routes', async () => {
+  it('opens the server-mediated route and sends only its opaque optionId to mutation routes', async () => {
     mockFetch.mockImplementation((input: RequestInfo | URL) => (
       String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(LIVE_APPLY_DETAIL) : jsonResponse({})
     ))
 
     render(<JobDetailPage params={{ id: JOB_ID }} />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply ↗' }))
+    const apply = await screen.findByRole('button', { name: 'Apply ↗' })
+    const redirectHref = `/api/jobs/${JOB_ID}/open?optionId=${APPLY_OPTION_ID}`
+    expect(screen.getByRole('link', { name: /View full posting/i }))
+      .toHaveAttribute('href', redirectHref)
+    fireEvent.click(apply)
 
-    expect(window.open).toHaveBeenCalledWith('https://apply.example/job', '_blank', 'noopener')
+    expect(window.open).toHaveBeenCalledWith(redirectHref, '_blank', 'noopener')
     const arm = JSON.parse(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`) ?? '{}')
     expect(arm).toMatchObject({
       optionId: APPLY_OPTION_ID,
@@ -1149,6 +1153,49 @@ describe('Job detail Practice readiness', () => {
       expect(document.activeElement).not.toBe(document.body)
       expect(document.activeElement).not.toBe(apply)
     })
+  })
+
+  it('revalidates a continuously visible tab within four minutes and removes revoked controls', async () => {
+    const restricted = {
+      ...LIVE_APPLY_DETAIL,
+      postingState: 'restricted' as const,
+      capabilities: {
+        apply: false,
+        viewSource: false,
+        xray: false,
+        tailor: false,
+        practice: false,
+        atsCheck: false,
+      },
+      jd: undefined,
+      applyOptions: undefined,
+    }
+    let intervalHandler: TimerHandler | null = null
+    const setIntervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler, delay) => {
+      if (delay === 4 * 60_000) intervalHandler = handler
+      return 42
+    })
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input) !== `/api/jobs/${JOB_ID}`) return jsonResponse({})
+      detailCalls += 1
+      return jsonResponse(detailCalls === 1 ? LIVE_APPLY_DETAIL : restricted)
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    expect(await screen.findByRole('button', { name: 'Apply ↗' })).toBeTruthy()
+    expect(intervalHandler).not.toBeNull()
+
+    await act(async () => {
+      if (typeof intervalHandler === 'function') intervalHandler()
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('Posting unavailable')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply ↗' })).toBeNull()
+    expect(screen.queryByRole('link', { name: /View full posting/i })).toBeNull()
+    expect(detailCalls).toBe(2)
+    setIntervalSpy.mockRestore()
   })
 
   it('clears a Tailor completion and restores its invoker if the posting becomes restricted', async () => {

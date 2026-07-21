@@ -12,6 +12,8 @@ export interface IJobIngestCycle extends Document {
   _id: mongoose.Types.ObjectId
   kind: 'sync' | 'llm-verdict' | 'link-check'
   sourceId?: string
+  /** Audited manual operation correlation; scheduled cycles omit it. */
+  operationId?: string
   startedAt: Date
   finishedAt?: Date
   // sync counters
@@ -28,6 +30,9 @@ export interface IJobIngestCycle extends Document {
   closed?: number
   dupCollapsedPct?: number
   quotaSpent?: number
+  /** A local hard rail stopped outbound work. Partial persisted yield remains
+   * visible without misclassifying the provider as unhealthy. */
+  requestStopReason?: 'quota-exhausted' | 'quota-unavailable'
   stubRate?: number
   healthTransitions?: string[]
   // llm-verdict counters (ruling #16)
@@ -69,6 +74,7 @@ const JobIngestCycleSchema = new Schema<IJobIngestCycle>(
   {
     kind: { type: String, enum: ['sync', 'llm-verdict', 'link-check'], required: true },
     sourceId: { type: String },
+    operationId: { type: String },
     startedAt: { type: Date, required: true },
     finishedAt: { type: Date },
     fetched: { type: Number },
@@ -83,6 +89,7 @@ const JobIngestCycleSchema = new Schema<IJobIngestCycle>(
     closed: { type: Number },
     dupCollapsedPct: { type: Number },
     quotaSpent: { type: Number },
+    requestStopReason: { type: String, enum: ['quota-exhausted', 'quota-unavailable'] },
     stubRate: { type: Number },
     healthTransitions: { type: [String], default: undefined },
     llm: { type: Schema.Types.Mixed },

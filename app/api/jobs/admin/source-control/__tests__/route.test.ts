@@ -198,7 +198,14 @@ describe('POST /api/jobs/admin/source-control', () => {
     const response = await POST(request())
 
     expect(response.status).toBe(403)
-    expect(mockUserFindOne).toHaveBeenCalledWith({ _id: ACTOR_ID, role: 'platform_admin' })
+    expect(mockUserFindOne).toHaveBeenCalledWith({
+      _id: ACTOR_ID,
+      role: 'platform_admin',
+      $or: [
+        { accountState: 'active' },
+        { accountState: { $exists: false } },
+      ],
+    })
     expect(mockControlJobSource).not.toHaveBeenCalled()
   })
 

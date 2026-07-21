@@ -3,6 +3,13 @@ import * as http from 'node:http'
 import * as https from 'node:https'
 import type { IncomingMessage } from 'node:http'
 import ipaddr from 'ipaddr.js'
+import {
+  buildPinnedConnectionOptions,
+  isApprovedPinnedRemote,
+  isGlobalUnicastAddress as sharedIsGlobalUnicastAddress,
+  resolvePinnedAddresses as sharedResolvePinnedAddresses,
+  type PinnedResolution,
+} from '@shared/pinnedHttpClient'
 
 /**
  * Network boundary for attacker-influenced apply URLs.
@@ -20,7 +27,6 @@ export const LINK_BODY_CAP_BYTES = 100_000
 const USER_AGENT = 'InterviewPrepGuruBot/1.0 (+https://www.interviewprep.guru/jobs-bot)'
 const MAX_URL_LENGTH = 8_192
 const MAX_PINNED_ADDRESS_ATTEMPTS = 8
-const IPV6_GLOBAL_UNICAST_PREFIX = ipaddr.IPv6.parse('2000::')
 
 export interface PinnedAddress {
   address: string
@@ -74,35 +80,7 @@ function normalizeDnsHostname(hostname: string): string {
  * are rejected. IPv4-mapped IPv6 is allowed only when the embedded IPv4 is
  * itself global unicast. */
 export function isGlobalUnicastAddress(address: string): boolean {
-  if (!address || address.includes('%')) return false
-  try {
-    const parsed = ipaddr.parse(address)
-    if (parsed.kind() === 'ipv4') return parsed.range() === 'unicast'
-    const ipv6 = parsed as ipaddr.IPv6
-    if (ipv6.isIPv4MappedAddress()) return ipv6.toIPv4Address().range() === 'unicast'
-    // ipaddr's default bucket is named "unicast" even for currently
-    // unallocated space. IPv6 global unicast is 2000::/3; require both.
-    return ipv6.range() === 'unicast' && ipv6.match(IPV6_GLOBAL_UNICAST_PREFIX, 3)
-  } catch {
-    return false
-  }
-}
-
-function pinnedAddressOf(answer: LookupAddress): PinnedAddress | null {
-  if (!isGlobalUnicastAddress(answer.address)) return null
-  try {
-    const parsed = ipaddr.parse(answer.address)
-    const family = parsed.kind() === 'ipv4' ? 4 : 6
-    if (answer.family !== family) return null
-    return {
-      address: parsed.kind() === 'ipv4'
-        ? parsed.toString()
-        : (parsed as ipaddr.IPv6).toRFC5952String(),
-      family,
-    }
-  } catch {
-    return null
-  }
+  return sharedIsGlobalUnicastAddress(address)
 }
 
 /** Canonical request policy: absolute credential-free HTTP(S), no fragments,
@@ -155,93 +133,17 @@ function errorCode(error: unknown): string | undefined {
   return typeof cause === 'string' ? cause : undefined
 }
 
-function withDnsBudget<T>(promise: Promise<T>, signal: AbortSignal, timeoutMs: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let settled = false
-    const finish = (fn: () => void) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      signal.removeEventListener('abort', onAbort)
-      fn()
-    }
-    const onAbort = () => finish(() => reject(codedError('ABORT_ERR')))
-    const timer = setTimeout(() => finish(() => reject(codedError('DNS_TIMEOUT'))), timeoutMs)
-    signal.addEventListener('abort', onAbort, { once: true })
-    if (signal.aborted) {
-      onAbort()
-      return
-    }
-    promise.then(
-      (value) => finish(() => resolve(value)),
-      (error) => finish(() => reject(error)),
-    )
-  })
-}
-
-type PinnedResolution =
-  | { kind: 'addresses'; addresses: PinnedAddress[] }
-  | { kind: 'nxdomain' }
-  | { kind: 'unverifiable'; code?: string }
-
 async function resolvePinnedAddresses(
   url: URL,
   resolveImpl: LinkResolveImpl,
   signal: AbortSignal,
   timeoutMs: number,
 ): Promise<PinnedResolution> {
-  const hostname = hostnameWithoutBrackets(url)
-  if (ipaddr.isValid(hostname)) {
-    const parsed = ipaddr.parse(hostname)
-    const answer: LookupAddress = {
-      address: parsed.kind() === 'ipv4'
-        ? parsed.toString()
-        : (parsed as ipaddr.IPv6).toRFC5952String(),
-      family: parsed.kind() === 'ipv4' ? 4 : 6,
-    }
-    const pinned = pinnedAddressOf(answer)
-    return pinned ? { kind: 'addresses', addresses: [pinned] } : { kind: 'unverifiable' }
-  }
-
-  let answers: LookupAddress[]
-  try {
-    answers = await withDnsBudget(resolveImpl(hostname), signal, timeoutMs)
-  } catch (error) {
-    const code = errorCode(error)
-    if (code === 'ENOTFOUND' || code === 'ENODATA') return { kind: 'nxdomain' }
-    return { kind: 'unverifiable', code }
-  }
-  if (answers.length === 0) return { kind: 'unverifiable', code: 'DNS_EMPTY' }
-
-  const addresses: PinnedAddress[] = []
-  const seen = new Set<string>()
-  for (const answer of answers) {
-    const pinned = pinnedAddressOf(answer)
-    // One non-global, malformed, or family-mismatched answer poisons the set.
-    if (!pinned) return { kind: 'unverifiable', code: 'DNS_NON_GLOBAL' }
-    const key = `${pinned.family}:${pinned.address}`
-    if (!seen.has(key)) {
-      seen.add(key)
-      addresses.push(pinned)
-    }
-  }
-  return addresses.length
-    ? { kind: 'addresses', addresses }
-    : { kind: 'unverifiable', code: 'DNS_EMPTY' }
-}
-
-function addressesEquivalent(left: string, right: string): boolean {
-  try {
-    return ipaddr.process(left).toString() === ipaddr.process(right).toString()
-  } catch {
-    return false
-  }
+  return sharedResolvePinnedAddresses(url, resolveImpl, signal, timeoutMs)
 }
 
 function isApprovedRemote(remoteAddress: string | undefined, addresses: readonly PinnedAddress[]): boolean {
-  return !!remoteAddress
-    && isGlobalUnicastAddress(remoteAddress)
-    && addresses.some((candidate) => addressesEquivalent(remoteAddress, candidate.address))
+  return isApprovedPinnedRemote(remoteAddress, addresses)
 }
 
 /** Byte-bound reader kept separate so the security limit is testable without
@@ -297,34 +199,14 @@ export function buildPinnedRequestOptions(
   url: URL,
   selected: PinnedAddress,
 ): https.RequestOptions & { autoSelectFamily: boolean } {
-  const hostname = hostnameWithoutBrackets(url)
-  return {
-    protocol: url.protocol,
-    hostname,
-    port: url.protocol === 'https:' ? 443 : 80,
-    path: `${url.pathname}${url.search}`,
+  return buildPinnedConnectionOptions({
+    url,
     method: 'GET',
-    agent: false,
-    family: selected.family,
-    autoSelectFamily: false,
-    lookup: (lookupHostname, _options, callback) => {
-      if (normalizeDnsHostname(lookupHostname) !== normalizeDnsHostname(hostname)) {
-        callback(codedError('PINNED_HOSTNAME_MISMATCH'), '', 4)
-        return
-      }
-      callback(null, selected.address, selected.family)
-    },
     headers: {
-      Host: url.host,
       'User-Agent': USER_AGENT,
       Accept: 'text/html,*/*',
-      'Accept-Encoding': 'identity',
     },
-    rejectUnauthorized: true,
-    // SNI is a DNS hostname, never the pinned address. IP-literal HTTPS
-    // still receives normal IP-SAN certificate validation without SNI.
-    servername: ipaddr.isValid(hostname) ? undefined : hostname,
-  }
+  }, selected)
 }
 
 async function defaultPinnedRequest(

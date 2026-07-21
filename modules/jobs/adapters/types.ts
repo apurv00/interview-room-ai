@@ -1,5 +1,6 @@
 import type { IJobSourceConfig, IJobIngestCursor } from '@shared/db/models'
 import type { ApplyTier } from '../config/spamRules'
+import type { BeforePhysicalRequestResult } from '@shared/fetchJSONWithRetry'
 
 /**
  * Source-adapter contract (INGESTION §4.1). Adapters are the ONLY layer that
@@ -36,11 +37,13 @@ export interface FetchResult {
   /** The source's exact control revision stopped authorizing outbound work.
    *  This is a lifecycle abort, not a provider/network health failure. */
   authorityChanged?: true
+  /** A local lifecycle/budget guard denied the request before networking. */
+  requestRejected?: string
 }
 
 /** Called immediately before each provider HTTP request. False or throw =
  *  authority was withdrawn; adapters must stop without another request. */
-export type BeforePhysicalRequest = () => boolean | void | Promise<boolean | void>
+export type BeforePhysicalRequest = () => BeforePhysicalRequestResult | Promise<BeforePhysicalRequestResult>
 
 export interface AdapterFetchOptions {
   beforePhysicalRequest?: BeforePhysicalRequest

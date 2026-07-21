@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { PinnedHttpRequest, PinnedHttpResult } from '@shared/pinnedHttpClient'
 
 /**
  * apna + Unstop adapters (INGESTION §6 items 5/6). Fixtures mirror the
@@ -9,8 +10,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
  * branded contact UA.
  */
 
-const { mockFetchJSON } = vi.hoisted(() => ({ mockFetchJSON: vi.fn() }))
+const { mockFetchJSON, mockPinnedHttpRequest } = vi.hoisted(() => ({
+  mockFetchJSON: vi.fn(),
+  mockPinnedHttpRequest: vi.fn(),
+}))
 vi.mock('@shared/fetchJSONWithRetry', () => ({ fetchJSONWithRetry: mockFetchJSON }))
+vi.mock('@shared/pinnedHttpClient', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@shared/pinnedHttpClient')>()),
+  pinnedHttpRequest: mockPinnedHttpRequest,
+}))
 
 import { apnaAdapter, extractLocs, extractUrlEntries, extractJobPostingJsonLd } from '../adapters/apnaAdapter'
 import { unstopAdapter } from '../adapters/unstopAdapter'
@@ -88,6 +96,7 @@ describe('apna fetch', () => {
 
   beforeEach(() => {
     urls = []
+    mockPinnedHttpRequest.mockReset()
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       urls.push(url)
       const body =
@@ -107,6 +116,38 @@ describe('apna fetch', () => {
                   : pageFor('stub')
       return { ok: true, status: 200, text: async () => body } as Response
     }))
+    // Adapter tests keep their readable wire fixtures while the dedicated
+    // pinned-client suite owns DNS/socket behavior. This facade preserves the
+    // production contract: gate once immediately before one physical call.
+    mockPinnedHttpRequest.mockImplementation(async (request: PinnedHttpRequest): Promise<PinnedHttpResult> => {
+      if (request.beforePhysicalRequest) {
+        try {
+          const permission = await request.beforePhysicalRequest()
+          if (permission === false) return { kind: 'authority-changed', socketAttempts: 0 }
+          if (permission && typeof permission === 'object' && permission.allowed === false) {
+            return { kind: 'request-rejected', reason: permission.reason, socketAttempts: 0 }
+          }
+        } catch {
+          return { kind: 'authority-changed', socketAttempts: 0 }
+        }
+      }
+      try {
+        const result = await fetch(String(request.url), {
+          headers: request.headers,
+          redirect: 'manual',
+          signal: request.signal,
+        })
+        return {
+          kind: 'response',
+          status: result.status,
+          headers: {},
+          body: Buffer.from(result.ok ? await result.text() : ''),
+          socketAttempts: 1,
+        }
+      } catch {
+        return { kind: 'network-error', code: 'CONNECTION_FAILED', retryable: true, socketAttempts: 1 }
+      }
+    })
   })
   afterEach(() => vi.unstubAllGlobals())
 
@@ -123,6 +164,8 @@ describe('apna fetch', () => {
     expect(res.raw).toHaveLength(1)
     const ua = (vi.mocked(fetch).mock.calls[0][1] as RequestInit).headers as Record<string, string>
     expect(ua['User-Agent']).toContain('interviewprep.guru/jobs-bot')
+    expect(mockPinnedHttpRequest.mock.calls[0][0].maxResponseBytes).toBe(16 * 1024 * 1024)
+    expect(mockPinnedHttpRequest.mock.calls.at(-1)?.[0].maxResponseBytes).toBe(2 * 1024 * 1024)
   })
 
   it('rechecks authority after sitemap discovery and blocks the first detail request after revocation', async () => {
@@ -142,6 +185,106 @@ describe('apna fetch', () => {
     expect(beforePhysicalRequest).toHaveBeenCalledTimes(4)
     expect(urls).toHaveLength(3)
     expect(urls.some((u) => u.includes('/job/fresh-new'))).toBe(false)
+  })
+
+  it('keeps redirects terminal, including a redirect to a private address', async () => {
+    const beforePhysicalRequest = vi.fn().mockResolvedValue(true)
+    vi.mocked(fetch).mockImplementation(async (url: unknown, init?: RequestInit) => {
+      urls.push(String(url))
+      expect(init?.redirect).toBe('manual')
+      return {
+        ok: false,
+        status: 302,
+        headers: new Headers({ location: 'http://127.0.0.1/admin' }),
+        text: async () => '',
+      } as Response
+    })
+    const [, activeTarget] = apnaAdapter.buildTargets({ sourceId: 'apna', enabled: true }, [])
+
+    const res = await apnaAdapter.fetch(activeTarget, { beforePhysicalRequest })
+
+    expect(res).toMatchObject({ ok: false, status: 302, attempts: 1 })
+    expect(urls).toEqual([INDEX])
+    expect(beforePhysicalRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('never fetches an untrusted job-index URL discovered in the root sitemap', async () => {
+    const beforePhysicalRequest = vi.fn().mockResolvedValue(true)
+    const malicious = 'https://apna.co@169.254.169.254/job-listing-sitemap.xml'
+    vi.mocked(fetch).mockImplementation(async (url: unknown) => {
+      urls.push(String(url))
+      if (String(url) !== INDEX) throw new Error('untrusted URL reached fetch')
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `<sitemapindex><loc>${malicious}</loc></sitemapindex>`,
+      } as Response
+    })
+    const [, activeTarget] = apnaAdapter.buildTargets({ sourceId: 'apna', enabled: true }, [])
+
+    const res = await apnaAdapter.fetch(activeTarget, { beforePhysicalRequest })
+
+    expect(res).toMatchObject({ ok: false, bodyError: true, attempts: 1 })
+    expect(urls).toEqual([INDEX])
+    expect(beforePhysicalRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('never fetches an untrusted shard URL discovered in the job index', async () => {
+    const beforePhysicalRequest = vi.fn().mockResolvedValue(true)
+    const jobIndex = 'https://apna.co/job-listing-sitemap.xml'
+    const malicious = 'https://apna.co.evil.example/active-job-listings-1.xml'
+    vi.mocked(fetch).mockImplementation(async (url: unknown) => {
+      const u = String(url)
+      urls.push(u)
+      if (u === INDEX) {
+        return { ok: true, status: 200, text: async () => `<sitemapindex><loc>${jobIndex}</loc></sitemapindex>` } as Response
+      }
+      if (u === jobIndex) {
+        return { ok: true, status: 200, text: async () => `<sitemapindex><loc>${malicious}</loc></sitemapindex>` } as Response
+      }
+      throw new Error('untrusted URL reached fetch')
+    })
+    const [, activeTarget] = apnaAdapter.buildTargets({ sourceId: 'apna', enabled: true }, [])
+
+    const res = await apnaAdapter.fetch(activeTarget, { beforePhysicalRequest })
+
+    expect(res).toMatchObject({ ok: false, bodyError: true, attempts: 2 })
+    expect(urls).toEqual([INDEX, jobIndex])
+    expect(beforePhysicalRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects malicious detail locations while valid Apna URLs keep exact request accounting', async () => {
+    const beforePhysicalRequest = vi.fn().mockResolvedValue(true)
+    const jobIndex = 'https://apna.co/job-listing-sitemap.xml'
+    const shard = 'https://apna.co/active-job-listings-1.xml'
+    const malicious = 'http://169.254.169.254/job/steal'
+    const valid = 'https://apna.co/job/valid-role-1'
+    vi.mocked(fetch).mockImplementation(async (url: unknown) => {
+      const u = String(url)
+      urls.push(u)
+      const body = u === INDEX
+        ? `<sitemapindex><loc>${jobIndex}</loc></sitemapindex>`
+        : u === jobIndex
+          ? `<sitemapindex><loc>${shard}</loc></sitemapindex>`
+          : u === shard
+            ? `<urlset>
+                <url><loc>${malicious}</loc><lastmod>2026-07-14T00:00:00Z</lastmod></url>
+                <url><loc>${valid}</loc><lastmod>2026-07-15T00:00:00Z</lastmod></url>
+              </urlset>`
+            : u === valid
+              ? pageFor('Long enough description. '.repeat(30))
+              : (() => { throw new Error('untrusted URL reached fetch') })()
+      return { ok: true, status: 200, text: async () => body } as Response
+    })
+    const [, activeTarget] = apnaAdapter.buildTargets({ sourceId: 'apna', enabled: true }, [])
+
+    const res = await apnaAdapter.fetch(activeTarget, { beforePhysicalRequest })
+
+    expect(res.ok).toBe(true)
+    expect(res.raw).toHaveLength(1)
+    expect(urls).toEqual([INDEX, jobIndex, shard, valid])
+    expect(urls).not.toContain(malicious)
+    expect(beforePhysicalRequest).toHaveBeenCalledTimes(urls.length)
   })
 
   it('backlog beyond the cap drains OLDEST-first so the cursor never strands unfetched URLs (Codex #536)', async () => {
