@@ -130,6 +130,12 @@ export async function GET(req: NextRequest) {
       }
       return NextResponse.json({ error: 'No recording for this session' }, { status: 404 })
     }
+    // The reference lookup is another await boundary. Deletion may mark the
+    // account after the post-sign check while the retained session still
+    // satisfies `exists`; never release that already-minted URL in that race.
+    if (!(await isJobsAccountActive(requesterUserId))) {
+      return accountUnavailableResponse()
+    }
     return NextResponse.json(
       { url, kind, expiresInSeconds: REPLAY_PRESIGN_TTL_SECONDS },
       { headers: { 'Cache-Control': 'private, no-store' } },

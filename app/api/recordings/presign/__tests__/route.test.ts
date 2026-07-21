@@ -208,6 +208,27 @@ describe('GET /api/recordings/presign account and artifact fences', () => {
     })
   })
 
+  it('withholds a live-reference URL when deletion commits during reference verification', async () => {
+    mocks.isJobsAccountActive
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const response = await callRoute()
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mocks.exists).toHaveBeenCalledWith({
+      _id: SESSION_ID,
+      userId: USER_ID,
+      recordingR2Key: R2_KEY,
+    })
+  })
+
   it('prefers account-unavailable when the session read fails during deletion', async () => {
     mocks.findOne.mockReturnValue({
       select: vi.fn().mockRejectedValue(new Error('session sweep interrupted query')),
@@ -270,7 +291,7 @@ describe('GET /api/recordings/presign account and artifact fences', () => {
       userId: USER_ID,
       recordingR2Key: R2_KEY,
     })
-    expect(mocks.isJobsAccountActive).toHaveBeenCalledTimes(3)
+    expect(mocks.isJobsAccountActive).toHaveBeenCalledTimes(4)
   })
 
   it('binds a screen replay to the screen field and key type', async () => {
