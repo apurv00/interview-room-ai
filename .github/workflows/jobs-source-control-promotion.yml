@@ -1,10 +1,10 @@
-name: Jobs Source Control Promotion Gate
+name: Jobs Data-Lifecycle Promotion Gate
 
 on:
   workflow_dispatch:
     inputs:
       phase:
-        description: Prepare indexes before adoption, or run the post-adoption promotion gate
+        description: Prepare source indexes, or run the combined source-control and retention gate
         required: true
         default: verify-promotion
         type: choice
@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   verify-a02:
-    name: A02 ${{ inputs.phase }} on jobs-staging
+    name: Jobs ${{ inputs.phase }} on jobs-staging
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Deliberately hard-coded: the smoke creates and drops UUID-named
@@ -54,9 +54,39 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
 
+      - name: Preview historical retention repair
+        if: inputs.phase == 'verify-promotion'
+        run: npm run repair:jobs-retention
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Clear historical TTLs and repair owner pins
+        if: inputs.phase == 'verify-promotion'
+        run: npm run repair:jobs-retention -- --apply
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
       - name: Verify owner-retention repair state
         if: inputs.phase == 'verify-promotion'
         run: npm run check:jobs-retention
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Preview retention TTL index activation
+        if: inputs.phase == 'verify-promotion'
+        run: npm run prepare:jobs-retention-index
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Activate exact retention TTL index
+        if: inputs.phase == 'verify-promotion'
+        run: npm run prepare:jobs-retention-index -- --apply
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Verify exact retention TTL index
+        if: inputs.phase == 'verify-promotion'
+        run: npm run check:jobs-retention-index
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
 
@@ -80,3 +110,24 @@ jobs:
           A02_SMOKE_ALLOW: '1'
           A02_SMOKE_ROWS: '25000'
           A02_SMOKE_MAX_MS: '45000'
+
+      # Run lifecycle mutations only after the exact retained-corpus/source
+      # checks. TTL deletion is asynchronous and intentionally leaves the
+      # serialized admission counter stale-high until its next preflight.
+      - name: Preview Jobs retention lifecycle
+        if: inputs.phase == 'verify-promotion'
+        run: npm run sweep:jobs-retention
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Apply Jobs retention lifecycle
+        if: inputs.phase == 'verify-promotion'
+        run: npm run sweep:jobs-retention -- --apply
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Verify Jobs retention lifecycle convergence
+        if: inputs.phase == 'verify-promotion'
+        run: npm run check:jobs-retention-sweep
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}

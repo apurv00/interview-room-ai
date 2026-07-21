@@ -50,13 +50,18 @@ describe('Jobs retention repair deploy gate', () => {
   })
 
   it('passes only when every retained owner row is pinned without a TTL', () => {
-    expect(() => assertRetentionInvariant({ ownerContradictions: 0, pinnedWithTtl: 0 })).not.toThrow()
+    expect(() => assertRetentionInvariant({
+      ownerContradictions: 0,
+      pinnedWithTtl: 0,
+      nonPurgeableWithTtl: 0,
+    })).not.toThrow()
   })
 
   it.each([
-    [{ ownerContradictions: 2, pinnedWithTtl: 0 }, 'owner contradictions=2'],
-    [{ ownerContradictions: 0, pinnedWithTtl: 3 }, 'pinned TTL rows=3'],
-    [{ ownerContradictions: 2, pinnedWithTtl: 3 }, 'owner contradictions=2, pinned TTL rows=3'],
+    [{ ownerContradictions: 2, pinnedWithTtl: 0, nonPurgeableWithTtl: 0 }, 'owner contradictions=2'],
+    [{ ownerContradictions: 0, pinnedWithTtl: 3, nonPurgeableWithTtl: 0 }, 'pinned TTL rows=3'],
+    [{ ownerContradictions: 0, pinnedWithTtl: 0, nonPurgeableWithTtl: 4 }, 'non-purgeable TTL rows=4'],
+    [{ ownerContradictions: 2, pinnedWithTtl: 3, nonPurgeableWithTtl: 4 }, 'owner contradictions=2, pinned TTL rows=3, non-purgeable TTL rows=4'],
   ])('fails promotion for invariant drift %j', (counts, message) => {
     expect(() => assertRetentionInvariant(counts)).toThrow(message)
   })
@@ -67,6 +72,8 @@ describe('Jobs retention repair deploy gate', () => {
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1)
 
     await expect(runRetentionRepair(['--check'])).rejects.toThrow('owner contradictions=1')
 
@@ -78,6 +85,8 @@ describe('Jobs retention repair deploy gate', () => {
     mocks.distinct.mockResolvedValue(['owned-1'])
     mocks.countDocuments
       .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(0)
 
@@ -95,15 +104,22 @@ describe('Jobs retention repair deploy gate', () => {
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(0)
     mocks.updateMany
-      .mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
       .mockResolvedValueOnce({ modifiedCount: 1 })
+      .mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
 
     await expect(runRetentionRepair(['--apply'])).resolves.toBeUndefined()
 
     expect(mocks.distinct).toHaveBeenCalledTimes(2)
-    expect(mocks.countDocuments).toHaveBeenNthCalledWith(4, {
+    expect(mocks.updateMany).toHaveBeenNthCalledWith(1,
+      { purgeAt: { $exists: true } },
+      { $unset: { purgeAt: 1 } },
+    )
+    expect(mocks.countDocuments).toHaveBeenNthCalledWith(6, {
       _id: { $in: ['owned-1', 'owned-2'] },
       $or: [
         { userReferenced: { $ne: true } },

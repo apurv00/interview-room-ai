@@ -2,7 +2,7 @@ import { gzipSync, gunzipSync } from 'zlib'
 import crypto from 'crypto'
 import type { ClientSession } from 'mongoose'
 import { JOB_SOURCE_LINEAGE_UNKNOWN, JobPosting, type IJobPosting } from '@shared/db/models'
-import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, displayJdBody, bodyHashOf } from './qualityGate'
+import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, displayJdBody, bodyHashOf, validThroughDate } from './qualityGate'
 import { companyKey, titleKey, titleTokens, locationKey, fingerprintOf, sourceKeyOf, isConfidentialCompany, titleJaccard, FUZZY_MERGE_JACCARD } from './identityResolver'
 import type { NormalizedJob } from '../adapters/types'
 
@@ -188,7 +188,8 @@ function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedF
     },
     status: 'open' as const,
     postedAt: validDate(p.job.postedAt),
-    validThrough: validDate(p.job.validThrough),
+    validThrough: validThroughDate(p.job.validThrough),
+    lastSeenAt: now,
     userReferenced: false,
   }
 }
@@ -201,6 +202,10 @@ const REOPENABLE_CLOSE_REASONS = new Set(['aged-out', 'board-poll-miss', 'valid-
 
 /** Merge an incoming posting into an existing canonical doc (§4.2 policy). */
 export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: string, now: Date): void {
+  // Canonical freshness is independent of detailed provenance. Provider rows
+  // without externalId deliberately have no provenance entry, and the cap-8
+  // array may evict old contributors; neither may create an immortal posting.
+  doc.lastSeenAt = now
   // A02 legal lineage is monotonic and independent of the cap-8 detailed
   // provenance array. Legacy rows hydrate with an empty sourceIds default;
   // reconstruct what is knowable and mark empty/cap-reached history as
@@ -326,6 +331,13 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
   // postedAt: earliest non-null (aggregators re-stamp reposts).
   const incoming = validDate(p.job.postedAt) ?? null
   if (incoming && (!doc.postedAt || incoming < doc.postedAt)) doc.postedAt = incoming
+  // A contributing source extending a deadline must not be reopened and then
+  // immediately re-closed against the stale stored value. Without per-source
+  // deadline lineage, the conservative canonical rule is the latest deadline.
+  const incomingValidThrough = validThroughDate(p.job.validThrough)
+  if (incomingValidThrough && (!doc.validThrough || incomingValidThrough > doc.validThrough)) {
+    doc.validThrough = incomingValidThrough
+  }
   // locations: union of location keys (bounded by metro cardinality).
   if (p.locKey && !doc.locationKeys.includes(p.locKey)) doc.locationKeys.push(p.locKey)
   if (p.job.city && !doc.locations.includes(p.job.city)) doc.locations.push(p.job.city)

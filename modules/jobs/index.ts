@@ -10,7 +10,7 @@ export {
 } from './services/identityResolver'
 export {
   classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier,
-  isStaffingOrg, normalizeJdBody, bodyHashOf,
+  isStaffingOrg, normalizeJdBody, bodyHashOf, validThroughDate,
 } from './services/qualityGate'
 export type { ClassifyInput, ClassifyResult, DropRule, FlagRule } from './services/qualityGate'
 export { METROS, METRO_ALIASES } from './config/metros'

@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 // resolves).
 import {
   classifyJob, classifyApplyUrl, isBlockedApplyUrl, bestUsableTier,
-  isStaffingOrg, normalizeJdBody, bodyHashOf,
+  isStaffingOrg, normalizeJdBody, bodyHashOf, validThroughDate,
 } from '@jobs'
 
 // Ported from the probe's executable spec (scripts/jobs-liquidity-probe.test.mjs).
@@ -126,6 +126,7 @@ describe('validThrough', () => {
     const todayUtc = new Date().toISOString().slice(0, 10)
     expect(classifyJob({ ...base, description: longBody, validThrough: todayUtc }).drops).not.toContain('valid-through-expired')
     expect(classifyJob({ ...base, description: longBody, validThrough: '2020-01-01' }).drops).toContain('valid-through-expired')
+    expect(validThroughDate(todayUtc)?.toISOString()).toBe(`${todayUtc}T23:59:59.999Z`)
   })
 })
 

@@ -126,6 +126,19 @@ export function displayJdBody(description = ''): string {
     .trim()
 }
 
+/** Canonical valid-through parser shared by classification and persistence.
+ * JSON-LD date-only deadlines remain live through the end of that UTC day. */
+export function validThroughDate(value: string | null | undefined): Date | undefined {
+  if (!value) return undefined
+  const normalized = value.trim()
+  const parsed = new Date(
+    /^\d{4}-\d{2}-\d{2}$/.test(normalized)
+      ? `${normalized}T23:59:59.999Z`
+      : normalized,
+  )
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed
+}
+
 export function classifyJob({ title = '', company = '', description = '', applyUrls = [], validThrough = null }: ClassifyInput): ClassifyResult {
   const drops: DropRule[] = []
   const flags: FlagRule[] = []
@@ -147,14 +160,9 @@ export function classifyJob({ title = '', company = '', description = '', applyU
   // Malformed dates must be VISIBLE, not silently alive: NaN passes neither
   // branch, so bad dates get a flag and real expiries get the drop.
   if (validThrough) {
-    // Date-only values (JSON-LD sources commonly send 'YYYY-MM-DD') parse
-    // to midnight UTC, which would expire a posting at the START of its
-    // closing day — treat them as valid through END of that day
-    // (Codex on #507).
-    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(validThrough.trim())
-    const vt = new Date(isDateOnly ? `${validThrough.trim()}T23:59:59.999Z` : validThrough).getTime()
-    if (Number.isNaN(vt)) flags.push('bad-valid-through')
-    else if (vt < Date.now()) drops.push('valid-through-expired')
+    const vt = validThroughDate(validThrough)
+    if (!vt) flags.push('bad-valid-through')
+    else if (vt.getTime() <= Date.now()) drops.push('valid-through-expired')
   }
 
   if (isStaffingOrg(company)) flags.push('staffing')
