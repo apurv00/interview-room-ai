@@ -49,7 +49,7 @@ jobs:
           A02_STAGING_EXPECTED_DATABASE: ${{ vars.A02_STAGING_EXPECTED_DATABASE }}
           A02_STAGING_SENTINEL_TOKEN: ${{ secrets.A02_STAGING_SENTINEL_TOKEN }}
 
-      - name: Prepare five non-dropping source-control indexes
+      - name: Prepare seven non-dropping source-control indexes
         run: npm run prepare:jobs-source-control-indexes -- --apply
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}

@@ -5,7 +5,9 @@ const {
   mockCursorFind, mockCursorBulkWrite, mockCycleCreate, mockAdapterFetch,
   mockPostingFindOne, mockPostingFind, mockPostingCreate, mockPostingUpdateMany,
   mockPostingUpdateOne, mockPostingBulkWrite, mockAssertSourceSyncAuthority, mockAssertSourceTransactionsReady,
-  mockAssertSourceProbeAuthority, mockWithSourceWriteFence,
+  mockAssertSourceProbeAuthority, mockAssertSourceValidationAuthority, mockWithSourceWriteFence,
+  mockRedisEval, mockRedisGet, mockMetaFindOne, mockOperationFind,
+  mockCompleteSourceValidation, mockSourceWorkerReadiness, mockOperationUpdate,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockSourceFindOne: vi.fn(),
@@ -24,18 +26,31 @@ const {
   mockAssertSourceSyncAuthority: vi.fn(),
   mockAssertSourceTransactionsReady: vi.fn(),
   mockAssertSourceProbeAuthority: vi.fn(),
+  mockAssertSourceValidationAuthority: vi.fn(),
   mockWithSourceWriteFence: vi.fn(),
+  mockRedisEval: vi.fn(),
+  mockRedisGet: vi.fn(),
+  mockMetaFindOne: vi.fn(),
+  mockOperationFind: vi.fn(),
+  mockCompleteSourceValidation: vi.fn(),
+  mockSourceWorkerReadiness: vi.fn(),
+  mockOperationUpdate: vi.fn(),
 }))
 
 vi.mock('@shared/services/inngest', () => ({
   inngest: { send: mockSend, createFunction: vi.fn(() => ({})) },
 }))
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
-vi.mock('@shared/redis', () => ({ redis: { sadd: vi.fn(), expire: vi.fn(), scard: vi.fn() } }))
+vi.mock('@shared/redis', () => ({ redis: {
+  sadd: vi.fn(), expire: vi.fn(), scard: vi.fn(), eval: mockRedisEval, get: mockRedisGet,
+} }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn() } }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findOne: mockPostingFindOne, find: mockPostingFind, create: mockPostingCreate, updateMany: mockPostingUpdateMany, updateOne: mockPostingUpdateOne, bulkWrite: mockPostingBulkWrite },
   JobSourceConfig: { findOne: mockSourceFindOne, find: mockSourceFind, updateOne: mockSourceUpdateOne },
+  JobSourceControlMeta: { findOne: mockMetaFindOne },
+  JobSourceOperationAudit: { findOne: mockOperationFind, updateOne: mockOperationUpdate },
+  JOB_SOURCE_CONTROL_META_ID: 'jobs-source-control',
   JobIngestCursor: { find: mockCursorFind, bulkWrite: mockCursorBulkWrite },
   JobIngestCycle: { create: mockCycleCreate },
   // §4.5 switch read once per sync — OFF keeps these tests byte-identical.
@@ -64,14 +79,39 @@ vi.mock('../services/sourceControl', () => {
     controlRevisionFilter: (revision: number) => revision === 0
       ? { $or: [{ controlRevision: 0 }, { controlRevision: { $exists: false } }] }
       : { controlRevision: revision },
+    operationalRevisionOf: (source: { operationalRevision?: number | null }) =>
+      Number.isInteger(source.operationalRevision) && (source.operationalRevision as number) >= 0
+        ? source.operationalRevision as number
+        : 0,
+    operationalRevisionFilter: (revision: number) => revision === 0
+      ? { $or: [{ operationalRevision: 0 }, { operationalRevision: { $exists: false } }] }
+      : { operationalRevision: revision },
     assertSourceSyncAuthority: (sourceId: string, revision: number) =>
       mockAssertSourceSyncAuthority(sourceId, revision),
     assertSourceTransactionsReady: (sourceId: string, revision: number) =>
       mockAssertSourceTransactionsReady(sourceId, revision),
     assertSourceProbeAuthority: (sourceId: string, revision: number) =>
       mockAssertSourceProbeAuthority(sourceId, revision),
-    withSourceWriteFence: <T,>(sourceId: string, revision: number, work: (session: undefined) => Promise<T>) =>
-      mockWithSourceWriteFence(sourceId, revision, work),
+    assertSourceValidationAuthority: (sourceId: string, revision: number, operationalRevision: number) =>
+      mockAssertSourceValidationAuthority(sourceId, revision, operationalRevision),
+    completeSourceValidation: (...args: unknown[]) => mockCompleteSourceValidation(...args),
+    withSourceWriteFence: <T,>(
+      sourceId: string,
+      revision: number,
+      operationalRevisionOrWork: number | ((session: undefined) => Promise<T>),
+      workMaybe?: (session: undefined) => Promise<T>,
+    ) => mockWithSourceWriteFence(
+      sourceId,
+      revision,
+      typeof operationalRevisionOrWork === 'number' ? workMaybe : operationalRevisionOrWork,
+    ),
+  }
+})
+vi.mock('../services/sourceOperations', () => {
+  class SourceOperationError extends Error {}
+  return {
+    SourceOperationError,
+    assertSourceWorkerReadiness: (...args: unknown[]) => mockSourceWorkerReadiness(...args),
   }
 })
 vi.mock('../adapters/jsearchAdapter', async (importOriginal) => {
@@ -87,10 +127,17 @@ vi.mock('../adapters/atsBoardAdapter', async (importOriginal) => {
   return { atsBoardAdapter: { ...real.atsBoardAdapter, fetch: mockAdapterFetch } }
 })
 
-import { runIngestSchedulerHandler, runSourceSyncHandler, runBoardProbeHandler } from '../jobs/ingestJobs'
+import {
+  runIngestSchedulerHandler,
+  runSourceSyncHandler,
+  runSourceValidationHandler,
+  runBoardProbeHandler,
+} from '../jobs/ingestJobs'
 import { jsearchAdapter } from '../adapters/jsearchAdapter'
 import { JobPosting } from '@shared/db/models'
 import { SourceAuthorityChangedError, SourceTransactionsRequiredError } from '../services/sourceControl'
+import { SourceOperationError } from '../services/sourceOperations'
+import { JOB_SOURCE_CATALOG, sourcePolicyHash } from '../config/sourceCatalog'
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 
@@ -101,7 +148,9 @@ function resetAll(): void {
     mockPostingFindOne, mockPostingFind, mockPostingCreate,
     mockPostingUpdateMany, mockPostingUpdateOne, mockPostingBulkWrite,
     mockAssertSourceSyncAuthority, mockAssertSourceTransactionsReady, mockAssertSourceProbeAuthority,
-    mockWithSourceWriteFence,
+    mockAssertSourceValidationAuthority, mockWithSourceWriteFence, mockRedisEval, mockRedisGet,
+    mockMetaFindOne, mockOperationFind, mockCompleteSourceValidation, mockSourceWorkerReadiness,
+    mockOperationUpdate,
   ]) m.mockReset()
   mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
   mockSourceUpdateOne.mockResolvedValue({})
@@ -116,61 +165,88 @@ function resetAll(): void {
   mockAssertSourceSyncAuthority.mockResolvedValue(undefined)
   mockAssertSourceTransactionsReady.mockResolvedValue(undefined)
   mockAssertSourceProbeAuthority.mockResolvedValue(undefined)
+  mockAssertSourceValidationAuthority.mockResolvedValue(undefined)
+  mockCompleteSourceValidation.mockResolvedValue(undefined)
+  mockSourceWorkerReadiness.mockResolvedValue(undefined)
+  mockOperationUpdate.mockResolvedValue({ matchedCount: 1 })
+  mockRedisEval.mockResolvedValue([1, 1, 1, 1])
+  mockRedisGet.mockResolvedValue(null)
+  mockMetaFindOne.mockReturnValue({
+    lean: () => Promise.resolve({ sourceLineageVersion: 1, controlWriteSeq: 0, ingestWriteSeq: 0, retainedPostings: 0 }),
+  })
+  mockOperationFind.mockImplementation((filter: { sourceId?: string }) => ({
+    lean: () => {
+      const definition = JOB_SOURCE_CATALOG.find((source) => source.sourceId === filter.sourceId)
+      const policyHash = definition ? sourcePolicyHash({
+        ...definition,
+        cadenceMinutes: 60,
+        requestBudget: definition.requestBudget,
+        llmVerdictOptOut: false,
+      }) : null
+      return Promise.resolve({
+        sourceId: filter.sourceId,
+        to: {
+          enabled: true,
+          controlRevision: filter.sourceId === 'jsearch' ? 7 : 0,
+          operationalRevision: 0,
+          policyHash,
+        },
+        occurredAt: new Date(),
+      })
+    },
+  }))
   mockWithSourceWriteFence.mockImplementation(
     (_sourceId: string, _revision: number, work: (session: undefined) => Promise<unknown>) => work(undefined)
   )
 }
 
 describe('runIngestSchedulerHandler', () => {
-  it('no enabled sources → zero dispatches (data is the only switch — no flags)', async () => {
+  it('reports bootstrap-required instead of silently accepting an empty catalog', async () => {
     resetAll()
     mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     const r = await runIngestSchedulerHandler(step)
-    expect(r).toEqual({ dispatched: 0 })
+    expect(r).toEqual({ skipped: true, reason: 'bootstrap-required' })
     expect(mockSend).not.toHaveBeenCalled()
   })
 
-  it('seeds jsearch DISABLED and dispatches only due enabled sources', async () => {
+  it('never seeds configuration and dispatches only due enabled sources with both epochs', async () => {
     resetAll()
     const now = Date.now()
     mockSourceFind.mockReturnValue({
       lean: () => Promise.resolve([
-        { sourceId: 'due-source', enabled: true, health: 'active', controlRevision: 7, cadenceMinutes: 60, lastSyncAt: new Date(now - 2 * 3600_000) },
-        { sourceId: 'not-due', enabled: true, health: 'active', cadenceMinutes: 1440, lastSyncAt: new Date(now - 3600_000) },
+        ...JOB_SOURCE_CATALOG.map((definition) => ({
+          sourceId: definition.sourceId,
+          kind: definition.kind,
+          atsKind: definition.atsKind,
+          slug: definition.slug,
+          displayName: definition.displayName,
+          requestBudget: definition.requestBudget,
+          enabled: definition.sourceId === 'jsearch',
+          health: 'active',
+          controlRevision: definition.sourceId === 'jsearch' ? 7 : 0,
+          operationalRevision: 0,
+          cadenceMinutes: 60,
+          llmVerdictOptOut: false,
+          lastSyncAt: definition.sourceId === 'jsearch'
+            ? new Date(now - 2 * 3600_000)
+            : new Date(now),
+        })),
       ]),
     })
     const r = await runIngestSchedulerHandler(step)
     expect(r).toEqual({ dispatched: 1 })
-    // seed uses $setOnInsert with enabled:false — the scheduler never
-    // invents an active source
-    const seed = mockSourceUpdateOne.mock.calls[0]
-    expect(seed[1].$setOnInsert.enabled).toBe(false)
-    expect(seed[1].$setOnInsert).toMatchObject({ controlRevision: 0, ingestWriteSeq: 0 })
-    // India-native sources seed next (§6 items 5/6), also DISABLED — the
-    // founder's ToS read gates their enable (DECISIONS #9).
-    const apnaSeed = mockSourceUpdateOne.mock.calls[1]
-    expect(apnaSeed[0]).toEqual({ sourceId: 'apna' })
-    expect(apnaSeed[1].$setOnInsert).toMatchObject({ kind: 'sitemap-jsonld', enabled: false })
-    const unstopSeed = mockSourceUpdateOne.mock.calls[2]
-    expect(unstopSeed[0]).toEqual({ sourceId: 'unstop' })
-    expect(unstopSeed[1].$setOnInsert).toMatchObject({ kind: 'public-api', enabled: false })
-    // board seeds carry displayName on insert; a guarded second update
-    // backfills ONLY absent values so ops edits are never stomped
-    const boardSeed = mockSourceUpdateOne.mock.calls[3]
-    expect(boardSeed[1].$setOnInsert.displayName).toBeTruthy()
-    expect(boardSeed[1].$setOnInsert.enabled).toBe(false)
-    const backfill = mockSourceUpdateOne.mock.calls[4]
-    expect(backfill[0].displayName).toEqual({ $in: [null, ''] })
-    expect(backfill[1].$set.displayName).toBeTruthy()
-    expect(backfill[2]?.upsert).toBeUndefined()
-    expect(mockSend).toHaveBeenCalledWith({ name: 'jobs/source.sync', data: { sourceId: 'due-source', controlRevision: 7 } })
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+    expect(mockSend).toHaveBeenCalledWith({
+      name: 'jobs/source.sync',
+      data: { sourceId: 'jsearch', controlRevision: 7, operationalRevision: 0 },
+    })
   })
 })
 
 describe('runSourceSyncHandler — feed continuation', () => {
   it('persists a large provider page in bounded source-authority transactions', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', displayName: 'Unstop', requestBudget: { perRunRequestCap: 15, dailyRequestCap: 15, monthlyRequestCap: 400 }, enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     const rows = Array.from({ length: 26 }, (_, index) => ({
       id: `u${index}`,
@@ -201,7 +277,7 @@ describe('runSourceSyncHandler — feed continuation', () => {
 
   it('a physically-full page with ZERO open rows keeps paging — policy filtering is not exhaustion (Codex #536)', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', displayName: 'Unstop', requestBudget: { perRunRequestCap: 15, dailyRequestCap: 15, monthlyRequestCap: 400 }, enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch
       .mockResolvedValueOnce({ ok: true, status: 200, raw: [], rawPageSize: 15, attempts: 1 }) // full page, all closed
@@ -213,7 +289,7 @@ describe('runSourceSyncHandler — feed continuation', () => {
 
   it('a first-run feed (no cursor) does NOT get the #559 bucket distrust — an all-known full page still hits the cutoff instead of draining to the feed cap (Codex #559 round 2)', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', displayName: 'Unstop', requestBudget: { perRunRequestCap: 15, dailyRequestCap: 15, monthlyRequestCap: 400 }, enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) }) // no cursor — first run for the feed
     // Every incoming row is already stored → Tier-1 refresh → knownRate = 1.
     ;(JobPosting.findOne as ReturnType<typeof vi.fn>).mockImplementation((q: Record<string, unknown>) =>
@@ -236,7 +312,7 @@ describe('runSourceSyncHandler — feed continuation', () => {
 
   it('resumes unstop at the persisted lastPage+1 — the continuation offset is never stomped (Codex #536)', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'unstop', displayName: 'Unstop', requestBudget: { perRunRequestCap: 15, dailyRequestCap: 15, monthlyRequestCap: 400 }, enabled: true, health: 'active', kind: 'public-api', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([{ bucket: 'unstop:feed', lastPage: 12 }]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, raw: [], rawPageSize: 0, attempts: 1 })
     await runSourceSyncHandler({ data: { sourceId: 'unstop' } }, step, { interRequestDelayMs: 0 })
@@ -249,7 +325,9 @@ describe('runSourceSyncHandler', () => {
   const CONTROL_REVISION = 4
   const REVISION_EVENT = { data: { sourceId: 'jsearch', controlRevision: CONTROL_REVISION } }
   const REVISION_CONFIG = {
-    sourceId: 'jsearch', enabled: true, health: 'active',
+    sourceId: 'jsearch', kind: 'aggregator-api' as const, displayName: 'JSearch',
+    requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 },
+    enabled: true, health: 'active',
     controlRevision: CONTROL_REVISION, cadenceMinutes: 1440,
   }
   const REVISION_ROW = {
@@ -269,7 +347,10 @@ describe('runSourceSyncHandler', () => {
     resetAll()
     // enabled + healthy but no adapter resolves for this kind/id
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'nope', enabled: true, health: 'active', kind: 'public-api' }) })
-    expect(await runSourceSyncHandler({ data: { sourceId: 'nope' } }, step)).toMatchObject({ skipped: true, reason: 'no adapter for nope' })
+    expect(await runSourceSyncHandler({ data: { sourceId: 'nope' } }, step)).toMatchObject({
+      skipped: true,
+      reason: 'source catalog identity unavailable',
+    })
 
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: false, health: 'active' }) })
@@ -278,6 +359,31 @@ describe('runSourceSyncHandler', () => {
     resetAll()
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'quarantined' }) })
     expect(await runSourceSyncHandler(EVENT, step)).toMatchObject({ skipped: true, reason: 'health quarantined' })
+  })
+
+  it('never egresses for a known source whose deploy-reviewed adapter identity drifted', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({
+      sourceId: 'jsearch', kind: 'public-api', enabled: true, health: 'active', cadenceMinutes: 1440,
+    }) })
+    expect(await runSourceSyncHandler(EVENT, step)).toEqual({
+      skipped: true,
+      reason: 'source catalog identity unavailable',
+    })
+    expect(mockAdapterFetch).not.toHaveBeenCalled()
+  })
+
+  it('never egresses when a persisted budget exceeds the deploy-reviewed ceiling', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({
+      ...REVISION_CONFIG,
+      requestBudget: { perRunRequestCap: 999, dailyRequestCap: 999, monthlyRequestCap: 9_999 },
+    }) })
+    expect(await runSourceSyncHandler(REVISION_EVENT, step)).toEqual({
+      skipped: true,
+      reason: 'request budget unavailable',
+    })
+    expect(mockAdapterFetch).not.toHaveBeenCalled()
   })
 
   it('fails transaction readiness before spending provider quota', async () => {
@@ -418,6 +524,9 @@ describe('runSourceSyncHandler', () => {
 
   it('runs chunks, writes cursors + cycle row, keeps health active on a clean run', async () => {
     resetAll()
+    // The adapter is mocked below, so model the durable Redis run counter
+    // separately (real adapters claim it before every physical request).
+    mockRedisGet.mockResolvedValue('43')
     mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(REVISION_CONFIG) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     // Every bucket returns one fresh row (non-full page → no pagination).
@@ -429,10 +538,15 @@ describe('runSourceSyncHandler', () => {
         job_posted_at_datetime_utc: '2026-07-12T00:00:00Z', job_apply_link: 'https://careers.acme.com/1',
       }],
     }))
-    const r = await runSourceSyncHandler(REVISION_EVENT, step, { interRequestDelayMs: 0 })
+    const operationId = 'manual-run-clean'
+    const r = await runSourceSyncHandler({
+      id: operationId,
+      data: { ...REVISION_EVENT.data, operationalRevision: 0, operationId },
+    }, step, { interRequestDelayMs: 0 })
     expect(r).toMatchObject({ cycleWritten: true })
     const cycle = mockCycleCreate.mock.calls[0][0][0]
     expect(cycle.kind).toBe('sync')
+    expect(cycle.operationId).toBe(operationId)
     expect(cycle.fetched).toBeGreaterThan(0)
     expect(cycle.quotaSpent).toBe(cycle.fetched) // 1 attempt per bucket, 1 row each
     expect(mockCursorBulkWrite).toHaveBeenCalled()
@@ -448,14 +562,49 @@ describe('runSourceSyncHandler', () => {
       controlRevision: CONTROL_REVISION,
     })
     expect(mockCycleCreate).toHaveBeenCalledWith(
-      [expect.objectContaining({ kind: 'sync', sourceId: 'jsearch' })],
+      [expect.objectContaining({ kind: 'sync', sourceId: 'jsearch', operationId })],
       { session: undefined },
+    )
+    expect(mockOperationUpdate).toHaveBeenCalledWith(
+      { operationId, action: 'run-now', outcome: { $exists: false } },
+      { $set: { outcome: 'succeeded', completedAt: expect.any(Date) } },
+    )
+  })
+
+  it('finalizes partial telemetry on quota stop without degrading provider health', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve(REVISION_CONFIG) })
+    mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockAdapterFetch.mockResolvedValue({
+      ok: false,
+      status: 0,
+      attempts: 0,
+      raw: [],
+      requestRejected: 'quota-exhausted',
+    })
+
+    const operationId = 'manual-run-quota-stop'
+    expect(await runSourceSyncHandler({
+      id: operationId,
+      data: { ...REVISION_EVENT.data, operationalRevision: 0, operationId },
+    }, step, { interRequestDelayMs: 0 }))
+      .toMatchObject({ cycleWritten: true })
+    const cycle = mockCycleCreate.mock.calls[0][0][0]
+    expect(cycle.requestStopReason).toBe('quota-exhausted')
+    expect(cycle.operationId).toBe(operationId)
+    expect(cycle.healthTransitions).toEqual([])
+    const sourceWrite = mockSourceUpdateOne.mock.calls.at(-1)![1].$set
+    expect(sourceWrite.health).toBe('active')
+    expect(sourceWrite.lastHealthyProbeAt).toBeUndefined()
+    expect(mockOperationUpdate).toHaveBeenCalledWith(
+      { operationId, action: 'run-now', outcome: { $exists: false } },
+      { $set: { outcome: 'failed', completedAt: expect.any(Date), errorCode: 'quota-exhausted' } },
     )
   })
 
   it('cursors checkpoint per chunk — durable even when the run dies before finalize (prod first-fill, 2026-07-15)', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockImplementation(async (t: { bucketId?: string }) => ({
       ok: true, status: 200, attempts: 1,
@@ -486,7 +635,7 @@ describe('runSourceSyncHandler', () => {
 
   it('a partially-fetched bucket never advances its cursor (Codex #528) — failed later pages stay in the window', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     // Page 1: FULL page (10 fresh rows) → pagination continues; page 2: 500.
     // The bucket ingested page 1 but is INCOMPLETE — advancing its cursor
@@ -520,7 +669,7 @@ describe('runSourceSyncHandler', () => {
 
   it('a windowIncomplete bucket distrusts the known-rate cutoff — the failed page is retried before the cursor moves (Codex #528 P1)', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     // Real bucket ids from the real matrix (only fetch is mocked).
     const targets = jsearchAdapter.buildTargets({ sourceId: 'jsearch', enabled: true }, [])
     const retryBucket = (targets[0] as { bucketId: string }).bucketId
@@ -581,7 +730,7 @@ describe('runSourceSyncHandler', () => {
 
   it('a first-run bucket (no cursor yet) distrusts the known-rate cutoff — a #23 renamed bucket over an existing corpus must not freeze shallow (Codex #559)', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     const targets = jsearchAdapter.buildTargets({ sourceId: 'jsearch', enabled: true }, [])
     const freshBucket = (targets[0] as { bucketId: string }).bucketId    // brand new — no cursor (the rename)
     const knownBucket = (targets[1] as { bucketId: string }).bucketId    // already has a completed cursor
@@ -628,7 +777,7 @@ describe('runSourceSyncHandler', () => {
     resetAll()
     const { logger } = await import('@shared/logger')
     vi.mocked(logger.warn).mockClear()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     // Every page is FULL (10 rows) and every row is NEW (findOne default → null)
     // → knownRate 0, no cutoff → the bucket paginates to the 4-page cap and
@@ -651,7 +800,7 @@ describe('runSourceSyncHandler', () => {
 
   it('a garbage postedAt never reaches the cursor write — finalize still succeeds', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({
       ok: true, status: 200, attempts: 1,
@@ -671,7 +820,7 @@ describe('runSourceSyncHandler', () => {
 
   it('a run with store failures never reads healthy — degraded + storeErrors persisted', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({
       ok: true, status: 200, attempts: 1,
@@ -690,7 +839,7 @@ describe('runSourceSyncHandler', () => {
 
   it('total schema drift (>50%) QUARANTINES the source — §4.4 contract', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ shape: 'drifted' }] })
     const r = await runSourceSyncHandler(EVENT, step, { interRequestDelayMs: 0 })
@@ -702,7 +851,7 @@ describe('runSourceSyncHandler', () => {
 
   it('partial schema drift (20-50%) DEGRADES the source', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     // 1 drifted row of 3 per bucket = ~33% drift: above degrade, below quarantine.
     mockAdapterFetch.mockResolvedValue({
@@ -721,7 +870,7 @@ describe('runSourceSyncHandler', () => {
 
   it('a 429 anywhere degrades the source; drift rows are counted', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', enabled: true, health: 'active', cadenceMinutes: 1440 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'jsearch', kind: 'aggregator-api', displayName: 'JSearch', requestBudget: { perRunRequestCap: 180, dailyRequestCap: 220, monthlyRequestCap: 5_000 }, enabled: true, health: 'active', cadenceMinutes: 1440 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     let first = true
     mockAdapterFetch.mockImplementation(async () => {
@@ -749,7 +898,7 @@ describe('runSourceSyncHandler', () => {
 describe('board sync uses per-config sourceId (Codex #513 P1)', () => {
   it('provenance sourceKeys carry gh:phonepe, never the adapter constant', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', displayName: 'PhonePe', requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 }, enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({
       ok: true, status: 200, attempts: 1,
@@ -784,7 +933,7 @@ function docStub(overrides: Record<string, unknown> = {}) {
 describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () => {
   it('second consecutive miss closes a board-only posting; other-source rows untouched', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', displayName: 'PhonePe', requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 }, enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] }) // clean sync, lists nothing
     const staleSolo = docStub({ boardPollMisses: 1, provenance: [{ sourceId: 'gh:phonepe', externalId: 'gone', sourceKey: 'gh:phonepe:gone', lastSeenAt: new Date() }] })
@@ -811,7 +960,7 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
 
   it('a restricted close that wins after the stale scan cannot be downgraded to a board archive', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', displayName: 'PhonePe', requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 }, enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
     const stale = docStub({ boardPollMisses: 1, provenance: [{ sourceId: 'gh:phonepe', externalId: 'gone', sourceKey: 'gh:phonepe:gone', lastSeenAt: new Date() }] })
@@ -832,7 +981,7 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
 
   it('first miss only increments; a failed fetch is NOT a miss', async () => {
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', displayName: 'PhonePe', requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 }, enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     const stale = docStub({ boardPollMisses: 0, provenance: [{ sourceId: 'gh:phonepe', externalId: 'gone', sourceKey: 'gh:phonepe:gone', lastSeenAt: new Date() }] })
     const { JobPosting } = await import('@shared/db/models')
@@ -849,7 +998,7 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
 
     // drifted run: incomplete seen-set — the sweep must not run either
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', displayName: 'PhonePe', requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 }, enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [{ kind: 'greenhouse', raw: { shape: 'drifted' } }] })
     const { JobPosting: JP } = await import('@shared/db/models')
@@ -862,7 +1011,7 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     // a SAVED (userReferenced) posting closes on the 2nd miss but must
     // NEVER get a purgeAt — the tracker keeps its _id forever (Codex #517)
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', displayName: 'PhonePe', requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 }, enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
     const pinned = docStub({ provenance: [{ sourceId: 'gh:phonepe', sourceKey: 'gh:phonepe:z9' }], boardPollMisses: 1, userReferenced: true })
@@ -879,7 +1028,7 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
     // collection existence check races a concurrent first ownership write.
     // Conservative orphan cleanup belongs in a separate reconciliation job.
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', displayName: 'PhonePe', requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 }, enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: true, status: 200, attempts: 1, raw: [] })
     const models = await import('@shared/db/models')
@@ -894,7 +1043,7 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
 
     // failed fetch: the sweep must not run at all
     resetAll()
-    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({ sourceId: 'gh:phonepe', displayName: 'PhonePe', requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 }, enabled: true, health: 'active', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe', cadenceMinutes: 360 }) })
     mockCursorFind.mockReturnValue({ lean: () => Promise.resolve([]) })
     mockAdapterFetch.mockResolvedValue({ ok: false, status: 503, attempts: 1, raw: [] })
     vi.mocked(JobPosting.find).mockClear()
@@ -903,10 +1052,81 @@ describe('board delisting closure (§4.3 board-poll-miss; Codex #513 P2)', () =>
   })
 })
 
+describe('runSourceValidationHandler', () => {
+  const validationEvent = {
+    id: 'validation-event-1',
+    data: { sourceId: 'unstop', controlRevision: 0, operationalRevision: 3, operationId: 'validation-event-1' },
+  }
+
+  it('records revision-bound healthy evidence without enabling the paused source', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({
+      sourceId: 'unstop', kind: 'public-api', displayName: 'Unstop',
+      requestBudget: { perRunRequestCap: 15, dailyRequestCap: 15, monthlyRequestCap: 400 },
+      enabled: false, health: 'active',
+      controlRevision: 0, operationalRevision: 3,
+    }) })
+    mockAdapterFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      attempts: 1,
+      raw: [{
+        id: 'u1', title: 'Backend Developer', organisation: { name: 'Acme' },
+        seo_url: 'https://unstop.com/jobs/acme-1', details: 'Build APIs. '.repeat(50),
+        start_date: '2026-07-12T00:00:00Z', regn_open: true,
+      }],
+    })
+    expect(await runSourceValidationHandler(validationEvent, step)).toEqual({
+      validated: true,
+      status: 'healthy',
+      usablePostings: 1,
+    })
+    expect(mockCompleteSourceValidation).toHaveBeenCalledWith(
+      'unstop',
+      0,
+      3,
+      'validation-event-1',
+      expect.objectContaining({ status: 'healthy', usablePostings: 1 }),
+    )
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+    expect(mockAssertSourceValidationAuthority).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not egress when the paused row drifts from catalog identity', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({
+      sourceId: 'unstop', kind: 'ats-board', enabled: false, health: 'active',
+      controlRevision: 0, operationalRevision: 3,
+    }) })
+    expect(await runSourceValidationHandler(validationEvent, step)).toEqual({
+      skipped: true,
+      reason: 'source adapter unavailable',
+    })
+    expect(mockAdapterFetch).not.toHaveBeenCalled()
+    expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('does not fetch when runtime topology/index/quota readiness is lost after dispatch', async () => {
+    resetAll()
+    mockSourceFindOne.mockReturnValue({ lean: () => Promise.resolve({
+      sourceId: 'unstop', kind: 'public-api', displayName: 'Unstop',
+      requestBudget: { perRunRequestCap: 15, dailyRequestCap: 15, monthlyRequestCap: 400 },
+      enabled: false, health: 'active', controlRevision: 0, operationalRevision: 3,
+    }) })
+    mockSourceWorkerReadiness.mockRejectedValue(new Error('runtime readiness unavailable'))
+
+    await expect(runSourceValidationHandler(validationEvent, step)).rejects.toThrow('runtime readiness unavailable')
+    expect(mockAdapterFetch).not.toHaveBeenCalled()
+    expect(mockCompleteSourceValidation).not.toHaveBeenCalled()
+  })
+})
+
 describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
   function boardRow(overrides: Record<string, unknown> = {}) {
     return {
       sourceId: 'gh:phonepe', kind: 'ats-board', atsKind: 'greenhouse', slug: 'phonepe',
+      displayName: 'PhonePe',
+      requestBudget: { perRunRequestCap: 12, dailyRequestCap: 50, monthlyRequestCap: 1_500 },
       enabled: true, health: 'active', minIndiaPostings: 10, emptyStreak: 0, healthyProbeStreak: 0,
       ...overrides,
     }
@@ -929,7 +1149,7 @@ describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
 
     const result = await runBoardProbeHandler(step)
 
-    expect(result).toEqual({ probed: 1 })
+    expect(result).toEqual({ probed: 0 })
     expect(mockAssertSourceProbeAuthority).toHaveBeenCalledWith('gh:phonepe', 5)
     expect(mockAdapterFetch).not.toHaveBeenCalled()
     expect(mockSourceUpdateOne).not.toHaveBeenCalled()
@@ -952,9 +1172,32 @@ describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
 
     const result = await runBoardProbeHandler(step)
 
-    expect(result).toEqual({ probed: 1 })
+    expect(result).toEqual({ probed: 0 })
     expect(mockAssertSourceProbeAuthority).toHaveBeenCalledTimes(2)
     expect(mockSourceUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('skips one source readiness failure without starving later boards', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({ lean: () => Promise.resolve([
+      boardRow(),
+      boardRow({
+        sourceId: 'gh:postman', slug: 'postman', displayName: 'Postman', minIndiaPostings: 5,
+      }),
+    ]) })
+    mockSourceWorkerReadiness
+      .mockRejectedValueOnce(new SourceOperationError('quota state malformed'))
+      .mockResolvedValueOnce(undefined)
+    mockAdapterFetch.mockResolvedValue({ ok: false, status: 404, attempts: 1, raw: [] })
+
+    const result = await runBoardProbeHandler(step)
+
+    expect(result).toEqual({ probed: 1 })
+    expect(mockAdapterFetch).toHaveBeenCalledOnce()
+    expect(mockSourceUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceId: 'gh:postman' }),
+      expect.anything(),
+    )
   })
 
   it('binds a probe health write to the exact loaded revision and lifecycle state', async () => {
@@ -973,6 +1216,7 @@ describe('runBoardProbeHandler (weekly liveness, §4.4)', () => {
       enabled: true,
       health: 'active',
       controlRevision: 5,
+      $and: [{ $or: [{ operationalRevision: 0 }, { operationalRevision: { $exists: false } }] }],
     })
     expect(mockSourceUpdateOne.mock.calls[0][1].$set).toMatchObject({
       health: 'quarantined',

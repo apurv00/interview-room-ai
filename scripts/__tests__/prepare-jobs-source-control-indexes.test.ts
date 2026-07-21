@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   configIndexes: vi.fn(),
   auditCreateIndex: vi.fn(),
   auditIndexes: vi.fn(),
+  operationAuditCreateIndex: vi.fn(),
+  operationAuditIndexes: vi.fn(),
 }))
 
 vi.mock('../../shared/db/connection', () => ({ connectDB: mocks.connectDB }))
@@ -20,6 +22,9 @@ vi.mock('../../shared/db/models', () => ({
   },
   JobSourceControlAudit: {
     collection: { createIndex: mocks.auditCreateIndex, indexes: mocks.auditIndexes },
+  },
+  JobSourceOperationAudit: {
+    collection: { createIndex: mocks.operationAuditCreateIndex, indexes: mocks.operationAuditIndexes },
   },
 }))
 
@@ -39,6 +44,9 @@ describe('Jobs source-control index preparation', () => {
     mocks.postingCreateIndex
       .mockResolvedValueOnce('sourceIds_1')
       .mockResolvedValueOnce('provenance.sourceId_1')
+    mocks.operationAuditCreateIndex
+      .mockResolvedValueOnce('operationId_1')
+      .mockResolvedValueOnce('sourceId_1_occurredAt_-1')
     mocks.configIndexes.mockResolvedValue([
       { name: 'sourceId_1', key: { sourceId: 1 }, unique: true },
     ])
@@ -49,6 +57,10 @@ describe('Jobs source-control index preparation', () => {
     mocks.postingIndexes.mockResolvedValue([
       { name: 'sourceIds_1', key: { sourceIds: 1 } },
       { name: 'provenance.sourceId_1', key: { 'provenance.sourceId': 1 } },
+    ])
+    mocks.operationAuditIndexes.mockResolvedValue([
+      { name: 'operationId_1', key: { operationId: 1 }, unique: true },
+      { name: 'sourceId_1_occurredAt_-1', key: { sourceId: 1, occurredAt: -1 } },
     ])
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
   })
@@ -72,9 +84,10 @@ describe('Jobs source-control index preparation', () => {
     expect(mocks.postingCreateIndex).not.toHaveBeenCalled()
     expect(mocks.configCreateIndex).not.toHaveBeenCalled()
     expect(mocks.auditCreateIndex).not.toHaveBeenCalled()
+    expect(mocks.operationAuditCreateIndex).not.toHaveBeenCalled()
   })
 
-  it('creates only the five enumerated indexes with schema automation disabled', async () => {
+  it('creates only the seven enumerated indexes with schema automation disabled', async () => {
     await prepareJobsSourceControlIndexes(['--apply'])
 
     expect(mocks.connectDB).toHaveBeenCalledWith({ schemaInitialization: 'disabled' })
@@ -91,6 +104,16 @@ describe('Jobs source-control index preparation', () => {
       2,
       { sourceId: 1, revision: 1 },
       { name: 'sourceId_1_revision_1', unique: true },
+    )
+    expect(mocks.operationAuditCreateIndex).toHaveBeenNthCalledWith(
+      1,
+      { operationId: 1 },
+      { name: 'operationId_1', unique: true },
+    )
+    expect(mocks.operationAuditCreateIndex).toHaveBeenNthCalledWith(
+      2,
+      { sourceId: 1, occurredAt: -1 },
+      { name: 'sourceId_1_occurredAt_-1' },
     )
     expect(mocks.postingCreateIndex).toHaveBeenNthCalledWith(
       1,
@@ -163,6 +186,18 @@ describe('Jobs source-control index preparation', () => {
 
     await expect(prepareJobsSourceControlIndexes(['--apply'])).rejects.toThrow(
       'source-control audit collection has a TTL index',
+    )
+  })
+
+  it('rejects any TTL on permanent source-operation audit evidence', async () => {
+    mocks.operationAuditIndexes.mockResolvedValue([
+      { name: 'operationId_1', key: { operationId: 1 }, unique: true },
+      { name: 'sourceId_1_occurredAt_-1', key: { sourceId: 1, occurredAt: -1 } },
+      { name: 'createdAt_1', key: { createdAt: 1 }, expireAfterSeconds: 86_400 },
+    ])
+
+    await expect(prepareJobsSourceControlIndexes(['--apply'])).rejects.toThrow(
+      'source-operation audit collection has a TTL index',
     )
   })
 })

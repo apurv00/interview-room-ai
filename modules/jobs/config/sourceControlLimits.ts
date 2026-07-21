@@ -13,6 +13,8 @@ export const JOB_SOURCE_CONTROL_INDEX_NAMES = {
   sourceConfigSourceId: 'sourceId_1',
   auditOperationId: 'operationId_1',
   auditSourceRevision: 'sourceId_1_revision_1',
+  operationAuditOperationId: 'operationId_1',
+  operationAuditSourceOccurredAt: 'sourceId_1_occurredAt_-1',
   postingSourceIds: 'sourceIds_1',
   postingProvenanceSourceId: 'provenance.sourceId_1',
 } as const

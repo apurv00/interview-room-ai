@@ -68,6 +68,20 @@ export type InngestEvents = {
       /** A02 authority epoch: a queued event can never cross a later legal
        *  revoke/restore transition. */
       controlRevision: number
+      /** A08 operational epoch: queued syncs cannot cross pause/settings or
+       * enable transitions even when legal authority is unchanged. */
+      operationalRevision: number
+      /** Present for audited manual runs; the Inngest event id remains the
+       * stable per-run quota identity for scheduled and manual dispatches. */
+      operationId?: string
+    }
+  }
+  'jobs/source.validate': {
+    data: {
+      sourceId: string
+      controlRevision: number
+      operationalRevision: number
+      operationId: string
     }
   }
   // Jobs LLM verdict (Wave 2.3, §4.5): ids only, ≤40 per event.

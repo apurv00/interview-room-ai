@@ -16,6 +16,7 @@ import {
   JobSourceConfig,
   JobSourceControlAudit,
   JobSourceControlMeta,
+  JobSourceOperationAudit,
   JOB_SOURCE_CONTROL_META_ID,
 } from '../shared/db/models'
 import {
@@ -291,6 +292,33 @@ async function main(): Promise<void> {
   console.log(`Unique audit source/revision index: ${auditRevisionIndex ? 'present' : 'MISSING'}`)
   console.log(`Audit TTL indexes: ${auditHasTtlIndex ? 'PRESENT (INVALID)' : 'none'}`)
 
+  let operationAuditIdIndex = false
+  let operationAuditTimelineIndex = false
+  let operationAuditHasTtlIndex = false
+  try {
+    const operationIndexes = await JobSourceOperationAudit.collection.indexes()
+    operationAuditIdIndex = hasSingleSafeNamedIndex(
+      operationIndexes,
+      [['operationId', 1]],
+      true,
+      JOB_SOURCE_CONTROL_INDEX_NAMES.operationAuditOperationId,
+    )
+    operationAuditTimelineIndex = hasSingleSafeNamedIndex(
+      operationIndexes,
+      [['sourceId', 1], ['occurredAt', -1]],
+      false,
+      JOB_SOURCE_CONTROL_INDEX_NAMES.operationAuditSourceOccurredAt,
+    )
+    operationAuditHasTtlIndex = operationIndexes.some((index) => (
+      typeof (index as { expireAfterSeconds?: unknown }).expireAfterSeconds === 'number'
+    ))
+  } catch (error) {
+    if ((error as { codeName?: string }).codeName !== 'NamespaceNotFound') throw error
+  }
+  console.log(`Unique operation-audit command index: ${operationAuditIdIndex ? 'present' : 'MISSING'}`)
+  console.log(`Operation-audit source timeline index: ${operationAuditTimelineIndex ? 'present' : 'MISSING'}`)
+  console.log(`Operation-audit TTL indexes: ${operationAuditHasTtlIndex ? 'PRESENT (INVALID)' : 'none'}`)
+
   let sourceConfigIdentityIndex = false
   try {
     const configIndexes = await JobSourceConfig.collection.indexes()
@@ -556,6 +584,9 @@ async function main(): Promise<void> {
     !auditOperationIndex ||
     !auditRevisionIndex ||
     auditHasTtlIndex ||
+    !operationAuditIdIndex ||
+    !operationAuditTimelineIndex ||
+    operationAuditHasTtlIndex ||
     !sourceConfigIdentityIndex ||
     retainedPostings > JOB_SOURCE_CONTROL_MAX_POSTINGS ||
     missingLineage > 0 ||

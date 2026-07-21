@@ -19,15 +19,32 @@ same posting rows and retained-corpus counter cross both policies.
   point-in-time target instead of assuming post-snapshot writes can be replayed
   manually. Old workers may lack the A02 authority fence or may still write
   historical TTL values.
-- Index preparation uses only the five enumerated `createIndex` calls. Never
+- Index preparation uses only the seven enumerated `createIndex` calls: five
+  legal/lineage indexes and two permanent operational-audit indexes. Never
   use `syncIndexes`, `dropIndex`, or `dropIndexes` during this rollout. A
   key-identical partial, sparse, hidden, TTL, collated, or otherwise duplicate
   index is unsafe and fails verification. Runtime legal queries hint the one
-  verified stable index name, never an ambiguous key pattern. The names are
-  `sourceId_1`, `operationId_1`, `sourceId_1_revision_1`, `sourceIds_1`, and
-  `provenance.sourceId_1`; changing one is a coordinated code, preparation,
-  gate, and rollout change.
-- `JobSourceControlAudit` is permanent. Any TTL index on it blocks promotion.
+  verified stable index name, never an ambiguous key pattern. The exact
+  collection/name/key contract is:
+
+  | Collection | Index name | Key | Purpose |
+  | --- | --- | --- | --- |
+  | `jobsourceconfigs` | `sourceId_1` | `{sourceId:1}` unique | One config/authority epoch per reviewed source. |
+  | `jobsourcecontrolaudits` | `operationId_1` | `{operationId:1}` unique | Idempotent legal commands. |
+  | `jobsourcecontrolaudits` | `sourceId_1_revision_1` | `{sourceId:1,revision:1}` unique | One legal record per source revision. |
+  | `jobpostings` | `sourceIds_1` | `{sourceIds:1}` | Durable legal-lineage lookup. |
+  | `jobpostings` | `provenance.sourceId_1` | `{'provenance.sourceId':1}` | Legacy-lineage and lifecycle lookup. |
+  | `jobsourceoperationaudits` | `operationId_1` | `{operationId:1}` unique | Idempotent operational commands. |
+  | `jobsourceoperationaudits` | `sourceId_1_occurredAt_-1` | `{sourceId:1,occurredAt:-1}` | Permanent per-source operations timeline. |
+
+  The duplicate `operationId_1` name is intentional because it belongs to two
+  different collections. Changing any name, key, or option is a coordinated
+  code, preparation, gate, permission, and rollout change.
+- `JobSourceControlAudit` and `JobSourceOperationAudit` are permanent. Any TTL
+  index on either collection blocks promotion. An operational audit is not an
+  immutable/append-only row: command evidence is committed once, then
+  `dispatchedAt` and terminal `outcome`/`completedAt`/`errorCode` are written as
+  one-way markers. Neither history may be deleted or expired.
 - `JobPosting.purgeAt` has exactly one whole-collection, non-unique absolute
   TTL index. The model never auto-creates it. Clear all historical `purgeAt`
   values and verify owner pins before first activation; index preparation
@@ -45,6 +62,173 @@ same posting rows and retained-corpus counter cross both policies.
   checks.
 - A `restore` records legal clearance only. It keeps the source disabled and
   quarantined, clears cursors for later cold validation, and reopens no job.
+
+## A08 CMS source-operations workflow
+
+`/cms/jobs-ingest` is the standard operator surface. Use it for bootstrap,
+deployment/runtime status, settings, credentials-by-status, budgets, cold validation, manual
+dispatch, pause/enable, and legal revoke/restore. It is platform-admin only;
+every accepted command is idempotent, every source-specific command binds the
+expected legal **and** operational revisions, and every mutation creates
+permanent operator evidence. Never update
+`JobSourceConfig`, `JobSourceControlAudit`, or `JobSourceOperationAudit`
+directly.
+
+### Bootstrap and normal activation
+
+1. Satisfy the database/index promotion gates in this runbook and configure
+   Inngest, Redis, and required provider secrets in the deployed environment.
+   The CMS shows configuration/health indicators and credential **status**,
+   never secret values. An Inngest indicator proves only that the event and
+   signing variables are present; it is not worker-registration or event-delivery
+   evidence. Complete the deployment smoke below before calling workers ready.
+2. If the dashboard reports an uninitialized or incomplete catalog, choose
+   **Initialize sources** once. Bootstrap creates only missing entries from the
+   deploy-reviewed `JOB_SOURCE_CATALOG`. Every created entry is disabled and
+   appears paused; bootstrap does not dispatch ingestion and cannot invent an
+   adapter, endpoint, source ID, or credential name. It may safely initialize an
+   empty database or complete a catalog whose existing rows match reviewed
+   routing identity; reviewed display labels and safe catalog-default budgets
+   can be repaired from code. Unknown sources or drift in `kind`/`atsKind`/
+   `slug`, existing Jobs data without the lineage metadata, a revoked epoch
+   without legal evidence, or an explicitly malformed/negative operational
+   revision require the protected migration; Bootstrap must not guess or coerce
+   them. A missing legacy operational revision may be initialized to epoch zero.
+   If bootstrap encounters an enabled legacy source without current permanent
+   operational authorization, it adopts that row by recording an audited Pause;
+   the source stays off until the operator completes Validate → Enable.
+3. Review each source's cadence, per-run/daily/monthly request caps,
+   India-supply floor, LLM opt-out, and credential state. Save a bounded
+   settings change with a non-sensitive reason. Saving settings on an active
+   source also pauses it. The operational revision advances and old validation
+   evidence is cleared, so every settings change requires Validate → Enable.
+4. Choose **Validate**. This is a cold provider/credential check at the current
+   legal and operational revisions: it may spend bounded request quota but
+   stores and reopens no posting. “Queued” is not “passed”. Use **Refresh
+   state** until the matching operation ID shows a terminal succeeded/failed
+   marker and the source shows the corresponding validation result; do not mint
+   a new operation ID merely because delivery is still pending.
+5. Enable only after current-revision validation passes and all blockers are
+   clear. Then use **Run now** if an immediate first sync is needed. Run now
+   only queues work and never bypasses credential, revision, health, quota,
+   transaction, or retained-corpus gates. Refresh until the matching command
+   reaches a terminal outcome, then confirm its resulting sync cycle and audit
+   evidence in CMS.
+
+The operator-facing states have distinct meanings:
+
+| State | Meaning and safe next action |
+| --- | --- |
+| `paused` | Operationally disabled; no new source sync writes. Existing postings stay available. Validate, then Enable when intended. |
+| `validating` | Cold validation is pending; it is not permission to ingest. Refresh until the matching operation reaches a terminal outcome. |
+| `active` | Scheduled/manual sync may run within all hard gates and request caps. |
+| `quarantined` | Health or restored-legal state blocks ingestion. Diagnose, repair credentials/settings/provider behavior, then Validate. |
+| `dead` | Provider/board health has failed terminal thresholds. Keep disabled and investigate before any recovery workflow. |
+| `revoked` | Legal authority is withdrawn; ingestion is disabled and every row carrying the source lineage is restricted. Only an approved legal Restore may advance this state. |
+
+### Pause is not revoke
+
+| Operator intent | Action | Existing corpus | Recovery |
+| --- | --- | --- | --- |
+| Maintenance, cost control, bad settings, provider incident, or temporary credential work | **Pause** | Unchanged; already-served postings remain governed by normal lifecycle. | Repair/configure → Validate → Enable. |
+| Legal objection, ToS withdrawal, source authority loss, or a requirement to stop serving source-derived rows | **Revoke** | All matching canonical rows become restricted `source-revoked`; no TTL deletion is implied. | Legal approval → Restore → Validate → Enable. Existing restricted rows do not reopen. |
+
+Pause increments the operational epoch so queued/stale work fails its fence,
+but it does not make a legal claim and must never be used as a substitute for
+Revoke. Revoke increments the independent legal authority revision and requires
+typed source confirmation plus a non-sensitive case reference.
+
+### Restore, credentials, and quota operations
+
+Restore means “legal clearance recorded,” not “source trusted and running.”
+After Restore, verify the source is disabled and quarantined and the historical
+corpus remains restricted. Repair credentials/settings, run a cold Validate at
+the current revisions, inspect the completed result, and only then Enable.
+Skipping directly from Restore to Enable is a control failure.
+
+Provider credentials are deployment secrets. For the current catalog,
+`RAPIDAPI_KEY` is required by JSearch; sources without a declared credential
+show “not required.” Provision or rotate secrets through the deployment secret
+manager, restart/redeploy the affected workers, refresh CMS, and Validate. A
+historical rejected/failed result does not prevent revalidation after rotation;
+the current secret presence plus a new current-revision provider check decides
+the new result. Because validation is paused-only, rotate an active source by
+Pause → rotate/redeploy → Validate → Enable. Never paste a
+secret into CMS notes, command reasons, tickets, shell history, or audit
+evidence. `missing`, `invalid`, and `unknown` are blockers to enablement, not
+prompts to store the value in Mongo.
+
+Per-run, UTC-day, and UTC-month request caps are atomic Redis hard controls and
+count physical attempts, including retries. There is no 80%-cadence or
+95%-source-stop policy: a warning is observability only, while an exact cap
+rejects the next physical request. Run now and validation obey the same claim
+path. A cap change requires a reason, pauses an active source, advances the
+operational revision, invalidates older validation, and must be followed by
+Validate → Enable. Staging and production require a shared reachable Redis
+(`REDIS_URL`) so meters are consistent across processes and retries; missing,
+malformed, exhausted, or unavailable meter state fails closed.
+The quota store is authority data, not a disposable cache: deploy Redis with
+durable persistence/replication, a persistent volume, and a no-eviction policy
+for these keys. A restart, failover, restore, flush, or eviction that loses a
+current run/day/month counter can reset usage and invalidate the hard-cap
+claim; keep sources paused until counter continuity is proven or the affected
+windows expire.
+
+### Raw API break-glass rule
+
+Routine operators use CMS. Direct calls to
+`POST /api/cms/jobs-ingest/sources` or
+`POST /api/jobs/admin/source-control`, and the compatibility
+`POST /api/jobs/admin/sync` route are reserved for this runbook's automated
+promotion/adoption steps or an incident where CMS is unavailable and the
+incident/change owner authorizes break-glass use. Record the exact endpoint,
+actor, source, both expected revisions where operational work is involved, UUID
+idempotency key, byte-identical payload, response, and resulting CMS audit row.
+The compatibility sync route delegates to the same audited Run-now command; it
+is not an authority bypass. Retry an ambiguous timeout with the same key and
+payload; on a revision conflict, refresh authority and reassess rather than
+editing Mongo or guessing a revision. Never use raw API access to bypass a CMS
+blocker, validation, credential status, quota cap, or typed legal confirmation.
+
+## A08 staging and production activation gates
+
+These gates are mandatory before enabling any source in either environment:
+
+1. **Transactional database:** the deployed Mongo target must report a replica
+   set or sharded topology, the seven exact indexes must pass, and lineage/meta
+   counters must match the physical corpus. A standalone `mongod` is not a
+   degraded mode; source operations and ingestion remain blocked.
+2. **Shared request meter:** `REDIS_URL` must resolve to the shared deployed
+   Redis and a real read/atomic-claim smoke must pass. Verify persistent
+   storage, restart/failover continuity, and a no-eviction policy for quota
+   keys; environment-variable presence or a successful `PING` alone is not
+   sufficient.
+3. **Inngest registration and delivery:** `INNGEST_EVENT_KEY` and
+   `INNGEST_SIGNING_KEY` prove configuration only. In the deployed Inngest
+   environment, verify `/api/inngest` registration lists both
+   `jobs-source-validate` (`jobs/source.validate`) and `jobs-source-sync`
+   (`jobs/source.sync`). From CMS, Validate a paused canary and match its
+   operation ID to a terminal validation run; after every other gate passes,
+   Enable it, choose Run now, and match that operation ID to a terminal sync
+   run plus `JobIngestCycle`. A queued event, successful send response, or
+   registered function without delivered work does not satisfy this gate.
+4. **Provider-egress verification:** ingestion now uses the shared HTTPS-only
+   provider transport, which resolves once, rejects any private/mixed/malformed
+   answer set, pins Host/SNI/certificate-checked sockets to vetted answers,
+   verifies the connected remote address, keeps redirects terminal, bounds DNS,
+   connection/response time, response bytes, and address attempts, and makes a
+   Redis quota/authority claim immediately before every physical socket. Before
+   source activation, retain evidence from the deployed staging **and**
+   production environments against controlled endpoints for DNS-answer change,
+   direct private/mixed answers, redirect-to-private (with credential headers
+   proven not forwarded), timeout/body/address-attempt limits, and per-run/day/
+   month cap exhaustion. Unit tests and the separate link-check transport smoke
+   are necessary but do not replace this deployment evidence. Unknown or failed
+   evidence blocks enablement.
+
+Keep all sources paused if any gate is unknown or failed. The CMS runtime cards
+are useful status inputs, not a replacement for the registration, delivery, or
+egress evidence above.
 
 ## Tracker-status sweep cursor
 
@@ -166,8 +350,8 @@ The staging database role needs only:
 - `find` on `__deployment_environment_identity` (the promotion command never
   writes this marker);
 - `find`, `aggregate`, and `listIndexes` on the Jobs application collections;
-- `createIndex` on `jobpostings`, `jobsourceconfigs`, and
-  `jobsourcecontrolaudits`;
+- `createIndex` on `jobpostings`, `jobsourceconfigs`,
+  `jobsourcecontrolaudits`, and `jobsourceoperationaudits`;
 - `find`/`distinct` on `jobapplications`, plus `find` and `update` on
   `jobpostings`, for the retention repair and lifecycle sweep;
 - create/index/read/write/drop rights in the staging database for UUID-named
@@ -178,10 +362,28 @@ Scope those rights to the staging database. The promotion workflow exposes the
 secret only to database steps, never checkout, dependency installation, or
 package lifecycle scripts.
 
-Production application credentials are part of the trust boundary: deny
-delete/update on `jobsourcecontrolaudits` to routine application/analyst roles
-where Atlas role separation permits it. “Append-only” is enforced by code and
-least privilege, not by MongoDB collection immutability.
+Staging and production application credentials are part of the trust boundary.
+The Jobs service needs `find`/`insert` on `jobsourcecontrolaudits`, but no
+update/delete; it needs `find`/`insert` plus bounded update capability on
+`jobsourceoperationaudits` because dispatch and terminal markers are written
+after the command transaction, but no delete or TTL-index capability. It also
+needs the existing bounded `find`/`insert`/`update` rights on
+`jobsourceconfigs` and affected Jobs collections. Analyst/read-only identities
+must not mutate either audit collection. Mongo roles are normally
+collection-scoped rather than field-scoped, so one-way operational-marker
+semantics are enforced by conditional application updates and tests while
+least privilege prevents deletion; do not describe that collection as
+immutable or append-only.
+
+CMS Bootstrap explicitly calls the same seven non-dropping `createIndex`
+operations before its logical transaction. If Bootstrap is required, use an
+approved temporary deployment identity/grant with `createIndex` on exactly
+`jobpostings`, `jobsourceconfigs`, `jobsourcecontrolaudits`, and
+`jobsourceoperationaudits`; remove that grant after Bootstrap and the read-only
+index check pass. Never grant `dropIndex`/`dropIndexes` to make Bootstrap work.
+If the application identity has no approved index grant, prepare the indexes
+with the operator command first; Bootstrap must fail rather than weaken the
+contract.
 
 The deployed application Mongo identity also needs `find`, `insert`, `update`,
 and `remove` on `jobs_tracker_status_sweep_cursors`. If collection-scoped
@@ -283,8 +485,10 @@ cleanup permissions before enabling the cron:
    decision: it advances the epoch, re-closes the corpus, and creates permanent
    audit evidence.
 
-   The CMS Sources table shows the current authority revision. Submit from an
-   authenticated platform-admin session; replace the placeholders but reuse
+   This migration adoption is an approved raw-API exception under the A08
+   break-glass rule above. The CMS Sources table shows the current authority
+   revision. Submit from an authenticated platform-admin session; replace the
+   placeholders but reuse
    the **same** key and byte-for-byte payload after an ambiguous timeout:
 
    ```bash
@@ -316,12 +520,28 @@ cleanup permissions before enabling the cron:
    dry-run to report zero pending mutations. Lifecycle runs last because Mongo
    may asynchronously delete past-due archives and leave the serialized
    admission counter safely stale-high until the next source preflight.
-7. Re-enable dispatch only after the verify phase is green. After TTL deletion
+7. Keep dispatch paused after the verify phase turns green. After TTL deletion
    metrics and the physical posting count are stable across two TTL-monitor
    intervals, run one serialized source preflight to reconcile the safely
    stale-high admission counter, then immediately re-run
    `check:jobs-retention`, `check:jobs-source-lineage`,
    `check:jobs-source-control`, and `check:jobs-retention-sweep`.
+8. Open `/cms/jobs-ingest` and use **Initialize sources** if the reviewed
+   catalog is empty or incomplete. Confirm every new entry is paused. If
+   bootstrap adopts an enabled source that lacks current operational audit
+   authority, confirm its generated Pause evidence and leave it paused. An
+   unknown/routing-drift row, protected-migration blocker, or invalid revision
+   is not CMS-repairable; stop and use the approved migration path. Apply any
+   settings while sources remain paused.
+9. Execute all four [A08 activation gates](#a08-staging-and-production-activation-gates).
+   Retain the deployed pinned-provider egress results before allowing provider
+   validation. Then use one paused canary for the Inngest Validate-delivery
+   smoke, followed by Enable → Run now for the sync-delivery smoke. Refresh
+   CMS until both operation IDs have terminal outcomes; retain the Inngest run
+   links and resulting validation/cycle IDs.
+10. Re-enable scheduled dispatch only after every gate and canary is green.
+    Within five minutes, confirm revoked sources have no normally accessible
+    postings and no stale legal or operational revision is succeeding.
 
 The smoke is a raw Mongo-driver proof of the target Atlas topology and tier. It
 uses isolated UUID collections to exercise page-first/revoke-first commit
@@ -421,11 +641,21 @@ record.
 
 10. After physical count and TTL-deletion metrics stabilize across two monitor
     intervals, run one source preflight and `check:jobs-source-control` to
-    reconcile the safely stale-high admission counter. Then leave maintenance,
-    re-enable scheduled dispatch, and verify one deliberately triggered healthy
-   source sync completes at its current revision. Within five minutes, confirm
-   revoked sources have no normally accessible postings and no stale-revision
-   sync is succeeding.
+    reconcile the safely stale-high admission counter. Keep maintenance and
+    dispatch pauses in place.
+11. In CMS, initialize an empty/incomplete safe catalog, confirm all inserted or
+    adopted legacy sources are paused, and make any settings changes. Bootstrap
+    is not permission to repair unknown identities, protected-migration state,
+    or malformed revisions; stop on any such blocker.
+12. Execute all four [A08 activation gates](#a08-staging-and-production-activation-gates)
+    with production evidence, including the pinned-provider transport smoke.
+    Then prove actual Inngest delivery with a paused canary Validate, followed
+    by Enable → Run now; refresh CMS until both matching operation IDs are
+    terminal and retain their run/validation/cycle evidence.
+13. Leave maintenance and re-enable scheduled dispatch only after every gate is
+    green. Within five minutes, confirm revoked sources have no normally
+    accessible postings and no sync at a stale legal or operational revision is
+    succeeding.
 
 If any step fails, leave both dispatch channels paused. Index preparation is
 intentionally non-dropping, so do not improvise with `dropIndex` or rewrite TTL
@@ -457,11 +687,28 @@ transaction. A revoke can still commit in the micro-gap after the last primary
 read but before a job board, model, email provider, or browser response accepts
 the request; an accepted request cannot be recalled. The five-minute SLA means
 all **server requests whose final authority read begins after the revoke
-commit** fail closed. It cannot retract a JD/apply URL already rendered in an
-open browser tab or content already accepted by a provider. Active-tab
-invalidation and server-mediated apply redirects are explicit A08 follow-ups.
-Eliminating the provider gap requires a future source-scoped egress lease that
-every external call acquires and revocation can synchronously drain.
+commit** fail closed.
+
+A08 closes the controllable browser gap. Apply and View Source open only the
+authenticated, identity-rate-limited
+`GET /api/jobs/{postingId}/open?optionId={opaqueId}` boundary. It reads the live
+posting explicitly from the Mongo primary, resolves the current safe canonical
+option, and brackets that resolution with active-account reads immediately
+before returning a private/no-store redirect. A revoked posting, replaced
+option, inactive account, malformed identity, or internal failure returns a
+generic response with no destination URL. The server mediates authorization and
+never exposes a destination through its JSON/error contract; the candidate's
+browser still performs the external destination's final DNS/connect and cannot
+inherit the liveness worker's pin. Apply-click telemetry and the return sheet
+remain separate from navigation authority. A visible Jobs detail tab
+revalidates on visibility return and on a four-minute interval, so a committed
+revoke removes its stale Apply/View Source controls within the five-minute SLA
+even if the tab never backgrounds.
+
+This still cannot retract content accepted by a model/email provider or close
+an external board page that already opened. Eliminating the final provider
+read→send micro-gap requires a future source-scoped egress lease that every
+external call acquires and revocation can synchronously drain.
 
 ## Legal restore procedure
 
@@ -470,5 +717,5 @@ source. Use its current revision and a new UUID idempotency key. Success means
 the clearance was recorded and the authority epoch advanced; it does **not**
 mean ingestion resumed. Verify the source remains `enabled:false`,
 `health:'quarantined'`, and that previously restricted postings remain closed.
-Cold validation and any later enable decision are separate A08-controlled
-actions.
+Cold validation and the later explicit Enable are separate A08 CMS actions.
+Use the ordered Restore → Validate → Enable procedure above.

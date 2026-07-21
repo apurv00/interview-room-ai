@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
 import { z } from 'zod'
-import { authOptions } from '@shared/auth/authOptions'
-import { connectDB } from '@shared/db/connection'
-import { User } from '@shared/db/models'
 import { logger } from '@shared/logger'
+import { requireCurrentPlatformAdmin } from '@jobs/services/adminAuth'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
 import {
   controlJobSource,
@@ -27,7 +24,6 @@ const bodySchema = z.object({
 }).strict()
 
 const operationIdSchema = z.string().uuid()
-const actorIdSchema = z.string().regex(/^[a-f\d]{24}$/i)
 
 /**
  * POST /api/jobs/admin/source-control
@@ -38,36 +34,30 @@ const actorIdSchema = z.string().regex(/^[a-f\d]{24}$/i)
  */
 export async function POST(req: Request) {
   const startedAt = Date.now()
-  const session = await getServerSession(authOptions)
-  if (!session?.user) {
-    return NextResponse.json({ error: 'platform_admin required' }, { status: 401 })
-  }
-
-  const actorUserId = (session.user as { id?: string }).id
-  if (!actorUserId || !actorIdSchema.safeParse(actorUserId).success) {
-    return NextResponse.json({ error: 'platform_admin required' }, { status: 403 })
-  }
-  const rateLimitBlock = await checkJobsRateLimit(actorUserId, 'admin-command')
-  if (rateLimitBlock) return rateLimitBlock
-
-  let currentAdmin: unknown
-  try {
-    await connectDB()
-    currentAdmin = await User.findOne({ _id: actorUserId, role: 'platform_admin' }).select('_id').lean()
-  } catch (error) {
-    logger.error({
-      error,
-      actorUserId,
-      durationMs: Date.now() - startedAt,
-    }, 'jobs source-control authorization lookup failed')
+  const authorization = await requireCurrentPlatformAdmin({
+    beforeAuthorityLookup: async (actorUserId) => {
+      const limited = await checkJobsRateLimit(actorUserId, 'admin-command')
+      return limited
+    },
+  })
+  if (!authorization.ok) {
+    if (authorization.response) return authorization.response
+    if (authorization.cause) {
+      logger.error({
+        error: authorization.cause,
+        actorUserId: authorization.actorUserId,
+        durationMs: Date.now() - startedAt,
+      }, 'jobs source-control authorization lookup failed')
+    }
     return NextResponse.json({
-      error: 'source-control authorization unavailable',
-      code: 'AUTHORITY_UNAVAILABLE',
-    }, { status: 503 })
+      error: authorization.status === 503
+        ? 'source-control authorization unavailable'
+        : authorization.error,
+      ...(authorization.status === 503 ? { code: authorization.code } : {}),
+    }, { status: authorization.status })
   }
-  if (!currentAdmin) {
-    return NextResponse.json({ error: 'platform_admin required' }, { status: 403 })
-  }
+
+  const actorUserId = authorization.actorUserId
 
   let input: unknown
   try {

@@ -1,4 +1,5 @@
 import { classifyApplyUrl } from '../services/qualityGate'
+import { pinnedHttpRequest } from '@shared/pinnedHttpClient'
 import type { AdapterFetchOptions, BeforePhysicalRequest, FetchResult, FetchTarget, JobSourceAdapter, NormalizedJob } from './types'
 
 /**
@@ -34,26 +35,79 @@ const JD_FLOOR_CHARS = 400
 const MAX_DETAILS_PER_TARGET = 12
 const DETAIL_TIMEOUT_MS = 8000
 const SHARDS_PER_TARGET = 4
+const SITEMAP_BODY_CAP_BYTES = 16 * 1024 * 1024
+const DETAIL_BODY_CAP_BYTES = 2 * 1024 * 1024
+
+type ApnaUrlClass = 'job-index' | 'shard' | 'detail'
+
+/**
+ * Sitemap locations are provider data, not trusted request targets. Binding
+ * every discovered location back to the compiled-in Apna origin prevents an
+ * attacker-controlled hostname (and therefore attacker-controlled DNS) from
+ * reaching fetch. Redirects are disabled separately in getText, so the host
+ * cannot change after this check.
+ */
+function canonicalApnaUrl(raw: string, urlClass: ApnaUrlClass): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    return null
+  }
+
+  if (
+    parsed.protocol !== 'https:'
+    || parsed.hostname.toLowerCase() !== 'apna.co'
+    || parsed.port !== ''
+    || parsed.username !== ''
+    || parsed.password !== ''
+    || parsed.search !== ''
+    || parsed.hash !== ''
+  ) return null
+
+  const validPath = urlClass === 'job-index'
+    ? parsed.pathname === '/job-listing-sitemap.xml'
+    : urlClass === 'shard'
+      ? /^\/(?:active|external)-job-listings-[A-Za-z0-9_-]+\.xml$/.test(parsed.pathname)
+      : /^\/job\/[A-Za-z0-9][A-Za-z0-9_-]*(?:\/[A-Za-z0-9][A-Za-z0-9_-]*)*\/?$/.test(parsed.pathname)
+
+  return validPath ? parsed.href : null
+}
 
 async function getText(
   url: string,
   timeoutMs = 15000,
+  maxResponseBytes = SITEMAP_BODY_CAP_BYTES,
   beforePhysicalRequest?: BeforePhysicalRequest,
-): Promise<{ ok: boolean; status: number; text: string; authorityChanged?: true }> {
-  if (beforePhysicalRequest) {
-    try {
-      if ((await beforePhysicalRequest()) === false) {
-        return { ok: false, status: 0, text: '', authorityChanged: true }
-      }
-    } catch {
-      return { ok: false, status: 0, text: '', authorityChanged: true }
+): Promise<{ ok: boolean; status: number; text: string; attempts: number; authorityChanged?: true; requestRejected?: string }> {
+  const result = await pinnedHttpRequest({
+    url,
+    method: 'GET',
+    headers: UA,
+    signal: AbortSignal.timeout(timeoutMs),
+    maxResponseBytes,
+    beforePhysicalRequest,
+  })
+  if (result.kind === 'authority-changed') {
+    return { ok: false, status: 0, text: '', attempts: result.socketAttempts, authorityChanged: true }
+  }
+  if (result.kind === 'request-rejected') {
+    return {
+      ok: false,
+      status: 0,
+      text: '',
+      attempts: result.socketAttempts,
+      requestRejected: result.reason,
     }
   }
-  try {
-    const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(timeoutMs) })
-    return { ok: res.ok, status: res.status, text: res.ok ? await res.text() : '' }
-  } catch {
-    return { ok: false, status: 0, text: '' }
+  if (result.kind === 'network-error') {
+    return { ok: false, status: 0, text: '', attempts: result.socketAttempts }
+  }
+  return {
+    ok: result.status >= 200 && result.status < 300,
+    status: result.status,
+    text: result.status >= 200 && result.status < 300 ? result.body.toString('utf8') : '',
+    attempts: result.socketAttempts,
   }
 }
 
@@ -150,23 +204,32 @@ export const apnaAdapter: JobSourceAdapter = {
     const cap = target.slugFilter.maxDetailFetches
     let attempts = 0
 
-    const idx = await getText(SITEMAP_INDEX, 15000, options?.beforePhysicalRequest)
+    const idx = await getText(SITEMAP_INDEX, 15000, SITEMAP_BODY_CAP_BYTES, options?.beforePhysicalRequest)
+    attempts += idx.attempts
     if (idx.authorityChanged) return { ok: false, status: 0, raw: [], attempts, authorityChanged: true }
-    attempts++
+    if (idx.requestRejected) return { ok: false, status: 0, raw: [], attempts, requestRejected: idx.requestRejected }
     if (!idx.ok) return { ok: false, status: idx.status, raw: [], attempts }
-    const jobIndex = extractLocs(idx.text).find((u) => /job-listing-sitemap\.xml/.test(u))
+    const jobIndex = extractLocs(idx.text)
+      .map((url) => canonicalApnaUrl(url, 'job-index'))
+      .find((url): url is string => url !== null)
     // Schema drift (index no longer names the job sitemap) = FAILED fetch —
     // health must degrade, never a clean zero-row sync (Codex #536).
     if (!jobIndex) return { ok: false, status: 200, raw: [], bodyError: true, attempts }
 
-    const shardIdx = await getText(jobIndex, 15000, options?.beforePhysicalRequest)
+    const shardIdx = await getText(jobIndex, 15000, SITEMAP_BODY_CAP_BYTES, options?.beforePhysicalRequest)
+    attempts += shardIdx.attempts
     if (shardIdx.authorityChanged) return { ok: false, status: 0, raw: [], attempts, authorityChanged: true }
-    attempts++
+    if (shardIdx.requestRejected) return { ok: false, status: 0, raw: [], attempts, requestRejected: shardIdx.requestRejected }
     if (!shardIdx.ok) return { ok: false, status: shardIdx.status, raw: [], attempts }
     const allShards = extractLocs(shardIdx.text)
-    const shards = allShards.filter((u) =>
-      wantExternal ? /external-job-listings/.test(u) : /active-job-listings/.test(u)
-    )
+      .map((url) => canonicalApnaUrl(url, 'shard'))
+      .filter((url): url is string => url !== null)
+    const shards = allShards.filter((url) => {
+      const pathname = new URL(url).pathname
+      return wantExternal
+        ? pathname.startsWith('/external-job-listings-')
+        : pathname.startsWith('/active-job-listings-')
+    })
     if (!shards.length) return { ok: false, status: 200, raw: [], bodyError: true, attempts }
 
     // Collect candidate URLs newer than the cursor and drain them
@@ -181,16 +244,20 @@ export const apnaAdapter: JobSourceAdapter = {
     // they only consume cap after the dated backlog drains.
     const all: Array<{ loc: string; lastmod: string | null }> = []
     for (const shard of shards.slice(0, SHARDS_PER_TARGET)) {
-      const res = await getText(shard, 15000, options?.beforePhysicalRequest)
+      const res = await getText(shard, 15000, SITEMAP_BODY_CAP_BYTES, options?.beforePhysicalRequest)
+      attempts += res.attempts
       if (res.authorityChanged) return { ok: false, status: 0, raw: [], attempts, authorityChanged: true }
-      attempts++
+      if (res.requestRejected) return { ok: false, status: 0, raw: [], attempts, requestRejected: res.requestRejected }
       // A failed shard would silently drop EVERY URL it holds while the
       // successful shards advance the cursor past them (Codex #536 — the
       // same never-retried class as detail failures, one level up). Fail
       // the whole target: no cursor advance, health sees the failure.
       if (!res.ok) return { ok: false, status: res.status, raw: [], attempts }
       for (const e of extractUrlEntries(res.text)) {
-        if (/apna\.co\/job/.test(e.loc) && (!sinceIso || !e.lastmod || e.lastmod > sinceIso)) all.push(e)
+        const loc = canonicalApnaUrl(e.loc, 'detail')
+        if (loc && (!sinceIso || !e.lastmod || e.lastmod > sinceIso)) {
+          all.push({ ...e, loc })
+        }
       }
       await sleep(150)
     }
@@ -206,9 +273,10 @@ export const apnaAdapter: JobSourceAdapter = {
     let failStatus = 0
     let watermark: string | null = null
     for (const c of candidates) {
-      const page = await getText(c.loc, DETAIL_TIMEOUT_MS, options?.beforePhysicalRequest)
+      const page = await getText(c.loc, DETAIL_TIMEOUT_MS, DETAIL_BODY_CAP_BYTES, options?.beforePhysicalRequest)
+      attempts += page.attempts
       if (page.authorityChanged) return { ok: false, status: 0, raw, attempts, authorityChanged: true }
-      attempts++
+      if (page.requestRejected) return { ok: false, status: 0, raw, attempts, requestRejected: page.requestRejected }
       if (page.ok) {
         const jsonld = extractJobPostingJsonLd(page.text)
         // Policy floor (fetch-level, like the board adapter's India scope):

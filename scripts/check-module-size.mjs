@@ -121,10 +121,18 @@ const BUDGETS = {
   // Jobs contract consumed A02's prior headroom; 153 actual +1 headroom keeps
   // the tripwire tight. See
   // docs/adr/0020-shared-budget-bump-jobs-account-fence.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 154 },
+  // Bumped maxFiles 154 → 157 on 2026-07-22 (Jobs audit A08): adds TWO
+  // counted files — permanent operational source-command evidence and the
+  // shared DNS-pinned, response-capped provider transport. 156 actual +1
+  // headroom keeps the tripwire tight.
+  // See docs/adr/0021-shared-budget-bump-jobs-operations-audit.md.
+  'shared':            { maxLOC: 25_000, maxFiles: 157 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
-  'modules/jobs':      { maxLOC: 14_000, maxFiles: 70 },
+  // Bumped maxLOC 14,000 → 16,000 on 2026-07-22 for the bounded A08
+  // source-control plane. File count remains capped at 70. See
+  // docs/adr/0022-jobs-budget-source-control-plane.md.
+  'modules/jobs':      { maxLOC: 16_000, maxFiles: 70 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])
