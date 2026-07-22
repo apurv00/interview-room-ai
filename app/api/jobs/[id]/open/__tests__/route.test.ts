@@ -6,7 +6,9 @@ const {
   mockResolveLiveApplyRedirect,
   mockRecordApplyOpenAttempt,
   mockCheckJobsRateLimit,
+  mockRecordJobsUserEvent,
   mockLoggerError,
+  mockLoggerWarn,
   MockJobsAccountInactiveError,
 } = vi.hoisted(() => {
   class MockJobsAccountInactiveError extends Error {
@@ -20,7 +22,9 @@ const {
     mockResolveLiveApplyRedirect: vi.fn(),
     mockRecordApplyOpenAttempt: vi.fn(),
     mockCheckJobsRateLimit: vi.fn(),
+    mockRecordJobsUserEvent: vi.fn(),
     mockLoggerError: vi.fn(),
+    mockLoggerWarn: vi.fn(),
     MockJobsAccountInactiveError,
   }
 })
@@ -38,8 +42,11 @@ vi.mock('@jobs', () => ({ recordApplyOpenAttempt: mockRecordApplyOpenAttempt }))
 vi.mock('@jobs/services/rateLimit', () => ({
   checkJobsRateLimit: mockCheckJobsRateLimit,
 }))
+vi.mock('@jobs/services/userEventService', () => ({
+  recordJobsUserEvent: mockRecordJobsUserEvent,
+}))
 vi.mock('@shared/logger', () => ({
-  logger: { error: mockLoggerError },
+  logger: { error: mockLoggerError, warn: mockLoggerWarn },
 }))
 
 import { GET, POST } from '../route'
@@ -80,7 +87,9 @@ beforeEach(() => {
     },
   })
   mockCheckJobsRateLimit.mockReset().mockResolvedValue(null)
+  mockRecordJobsUserEvent.mockReset().mockResolvedValue(true)
   mockLoggerError.mockReset()
+  mockLoggerWarn.mockReset()
 })
 
 describe('GET/POST /api/jobs/[id]/open', () => {
@@ -94,6 +103,17 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(USER_ID)
     expect(mockRecordApplyOpenAttempt).toHaveBeenCalledWith(USER_ID, POSTING_ID, OPTION_ID)
     expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'jobs.apply_click',
+      userId: USER_ID,
+      jobPostingId: POSTING_ID,
+      props: {
+        tier: 'direct-ats',
+        source: 'trusted-open',
+        transitioned: true,
+        evidenceVersion: 1,
+      },
+    }))
   })
 
   it('redirects View on GET without recording Apply status or governance evidence', async () => {
@@ -103,6 +123,7 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(response.headers.get('location')).toBe(DESTINATION)
     expect(mockResolveLiveApplyRedirect).toHaveBeenCalledWith(USER_ID, POSTING_ID, OPTION_ID)
     expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('uses the transaction-returned canonical URL as final Apply authority', async () => {
@@ -127,6 +148,49 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe(currentDestination)
     expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).toHaveBeenCalledWith(expect.objectContaining({
+      props: {
+        tier: 'employer',
+        source: 'trusted-open',
+        transitioned: false,
+        evidenceVersion: 1,
+      },
+    }))
+  })
+
+  it('keeps the successful redirect when trusted-open telemetry fails', async () => {
+    mockRecordJobsUserEvent.mockRejectedValueOnce(new Error('telemetry unavailable'))
+
+    const response = await POST(request('POST', 'apply'), { params: { id: POSTING_ID } })
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe(DESTINATION)
+    await vi.waitFor(() => {
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error) }),
+        'jobs.apply_click telemetry write failed',
+      )
+    })
+    expect(mockLoggerError).not.toHaveBeenCalled()
+  })
+
+  it('returns the authorized 303 without waiting for unresolved telemetry', async () => {
+    mockRecordJobsUserEvent.mockReturnValueOnce(new Promise(() => undefined))
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+
+    const response = await Promise.race([
+      POST(request('POST', 'apply'), { params: { id: POSTING_ID } }),
+      new Promise<never>((_resolve, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error('authorized redirect waited for telemetry')),
+          500,
+        )
+      }),
+    ])
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe(DESTINATION)
   })
 
   it('rejects GET intent=apply before auth, rate limiting, or database work', async () => {
@@ -138,6 +202,7 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(mockConnectDB).not.toHaveBeenCalled()
     expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
     expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('rejects POST intent=view before auth, rate limiting, or database work', async () => {
@@ -149,6 +214,7 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(mockConnectDB).not.toHaveBeenCalled()
     expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
     expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -167,6 +233,7 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(mockConnectDB).not.toHaveBeenCalled()
     expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
     expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('returns a generic URL-free error when the option is no longer current', async () => {
@@ -179,6 +246,7 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(body).toContain('destination unavailable')
     expect(body).not.toContain(DESTINATION)
     expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('fails closed without exposing the destination when the Apply attempt loses authority', async () => {
@@ -189,6 +257,7 @@ describe('GET/POST /api/jobs/[id]/open', () => {
 
     expect(response.status).toBe(404)
     expect(body).not.toContain(DESTINATION)
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('returns ACCOUNT_UNAVAILABLE without a destination for an inactive account', async () => {
@@ -201,6 +270,7 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(body).toContain('ACCOUNT_UNAVAILABLE')
     expect(body).not.toContain(DESTINATION)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('does not echo a URL contained in an unexpected error', async () => {
@@ -212,6 +282,7 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(response.status).toBe(503)
     expect(body).not.toContain(DESTINATION)
     expect(JSON.stringify(mockLoggerError.mock.calls)).not.toContain(DESTINATION)
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('preserves private no-store headers on identity rate-limit responses', async () => {
@@ -225,5 +296,6 @@ describe('GET/POST /api/jobs/[id]/open', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store')
     expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
     expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 })

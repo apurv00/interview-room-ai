@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { clearAllInterviewStorage, STORAGE_KEYS } from '@shared/storageKeys'
@@ -25,6 +25,15 @@ import { retakeParentFromSearch } from '@interview/utils/retakeNavigation'
 
 interface ApplyOption { optionId: string; url: string; tier: string; viaSite?: string }
 interface ApplyReturnArm extends ApplyOption { clickedAt: number }
+type ExperienceLevel = '0-2' | '3-6' | '7+'
+type DetailStatus =
+  | 'loading'
+  | 'ready'
+  | 'missing'
+  | 'gone'
+  | 'server-error'
+  | 'offline'
+  | 'account-unavailable'
 type BrokenLinkDisposition = 'pending-verification' | 'crowd-demoted' | 'machine-demoted'
 interface XrayReq { id: string; category: string; requirement: string; importance: 'must-have' | 'nice-to-have' }
 interface Xray { role: string; inferredDomain?: string; keyThemes: string[]; requirements: XrayReq[]; retryable?: boolean }
@@ -50,6 +59,8 @@ interface Detail {
   }
   practiceRole?: string
   practiceHandoffToken?: string
+  practiceExperience?: ExperienceLevel
+  practiceBlocker?: 'experience-required'
   jd?: string
   applyOptions?: ApplyOption[]
   /** Coarse server projection; governance counts/timestamps stay private. */
@@ -68,6 +79,152 @@ interface Detail {
   } | null
 }
 
+const APPLY_OPTION_ID_RE = /^ao2_[A-Za-z0-9_-]{43}$/
+const EXPERIENCE_LEVELS = new Set<ExperienceLevel>(['0-2', '3-6', '7+'])
+const POSTING_STATES = new Set<NonNullable<Detail['postingState']>>([
+  'live',
+  'archived',
+  'restricted',
+  'snapshot-only',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+function isDetailProjection(value: unknown, expectedId: string): value is Detail {
+  if (!isRecord(value)) return false
+  if (
+    value.id !== expectedId ||
+    typeof value.title !== 'string' ||
+    typeof value.company !== 'string' ||
+    !Array.isArray(value.locations) ||
+    !value.locations.every((location) => typeof location === 'string') ||
+    typeof value.isRemote !== 'boolean' ||
+    typeof value.gated !== 'boolean' ||
+    !isOptionalString(value.domain) ||
+    !isOptionalString(value.postedAt) ||
+    !isOptionalString(value.salaryText) ||
+    !isOptionalString(value.applyTier) ||
+    !isOptionalString(value.jd) ||
+    (value.postingState !== undefined && !POSTING_STATES.has(value.postingState as NonNullable<Detail['postingState']>)) ||
+    (value.allApplyOptionsDemoted !== undefined && typeof value.allApplyOptionsDemoted !== 'boolean') ||
+    (value.practiceRole !== undefined && (typeof value.practiceRole !== 'string' || !value.practiceRole)) ||
+    (value.practiceHandoffToken !== undefined && (typeof value.practiceHandoffToken !== 'string' || !value.practiceHandoffToken)) ||
+    (value.practiceExperience !== undefined && !EXPERIENCE_LEVELS.has(value.practiceExperience as ExperienceLevel)) ||
+    (value.practiceBlocker !== undefined && value.practiceBlocker !== 'experience-required')
+  ) return false
+
+  // The authenticated body drives mutation authority. Missing fields must
+  // never be interpreted as "not tracked" or "no apply options" because a
+  // partial/wrong cache response could then expose actions for another state.
+  if (!value.gated && (
+    value.postingState === undefined ||
+    value.capabilities === undefined ||
+    value.applyOptions === undefined ||
+    value.application === undefined ||
+    value.allApplyOptionsDemoted === undefined ||
+    value.flags === undefined
+  )) return false
+
+  if (value.capabilities !== undefined) {
+    const capabilities = value.capabilities
+    if (!isRecord(capabilities)) return false
+    const capabilityKeys: Array<keyof NonNullable<Detail['capabilities']>> = [
+      'apply',
+      'viewSource',
+      'xray',
+      'tailor',
+      'practice',
+      'atsCheck',
+    ]
+    if (!capabilityKeys.every((key) => typeof capabilities[key] === 'boolean')) return false
+  }
+
+  if (value.applyOptions !== undefined) {
+    if (!Array.isArray(value.applyOptions)) return false
+    for (const option of value.applyOptions) {
+      if (
+        !isRecord(option) ||
+        typeof option.optionId !== 'string' ||
+        !APPLY_OPTION_ID_RE.test(option.optionId) ||
+        typeof option.url !== 'string' ||
+        !option.url ||
+        typeof option.tier !== 'string' ||
+        !option.tier ||
+        (option.viaSite !== undefined && typeof option.viaSite !== 'string')
+      ) return false
+    }
+  }
+
+  if (value.flags !== undefined) {
+    if (
+      !isRecord(value.flags) ||
+      typeof value.flags.staffing !== 'boolean' ||
+      typeof value.flags.shortJd !== 'boolean' ||
+      typeof value.flags.repost !== 'boolean'
+    ) return false
+  }
+
+  if (value.application !== undefined && value.application !== null) {
+    const application = value.application
+    if (
+      !isRecord(application) ||
+      typeof application.applicationId !== 'string' ||
+      !application.applicationId ||
+      typeof application.status !== 'string' ||
+      !application.status ||
+      typeof application.practiceCount !== 'number' ||
+      !Number.isInteger(application.practiceCount) ||
+      application.practiceCount < 0 ||
+      !isOptionalString(application.interviewDate) ||
+      (
+        application.interviewDateConfidence !== undefined &&
+        !['exact', 'week', 'unknown'].includes(String(application.interviewDateConfidence))
+      ) ||
+      (
+        application.interviewDatePreference !== undefined &&
+        !['this-week', 'next-week', 'unknown'].includes(String(application.interviewDatePreference))
+      )
+    ) return false
+
+    if (application.tailoredResume !== undefined) {
+      if (
+        !isRecord(application.tailoredResume) ||
+        typeof application.tailoredResume.createdAt !== 'string' ||
+        typeof application.tailoredResume.current !== 'boolean'
+      ) return false
+    }
+    if (application.appliedWith !== undefined) {
+      if (!isRecord(application.appliedWith) || typeof application.appliedWith.wasTailored !== 'boolean') return false
+    }
+    if (!isRecord(application.ats)) return false
+    if (
+      !['none', 'pending', 'done'].includes(String(application.ats.state)) ||
+      (application.ats.score !== undefined && (
+        typeof application.ats.score !== 'number' ||
+        !Number.isFinite(application.ats.score)
+      )) ||
+      (application.ats.missingKeywords !== undefined && (
+        !Array.isArray(application.ats.missingKeywords) ||
+        !application.ats.missingKeywords.every((keyword) => typeof keyword === 'string')
+      ))
+    ) return false
+  }
+
+  return true
+}
+
+function detailFailureStatus(status: number): Extract<DetailStatus, 'missing' | 'gone' | 'server-error'> {
+  if (status === 404) return 'missing'
+  if (status === 410) return 'gone'
+  return 'server-error'
+}
+
 const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
   'direct-ats': (co) => `Opens ${co}'s application form`,
   employer: (co) => `Opens ${co}'s careers site`,
@@ -81,7 +238,6 @@ const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
 // Practice; successful X-ray responses keep the normal bounded read retries.
 const LOST_XRAY_READINESS_DELAYS_MS = [0, 250, 750, 2_000, 4_000, 8_000, 8_000, 8_000] as const
 const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
-const APPLY_OPTION_ID_RE = /^ao2_[A-Za-z0-9_-]{43}$/
 const APPLIED_HISTORY_STATUSES = new Set([
   'applied',
   'interview_scheduled',
@@ -132,9 +288,12 @@ function parseApplyReturnArm(raw: string | null): ApplyReturnArm | null {
 export default function JobDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [detail, setDetail] = useState<Detail | null>(null)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'unavailable' | 'account-unavailable'>('loading')
+  const [status, setStatus] = useState<DetailStatus>('loading')
+  const [detailAttempt, setDetailAttempt] = useState(0)
   const [gate, setGate] = useState<null | 'view_job_detail' | 'save_job'>(null)
-  const [saved, setSaved] = useState(false)
+  const [saveBusy, setSaveBusy] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [applyError, setApplyError] = useState<string | null>(null)
   const [xray, setXray] = useState<Xray | null>(null)
   const [xrayState, setXrayState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
   const [xrayAttempt, setXrayAttempt] = useState(0)
@@ -149,7 +308,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   const xrayFetchedFor = useRef<string | null>(null)
   const pendingPollFor = useRef<string | null>(null)
   const practiceStartInFlight = useRef(false)
+  const saveInFlight = useRef(false)
   const practiceReadyRef = useRef(false)
+  const jobViewedFor = useRef<string | null>(null)
   const accountUnavailableRef = useRef(false)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const unavailableRef = useRef<HTMLElement>(null)
@@ -161,6 +322,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     xrayFetchedFor.current = null
     pendingPollFor.current = null
     practiceStartInFlight.current = false
+    saveInFlight.current = false
     sheetInvokerRef.current = null
     // A Jobs Practice handoff stores the canonical JD, signed handoff token,
     // attribution, and retake pointer in interview storage. Account deletion
@@ -171,7 +333,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     setDetail(null)
     setStatus('account-unavailable')
     setGate(null)
-    setSaved(false)
+    setSaveBusy(false)
+    setSaveError(null)
+    setApplyError(null)
     setXray(null)
     setXrayState('idle')
     setAtsBusy(false)
@@ -196,38 +360,53 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     let cancelled = false
     setDetail(null)
     setStatus('loading')
+    setSaveError(null)
     void (async () => {
+      let response: Response
       try {
-        const response = await fetch(`/api/jobs/${params.id}`)
-        if (cancelled) return
-        if (!response.ok) {
-          if (await isAccountUnavailableResponse(response)) {
-            if (!cancelled) scrubAccountBoundState()
-            return
-          }
-          if (cancelled || accountUnavailableRef.current) return
-          setStatus(response.status === 404 ? 'missing' : 'unavailable')
+        response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+      } catch {
+        if (!cancelled && !accountUnavailableRef.current) setStatus('offline')
+        return
+      }
+      if (cancelled) return
+      if (!response.ok) {
+        if (await isAccountUnavailableResponse(response)) {
+          if (!cancelled) scrubAccountBoundState()
           return
         }
-        const nextDetail = await response.json() as Detail
         if (cancelled || accountUnavailableRef.current) return
-        setDetail(nextDetail)
-        setStatus('ready')
-      } catch {
-        if (!cancelled && !accountUnavailableRef.current) {
-          setDetail(null)
-          setStatus('unavailable')
-        }
+        setStatus(detailFailureStatus(response.status))
+        return
       }
+      let nextDetail: unknown
+      try {
+        nextDetail = await response.json()
+      } catch {
+        if (!cancelled && !accountUnavailableRef.current) setStatus('server-error')
+        return
+      }
+      if (cancelled || accountUnavailableRef.current) return
+      if (!isDetailProjection(nextDetail, params.id)) {
+        setStatus('server-error')
+        return
+      }
+      setDetail(nextDetail)
+      setStatus('ready')
     })()
+    return () => { cancelled = true }
+  }, [detailAttempt, params.id, scrubAccountBoundState])
+
+  useEffect(() => {
+    if (jobViewedFor.current === params.id) return
+    jobViewedFor.current = params.id
     fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'jobs.job_viewed', jobPostingId: params.id, props: {} }),
       keepalive: true,
     }).catch(() => {})
-    return () => { cancelled = true }
-  }, [params.id, scrubAccountBoundState])
+  }, [params.id])
 
   // X-ray loads progressively AFTER the body — the first view on a posting
   // pays a lazy LLM parse (seconds); cached thereafter. Authed only (P-2).
@@ -235,7 +414,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   // effect keyed on the whole object re-fired the parse while the first one
   // was still uncached — concurrent LLM calls for one JD (Codex on #521).
   practiceReadyRef.current = !!(
-    detail && !detail.gated && detail.practiceRole && detail.practiceHandoffToken
+    detail &&
+    !detail.gated &&
+    typeof detail.jd === 'string' &&
+    detail.jd.trim().length > 0 &&
+    detail.practiceRole &&
+    detail.practiceHandoffToken &&
+    detail.practiceExperience
   )
 
   const restoreReturnSheetFocus = useCallback(() => {
@@ -323,9 +508,16 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             }
             continue
           }
-          const reconciled = await response.json() as Detail
+          const reconciled: unknown = await response.json()
+          if (!isDetailProjection(reconciled, params.id)) continue
           if (!cancelled && !accountUnavailableRef.current) setDetail(reconciled)
-          const isReady = !!(reconciled.practiceRole && reconciled.practiceHandoffToken)
+          const isReady = !!(
+            typeof reconciled.jd === 'string' &&
+            reconciled.jd.trim().length > 0 &&
+            reconciled.practiceRole &&
+            reconciled.practiceHandoffToken &&
+            reconciled.practiceExperience
+          )
           if (!pollUntilReady || isReady) return
         } catch { /* bounded retry */ }
       }
@@ -390,7 +582,8 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         return false
       }
       if (r.ok) {
-        const nextDetail = await r.json() as Detail
+        const nextDetail: unknown = await r.json()
+        if (!isDetailProjection(nextDetail, params.id)) return false
         if (!accountUnavailableRef.current) setDetail(nextDetail)
       }
     } catch { /* keep the current view */ }
@@ -519,7 +712,13 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     } catch {
       return
     }
-    if (!detail.practiceRole || !detail.practiceHandoffToken) return
+    if (
+      typeof detail.jd !== 'string' ||
+      detail.jd.trim().length === 0 ||
+      !detail.practiceRole ||
+      !detail.practiceHandoffToken ||
+      !detail.practiceExperience
+    ) return
     autoPracticeAttemptedFor.current = params.id
     onPractice()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -533,7 +732,16 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       // Refresh at click time so a long-open tab never hands the lobby an
       // expired intent. The signed token binds user + job + exact JD hash;
       // the session API resolves all three back to server state.
-      const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+      let response: Response
+      try {
+        response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+      } catch {
+        if (!accountUnavailableRef.current) {
+          setDetail(null)
+          setStatus('offline')
+        }
+        throw new Error('handoff offline')
+      }
       if (!response.ok) {
         if (await isAccountUnavailableResponse(response)) {
           scrubAccountBoundState()
@@ -541,16 +749,22 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         }
         if (accountUnavailableRef.current) return
         setDetail(null)
-        setStatus(response.status === 404 ? 'missing' : 'unavailable')
+        setStatus(detailFailureStatus(response.status))
         throw new Error('handoff unavailable')
       }
-      let fresh: Detail
+      let fresh: unknown
       try {
-        fresh = (await response.json()) as Detail
+        fresh = await response.json()
       } catch {
         if (accountUnavailableRef.current) return
         setDetail(null)
-        setStatus('unavailable')
+        setStatus('server-error')
+        throw new Error('handoff unavailable')
+      }
+      if (!isDetailProjection(fresh, params.id)) {
+        if (accountUnavailableRef.current) return
+        setDetail(null)
+        setStatus('server-error')
         throw new Error('handoff unavailable')
       }
       // Reconcile the fresh authorization projection before checking
@@ -561,13 +775,15 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       setStatus('ready')
       if (
         fresh.gated ||
-        !fresh.jd ||
+        typeof fresh.jd !== 'string' ||
+        fresh.jd.trim().length === 0 ||
         !fresh.practiceRole ||
-        !fresh.practiceHandoffToken
+        !fresh.practiceHandoffToken ||
+        !fresh.practiceExperience
       ) throw new Error('handoff unavailable')
       const config = {
         role: fresh.practiceRole,
-        experience: '3-6' as const,
+        experience: fresh.practiceExperience,
         duration: 20,
         jobDescription: fresh.jd,
         targetCompany: fresh.company.slice(0, INTERVIEW_TARGET_COMPANY_MAX_CHARS),
@@ -604,26 +820,125 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   }
 
   async function onSave() {
-    if (accountUnavailableRef.current) return
-    const res = await fetch(`/api/jobs/${params.id}/save`, { method: 'POST' })
-    if (await isAccountUnavailableResponse(res)) {
-      scrubAccountBoundState()
-      return
-    }
-    if (accountUnavailableRef.current) return
-    if (res.status === 401) { setGate('save_job'); return }
-    if (res.ok) {
-      setSaved(true)
-      // Materialize the fresh application row so Save-gated surfaces (the
-      // ATS button, the evidence ticker) unlock without a manual refresh
-      // (Codex on #521).
-      await refetchDetail()
+    if (accountUnavailableRef.current || saveInFlight.current || detail?.application) return
+    saveInFlight.current = true
+    setSaveBusy(true)
+    setSaveError(null)
+    try {
+      const res = await fetch(`/api/jobs/${params.id}/save`, { method: 'POST' })
+      if (await isAccountUnavailableResponse(res)) {
+        scrubAccountBoundState()
+        return
+      }
+      if (accountUnavailableRef.current) return
+      if (res.status === 401) {
+        setGate('save_job')
+        return
+      }
+      if (!res.ok) {
+        setSaveError('We couldn\'t save this job. Try again.')
+        return
+      }
+
+      // A successful mutation is not browser truth. Re-read the server
+      // projection and show Tracked only when the application row is present.
+      let projection: Response
+      try {
+        projection = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+      } catch {
+        setSaveError('We couldn\'t confirm the save. Refresh the job before trying again.')
+        return
+      }
+      if (await isAccountUnavailableResponse(projection)) {
+        scrubAccountBoundState()
+        return
+      }
+      if (!projection.ok) {
+        if (projection.status === 404 || projection.status === 410) {
+          // The mutation may have raced a source revocation/closure. Replace
+          // the stale live projection with the authoritative terminal state
+          // so Apply, Save, and retained JD-derived actions disappear.
+          setDetail(null)
+          setStatus(detailFailureStatus(projection.status))
+          setApplyError(null)
+          setXray(null)
+          setXrayState('idle')
+          setSheet(null)
+          setSheetDone(null)
+          setInference('idle')
+          return
+        }
+        setSaveError('We couldn\'t confirm the save. Refresh the job before trying again.')
+        return
+      }
+      const nextDetail: unknown = await projection.json().catch(() => null)
+      if (!isDetailProjection(nextDetail, params.id)) {
+        setSaveError('We couldn\'t confirm the save. Refresh the job before trying again.')
+        return
+      }
+      if (accountUnavailableRef.current) return
+      setDetail(nextDetail)
+      setStatus('ready')
+      if (!nextDetail.application) {
+        setSaveError('We couldn\'t confirm the save. Refresh the job before trying again.')
+      }
+    } catch {
+      if (!accountUnavailableRef.current) {
+        setSaveError('We couldn\'t save this job. Check your connection and try again.')
+      }
+    } finally {
+      saveInFlight.current = false
+      if (!accountUnavailableRef.current) setSaveBusy(false)
     }
   }
 
-  function onApply(opt: ApplyOption, invoker: HTMLElement) {
-    if (accountUnavailableRef.current) return
-    sheetInvokerRef.current = invoker
+  function onApply(opt: ApplyOption, event: ReactMouseEvent<HTMLButtonElement>) {
+    if (accountUnavailableRef.current) {
+      event.preventDefault()
+      return
+    }
+    const form = event.currentTarget.form
+    if (!form) {
+      event.preventDefault()
+      setApplyError('We couldn\'t open the application tab. Refresh this page and try again.')
+      return
+    }
+    let popupTarget: string
+    try {
+      const randomBytes = new Uint8Array(16)
+      if (typeof window.crypto?.getRandomValues !== 'function') throw new Error('secure randomness unavailable')
+      window.crypto.getRandomValues(randomBytes)
+      popupTarget = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+    } catch {
+      event.preventDefault()
+      setApplyError('We couldn\'t open the application tab safely. Refresh this page and try again.')
+      return
+    }
+    let popup: Window | null = null
+    try {
+      popup = window.open('', popupTarget)
+    } catch { /* handled as a blocked popup below */ }
+    if (!popup) {
+      event.preventDefault()
+      setApplyError('Your browser blocked the application tab. Allow pop-ups for this site, then try Apply again.')
+      return
+    }
+    try {
+      // Pre-opening inside the user gesture makes popup blocking observable.
+      // Sever the opener before the native POST targets this named tab. The
+      // /open response also sends Referrer-Policy: no-referrer.
+      popup.opener = null
+      popup.name = popupTarget
+      form.target = popupTarget
+      form.removeAttribute('rel')
+    } catch {
+      event.preventDefault()
+      try { popup.close() } catch { /* best effort */ }
+      setApplyError('We couldn\'t open the application tab safely. Refresh this page and try again.')
+      return
+    }
+    setApplyError(null)
+    sheetInvokerRef.current = event.currentTarget
     // This handler remains synchronous so the native target=_blank POST form
     // can submit immediately after the return-sheet arm is stored. The server
     // converts the successful POST to an external GET with a 303 redirect.
@@ -639,17 +954,6 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         viaSite: opt.viaSite,
       }))
     } catch { /* private mode — no sheet, the next-visit confirm card (4.2) catches it */ }
-    // Best-effort status/telemetry compatibility only. POST /open?intent=apply
-    // owns the trusted attempt; this directly callable keepalive creates no
-    // broken-link governance proof.
-    fetch(`/api/jobs/${params.id}/apply-click`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ optionId: opt.optionId }),
-      keepalive: true,
-    }).then(async (response) => {
-      if (await isAccountUnavailableResponse(response)) scrubAccountBoundState()
-    }).catch(() => {})
   }
 
   // Return-to-tab sheet (§4b): ≥20s away = the real ask; <20s = lead with
@@ -676,21 +980,33 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       if (document.visibilityState !== 'visible') return
       if (validating) return
       validating = true
+      const clearArm = () => {
+        try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
+      }
+      const clearJobSpecificProjection = () => {
+        clearArm()
+        closeReturnSheet()
+        setSheetDone(null)
+        setInference('idle')
+        setXray(null)
+        setXrayState('idle')
+      }
+      const failClosed = (nextStatus: Extract<DetailStatus, 'missing' | 'gone' | 'server-error' | 'offline'>) => {
+        if (cancelled || accountUnavailableRef.current) return
+        clearJobSpecificProjection()
+        setDetail(null)
+        setStatus(nextStatus)
+      }
       try {
-        const clearArm = () => {
-          try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
-        }
-        const clearJobSpecificProjection = () => {
-          clearArm()
-          closeReturnSheet()
-          setSheetDone(null)
-          setInference('idle')
-          setXray(null)
-          setXrayState('idle')
-        }
         // The posting may have closed while the employer tab was active.
         // Re-authorize lifecycle before asking any apply-return question.
-        const response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+        let response: Response
+        try {
+          response = await fetch(`/api/jobs/${params.id}`, { cache: 'no-store' })
+        } catch {
+          failClosed('offline')
+          return
+        }
         if (cancelled) return
         if (!response.ok) {
           if (await isAccountUnavailableResponse(response)) {
@@ -698,13 +1014,21 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             return
           }
           if (cancelled || accountUnavailableRef.current) return
-          clearJobSpecificProjection()
-          setDetail(null)
-          setStatus('unavailable')
+          failClosed(detailFailureStatus(response.status))
           return
         }
-        const fresh = await response.json() as Detail
+        let fresh: unknown
+        try {
+          fresh = await response.json()
+        } catch {
+          failClosed('server-error')
+          return
+        }
         if (cancelled || accountUnavailableRef.current) return
+        if (!isDetailProjection(fresh, params.id)) {
+          failClosed('server-error')
+          return
+        }
         if (fresh.gated) {
           clearJobSpecificProjection()
           setDetail(fresh)
@@ -754,16 +1078,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
           elapsedMs: elapsed,
         })
       } catch {
-        if (!cancelled && !accountUnavailableRef.current) {
-          try { localStorage.removeItem(`JOBS_RETURN_${params.id}`) } catch { /* noop */ }
-          closeReturnSheet()
-          setSheetDone(null)
-          setInference('idle')
-          setXray(null)
-          setXrayState('idle')
-          setDetail(null)
-          setStatus('unavailable')
-        }
+        failClosed('server-error')
       } finally {
         validating = false
       }
@@ -817,44 +1132,20 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
   async function sheetApplied(appliedWith?: { wasTailored: boolean; tailoredAt?: string }) {
     if (accountUnavailableRef.current) return
-    const clicked = sheet?.clicked
     const elapsedMs = sheet?.elapsedMs
     closeReturnSheet()
-    const post = () =>
-      fetch(`/api/jobs/${params.id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          status: 'applied',
-          latencyMs: elapsedMs,
-          ...(appliedWith ? { appliedWith } : {}),
-        }),
-      }).catch(() => null)
-    let res = await post()
+    const res = await fetch(`/api/jobs/${params.id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        status: 'applied',
+        latencyMs: elapsedMs,
+        ...(appliedWith ? { appliedWith } : {}),
+      }),
+    }).catch(() => null)
     if (res && await isAccountUnavailableResponse(res)) {
       scrubAccountBoundState()
       return
-    }
-    if (accountUnavailableRef.current) return
-    // Historical/direct flows may not have an application row. The legacy
-    // status edge can recreate apply_clicked before retrying the user's claim,
-    // but it deliberately creates no broken-link governance proof.
-    if (res && res.status === 404 && clicked) {
-      const applyResponse = await fetch(`/api/jobs/${params.id}/apply-click`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ optionId: clicked.optionId }),
-      }).catch(() => null)
-      if (applyResponse && await isAccountUnavailableResponse(applyResponse)) {
-        scrubAccountBoundState()
-        return
-      }
-      if (accountUnavailableRef.current) return
-      res = await post()
-      if (res && await isAccountUnavailableResponse(res)) {
-        scrubAccountBoundState()
-        return
-      }
     }
     if (accountUnavailableRef.current) return
     if (res?.ok) {
@@ -932,8 +1223,22 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
   if (status === 'missing') {
     return (
-      <main className="mx-auto max-w-3xl px-4 py-16">
+      <main ref={unavailableRef} tabIndex={-1} className="mx-auto max-w-3xl px-4 py-16">
         <p className="font-medium">This posting isn&apos;t available anymore.</p>
+        {retakeParentId && (
+          <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-3 block text-sm font-medium text-blue-600 hover:underline">
+            Start a new general practice
+          </Link>
+        )}
+        <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Back to jobs</Link>
+      </main>
+    )
+  }
+  if (status === 'gone') {
+    return (
+      <main ref={unavailableRef} tabIndex={-1} className="mx-auto max-w-3xl px-4 py-16">
+        <p className="font-medium">This posting has closed or expired.</p>
+        <p className="mt-1 text-sm text-slate-500">Browse current jobs to find an active opening.</p>
         {retakeParentId && (
           <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-3 block text-sm font-medium text-blue-600 hover:underline">
             Start a new general practice
@@ -957,17 +1262,31 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       </main>
     )
   }
-  if (status === 'unavailable') {
+  if (status === 'server-error' || status === 'offline') {
+    const offline = status === 'offline'
     return (
       <main ref={unavailableRef} tabIndex={-1} className="mx-auto max-w-3xl px-4 py-16">
-        <p className="font-medium">We couldn&apos;t confirm this posting is still available.</p>
-        <p className="mt-1 text-sm text-slate-500">Refresh before applying or opening the employer link.</p>
+        <p className="font-medium">
+          {offline ? 'You appear to be offline.' : 'We couldn\'t load this posting right now.'}
+        </p>
+        <p className="mt-1 text-sm text-slate-500">
+          {offline
+            ? 'Check your connection, then retry.'
+            : 'The service returned a temporary or invalid response. Retry before applying or opening the employer link.'}
+        </p>
+        <button
+          type="button"
+          onClick={() => setDetailAttempt((attempt) => attempt + 1)}
+          className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Retry
+        </button>
         {retakeParentId && (
           <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-3 block text-sm font-medium text-blue-600 hover:underline">
             Start a new general practice
           </Link>
         )}
-        <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-600 hover:underline">← Back to jobs</Link>
+        <Link href="/jobs" className="mt-3 block text-sm text-blue-600 hover:underline">← Back to jobs</Link>
       </main>
     )
   }
@@ -975,11 +1294,20 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
   const postingState = detail.gated ? 'live' : (detail.postingState ?? 'live')
   const isLive = postingState === 'live'
-  const primary = isLive && detail.capabilities?.apply !== false
+  const canApply = isLive && detail.capabilities?.apply === true
+  const primary = canApply
     ? detail.applyOptions?.[0]
     : undefined
-  const alternates = isLive ? (detail.applyOptions ?? []).slice(1) : []
-  const practiceReady = detail.capabilities?.practice !== false && !!detail.practiceRole && !!detail.practiceHandoffToken
+  const alternates = canApply ? (detail.applyOptions ?? []).slice(1) : []
+  const practiceReady = detail.capabilities?.practice !== false && !!(
+    typeof detail.jd === 'string' &&
+    detail.jd.trim().length > 0 &&
+    detail.practiceRole &&
+    detail.practiceHandoffToken &&
+    detail.practiceExperience
+  )
+  const practiceSetupNeeded = detail.practiceBlocker === 'experience-required'
+  const tracked = !!detail.application
   const canTailor = !detail.gated && (detail.capabilities?.tailor ?? isLive)
   const hasRestrictedPrepContext = postingState === 'restricted' || postingState === 'snapshot-only'
   const exactInterviewDate = detail.application?.interviewDateConfidence === 'exact'
@@ -1027,7 +1355,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         </aside>
       )}
 
-      {retakeParentId && !practiceReady && detail.application?.status !== 'interview_scheduled' && (
+      {retakeParentId && !practiceReady && !practiceSetupNeeded && detail.application?.status !== 'interview_scheduled' && (
         <aside className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
           <p className="font-medium">Exact-job context is no longer available for this retake.</p>
           <p className="mt-1 text-xs text-slate-600">You can start a new general practice without the posting-derived JD. It won&apos;t be compared with this exact-job session.</p>
@@ -1066,7 +1394,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               >
                 <button
                   type="submit"
-                  onClick={(event) => onApply(primary, event.currentTarget)}
+                  onClick={(event) => onApply(primary, event)}
                   className="rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
                 >
                   Apply ↗
@@ -1089,6 +1417,12 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               >
                 {practiceStart === 'loading' ? 'Preparing practice…' : '🎙 Practice for this job · 20 min'}
               </button>
+            ) : practiceSetupNeeded ? (
+              <span className="text-xs text-amber-700">
+                Add your experience level in{' '}
+                <Link href="/settings" className="font-medium text-blue-600 hover:underline">Settings</Link>
+                {' '}to start job-specific practice.
+              </span>
             ) : detail.capabilities?.practice === false && !isLive ? (
               <span className="text-xs text-slate-500">
                 Job-specific practice isn&apos;t available for this retained posting.
@@ -1121,10 +1455,10 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             {isLive && (
               <button
                 onClick={onSave}
-                disabled={saved}
+                disabled={tracked || saveBusy}
                 className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-60"
               >
-                {saved ? 'Saved ✓' : 'Save'}
+                {tracked ? 'Tracked ✓' : saveBusy ? 'Saving…' : 'Save'}
               </button>
             )}
             {primary && detail.capabilities?.viewSource !== false && (
@@ -1138,6 +1472,8 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               </a>
             )}
           </div>
+          {saveError && <p role="alert" className="mt-2 text-sm text-red-600">{saveError}</p>}
+          {applyError && <p role="alert" className="mt-2 text-sm text-red-600">{applyError}</p>}
           {detail.application?.tailoredResume && (
             <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-slate-700">
               <p className="font-medium">
@@ -1189,7 +1525,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 >
                   <button
                     type="submit"
-                    onClick={(event) => onApply(o, event.currentTarget)}
+                    onClick={(event) => onApply(o, event)}
                     className="underline decoration-dotted hover:text-slate-600"
                   >
                     {o.viaSite ?? o.tier}{i < alternates.length - 1 ? ', ' : ''}
@@ -1224,13 +1560,21 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                   selection, including coarse week preferences. */}
               <InterviewDateControls onCapture={captureDate} />
               <p className="mt-1 text-xs text-slate-600">
-                {hasRestrictedPrepContext
+                {practiceSetupNeeded
+                  ? 'Add your experience level in Settings to unlock job-specific preparation.'
+                  : hasRestrictedPrepContext
                   ? 'Exact-job preparation is unavailable because the original posting context can no longer be used.'
                   : 'Job-specific preparation is currently unavailable, but you can still prepare in the general interview setup.'}
               </p>
-              <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-2 inline-block text-xs font-medium text-blue-600 hover:underline">
-                Open general interview setup
-              </Link>
+              {practiceSetupNeeded ? (
+                <Link href="/settings" className="mt-2 inline-block text-xs font-medium text-blue-600 hover:underline">
+                  Set experience level
+                </Link>
+              ) : (
+                <Link href={genericSetupHref} onClick={rememberGenericRetake} className="mt-2 inline-block text-xs font-medium text-blue-600 hover:underline">
+                  Open general interview setup
+                </Link>
+              )}
             </div>
           ) : detail.application?.status === 'interview_scheduled' ? (
             /* §4c hero swap: the chip yields to the PREP PLAN panel. */

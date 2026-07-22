@@ -3,9 +3,12 @@ import { getServerSession } from 'next-auth'
 import mongoose from 'mongoose'
 import { authOptions } from '@shared/auth/authOptions'
 import { getSession } from '@interview/services/core/interviewService'
-import { JobApplication, JobPosting } from '@shared/db/models'
+import { JobApplication, JobPosting, User } from '@shared/db/models'
 import { jobPostingStateOf } from '@jobs/services/postingAccess'
-import { preparePracticeHandoffPosting } from '@jobs/services/practiceHandoff'
+import {
+  asPracticeExperienceLevel,
+  preparePracticeHandoffPosting,
+} from '@jobs/services/practiceHandoff'
 import { logger } from '@shared/logger'
 import { AppError } from '@shared/errors'
 import { connectDB } from '@shared/db/connection'
@@ -99,6 +102,42 @@ export async function POST(
       mongoose.Types.ObjectId.isValid(claimedJobId)
         ? claimedJobId
         : undefined
+    // A chained retake can only reuse exact Jobs context when the selected
+    // session and the original root agree on every persisted identity input.
+    // Legacy chains predate these invariants, so a missing or drifting root
+    // deliberately degrades to generic Practice instead of trusting only the
+    // most recent child session.
+    let rootMatchesJobsIdentity = rootParentId === params.id
+    if (attributedJobId && !rootMatchesJobsIdentity) {
+      try {
+        const root = await getSession(
+          rootParentId,
+          authSession.user.id,
+          authSession.user.role,
+          authSession.user.organizationId,
+          { excludeTranscript: true }
+        )
+        const rootAttribution = root.attribution as {
+          source?: string
+          jobId?: string
+          handoffVersion?: number
+          jdHash?: string
+        } | undefined
+        rootMatchesJobsIdentity =
+          String(root.userId) === authSession.user.id &&
+          !root.parentSessionId &&
+          rootAttribution?.source === 'jobs' &&
+          rootAttribution.handoffVersion === 1 &&
+          rootAttribution.jobId === attributedJobId &&
+          rootAttribution.jdHash === attribution?.jdHash &&
+          root.config.role === parent.config.role &&
+          root.config.experience === parent.config.experience
+      } catch {
+        // An inaccessible, deleted, or malformed root must not make retake
+        // unavailable. It only removes the exact-job reuse authorization.
+        rootMatchesJobsIdentity = false
+      }
+    }
     // Live Jobs context remains available to its original candidate. Normal
     // expiry/delisting also remains available, but only when a JobApplication
     // proves that this authenticated user tracked it before closure. In both
@@ -107,10 +146,14 @@ export async function POST(
     // JDs, inactive CMS roles, deleted postings, and foreign archives fall
     // back to a generic retake.
     let verifiedJobId: string | undefined
-    if (attributedJobId) {
-      const posting = await JobPosting.findById(attributedJobId)
-        .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
-        .lean()
+    if (attributedJobId && rootMatchesJobsIdentity) {
+      const [posting, profile] = await Promise.all([
+        JobPosting.findById(attributedJobId)
+          .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed')
+          .lean(),
+        User.findById(authSession.user.id).select('experienceLevel').lean(),
+      ])
+      const currentExperience = asPracticeExperienceLevel(profile?.experienceLevel)
       if (posting) {
         const postingState = jobPostingStateOf(posting)
         const mayReuseArchivedContext = postingState === 'archived' && !!(
@@ -122,7 +165,11 @@ export async function POST(
         if (postingState === 'live' || mayReuseArchivedContext) {
           try {
             const prepared = await preparePracticeHandoffPosting(posting)
-            if (prepared.role && prepared.jdHash === attribution?.jdHash) {
+            if (
+              prepared.role === parent.config.role &&
+              prepared.jdHash === attribution?.jdHash &&
+              currentExperience === parent.config.experience
+            ) {
               verifiedJobId = attributedJobId
             }
           } catch {

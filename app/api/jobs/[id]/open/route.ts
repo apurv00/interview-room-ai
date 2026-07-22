@@ -8,6 +8,7 @@ import { recordApplyOpenAttempt } from '@jobs'
 import { isApplyOptionId } from '@jobs/services/applyOptionIdentity'
 import { resolveLiveApplyRedirect } from '@jobs/services/applyRedirectService'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import { recordJobsUserEvent } from '@jobs/services/userEventService'
 import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
@@ -73,10 +74,35 @@ async function openDestination(
     }
 
     // Resolve current authority and record the attempt together inside the
-    // account-fenced application transaction. Telemetry remains on the
-    // asynchronous legacy status edge so it cannot delay this redirect.
+    // account-fenced application transaction.
     const attempt = await recordApplyOpenAttempt(userId, params.id, optionId)
     if (!attempt) return unavailable()
+
+    // The successful trusted open is the sole apply-click telemetry source.
+    // Use only the server-resolved canonical option and never let telemetry
+    // failure turn an already-authorized navigation into an error.
+    try {
+      const telemetry = recordJobsUserEvent({
+        name: 'jobs.apply_click',
+        userId,
+        jobPostingId: params.id,
+        props: {
+          tier: attempt.canonicalOption.tier,
+          source: 'trusted-open',
+          transitioned: attempt.transitioned,
+          evidenceVersion: 1,
+        },
+        ts: new Date(),
+      })
+      // A second telemetry transaction must never hold the already-authorized
+      // 303 open. A lost best-effort event remains distinguishable from the
+      // durable trusted attempt regardless of which deployment serves it.
+      void telemetry.catch((err) => {
+        logger.warn({ err }, 'jobs.apply_click telemetry write failed')
+      })
+    } catch (err) {
+      logger.warn({ err }, 'jobs.apply_click telemetry write failed')
+    }
 
     // 303 is mandatory: after our POST mutation succeeds, the user agent must
     // reach the external employer with GET and must never replay the POST.

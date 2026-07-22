@@ -4,35 +4,66 @@ import { gzipSync } from 'zlib'
 const {
   mockPostingFindById,
   mockPostingExists,
+  mockPostingUpdateOne,
   mockApplicationFindOne,
   mockApplicationExists,
+  mockApplicationUpdateOne,
+  mockUserFindById,
+  mockUserExists,
   mockConnectDB,
   mockGetActiveCatalog,
+  mockGetOrParseXray,
   mockIsJobsAccountActive,
 } = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
   mockPostingExists: vi.fn().mockResolvedValue({ _id: 'posting-authoritative' }),
+  mockPostingUpdateOne: vi.fn(),
   mockApplicationFindOne: vi.fn(),
   mockApplicationExists: vi.fn().mockResolvedValue({ _id: 'application-authoritative' }),
+  mockApplicationUpdateOne: vi.fn(),
+  mockUserFindById: vi.fn(),
+  mockUserExists: vi.fn(),
   mockConnectDB: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
+  mockGetOrParseXray: vi.fn(),
   mockIsJobsAccountActive: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
-  JobApplication: { findOne: mockApplicationFindOne, exists: mockApplicationExists },
+  JobPosting: {
+    findById: mockPostingFindById,
+    exists: mockPostingExists,
+    updateOne: mockPostingUpdateOne,
+  },
+  JobApplication: {
+    findOne: mockApplicationFindOne,
+    exists: mockApplicationExists,
+    updateOne: mockApplicationUpdateOne,
+  },
+  User: { findById: mockUserFindById, exists: mockUserExists },
 }))
 vi.mock('@interview/services/persona/domainCatalogService', () => ({
   getActiveInterviewDomainCatalog: mockGetActiveCatalog,
 }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
   isJobsAccountActive: mockIsJobsAccountActive,
+  activeJobsAccountFilter: (userId: string) => ({
+    _id: userId,
+    $or: [
+      { accountState: 'active' },
+      { accountState: { $exists: false } },
+    ],
+  }),
 }))
+vi.mock('../services/xrayService', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/xrayService')>()
+  return { ...actual, getOrParseXray: mockGetOrParseXray }
+})
 
 import {
   mintPracticeHandoffToken,
+  fencePracticeSessionWrite,
   PRACTICE_HANDOFF_TTL_SECONDS,
   preparePracticeHandoffPosting,
   practiceHandoffHashOf,
@@ -59,24 +90,60 @@ const ACTIVE_CATALOG = {
   authoritative: true,
   source: 'cms' as const,
 }
+const PARSED_JD = {
+  rawText: JD,
+  company: 'PhonePe',
+  role: 'Backend Engineer',
+  inferredDomain: 'backend',
+  requirements: [{
+    id: 'req-1',
+    category: 'technical' as const,
+    requirement: 'Build Node.js services',
+    importance: 'must-have' as const,
+    targetCompetencies: ['backend'],
+  }],
+  keyThemes: ['payments'],
+}
+const RESOLVED_PARSED_JD = {
+  ...PARSED_JD,
+  rawText: DISPLAY_JD,
+  modelParsingSuppressed: true as const,
+}
 
 const selectLean = (value: unknown) => ({ select: () => ({ lean: () => Promise.resolve(value) }) })
+const transactionalSelectLean = (value: unknown) => ({
+  select: () => {
+    const query = {
+      session: () => query,
+      lean: () => Promise.resolve(value),
+    }
+    return query
+  },
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('NEXTAUTH_SECRET', 'test-secret-longer-than-sixteen-characters')
   mockConnectDB.mockResolvedValue(undefined)
   mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
+  mockGetOrParseXray.mockResolvedValue({ parsed: PARSED_JD })
   mockIsJobsAccountActive.mockResolvedValue(true)
+  mockUserFindById.mockReturnValue(selectLean({ experienceLevel: '3-6' }))
+  mockUserExists.mockResolvedValue({ _id: USER_ID })
   mockPostingFindById.mockReturnValue(selectLean({
     company: 'PhonePe',
     domain: 'backend',
     status: 'open',
+    parsedJD: PARSED_JD,
+    parsedJDHash: xrayHashOf(JD),
+    parsedJDRoleVersion: ACTIVE_CATALOG.revision,
     jdCompressed: gzipSync(Buffer.from(JD)),
     // Different formatting, identical normalized xray hash.
     jdDisplayCompressed: gzipSync(Buffer.from(DISPLAY_JD)),
   }))
   mockApplicationFindOne.mockReturnValue(selectLean({ _id: 'app-canonical' }))
+  mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mockApplicationUpdateOne.mockResolvedValue({ matchedCount: 1 })
 })
 
 describe('Jobs practice handoff', () => {
@@ -90,10 +157,135 @@ describe('Jobs practice handoff', () => {
       jobDescription: DISPLAY_JD,
       jdHash: HASH,
       company: 'PhonePe',
+      experience: '3-6',
+      parsedJobDescription: RESOLVED_PARSED_JD,
       role: 'backend',
       applicationId: 'app-canonical',
     })
     expect(mockApplicationFindOne).toHaveBeenCalledWith({ userId: USER_ID, jobPostingId: JOB_ID })
+    expect(mockGetOrParseXray).not.toHaveBeenCalled()
+  })
+
+  it('routes a live cache miss through the posting X-ray cache exactly once', async () => {
+    mockPostingFindById.mockReturnValue(selectLean({
+      company: 'PhonePe',
+      domain: 'backend',
+      status: 'open',
+      jdCompressed: gzipSync(Buffer.from(JD)),
+      jdDisplayCompressed: gzipSync(Buffer.from(DISPLAY_JD)),
+    }))
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+
+    const resolved = await resolvePracticeHandoff(token, USER_ID, NOW)
+
+    expect(mockGetOrParseXray).toHaveBeenCalledOnce()
+    expect(mockGetOrParseXray).toHaveBeenCalledWith(JOB_ID, USER_ID)
+    expect(mockPostingFindById).toHaveBeenCalledTimes(2)
+    expect(resolved?.parsedJobDescription).toEqual(RESOLVED_PARSED_JD)
+  })
+
+  it('does not re-enter X-ray when the final session fence follows a live parser fallback', async () => {
+    const posting = {
+      company: 'PhonePe',
+      domain: 'backend',
+      status: 'open' as const,
+      jdCompressed: gzipSync(Buffer.from(JD)),
+      jdDisplayCompressed: gzipSync(Buffer.from(DISPLAY_JD)),
+      updatedAt: NOW,
+    }
+    mockPostingFindById.mockReturnValue(transactionalSelectLean(posting))
+    mockGetOrParseXray.mockResolvedValueOnce({
+      parsed: {
+        company: '',
+        role: '',
+        inferredDomain: '',
+        requirements: [],
+        keyThemes: [],
+      },
+      cached: false,
+    })
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    const resolved = await resolvePracticeHandoff(token, USER_ID, NOW)
+    if (!resolved?.role) throw new Error('expected resolved live handoff')
+    const dbSession = { id: 'practice-transaction' }
+
+    const fenced = await fencePracticeSessionWrite({
+      userId: USER_ID,
+      jobId: resolved.jobId,
+      jdHash: resolved.jdHash,
+      role: resolved.role,
+      applicationId: resolved.applicationId,
+    }, dbSession as never)
+
+    expect(fenced).toBe(true)
+    expect(mockGetOrParseXray).toHaveBeenCalledOnce()
+    expect(mockPostingUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: JOB_ID,
+        status: 'open',
+        jdCompressed: posting.jdCompressed,
+      }),
+      { $inc: { derivedAuthorityRevision: 1 } },
+      { session: dbSession, timestamps: false },
+    )
+    expect(mockApplicationUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: 'app-canonical',
+        userId: USER_ID,
+        jobPostingId: JOB_ID,
+      },
+      { $inc: { derivedAuthorityRevision: 1 } },
+      { session: dbSession, timestamps: false },
+    )
+  })
+
+  it('rejects a revoke-first transaction before any posting or session authority write', async () => {
+    mockPostingFindById.mockReturnValue(transactionalSelectLean({
+      company: 'PhonePe',
+      domain: 'backend',
+      status: 'closed',
+      closedReason: 'source-revoked',
+      jdCompressed: gzipSync(Buffer.from(JD)),
+      updatedAt: NOW,
+    }))
+    const dbSession = { id: 'revoke-first' }
+
+    const fenced = await fencePracticeSessionWrite({
+      userId: USER_ID,
+      jobId: JOB_ID,
+      jdHash: HASH,
+      role: 'backend',
+      applicationId: 'app-canonical',
+    }, dbSession as never)
+
+    expect(fenced).toBe(false)
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockApplicationUpdateOne).not.toHaveBeenCalled()
+    expect(mockGetOrParseXray).not.toHaveBeenCalled()
+  })
+
+  it('keeps an unparsed normal archive on raw JD without new X-ray spend', async () => {
+    mockPostingFindById.mockReturnValue(selectLean({
+      company: 'PhonePe',
+      domain: 'backend',
+      status: 'closed',
+      closedReason: 'aged-out',
+      jdCompressed: gzipSync(Buffer.from(JD)),
+    }))
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+
+    const resolved = await resolvePracticeHandoff(token, USER_ID, NOW)
+
+    expect(mockGetOrParseXray).not.toHaveBeenCalled()
+    expect(resolved?.parsedJobDescription).toEqual({
+      rawText: JD,
+      company: '',
+      role: '',
+      inferredDomain: '',
+      requirements: [],
+      keyThemes: [],
+      modelParsingSuppressed: true,
+    })
   })
 
   it('rejects cross-user replay, signature tampering, and expiry before database reads', async () => {
@@ -118,6 +310,7 @@ describe('Jobs practice handoff', () => {
     expect(mockIsJobsAccountActive).toHaveBeenCalledWith(USER_ID)
     expect(mockPostingFindById).not.toHaveBeenCalled()
     expect(mockApplicationFindOne).not.toHaveBeenCalled()
+    expect(mockUserFindById).not.toHaveBeenCalled()
     expect(mockGetActiveCatalog).not.toHaveBeenCalled()
   })
 
@@ -125,7 +318,7 @@ describe('Jobs practice handoff', () => {
     const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
     mockIsJobsAccountActive
       .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false)
+    mockUserExists.mockResolvedValueOnce(null)
 
     expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
 
@@ -134,8 +327,42 @@ describe('Jobs practice handoff', () => {
     expect(mockGetActiveCatalog).toHaveBeenCalledOnce()
     expect(mockPostingExists).toHaveBeenCalledOnce()
     expect(mockApplicationExists).toHaveBeenCalledOnce()
-    expect(mockIsJobsAccountActive).toHaveBeenNthCalledWith(1, USER_ID)
-    expect(mockIsJobsAccountActive).toHaveBeenNthCalledWith(2, USER_ID)
+    expect(mockIsJobsAccountActive).toHaveBeenCalledOnce()
+    expect(mockUserExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: USER_ID,
+      experienceLevel: '3-6',
+    }))
+  })
+
+  it.each(['0-2', '7+'] as const)(
+    'resolves the server profile experience %s into the trusted handoff',
+    async (experienceLevel) => {
+      mockUserFindById.mockReturnValueOnce(selectLean({ experienceLevel }))
+      const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+
+      expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toMatchObject({ experience: experienceLevel })
+    },
+  )
+
+  it('fails closed before reading the posting when profile experience is missing or malformed', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockUserFindById.mockReturnValueOnce(selectLean({}))
+
+    expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(mockApplicationFindOne).not.toHaveBeenCalled()
+  })
+
+  it('rejects a handoff when profile experience changes during preparation', async () => {
+    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
+    mockUserFindById.mockReturnValueOnce(selectLean({ experienceLevel: '0-2' }))
+    mockUserExists.mockResolvedValueOnce(null)
+
+    expect(await resolvePracticeHandoff(token, USER_ID, NOW)).toBeNull()
+    expect(mockUserExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: USER_ID,
+      experienceLevel: '0-2',
+    }))
   })
 
   it('normal archive owner can resolve an exact-JD historical inferred role after catalog revision drift', async () => {
@@ -319,27 +546,23 @@ describe('Jobs practice handoff', () => {
   })
 
   it('uses inferred role only when its parse cache belongs to the signed JD', async () => {
-    const token = mintPracticeHandoffToken({ userId: USER_ID, jobId: JOB_ID, jdHash: HASH }, NOW)
-    mockPostingFindById
-      .mockReturnValueOnce(selectLean({
-        company: 'PhonePe',
-        status: 'open',
-        parsedJD: { inferredDomain: 'frontend' },
-        parsedJDHash: 'stale-cache-hash',
-        parsedJDRoleVersion: ACTIVE_CATALOG.revision,
-        jdCompressed: gzipSync(Buffer.from(JD)),
-      }))
-      .mockReturnValueOnce(selectLean({
-        company: 'PhonePe',
-        status: 'open',
-        parsedJD: { inferredDomain: 'frontend' },
-        parsedJDHash: xrayHashOf(JD),
-        parsedJDRoleVersion: ACTIVE_CATALOG.revision,
-        jdCompressed: gzipSync(Buffer.from(JD)),
-      }))
+    const stale = await preparePracticeHandoffPosting({
+      status: 'open',
+      parsedJD: { inferredDomain: 'frontend' },
+      parsedJDHash: 'stale-cache-hash',
+      parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+      jdCompressed: gzipSync(Buffer.from(JD)),
+    })
+    const exact = await preparePracticeHandoffPosting({
+      status: 'open',
+      parsedJD: { inferredDomain: 'frontend' },
+      parsedJDHash: xrayHashOf(JD),
+      parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+      jdCompressed: gzipSync(Buffer.from(JD)),
+    })
 
-    expect((await resolvePracticeHandoff(token, USER_ID, NOW))?.role).toBeUndefined()
-    expect((await resolvePracticeHandoff(token, USER_ID, NOW))?.role).toBe('frontend')
+    expect(stale.role).toBeUndefined()
+    expect(exact.role).toBe('frontend')
   })
 
   it('withholds a same-hash legacy role until X-ray refreshes its catalog revision', async () => {

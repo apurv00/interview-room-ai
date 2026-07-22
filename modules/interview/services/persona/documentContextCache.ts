@@ -124,7 +124,9 @@ export async function getOrLoadJDContext(
   try {
     await connectDB()
     const doc = await InterviewSession.findById(sessionId).select('parsedJobDescription').lean()
-    const parsed = doc?.parsedJobDescription as IParsedJobDescription | undefined
+    const parsed = doc?.parsedJobDescription as (IParsedJobDescription & {
+      modelParsingSuppressed?: boolean
+    }) | undefined
     if (parsed && Array.isArray(parsed.requirements) && parsed.requirements.length > 0) {
       const ctx = buildParsedJDContext(parsed)
       if (ctx) {
@@ -132,8 +134,16 @@ export async function getOrLoadJDContext(
         return ctx
       }
     }
+    // Jobs archive sessions intentionally retain raw JD context without
+    // spending on a new parse after closure. The marker is persisted with
+    // the session so every later cache miss preserves that product contract.
+    if (parsed?.modelParsingSuppressed === true) return null
   } catch (err) {
     logger.warn({ err, sessionId }, 'getOrLoadJDContext: Mongo read failed')
+    // Without the session document we cannot distinguish an ordinary cache
+    // miss from a Jobs archive that explicitly forbids new model parsing.
+    // Keep the current request on raw JD and retry the DB read next time.
+    return null
   }
 
   // 3. Recent parse attempt already failed — skip re-parse.

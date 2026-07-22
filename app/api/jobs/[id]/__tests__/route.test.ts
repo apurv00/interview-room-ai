@@ -167,6 +167,33 @@ describe('GET /api/jobs/[id] practice handoff', () => {
     expect(await response.json()).toEqual({ error: 'not found' })
   })
 
+  it('returns a non-cacheable 410 for an anonymous normal archive', async () => {
+    mockGetServerSession.mockResolvedValue(null)
+    mockGetJobDetail.mockResolvedValue({ unavailable: 'gone' })
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}`), {
+      params: { id: JOB_ID },
+    })
+
+    expect(response.status).toBe(410)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(await response.json()).toEqual({ error: 'gone' })
+  })
+
+  it('returns a private 410 for an authenticated archive non-owner after the account fence', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockGetJobDetail.mockResolvedValue({ unavailable: 'gone' })
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}`), {
+      params: { id: JOB_ID },
+    })
+
+    expect(response.status).toBe(410)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(await response.json()).toEqual({ error: 'gone' })
+    expect(mockIsJobsAccountActive).toHaveBeenCalledTimes(2)
+  })
+
   it('passes an owner archive projection through as private without adding authority', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
     mockGetJobDetail.mockResolvedValue({

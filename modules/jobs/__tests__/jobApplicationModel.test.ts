@@ -7,6 +7,14 @@ import {
 } from '../services/trackerStatusSweepService'
 
 describe('JobApplication tracker sweep index', () => {
+  it('keeps the derived-authority transaction token private', () => {
+    const path = JobApplication.schema.path('derivedAuthorityRevision')
+
+    expect(path).toBeDefined()
+    expect((path?.options as { select?: boolean; default?: number }).select).toBe(false)
+    expect((path?.options as { select?: boolean; default?: number }).default).toBe(0)
+  })
+
   it('indexes only confirmed applications by due time', () => {
     const dueIndex = JobApplication.schema.indexes().find(
       ([, options]) => options.name === TRACKER_STATUS_SWEEP_INDEX_NAME,

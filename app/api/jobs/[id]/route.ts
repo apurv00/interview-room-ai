@@ -53,5 +53,14 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
       }
     )
   }
+  if ('unavailable' in detail && detail.unavailable === 'gone') {
+    return NextResponse.json(
+      { error: 'gone' },
+      {
+        status: 410,
+        headers: { 'Cache-Control': userId ? 'private, no-store' : 'no-store' },
+      },
+    )
+  }
   return NextResponse.json(detail, privateResponse)
 }

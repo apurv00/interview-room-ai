@@ -6,6 +6,7 @@ const {
   mockPostingExists,
   mockAppFindOne,
   mockAppExists,
+  mockUserFindById,
   mockGetBase,
   mockGetResume,
   mockGetActiveCatalog,
@@ -15,6 +16,7 @@ const {
   mockPostingExists: vi.fn().mockResolvedValue({ _id: 'posting-authoritative' }),
   mockAppFindOne: vi.fn(),
   mockAppExists: vi.fn().mockResolvedValue({ _id: 'application-authoritative' }),
+  mockUserFindById: vi.fn(),
   mockGetBase: vi.fn(),
   mockGetResume: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
@@ -23,6 +25,7 @@ const {
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockFindById, exists: mockPostingExists },
   JobApplication: { findOne: mockAppFindOne, exists: mockAppExists },
+  User: { findById: mockUserFindById },
 }))
 vi.mock('../services/baseResumeService', () => ({ getBaseResume: mockGetBase }))
 vi.mock('@resume', async (importOriginal) => {
@@ -36,7 +39,13 @@ vi.mock('../services/feedDiscovery', () => ({
   discoverFeed: mockDiscoverFeed,
 }))
 
-import { matchedSkillsOf, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
+import {
+  JOB_DETAIL_GONE,
+  matchedSkillsOf,
+  bestApplyTierOf,
+  getFeed,
+  getJobDetail,
+} from '../services/feedService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
 import { xrayHashOf } from '../services/xrayService'
 import { INTERVIEW_JOB_DESCRIPTION_MAX_CHARS } from '@shared/interviewContract'
@@ -252,6 +261,10 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     mockGetActiveCatalog.mockReset()
     mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
     mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) })
+    mockUserFindById.mockReset()
+    mockUserFindById.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve({ experienceLevel: '3-6' }) }),
+    })
   })
 
   it('anon = gated shell — JD and apply URLs are ABSENT from the object, not just hidden', async () => {
@@ -265,6 +278,9 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect(json).not.toContain('greenhouse')
     expect((d as Record<string, unknown>).jd).toBeUndefined()
     expect((d as Record<string, unknown>).applyOptions).toBeUndefined()
+    expect((d as Record<string, unknown>).practiceExperience).toBeUndefined()
+    expect((d as Record<string, unknown>).practiceBlocker).toBeUndefined()
+    expect(mockUserFindById).not.toHaveBeenCalled()
   })
 
   it('anon serves no stale shell when source authority changes after the initial read', async () => {
@@ -333,6 +349,47 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       Buffer.from(detail.practiceHandoffToken!.split('.')[0], 'base64url').toString('utf8')
     ) as { jdh: string }
     expect(payload.jdh).toBe(practiceHandoffHashOf(canonical))
+  })
+
+  it.each(['0-2', '7+'] as const)(
+    'binds Practice readiness to the authenticated profile experience %s',
+    async (experienceLevel) => {
+      const canonical = 'Build secure backend services at production scale.'
+      mockUserFindById.mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({ experienceLevel }) }),
+      })
+      mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+        jdCompressed: gzipSync(Buffer.from(canonical)),
+      })) })
+
+      const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+      expect(detail).toMatchObject({
+        capabilities: { practice: true },
+        practiceRole: 'backend',
+        practiceExperience: experienceLevel,
+        practiceHandoffToken: expect.any(String),
+      })
+      expect(detail).not.toHaveProperty('practiceBlocker')
+    },
+  )
+
+  it('requires profile experience without leaking malformed profile data', async () => {
+    mockUserFindById.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ experienceLevel: 'arbitrary-seniority' }) }),
+    })
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from('Build backend services with Node.js.')),
+    })) })
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail.capabilities.practice).toBe(false)
+    expect(detail.practiceBlocker).toBe('experience-required')
+    expect(detail).not.toHaveProperty('practiceExperience')
+    expect(detail).not.toHaveProperty('practiceRole')
+    expect(detail).not.toHaveProperty('practiceHandoffToken')
+    expect(JSON.stringify(detail)).not.toContain('arbitrary-seniority')
   })
 
   it('falls back to canonical text and hashes canonical when the display twin is stale', async () => {
@@ -665,16 +722,50 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     }
   })
 
-  it('closed anonymous and non-owner requests remain indistinguishable from missing', async () => {
+  it('normal archives return the typed gone outcome for anonymous and authenticated non-owners', async () => {
     mockAppFindOne.mockClear()
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ status: 'closed', closedReason: 'aged-out' })) })
-    expect(await getJobDetail('j1', null)).toBeNull()
+    expect(await getJobDetail('j1', null)).toBe(JOB_DETAIL_GONE)
     expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockPostingExists.mock.calls.at(-1)?.[0]).toEqual({
+      _id: 'j1',
+      status: 'closed',
+      closedReason: 'aged-out',
+    })
 
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({ status: 'closed', closedReason: 'aged-out' })) })
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
-    expect(await getJobDetail('j1', 'other-user')).toBeNull()
+    expect(await getJobDetail('j1', 'other-user')).toBe(JOB_DETAIL_GONE)
+  })
 
+  it('does not emit a stale gone outcome when archive authority changes after the read', async () => {
+    mockFindById.mockReturnValue({
+      lean: () => Promise.resolve(doc({ status: 'closed', closedReason: 'aged-out' })),
+    })
+    mockPostingExists.mockResolvedValueOnce(null)
+
+    expect(await getJobDetail('j1', null)).toBeNull()
+    expect(mockPostingExists.mock.calls.at(-1)?.[0]).toEqual({
+      _id: 'j1',
+      status: 'closed',
+      closedReason: 'aged-out',
+    })
+  })
+
+  it.each(['source-revoked', 'llm-verdict', undefined])(
+    'restricted closure %s and unknown postings remain indistinguishable from missing',
+    async (closedReason) => {
+      mockFindById.mockReturnValueOnce({
+        lean: () => Promise.resolve(doc({ status: 'closed', closedReason })),
+      })
+      if (closedReason !== undefined) {
+        mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+      }
+      expect(await getJobDetail('j1', closedReason === undefined ? null : 'other-user')).toBeNull()
+    },
+  )
+
+  it('unknown posting remains not found for an authenticated caller without a tracker snapshot', async () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(null) })
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
     expect(await getJobDetail('nope', 'u1')).toBeNull()
@@ -724,7 +815,7 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     }) }) })
     mockAppExists.mockResolvedValueOnce(null)
 
-    expect(await getJobDetail('j1', 'u1')).toBeNull()
+    expect(await getJobDetail('j1', 'u1')).toBe(JOB_DETAIL_GONE)
     expect(mockAppExists).toHaveBeenCalledWith({
       _id: 'app-archived',
       userId: 'u1',
@@ -763,6 +854,8 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect(detail).not.toHaveProperty('jd')
     expect(detail).not.toHaveProperty('applyTier')
     expect(detail).not.toHaveProperty('practiceHandoffToken')
+    expect(detail).not.toHaveProperty('practiceExperience')
+    expect(detail).not.toHaveProperty('practiceBlocker')
     expect(detail).not.toHaveProperty('tailorInputHash')
     expect(detail).not.toHaveProperty('salaryText')
     expect(detail).not.toHaveProperty('domain')
@@ -812,6 +905,8 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       application: { applicationId: 'app-snapshot', status: 'offer', practiceCount: 1 },
     })
     expect(detail.capabilities).toEqual({ apply: false, viewSource: false, xray: false, tailor: false, practice: false, atsCheck: false })
+    expect(detail).not.toHaveProperty('practiceExperience')
+    expect(detail).not.toHaveProperty('practiceBlocker')
     expect(JSON.stringify(detail)).not.toContain('secret.example')
     expect(detail.application?.ats).toMatchObject({ state: 'done' })
     expect(detail.application?.ats).not.toHaveProperty('score')

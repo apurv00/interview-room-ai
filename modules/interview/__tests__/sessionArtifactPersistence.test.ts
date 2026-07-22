@@ -10,6 +10,7 @@ const mockSessionCreate = vi.fn()
 const mockUserUpdateOne = vi.fn()
 const mockUserFindOneAndUpdate = vi.fn()
 const mockUserExists = vi.fn()
+const mockUserExistsSession = vi.fn()
 const mockUserFindByIdAndUpdate = vi.fn()
 const mockDepthFindOne = vi.fn()
 const mockParseJobDescription = vi.fn()
@@ -84,12 +85,31 @@ vi.mock('@interview/services/core/sessionConfigCache', () => ({
 
 import { createSession, updateSession } from '@interview/services/core/interviewService'
 
+const JOBS_JD = 'A server-resolved backend role requiring reliable Node.js services.'
+const JOBS_PARSED_JD = {
+  rawText: JOBS_JD,
+  company: 'Acme',
+  role: 'Backend Engineer',
+  inferredDomain: 'backend',
+  requirements: [{
+    id: 'req-1',
+    category: 'technical' as const,
+    requirement: 'Build reliable Node.js services',
+    importance: 'must-have' as const,
+    targetCompetencies: ['backend'],
+  }],
+  keyThemes: ['reliability'],
+  modelParsingSuppressed: true as const,
+}
+
 describe('createSession — Jobs JD provider authority', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockWithActiveJobsAccountWrite.mockImplementation(
       async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
     )
+    mockUserExistsSession.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockUserExists.mockReturnValue({ session: mockUserExistsSession })
   })
 
   it('forwards the optional authority callback to structured JD parsing', async () => {
@@ -157,6 +177,7 @@ describe('createSession — Jobs JD provider authority', () => {
   })
 
   it('creates a Jobs-attributed session inside the active-account transaction', async () => {
+    const beforeVerifiedJobsSessionWrite = vi.fn().mockResolvedValue(true)
     mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
     mockUserFindOneAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
     mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
@@ -178,17 +199,165 @@ describe('createSession — Jobs JD provider authority', () => {
         jdHash: 'a'.repeat(64),
         verifiedAt: new Date('2026-07-21T00:00:00Z'),
       },
+      verifiedJobsParsedJobDescription: JOBS_PARSED_JD,
+      beforeVerifiedJobsSessionWrite,
+      jobDescription: JOBS_JD,
     })
 
     expect(mockWithActiveJobsAccountWrite).toHaveBeenCalledWith(
       '507f1f77bcf86cd799439010',
       expect.any(Function),
     )
+    expect(mockUserExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: expect.anything(),
+      experienceLevel: '3-6',
+    }))
+    expect(mockUserExistsSession).toHaveBeenCalledWith(mockDbSession)
     expect(mockSessionCreate).toHaveBeenCalledWith(
       [expect.objectContaining({
         attribution: expect.objectContaining({ source: 'jobs' }),
+        parsedJobDescription: JOBS_PARSED_JD,
       })],
       { session: mockDbSession },
+    )
+    expect(beforeVerifiedJobsSessionWrite).toHaveBeenCalledWith(mockDbSession)
+    expect(beforeVerifiedJobsSessionWrite.mock.invocationCallOrder[0])
+      .toBeLessThan(mockSessionCreate.mock.invocationCallOrder[0])
+    expect(mockParseJobDescription).not.toHaveBeenCalled()
+  })
+
+  it('rolls quota back and creates nothing when source revoke wins before the posting fence', async () => {
+    const beforeVerifiedJobsSessionWrite = vi.fn().mockResolvedValue(false)
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockUserFindByIdAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 20,
+      },
+      verifiedJobsAttribution: {
+        source: 'jobs',
+        jobId: '507f1f77bcf86cd799439011',
+        handoffVersion: 1,
+        jdHash: 'a'.repeat(64),
+        verifiedAt: new Date('2026-07-21T00:00:00Z'),
+      },
+      verifiedJobsParsedJobDescription: JOBS_PARSED_JD,
+      beforeVerifiedJobsSessionWrite,
+      jobDescription: JOBS_JD,
+    })).rejects.toMatchObject({ name: 'ModelProviderPreconditionError' })
+
+    expect(beforeVerifiedJobsSessionWrite).toHaveBeenCalledWith(mockDbSession)
+    expect(mockUserExists).not.toHaveBeenCalled()
+    expect(mockSessionCreate).not.toHaveBeenCalled()
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439010',
+      { $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 } },
+    )
+  })
+
+  it('preserves a transient posting write conflict so Mongo can retry the transaction', async () => {
+    const transientConflict = Object.assign(new Error('write conflict'), {
+      errorLabels: ['TransientTransactionError'],
+      hasErrorLabel: (label: string) => label === 'TransientTransactionError',
+    })
+    const beforeVerifiedJobsSessionWrite = vi.fn().mockRejectedValue(transientConflict)
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockUserFindByIdAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 20,
+      },
+      verifiedJobsAttribution: {
+        source: 'jobs',
+        jobId: '507f1f77bcf86cd799439011',
+        handoffVersion: 1,
+        jdHash: 'a'.repeat(64),
+        verifiedAt: new Date('2026-07-21T00:00:00Z'),
+      },
+      verifiedJobsParsedJobDescription: JOBS_PARSED_JD,
+      beforeVerifiedJobsSessionWrite,
+      jobDescription: JOBS_JD,
+    })).rejects.toBe(transientConflict)
+
+    expect(transientConflict.hasErrorLabel('TransientTransactionError')).toBe(true)
+    expect(mockSessionCreate).not.toHaveBeenCalled()
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439010',
+      { $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 } },
+    )
+  })
+
+  it('rejects Jobs attribution without the server-carried exact parse before quota', async () => {
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 20,
+      },
+      verifiedJobsAttribution: {
+        source: 'jobs',
+        jobId: '507f1f77bcf86cd799439011',
+        handoffVersion: 1,
+        jdHash: 'a'.repeat(64),
+        verifiedAt: new Date('2026-07-21T00:00:00Z'),
+      },
+      beforeVerifiedJobsSessionWrite: vi.fn().mockResolvedValue(true),
+      jobDescription: JOBS_JD,
+    })).rejects.toMatchObject({ name: 'ModelProviderPreconditionError' })
+
+    expect(mockUserUpdateOne).not.toHaveBeenCalled()
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockSessionCreate).not.toHaveBeenCalled()
+    expect(mockParseJobDescription).not.toHaveBeenCalled()
+  })
+
+  it('rolls quota back and creates nothing when profile experience changes before the final transaction write', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockUserExistsSession.mockResolvedValueOnce(null)
+
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 20,
+      },
+      verifiedJobsAttribution: {
+        source: 'jobs',
+        jobId: '507f1f77bcf86cd799439011',
+        handoffVersion: 1,
+        jdHash: 'a'.repeat(64),
+        verifiedAt: new Date('2026-07-21T00:00:00Z'),
+      },
+      verifiedJobsParsedJobDescription: JOBS_PARSED_JD,
+      beforeVerifiedJobsSessionWrite: vi.fn().mockResolvedValue(true),
+      jobDescription: JOBS_JD,
+    })).rejects.toMatchObject({ name: 'ModelProviderPreconditionError' })
+
+    expect(mockUserExistsSession).toHaveBeenCalledWith(mockDbSession)
+    expect(mockSessionCreate).not.toHaveBeenCalled()
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439010',
+      { $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 } },
     )
   })
 
@@ -215,6 +384,9 @@ describe('createSession — Jobs JD provider authority', () => {
         jdHash: 'a'.repeat(64),
         verifiedAt: new Date('2026-07-21T00:00:00Z'),
       },
+      verifiedJobsParsedJobDescription: JOBS_PARSED_JD,
+      beforeVerifiedJobsSessionWrite: vi.fn().mockResolvedValue(true),
+      jobDescription: JOBS_JD,
     })).rejects.toThrow('User not found')
 
     expect(mockSessionCreate).not.toHaveBeenCalled()

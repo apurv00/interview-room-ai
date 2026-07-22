@@ -107,15 +107,24 @@ describe('verified Jobs retake context', () => {
     verifiedAt: new Date(),
   }
 
-  it('accepts only the same verified job and exact JD benchmark', () => {
-    expect(isRetakeContextCompatible(current, current)).toBe(true)
-    expect(isRetakeContextCompatible(current, { ...current, jobId: '507f1f77bcf86cd799439012' })).toBe(false)
-    expect(isRetakeContextCompatible(current, { ...current, jdHash: 'b'.repeat(64) })).toBe(false)
-    expect(isRetakeContextCompatible(current, { source: 'jobs', jobId: current.jobId })).toBe(false)
+  it('accepts only the same verified job, exact JD, role, and stored experience benchmark', () => {
+    expect(isRetakeContextCompatible(current, current, '0-2', '0-2', 'backend', 'backend')).toBe(true)
+    expect(isRetakeContextCompatible(current, { ...current, jobId: '507f1f77bcf86cd799439012' }, '0-2', '0-2', 'backend', 'backend')).toBe(false)
+    expect(isRetakeContextCompatible(current, { ...current, jdHash: 'b'.repeat(64) }, '0-2', '0-2', 'backend', 'backend')).toBe(false)
+    expect(isRetakeContextCompatible(current, { source: 'jobs', jobId: current.jobId }, '0-2', '0-2', 'backend', 'backend')).toBe(false)
+    expect(isRetakeContextCompatible(current, current, '0-2', '7+', 'backend', 'backend')).toBe(false)
+    expect(isRetakeContextCompatible(current, current, '0-2', undefined, 'backend', 'backend')).toBe(false)
+    expect(isRetakeContextCompatible(current, current, '0-2', '0-2', 'backend', 'frontend')).toBe(false)
   })
 
-  it('does not let a generic session attach to a verified Jobs chain', () => {
+  it('does not let a generic session attach to any claimed Jobs chain', () => {
     expect(isRetakeContextCompatible(undefined, current)).toBe(false)
+    expect(isRetakeContextCompatible(undefined, {
+      source: 'jobs',
+      jobId: current.jobId,
+    })).toBe(false)
+    expect(isRetakeContextCompatible(undefined, { source: 'jobs' })).toBe(false)
     expect(isRetakeContextCompatible(undefined, undefined)).toBe(true)
+    expect(isRetakeContextCompatible(undefined, { source: 'manual' })).toBe(true)
   })
 })

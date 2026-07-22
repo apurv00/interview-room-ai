@@ -139,6 +139,45 @@ describe('documentContextCache', () => {
       await flushMicrotasks()
       expect(mockParseJobDescription).not.toHaveBeenCalled()
     })
+
+    it('preserves the raw-only Jobs archive contract on every cache miss', async () => {
+      mockRedisGet.mockResolvedValue(null)
+      mockFindById.mockReturnValue(makeLeanQuery({
+        parsedJobDescription: {
+          rawText: 'retained archived JD',
+          company: '',
+          role: '',
+          inferredDomain: '',
+          requirements: [],
+          keyThemes: [],
+          modelParsingSuppressed: true,
+        },
+      }))
+
+      const result = await getOrLoadJDContext('sess-jobs-archive', 'retained archived JD')
+
+      expect(result).toBeNull()
+      await flushMicrotasks()
+      expect(mockParseJobDescription).not.toHaveBeenCalled()
+      expect(mockFindByIdAndUpdate).not.toHaveBeenCalled()
+      expect(mockRedisSet).not.toHaveBeenCalled()
+    })
+
+    it('does not parse when Mongo cannot prove whether parsing is allowed', async () => {
+      mockRedisGet.mockResolvedValue(null)
+      mockFindById.mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          lean: vi.fn().mockRejectedValue(new Error('mongo unavailable')),
+        }),
+      })
+
+      const result = await getOrLoadJDContext('sess-db-outage', 'raw JD text')
+
+      expect(result).toBeNull()
+      await flushMicrotasks()
+      expect(mockParseJobDescription).not.toHaveBeenCalled()
+      expect(mockFindByIdAndUpdate).not.toHaveBeenCalled()
+    })
   })
 
   describe('getOrLoadResumeContext', () => {

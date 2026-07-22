@@ -1,4 +1,4 @@
-import mongoose from 'mongoose'
+import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import {
   activeJobsAccountFilter,
@@ -8,7 +8,14 @@ import {
 import { InterviewSession, User } from '@shared/db/models'
 import { InterviewDepth } from '@shared/db/models/InterviewDepth'
 import type { IInterviewSession } from '@shared/db/models'
-import type { InterviewConfig, TranscriptEntry, AnswerEvaluation, SpeechMetrics, FeedbackData } from '@shared/types'
+import type {
+  InterviewConfig,
+  TranscriptEntry,
+  AnswerEvaluation,
+  SpeechMetrics,
+  FeedbackData,
+  IParsedJobDescription,
+} from '@shared/types'
 import { NotFoundError, ForbiddenError, UsageLimitError } from '@shared/errors'
 import { canViewSession, canEditSession } from '@shared/auth/permissions'
 import { FALLBACK_DEPTHS } from '@shared/db/seed'
@@ -43,7 +50,13 @@ interface CreateSessionInput {
     jdHash: string
     verifiedAt: Date
   }
-  /** Revalidates Jobs posting authority at the model adapter boundary. */
+  /** Server-resolved posting-cache parse; never accepted from browser config. */
+  verifiedJobsParsedJobDescription?: IParsedJobDescription & {
+    modelParsingSuppressed: true
+  }
+  /** Jobs-owned posting/application fence executed inside the session transaction. */
+  beforeVerifiedJobsSessionWrite?: (session: ClientSession) => Promise<boolean>
+  /** Revalidates Jobs posting authority immediately before its session write. */
   beforeJobDescriptionProviderCall?: CompletionOptions['beforeProviderCall']
   /**
    * If set, the new session is a retake. The service resolves this id to
@@ -71,17 +84,33 @@ function verifiedJobsRetakeIdentity(attribution: RetakeAttribution | undefined) 
     : undefined
 }
 
-/** Keep retake comparisons inside one server-verified job + JD benchmark. */
+/** Keep retakes inside one server-verified job, JD, role, and experience benchmark. */
 export function isRetakeContextCompatible(
   current: CreateSessionInput['verifiedJobsAttribution'],
   parent: RetakeAttribution | undefined,
+  currentExperience?: InterviewConfig['experience'],
+  parentExperience?: unknown,
+  currentRole?: InterviewConfig['role'],
+  parentRole?: unknown,
 ): boolean {
   const currentIdentity = verifiedJobsRetakeIdentity(current)
   const parentIdentity = verifiedJobsRetakeIdentity(parent)
-  if (!currentIdentity && !parentIdentity) return true
+  const currentClaimsJobs = current?.source === 'jobs'
+  const parentClaimsJobs = parent?.source === 'jobs'
+  // Two genuinely generic sessions remain comparable. A legacy or malformed
+  // Jobs claim is different: collapsing it to "generic" would let an
+  // unverified posting-derived benchmark acquire new comparison lineage.
+  if (!currentIdentity && !parentIdentity) {
+    return !currentClaimsJobs && !parentClaimsJobs
+  }
   return !!currentIdentity && !!parentIdentity &&
     currentIdentity.jobId === parentIdentity.jobId &&
-    currentIdentity.jdHash === parentIdentity.jdHash
+    currentIdentity.jdHash === parentIdentity.jdHash &&
+    currentExperience !== undefined &&
+    parentExperience === currentExperience &&
+    typeof currentRole === 'string' &&
+    currentRole.length > 0 &&
+    parentRole === currentRole
 }
 
 interface UpdateSessionInput {
@@ -133,6 +162,17 @@ export function isDepthAllowedForExperience(depthSlug: string, experience: strin
 
 export async function createSession(input: CreateSessionInput): Promise<IInterviewSession> {
   await connectDB()
+
+  if (
+    input.verifiedJobsAttribution && (
+      !input.verifiedJobsParsedJobDescription ||
+      input.verifiedJobsParsedJobDescription.modelParsingSuppressed !== true ||
+      input.verifiedJobsParsedJobDescription.rawText !== input.jobDescription ||
+      !input.beforeVerifiedJobsSessionWrite
+    )
+  ) {
+    throw new ModelProviderPreconditionError()
+  }
 
   // Server-side experience gate: an experience-restricted depth (academics → 0-2) must
   // NOT run on the wrong band even if a tampered client config or a direct API call
@@ -234,7 +274,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   if (input.parentSessionId) {
     try {
       const parent = await InterviewSession.findById(input.parentSessionId)
-        .select('_id parentSessionId userId attribution')
+        .select('_id parentSessionId userId attribution config.experience config.role')
         .lean()
       if (
         parent &&
@@ -242,13 +282,17 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
         isRetakeContextCompatible(
           input.verifiedJobsAttribution,
           parent.attribution as RetakeAttribution | undefined,
+          input.config.experience,
+          parent.config?.experience,
+          input.config.role,
+          parent.config?.role,
         )
       ) {
         const candidateRootId = (parent.parentSessionId as mongoose.Types.ObjectId | undefined) ||
           (parent._id as mongoose.Types.ObjectId)
         const root = parent.parentSessionId
           ? await InterviewSession.findById(candidateRootId)
-            .select('_id userId attribution')
+            .select('_id userId attribution config.experience config.role')
             .lean()
           : parent
         if (
@@ -257,6 +301,10 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
           !isRetakeContextCompatible(
             input.verifiedJobsAttribution,
             root.attribution as RetakeAttribution | undefined,
+            input.config.experience,
+            root.config?.experience,
+            input.config.role,
+            root.config?.role,
           )
         ) {
           throw new Error('Retake root does not match the current interview context')
@@ -294,18 +342,18 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     plannedQuestionCount = undefined
   }
 
-  // Jobs-derived JDs have a revocable source authority. Parse them before a
-  // session exists, then recheck once more after the provider returns. If the
-  // adapter-level gate or final check denies, roll back the quota claim and
-  // leave no stale Jobs session for the API to return. Ordinary/manual JDs
-  // retain the historical post-create, non-fatal parsing path below.
-  let gatedParsedJobDescription: Awaited<ReturnType<typeof parseJobDescription>> | undefined
+  // Jobs-derived JDs have a revocable source authority and arrive with the
+  // posting-cache parse already resolved. Recheck that authority before the
+  // session write, but never invoke the interview module's second JD parser.
+  // Ordinary/manual JDs retain the historical post-create parsing path below.
+  let gatedParsedJobDescription: Awaited<ReturnType<typeof parseJobDescription>> | undefined =
+    input.verifiedJobsParsedJobDescription
   if (input.jobDescription && input.beforeJobDescriptionProviderCall) {
     try {
-      gatedParsedJobDescription = await parseJobDescription(
+      gatedParsedJobDescription = input.verifiedJobsParsedJobDescription ?? await parseJobDescription(
         input.jobDescription,
         undefined,
-        input.beforeJobDescriptionProviderCall
+        input.beforeJobDescriptionProviderCall,
       )
       try {
         if (!(await input.beforeJobDescriptionProviderCall())) {
@@ -343,6 +391,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     candidateName: input.candidateName,
     userAgent: input.userAgent,
     jobDescription: input.jobDescription,
+    parsedJobDescription: gatedParsedJobDescription as unknown as Record<string, unknown> | undefined,
     resumeText: input.resumeText,
     jdFileName: input.jdFileName,
     resumeFileName: input.resumeFileName,
@@ -356,6 +405,22 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   try {
     if (input.verifiedJobsAttribution) {
       session = await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
+        // Preserve Mongo's TransientTransactionError labels unchanged so
+        // withTransaction can retry the whole User → posting → application →
+        // session unit against the winning commit.
+        const jobsAuthorityCurrent = Boolean(
+          await input.beforeVerifiedJobsSessionWrite?.(dbSession),
+        )
+        if (!jobsAuthorityCurrent) throw new ModelProviderPreconditionError()
+        // The route/provider checks can finish before the final write. Bind
+        // the server-canonical experience to the same User-document write
+        // fence and Mongo transaction that creates the session so a profile
+        // edit cannot win in the last gap and persist a stale calibration.
+        const profileStillCurrent = await User.exists({
+          _id: new mongoose.Types.ObjectId(input.userId),
+          experienceLevel: input.config.experience,
+        }).session(dbSession)
+        if (!profileStillCurrent) throw new ModelProviderPreconditionError()
         const [created] = await InterviewSession.create([sessionPayload], { session: dbSession })
         return created
       })
@@ -398,7 +463,9 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
       const update: Record<string, unknown> = {}
 
       if (jdResult.status === 'fulfilled' && jdResult.value && jdResult.value.requirements?.length) {
-        update.parsedJobDescription = jdResult.value
+        // Jobs sessions persisted their server-resolved parse atomically with
+        // session creation; only the ordinary/manual path needs this backfill.
+        if (!gatedParsedJobDescription) update.parsedJobDescription = jdResult.value
         const ctx = buildParsedJDContext(jdResult.value)
         if (ctx) {
           try { await setCachedJDContext(sid, ctx) } catch { /* non-fatal */ }

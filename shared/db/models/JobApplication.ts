@@ -281,6 +281,13 @@ const JobApplicationSchema = new Schema<IJobApplication>(
   { timestamps: true }
 )
 
+// Internal transaction-conflict token for authority-bound readers that must
+// serialize against tracker deletion without changing candidate-visible
+// status, history, readiness, or updatedAt.
+JobApplicationSchema.add({
+  derivedAuthorityRevision: { type: Number, default: 0, select: false },
+} as never)
+
 // One application row per user per posting — double-saves collapse.
 JobApplicationSchema.index({ userId: 1, jobPostingId: 1 }, { unique: true })
 // Tracker list: grouped by status, most recently touched first.

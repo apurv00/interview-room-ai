@@ -10,6 +10,8 @@ export { getShortFormMinAnswers } from './services/eval/sessionScoringPolicy'
 export { generateSessionBrief, briefToPromptContext } from './services/persona/personalizationEngine'
 export { retrieveQuestions, getQuestionBankContext, getCompanyContext } from './services/persona/retrievalService'
 export { parseJobDescription, buildParsedJDContext } from './services/persona/jdParserService'
+export { getActiveInterviewDomainCatalog } from './services/persona/domainCatalogService'
+export type { ActiveInterviewDomainCatalog } from './services/persona/domainCatalogService'
 export {
   parseAndCacheResume,
   buildParsedResumeContext,

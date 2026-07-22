@@ -38,6 +38,7 @@ const BASE_DETAIL = {
   },
   jd: 'Build accessible React interfaces.',
   applyOptions: [],
+  allApplyOptionsDemoted: false,
   flags: { staffing: false, shortJd: false, repost: false },
   application: null,
 }
@@ -71,6 +72,16 @@ const LIVE_APPLY_DETAIL_WITH_ALTERNATE = {
     },
   ],
 }
+const TRACKED_INTERVIEW_DETAIL = {
+  ...BASE_DETAIL,
+  capabilities: { ...BASE_DETAIL.capabilities, xray: false },
+  application: {
+    applicationId: 'app-1',
+    status: 'interview_scheduled',
+    practiceCount: 1,
+    ats: { state: 'none' as const },
+  },
+}
 
 function jsonResponse(value: unknown, ok = true) {
   return Promise.resolve({ ok, json: () => Promise.resolve(value) })
@@ -89,7 +100,7 @@ beforeEach(() => {
   mockFetch.mockReset()
   mockPush.mockReset()
   localStorage.clear()
-  vi.stubGlobal('open', vi.fn())
+  vi.stubGlobal('open', vi.fn(() => ({ opener: window, name: '', close: vi.fn() })))
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   window.history.replaceState({}, '', `/jobs/${JOB_ID}`)
 })
@@ -171,6 +182,94 @@ describe('Job detail Practice readiness', () => {
     expect(screen.queryByText('Your account is unavailable.')).toBeNull()
   })
 
+  it('renders Tracked from the server application projection without issuing a Save mutation', async () => {
+    const trackedDetail = {
+      ...LIVE_APPLY_DETAIL,
+      application: {
+        applicationId: 'app-1',
+        status: 'saved',
+        practiceCount: 0,
+        ats: { state: 'none' as const },
+      },
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(trackedDetail) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    const tracked = await screen.findByRole('button', { name: 'Tracked ✓' })
+    expect(tracked).toBeDisabled()
+    fireEvent.click(tracked)
+    expect(mockFetch.mock.calls.some(([url]) => String(url).endsWith('/save'))).toBe(false)
+  })
+
+  it('shows Tracked only after the post-mutation server projection contains an application', async () => {
+    const trackedDetail = {
+      ...LIVE_APPLY_DETAIL,
+      application: {
+        applicationId: 'app-1',
+        status: 'saved',
+        practiceCount: 0,
+        ats: { state: 'none' as const },
+      },
+    }
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return jsonResponse(detailCalls === 1 ? LIVE_APPLY_DETAIL : trackedDetail)
+      }
+      if (url.endsWith('/save')) return jsonResponse({ ok: true })
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('button', { name: 'Tracked ✓' })).toBeDisabled()
+    expect(detailCalls).toBe(2)
+  })
+
+  it('keeps Save single-flight across rapid same-tick clicks', async () => {
+    let resolveSave!: (response: unknown) => void
+    const pendingSave = new Promise((resolve) => { resolveSave = resolve })
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
+      if (url.endsWith('/save')) return pendingSave
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    const save = await screen.findByRole('button', { name: 'Save' })
+    fireEvent.click(save)
+    fireEvent.click(save)
+
+    const saveCalls = mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/save'))
+    expect(saveCalls).toHaveLength(1)
+    await act(async () => {
+      resolveSave({ ok: false, status: 503, json: () => Promise.resolve({}) })
+    })
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t save this job/i)
+  })
+
+  it('keeps Save unconfirmed and reports a safe error when the authority refresh has no application', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
+      if (url.endsWith('/save')) return jsonResponse({ ok: true })
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t confirm the save/i)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+  })
+
   it('scrubs the job when the post-Save detail refresh reports account unavailability', async () => {
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -194,6 +293,39 @@ describe('Job detail Practice readiness', () => {
 
     expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
     expect(screen.queryByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeNull()
+  })
+
+  it.each([
+    [404, /isn.t available anymore/i],
+    [410, /closed or expired/i],
+  ] as const)('replaces stale actions with the authoritative %i state after Save', async (status, safeCopy) => {
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return detailCalls === 1
+          ? jsonResponse(LIVE_APPLY_DETAIL)
+          : Promise.resolve({
+              ok: false,
+              status,
+              json: () => Promise.resolve({}),
+            })
+      }
+      if (url.endsWith('/save')) return jsonResponse({ ok: true })
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText(safeCopy)).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Apply ↗' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Tailor resume' })).toBeNull()
+    expect(screen.queryByText(LIVE_APPLY_DETAIL.jd)).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('scrubs the job when ATS-check reports account unavailability', async () => {
@@ -227,6 +359,7 @@ describe('Job detail Practice readiness', () => {
       capabilities: { ...BASE_DETAIL.capabilities, xray: false, practice: true },
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
       application: {
         applicationId: 'app1',
         status: 'interview_scheduled',
@@ -254,6 +387,7 @@ describe('Job detail Practice readiness', () => {
       capabilities: { ...BASE_DETAIL.capabilities, xray: false, practice: true },
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
       application: {
         applicationId: 'app1',
         status: 'interview_scheduled',
@@ -277,17 +411,103 @@ describe('Job detail Practice readiness', () => {
 
   it.each([
     ['a server failure', () => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) })],
-    ['a transport failure', () => Promise.reject(new Error('offline'))],
-    ['an invalid response', () => Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error('invalid JSON')) })],
-  ])('uses truthful unavailable copy for %s on initial load', async (_case, detailResponse) => {
+    ['invalid JSON', () => Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error('invalid JSON')) })],
+    ['a malformed projection', () => jsonResponse({ id: JOB_ID })],
+    ['a projection for another job', () => jsonResponse({ ...BASE_DETAIL, id: RETAKE_ID })],
+    ['a projection without lifecycle authority', () => jsonResponse({
+      ...BASE_DETAIL,
+      postingState: undefined,
+    })],
+    ['malformed capabilities', () => jsonResponse({
+      ...BASE_DETAIL,
+      capabilities: { ...BASE_DETAIL.capabilities, atsCheck: 'yes' },
+    })],
+    ['a malformed apply option', () => jsonResponse({
+      ...BASE_DETAIL,
+      applyOptions: [{ optionId: 'raw-database-id', url: 'https://apply.example/job', tier: 'direct-ats' }],
+    })],
+    ['a malformed application ATS projection', () => jsonResponse({
+      ...TRACKED_INTERVIEW_DETAIL,
+      application: { ...TRACKED_INTERVIEW_DETAIL.application, ats: { state: 'complete' } },
+    })],
+    ['a malformed Practice projection', () => jsonResponse({
+      ...BASE_DETAIL,
+      practiceExperience: '3-to-6',
+    })],
+  ])('shows a retryable server error for %s on initial load', async (_case, detailResponse) => {
     mockFetch.mockImplementation((input: RequestInfo | URL) => (
       String(input) === `/api/jobs/${JOB_ID}` ? detailResponse() : jsonResponse({})
     ))
 
     render(<JobDetailPage params={{ id: JOB_ID }} />)
 
-    expect(await screen.findByText(/couldn.t confirm this posting is still available/i)).toBeTruthy()
+    expect(await screen.findByText(/couldn.t load this posting right now/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
     expect(screen.queryByText(/isn.t available anymore/i)).toBeNull()
+  })
+
+  it.each([
+    ['a projection for another job', { ...TRACKED_INTERVIEW_DETAIL, id: RETAKE_ID, title: 'Wrong job' }],
+    ['a projection without lifecycle authority', {
+      ...TRACKED_INTERVIEW_DETAIL,
+      postingState: undefined,
+    }],
+    ['a malformed nested application', {
+      ...TRACKED_INTERVIEW_DETAIL,
+      title: 'Malformed job',
+      application: { ...TRACKED_INTERVIEW_DETAIL.application, ats: {} },
+    }],
+  ])('preserves the current projection when a background refetch returns %s', async (_case, backgroundProjection) => {
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return jsonResponse(detailCalls === 1 ? TRACKED_INTERVIEW_DETAIL : backgroundProjection)
+      }
+      if (url.endsWith('/interview-date')) return jsonResponse({ ok: true })
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    const heading = await screen.findByRole('heading', { name: BASE_DETAIL.title })
+    expect(screen.getByRole('button', { name: 'Tracked ✓' })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tomorrow' }))
+    await waitFor(() => expect(detailCalls).toBe(2))
+
+    expect(heading.isConnected).toBe(true)
+    expect(screen.getByRole('heading', { name: BASE_DETAIL.title })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: /Wrong job|Malformed job/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Tracked ✓' })).toBeDisabled()
+    expect(screen.queryByText(/couldn.t load this posting right now/i)).toBeNull()
+  })
+
+  it('distinguishes an offline initial load and retries with a read without duplicating the view event', async () => {
+    const retryDetail = {
+      ...BASE_DETAIL,
+      capabilities: { ...BASE_DETAIL.capabilities, xray: false },
+    }
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return detailCalls === 1 ? Promise.reject(new Error('offline')) : jsonResponse(retryDetail)
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByText('You appear to be offline.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('heading', { name: BASE_DETAIL.title })).toBeTruthy()
+    expect(detailCalls).toBe(2)
+    const viewEvents = mockFetch.mock.calls.filter(([url, init]) => (
+      String(url) === '/api/events' && String(init?.body).includes('jobs.job_viewed')
+    ))
+    expect(viewEvents).toHaveLength(1)
   })
 
   it('reserves missing copy for an authoritative 404', async () => {
@@ -300,6 +520,20 @@ describe('Job detail Practice readiness', () => {
     render(<JobDetailPage params={{ id: JOB_ID }} />)
 
     expect(await screen.findByText(/isn.t available anymore/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('renders an authoritative 410 as closed rather than a temporary failure', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}`
+        ? Promise.resolve({ ok: false, status: 410, json: () => Promise.resolve({}) })
+        : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByText('This posting has closed or expired.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
   it('does not let a truthy X-ray role expose Practice when the server withholds readiness', async () => {
@@ -321,6 +555,53 @@ describe('Job detail Practice readiness', () => {
     expect(mockPush).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['whitespace-only', '   '],
+  ])('does not advertise or auto-start Practice when the canonical JD is %s', async (_case, jd) => {
+    window.history.replaceState({}, '', `/jobs/${JOB_ID}?practice=1`)
+    const noCanonicalJd = {
+      ...BASE_DETAIL,
+      capabilities: { ...BASE_DETAIL.capabilities, xray: false, practice: true },
+      jd,
+      practiceRole: 'frontend',
+      practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(noCanonicalJd) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByRole('heading', { name: BASE_DETAIL.title })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Practice for this job/i })).toBeNull()
+    expect(localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)).toBeNull()
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('blocks Practice on missing profile experience and links to Settings without guessing a range', async () => {
+    window.history.replaceState({}, '', `/jobs/${JOB_ID}?practice=1`)
+    const needsExperience = {
+      ...BASE_DETAIL,
+      capabilities: { ...BASE_DETAIL.capabilities, xray: false, practice: false },
+      practiceBlocker: 'experience-required' as const,
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(needsExperience) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    const settings = await screen.findByRole('link', { name: 'Settings' })
+    expect(settings).toHaveAttribute('href', '/settings')
+    expect(screen.getByText(/Add your experience level/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Practice for this job/i })).toBeNull()
+    expect(localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)).toBeNull()
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
   it('waits for server readiness after X-ray persistence and uses the server role for email auto-start', async () => {
     window.history.replaceState({}, '', `/jobs/${JOB_ID}?practice=1`)
     const ready = {
@@ -328,6 +609,7 @@ describe('Job detail Practice readiness', () => {
       company: 'c'.repeat(201),
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
     }
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -346,10 +628,12 @@ describe('Job detail Practice readiness', () => {
     expect(mockPush).toHaveBeenCalledTimes(1)
     const stored = JSON.parse(localStorage.getItem('interviewConfig') ?? '{}') as {
       role?: string
+      experience?: string
       jobsHandoffToken?: string
       targetCompany?: string
     }
     expect(stored.role).toBe('frontend')
+    expect(stored.experience).toBe('7+')
     expect(stored.jobsHandoffToken).toBe('server-signed-token')
     expect(stored.targetCompany).toHaveLength(200)
     expect(stored.role).not.toBe(XRAY.inferredDomain)
@@ -360,6 +644,7 @@ describe('Job detail Practice readiness', () => {
       ...BASE_DETAIL,
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
     }
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -388,6 +673,7 @@ describe('Job detail Practice readiness', () => {
       ...BASE_DETAIL,
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
     }
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -411,11 +697,50 @@ describe('Job detail Practice readiness', () => {
     expect(mockPush).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps X-ray reconciliation open until the server publishes a non-empty canonical JD', async () => {
+    window.history.replaceState({}, '', `/jobs/${JOB_ID}?practice=1`)
+    const credentialsWithoutJd = {
+      ...BASE_DETAIL,
+      jd: '   ',
+      practiceRole: 'frontend',
+      practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
+    }
+    const ready = {
+      ...credentialsWithoutJd,
+      jd: 'Canonical persisted job description.',
+    }
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/xray')) return Promise.reject(new Error('response lost before JD persistence'))
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return jsonResponse(detailCalls < 3 ? credentialsWithoutJd : ready)
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    await waitFor(
+      () => expect(mockPush).toHaveBeenCalledWith('/lobby'),
+      { timeout: 2_500 },
+    )
+    // Initial load + two reconciliation reads + click-time authority refresh.
+    expect(detailCalls).toBe(4)
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG) ?? '{}') as {
+      jobDescription?: string
+    }
+    expect(stored.jobDescription).toBe(ready.jd)
+  })
+
   it('does not refetch detail after X-ray when the initial server projection is already ready', async () => {
     const ready = {
       ...BASE_DETAIL,
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
     }
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -510,6 +835,7 @@ describe('Job detail Practice readiness', () => {
       ...BASE_DETAIL,
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
     }
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -529,19 +855,46 @@ describe('Job detail Practice readiness', () => {
     expect(mockPush).not.toHaveBeenCalled()
   })
 
+  it('fails closed when click-time reauthorization returns only whitespace as the JD', async () => {
+    const ready = {
+      ...BASE_DETAIL,
+      capabilities: { ...BASE_DETAIL.capabilities, xray: false },
+      practiceRole: 'frontend',
+      practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
+    }
+    let detailCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailCalls += 1
+        return jsonResponse(detailCalls === 1 ? ready : { ...ready, jd: '   ' })
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Practice for this job/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn\'t prepare/i)
+    expect(localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG)).toBeNull()
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
   it('replaces stale live content when click-time Practice reauthorization becomes restricted', async () => {
     const ready = {
       ...LIVE_APPLY_DETAIL,
       capabilities: { ...LIVE_APPLY_DETAIL.capabilities, practice: true },
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
     }
     const restricted = {
       ...BASE_DETAIL,
       postingState: 'restricted' as const,
       capabilities: { apply: false, viewSource: false, xray: false, tailor: false, practice: false, atsCheck: false },
       jd: undefined,
-      applyOptions: undefined,
+      applyOptions: [],
       application: { applicationId: 'app1', status: 'saved', practiceCount: 0, ats: { state: 'none' as const } },
     }
     let detailCalls = 0
@@ -567,11 +920,13 @@ describe('Job detail Practice readiness', () => {
   it.each([
     ['a non-OK response', () => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) })],
     ['invalid JSON', () => Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error('invalid')) })],
+    ['a malformed projection', () => jsonResponse({ id: JOB_ID })],
   ])('fails closed instead of retaining stale detail after click-time %s', async (_case, failedRefresh) => {
     const ready = {
       ...BASE_DETAIL,
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
     }
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -587,7 +942,7 @@ describe('Job detail Practice readiness', () => {
     render(<JobDetailPage params={{ id: JOB_ID }} />)
     fireEvent.click(await screen.findByRole('button', { name: /Practice for this job/i }))
 
-    expect(await screen.findByText(/couldn.t confirm this posting is still available/i)).toBeTruthy()
+    expect(await screen.findByText(/couldn.t load this posting right now/i)).toBeTruthy()
     expect(screen.queryByText(BASE_DETAIL.jd)).toBeNull()
     expect(mockPush).not.toHaveBeenCalled()
   })
@@ -628,6 +983,7 @@ describe('Job detail Practice readiness', () => {
       applyOptions: [{ optionId: APPLY_OPTION_ID, url: 'https://must-not-render.example/apply', tier: 'direct-ats' }],
       practiceRole: 'frontend',
       practiceHandoffToken: 'archived-owner-token',
+      practiceExperience: '7+' as const,
       application: { applicationId: 'app1', status: 'applied', practiceCount: 1, ats: { state: 'none' as const } },
     }
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -843,17 +1199,23 @@ describe('Job detail Practice readiness', () => {
       .toHaveAttribute('href', viewRedirectHref)
     fireEvent.click(apply)
 
-    expect(window.open).not.toHaveBeenCalled()
+    expect(window.open).toHaveBeenCalledTimes(1)
+    expect(window.open).toHaveBeenCalledWith('', expect.stringMatching(/^[a-f0-9]{32}$/))
+    const popup = vi.mocked(window.open).mock.results[0]?.value as Window
+    const popupTarget = applyForm?.getAttribute('target')
+    expect(popupTarget).toMatch(/^[a-f0-9]{32}$/)
+    expect(popupTarget).not.toContain(JOB_ID)
+    expect(popupTarget).not.toContain(APPLY_OPTION_ID)
+    expect(popup.name).toBe(popupTarget)
+    expect(popup.opener).toBeNull()
+    expect(applyForm).not.toHaveAttribute('rel')
     const arm = JSON.parse(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`) ?? '{}')
     expect(arm).toMatchObject({
       optionId: APPLY_OPTION_ID,
       url: 'https://apply.example/job',
       tier: 'direct-ats',
     })
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith(
-      `/api/jobs/${JOB_ID}/apply-click`,
-      expect.objectContaining({ body: JSON.stringify({ optionId: APPLY_OPTION_ID }) }),
-    ))
+    expect(mockFetch.mock.calls.some(([url]) => String(url).endsWith('/apply-click'))).toBe(false)
 
     fireEvent(document, new Event('visibilitychange'))
     fireEvent.click(await screen.findByRole('button', { name: /Link didn.t work/i }))
@@ -905,27 +1267,71 @@ describe('Job detail Practice readiness', () => {
     expect(alternate.closest('form')).toHaveAttribute('rel', 'noopener noreferrer')
   })
 
-  it('scrubs the job when the Apply keepalive reports account unavailability', async () => {
-    mockFetch.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
-      if (url.endsWith('/apply-click')) return accountUnavailableResponse()
-      return jsonResponse({})
-    })
+  it('prevents Apply and leaves no false return arm when the browser blocks the popup', async () => {
+    vi.mocked(window.open).mockReturnValueOnce(null)
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(LIVE_APPLY_DETAIL) : jsonResponse({})
+    ))
 
     render(<JobDetailPage params={{ id: JOB_ID }} />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply ↗' }))
+    const apply = await screen.findByRole('button', { name: 'Apply ↗' })
+    const form = apply.closest('form')
+    const submitted = fireEvent.click(apply)
 
-    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
-    expect(screen.queryByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeNull()
+    expect(submitted).toBe(false)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/blocked the application tab/i)
     expect(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`)).toBeNull()
+    expect(form).toHaveAttribute('target', '_blank')
+    expect(form).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(mockFetch.mock.calls.some(([url]) => String(url).endsWith('/apply-click'))).toBe(false)
+  })
+
+  it('renders no primary or alternate Apply forms when server capability is false', async () => {
+    const contradictory = {
+      ...LIVE_APPLY_DETAIL_WITH_ALTERNATE,
+      capabilities: { ...LIVE_APPLY_DETAIL_WITH_ALTERNATE.capabilities, apply: false },
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(contradictory) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByRole('heading', { name: LIVE_APPLY_DETAIL.title })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply ↗' })).toBeNull()
+    expect(screen.queryByText(/Also available:/i)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Company careers' })).toBeNull()
+    expect(screen.queryByRole('link', { name: /View full posting/i })).toBeNull()
+    expect(document.querySelector('form[action*="/open?"]')).toBeNull()
+  })
+
+  it('fails safely without opening or arming Apply when secure randomness is unavailable', async () => {
+    const randomSpy = vi.spyOn(window.crypto, 'getRandomValues').mockImplementationOnce(() => {
+      throw new Error('secure randomness unavailable')
+    })
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(LIVE_APPLY_DETAIL) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    const apply = await screen.findByRole('button', { name: 'Apply ↗' })
+    const form = apply.closest('form')
+    const submitted = fireEvent.click(apply)
+
+    expect(submitted).toBe(false)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/open the application tab safely/i)
+    expect(window.open).not.toHaveBeenCalled()
+    expect(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`)).toBeNull()
+    expect(form).toHaveAttribute('target', '_blank')
+    expect(form).toHaveAttribute('rel', 'noopener noreferrer')
+    randomSpy.mockRestore()
   })
 
   it.each(['server error', 'transport error'])('does not let a slower visibility %s replace terminal account-unavailable state', async (failure) => {
-    let resolveApply!: (value: unknown) => void
+    let resolveSave!: (value: unknown) => void
     let resolveVisibility!: (value: unknown) => void
     let rejectVisibility!: (reason: unknown) => void
-    const applyResponse = new Promise((resolve) => { resolveApply = resolve })
+    const saveResponse = new Promise((resolve) => { resolveSave = resolve })
     const visibilityResponse = new Promise((resolve, reject) => {
       resolveVisibility = resolve
       rejectVisibility = reject
@@ -937,17 +1343,17 @@ describe('Job detail Practice readiness', () => {
         detailCalls += 1
         return detailCalls === 1 ? jsonResponse(LIVE_APPLY_DETAIL) : visibilityResponse
       }
-      if (url.endsWith('/apply-click')) return applyResponse
+      if (url.endsWith('/save')) return saveResponse
       return jsonResponse({})
     })
 
     render(<JobDetailPage params={{ id: JOB_ID }} />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply ↗' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
     fireEvent(document, new Event('visibilitychange'))
     await waitFor(() => expect(detailCalls).toBe(2))
 
     await act(async () => {
-      resolveApply({
+      resolveSave({
         ok: false,
         status: 401,
         json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
@@ -973,15 +1379,16 @@ describe('Job detail Practice readiness', () => {
   })
 
   it('does not let a slower Practice refresh replace terminal account-unavailable state', async () => {
-    let resolveApply!: (value: unknown) => void
+    let resolveSave!: (value: unknown) => void
     let resolvePractice!: (value: unknown) => void
-    const applyResponse = new Promise((resolve) => { resolveApply = resolve })
+    const saveResponse = new Promise((resolve) => { resolveSave = resolve })
     const practiceResponse = new Promise((resolve) => { resolvePractice = resolve })
     const practiceDetail = {
       ...LIVE_APPLY_DETAIL,
       capabilities: { ...LIVE_APPLY_DETAIL.capabilities, practice: true },
       practiceRole: 'frontend',
       practiceHandoffToken: 'server-signed-token',
+      practiceExperience: '7+' as const,
     }
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -990,17 +1397,17 @@ describe('Job detail Practice readiness', () => {
         detailCalls += 1
         return detailCalls === 1 ? jsonResponse(practiceDetail) : practiceResponse
       }
-      if (url.endsWith('/apply-click')) return applyResponse
+      if (url.endsWith('/save')) return saveResponse
       return jsonResponse({})
     })
 
     render(<JobDetailPage params={{ id: JOB_ID }} />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply ↗' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
     fireEvent.click(screen.getByRole('button', { name: /Practice for this job/i }))
     await waitFor(() => expect(detailCalls).toBe(2))
 
     await act(async () => {
-      resolveApply({
+      resolveSave({
         ok: false,
         status: 401,
         json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
@@ -1042,6 +1449,32 @@ describe('Job detail Practice readiness', () => {
 
     expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
     expect(screen.queryByText(/Couldn.t record that just now/i)).toBeNull()
+  })
+
+  it('does not manufacture an application or retry when apply confirmation has no server row', async () => {
+    localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
+      clickedAt: Date.now() - 21_000,
+      optionId: APPLY_OPTION_ID,
+      url: 'https://apply.example/job',
+      tier: 'direct-ats',
+    }))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL)
+      if (url.endsWith('/status')) {
+        return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) })
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    await screen.findByRole('button', { name: 'Apply ↗' })
+    fireEvent(document, new Event('visibilitychange'))
+    fireEvent.click(await screen.findByRole('button', { name: '✓ Yes, applied' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/Couldn.t record that just now/i)
+    expect(mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/status'))).toHaveLength(1)
+    expect(mockFetch.mock.calls.some(([url]) => String(url).endsWith('/apply-click'))).toBe(false)
   })
 
   it('shows durable Tailor state and sends the explicit tailored version on apply confirmation', async () => {
@@ -1305,7 +1738,11 @@ describe('Job detail Practice readiness', () => {
   })
 
   it.each([
-    ['a non-OK response', () => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) }), /couldn.t confirm this posting/i],
+    ['a 404 response', () => Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) }), /isn.t available anymore/i],
+    ['a 410 response', () => Promise.resolve({ ok: false, status: 410, json: () => Promise.resolve({}) }), /closed or expired/i],
+    ['a server response', () => Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) }), /couldn.t load this posting right now/i],
+    ['a malformed projection', () => jsonResponse({ id: JOB_ID }), /couldn.t load this posting right now/i],
+    ['an offline response', () => Promise.reject(new Error('offline')), /appear to be offline/i],
     ['a gated projection', () => jsonResponse({ ...LIVE_APPLY_DETAIL, gated: true, jd: undefined, applyOptions: undefined }), /sign in to read the full posting/i],
   ])('fails closed on visibility revalidation with %s', async (_case, revalidation, safeCopy) => {
     let detailCalls = 0
@@ -1346,7 +1783,7 @@ describe('Job detail Practice readiness', () => {
         atsCheck: false,
       },
       jd: undefined,
-      applyOptions: undefined,
+      applyOptions: [],
     }
     let intervalHandler: TimerHandler | null = null
     const setIntervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler, delay) => {
@@ -1390,7 +1827,7 @@ describe('Job detail Practice readiness', () => {
         atsCheck: false,
       },
       jd: undefined,
-      applyOptions: undefined,
+      applyOptions: [],
     }
     let detailCalls = 0
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
