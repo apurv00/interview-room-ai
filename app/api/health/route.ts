@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { deploymentCommitOf } from './deploymentIdentity'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,13 +41,12 @@ export async function GET(req: NextRequest) {
   // If HEALTH_CHECK_TOKEN is not set, the detailed check is disabled for
   // public access.
   const token = process.env.HEALTH_CHECK_TOKEN
-  if (token) {
-    const provided =
-      req.headers.get('authorization')?.replace('Bearer ', '') ||
-      req.nextUrl.searchParams.get('token')
-    if (provided !== token) {
-      return NextResponse.json({ status: 'ok' }, { status: 200 })
-    }
+  const provided =
+    req.headers.get('authorization')?.replace('Bearer ', '') ||
+    req.nextUrl.searchParams.get('token')
+  const releaseGateAuthenticated = !!token && provided === token
+  if (!releaseGateAuthenticated) {
+    return NextResponse.json({ status: 'ok' }, { status: 200 })
   }
   const checks: Record<string, 'ok' | 'error'> = {}
 
@@ -69,13 +69,17 @@ export async function GET(req: NextRequest) {
 
   const allOk = Object.values(checks).every((v) => v === 'ok')
 
-  return NextResponse.json(
+  const response = NextResponse.json(
     {
       status: allOk ? 'healthy' : 'degraded',
       checks,
+      releaseGateAuthenticated,
+      deploymentCommit: releaseGateAuthenticated ? deploymentCommitOf() : null,
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
     },
     { status: allOk ? 200 : 503 }
   )
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
 }

@@ -16,7 +16,7 @@ const {
   mockSessionFindById, mockAppFindById, mockAppFindOne, mockAppUpdateOne, mockPostingFindById, mockPostingExists,
   mockPostingUpdateOne,
   mockEvidenceDeleteMany, mockEvidenceInsertMany, mockEvidenceFind, mockEvidenceExists,
-  mockCompletion, mockInngestSend, mockSessionFind, mockSessionUpdateOne, mockResolveModel,
+  mockCompletion, mockInngestSend, mockSessionFind, mockSessionUpdateOne, mockResolveModelWithAuthority,
   mockSessionExists, mockEnsurePracticeApplication,
   mockIsScorablePracticeEvaluation, mockHasCompletedScoredPractice,
   mockAppExists, createdFunctionConfigs,
@@ -27,7 +27,7 @@ const {
   mockSessionFindById: vi.fn(), mockAppFindById: vi.fn(), mockAppFindOne: vi.fn(), mockAppUpdateOne: vi.fn(),
   mockPostingFindById: vi.fn(), mockPostingExists: vi.fn(), mockPostingUpdateOne: vi.fn(), mockEvidenceDeleteMany: vi.fn(), mockEvidenceInsertMany: vi.fn(),
   mockEvidenceFind: vi.fn(), mockEvidenceExists: vi.fn(), mockCompletion: vi.fn(), mockInngestSend: vi.fn(),
-  mockSessionFind: vi.fn(), mockSessionUpdateOne: vi.fn(), mockResolveModel: vi.fn(),
+  mockSessionFind: vi.fn(), mockSessionUpdateOne: vi.fn(), mockResolveModelWithAuthority: vi.fn(),
   mockSessionExists: vi.fn(), mockEnsurePracticeApplication: vi.fn(),
     mockAppExists: vi.fn(),
     createdFunctionConfigs: [] as Array<Record<string, unknown>>,
@@ -54,7 +54,10 @@ vi.mock('@shared/services/inngest', () => ({
     }),
   },
 }))
-vi.mock('@shared/services/modelRouter', () => ({ completion: mockCompletion, resolveModel: mockResolveModel }))
+vi.mock('@shared/services/modelRouter', () => ({
+  completion: mockCompletion,
+  resolveModelWithAuthority: mockResolveModelWithAuthority,
+}))
 vi.mock('@shared/services/jobsAccountFence', () => ({
   isJobsAccountActive: mockIsJobsAccountActive,
   JobsAccountInactiveError: MockJobsAccountInactiveError,
@@ -87,11 +90,46 @@ import {
   runEvidenceAttributionHandler,
   runEvidenceReconcileHandler,
 } from '../jobs/evidenceAttributionJob'
+import {
+  ANSWER_EVALUATION_CONTRACT_VERSION,
+  answerScoringBindingHash,
+  modelConfigSnapshotOf,
+  modelExecutionProvenanceOf,
+  primaryModelExecutionProvenanceOf,
+} from '@shared/services/scoringProvenance'
+import type { ResolvedModel } from '@shared/services/modelRouter'
 import { xrayHashOf } from '../services/xrayService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
 
-/** What the mocked resolveModel returns — the epoch every row must carry. */
-const RESOLVED_MODEL = 'gpt-5.6-luna'
+const resolvedModelFor = (taskSlot: string): ResolvedModel => ({
+  model: taskSlot === 'jobs.evidence-attribution'
+    ? 'attribution-model'
+    : taskSlot === 'interview.evaluate-code'
+      ? 'code-model'
+      : taskSlot === 'interview.evaluate-design'
+        ? 'design-model'
+        : 'scoring-model',
+  provider: 'openai',
+  maxTokens: taskSlot === 'jobs.evidence-attribution' ? 900 : 500,
+  reasoningEffort: 'low',
+  ...(taskSlot === 'jobs.evidence-attribution'
+    ? { fallbackModel: 'contract-model', fallbackProvider: 'openai' }
+    : {}),
+  useToonInput: false,
+})
+const authoritativeResolutionFor = (taskSlot: string) => ({
+  resolved: resolvedModelFor(taskSlot),
+  source: 'L3-Mongo' as const,
+  authoritative: true,
+})
+const SCORING_EXECUTION = primaryModelExecutionProvenanceOf({
+  snapshot: modelConfigSnapshotOf('interview.evaluate-answer', resolvedModelFor('interview.evaluate-answer')),
+  contractVersion: ANSWER_EVALUATION_CONTRACT_VERSION,
+})
+const ATTRIBUTION_EXECUTION = primaryModelExecutionProvenanceOf({
+  snapshot: modelConfigSnapshotOf('jobs.evidence-attribution', resolvedModelFor('jobs.evidence-attribution')),
+  contractVersion: EVIDENCE_ATTRIBUTION_CONTRACT_VERSION,
+})
 const completionResult = (
   text: string,
   overrides: Partial<{
@@ -101,16 +139,21 @@ const completionResult = (
     inputTokens: number
     outputTokens: number
     truncated: boolean
+    attemptKind: 'primary' | 'configured-fallback' | 'task-default'
   }> = {},
-) => ({
-  text,
-  model: 'attribution-model',
-  provider: 'openai',
-  usedFallback: false,
-  inputTokens: 21,
-  outputTokens: 12,
-  ...overrides,
-})
+) => {
+  const usedFallback = overrides.usedFallback ?? false
+  return {
+    text,
+    model: 'attribution-model',
+    provider: 'openai',
+    usedFallback,
+    attemptKind: overrides.attemptKind ?? (usedFallback ? 'configured-fallback' : 'primary'),
+    inputTokens: 21,
+    outputTokens: 12,
+    ...overrides,
+  }
+}
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 const selectLean = (v: unknown) => ({ select: () => ({ lean: () => Promise.resolve(v) }) })
@@ -149,6 +192,39 @@ const evaluation = (over: Record<string, unknown> = {}) => ({
   relevance: 80, structure: 70, specificity: 90, ownership: 80,
   status: 'ok', ...over,
 })
+const scoringReceipt = (value: Record<string, unknown>) => ({
+  schemaVersion: 1 as const,
+  bindingHash: answerScoringBindingHash(value),
+  execution: SCORING_EXECUTION,
+  recordedAt: new Date('2026-07-22T00:00:00.000Z'),
+})
+const sessionWithReceipts = <T extends Record<string, unknown>>(value: T): T & { answerScoringReceipts: unknown[] } => {
+  const evaluations = Array.isArray(value.evaluations)
+    ? value.evaluations as Array<Record<string, unknown>>
+    : []
+  return {
+    ...value,
+    answerScoringReceipts: evaluations
+      .filter((item) => (item.status ?? 'ok') === 'ok' && String(item.answer ?? '').trim().length > 0)
+      .map(scoringReceipt),
+  }
+}
+const sessionLean = (value: Record<string, unknown>) => selectLean(sessionWithReceipts(value))
+const evidenceRow = (over: Record<string, unknown> = {}) => ({
+  requirementId: 'req-node',
+  xrayHash: HASH,
+  strength: 'strong',
+  answerScore: 80,
+  scoringEpoch: SCORING_EXECUTION.fingerprint,
+  sessionId: 'sess1',
+  provenance: {
+    schemaVersion: 1,
+    status: 'attested',
+    scoring: SCORING_EXECUTION,
+    attribution: ATTRIBUTION_EXECUTION,
+  },
+  ...over,
+})
 const parsedJD = {
   requirements: [
     { id: 'req-node', requirement: 'Node.js experience', importance: 'must-have' },
@@ -162,7 +238,7 @@ beforeEach(() => {
   // Live persisted shape (Codex #538 r3 P1): the JD is mirrored to the
   // TOP-LEVEL field by /api/interviews; the strict config subdoc strips
   // it. Every test therefore pins the top-level read.
-  mockSessionFindById.mockReturnValue(selectLean({ jobDescription: JD, config: {}, evaluations: [evaluation()], userId: 'u1', attribution: ATTRIBUTION }))
+  mockSessionFindById.mockReturnValue(sessionLean({ jobDescription: JD, config: {}, evaluations: [evaluation()], userId: 'u1', attribution: ATTRIBUTION }))
   mockAppFindById.mockReturnValue(selectLean({ verifiedPracticeSessionIds: ['sess1', 's0', 'sx'], userId: 'u1', jobPostingId: 'job1' }))
   mockAppFindOne.mockReturnValue(selectLean({ userId: 'u1', jobPostingId: 'job1', readinessRevision: 0 }))
   mockPostingFindById.mockReturnValue(selectLean({ status: 'open', parsedJD, parsedJDHash: HASH }))
@@ -172,15 +248,17 @@ beforeEach(() => {
     '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay","req-nice","invented-id"],"strength":"strong"}]}',
   ))
   mockEvidenceDeleteMany.mockResolvedValue({})
-  mockEvidenceInsertMany.mockResolvedValue({})
+  mockEvidenceInsertMany.mockImplementation((docs: unknown[]) => Promise.resolve(docs))
   mockEvidenceFind.mockReturnValue(selectLean([
-    { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL, sessionId: 'sess1' },
-    { requirementId: 'req-pay', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL, sessionId: 'sess1' },
+    evidenceRow(),
+    evidenceRow({ requirementId: 'req-pay' }),
   ]))
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockSessionUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockEvidenceExists.mockResolvedValue(null)
-  mockResolveModel.mockResolvedValue({ model: RESOLVED_MODEL, maxTokens: 900 })
+  mockResolveModelWithAuthority.mockImplementation(
+    (taskSlot: string) => Promise.resolve(authoritativeResolutionFor(taskSlot)),
+  )
   mockSessionExists.mockResolvedValue({ _id: 'sess1' })
   mockIsJobsAccountActive.mockResolvedValue(true)
   mockWithActiveJobsAccountWrite.mockImplementation(
@@ -237,24 +315,47 @@ describe('evidence attribution classifier contract', () => {
         outputTokens: 13,
       },
     ])
+    expect(result.provenance).toMatchObject({
+      taskSlot: 'jobs.evidence-attribution',
+      contractVersion: EVIDENCE_ATTRIBUTION_CONTRACT_VERSION,
+      model: 'contract-model',
+      provider: 'openai',
+      usedFallback: true,
+    })
   })
 
   it('uses the active CMS slot token budget for the bumped retry', async () => {
     const valid = '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}'
-    mockResolveModel.mockResolvedValueOnce({ model: 'cms-attribution-model', maxTokens: 1_750 })
+    const cmsModel = {
+      ...resolvedModelFor('jobs.evidence-attribution'),
+      model: 'cms-attribution-model',
+      maxTokens: 1_750,
+    }
+    mockResolveModelWithAuthority.mockResolvedValue({
+      resolved: cmsModel,
+      source: 'L3-Mongo',
+      authoritative: true,
+    })
     mockCompletion
-      .mockResolvedValueOnce(completionResult('not-json'))
-      .mockResolvedValueOnce(completionResult(valid))
+      .mockResolvedValueOnce(completionResult('not-json', { model: cmsModel.model }))
+      .mockResolvedValueOnce(completionResult(valid, { model: cmsModel.model }))
 
     await classifyEvidenceAttribution({
       answers: [{ index: 0, question: 'Q', answer: 'A', answerScore: 70 }],
       mustHaves: [{ id: 'req-node', requirement: 'Node.js' }],
     })
 
-    expect(mockResolveModel).toHaveBeenCalledTimes(1)
-    expect(mockResolveModel).toHaveBeenCalledWith('jobs.evidence-attribution')
+    expect(mockResolveModelWithAuthority).toHaveBeenCalledOnce()
+    expect(mockResolveModelWithAuthority).toHaveBeenCalledWith(
+      'jobs.evidence-attribution',
+      { waitForAuthoritative: true },
+    )
+    expect(mockCompletion.mock.calls[0][0]).toMatchObject({ resolvedModel: cmsModel })
     expect(mockCompletion.mock.calls[0][0]).not.toHaveProperty('maxTokens')
-    expect(mockCompletion.mock.calls[1][0]).toMatchObject({ maxTokens: 2_350 })
+    expect(mockCompletion.mock.calls[1][0]).toMatchObject({
+      maxTokens: 2_350,
+      resolvedModel: cmsModel,
+    })
   })
 
   it('rejects unknown answer indices after one retry and retains sanitized attempt metadata', async () => {
@@ -278,6 +379,20 @@ describe('evidence attribution classifier contract', () => {
     })
     expect(error).not.toHaveProperty('text')
     expect(mockCompletion).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed before egress when only a synthetic config snapshot is available', async () => {
+    mockResolveModelWithAuthority.mockResolvedValue({
+      resolved: resolvedModelFor('jobs.evidence-attribution'),
+      source: 'cold-defaults-synthetic',
+      authoritative: false,
+    })
+
+    await expect(classifyEvidenceAttribution({
+      answers: [{ index: 0, question: 'Q', answer: 'A', answerScore: 70 }],
+      mustHaves: [{ id: 'req-node', requirement: 'Node.js' }],
+    })).rejects.toMatchObject({ reason: 'config-drift' })
+    expect(mockCompletion).not.toHaveBeenCalled()
   })
 
   it('rejects duplicate answer-requirement pairs, including across strength groups', async () => {
@@ -343,7 +458,7 @@ describe('evidence attribution classifier contract', () => {
       name: 'EvidenceAttributionClassificationError',
       reason: 'invalid-input',
     })
-    expect(mockResolveModel).not.toHaveBeenCalled()
+    expect(mockResolveModelWithAuthority).not.toHaveBeenCalled()
     expect(mockCompletion).not.toHaveBeenCalled()
   })
 
@@ -392,6 +507,75 @@ describe('evidence attribution classifier contract', () => {
 })
 
 describe('runEvidenceAttributionHandler', () => {
+  it('quarantines legacy scorable evaluations before attribution egress', async () => {
+    mockSessionFindById.mockReturnValue(selectLean({
+      jobDescription: JD,
+      config: {},
+      evaluations: [evaluation()],
+      answerScoringReceipts: [],
+      userId: 'u1',
+      attribution: ATTRIBUTION,
+    }))
+
+    const result = await runEvidenceAttributionHandler(EVENT, step)
+
+    expect(result).toEqual({ outcome: 'no-attested-scorable-answers' })
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).toHaveBeenCalled()
+  })
+
+  it('rejects an ambiguous scorer receipt instead of choosing by order or current config', async () => {
+    const scored = evaluation()
+    const alternate = modelExecutionProvenanceOf({
+      snapshot: modelConfigSnapshotOf('interview.evaluate-answer', {
+        ...resolvedModelFor('interview.evaluate-answer'),
+        model: 'older-model',
+      }),
+      result: { model: 'older-model', provider: 'openai', usedFallback: false },
+      contractVersion: ANSWER_EVALUATION_CONTRACT_VERSION,
+    })
+    mockSessionFindById.mockReturnValue(selectLean({
+      jobDescription: JD,
+      config: {},
+      evaluations: [scored],
+      answerScoringReceipts: [
+        scoringReceipt(scored),
+        { ...scoringReceipt(scored), execution: alternate },
+      ],
+      userId: 'u1',
+      attribution: ATTRIBUTION,
+    }))
+
+    const result = await runEvidenceAttributionHandler(EVENT, step)
+
+    expect(result).toEqual({ outcome: 'no-attested-scorable-answers' })
+    expect(mockCompletion).not.toHaveBeenCalled()
+  })
+
+  it('fails the session closed when duplicate evaluations try to reuse one content-bound receipt', async () => {
+    const duplicated = evaluation()
+    const unique = evaluation({
+      questionIndex: 1,
+      question: 'Describe a different system.',
+      answer: 'I designed a separate queueing system.',
+    })
+    mockSessionFindById.mockReturnValue(selectLean({
+      jobDescription: JD,
+      config: {},
+      evaluations: [duplicated, { ...duplicated }, unique],
+      answerScoringReceipts: [scoringReceipt(duplicated), scoringReceipt(unique)],
+      userId: 'u1',
+      attribution: ATTRIBUTION,
+    }))
+
+    const result = await runEvidenceAttributionHandler(EVENT, step)
+
+    expect(result).toEqual({ outcome: 'duplicate-scorable-evaluations' })
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).toHaveBeenCalled()
+  })
+
   it('happy path: persists ONLY must-have ids (belt drops nice-to-have + invented), replace semantics, snapshot denormalized', async () => {
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('attributed')
@@ -401,19 +585,35 @@ describe('runEvidenceAttributionHandler', () => {
       { session: undefined },
     )
     const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(mockEvidenceInsertMany.mock.calls[0][1]).toEqual({
+      ordered: true,
+      session: undefined,
+    })
     expect(docs.map((d) => d.requirementId).sort()).toEqual(['req-node', 'req-pay'])
     // Codex #538 P1+r2: live evaluations carry NO modelUsed — rows are
     // epoch-stamped with the RESOLVED evaluate-answer model at attribution
     // time (resolveModel honors CMS overrides; hardcoded defaults do not),
     // and the same value feeds the snapshot filter (else readiness pins
     // at zero).
-    expect(mockResolveModel).toHaveBeenCalledWith('interview.evaluate-answer')
+    expect(mockResolveModelWithAuthority).toHaveBeenCalledWith(
+      'interview.evaluate-answer',
+      { waitForAuthoritative: true },
+    )
     expect(docs[0]).toMatchObject({
       handoffVersion: 1,
       handoffJdHash: ATTRIBUTION.jdHash,
       strength: 'strong',
       answerScore: 80,
-      scoringEpoch: RESOLVED_MODEL,
+      scoringEpoch: SCORING_EXECUTION.fingerprint,
+      provenance: expect.objectContaining({
+        schemaVersion: 1,
+        status: 'attested',
+        scoring: SCORING_EXECUTION,
+        attribution: expect.objectContaining({
+          taskSlot: 'jobs.evidence-attribution',
+          contractVersion: EVIDENCE_ATTRIBUTION_CONTRACT_VERSION,
+        }),
+      }),
     })
     expect(docs[0].scoringEpoch).not.toBe('unknown')
     expect(mockEvidenceFind).toHaveBeenCalledWith({
@@ -453,10 +653,21 @@ describe('runEvidenceAttributionHandler', () => {
     )
   })
 
-  it('continues a durable run whose llm step memoized the legacy payload shape', async () => {
+  it('does not publish readiness or a processed marker after a short replacement insert', async () => {
+    mockEvidenceInsertMany.mockResolvedValueOnce([])
+
+    await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow(
+      'verified evidence insert did not persist the complete replacement set',
+    )
+
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('quarantines a durable run whose versioned llm step lacks execution provenance', async () => {
     const legacyMemoizedStep = {
       run: async <T,>(name: string, fn: () => Promise<T> | T): Promise<T> => {
-        if (name === 'llm-attribute') {
+        if (name === 'llm-attribute-provenance-v1') {
           return {
             attributions: [{
               answerIndex: 0,
@@ -471,17 +682,22 @@ describe('runEvidenceAttributionHandler', () => {
 
     const result = await runEvidenceAttributionHandler(EVENT, legacyMemoizedStep)
 
-    expect(result).toEqual({ outcome: 'attributed', rows: 1 })
+    expect(result).toEqual({ outcome: 'unsupported-provenance' })
     expect(mockCompletion).not.toHaveBeenCalled()
-    const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
-    expect(docs).toEqual([
-      expect.objectContaining({ requirementId: 'req-node', strength: 'strong' }),
-    ])
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(mockSessionUpdateOne).toHaveBeenCalledWith(
+      { _id: 'sess1' },
+      { $set: expect.objectContaining({
+        'attribution.evidenceProcessedAt': expect.any(Date),
+        'attribution.evidenceUnsupportedContract': 'evidence-provenance.v1',
+      }) },
+      undefined,
+    )
   })
 
   it('returns a counted no-egress outcome when a session exceeds the v1 response bound', async () => {
     const runStep = vi.spyOn(step, 'run')
-    mockSessionFindById.mockReturnValue(selectLean({
+    mockSessionFindById.mockReturnValue(sessionLean({
       jobDescription: JD,
       config: {},
       evaluations: Array.from({ length: 41 }, (_, index) => evaluation({
@@ -495,10 +711,13 @@ describe('runEvidenceAttributionHandler', () => {
     await expect(runEvidenceAttributionHandler(EVENT, step)).resolves.toEqual({
       outcome: 'unsupported-input',
     })
-    expect(mockResolveModel).not.toHaveBeenCalled()
+    expect(mockResolveModelWithAuthority).not.toHaveBeenCalled()
     expect(mockCompletion).not.toHaveBeenCalled()
     expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
-    expect(runStep.mock.calls.map(([name]) => name)).toEqual(['load-inputs', 'mark-unsupported-contract'])
+    expect(runStep.mock.calls.map(([name]) => name)).toEqual([
+      'load-inputs-provenance-v1',
+      'mark-unsupported-contract',
+    ])
     expect(mockSessionUpdateOne).toHaveBeenCalledWith(
       { _id: 'sess1' },
       { $set: expect.objectContaining({
@@ -511,7 +730,7 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it('same requirement evidenced by two answers collapses to the BEST row before insert (Codex #538)', async () => {
-    mockSessionFindById.mockReturnValue(selectLean({
+    mockSessionFindById.mockReturnValue(sessionLean({
       jobDescription: JD,
       config: {},
       evaluations: [
@@ -534,18 +753,74 @@ describe('runEvidenceAttributionHandler', () => {
     expect(docs[0]).toMatchObject({ requirementId: 'req-node', strength: 'strong', answerScore: 60 })
   })
 
-  it('a CMS ModelConfig override flows into the epoch — resolved model, never the hardcoded default (Codex #538 r2)', async () => {
-    mockResolveModel.mockResolvedValue({ model: 'cms-override-model', maxTokens: 900 })
+  it('prefers a lower-scoring current scorer tuple over a higher stale tuple for the same requirement', async () => {
+    const staleAnswer = evaluation({
+      relevance: 95,
+      structure: 95,
+      specificity: 95,
+      ownership: 95,
+    })
+    const currentAnswer = evaluation({
+      questionIndex: 1,
+      question: 'How did you operate the service?',
+      answer: 'I owned the on-call rotation and reduced recovery time.',
+      relevance: 50,
+      structure: 50,
+      specificity: 50,
+      ownership: 50,
+    })
+    const staleScoring = primaryModelExecutionProvenanceOf({
+      snapshot: modelConfigSnapshotOf('interview.evaluate-answer', {
+        ...resolvedModelFor('interview.evaluate-answer'),
+        model: 'retired-scoring-model',
+      }),
+      contractVersion: ANSWER_EVALUATION_CONTRACT_VERSION,
+    })
+    mockSessionFindById.mockReturnValue(selectLean({
+      jobDescription: JD,
+      config: {},
+      evaluations: [staleAnswer, currentAnswer],
+      answerScoringReceipts: [
+        { ...scoringReceipt(staleAnswer), execution: staleScoring },
+        scoringReceipt(currentAnswer),
+      ],
+      userId: 'u1',
+      attribution: ATTRIBUTION,
+    }))
+    mockCompletion.mockResolvedValue(completionResult(
+      '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"},{"answerIndex":1,"requirementIds":["req-node"],"strength":"partial"}]}',
+    ))
+
+    const result = await runEvidenceAttributionHandler(EVENT, step)
+
+    expect(result.rows).toBe(1)
+    const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(docs[0]).toMatchObject({
+      requirementId: 'req-node',
+      strength: 'partial',
+      answerScore: 50,
+      scoringEpoch: SCORING_EXECUTION.fingerprint,
+    })
+  })
+
+  it('a CMS scorer cutover never relabels an older exact scoring receipt', async () => {
+    mockResolveModelWithAuthority.mockImplementation((taskSlot: string) => Promise.resolve({
+      resolved: taskSlot === 'interview.evaluate-answer'
+        ? { ...resolvedModelFor(taskSlot), model: 'cms-override-model' }
+        : resolvedModelFor(taskSlot),
+      source: 'L3-Mongo',
+      authoritative: true,
+    }))
     mockEvidenceFind.mockReturnValue(selectLean([
-      { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: 'cms-override-model', sessionId: 'sess1' },
+      evidenceRow(),
     ]))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('attributed')
     const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
-    expect(docs.every((d) => d.scoringEpoch === 'cms-override-model')).toBe(true)
+    expect(docs.every((d) => d.scoringEpoch === SCORING_EXECUTION.fingerprint)).toBe(true)
     const snap = mockAppUpdateOne.mock.calls[0][1].$set.readiness
-    expect(snap.scoringEpoch).toBe('cms-override-model')
-    expect(snap.practicedCount).toBe(1)
+    expect(snap.scoringEpoch).not.toBe('cms-override-model')
+    expect(snap.practicedCount).toBe(0)
   })
 
   it('JD-version mismatch = counted skip, never cross-version attribution — and NEVER stamped (stale cache heals, Codex #538 r4)', async () => {
@@ -658,7 +933,7 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it('failed/truncated evaluations are excluded; all-excluded = no-scorable-answers, zero LLM spend', async () => {
-    mockSessionFindById.mockReturnValue(selectLean({
+    mockSessionFindById.mockReturnValue(sessionLean({
       jobDescription: JD,
       config: {},
       evaluations: [evaluation({ status: 'failed' }), evaluation({ status: 'truncated' })],
@@ -691,7 +966,7 @@ describe('runEvidenceAttributionHandler', () => {
     mockSessionFindById.mockReturnValue({
       select: (s: string) => {
         selectArg = s
-        return { lean: () => Promise.resolve({ jobDescription: JD, config: {}, evaluations: [evaluation()], userId: 'u1', attribution: ATTRIBUTION }) }
+        return { lean: () => Promise.resolve(sessionWithReceipts({ jobDescription: JD, config: {}, evaluations: [evaluation()], userId: 'u1', attribution: ATTRIBUTION })) }
       },
     })
     await runEvidenceAttributionHandler(EVENT, step)
@@ -699,7 +974,7 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it('legacy config-carried JD still attributes via the fallback read', async () => {
-    mockSessionFindById.mockReturnValue(selectLean({ config: { jobDescription: JD }, evaluations: [evaluation()], userId: 'u1', attribution: ATTRIBUTION }))
+    mockSessionFindById.mockReturnValue(sessionLean({ config: { jobDescription: JD }, evaluations: [evaluation()], userId: 'u1', attribution: ATTRIBUTION }))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('attributed')
   })
@@ -884,11 +1159,11 @@ describe('runEvidenceAttributionHandler', () => {
       .mockReturnValueOnce(selectLean({ readinessRevision: 1 }))
     mockEvidenceFind
       .mockReturnValueOnce(selectLean([
-        { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL, sessionId: 'deleted-A' },
-        { requirementId: 'req-pay', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL, sessionId: 'sess1' },
+        evidenceRow({ requirementId: 'req-node', sessionId: 'deleted-A' }),
+        evidenceRow({ requirementId: 'req-pay', sessionId: 'sess1' }),
       ]))
       .mockReturnValueOnce(selectLean([
-        { requirementId: 'req-pay', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: RESOLVED_MODEL, sessionId: 'sess1' },
+        evidenceRow({ requirementId: 'req-pay', sessionId: 'sess1' }),
       ]))
     // The first miss represents session A's deletion incrementing the
     // revision after B read [A,B]. B must re-read and publish only [B].

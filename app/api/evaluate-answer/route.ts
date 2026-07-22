@@ -17,6 +17,11 @@ import { buildScoringGuide, resolveEvalDepthSlug } from '@interview/services/eva
 import { getOrLoadJDContext, getOrLoadResumeContext } from '@interview/services/persona/documentContextCache'
 import { getOrLoadSessionConfig } from '@interview/services/core/sessionConfigCache'
 import type { AnswerEvaluation } from '@shared/types'
+import {
+  ANSWER_EVALUATION_CONTRACT_VERSION,
+  captureModelConfigSnapshot,
+  recordJobsAnswerScoringReceipt,
+} from '@shared/services/scoringProvenance'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -353,11 +358,18 @@ ${dimensionSchema}${jdAlignmentSchema},
 }`
 
     try {
+      const scoringConfigBefore = sessionId && config.attribution?.source === 'jobs'
+        ? await captureModelConfigSnapshot('interview.evaluate-answer').catch((error) => {
+            aiLogger.warn({ error, sessionId }, 'evaluate-answer scorer provenance preflight unavailable')
+            return null
+          })
+        : null
       const modelStart = Date.now()
       let result = await completionStream({
         taskSlot: 'interview.evaluate-answer',
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
+        ...(scoringConfigBefore ? { resolvedModel: scoringConfigBefore.resolved } : {}),
       })
 
       // G.3: truncation detection + single retry with expanded budget.
@@ -384,6 +396,7 @@ ${dimensionSchema}${jdAlignmentSchema},
           taskSlot: 'interview.evaluate-answer',
           system: systemPrompt,
           messages: [{ role: 'user', content: userPrompt }],
+          ...(scoringConfigBefore ? { resolvedModel: scoringConfigBefore.resolved } : {}),
           // Must exceed the slot primary (500 since the 2026-07-11 low-
           // reasoning headroom bump) or the retry re-truncates identically.
           maxTokens: 800,
@@ -469,6 +482,20 @@ ${dimensionSchema}${jdAlignmentSchema},
           probeTarget: scores.probeTarget ?? null,
           isPivot: scores.isPivot === true,
         },
+      }
+
+      if (sessionId && scoringConfigBefore && evalStatus === 'ok') {
+        await recordJobsAnswerScoringReceipt({
+          sessionId,
+          userId: user.id,
+          evaluation: evaluation as unknown as Record<string, unknown>,
+          before: scoringConfigBefore,
+          result,
+          contractVersion: ANSWER_EVALUATION_CONTRACT_VERSION,
+          ...(truncationRetried ? { overrides: { maxTokens: 800 } } : {}),
+        }).catch((error) => {
+          aiLogger.warn({ error, sessionId, questionIndex }, 'evaluate-answer scorer receipt was not persisted')
+        })
       }
 
       trackUsage({

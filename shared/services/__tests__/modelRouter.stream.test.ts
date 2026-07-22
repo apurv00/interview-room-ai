@@ -300,6 +300,7 @@ describe('completion — provider precondition gate', () => {
       model: 'fallback-model',
       provider: 'fallback-provider',
       usedFallback: true,
+      attemptKind: 'configured-fallback',
     })
 
     expect(primaryComplete).toHaveBeenCalledOnce()
@@ -307,9 +308,110 @@ describe('completion — provider precondition gate', () => {
     expect(primaryComplete.mock.calls[0][0]).toMatchObject({ disableSdkRetries: false })
     expect(fallbackComplete.mock.calls[0][0]).toMatchObject({ disableSdkRetries: false })
   })
+
+  it('pins a supplied route even if the live CMS cache changes before completion', async () => {
+    const pinned = {
+      model: 'pinned-model-a',
+      provider: 'provider-a',
+      maxTokens: 400,
+      useToonInput: false,
+    }
+    await injectSlotConfig({
+      primaryProvider: 'provider-b',
+      primaryModel: 'live-model-b',
+    })
+    const providerAComplete = vi.fn().mockResolvedValue({
+      text: 'from pinned A', inputTokens: 3, outputTokens: 2,
+    })
+    const providerBComplete = vi.fn().mockResolvedValue({
+      text: 'from live B', inputTokens: 3, outputTokens: 2,
+    })
+    mockGetProvider.mockImplementation((provider: string) => ({
+      isConfigured: () => true,
+      complete: provider === 'provider-a' ? providerAComplete : providerBComplete,
+    }))
+
+    await expect(completion({
+      taskSlot: 'learn.drill-evaluate',
+      resolvedModel: pinned,
+      system: 'system',
+      messages: [{ role: 'user', content: 'input' }],
+    })).resolves.toMatchObject({
+      text: 'from pinned A',
+      model: 'pinned-model-a',
+      provider: 'provider-a',
+      usedFallback: false,
+      attemptKind: 'primary',
+    })
+    expect(providerAComplete).toHaveBeenCalledOnce()
+    expect(providerBComplete).not.toHaveBeenCalled()
+  })
+
+  it('identifies the hardcoded task-default attempt distinctly from a configured fallback', async () => {
+    await injectSlotConfig({
+      primaryProvider: 'cms-provider',
+      primaryModel: 'cms-model',
+    })
+    const cmsComplete = vi.fn().mockRejectedValue(new Error('CMS primary unavailable'))
+    const defaultComplete = vi.fn().mockResolvedValue({
+      text: 'task default result', inputTokens: 2, outputTokens: 1,
+    })
+    mockGetProvider.mockImplementation((provider: string) => ({
+      isConfigured: () => true,
+      complete: provider === 'cms-provider' ? cmsComplete : defaultComplete,
+    }))
+
+    await expect(completion({
+      taskSlot: 'learn.drill-evaluate',
+      system: 'system',
+      messages: [{ role: 'user', content: 'input' }],
+    })).resolves.toMatchObject({
+      text: 'task default result',
+      usedFallback: true,
+      attemptKind: 'task-default',
+    })
+    expect(cmsComplete).toHaveBeenCalledOnce()
+    expect(defaultComplete).toHaveBeenCalledOnce()
+  })
 })
 
 describe('streamCompletion — polyfill path', () => {
+  it('honors an explicitly pinned model route', async () => {
+    await injectSlotConfig({
+      primaryProvider: 'cms-provider',
+      primaryModel: 'cms-model',
+    })
+    const complete = vi.fn().mockResolvedValue({
+      text: 'pinned', inputTokens: 1, outputTokens: 1, truncated: false,
+    })
+    mockGetProvider.mockReturnValue({ isConfigured: () => true, complete })
+
+    const events = await collect(streamCompletion({
+      taskSlot: 'learn.drill-evaluate',
+      system: 'system',
+      messages: [{ role: 'user', content: 'prompt' }],
+      resolvedModel: {
+        model: 'pinned-model',
+        provider: 'pinned-provider',
+        maxTokens: 321,
+        useToonInput: false,
+      },
+    }))
+
+    expect(mockGetProvider).toHaveBeenCalledWith('pinned-provider')
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'pinned-model',
+        maxTokens: 321,
+      }),
+      undefined,
+    )
+    expect(events).toEqual([
+      { kind: 'delta', text: 'pinned' },
+      { kind: 'done', inputTokens: 1, outputTokens: 1, truncated: false },
+    ])
+  })
+
   it('synthesizes delta + done from complete() when provider has no .stream', async () => {
     mockGetProvider.mockReturnValue({
       name: 'polyfill-only',

@@ -102,6 +102,10 @@ interface CachedConfig {
   routingEnabled: boolean
   slots: Map<TaskSlot, SlotConfig>
   loadedAt: number
+  /** Origin of this exact in-memory snapshot. Kept on the object rather than
+   * in a global so concurrent cold loads cannot mislabel synthetic defaults
+   * as an authoritative CMS resolution. */
+  source: ConfigLoadSource
 }
 
 const CACHE_TTL_MS = 60_000
@@ -178,7 +182,7 @@ let _loadPromise: Promise<void> | null = null
  * logging every call would drown out the cold-path events we actually
  * care about.
  */
-type ConfigLoadSource =
+export type ConfigLoadSource =
   | 'L2-Redis'                 // Redis cache hit — the happy path this PR was scoped for
   | 'L3-Mongo'                 // Redis miss + Mongo read succeeded — expected on first cold Lambda after cache bust / deploy
   | 'L3-Mongo-error'           // Mongo read failed — defaults used, alert-worthy
@@ -223,6 +227,7 @@ function hydrateFromSerialized(data: SerializedConfig): CachedConfig {
     routingEnabled: data.routingEnabled,
     slots: new Map(data.slotEntries),
     loadedAt: Date.now(),
+    source: 'L2-Redis',
   }
 }
 
@@ -478,7 +483,7 @@ async function writeToRedis(cache: CachedConfig, capturedEpoch: string | null): 
 
 async function loadConfig(): Promise<void> {
   if (typeof window !== 'undefined') {
-    _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
+    _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now(), source: 'defaults-client' }
     _lastLoadSource = 'defaults-client'
     return
   }
@@ -514,7 +519,7 @@ async function loadConfig(): Promise<void> {
           slotMap.set(slot.taskSlot, slot)
         }
       }
-      _cache = { routingEnabled: doc.routingEnabled, slots: slotMap, loadedAt: Date.now() }
+      _cache = { routingEnabled: doc.routingEnabled, slots: slotMap, loadedAt: Date.now(), source: 'L3-Mongo' }
       // Fire-and-forget Redis write guarded by TWO epoch checks:
       //   (1) in-process: same-Lambda invalidate mid-load
       //   (2) Redis-shared: cross-Lambda invalidate mid-load (CAS
@@ -534,13 +539,13 @@ async function loadConfig(): Promise<void> {
       // NOT written to Redis: caching "no config" would mask a genuine
       // operator misconfiguration and prevent the next ping from
       // re-checking Mongo.
-      _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
+      _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now(), source: 'L3-Mongo' }
     }
     _lastLoadSource = 'L3-Mongo'
   } catch (err) {
     aiLogger.warn({ err }, 'ModelRouter: failed to load config from DB, using hardcoded defaults')
     if (!_cache) {
-      _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now() }
+      _cache = { routingEnabled: false, slots: new Map(), loadedAt: Date.now(), source: 'L3-Mongo-error' }
     }
     _lastLoadSource = 'L3-Mongo-error'
   }
@@ -642,7 +647,7 @@ async function ensureConfig(): Promise<CachedConfig> {
     },
     'ModelRouter: cold Lambda with empty L2, serving TASK_SLOT_DEFAULTS while background Mongo refresh loads',
   )
-  return { routingEnabled: false, slots: new Map(), loadedAt: now }
+  return { routingEnabled: false, slots: new Map(), loadedAt: now, source: 'cold-defaults-synthetic' }
 }
 
 /**
@@ -752,6 +757,7 @@ export async function replaceModelConfigCache(doc: {
     routingEnabled: doc.routingEnabled,
     slots: slotMap,
     loadedAt: Date.now(),
+    source: 'L3-Mongo',
   }
   _cache = cache
   _invalidationEpoch++
@@ -835,8 +841,13 @@ export interface ResolvedModel {
   useToonInput: boolean
 }
 
-export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
-  const config = await ensureConfig()
+export interface ResolvedModelAuthority {
+  resolved: ResolvedModel
+  source: ConfigLoadSource | 'explicit'
+  authoritative: boolean
+}
+
+function resolvedModelFromConfig(taskSlot: TaskSlot, config: CachedConfig): ResolvedModel {
   const defaults = TASK_SLOT_DEFAULTS[taskSlot]
 
   if (!config.routingEnabled) {
@@ -881,6 +892,49 @@ export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
   }
 }
 
+function configSourceIsAuthoritative(source: ConfigLoadSource): boolean {
+  return source === 'L2-Redis' || source === 'L3-Mongo'
+}
+
+/**
+ * Resolve a model together with the authority of the exact cache snapshot
+ * used. Interactive routes keep the non-blocking default and can decline to
+ * mint provenance on a synthetic cold fallback. Workers/release gates may
+ * wait for the already-started Mongo refresh to finish.
+ */
+export async function resolveModelWithAuthority(
+  taskSlot: TaskSlot,
+  options: { waitForAuthoritative?: boolean } = {},
+): Promise<ResolvedModelAuthority> {
+  let config = await ensureConfig()
+  if (options.waitForAuthoritative) {
+    // ensureConfig intentionally serves stale L1 while a refresh runs so
+    // interactive requests do not inherit Mongo latency. Provenance gates
+    // need the opposite contract: wait for that exact refresh, then inspect
+    // the cache it actually produced. A failed refresh may leave the stale
+    // source label intact, so freshness and cache identity are part of the
+    // authority decision below rather than trusting the label alone.
+    const pendingRefresh = _loadPromise
+    if (pendingRefresh) await pendingRefresh
+    if (_cache) config = _cache
+  }
+  const freshAuthoritativeSnapshot = configSourceIsAuthoritative(config.source) &&
+    Date.now() - config.loadedAt < CACHE_TTL_MS &&
+    config === _cache &&
+    _loadPromise === null
+  return {
+    resolved: resolvedModelFromConfig(taskSlot, config),
+    source: config.source,
+    authoritative: options.waitForAuthoritative
+      ? freshAuthoritativeSnapshot
+      : configSourceIsAuthoritative(config.source),
+  }
+}
+
+export async function resolveModel(taskSlot: TaskSlot): Promise<ResolvedModel> {
+  return (await resolveModelWithAuthority(taskSlot)).resolved
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export interface CompletionOptions {
@@ -892,6 +946,9 @@ export interface CompletionOptions {
   temperature?: number
   reasoningEffort?: import('./providers/index').ReasoningEffort
   responseFormat?: import('./providers/index').CompletionResponseFormat
+  /** Server-resolved route pinned by provenance-sensitive callers. Omit for
+   * the existing dynamic CMS resolution behavior. */
+  resolvedModel?: ResolvedModel
   /**
    * Optional fail-closed gate evaluated inside the router immediately before
    * each configured provider-adapter attempt (primary, fallback, and slot
@@ -915,6 +972,9 @@ export interface CompletionResult {
   inputTokens: number
   outputTokens: number
   usedFallback: boolean
+  /** Exact branch that accepted the response. Optional for backward-compatible
+   * test doubles; production completion() always sets it. */
+  attemptKind?: 'primary' | 'configured-fallback' | 'task-default'
   /**
    * True when the underlying provider indicated max_tokens was hit
    * mid-generation. Callers that care about complete output (e.g.
@@ -997,7 +1057,7 @@ async function callProvider(
  *   3. Hardcoded Anthropic default for this slot
  */
 export async function completion(opts: CompletionOptions): Promise<CompletionResult> {
-  const resolved = await resolveModel(opts.taskSlot)
+  const resolved = opts.resolvedModel ?? await resolveModel(opts.taskSlot)
   const maxTokens = opts.maxTokens ?? resolved.maxTokens
   const temperature = opts.temperature ?? resolved.temperature
   const reasoningEffort = opts.reasoningEffort ?? resolved.reasoningEffort
@@ -1007,7 +1067,13 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
   // Attempt 1: primary model via configured provider
   try {
     const result = await callProvider(resolved.provider, resolved.model, system, messages, maxTokens, temperature, opts.responseFormat, reasoningEffort, opts.beforeProviderCall)
-    return { ...result, model: resolved.model, provider: resolved.provider, usedFallback: false }
+    return {
+      ...result,
+      model: resolved.model,
+      provider: resolved.provider,
+      usedFallback: false,
+      attemptKind: 'primary',
+    }
   } catch (primaryErr) {
     if (primaryErr instanceof ModelProviderPreconditionError) throw primaryErr
     aiLogger.warn({ err: primaryErr, taskSlot: opts.taskSlot, model: resolved.model, provider: resolved.provider },
@@ -1019,7 +1085,13 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
     const fbProvider = resolved.fallbackProvider ?? 'anthropic'
     try {
       const result = await callProvider(fbProvider, resolved.fallbackModel, system, messages, maxTokens, temperature, opts.responseFormat, reasoningEffort, opts.beforeProviderCall)
-      return { ...result, model: resolved.fallbackModel, provider: fbProvider, usedFallback: true }
+      return {
+        ...result,
+        model: resolved.fallbackModel,
+        provider: fbProvider,
+        usedFallback: true,
+        attemptKind: 'configured-fallback',
+      }
     } catch (fallbackErr) {
       if (fallbackErr instanceof ModelProviderPreconditionError) throw fallbackErr
       aiLogger.warn({ err: fallbackErr, taskSlot: opts.taskSlot, fallbackModel: resolved.fallbackModel, fallbackProvider: fbProvider },
@@ -1035,7 +1107,13 @@ export async function completion(opts: CompletionOptions): Promise<CompletionRes
   }
 
   const result = await callProvider(defaultProvider, defaults.model, system, messages, opts.maxTokens ?? defaults.maxTokens, temperature, opts.responseFormat, opts.reasoningEffort ?? defaults.reasoningEffort, opts.beforeProviderCall)
-  return { ...result, model: defaults.model, provider: defaultProvider, usedFallback: true }
+  return {
+    ...result,
+    model: defaults.model,
+    provider: defaultProvider,
+    usedFallback: true,
+    attemptKind: 'task-default',
+  }
 }
 
 /**
@@ -1085,7 +1163,7 @@ export async function* streamCompletion(
   signal?: AbortSignal,
 ): AsyncIterable<import('./providers/index').StreamEvent> {
   const { getProvider } = await import('./providers/index')
-  const resolved = await resolveModel(opts.taskSlot)
+  const resolved = opts.resolvedModel ?? await resolveModel(opts.taskSlot)
   const maxTokens = opts.maxTokens ?? resolved.maxTokens
   const temperature = opts.temperature ?? resolved.temperature
   const reasoningEffort = opts.reasoningEffort ?? resolved.reasoningEffort

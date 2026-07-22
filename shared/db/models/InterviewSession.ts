@@ -6,6 +6,7 @@ import type {
   SpeechMetrics,
   FeedbackData,
 } from '@shared/types'
+import type { AnswerScoringReceipt } from '@shared/services/scoringProvenance'
 
 export type SessionStatus = 'created' | 'in_progress' | 'completed' | 'abandoned'
 
@@ -36,6 +37,9 @@ export interface IInterviewSession extends Document {
 
   transcript: TranscriptEntry[]
   evaluations: AnswerEvaluation[]
+  /** Server-authored, hash-bound scorer receipts for verified Jobs sessions.
+   * The client update contract cannot write this field. */
+  answerScoringReceipts?: AnswerScoringReceipt[]
   speechMetrics: SpeechMetrics[]
   feedback?: FeedbackData
 
@@ -214,6 +218,31 @@ export interface IInterviewSession extends Document {
   updatedAt: Date
 }
 
+const ModelExecutionProvenanceSchema = new Schema(
+  {
+    schemaVersion: { type: Number, enum: [1], required: true },
+    taskSlot: { type: String, required: true, maxlength: 100 },
+    contractVersion: { type: String, required: true, maxlength: 100 },
+    model: { type: String, required: true, maxlength: 200 },
+    provider: { type: String, required: true, maxlength: 60 },
+    usedFallback: { type: Boolean, required: true },
+    attemptKind: { type: String, enum: ['primary', 'configured-fallback', 'task-default'], required: true },
+    configDigest: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+    fingerprint: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+  },
+  { _id: false },
+)
+
+const AnswerScoringReceiptSchema = new Schema(
+  {
+    schemaVersion: { type: Number, enum: [1], required: true },
+    bindingHash: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+    execution: { type: ModelExecutionProvenanceSchema, required: true },
+    recordedAt: { type: Date, required: true },
+  },
+  { _id: false },
+)
+
 const InterviewSessionSchema = new Schema<IInterviewSession>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -245,6 +274,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 
     transcript: { type: Schema.Types.Mixed, default: [] },
     evaluations: { type: Schema.Types.Mixed, default: [] },
+    answerScoringReceipts: { type: [AnswerScoringReceiptSchema], default: undefined },
     speechMetrics: { type: Schema.Types.Mixed, default: [] },
     feedback: { type: Schema.Types.Mixed },
 

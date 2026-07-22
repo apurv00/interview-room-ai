@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
+import type { ModelExecutionProvenance } from '@shared/services/scoringProvenance'
 import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 
 /**
@@ -135,6 +136,13 @@ export interface IJobApplication extends Document {
     strongCoverage: number
     xrayHash: string
     scoringEpoch: string
+    /** Exact execution facts represented by this snapshot. Absence means a
+     * legacy snapshot that must not surface or survive the repair gate. */
+    provenance?: {
+      schemaVersion: 1
+      scoring: ModelExecutionProvenance[]
+      attribution: ModelExecutionProvenance[]
+    }
     at: Date
   }
   /** Optimistic fence for denormalized readiness writes. Snapshot publishers
@@ -145,6 +153,30 @@ export interface IJobApplication extends Document {
   createdAt: Date
   updatedAt: Date
 }
+
+const ModelExecutionProvenanceSchema = new Schema(
+  {
+    schemaVersion: { type: Number, enum: [1], required: true },
+    taskSlot: { type: String, required: true, maxlength: 100 },
+    contractVersion: { type: String, required: true, maxlength: 100 },
+    model: { type: String, required: true, maxlength: 200 },
+    provider: { type: String, required: true, maxlength: 60 },
+    usedFallback: { type: Boolean, required: true },
+    attemptKind: { type: String, enum: ['primary', 'configured-fallback', 'task-default'], required: true },
+    configDigest: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+    fingerprint: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+  },
+  { _id: false },
+)
+
+const ReadinessProvenanceSchema = new Schema(
+  {
+    schemaVersion: { type: Number, enum: [1], required: true },
+    scoring: { type: [ModelExecutionProvenanceSchema], required: true },
+    attribution: { type: [ModelExecutionProvenanceSchema], required: true },
+  },
+  { _id: false },
+)
 
 const JobApplicationSchema = new Schema<IJobApplication>(
   {
@@ -282,6 +314,7 @@ const JobApplicationSchema = new Schema<IJobApplication>(
           strongCoverage: { type: Number, required: true, min: 0, max: 1 },
           xrayHash: { type: String, required: true },
           scoringEpoch: { type: String, required: true },
+          provenance: { type: ReadinessProvenanceSchema },
           at: { type: Date, required: true },
         },
         { _id: false }

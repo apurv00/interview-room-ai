@@ -18,11 +18,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockCompletionStream, mockWarn, mockError, mockInfo } = vi.hoisted(() => ({
+const { mockCompletionStream, mockWarn, mockError, mockInfo, mockCaptureScoringConfig, mockRecordScoringReceipt } = vi.hoisted(() => ({
   mockCompletionStream: vi.fn(),
   mockWarn: vi.fn(),
   mockError: vi.fn(),
   mockInfo: vi.fn(),
+  mockCaptureScoringConfig: vi.fn(),
+  mockRecordScoringReceipt: vi.fn(),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -55,6 +57,12 @@ vi.mock('@shared/services/modelRouter', () => ({
 
 vi.mock('@shared/services/usageTracking', () => ({
   trackUsage: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@shared/services/scoringProvenance', () => ({
+  ANSWER_EVALUATION_CONTRACT_VERSION: 'answer-evaluation.v1',
+  captureModelConfigSnapshot: mockCaptureScoringConfig,
+  recordJobsAnswerScoringReceipt: mockRecordScoringReceipt,
 }))
 
 vi.mock('@shared/db/connection', () => ({
@@ -121,9 +129,18 @@ import { POST } from '@/app/api/evaluate-answer/route'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-function makeRequest(answer = 'A reasonably long answer about a team conflict resolution.') {
+function makeRequest(
+  answer = 'A reasonably long answer about a team conflict resolution.',
+  jobsPractice = false,
+) {
   const body = {
-    config: { role: 'pm', experience: '0-2', duration: 30, interviewType: 'screening' },
+    config: {
+      role: 'pm',
+      experience: '0-2',
+      duration: 30,
+      interviewType: 'screening',
+      ...(jobsPractice && { attribution: { source: 'jobs', jobId: 'job-1' } }),
+    },
     question: 'Tell me about a time you resolved a conflict.',
     answer,
     questionIndex: 0,
@@ -136,14 +153,22 @@ function makeRequest(answer = 'A reasonably long answer about a team conflict re
   })
 }
 
+const ANSWER_MODEL = {
+  model: 'test-model',
+  provider: 'test-provider',
+  maxTokens: 500,
+  useToonInput: false,
+}
+
 function completionResult(text: string, truncated: boolean) {
   return {
     text,
-    model: 'test-model',
-    provider: 'test-provider',
+    model: ANSWER_MODEL.model,
+    provider: ANSWER_MODEL.provider,
     inputTokens: 100,
     outputTokens: truncated ? 250 : 120,
     usedFallback: false,
+    attemptKind: 'primary' as const,
     truncated,
   }
 }
@@ -170,6 +195,15 @@ describe('POST /api/evaluate-answer — G.3 truncation handling', () => {
     mockWarn.mockReset()
     mockError.mockReset()
     mockInfo.mockReset()
+    mockCaptureScoringConfig.mockReset()
+    mockRecordScoringReceipt.mockReset()
+    mockCaptureScoringConfig.mockResolvedValue({
+      taskSlot: 'interview.evaluate-answer',
+      resolved: ANSWER_MODEL,
+      source: 'L3-Mongo',
+      authoritative: true,
+    })
+    mockRecordScoringReceipt.mockResolvedValue(true)
   })
 
   it('does not retry when first completion is not truncated', async () => {
@@ -182,6 +216,25 @@ describe('POST /api/evaluate-answer — G.3 truncation handling', () => {
     expect(json.status).toBe('ok')
     expect(json.failure).toBeUndefined()
     expect(json.relevance).toBe(75)
+    expect(mockCaptureScoringConfig).not.toHaveBeenCalled()
+  })
+
+  it('records exact scorer provenance only for Jobs-attributed config', async () => {
+    mockCompletionStream.mockResolvedValueOnce(completionResult(validScores, false))
+
+    await POST(makeRequest(undefined, true))
+
+    expect(mockCaptureScoringConfig).toHaveBeenCalledWith('interview.evaluate-answer')
+    expect(mockCompletionStream).toHaveBeenCalledWith(expect.objectContaining({
+      resolvedModel: ANSWER_MODEL,
+    }))
+    expect(mockRecordScoringReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: '507f1f77bcf86cd799439011',
+      userId: 'test-user-1',
+      contractVersion: 'answer-evaluation.v1',
+      evaluation: expect.objectContaining({ relevance: 75, status: 'ok' }),
+      result: expect.objectContaining({ attemptKind: 'primary' }),
+    }))
   })
 
   it('retries once with expanded maxTokens when initial call truncated, succeeds on retry', async () => {
@@ -202,6 +255,28 @@ describe('POST /api/evaluate-answer — G.3 truncation handling', () => {
     expect(mockWarn).toHaveBeenCalled()
   })
 
+  it('pins the Jobs retry to one scorer snapshot and records only the accepted retry', async () => {
+    mockCompletionStream
+      .mockResolvedValueOnce(completionResult('{"relevance": 70, "struc', true))
+      .mockResolvedValueOnce(completionResult(validScores, false))
+
+    const response = await POST(makeRequest(undefined, true))
+
+    expect(response.status).toBe(200)
+    expect(mockCaptureScoringConfig).toHaveBeenCalledOnce()
+    expect(mockCompletionStream).toHaveBeenCalledTimes(2)
+    expect(mockCompletionStream.mock.calls[0][0]).toMatchObject({ resolvedModel: ANSWER_MODEL })
+    expect(mockCompletionStream.mock.calls[1][0]).toMatchObject({
+      resolvedModel: ANSWER_MODEL,
+      maxTokens: 800,
+    })
+    expect(mockRecordScoringReceipt).toHaveBeenCalledOnce()
+    expect(mockRecordScoringReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      overrides: { maxTokens: 800 },
+      result: expect.objectContaining({ attemptKind: 'primary', truncated: false }),
+    }))
+  })
+
   it('marks evaluation.status = "truncated" when retry also truncates (parseable partial)', async () => {
     // Realistic truncation shape: the model emitted a complete JSON
     // object but the `truncated` flag is still set because stop_reason
@@ -218,12 +293,13 @@ describe('POST /api/evaluate-answer — G.3 truncation handling', () => {
       .mockResolvedValueOnce(completionResult('{"relevance": 70, "struc', true))
       .mockResolvedValueOnce(completionResult(partial, true))
 
-    const res = await POST(makeRequest())
+    const res = await POST(makeRequest(undefined, true))
     const json = await res.json()
 
     expect(mockCompletionStream).toHaveBeenCalledTimes(2)
     expect(json.status).toBe('truncated')
     expect(json.relevance).toBe(72)
+    expect(mockRecordScoringReceipt).not.toHaveBeenCalled()
   })
 
   it('falls through to status = "failed" when retry parse also fails', async () => {

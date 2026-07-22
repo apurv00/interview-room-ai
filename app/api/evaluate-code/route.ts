@@ -7,6 +7,13 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { sanitizeGeneratedText } from '@shared/services/sanitizeGeneratedText'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { buildFollowUpCalibration } from '@interview/flow/probeGuidance'
+import { codeEvaluationToAnswerEvaluation } from '@interview/services/eval/answerEvaluationAdapters'
+import {
+  CODE_EVALUATION_CONTRACT_VERSION,
+  captureModelConfigSnapshot,
+  isCanonicalJobsPracticeSession,
+  recordJobsAnswerScoringReceipt,
+} from '@shared/services/scoringProvenance'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -18,6 +25,9 @@ const EvaluateCodeSchema = z.object({
   problemDescription: z.string().min(1).max(5000),
   questionIndex: z.number().int().min(0),
   sessionId: z.string().optional(),
+  /** Client optimization hint only; the receipt writer still requires a
+   * canonical server-verified Jobs session before it can mutate anything. */
+  jobsPractice: z.boolean().optional(),
   // Band calibration for the grounded follow-up (grounded_followups flag).
   // Optional: absent → follow-up is generated uncalibrated (or not at all
   // when the flag is off). domain cap matches the CMS domain-slug validator
@@ -38,7 +48,7 @@ export const POST = composeApiRoute<EvaluateCodePayload>({
     keyPrefix: 'rl:eval-code',
   },
   handler: async (_req, ctx) => {
-    const { code, language, problemTitle, problemDescription, questionIndex, sessionId, domain, experience } = ctx.body
+    const { code, language, problemTitle, problemDescription, questionIndex, sessionId, jobsPractice, domain, experience } = ctx.body
     const startTime = Date.now()
 
     // Grounded follow-up (flag-gated): when ON, the eval also writes ONE
@@ -54,8 +64,19 @@ export const POST = composeApiRoute<EvaluateCodePayload>({
     const calibration = groundedOn ? buildFollowUpCalibration(domain, 'coding', experience) : ''
 
     try {
+      const shouldCaptureScoring = !!sessionId && (
+        jobsPractice === true ||
+        (jobsPractice === undefined && await isCanonicalJobsPracticeSession(sessionId, ctx.user.id).catch(() => false))
+      )
+      const scoringConfigBefore = shouldCaptureScoring
+        ? await captureModelConfigSnapshot('interview.evaluate-code').catch((error) => {
+            aiLogger.warn({ error, sessionId }, 'evaluate-code scorer provenance preflight unavailable')
+            return null
+          })
+        : null
       const result = await completion({
         taskSlot: 'interview.evaluate-code',
+        ...(scoringConfigBefore ? { resolvedModel: scoringConfigBefore.resolved } : {}),
         system: `${DATA_BOUNDARY_RULE}
 
 You are a senior technical interviewer evaluating a coding solution. Evaluate the code strictly but fairly.
@@ -94,6 +115,27 @@ ${JSON_OUTPUT_RULE}
       } else {
         evaluation.grounded_follow_up = sanitizeGeneratedText(evaluation.grounded_follow_up)
       }
+      const responseEvaluation = { ...evaluation, questionIndex }
+
+      if (sessionId && scoringConfigBefore && result.truncated !== true) {
+        const normalized = codeEvaluationToAnswerEvaluation(
+          responseEvaluation,
+          { title: problemTitle, description: problemDescription },
+          { code, language },
+        )
+        await recordJobsAnswerScoringReceipt({
+          sessionId,
+          userId: ctx.user.id,
+          evaluation: normalized as unknown as Record<string, unknown>,
+          before: scoringConfigBefore,
+          result,
+          contractVersion: CODE_EVALUATION_CONTRACT_VERSION,
+        }).catch((error) => {
+          aiLogger.warn({ error, sessionId, questionIndex }, 'evaluate-code scorer receipt was not persisted')
+        })
+      } else if (sessionId && scoringConfigBefore && result.truncated === true) {
+        aiLogger.warn({ sessionId, questionIndex }, 'truncated code evaluation is ineligible for Jobs evidence')
+      }
 
       // Track usage
       await trackUsage({
@@ -107,10 +149,7 @@ ${JSON_OUTPUT_RULE}
         success: true,
       }).catch(() => {})
 
-      return NextResponse.json({
-        questionIndex,
-        ...evaluation,
-      })
+      return NextResponse.json(responseEvaluation)
     } catch (err) {
       aiLogger.error({ err }, 'Code evaluation failed')
       return NextResponse.json({ error: 'Evaluation failed' }, { status: 500 })

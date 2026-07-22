@@ -38,6 +38,7 @@ vi.mock('@shared/logger', () => ({
 // Redis state survives across test files.
 import {
   resolveModel,
+  resolveModelWithAuthority,
   invalidateModelConfigCache,
   replaceModelConfigCache,
   __setRedisClientForTesting,
@@ -184,6 +185,118 @@ describe('resolveModel', () => {
   it('returns useToonInput: false when routing is disabled', async () => {
     const result = await resolveModel('interview.generate-question')
     expect(result.useToonInput).toBe(false)
+  })
+
+  it('labels a cold synthetic default as non-authoritative', async () => {
+    const result = await resolveModelWithAuthority('interview.evaluate-answer')
+
+    expect(result).toMatchObject({
+      source: 'cold-defaults-synthetic',
+      authoritative: false,
+      resolved: {
+        model: TASK_SLOT_DEFAULTS['interview.evaluate-answer'].model,
+        provider: TASK_SLOT_DEFAULTS['interview.evaluate-answer'].provider,
+      },
+    })
+  })
+
+  it('labels exact Redis and CMS replacement snapshots as authoritative', async () => {
+    const cachedConfig = {
+      routingEnabled: true,
+      slotEntries: [[
+        'interview.evaluate-answer',
+        {
+          taskSlot: 'interview.evaluate-answer',
+          model: 'redis-authoritative-model',
+          provider: 'openai',
+          maxTokens: 700,
+          isActive: true,
+        },
+      ]],
+    }
+    mockRedisMget.mockResolvedValueOnce([stampedPayload(cachedConfig, '7'), '7'])
+
+    await expect(resolveModelWithAuthority('interview.evaluate-answer')).resolves.toMatchObject({
+      source: 'L2-Redis',
+      authoritative: true,
+      resolved: { model: 'redis-authoritative-model' },
+    })
+
+    await replaceModelConfigCache({
+      routingEnabled: true,
+      slots: [{
+        taskSlot: 'interview.evaluate-answer',
+        model: 'mongo-authoritative-model',
+        provider: 'openai',
+        maxTokens: 800,
+        isActive: true,
+      }],
+    })
+    await expect(resolveModelWithAuthority('interview.evaluate-answer')).resolves.toMatchObject({
+      source: 'L3-Mongo',
+      authoritative: true,
+      resolved: { model: 'mongo-authoritative-model' },
+    })
+  })
+
+  it('waits for an in-flight authoritative Redis refresh when requested', async () => {
+    const refreshedConfig = {
+      routingEnabled: true,
+      slotEntries: [[
+        'interview.evaluate-answer',
+        {
+          taskSlot: 'interview.evaluate-answer',
+          model: 'refreshed-authoritative-model',
+          provider: 'openai',
+          maxTokens: 900,
+          isActive: true,
+        },
+      ]],
+    }
+    mockRedisMget
+      .mockResolvedValueOnce([null, '9'])
+      .mockResolvedValueOnce([stampedPayload(refreshedConfig, '9'), '9'])
+
+    const result = await resolveModelWithAuthority(
+      'interview.evaluate-answer',
+      { waitForAuthoritative: true },
+    )
+
+    expect(mockRedisMget).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({
+      source: 'L2-Redis',
+      authoritative: true,
+      resolved: { model: 'refreshed-authoritative-model' },
+    })
+  })
+
+  it('never labels an expired L1 snapshot authoritative after its refresh fails', async () => {
+    const time = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      await replaceModelConfigCache({
+        routingEnabled: true,
+        slots: [{
+          taskSlot: 'interview.evaluate-answer',
+          model: 'expired-model',
+          provider: 'openai',
+          maxTokens: 500,
+          isActive: true,
+        }],
+      })
+      time.mockReturnValue(1_061_000)
+      mockRedisMget.mockResolvedValue([null, null])
+
+      await expect(resolveModelWithAuthority(
+        'interview.evaluate-answer',
+        { waitForAuthoritative: true },
+      )).resolves.toMatchObject({
+        source: 'L3-Mongo',
+        authoritative: false,
+        resolved: { model: 'expired-model' },
+      })
+    } finally {
+      time.mockRestore()
+    }
   })
 
   // ── Redis L2 cache behavior (PR A) ───────────────────────────────────────

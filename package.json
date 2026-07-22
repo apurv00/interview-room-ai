@@ -66,6 +66,8 @@
     "check:jobs-retention": "tsx -r dotenv/config scripts/repair-jobs-retention.ts --check",
     "repair:jobs-tracker-status": "tsx -r dotenv/config scripts/repair-jobs-tracker-status.ts",
     "check:jobs-tracker-status": "tsx -r dotenv/config scripts/repair-jobs-tracker-status.ts --check",
+    "repair:jobs-evidence-provenance": "tsx -r dotenv/config scripts/repair-jobs-evidence-provenance.ts",
+    "check:jobs-evidence-provenance": "tsx -r dotenv/config scripts/repair-jobs-evidence-provenance.ts --check",
     "prepare:jobs-tracker-status-index": "tsx -r dotenv/config scripts/prepare-jobs-tracker-status-index.ts",
     "check:jobs-tracker-status-index": "tsx -r dotenv/config scripts/prepare-jobs-tracker-status-index.ts --check",
     "sweep:jobs-retention": "tsx -r dotenv/config scripts/sweep-jobs-retention.ts",

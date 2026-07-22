@@ -7,6 +7,13 @@ import { DATA_BOUNDARY_RULE, JSON_OUTPUT_RULE } from '@shared/services/promptSec
 import { sanitizeGeneratedText } from '@shared/services/sanitizeGeneratedText'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import { buildFollowUpCalibration } from '@interview/flow/probeGuidance'
+import { designEvaluationToAnswerEvaluation } from '@interview/services/eval/answerEvaluationAdapters'
+import {
+  DESIGN_EVALUATION_CONTRACT_VERSION,
+  captureModelConfigSnapshot,
+  isCanonicalJobsPracticeSession,
+  recordJobsAnswerScoringReceipt,
+} from '@shared/services/scoringProvenance'
 import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
@@ -37,6 +44,9 @@ const EvaluateDesignSchema = z.object({
   requirements: z.array(z.string()).transform((a) => a.slice(0, 20).map((s) => s.slice(0, 500))),
   questionIndex: z.number().int().min(0),
   sessionId: z.string().optional(),
+  /** Client optimization hint only; canonical Jobs attribution is enforced
+   * by the server-owned receipt write filter. */
+  jobsPractice: z.boolean().optional(),
   // Grounded-follow-up inputs (grounded_followups flag). expectedComponents
   // comes from the problem definition — previously authored but never
   // consumed anywhere — and lets the eval aim a probe at an important gap.
@@ -100,7 +110,7 @@ export const POST = composeApiRoute<EvaluateDesignPayload>({
     keyPrefix: 'rl:eval-design',
   },
   handler: async (_req, ctx) => {
-    const { components, connections, problemTitle, problemDescription, requirements, questionIndex, sessionId, domain, experience, expectedComponents } = ctx.body
+    const { components, connections, problemTitle, problemDescription, requirements, questionIndex, sessionId, jobsPractice, domain, experience, expectedComponents } = ctx.body
     const startTime = Date.now()
 
     const designText = serializeDesign(components, connections)
@@ -127,8 +137,19 @@ export const POST = composeApiRoute<EvaluateDesignPayload>({
       : ''
 
     try {
+      const shouldCaptureScoring = !!sessionId && (
+        jobsPractice === true ||
+        (jobsPractice === undefined && await isCanonicalJobsPracticeSession(sessionId, ctx.user.id).catch(() => false))
+      )
+      const scoringConfigBefore = shouldCaptureScoring
+        ? await captureModelConfigSnapshot('interview.evaluate-design').catch((error) => {
+            aiLogger.warn({ error, sessionId }, 'evaluate-design scorer provenance preflight unavailable')
+            return null
+          })
+        : null
       const result = await completion({
         taskSlot: 'interview.evaluate-design',
+        ...(scoringConfigBefore ? { resolvedModel: scoringConfigBefore.resolved } : {}),
         system: `${DATA_BOUNDARY_RULE}
 
 You are a senior system design interviewer evaluating a candidate's architecture diagram. Evaluate the design strictly but fairly.
@@ -186,6 +207,31 @@ Evaluate this system design.`,
       } else {
         evaluation.grounded_follow_up_2 = sanitizeGeneratedText(evaluation.grounded_follow_up_2)
       }
+      const responseEvaluation = { ...evaluation, questionIndex }
+
+      if (sessionId && scoringConfigBefore && result.truncated !== true) {
+        const normalized = designEvaluationToAnswerEvaluation(
+          responseEvaluation,
+          { title: problemTitle, description: problemDescription },
+          {
+            components,
+            connections,
+            questionIndex,
+          },
+        )
+        await recordJobsAnswerScoringReceipt({
+          sessionId,
+          userId: ctx.user.id,
+          evaluation: normalized as unknown as Record<string, unknown>,
+          before: scoringConfigBefore,
+          result,
+          contractVersion: DESIGN_EVALUATION_CONTRACT_VERSION,
+        }).catch((error) => {
+          aiLogger.warn({ error, sessionId, questionIndex }, 'evaluate-design scorer receipt was not persisted')
+        })
+      } else if (sessionId && scoringConfigBefore && result.truncated === true) {
+        aiLogger.warn({ sessionId, questionIndex }, 'truncated design evaluation is ineligible for Jobs evidence')
+      }
 
       await trackUsage({
         user: ctx.user,
@@ -198,10 +244,7 @@ Evaluate this system design.`,
         success: true,
       }).catch(() => {})
 
-      return NextResponse.json({
-        questionIndex,
-        ...evaluation,
-      })
+      return NextResponse.json(responseEvaluation)
     } catch (err) {
       aiLogger.error({ err }, 'Design evaluation failed')
       return NextResponse.json({ error: 'Evaluation failed' }, { status: 500 })
