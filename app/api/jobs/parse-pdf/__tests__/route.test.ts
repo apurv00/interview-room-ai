@@ -26,7 +26,7 @@ vi.mock('@shared/middleware/checkRateLimit', () => ({ checkRateLimit: vi.fn().mo
 
 import { POST } from '../route'
 
-function reqStub(fileName: string, type = 'application/pdf') {
+function reqStub(fileName: string, type = 'application/pdf', contentLength?: string) {
   const file = {
     name: fileName,
     type,
@@ -34,7 +34,7 @@ function reqStub(fileName: string, type = 'application/pdf') {
     arrayBuffer: async () => new TextEncoder().encode('%PDF-1.4 content').buffer,
   }
   return {
-    headers: { get: () => null },
+    headers: { get: (name: string) => name.toLowerCase() === 'content-length' ? contentLength ?? null : null },
     formData: async () => ({ get: (k: string) => (k === 'file' ? file : null) }),
   } as never
 }
@@ -48,6 +48,8 @@ describe('POST /api/jobs/parse-pdf', () => {
     const res = await POST(reqStub('Apurv Bhishek Resume.pdf'))
     expect(res.status).toBe(200)
     expect(mockParseDocument).toHaveBeenCalledWith(expect.anything(), 'resume.pdf')
+    expect(res.headers.get('cache-control')).toContain('private')
+    expect(res.headers.get('cache-control')).toContain('no-store')
   })
 
   it('a MIME-accepted PDF with no .pdf extension still parses as PDF', async () => {
@@ -68,5 +70,30 @@ describe('POST /api/jobs/parse-pdf', () => {
     expect(res.status).toBe(422)
     const body = await res.json()
     expect(body.code).toBe('EMPTY_TEXT')
+  })
+
+  it('surfaces extraction truncation for the onboarding review', async () => {
+    mockParseDocument.mockResolvedValue({
+      text: 'truncated resume text with enough words to pass the scan check safely',
+      wordCount: 8000,
+      originalWordCount: 9100,
+      truncated: true,
+      docType: 'pdf',
+    })
+
+    const res = await POST(reqStub('long-resume.pdf'))
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({
+      extractionWarnings: [expect.stringContaining('first 8,000 words')],
+    })
+  })
+
+  it('rejects a declared oversized multipart body before session/rate-limit parsing', async () => {
+    const res = await POST(reqStub('large.pdf', 'application/pdf', String(11 * 1024 * 1024)))
+
+    expect(res.status).toBe(413)
+    expect(res.headers.get('cache-control')).toContain('no-store')
+    expect(mockParseDocument).not.toHaveBeenCalled()
   })
 })

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
+import { useSession } from 'next-auth/react'
 import { JOB_DOMAIN_IDS } from '@jobs/config/domains'
 import { JOB_TARGET_QUESTION_CTA, postedAgeLabel } from '@jobs/config/truthfulLabels'
 import { clearAllInterviewStorage } from '@shared/storageKeys'
@@ -45,6 +46,45 @@ interface JobsTarget {
   method: 'paste' | 'upload' | 'questions' | 'import'
   role: string
   skills: string[]
+  /** null = anonymous tab; undefined = legacy unscoped blob. */
+  ownerId?: string | null
+}
+
+const JOBS_TARGET_METHODS = new Set<JobsTarget['method']>(['paste', 'upload', 'questions', 'import'])
+
+function parseJobsTarget(raw: string | null): JobsTarget | null {
+  if (!raw) return null
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>
+    if (!value || typeof value !== 'object' || !JOBS_TARGET_METHODS.has(value.method as JobsTarget['method'])) {
+      return null
+    }
+
+    const method = value.method as JobsTarget['method']
+    const ownerId = value.ownerId === null
+      ? null
+      : typeof value.ownerId === 'string' && value.ownerId.length <= 128
+        ? value.ownerId
+        : undefined
+    const role = typeof value.role === 'string' ? value.role.trim().slice(0, 80) : ''
+    const skills: string[] = []
+    const seen = new Set<string>()
+    if (method !== 'questions' && Array.isArray(value.skills)) {
+      for (const candidate of value.skills) {
+        if (typeof candidate !== 'string') continue
+        const skill = candidate.trim().slice(0, 40)
+        const key = skill.toLowerCase()
+        if (!skill || seen.has(key)) continue
+        seen.add(key)
+        skills.push(skill)
+        if (skills.length === 20) break
+      }
+    }
+
+    return role || skills.length ? { method, role, skills, ownerId } : null
+  } catch {
+    return null
+  }
 }
 
 const TIER_BADGE: Record<string, string> = {
@@ -57,6 +97,8 @@ const TIER_BADGE: Record<string, string> = {
 
 function JobsFeed() {
   const searchParams = useSearchParams()
+  const { data: session, status: authStatus } = useSession()
+  const currentUserId = session?.user?.id ?? null
   const domainParam = searchParams.get('domain')
   const domain =
     domainParam && (JOB_DOMAIN_IDS as readonly string[]).includes(domainParam) ? domainParam : undefined
@@ -66,12 +108,21 @@ function JobsFeed() {
   const [error, setError] = useState(false)
   const [target, setTarget] = useState<JobsTarget | null>(null)
   const [targetLoaded, setTargetLoaded] = useState(false)
-  const [capNotice, setCapNotice] = useState(false)
+  const [loadedTargetIdentityKey, setLoadedTargetIdentityKey] = useState<string | null>(null)
   const [quickWins, setQuickWins] = useState<{ count: number; resumeId?: string } | null>(null)
   const [winsDismissed, setWinsDismissed] = useState(false)
   const [accountUnavailable, setAccountUnavailable] = useState(false)
   const [feedRevision, setFeedRevision] = useState(0)
   const feedRequestRef = useRef(0)
+  const targetIdentityKey = `${authStatus}:${currentUserId ?? 'anonymous'}`
+  const targetIdentityReady = (
+    authStatus !== 'loading' &&
+    targetLoaded &&
+    loadedTargetIdentityKey === targetIdentityKey
+  )
+  const effectiveTarget = targetIdentityReady && target?.ownerId !== undefined && target.ownerId === currentUserId
+    ? target
+    : null
 
   // Domain arrives via client-side nav too (query-only change doesn't remount);
   // reset pagination in-render so the fetch effect runs once, not racing twice.
@@ -84,16 +135,34 @@ function JobsFeed() {
   // The confirm bar's output (sessionStorage — dies with the tab; a
   // stranger's resume structure never persists server-side).
   useEffect(() => {
+    feedRequestRef.current += 1
+    setTargetLoaded(false)
+    setLoadedTargetIdentityKey(null)
+    setTarget(null)
+    setQuickWins(null)
+    setData(null)
+    setError(false)
+    setAccountUnavailable(false)
+    if (authStatus === 'loading') return
     try {
       const raw = sessionStorage.getItem('JOBS_TARGET')
       if (raw) {
         // Legacy blobs may still carry a `city` field — ignored (city is
         // neither an input nor a rank signal, founder directive 2026-07-16).
-        setTarget(JSON.parse(raw) as JobsTarget)
+        const parsed = parseJobsTarget(raw)
+        // Legacy targets have no trustworthy owner provenance. Fail closed
+        // instead of exposing a prior signed-in user's role/skills after
+        // logout or on a shared tab.
+        const ownerMatches = parsed?.ownerId !== undefined && parsed.ownerId === currentUserId
+        if (ownerMatches) setTarget(parsed)
+        else sessionStorage.removeItem('JOBS_TARGET')
       }
     } catch { /* private mode / corrupt entry — Tier-A feed */ }
-    try { setCapNotice(sessionStorage.getItem('JOBS_CAP_NOTICE') === '1') } catch { /* noop */ }
+    // Old cap notices were unscoped. The current flow stays on review when a
+    // save hits the cap, so no feed handoff notice is needed.
+    try { sessionStorage.removeItem('JOBS_CAP_NOTICE') } catch { /* noop */ }
     try { setWinsDismissed(sessionStorage.getItem('JOBS_WINS_DISMISSED') === '1') } catch { /* noop */ }
+    setLoadedTargetIdentityKey(targetIdentityKey)
     setTargetLoaded(true)
     // Quick wins (package 10, zero LLM): 401 = anon, card hides.
     let cancelled = false
@@ -114,7 +183,6 @@ function JobsFeed() {
           feedRequestRef.current += 1
           clearAllInterviewStorage()
           setTarget(null)
-          setCapNotice(false)
           setQuickWins(null)
           setWinsDismissed(false)
           setData(null)
@@ -127,26 +195,33 @@ function JobsFeed() {
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [])
+  }, [authStatus, currentUserId, targetIdentityKey])
 
   function dismissWins() {
     setWinsDismissed(true)
     try { sessionStorage.setItem('JOBS_WINS_DISMISSED', '1') } catch { /* noop */ }
   }
 
-  function dismissCapNotice() {
-    setCapNotice(false)
-    try { sessionStorage.removeItem('JOBS_CAP_NOTICE') } catch { /* noop */ }
-  }
-
   useEffect(() => {
-    if (!targetLoaded) return
+    if (!targetIdentityReady) return
     const requestId = ++feedRequestRef.current
     const params = new URLSearchParams({ page: String(page) })
     if (domain) params.set('domain', domain)
-    if (target?.skills.length) params.set('skills', target.skills.join(','))
-    if (target?.role) params.set('targetRole', target.role)
-    fetch(`/api/jobs/feed?${params}`)
+    const personalized = !!effectiveTarget && (!!effectiveTarget.role || effectiveTarget.skills.length > 0)
+    const feedRequest = personalized
+      ? fetch('/api/jobs/feed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify({
+            page,
+            ...(domain ? { domain } : {}),
+            ...(effectiveTarget.role ? { targetRole: effectiveTarget.role } : {}),
+            ...(effectiveTarget.skills.length ? { skills: effectiveTarget.skills } : {}),
+          }),
+        })
+      : fetch(`/api/jobs/feed?${params}`)
+    feedRequest
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((nextData) => {
         if (requestId !== feedRequestRef.current) return
@@ -162,20 +237,28 @@ function JobsFeed() {
       body: JSON.stringify({ name: 'jobs.feed_viewed', props: { page } }),
       keepalive: true,
     }).catch(() => {})
-  }, [page, domain, target, targetLoaded, feedRevision])
+  }, [page, domain, effectiveTarget, targetIdentityReady, feedRevision])
 
   // Reveal honesty (§4a): name resume signals only when matched skills exist;
   // the role-question path never gets resume-flavored copy.
   const revealSkills = Array.from(new Set((data?.cards ?? []).flatMap((c) => c.matchedSkills ?? []))).slice(0, 3)
-  const revealLine = !target
+  const revealLine = !effectiveTarget
     ? null
-    : target.method === 'questions'
-      ? `Sorted by role — ${target.role}.`
+    : effectiveTarget.method === 'questions'
+      ? `Sorted by role — ${effectiveTarget.role}.`
       : (data?.sharpened ?? 0) > 0 && revealSkills.length
         ? `Sorted for you — based on your resume: ${revealSkills.join(', ')}.`
-        : target.role
-          ? `Sorted by your target role — ${target.role}.`
+        : effectiveTarget.role
+          ? `Sorted by your target role — ${effectiveTarget.role}.`
           : 'Feed refreshed.'
+
+  if (!targetIdentityReady) {
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-10" aria-label="Job feed">
+        <p className="mt-8 text-sm text-slate-500">Loading jobs…</p>
+      </main>
+    )
+  }
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10" aria-label="Job feed">
@@ -199,7 +282,7 @@ function JobsFeed() {
         </div>
       )}
 
-      {target ? (
+      {effectiveTarget ? (
         <div className="mt-4 flex items-center justify-between rounded-xl border border-slate-200 p-3 bg-white">
           <p className="text-sm">{revealLine}</p>
           <Link href="/jobs/start" className="shrink-0 text-xs text-blue-600 hover:underline">Edit target</Link>
@@ -225,16 +308,6 @@ function JobsFeed() {
             <Link href={`/resume/builder${quickWins.resumeId ? `?id=${quickWins.resumeId}` : ''}`} className="text-blue-600 underline">Fix in builder</Link>
           </p>
           <button onClick={dismissWins} aria-label="Dismiss" className="ml-3 text-slate-500 hover:text-slate-600">✕</button>
-        </div>
-      )}
-
-      {capNotice && (
-        <div className="mt-4 flex items-start justify-between rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
-          <p>
-            Your resume library is full (3/3), so we didn&apos;t save this one — your feed is still
-            sorted by it. <Link href="/resume" className="underline">Manage resumes</Link>
-          </p>
-          <button onClick={dismissCapNotice} aria-label="Dismiss" className="ml-3 text-slate-600 hover:text-slate-600">✕</button>
         </div>
       )}
 

@@ -27,12 +27,19 @@ vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 import { GET, POST } from '../route'
 
 const USER_ID = '507f1f77bcf86cd799439010'
-const postRequest = () => new Request('http://localhost/api/jobs/base-resume', {
+const postRequest = (originUserId: string | null = USER_ID) => new Request('http://localhost/api/jobs/base-resume', {
   method: 'POST',
+  headers: originUserId === null ? undefined : { 'x-origin-user-id': originUserId },
   body: JSON.stringify({
     resume: { contactInfo: { fullName: 'A', email: 'a@example.com' } },
     targetRole: 'Backend Engineer',
   }),
+})
+
+const rawPostRequest = (body: string, extraHeaders: HeadersInit = {}) => new Request('http://localhost/api/jobs/base-resume', {
+  method: 'POST',
+  headers: { 'x-origin-user-id': USER_ID, ...extraHeaders },
+  body,
 })
 
 beforeEach(() => {
@@ -46,6 +53,56 @@ beforeEach(() => {
 })
 
 describe('/api/jobs/base-resume account-state guard', () => {
+  it('rejects an account switch before rate limiting or database work', async () => {
+    const response = await POST(postRequest('507f1f77bcf86cd799439099'))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: 'account changed',
+      code: 'ACCOUNT_CHANGED',
+    })
+    expect(mocks.checkJobsRateLimit).not.toHaveBeenCalled()
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+    expect(mocks.saveBaseResume).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing captured identity before rate limiting or database work', async () => {
+    const response = await POST(postRequest(null))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_CHANGED' })
+    expect(mocks.checkJobsRateLimit).not.toHaveBeenCalled()
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+  })
+
+  it('accepts the captured identity for the active session', async () => {
+    const response = await POST(postRequest(USER_ID))
+
+    expect(response.status).toBe(200)
+    expect(mocks.saveBaseResume).toHaveBeenCalledTimes(1)
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(response.headers.get('cache-control')).toContain('no-store')
+  })
+
+  it('rejects null and array bodies without throwing or touching the database', async () => {
+    for (const body of ['null', '[]']) {
+      const response = await POST(rawPostRequest(body))
+      expect(response.status).toBe(400)
+      expect(response.headers.get('cache-control')).toContain('no-store')
+    }
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+    expect(mocks.saveBaseResume).not.toHaveBeenCalled()
+  })
+
+  it('rejects an actually oversized body before JSON parsing or database work', async () => {
+    const response = await POST(rawPostRequest(JSON.stringify({ padding: 'x'.repeat(1024 * 1024) })))
+
+    expect(response.status).toBe(413)
+    expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+    expect(mocks.saveBaseResume).not.toHaveBeenCalled()
+  })
+
   it('returns 401 and reads no resume after account deletion begins', async () => {
     mocks.isJobsAccountActive.mockResolvedValue(false)
 
@@ -87,6 +144,8 @@ describe('/api/jobs/base-resume account-state guard', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ base })
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(response.headers.get('cache-control')).toContain('no-store')
     expect(mocks.isJobsAccountActive).toHaveBeenCalledTimes(2)
   })
 

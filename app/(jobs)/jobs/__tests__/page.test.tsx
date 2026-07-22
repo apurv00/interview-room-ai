@@ -16,13 +16,22 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 
-const { mockUseSearchParams, mockFetch } = vi.hoisted(() => ({
+const { mockUseSearchParams, mockFetch, sessionState } = vi.hoisted(() => ({
   mockUseSearchParams: vi.fn(),
   mockFetch: vi.fn(),
+  sessionState: {
+    value: {
+      status: 'unauthenticated' as 'loading' | 'authenticated' | 'unauthenticated',
+      data: null as null | { user: { id: string } },
+    },
+  },
 }))
 
 vi.mock('next/navigation', () => ({
   useSearchParams: () => mockUseSearchParams(),
+}))
+vi.mock('next-auth/react', () => ({
+  useSession: () => sessionState.value,
 }))
 
 import JobsPage from '../page'
@@ -31,6 +40,11 @@ function feedCallUrls(): string[] {
   return mockFetch.mock.calls
     .map((c) => String(c[0]))
     .filter((u) => u.startsWith('/api/jobs/feed'))
+}
+
+function personalizedFeedCalls(): Array<[RequestInfo | URL, RequestInit]> {
+  return mockFetch.mock.calls
+    .filter((c) => String(c[0]) === '/api/jobs/feed' && c[1]?.method === 'POST') as Array<[RequestInfo | URL, RequestInit]>
 }
 
 beforeEach(() => {
@@ -45,6 +59,7 @@ beforeEach(() => {
     // quick-wins (401 for anon) + events fire-and-forget
     return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
   })
+  sessionState.value = { status: 'unauthenticated', data: null }
   sessionStorage.clear()
 })
 
@@ -96,14 +111,14 @@ describe('/jobs account deletion cleanup', () => {
       method: 'upload',
       role: 'Secret Role',
       skills: ['PrivateSkill'],
+      ownerId: null,
     }))
     sessionStorage.setItem('JOBS_CAP_NOTICE', '1')
-    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === '/api/jobs/quick-wins') return quickWinsResponse
       if (url.startsWith('/api/jobs/feed')) {
-        const parsed = new URL(url, 'http://x')
-        if (parsed.searchParams.has('targetRole')) return personalizedFeedResponse
+        if (init?.method === 'POST') return personalizedFeedResponse
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -127,8 +142,9 @@ describe('/jobs account deletion cleanup', () => {
 
     render(<JobsPage />)
     await waitFor(() => {
-      expect(feedCallUrls().some((url) => new URL(url, 'http://x').searchParams.has('targetRole'))).toBe(true)
+      expect(personalizedFeedCalls()).toHaveLength(1)
     })
+    expect(feedCallUrls().every((url) => !url.includes('Secret%20Role') && !url.includes('PrivateSkill'))).toBe(true)
 
     await act(async () => {
       resolveQuickWins({
@@ -167,6 +183,150 @@ describe('/jobs account deletion cleanup', () => {
     expect(screen.queryByText('Old Personalized Job')).toBeNull()
     expect(screen.queryByText('PrivateSkill')).toBeNull()
     expect(screen.queryByText(/Sorted for you/i)).toBeNull()
+  })
+})
+
+describe('/jobs personalized-feed privacy', () => {
+  it('sends resume-derived role and skills in a POST body, never the request URL', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('domain=pm'))
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
+      method: 'upload',
+      role: ' Product Manager ',
+      skills: [' Roadmaps ', 'roadmaps', 'SQL'],
+      ownerId: null,
+    }))
+
+    render(<JobsPage />)
+
+    await waitFor(() => expect(personalizedFeedCalls()).toHaveLength(1))
+    const [url, init] = personalizedFeedCalls()[0]
+    expect(String(url)).toBe('/api/jobs/feed')
+    expect(String(url)).not.toContain('Product')
+    expect(String(url)).not.toContain('Roadmaps')
+    expect(String(url)).not.toContain('SQL')
+    expect(init.cache).toBe('no-store')
+    expect(JSON.parse(String(init.body))).toEqual({
+      page: 1,
+      domain: 'pm',
+      targetRole: 'Product Manager',
+      skills: ['Roadmaps', 'SQL'],
+    })
+  })
+
+  it('removes corrupt target storage and falls back to a public GET without throwing', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
+      method: 'upload',
+      role: 42,
+      skills: 'PrivateSkill',
+      ownerId: null,
+    }))
+
+    render(<JobsPage />)
+
+    await waitFor(() => expect(feedCallUrls().length).toBeGreaterThan(0))
+    expect(personalizedFeedCalls()).toHaveLength(0)
+    expect(feedCallUrls()[0]).toBe('/api/jobs/feed?page=1')
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+  })
+
+  it('does not accept injected resume skills on the role-question path', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
+      method: 'questions',
+      role: 'Sales Executive',
+      skills: ['PrivateSkill'],
+      ownerId: null,
+    }))
+
+    render(<JobsPage />)
+
+    await waitFor(() => expect(personalizedFeedCalls()).toHaveLength(1))
+    expect(JSON.parse(String(personalizedFeedCalls()[0][1].body))).toEqual({
+      page: 1,
+      targetRole: 'Sales Executive',
+    })
+  })
+
+  it('clears a target owned by user A when the feed is opened as user B', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-b' } } }
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
+      method: 'import',
+      role: 'User A Secret Role',
+      skills: ['PrivateSkill'],
+      ownerId: 'user-a',
+    }))
+
+    render(<JobsPage />)
+
+    await waitFor(() => expect(feedCallUrls().length).toBeGreaterThan(0))
+    expect(personalizedFeedCalls()).toHaveLength(0)
+    expect(feedCallUrls()[0]).toBe('/api/jobs/feed?page=1')
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+    expect(screen.queryByText(/User A Secret Role/i)).toBeNull()
+  })
+
+  it('discards a valid-looking legacy target with no owner provenance', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
+      method: 'upload',
+      role: 'Legacy Private Role',
+      skills: ['PrivateSkill'],
+    }))
+
+    render(<JobsPage />)
+
+    await waitFor(() => expect(feedCallUrls().length).toBeGreaterThan(0))
+    expect(personalizedFeedCalls()).toHaveLength(0)
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+    expect(screen.queryByText(/Legacy Private Role/i)).toBeNull()
+  })
+
+  it('hides account-A personalization immediately while auth changes, then loads B publicly', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
+      method: 'import',
+      role: 'User A Secret Role',
+      skills: ['PrivateSkill'],
+      ownerId: 'user-a',
+    }))
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/feed' && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            cards: [{ id: 'a', title: 'A Secret Job', company: 'A Co', locations: [], isRemote: true }],
+            page: 1, pageSize: 20, hasMore: false, total: 1,
+          }),
+        })
+      }
+      if (url.startsWith('/api/jobs/feed')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            cards: [{ id: 'public', title: 'Public Job', company: 'Public Co', locations: [], isRemote: true }],
+            page: 1, pageSize: 20, hasMore: false, total: 1,
+          }),
+        })
+      }
+      return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) })
+    })
+
+    const view = render(<JobsPage />)
+    expect(await screen.findByText('A Secret Job')).toBeTruthy()
+
+    sessionState.value = { status: 'loading', data: null }
+    view.rerender(<JobsPage />)
+    expect(screen.queryByText('A Secret Job')).toBeNull()
+    expect(screen.queryByText(/User A Secret Role/i)).toBeNull()
+
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-b' } } }
+    view.rerender(<JobsPage />)
+    expect(await screen.findByText('Public Job')).toBeTruthy()
+    expect(personalizedFeedCalls()).toHaveLength(1)
   })
 })
 

@@ -5,15 +5,16 @@ import {
 } from '@shared/services/jobsAccountFence'
 
 /**
- * Base-resume auto-save + import door (PRODUCT_FLOW §1 Stage 2, Wave 3.2b).
- * Signed-in confirm auto-saves the parsed upload as "Base Resume — {role}"
- * (preserveFullText — the upload's original text is authoritative; a partial
- * parse must not silently drop what the parser couldn't model).
+ * Explicit-consent base-resume save + import door (PRODUCT_FLOW §1 Stage 2).
+ * A signed-in user may explicitly save the parser-produced upload as
+ * "Base Resume — {role}". preserveFullText keeps the upload's original text
+ * authoritative. Jobs matching-skill edits stay feed-only; this service
+ * receives the parser's canonical structured skill groups unchanged.
  *
  * Re-upload dedup: an existing base resume for the SAME target role is
  * UPDATED, not duplicated — repeat onboarding never eats the 3-slot cap.
- * At the cap: no save, no block — extraction still feeds ranking; the
- * caller renders a dismissible notice (spec: never gate the feed on it).
+ * At the cap: no save. The caller remains on review and offers an explicit
+ * tab-only continuation, so persistence failure is never hidden.
  */
 
 const BASE_PREFIX = 'Base Resume — '

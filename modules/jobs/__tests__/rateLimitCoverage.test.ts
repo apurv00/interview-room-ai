@@ -19,10 +19,15 @@ const EXPECTED_POST_ROUTES = [
   'admin/sync/route.ts',
   'base-resume/route.ts',
   'email-action/route.ts',
+  'feed/route.ts',
   'parse-pdf/route.ts',
 ] as const
 
 const EXISTING_LIMIT_EXEMPTIONS = new Map<string, RegExp>([
+  // Privacy transport only: this POST is the same bounded, read-only DB feed
+  // projection as public GET. The verb keeps resume-derived signals out of
+  // URLs; it performs no mutation or provider call.
+  ['feed/route.ts', /public, stateless Tier-B ranking/],
   ['parse-pdf/route.ts', /\bawait\s+checkRateLimit\s*\(/],
 ])
 

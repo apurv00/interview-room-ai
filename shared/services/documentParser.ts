@@ -4,7 +4,12 @@ import { logger } from '@shared/logger'
 
 export interface ParseResult {
   text: string
+  /** Word count represented in `text` (capped at the extraction limit). */
   wordCount: number
+  /** Original count before the extraction limit was applied. */
+  originalWordCount?: number
+  /** True when `text` contains only the leading extraction window. */
+  truncated?: boolean
   docType: 'pdf' | 'docx' | 'txt'
 }
 
@@ -76,6 +81,8 @@ export async function parseDocument(buffer: Buffer, filename: string): Promise<P
   return {
     text,
     wordCount: Math.min(wordCount, MAX_WORDS),
+    originalWordCount: wordCount,
+    truncated: wordCount > MAX_WORDS,
     docType: ext.slice(1) as ParseResult['docType'],
   }
 }

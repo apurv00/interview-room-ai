@@ -8,6 +8,21 @@ import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 export const dynamic = 'force-dynamic'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB — matches /api/documents/upload
+const MAX_MULTIPART_BODY_BYTES = MAX_FILE_SIZE + 512 * 1024
+const PRIVATE_HEADERS = {
+  'Cache-Control': 'private, no-store, max-age=0',
+  Pragma: 'no-cache',
+} as const
+
+function privateJson(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: PRIVATE_HEADERS })
+}
+
+function privateResponse(response: Response): Response {
+  response.headers.set('Cache-Control', PRIVATE_HEADERS['Cache-Control'])
+  response.headers.set('Pragma', PRIVATE_HEADERS.Pragma)
+  return response
+}
 
 /**
  * POST /api/jobs/parse-pdf — STATELESS PDF → text for the /jobs/start
@@ -23,6 +38,10 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB — matches /api/documents/uploa
  */
 export async function POST(req: NextRequest) {
   try {
+    const declaredLength = Number(req.headers.get('content-length') ?? 0)
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_MULTIPART_BODY_BYTES) {
+      return privateJson({ error: 'File too large. Maximum size is 10MB.' }, 413)
+    }
     const session = await getServerSession(authOptions)
     const ip = (req.headers.get('x-forwarded-for') ?? 'unknown').split(',')[0].trim()
     const blocked = await checkRateLimit(session?.user?.id ?? `ip:${ip}`, {
@@ -30,18 +49,18 @@ export async function POST(req: NextRequest) {
       maxRequests: 10,
       keyPrefix: 'rl:jobs-parse-pdf',
     })
-    if (blocked) return blocked
+    if (blocked) return privateResponse(blocked)
 
     const formData = await req.formData()
     const file = formData.get('file') as File | null
-    if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+    if (!file) return privateJson({ error: 'No file provided' }, 400)
     // PDF only (founder directive) — .txt/.docx are not offered here.
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
     if (!isPdf) {
-      return NextResponse.json({ error: 'Upload a PDF — or paste your resume text instead.' }, { status: 400 })
+      return privateJson({ error: 'Upload a PDF — or paste your resume text instead.' }, 400)
     }
     if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: 'File too large. Maximum size is 10MB.' }, { status: 400 })
+      return privateJson({ error: 'File too large. Maximum size is 10MB.' }, 400)
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
@@ -54,20 +73,25 @@ export async function POST(req: NextRequest) {
     const result = await parseDocument(buffer, 'resume.pdf')
     // Scanned-image signature (same heuristic as /api/documents/upload).
     if (result.wordCount === 0 || result.wordCount < 20) {
-      return NextResponse.json(
+      return privateJson(
         {
           error: 'No readable text in this PDF — it looks like a scanned image. Paste your resume text instead.',
           code: 'EMPTY_TEXT',
         },
-        { status: 422 }
+        422,
       )
     }
-    return NextResponse.json({ text: result.text })
+    return privateJson({
+      text: result.text,
+      extractionWarnings: result.truncated
+        ? ['Only the first 8,000 words were extracted from the PDF — review anything near the end of the resume.']
+        : [],
+    })
   } catch (err) {
     if (err instanceof UnsupportedFileTypeError) {
-      return NextResponse.json({ error: 'Upload a PDF — or paste your resume text instead.' }, { status: 400 })
+      return privateJson({ error: 'Upload a PDF — or paste your resume text instead.' }, 400)
     }
     logger.error({ err }, 'jobs parse-pdf failed')
-    return NextResponse.json({ error: 'Could not read that PDF. Paste your resume text instead.' }, { status: 500 })
+    return privateJson({ error: 'Could not read that PDF. Paste your resume text instead.' }, 500)
   }
 }

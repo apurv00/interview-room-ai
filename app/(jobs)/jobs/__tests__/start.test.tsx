@@ -11,13 +11,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 
-const { mockFetch, mockPush } = vi.hoisted(() => ({
+const { mockFetch, mockPush, sessionState } = vi.hoisted(() => ({
   mockFetch: vi.fn(),
   mockPush: vi.fn(),
+  sessionState: {
+    value: {
+      status: 'unauthenticated' as 'loading' | 'authenticated' | 'unauthenticated',
+      data: null as null | { user: { id: string } },
+    },
+  },
 }))
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
+}))
+vi.mock('next-auth/react', () => ({
+  useSession: () => sessionState.value,
 }))
 
 import JobsStartPage from '../start/page'
@@ -29,6 +38,7 @@ beforeEach(() => {
     return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
   })
   mockPush.mockReset()
+  sessionState.value = { status: 'unauthenticated', data: null }
   localStorage.clear()
   sessionStorage.clear()
 })
@@ -83,7 +93,7 @@ describe('/jobs/start doors', () => {
         status: 200,
         json: () => Promise.resolve({
           resume: {
-            contact: { name: 'Private Candidate' },
+            contactInfo: { fullName: 'Private Candidate' },
             experience: [{ title: 'Secret Role' }],
             skills: [{ items: ['SecretSkill'] }],
           },
@@ -95,13 +105,51 @@ describe('/jobs/start doors', () => {
     expect(screen.queryByText('SecretSkill')).toBeNull()
   })
 
+  it('lets a different healthy account start clean after the prior account became unavailable', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input) !== '/api/jobs/base-resume') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+      }
+      if (sessionState.value.data?.user.id === 'user-a') {
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          json: () => Promise.resolve({ code: 'ACCOUNT_UNAVAILABLE' }),
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          base: {
+            id: 'resume-b',
+            name: 'User B Resume',
+            targetRole: 'Product Manager',
+            skills: ['Roadmaps'],
+          },
+        }),
+      })
+    })
+
+    const view = render(<JobsStartPage />)
+    expect(await screen.findByText('Your account is unavailable.')).toBeTruthy()
+
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-b' } } }
+    view.rerender(<JobsStartPage />)
+
+    expect(await screen.findByText('Use my saved resume')).toBeTruthy()
+    expect(screen.queryByText('Your account is unavailable.')).toBeNull()
+  })
+
   it('does not navigate when the base-resume save reports account deletion', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
     let resolveBaseResumeSave!: (value: unknown) => void
     const baseResumeSaveResponse = new Promise((resolve) => { resolveBaseResumeSave = resolve })
     mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === '/api/jobs/base-resume' && !init?.method) {
-        return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({ error: 'sign in required' }) })
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ base: null }) })
       }
       if (url === '/api/jobs/base-resume' && init?.method === 'POST') return baseResumeSaveResponse
       if (url === '/api/jobs/parse-pdf') {
@@ -113,7 +161,7 @@ describe('/jobs/start doors', () => {
           status: 200,
           json: () => Promise.resolve({
             resume: {
-              contact: { name: 'Private Candidate' },
+              contactInfo: { fullName: 'Private Candidate' },
               experience: [{ title: 'Product Manager' }],
               skills: [{ items: ['Roadmaps'] }],
             },
@@ -125,7 +173,8 @@ describe('/jobs/start doors', () => {
 
     render(<JobsStartPage />)
     pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Show my jobs →' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /Save upload to My Resumes/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save resume & show jobs' }))
 
     await act(async () => {
       resolveBaseResumeSave({
@@ -142,6 +191,7 @@ describe('/jobs/start doors', () => {
   })
 
   it('saved-resume door prefills the role from the latest experience when no saved target exists (founder 2026-07-19)', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
     mockFetch.mockImplementation((url: string) => {
       if (String(url) === '/api/jobs/base-resume') {
         return Promise.resolve({ ok: true, json: () => Promise.resolve({ base: { id: 'r1', name: 'Apurv Resume.pdf', targetRole: '   ', latestRole: 'Senior Product Manager', skills: ['Roadmaps'] } }) })
@@ -219,12 +269,22 @@ describe('/jobs/start doors', () => {
   it('successful PDF parse feeds the confirm bar through the existing text-parse flow', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (String(url) === '/api/jobs/parse-pdf') {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ text: 'APURV — Product Manager. Skills: roadmaps.' }) })
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            text: 'APURV — Product Manager. Skills: roadmaps.',
+            extractionWarnings: ['Only the first 8,000 words were extracted from the PDF — review anything near the end of the resume.'],
+          }),
+        })
       }
       if (String(url) === '/api/resume/parse') {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ resume: { contact: { name: 'Apurv' }, experience: [{ title: 'Product Manager' }], skills: [] } }),
+          json: () => Promise.resolve({
+            resume: { contactInfo: { fullName: 'Apurv' }, experience: [{ title: 'Product Manager' }], skills: [] },
+            importedSections: ['contactInfo', 'experience'],
+            warnings: [],
+          }),
         })
       }
       return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
@@ -232,8 +292,341 @@ describe('/jobs/start doors', () => {
     render(<JobsStartPage />)
     pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
     await waitFor(() => expect(screen.getByText(/Role you.*targeting/i)).toBeTruthy())
+    expect(screen.getByText(/Imported sections: contact details, work experience/i)).toBeTruthy()
+    expect(screen.getByText(/first 8,000 words were extracted/i)).toBeTruthy()
     const parseCall = mockFetch.mock.calls.find((c) => String(c[0]) === '/api/resume/parse')
     expect(parseCall).toBeTruthy()
     expect(String((parseCall![1] as RequestInit).body)).toContain('Product Manager')
+    const pdfCall = mockFetch.mock.calls.find((c) => String(c[0]) === '/api/jobs/parse-pdf')
+    const postedFile = ((pdfCall?.[1] as RequestInit).body as FormData).get('file') as File
+    expect(postedFile.name).toBe('resume.pdf')
+  })
+
+  it('defaults a signed-in upload to tab-only and uses edited, deduplicated skills for matching', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/base-resume' && !init?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ base: null }) })
+      }
+      if (url === '/api/jobs/parse-pdf') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: 'resume text' }) })
+      }
+      if (url === '/api/resume/parse') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            resume: {
+              contactInfo: { fullName: 'Private Candidate' },
+              experience: [{ title: 'Product Manager' }],
+              skills: [{ items: ['Roadmaps', 'SQL'] }],
+            },
+            importedSections: ['experience', 'skills'],
+            warnings: ['The parser response ended early — some extracted fields may be incomplete.'],
+          }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<JobsStartPage />)
+    pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
+
+    expect(await screen.findByText(/cannot be saved from this screen/i)).toBeTruthy()
+    expect(screen.queryByRole('radio', { name: /Save upload to My Resumes/i })).toBeNull()
+    expect(screen.getByText(/parser response ended early/i)).toBeTruthy()
+    expect(screen.getByRole('link', { name: /Open Builder to upload or paste/i })).toHaveAttribute(
+      'href',
+      '/resume/builder?return=/jobs/start',
+    )
+    fireEvent.change(screen.getByLabelText('Skills used for job matching'), {
+      target: { value: 'Roadmaps, Customer research, roadmaps' },
+    })
+    fireEvent.change(screen.getByLabelText(/Role you.*targeting/i), {
+      target: { value: 'Senior Product Manager' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Show my jobs →' }))
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/jobs'))
+    const target = JSON.parse(sessionStorage.getItem('JOBS_TARGET') ?? '{}')
+    expect(target).toEqual({
+      method: 'upload',
+      role: 'Senior Product Manager',
+      skills: ['Roadmaps', 'Customer research'],
+      ownerId: 'user-a',
+    })
+    const saveCalls = mockFetch.mock.calls.filter(([url, init]) => (
+      String(url) === '/api/jobs/base-resume' && (init as RequestInit | undefined)?.method === 'POST'
+    ))
+    expect(saveCalls).toHaveLength(0)
+  })
+
+  it('hides an imported account-A review while auth is unresolved and clears it for account B', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input) === '/api/jobs/base-resume') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            base: {
+              id: 'resume-a',
+              name: 'User A Private Resume',
+              targetRole: 'User A Private Role',
+              skills: ['PrivateSkill'],
+            },
+          }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    const view = render(<JobsStartPage />)
+    fireEvent.click(await screen.findByText('Use my saved resume'))
+    expect(screen.getByDisplayValue('User A Private Role')).toBeTruthy()
+
+    sessionState.value = { status: 'loading', data: null }
+    view.rerender(<JobsStartPage />)
+    expect(screen.getByText(/Refreshing this review/i)).toBeTruthy()
+    expect(screen.queryByDisplayValue('User A Private Role')).toBeNull()
+
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-b' } } }
+    view.rerender(<JobsStartPage />)
+    await waitFor(() => expect(screen.queryByText(/Refreshing this review/i)).toBeNull())
+    expect(screen.queryByDisplayValue('User A Private Role')).toBeNull()
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+  })
+
+  it('keeps matching edits out of canonical resume structure, saves once, and awaits the result', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    let resolveSave!: (value: unknown) => void
+    const saveResponse = new Promise((resolve) => { resolveSave = resolve })
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/base-resume' && !init?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ base: null }) })
+      }
+      if (url === '/api/jobs/parse-pdf') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: 'original resume text' }) })
+      }
+      if (url === '/api/resume/parse') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            resume: {
+              contactInfo: { fullName: 'Candidate' },
+              experience: [{ title: 'Engineer' }],
+              skills: [{ items: ['Old skill'] }],
+            },
+            importedSections: ['contactInfo', 'experience', 'skills'],
+            warnings: [],
+          }),
+        })
+      }
+      if (url === '/api/jobs/base-resume' && init?.method === 'POST') return saveResponse
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<JobsStartPage />)
+    pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
+    fireEvent.change(await screen.findByLabelText('Skills used for job matching'), {
+      target: { value: 'TypeScript, Accessibility' },
+    })
+    fireEvent.click(screen.getByRole('radio', { name: /Save upload to My Resumes/i }))
+    const submit = screen.getByRole('button', { name: 'Save resume & show jobs' })
+    fireEvent.click(submit)
+    fireEvent.click(submit)
+
+    await waitFor(() => {
+      const calls = mockFetch.mock.calls.filter(([url, init]) => (
+        String(url) === '/api/jobs/base-resume' && (init as RequestInit | undefined)?.method === 'POST'
+      ))
+      expect(calls).toHaveLength(1)
+      const init = calls[0][1] as RequestInit
+      expect(new Headers(init.headers).get('x-origin-user-id')).toBe('user-a')
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        targetRole: 'Engineer',
+        fullText: 'original resume text',
+        resume: { skills: [{ items: ['Old skill'] }] },
+      })
+    })
+    expect(mockPush).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Skills used for job matching')).toBeDisabled()
+    expect(screen.getByRole('radio', { name: /Use for this tab only/i })).toBeDisabled()
+
+    await act(async () => {
+      resolveSave({ ok: true, status: 200, json: () => Promise.resolve({ saved: true, id: 'resume-1' }) })
+    })
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/jobs'))
+    expect(JSON.parse(sessionStorage.getItem('JOBS_TARGET') ?? '{}')).toMatchObject({
+      skills: ['TypeScript', 'Accessibility'],
+      ownerId: 'user-a',
+    })
+  })
+
+  it('stays on review after a failed explicit save and lets the user choose tab-only', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/base-resume' && !init?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ base: null }) })
+      }
+      if (url === '/api/jobs/parse-pdf') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: 'resume text' }) })
+      }
+      if (url === '/api/resume/parse') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            resume: { experience: [{ title: 'Engineer' }], skills: [] },
+            importedSections: ['experience'],
+            warnings: [],
+          }),
+        })
+      }
+      if (url === '/api/jobs/base-resume' && init?.method === 'POST') {
+        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'Save unavailable' }) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<JobsStartPage />)
+    pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /Save upload to My Resumes/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save resume & show jobs' }))
+
+    expect(await screen.findByText('Save unavailable')).toBeTruthy()
+    expect(mockPush).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('radio', { name: /Use for this tab only/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show my jobs →' }))
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/jobs'))
+  })
+
+  it('stays on review when My Resumes is full and requires an explicit tab-only continuation', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/base-resume' && !init?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ base: null }) })
+      }
+      if (url === '/api/jobs/parse-pdf') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: 'resume text' }) })
+      }
+      if (url === '/api/resume/parse') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            resume: { experience: [{ title: 'Engineer' }], skills: [] },
+            importedSections: ['experience'],
+            warnings: [],
+          }),
+        })
+      }
+      if (url === '/api/jobs/base-resume' && init?.method === 'POST') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ saved: false, reason: 'cap' }) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<JobsStartPage />)
+    pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /Save upload to My Resumes/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save resume & show jobs' }))
+
+    expect(await screen.findByText(/My Resumes is full/i)).toBeTruthy()
+    expect(mockPush).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('JOBS_CAP_NOTICE')).toBeNull()
+    const tabOnly = screen.getByRole('radio', { name: /Use for this tab only/i }) as HTMLInputElement
+    expect(tabOnly.checked).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Show my jobs →' }))
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/jobs'))
+  })
+
+  it('ignores a delayed user-A import response after the tab becomes user B', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    let resolveUserA!: (value: unknown) => void
+    const userAResponse = new Promise((resolve) => { resolveUserA = resolve })
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/base-resume' && !init?.method) {
+        if (sessionState.value.data?.user.id === 'user-a') return userAResponse
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            base: { id: 'b', name: 'User B Resume', targetRole: 'Designer', skills: ['Figma'] },
+          }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    const view = render(<JobsStartPage />)
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-b' } } }
+    view.rerender(<JobsStartPage />)
+
+    expect(await screen.findByText('User B Resume')).toBeTruthy()
+    await act(async () => {
+      resolveUserA({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          base: { id: 'a', name: 'User A Private Resume', targetRole: 'Secret', skills: ['Private'] },
+        }),
+      })
+    })
+    expect(screen.queryByText('User A Private Resume')).toBeNull()
+  })
+
+  it('does not navigate or store user-A targeting when identity changes during save', async () => {
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-a' } } }
+    let resolveSave!: (value: unknown) => void
+    const saveResponse = new Promise((resolve) => { resolveSave = resolve })
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/base-resume' && !init?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ base: null }) })
+      }
+      if (url === '/api/jobs/parse-pdf') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ text: 'user A resume text' }) })
+      }
+      if (url === '/api/resume/parse') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            resume: { experience: [{ title: 'Engineer A' }], skills: [{ items: ['Private A'] }] },
+            importedSections: ['experience', 'skills'],
+            warnings: [],
+          }),
+        })
+      }
+      if (url === '/api/jobs/base-resume' && init?.method === 'POST') return saveResponse
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    const view = render(<JobsStartPage />)
+    pickFile(new File(['%PDF-1.4'], 'resume.pdf', { type: 'application/pdf' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /Save upload to My Resumes/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save resume & show jobs' }))
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith(
+      '/api/jobs/base-resume',
+      expect.objectContaining({ method: 'POST' }),
+    ))
+
+    sessionState.value = { status: 'authenticated', data: { user: { id: 'user-b' } } }
+    view.rerender(<JobsStartPage />)
+    await act(async () => {
+      resolveSave({ ok: true, status: 200, json: () => Promise.resolve({ saved: true, id: 'resume-a' }) })
+    })
+
+    expect(mockPush).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
+    expect(screen.queryByText('Private A')).toBeNull()
+    expect(await screen.findByText(/sign-in changed/i)).toBeTruthy()
   })
 })
