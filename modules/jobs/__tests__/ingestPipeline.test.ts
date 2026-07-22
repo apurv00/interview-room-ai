@@ -13,6 +13,7 @@ vi.mock('@shared/db/models', () => ({
 
 import { ingestBatch, evictProvenance, makeRedisRepostCounter } from '../services/ingestPipeline'
 import type { NormalizedJob } from '../adapters/types'
+import { groupApplyLinkSubjects } from '../services/linkGovernance'
 
 const LONG_JD = 'A genuine role with real responsibilities and requirements. '.repeat(10)
 
@@ -56,6 +57,17 @@ function docStub(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function governedEntry(
+  entry: Record<string, unknown>,
+  governance: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const group = groupApplyLinkSubjects([entry])[0]
+  return {
+    ...entry,
+    linkGovernance: { ...group.governance, ...governance },
+  }
+}
+
 describe('ingestBatch — identity ladder', () => {
   it('inserts a clean new posting with fingerprint + provenance', async () => {
     reset()
@@ -67,6 +79,13 @@ describe('ingestBatch — identity ladder', () => {
     expect(doc.sourceIds).toEqual(['jsearch'])
     expect(doc.provenance[0].sourceKey).toBe('jsearch:ext-1')
     expect(doc.provenance[0].applyTier).toBe('employer')
+    expect(doc.provenance[0].applyUrlFirstSeenAt).toBeInstanceOf(Date)
+    expect(doc.provenance[0].linkGovernance).toMatchObject({
+      subject: expect.stringMatching(/^ls1_/),
+      generation: expect.stringMatching(/^lg1_/),
+      incidentVersion: 1,
+      reportCount: 0,
+    })
     expect(doc.domain).toBe('backend')
     expect(doc.lastSeenAt).toBeInstanceOf(Date)
   })
@@ -347,6 +366,8 @@ describe('Codex #510 regressions', () => {
     const entry = existing.provenance[0] as Record<string, unknown>
     expect(entry.applyUrl).toBe('https://boards.greenhouse.io/acme/jobs/9')
     expect(entry.applyTier).toBe('direct-ats')
+    expect(entry.applyUrlFirstSeenAt).toBeInstanceOf(Date)
+    expect(entry.linkGovernance).toMatchObject({ reportCount: 0, incidentVersion: 1 })
   })
 
   it('an incoming payload WITHOUT urls never erases a stored apply link', async () => {
@@ -363,6 +384,180 @@ describe('Codex #510 regressions', () => {
     const entry = existing.provenance[0] as Record<string, unknown>
     expect(entry.applyUrl).toBe('https://careers.acme.com/1')
     expect(entry.applyTier).toBe('employer')
+  })
+
+  it('a canonically equivalent URL refresh preserves generation, governance, and liveness evidence', async () => {
+    reset()
+    const firstSeen = new Date('2026-07-01T00:00:00Z')
+    const crowdAt = new Date('2026-07-10T00:00:00Z')
+    const entry = governedEntry({
+      sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+      applyUrl: 'https://careers.acme.com/1', applyUrlFirstSeenAt: firstSeen,
+      applyTier: 'employer', firstSeenAt: firstSeen, lastSeenAt: firstSeen,
+    }, {
+      reportWindowStartedAt: crowdAt,
+      reportCount: 3,
+      lastReportedAt: crowdAt,
+      crowdDemotedAt: crowdAt,
+    })
+    const governance = entry.linkGovernance
+    const applyCheck = { status: 'dead', deadStreak: 1, lastCheckedAt: crowdAt, lastDeadAt: crowdAt }
+    const existing = docStub({ provenance: [entry], applyCheck, jdLength: 99_999 })
+    mockFindOne.mockResolvedValueOnce(existing)
+
+    await ingestBatch([job({
+      applyOptions: [{ url: 'HTTPS://CAREERS.ACME.COM/1#apply' }],
+    })], 'jsearch')
+
+    expect(existing.provenance[0].applyUrl).toBe('https://careers.acme.com/1')
+    expect(existing.provenance[0].applyUrlFirstSeenAt).toEqual(firstSeen)
+    expect(existing.provenance[0].linkGovernance).toBe(governance)
+    expect(existing.applyCheck).toBe(applyCheck)
+  })
+
+  it('A→B→A replacements in one batch mint monotonically distinct generations and drop stale governance', async () => {
+    reset()
+    const firstSeen = new Date('2026-07-01T00:00:00Z')
+    const crowdAt = new Date('2026-07-10T00:00:00Z')
+    const original = governedEntry({
+      sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+      applyUrl: 'https://careers.acme.com/1', applyUrlFirstSeenAt: firstSeen,
+      applyTier: 'employer', firstSeenAt: firstSeen, lastSeenAt: firstSeen,
+    }, {
+      reportWindowStartedAt: crowdAt,
+      reportCount: 3,
+      lastReportedAt: crowdAt,
+      crowdDemotedAt: crowdAt,
+    })
+    const originalGeneration = (original.linkGovernance as Record<string, unknown>).generation
+    const existing = docStub({
+      provenance: [original],
+      applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: crowdAt, lastDeadAt: crowdAt },
+      jdLength: 99_999,
+    })
+    mockFindOne.mockResolvedValue(existing)
+
+    await ingestBatch([
+      job({ applyOptions: [{ url: 'https://careers.acme.com/2' }] }),
+      job({ applyOptions: [{ url: 'https://careers.acme.com/1' }] }),
+    ], 'jsearch')
+
+    const current = existing.provenance[0] as Record<string, unknown>
+    expect(current.applyUrl).toBe('https://careers.acme.com/1')
+    expect((current.applyUrlFirstSeenAt as Date).getTime()).toBeGreaterThan(firstSeen.getTime())
+    expect((current.linkGovernance as Record<string, unknown>).generation).not.toBe(originalGeneration)
+    expect(current.linkGovernance).toMatchObject({ reportCount: 0, incidentVersion: 1 })
+    expect(existing.applyCheck).toBeUndefined()
+    expect(existing.save).toHaveBeenCalledTimes(2)
+  })
+
+  it('a duplicate provider for the same canonical URL inherits governance without resetting applyCheck', async () => {
+    reset()
+    const firstSeen = new Date('2026-07-01T00:00:00Z')
+    const crowdAt = new Date('2026-07-10T00:00:00Z')
+    const original = governedEntry({
+      sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+      applyUrl: 'https://careers.acme.com/1', applyUrlFirstSeenAt: firstSeen,
+      applyTier: 'employer', firstSeenAt: firstSeen, lastSeenAt: firstSeen,
+    }, {
+      reportWindowStartedAt: crowdAt,
+      reportCount: 3,
+      lastReportedAt: crowdAt,
+      crowdDemotedAt: crowdAt,
+    })
+    const applyCheck = { status: 'alive', deadStreak: 0, lastCheckedAt: crowdAt }
+    const existing = docStub({ provenance: [original], applyCheck, jdLength: 99_999 })
+    mockFindOne
+      .mockResolvedValueOnce(null) // new provider sourceKey
+      .mockResolvedValueOnce(existing) // same canonical fingerprint
+
+    await ingestBatch([job({
+      externalId: 'ext-2',
+      applyOptions: [{ url: 'https://careers.acme.com/1#apply' }],
+    })], 'greenhouse')
+
+    expect(existing.provenance).toHaveLength(2)
+    expect(existing.provenance[0].linkGovernance).toEqual(existing.provenance[1].linkGovernance)
+    expect(existing.provenance[1].linkGovernance).toMatchObject({
+      reportCount: 3,
+      crowdDemotedAt: crowdAt,
+    })
+    expect(existing.applyCheck).toBe(applyCheck)
+  })
+
+  it('a legacy ungoverned same-URL provider retains the legacy generation without reopening', async () => {
+    reset()
+    const firstSeen = new Date('2026-07-01T00:00:00Z')
+    const closedAt = new Date('2026-07-15T00:00:00Z')
+    const legacy = {
+      sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+      applyUrl: 'https://careers.acme.com/1', applyTier: 'employer',
+      firstSeenAt: firstSeen, lastSeenAt: firstSeen,
+    }
+    const legacyGeneration = groupApplyLinkSubjects([legacy])[0].generation
+    const applyCheck = {
+      status: 'dead', deadStreak: 2, lastCheckedAt: closedAt, lastDeadAt: closedAt,
+    }
+    const existing = docStub({
+      status: 'closed',
+      closedReason: 'dead-apply-link',
+      closedAt,
+      provenance: [legacy],
+      applyCheck,
+      jdLength: 99_999,
+    })
+    mockFindOne
+      .mockResolvedValueOnce(null) // new provider sourceKey
+      .mockResolvedValueOnce(existing) // same canonical fingerprint
+
+    await ingestBatch([job({
+      externalId: 'ext-2',
+      applyOptions: [{ url: 'https://careers.acme.com/1#apply' }],
+    })], 'greenhouse')
+
+    const group = groupApplyLinkSubjects(existing.provenance)
+    expect(group).toHaveLength(1)
+    expect(group[0].generation).toBe(legacyGeneration)
+    expect(existing.provenance).toHaveLength(2)
+    expect(existing.provenance[0].linkGovernance).toEqual(existing.provenance[1].linkGovernance)
+    expect(existing.provenance[0].linkGovernance).toMatchObject({
+      generation: legacyGeneration,
+      reportCount: 0,
+      incidentVersion: 1,
+    })
+    expect(existing.status).toBe('closed')
+    expect(existing.closedReason).toBe('dead-apply-link')
+    expect(existing.applyCheck).toBe(applyCheck)
+  })
+
+  it('URL replacement resets only the superseded subject while preserving an unrelated link incident', async () => {
+    reset()
+    const firstSeen = new Date('2026-07-01T00:00:00Z')
+    const crowdAt = new Date('2026-07-10T00:00:00Z')
+    const replaced = governedEntry({
+      sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+      applyUrl: 'https://old.example/1', applyUrlFirstSeenAt: firstSeen,
+      applyTier: 'employer', firstSeenAt: firstSeen, lastSeenAt: firstSeen,
+    }, { reportWindowStartedAt: crowdAt, reportCount: 3, crowdDemotedAt: crowdAt })
+    const retained = governedEntry({
+      sourceId: 'greenhouse', externalId: 'ext-2', sourceKey: 'greenhouse:ext-2',
+      applyUrl: 'https://retained.example/2', applyUrlFirstSeenAt: firstSeen,
+      applyTier: 'direct-ats', firstSeenAt: firstSeen, lastSeenAt: firstSeen,
+    }, { reportWindowStartedAt: crowdAt, reportCount: 3, crowdDemotedAt: crowdAt })
+    const retainedGeneration = (retained.linkGovernance as Record<string, unknown>).generation
+    const existing = docStub({ provenance: [replaced, retained], jdLength: 99_999 })
+    mockFindOne.mockResolvedValueOnce(existing)
+
+    await ingestBatch([job({ applyOptions: [{ url: 'https://new.example/1' }] })], 'jsearch')
+
+    const changed = existing.provenance.find((entry) => entry.sourceKey === 'jsearch:ext-1')!
+    const untouched = existing.provenance.find((entry) => entry.sourceKey === 'greenhouse:ext-2')!
+    expect(changed.linkGovernance).toMatchObject({ reportCount: 0, incidentVersion: 1 })
+    expect(untouched.linkGovernance).toMatchObject({
+      generation: retainedGeneration,
+      reportCount: 3,
+      crowdDemotedAt: crowdAt,
+    })
   })
 
   it('an llm-verdict tombstone STAYS closed on re-fetch (anti-resurrection, ruling #16)', async () => {
@@ -602,5 +797,123 @@ describe('dead-apply-link reopen on URL replacement (Codex #543)', () => {
     expect(rec.status).toBe('open')
     expect(rec.closedReason).toBeUndefined()
     expect(rec.applyCheck).toBeUndefined()
+  })
+
+  it('a new provider with a genuinely new URL reopens a dead-link closure', async () => {
+    reset()
+    const closedAt = new Date('2026-07-15T00:00:00Z')
+    const oldUrl = 'https://old-dead.example/x'
+    const newUrl = 'https://careers.acme.com/1'
+    const closed = docStub({
+      status: 'closed',
+      closedReason: 'dead-apply-link',
+      closedAt,
+      purgeAt: new Date('2026-07-22T00:00:00Z'),
+      provenance: [{
+        sourceId: 'jsearch', externalId: 'ext-1', sourceKey: 'jsearch:ext-1',
+        applyUrl: oldUrl, applyTier: 'employer',
+        firstSeenAt: new Date('2026-07-01'), lastSeenAt: new Date('2026-07-01'),
+      }],
+      applyCheck: {
+        status: 'dead', deadStreak: 2, lastCheckedAt: closedAt, lastDeadAt: closedAt,
+      },
+      jdLength: 99_999,
+    })
+    mockFindOne
+      .mockResolvedValueOnce(null) // new provider sourceKey
+      .mockResolvedValueOnce(closed) // same canonical fingerprint
+
+    await ingestBatch([job({
+      externalId: 'ext-2',
+      applyOptions: [{ url: newUrl }],
+    })], 'greenhouse')
+
+    expect(groupApplyLinkSubjects(closed.provenance).map((group) => group.canonicalUrl))
+      .toEqual(expect.arrayContaining([oldUrl, newUrl]))
+    expect(closed.status).toBe('open')
+    expect(closed.closedReason).toBeUndefined()
+    expect(closed.closedAt).toBeUndefined()
+    expect(closed.purgeAt).toBeUndefined()
+    expect(closed.applyCheck).toBeUndefined()
+  })
+
+  it('a removal-only link-set change stays closed and preserves recovery evidence', async () => {
+    reset()
+    const closedAt = new Date('2026-07-15T00:00:00Z')
+    const applyCheck = {
+      status: 'dead', deadStreak: 2, lastCheckedAt: closedAt, lastDeadAt: closedAt,
+    }
+    const provenance = [
+      {
+        sourceId: 'jsearch', externalId: 'old-link', sourceKey: 'jsearch:old-link',
+        applyUrl: 'https://old-dead.example/x', applyTier: 'employer',
+        firstSeenAt: new Date('2026-06-01'), lastSeenAt: new Date('2026-06-01'),
+      },
+      ...Array.from({ length: 7 }, (_, index) => ({
+        sourceId: `source-${index}`,
+        externalId: `ext-${index}`,
+        sourceKey: `source-${index}:ext-${index}`,
+        firstSeenAt: new Date('2026-07-01'),
+        lastSeenAt: new Date('2026-07-01'),
+      })),
+    ]
+    const closed = docStub({
+      status: 'closed',
+      closedReason: 'dead-apply-link',
+      closedAt,
+      purgeAt: new Date('2026-07-22T00:00:00Z'),
+      provenance,
+      applyCheck,
+      jdLength: 99_999,
+    })
+    mockFindOne
+      .mockResolvedValueOnce(null) // new sourceKey
+      .mockResolvedValueOnce(closed) // same canonical fingerprint
+
+    // The cap-8 append evicts the stale URL-bearing jsearch row and adds no
+    // replacement URL, so the subject:generation set changed only by removal.
+    await ingestBatch([job({ externalId: 'ext-2', applyOptions: [] })], 'jsearch')
+
+    expect(groupApplyLinkSubjects(closed.provenance)).toHaveLength(0)
+    expect(closed.status).toBe('closed')
+    expect(closed.closedReason).toBe('dead-apply-link')
+    expect(closed.closedAt).toEqual(closedAt)
+    expect(closed.purgeAt).toEqual(new Date('2026-07-22T00:00:00Z'))
+    expect(closed.applyCheck).toBe(applyCheck)
+  })
+
+  it('a removal-only link-set change clears an open row for a fresh aggregate check', async () => {
+    reset()
+    const applyCheck = {
+      status: 'alive', deadStreak: 0, lastCheckedAt: new Date('2026-07-15T00:00:00Z'),
+    }
+    const provenance = [
+      {
+        sourceId: 'jsearch', externalId: 'old-link', sourceKey: 'jsearch:old-link',
+        applyUrl: 'https://old-alive.example/x', applyTier: 'employer',
+        firstSeenAt: new Date('2026-06-01'), lastSeenAt: new Date('2026-06-01'),
+      },
+      {
+        sourceId: 'jsearch', externalId: 'retained', sourceKey: 'jsearch:retained',
+        firstSeenAt: new Date('2026-07-01'), lastSeenAt: new Date('2026-07-01'),
+      },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        sourceId: `source-${index}`,
+        externalId: `ext-${index}`,
+        sourceKey: `source-${index}:ext-${index}`,
+        firstSeenAt: new Date('2026-07-01'),
+        lastSeenAt: new Date('2026-07-01'),
+      })),
+    ]
+    const open = docStub({ provenance, applyCheck, jdLength: 99_999 })
+    mockFindOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(open)
+
+    await ingestBatch([job({ externalId: 'ext-new', applyOptions: [] })], 'greenhouse')
+
+    expect(groupApplyLinkSubjects(open.provenance)).toHaveLength(0)
+    expect(open.status).toBe('open')
+    expect(open.applyCheck).toBeUndefined()
   })
 })

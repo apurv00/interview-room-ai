@@ -12,12 +12,10 @@ import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 export const dynamic = 'force-dynamic'
 
 /**
- * POST /api/jobs/[id]/apply-click — the MACHINE FACT (PRODUCT_FLOW §2:
- * apply_clicked vs applied, never conflated). Called keepalive from the
- * detail page's click handler AFTER the sync window.open. Authed-only by
- * construction (the apply ladder exists only behind the P-2 gate); the
- * telemetry event is written server-side here, replacing the client
- * keepalive event for this surface.
+ * POST /api/jobs/[id]/apply-click — legacy/backward-compatible status edge.
+ * It may record apply_clicked (never conflated with the user's applied
+ * claim), but deliberately creates no trusted attempt or broken-link
+ * governance proof. New detail-page Apply navigation uses /open?intent=apply.
  */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions)

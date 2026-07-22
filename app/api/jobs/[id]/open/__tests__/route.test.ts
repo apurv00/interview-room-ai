@@ -4,6 +4,7 @@ const {
   mockGetServerSession,
   mockConnectDB,
   mockResolveLiveApplyRedirect,
+  mockRecordApplyOpenAttempt,
   mockCheckJobsRateLimit,
   mockLoggerError,
   MockJobsAccountInactiveError,
@@ -17,6 +18,7 @@ const {
     mockGetServerSession: vi.fn(),
     mockConnectDB: vi.fn(),
     mockResolveLiveApplyRedirect: vi.fn(),
+    mockRecordApplyOpenAttempt: vi.fn(),
     mockCheckJobsRateLimit: vi.fn(),
     mockLoggerError: vi.fn(),
     MockJobsAccountInactiveError,
@@ -32,6 +34,7 @@ vi.mock('@shared/services/jobsAccountFence', () => ({
 vi.mock('@jobs/services/applyRedirectService', () => ({
   resolveLiveApplyRedirect: mockResolveLiveApplyRedirect,
 }))
+vi.mock('@jobs', () => ({ recordApplyOpenAttempt: mockRecordApplyOpenAttempt }))
 vi.mock('@jobs/services/rateLimit', () => ({
   checkJobsRateLimit: mockCheckJobsRateLimit,
 }))
@@ -39,52 +42,159 @@ vi.mock('@shared/logger', () => ({
   logger: { error: mockLoggerError },
 }))
 
-import { GET } from '../route'
+import { GET, POST } from '../route'
 
 const USER_ID = '507f1f77bcf86cd799439001'
 const POSTING_ID = '507f1f77bcf86cd799439011'
-const OPTION_ID = `ao1_${'a'.repeat(43)}`
+const OPTION_ID = `ao2_${'a'.repeat(43)}`
 const DESTINATION = 'https://boards.greenhouse.io/acme/jobs/123'
 
-function request(optionId = OPTION_ID) {
-  return new Request(`http://localhost/api/jobs/${POSTING_ID}/open?optionId=${optionId}`)
+function request(
+  method: 'GET' | 'POST',
+  intent: string | null,
+  optionId = OPTION_ID,
+) {
+  const intentParam = intent == null ? '' : `&intent=${intent}`
+  return new Request(
+    `http://localhost/api/jobs/${POSTING_ID}/open?optionId=${optionId}${intentParam}`,
+    { method },
+  )
 }
 
 beforeEach(() => {
   mockGetServerSession.mockReset().mockResolvedValue({ user: { id: USER_ID } })
   mockConnectDB.mockReset().mockResolvedValue(undefined)
   mockResolveLiveApplyRedirect.mockReset().mockResolvedValue(DESTINATION)
+  mockRecordApplyOpenAttempt.mockReset().mockResolvedValue({
+    status: 'apply_clicked',
+    created: true,
+    transitioned: true,
+    canonicalOption: {
+      optionId: OPTION_ID,
+      url: DESTINATION,
+      tier: 'direct-ats',
+      subject: 'source:greenhouse',
+      generation: 'generation-1',
+      incidentVersion: 0,
+      broken: false,
+    },
+  })
   mockCheckJobsRateLimit.mockReset().mockResolvedValue(null)
   mockLoggerError.mockReset()
 })
 
-describe('GET /api/jobs/[id]/open', () => {
-  it('redirects to the freshly resolved safe destination with private headers', async () => {
-    const response = await GET(request(), { params: { id: POSTING_ID } })
+describe('GET/POST /api/jobs/[id]/open', () => {
+  it('records Apply on POST and redirects with 303 so the employer receives GET', async () => {
+    const response = await POST(request('POST', 'apply'), { params: { id: POSTING_ID } })
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(303)
     expect(response.headers.get('location')).toBe(DESTINATION)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
     expect(response.headers.get('referrer-policy')).toBe('no-referrer')
     expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(USER_ID)
+    expect(mockRecordApplyOpenAttempt).toHaveBeenCalledWith(USER_ID, POSTING_ID, OPTION_ID)
+    expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
+  })
+
+  it('redirects View on GET without recording Apply status or governance evidence', async () => {
+    const response = await GET(request('GET', 'view'), { params: { id: POSTING_ID } })
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(DESTINATION)
     expect(mockResolveLiveApplyRedirect).toHaveBeenCalledWith(USER_ID, POSTING_ID, OPTION_ID)
+    expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+  })
+
+  it('uses the transaction-returned canonical URL as final Apply authority', async () => {
+    const currentDestination = 'https://jobs.acme.example/current/123'
+    mockRecordApplyOpenAttempt.mockResolvedValueOnce({
+      status: 'apply_clicked',
+      created: false,
+      transitioned: false,
+      canonicalOption: {
+        optionId: OPTION_ID,
+        url: currentDestination,
+        tier: 'employer',
+        subject: 'source:acme',
+        generation: 'generation-2',
+        incidentVersion: 1,
+        broken: false,
+      },
+    })
+
+    const response = await POST(request('POST', 'apply'), { params: { id: POSTING_ID } })
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe(currentDestination)
+    expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
+  })
+
+  it('rejects GET intent=apply before auth, rate limiting, or database work', async () => {
+    const response = await GET(request('GET', 'apply'), { params: { id: POSTING_ID } })
+
+    expect(response.status).toBe(404)
+    expect(mockGetServerSession).not.toHaveBeenCalled()
+    expect(mockCheckJobsRateLimit).not.toHaveBeenCalled()
+    expect(mockConnectDB).not.toHaveBeenCalled()
+    expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
+    expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+  })
+
+  it('rejects POST intent=view before auth, rate limiting, or database work', async () => {
+    const response = await POST(request('POST', 'view'), { params: { id: POSTING_ID } })
+
+    expect(response.status).toBe(404)
+    expect(mockGetServerSession).not.toHaveBeenCalled()
+    expect(mockCheckJobsRateLimit).not.toHaveBeenCalled()
+    expect(mockConnectDB).not.toHaveBeenCalled()
+    expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
+    expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['GET', null],
+    ['GET', ''],
+    ['GET', 'preview'],
+    ['POST', null],
+    ['POST', ''],
+    ['POST', 'APPLY'],
+  ] as const)('rejects %s with missing or invalid intent %s before database work', async (method, intent) => {
+    const response = method === 'GET'
+      ? await GET(request(method, intent), { params: { id: POSTING_ID } })
+      : await POST(request(method, intent), { params: { id: POSTING_ID } })
+
+    expect(response.status).toBe(404)
+    expect(mockConnectDB).not.toHaveBeenCalled()
+    expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
+    expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
   })
 
   it('returns a generic URL-free error when the option is no longer current', async () => {
     mockResolveLiveApplyRedirect.mockResolvedValueOnce(null)
 
-    const response = await GET(request(), { params: { id: POSTING_ID } })
+    const response = await GET(request('GET', 'view'), { params: { id: POSTING_ID } })
     const body = await response.text()
 
     expect(response.status).toBe(404)
     expect(body).toContain('destination unavailable')
     expect(body).not.toContain(DESTINATION)
+    expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
+  })
+
+  it('fails closed without exposing the destination when the Apply attempt loses authority', async () => {
+    mockRecordApplyOpenAttempt.mockResolvedValueOnce(null)
+
+    const response = await POST(request('POST', 'apply'), { params: { id: POSTING_ID } })
+    const body = await response.text()
+
+    expect(response.status).toBe(404)
+    expect(body).not.toContain(DESTINATION)
   })
 
   it('returns ACCOUNT_UNAVAILABLE without a destination for an inactive account', async () => {
-    mockResolveLiveApplyRedirect.mockRejectedValueOnce(new MockJobsAccountInactiveError(USER_ID))
+    mockRecordApplyOpenAttempt.mockRejectedValueOnce(new MockJobsAccountInactiveError(USER_ID))
 
-    const response = await GET(request(), { params: { id: POSTING_ID } })
+    const response = await POST(request('POST', 'apply'), { params: { id: POSTING_ID } })
     const body = await response.text()
 
     expect(response.status).toBe(401)
@@ -94,9 +204,9 @@ describe('GET /api/jobs/[id]/open', () => {
   })
 
   it('does not echo a URL contained in an unexpected error', async () => {
-    mockResolveLiveApplyRedirect.mockRejectedValueOnce(new Error(`failed for ${DESTINATION}`))
+    mockRecordApplyOpenAttempt.mockRejectedValueOnce(new Error(`failed for ${DESTINATION}`))
 
-    const response = await GET(request(), { params: { id: POSTING_ID } })
+    const response = await POST(request('POST', 'apply'), { params: { id: POSTING_ID } })
     const body = await response.text()
 
     expect(response.status).toBe(503)
@@ -109,10 +219,11 @@ describe('GET /api/jobs/[id]/open', () => {
       new Response(JSON.stringify({ error: 'rate limited' }), { status: 429 }),
     )
 
-    const response = await GET(request(), { params: { id: POSTING_ID } })
+    const response = await POST(request('POST', 'apply'), { params: { id: POSTING_ID } })
 
     expect(response.status).toBe(429)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
     expect(mockResolveLiveApplyRedirect).not.toHaveBeenCalled()
+    expect(mockRecordApplyOpenAttempt).not.toHaveBeenCalled()
   })
 })

@@ -23,11 +23,29 @@ vi.mock('@shared/db/models', () => ({
   JobIngestCycle: { create: mockCycleCreate },
 }))
 
-import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS } from '../services/linkCheckService'
+import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, nextClosedApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS } from '../services/linkCheckService'
 import { createSafeLinkRequest, type LinkRequestImpl, type PinnedRequestImpl } from '../services/safeLinkNetwork'
-import { postingOutcome, runLinkCheckHandler } from '../jobs/linkCheckJobs'
+import { pickPostingsToCheck, postingOutcome, runLinkCheckHandler } from '../jobs/linkCheckJobs'
+import {
+  groupApplyLinkSubjects,
+  linkDispositionOf,
+  nextMachineGovernance,
+} from '../services/linkGovernance'
 
 const NOW = new Date('2026-07-16T12:00:00Z')
+const RECOVERY_LINK = {
+  subject: `ls1_${'A'.repeat(43)}`,
+  generation: `lg1_${'B'.repeat(43)}`,
+}
+const OTHER_RECOVERY_LINK = {
+  subject: `ls1_${'C'.repeat(43)}`,
+  generation: `lg1_${'D'.repeat(43)}`,
+}
+const aliveRecovery = (identity = RECOVERY_LINK) => ({ ...identity, outcome: 'alive' as const })
+const unverifiableRecovery = (identity = RECOVERY_LINK) => ({
+  ...identity,
+  outcome: 'unverifiable' as const,
+})
 
 function requestStub(status: number, bodyText = '', location?: string): LinkRequestImpl {
   return vi.fn().mockResolvedValue({ kind: 'response', status, bodyText, location }) as never
@@ -39,6 +57,27 @@ const nxdomainStub = vi.fn().mockResolvedValue({ kind: 'nxdomain' }) as LinkRequ
 
 // Tests must never hit live DNS: a resolver and connector are always injected.
 const publicResolver = async () => [{ address: '93.184.216.34', family: 4 as const }]
+
+function governedProvenance(
+  url: string,
+  governance: Record<string, unknown> = {},
+): Array<Record<string, unknown>> {
+  const seenAt = new Date('2026-07-01T00:00:00Z')
+  const entry = {
+    sourceId: 'jsearch',
+    externalId: 'ext-1',
+    sourceKey: 'jsearch:ext-1',
+    applyUrl: url,
+    applyUrlFirstSeenAt: seenAt,
+    firstSeenAt: seenAt,
+    lastSeenAt: seenAt,
+  }
+  const group = groupApplyLinkSubjects([entry])[0]
+  return [{
+    ...entry,
+    linkGovernance: { ...group.governance, ...governance },
+  }]
+}
 
 describe('checkApplyLink classifier', () => {
   it('404/410 are dead; NXDOMAIN and connection-refused are dead (the vacancy-spam class)', async () => {
@@ -242,6 +281,191 @@ describe('two-strike close policy', () => {
   })
 })
 
+describe('two-alive closed-posting recovery policy', () => {
+  it('requires two alive observations at least 20h apart before reopening', () => {
+    const closed = nextApplyCheckState(undefined, 'dead', NOW).state
+    const firstAlive = nextClosedApplyCheckState(closed, 'alive', NOW, aliveRecovery())
+    expect(firstAlive.state.aliveStreak).toBe(1)
+    expect(firstAlive.state).toMatchObject({
+      recoverySubject: RECOVERY_LINK.subject,
+      recoveryGeneration: RECOVERY_LINK.generation,
+    })
+    expect(firstAlive.shouldReopen).toBe(false)
+
+    const tooSoon = nextClosedApplyCheckState(
+      firstAlive.state,
+      'alive',
+      new Date(NOW.getTime() + MIN_RESTRIKE_MS - 1),
+      aliveRecovery(),
+    )
+    expect(tooSoon.state.aliveStreak).toBe(1)
+    expect(tooSoon.state.lastAliveAt).toEqual(NOW)
+    expect(tooSoon.shouldReopen).toBe(false)
+
+    const spaced = nextClosedApplyCheckState(
+      tooSoon.state,
+      'alive',
+      new Date(NOW.getTime() + MIN_RESTRIKE_MS),
+      aliveRecovery(),
+    )
+    expect(spaced.shouldReopen).toBe(true)
+    expect(spaced.state.aliveStreak).toBeUndefined()
+    expect(spaced.state.lastAliveAt).toBeUndefined()
+    expect(spaced.state.recoverySubject).toBeUndefined()
+    expect(spaced.state.recoveryGeneration).toBeUndefined()
+  })
+
+  it('preserves a recovery strike across unverifiable checks but resets it on positive death', () => {
+    const firstAlive = nextClosedApplyCheckState(
+      undefined,
+      'alive',
+      NOW,
+      aliveRecovery(),
+    ).state
+    const unverifiable = nextClosedApplyCheckState(
+      firstAlive,
+      'unverifiable',
+      new Date(NOW.getTime() + 3600_000),
+      unverifiableRecovery(),
+    )
+    expect(unverifiable.state.aliveStreak).toBe(1)
+    expect(unverifiable.state.lastAliveAt).toEqual(NOW)
+    expect(unverifiable.state.recoverySubject).toBe(RECOVERY_LINK.subject)
+    expect(unverifiable.shouldReopen).toBe(false)
+
+    const dead = nextClosedApplyCheckState(
+      unverifiable.state,
+      'dead',
+      new Date(NOW.getTime() + MIN_RESTRIKE_MS),
+    )
+    expect(dead.state.aliveStreak).toBeUndefined()
+    expect(dead.state.lastAliveAt).toBeUndefined()
+    expect(dead.state.recoverySubject).toBeUndefined()
+    expect(dead.state.recoveryGeneration).toBeUndefined()
+    expect(dead.shouldReopen).toBe(false)
+  })
+
+  it('never combines alive strikes from alternating current URL generations', () => {
+    const first = nextClosedApplyCheckState(
+      undefined,
+      'alive',
+      NOW,
+      aliveRecovery(RECOVERY_LINK),
+    )
+    const switchedAt = new Date(NOW.getTime() + MIN_RESTRIKE_MS)
+    const switched = nextClosedApplyCheckState(
+      first.state,
+      'alive',
+      switchedAt,
+      aliveRecovery(OTHER_RECOVERY_LINK),
+    )
+
+    expect(switched.shouldReopen).toBe(false)
+    expect(switched.state).toMatchObject({
+      aliveStreak: 1,
+      lastAliveAt: switchedAt,
+      recoverySubject: OTHER_RECOVERY_LINK.subject,
+      recoveryGeneration: OTHER_RECOVERY_LINK.generation,
+    })
+
+    const sameLinkAgain = nextClosedApplyCheckState(
+      switched.state,
+      'alive',
+      new Date(switchedAt.getTime() + MIN_RESTRIKE_MS),
+      aliveRecovery(OTHER_RECOVERY_LINK),
+    )
+    expect(sameLinkAgain.shouldReopen).toBe(true)
+  })
+
+  it('does not reuse recovery strikes after reopen and a later re-close', () => {
+    const firstDead = nextApplyCheckState(undefined, 'dead', NOW)
+    const closed = nextApplyCheckState(
+      firstDead.state,
+      'dead',
+      new Date(NOW.getTime() + MIN_RESTRIKE_MS),
+    )
+    expect(closed.shouldClose).toBe(true)
+
+    const firstAlive = nextClosedApplyCheckState(
+      closed.state,
+      'alive',
+      new Date(NOW.getTime() + 2 * MIN_RESTRIKE_MS),
+      aliveRecovery(),
+    )
+    const reopened = nextClosedApplyCheckState(
+      firstAlive.state,
+      'alive',
+      new Date(NOW.getTime() + 3 * MIN_RESTRIKE_MS),
+      aliveRecovery(),
+    )
+    expect(reopened.shouldReopen).toBe(true)
+    expect(reopened.state.aliveStreak).toBeUndefined()
+    expect(reopened.state.lastAliveAt).toBeUndefined()
+    expect(reopened.state.recoverySubject).toBeUndefined()
+    expect(reopened.state.recoveryGeneration).toBeUndefined()
+
+    const nextFirstDead = nextApplyCheckState(
+      reopened.state,
+      'dead',
+      new Date(NOW.getTime() + 4 * MIN_RESTRIKE_MS),
+    )
+    const reclosed = nextApplyCheckState(
+      nextFirstDead.state,
+      'dead',
+      new Date(NOW.getTime() + 5 * MIN_RESTRIKE_MS),
+    )
+    expect(reclosed.shouldClose).toBe(true)
+    expect(reclosed.state.aliveStreak).toBeUndefined()
+    expect(reclosed.state.lastAliveAt).toBeUndefined()
+
+    const oneAlive = nextClosedApplyCheckState(
+      reclosed.state,
+      'alive',
+      new Date(NOW.getTime() + 6 * MIN_RESTRIKE_MS),
+      aliveRecovery(),
+    )
+    expect(oneAlive.shouldReopen).toBe(false)
+    expect(oneAlive.state.aliveStreak).toBe(1)
+  })
+})
+
+describe('per-link machine governance lifecycle', () => {
+  it('dead demotes, unverifiable preserves that evidence, and alive clears the incident', () => {
+    const source = governedProvenance('https://machine-lifecycle.example/apply')[0]
+    const initial = groupApplyLinkSubjects([source])[0].governance
+    const crowdAt = new Date(NOW.getTime() - 3600_000)
+    const crowd = {
+      ...initial,
+      reportWindowStartedAt: crowdAt,
+      reportCount: 3,
+      crowdDemotedAt: crowdAt,
+    }
+    const deadAt = new Date(NOW.getTime() + 1000)
+    const dead = nextMachineGovernance(crowd, 'dead', deadAt)
+    expect(dead.machineDemotedAt).toEqual(deadAt)
+    expect(linkDispositionOf(dead)).toBe('machine-demoted')
+
+    const unverifiable = nextMachineGovernance(
+      dead,
+      'unverifiable',
+      new Date(deadAt.getTime() + 1000),
+    )
+    expect(unverifiable.machineDemotedAt).toEqual(deadAt)
+    expect(linkDispositionOf(unverifiable)).toBe('machine-demoted')
+
+    const alive = nextMachineGovernance(
+      unverifiable,
+      'alive',
+      new Date(deadAt.getTime() + 2000),
+    )
+    expect(alive.incidentVersion).toBe(initial.incidentVersion + 1)
+    expect(alive.reportCount).toBe(0)
+    expect(alive.crowdDemotedAt).toBeUndefined()
+    expect(alive.machineDemotedAt).toBeUndefined()
+    expect(linkDispositionOf(alive)).toBe('pending-verification')
+  })
+})
+
 describe('postingOutcome', () => {
   it('one alive rung keeps the posting alive; all-dead = dead; mixed dead/unverifiable = unverifiable; none checkable = unverifiable', () => {
     expect(postingOutcome(['dead', 'alive'])).toBe('alive')
@@ -266,6 +490,45 @@ describe('runLinkCheckHandler', () => {
     mockCycleCreate.mockResolvedValue({})
   })
 
+  it('caps the crowd-request lane at 50 and reserves the remaining 100 slots for due machine work', async () => {
+    const crowd = Array.from({ length: 60 }, (_, index) => ({ _id: `crowd-${index}` }))
+    const machine = Array.from({ length: 120 }, (_, index) => ({ _id: `machine-${index}` }))
+    const cappedChain = (docs: unknown[]) => {
+      const limit = vi.fn((cap: number) => ({
+        lean: () => Promise.resolve(docs.slice(0, cap)),
+      }))
+      return {
+        query: {
+          select: vi.fn().mockReturnValue({
+            sort: vi.fn().mockReturnValue({ limit }),
+          }),
+        },
+        limit,
+      }
+    }
+    const crowdQuery = cappedChain(crowd)
+    const machineQuery = cappedChain(machine)
+    mockPostingFind
+      .mockReturnValueOnce(crowdQuery.query)
+      .mockReturnValueOnce(machineQuery.query)
+
+    const picked = await pickPostingsToCheck(NOW)
+
+    expect(picked).toHaveLength(150)
+    expect(crowdQuery.limit).toHaveBeenCalledWith(50)
+    expect(machineQuery.limit).toHaveBeenCalledWith(100)
+    expect(mockPostingFind).toHaveBeenCalledTimes(2)
+    expect(mockPostingFind.mock.calls[0][0]).toMatchObject({
+      linkCheckRequestedAt: { $type: 'date' },
+    })
+    expect(mockPostingFind.mock.calls[0][0]).not.toHaveProperty('provenance.brokenReportCount')
+    const due = mockPostingFind.mock.calls[1][0] as { $or: Array<Record<string, unknown>> }
+    expect(due.$or).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'open', 'applyCheck.status': 'dead' }),
+      expect.objectContaining({ status: 'closed', closedReason: 'dead-apply-link' }),
+    ]))
+  })
+
   it('a dead-everywhere posting on its SECOND ≥20h strike closes with dead-apply-link, status-guarded; telemetry row written', async () => {
     const doc = {
       _id: 'p1',
@@ -273,8 +536,8 @@ describe('runLinkCheckHandler', () => {
       applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: new Date(NOW.getTime() - 25 * 3600_000), lastDeadAt: new Date(NOW.getTime() - 25 * 3600_000) },
     }
     mockPostingFind
-      .mockReturnValueOnce(chain([doc])) // reported
-      .mockReturnValueOnce(chain([])) // restrikes
+      .mockReturnValueOnce(chain([doc])) // requested
+      .mockReturnValueOnce(chain([])) // restrikes/recovery
       .mockReturnValueOnce(chain([])) // unchecked
       .mockReturnValueOnce(chain([])) // stale unverifiable
       .mockReturnValueOnce(chain([])) // stale alive
@@ -285,17 +548,32 @@ describe('runLinkCheckHandler', () => {
     expect((update as { $set: Record<string, unknown> }).$set).toMatchObject({ status: 'closed', closedReason: 'dead-apply-link' })
     // Close first clears every TTL, then current DB pin state determines
     // whether a second conditional write may stamp a new one.
-    expect((update as { $unset: Record<string, unknown> }).$unset).toEqual({ purgeAt: 1 })
-    expect(mockPostingUpdateOne.mock.calls[1][0]).toMatchObject({ provenance: doc.provenance, userReferenced: true })
-    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({ provenance: doc.provenance, userReferenced: { $ne: true } })
+    expect((update as { $unset: Record<string, unknown> }).$unset).toEqual({
+      linkCheckRequestedAt: 1,
+      purgeAt: 1,
+    })
+    expect(mockPostingUpdateOne.mock.calls[1][0]).toMatchObject({
+      status: 'closed',
+      closedReason: 'dead-apply-link',
+      closedAt: expect.any(Date),
+      userReferenced: true,
+    })
+    expect(mockPostingUpdateOne.mock.calls[1][0]).not.toHaveProperty('provenance')
+    expect(mockPostingUpdateOne.mock.calls[2][0]).toMatchObject({
+      status: 'closed',
+      closedReason: 'dead-apply-link',
+      closedAt: expect.any(Date),
+      userReferenced: { $ne: true },
+    })
+    expect(mockPostingUpdateOne.mock.calls[2][0]).not.toHaveProperty('provenance')
     expect(mockPostingUpdateOne.mock.calls[2][1].$set.purgeAt).toBeInstanceOf(Date)
     expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'link-check', linkCheck: expect.objectContaining({ checked: 1, dead: 1, closedNow: 1 }) }))
   })
 
   it('Codex #543 P1: the picker has a restrike bucket — dead rows past the 20h window are re-picked (strike 2 is reachable)', async () => {
     mockPostingFind
-      .mockReturnValueOnce(chain([])) // reported
-      .mockReturnValueOnce(chain([])) // restrikes
+      .mockReturnValueOnce(chain([])) // requested
+      .mockReturnValueOnce(chain([])) // restrikes/recovery
       .mockReturnValueOnce(chain([])) // unchecked
       .mockReturnValueOnce(chain([])) // stale unverifiable
       .mockReturnValueOnce(chain([])) // stale alive
@@ -304,9 +582,19 @@ describe('runLinkCheckHandler', () => {
     // Codex #543 r3: transient results re-enter the pool.
     const unvFilter = mockPostingFind.mock.calls[3][0] as Record<string, unknown>
     expect(unvFilter['applyCheck.status']).toBe('unverifiable')
-    const restrikeFilter = mockPostingFind.mock.calls[1][0] as Record<string, unknown>
-    expect(restrikeFilter['applyCheck.status']).toBe('dead')
-    expect(restrikeFilter['applyCheck.lastDeadAt']).toBeDefined()
+    const machineDueFilter = mockPostingFind.mock.calls[1][0] as { $or: Array<Record<string, unknown>> }
+    expect(machineDueFilter.$or).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        status: 'open',
+        'applyCheck.status': 'dead',
+        'applyCheck.lastDeadAt': expect.anything(),
+      }),
+      expect.objectContaining({
+        status: 'closed',
+        closedReason: 'dead-apply-link',
+        'applyCheck.lastCheckedAt': expect.anything(),
+      }),
+    ]))
   })
 
   it('Codex #543 r6: a 4-URL all-dead posting is judged in ONE step — extra URLs never make it uncloseable', async () => {
@@ -370,18 +658,19 @@ describe('runLinkCheckHandler', () => {
       _id: 'p-revoked',
       status: 'open',
       provenance,
-      'provenance.applyUrl': 'https://revoked.example/a',
     })
     expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
-      linkCheck: expect.objectContaining({ checked: 0, closedNow: 0 }),
+      linkCheck: expect.objectContaining({ checked: 0, closedNow: 0, casMisses: 1 }),
     }))
   })
 
-  it('does not stamp TTL or closed telemetry when the optimistic close loses its race', async () => {
+  it('preserves the crowd request for retry when a newer report/generation wins the final CAS', async () => {
     const prevChecked = new Date(NOW.getTime() - 25 * 3600_000)
+    const requestedAt = new Date(NOW.getTime() - 3600_000)
     const doc = {
       _id: 'p-race',
-      provenance: [{ applyUrl: 'https://dead.example/a' }],
+      provenance: governedProvenance('https://dead.example/a'),
+      linkCheckRequestedAt: requestedAt,
       applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: prevChecked, lastDeadAt: prevChecked },
     }
     mockPostingFind
@@ -396,8 +685,267 @@ describe('runLinkCheckHandler', () => {
 
     expect(result.closed).toBe(0)
     expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
+    expect(mockPostingUpdateOne.mock.calls[0][0]).toMatchObject({
+      provenance: doc.provenance,
+      linkCheckRequestedAt: requestedAt,
+    })
+    expect(mockPostingUpdateOne.mock.calls[0][1]).toMatchObject({
+      $unset: { linkCheckRequestedAt: 1 },
+    })
     expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
-      linkCheck: expect.objectContaining({ closedNow: 0 }),
+      linkCheck: expect.objectContaining({
+        checked: 0,
+        closedNow: 0,
+        requestedProcessed: 0,
+        casMisses: 1,
+      }),
+    }))
+  })
+
+  it('checks duplicate canonical URLs once and replicates one machine result to every rung', async () => {
+    const seenAt = new Date('2026-07-01T00:00:00Z')
+    const provenance = [
+      {
+        sourceId: 'jsearch', externalId: '1', sourceKey: 'jsearch:1',
+        applyUrl: 'https://dup.example/jobs/1#apply', applyUrlFirstSeenAt: seenAt,
+        firstSeenAt: seenAt, lastSeenAt: seenAt,
+      },
+      {
+        sourceId: 'greenhouse', externalId: '2', sourceKey: 'greenhouse:2',
+        applyUrl: 'https://dup.example/jobs/1#details', applyUrlFirstSeenAt: seenAt,
+        firstSeenAt: seenAt, lastSeenAt: seenAt,
+      },
+    ]
+    const doc = { _id: 'p-duplicate', provenance }
+    mockPostingFind
+      .mockReturnValueOnce(chain([doc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    const request = requestStub(200, 'Apply now')
+
+    await runLinkCheckHandler(step, request, NOW, 0)
+
+    expect(request).toHaveBeenCalledTimes(1)
+    const governed = mockPostingUpdateOne.mock.calls[0][1].$set.provenance
+    expect(governed).toHaveLength(2)
+    expect(governed[0].linkGovernance).toEqual(governed[1].linkGovernance)
+    expect(governed[0].linkGovernance.machineOutcome).toBe('alive')
+  })
+
+  it('a report committed before the check is cleared only with the successful alive evidence write', async () => {
+    const reportedAt = new Date(NOW.getTime() - 3600_000)
+    const provenance = governedProvenance('https://healthy.example/a', {
+      reportWindowStartedAt: reportedAt,
+      reportCount: 3,
+      lastReportedAt: reportedAt,
+      crowdDemotedAt: reportedAt,
+    })
+    const doc = {
+      _id: 'p-reported-first',
+      status: 'open' as const,
+      provenance,
+      linkCheckRequestedAt: reportedAt,
+    }
+    mockPostingFind
+      .mockReturnValueOnce(chain([doc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+
+    const result = await runLinkCheckHandler(step, requestStub(200, 'Apply now'), NOW, 0)
+
+    expect(result.checked).toBe(1)
+    const [, update] = mockPostingUpdateOne.mock.calls[0]
+    const next = update.$set.provenance[0].linkGovernance
+    expect(next.reportCount).toBe(0)
+    expect(next.crowdDemotedAt).toBeUndefined()
+    expect(next.machineDemotedAt).toBeUndefined()
+    expect(next.machineOutcome).toBe('alive')
+    expect(update.$unset).toMatchObject({ linkCheckRequestedAt: 1 })
+    expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
+      linkCheck: expect.objectContaining({
+        requestedProcessed: 1,
+        crowdDispositionChanged: 1,
+        incidentsCleared: 1,
+        casMisses: 0,
+      }),
+    }))
+  })
+
+  it('machine-dead soft-demotes while unverifiable preserves an existing crowd demotion', async () => {
+    const deadDoc = { _id: 'p-machine-dead', provenance: governedProvenance('https://dead.example/a') }
+    mockPostingFind
+      .mockReturnValueOnce(chain([deadDoc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    await runLinkCheckHandler(step, nxdomainStub, NOW, 0)
+    const deadGovernance = mockPostingUpdateOne.mock.calls[0][1].$set.provenance[0].linkGovernance
+    expect(deadGovernance.machineOutcome).toBe('dead')
+    expect(deadGovernance.machineDemotedAt).toBeInstanceOf(Date)
+    expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
+      linkCheck: expect.objectContaining({ machineDispositionChanged: 1 }),
+    }))
+
+    vi.clearAllMocks()
+    mockPostingExists.mockResolvedValue({ _id: 'authorized' })
+    mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockCycleCreate.mockResolvedValue({})
+    const crowdAt = new Date(NOW.getTime() - 3600_000)
+    const unverifiableDoc = {
+      _id: 'p-machine-unverifiable',
+      provenance: governedProvenance('https://blocked.example/a', {
+        reportWindowStartedAt: crowdAt,
+        reportCount: 3,
+        lastReportedAt: crowdAt,
+        crowdDemotedAt: crowdAt,
+      }),
+    }
+    mockPostingFind
+      .mockReturnValueOnce(chain([unverifiableDoc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    await runLinkCheckHandler(step, requestStub(503), NOW, 0)
+    const unchanged = mockPostingUpdateOne.mock.calls[0][1].$set.provenance[0].linkGovernance
+    expect(unchanged.machineOutcome).toBe('unverifiable')
+    expect(unchanged.crowdDemotedAt).toEqual(crowdAt)
+    expect(unchanged.reportCount).toBe(3)
+  })
+
+  it('keeps retention closed after one alive recovery strike, then reopens and clears TTL after the spaced second', async () => {
+    const previous = new Date(NOW.getTime() - 25 * 3600_000)
+    const firstDoc = {
+      _id: 'p-recovery-1',
+      status: 'closed' as const,
+      closedReason: 'dead-apply-link',
+      provenance: governedProvenance('https://recovered.example/a', {
+        machineOutcome: 'dead',
+        machineCheckedAt: previous,
+        machineDemotedAt: previous,
+      }),
+      applyCheck: { status: 'dead', deadStreak: 2, lastCheckedAt: previous, lastDeadAt: previous },
+    }
+    const recoveryGroup = groupApplyLinkSubjects(firstDoc.provenance)[0]
+    mockPostingFind
+      .mockReturnValueOnce(chain([firstDoc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    await runLinkCheckHandler(step, requestStub(200, 'Apply now'), NOW, 0)
+    const [firstFilter, firstUpdate] = mockPostingUpdateOne.mock.calls[0]
+    expect(firstFilter).toMatchObject({ status: 'closed', closedReason: 'dead-apply-link' })
+    expect(firstUpdate.$set.applyCheck.aliveStreak).toBe(1)
+    expect(firstUpdate.$set.applyCheck).toMatchObject({
+      recoverySubject: recoveryGroup.subject,
+      recoveryGeneration: recoveryGroup.generation,
+    })
+    expect(firstUpdate.$set.status).toBeUndefined()
+    expect(firstUpdate.$unset.purgeAt).toBeUndefined()
+
+    vi.clearAllMocks()
+    mockPostingExists.mockResolvedValue({ _id: 'authorized' })
+    mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockCycleCreate.mockResolvedValue({})
+    const secondDoc = {
+      ...firstDoc,
+      _id: 'p-recovery-2',
+      applyCheck: {
+        status: 'alive', deadStreak: 0, aliveStreak: 1,
+        lastCheckedAt: previous, lastAliveAt: previous,
+        recoverySubject: recoveryGroup.subject,
+        recoveryGeneration: recoveryGroup.generation,
+      },
+    }
+    mockPostingFind
+      .mockReturnValueOnce(chain([secondDoc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    await runLinkCheckHandler(step, requestStub(200, 'Apply now'), NOW, 0)
+    const [, reopened] = mockPostingUpdateOne.mock.calls[0]
+    expect(reopened.$set).toMatchObject({ status: 'open' })
+    expect(reopened.$set.applyCheck.aliveStreak).toBeUndefined()
+    expect(reopened.$set.applyCheck.lastAliveAt).toBeUndefined()
+    expect(reopened.$set.applyCheck.recoverySubject).toBeUndefined()
+    expect(reopened.$set.applyCheck.recoveryGeneration).toBeUndefined()
+    expect(reopened.$unset).toMatchObject({
+      closedReason: 1,
+      closedAt: 1,
+      purgeAt: 1,
+      linkCheckRequestedAt: 1,
+    })
+    expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
+    expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
+      linkCheck: expect.objectContaining({ reopenedNow: 1 }),
+    }))
+  })
+
+  it('does not reopen when two spaced positive observations alternate between URLs', async () => {
+    const previous = new Date(NOW.getTime() - 25 * 3600_000)
+    const first = governedProvenance('https://recovery-a.example/apply', {
+      machineOutcome: 'alive',
+      machineCheckedAt: previous,
+    })[0]
+    const second = {
+      ...governedProvenance('https://recovery-b.example/apply', {
+        machineOutcome: 'dead',
+        machineCheckedAt: previous,
+        machineDemotedAt: previous,
+      })[0],
+      sourceId: 'greenhouse',
+      externalId: 'ext-2',
+      sourceKey: 'greenhouse:ext-2',
+    }
+    const firstGroup = groupApplyLinkSubjects([first])[0]
+    const secondGroup = groupApplyLinkSubjects([second])[0]
+    const doc = {
+      _id: 'p-alternating-recovery',
+      status: 'closed' as const,
+      closedReason: 'dead-apply-link',
+      provenance: [first, second],
+      applyCheck: {
+        status: 'alive',
+        deadStreak: 0,
+        aliveStreak: 1,
+        lastCheckedAt: previous,
+        lastAliveAt: previous,
+        recoverySubject: firstGroup.subject,
+        recoveryGeneration: firstGroup.generation,
+      },
+    }
+    mockPostingFind
+      .mockReturnValueOnce(chain([doc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    const alternating = vi.fn(async (url: URL) => ({
+      kind: 'response' as const,
+      status: url.hostname === 'recovery-a.example' ? 404 : 200,
+      bodyText: url.hostname === 'recovery-a.example' ? '' : 'Apply now',
+    }))
+
+    await runLinkCheckHandler(step, alternating as LinkRequestImpl, NOW, 0)
+
+    const [, update] = mockPostingUpdateOne.mock.calls[0]
+    expect(update.$set.status).toBeUndefined()
+    expect(update.$set.applyCheck).toMatchObject({
+      status: 'alive',
+      aliveStreak: 1,
+      recoverySubject: secondGroup.subject,
+      recoveryGeneration: secondGroup.generation,
+    })
+    expect(update.$set.applyCheck.lastAliveAt).not.toEqual(previous)
+    expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
+      linkCheck: expect.objectContaining({ reopenedNow: 0 }),
     }))
   })
 

@@ -12,16 +12,16 @@ import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 export const dynamic = 'force-dynamic'
 
 /**
- * POST /api/jobs/[id]/broken-link — dead-click report (§4b). Records on the
- * caller's application AND increments the posting-level rung counter: one
- * user's dead click demotes that rung for everyone (the ladder sort sinks
- * reported rungs; never hides them).
+ * POST /api/jobs/[id]/broken-link — advisory dead-click report (§4b).
+ * The service binds the report to a current server-recorded Apply attempt;
+ * crowd consensus may only soften ordering. Machine liveness remains the
+ * sole authority for hiding/closing a link or posting.
  */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
   if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
-  const rateLimitBlock = await checkJobsRateLimit(userId)
+  const rateLimitBlock = await checkJobsRateLimit(userId, 'broken-link')
   if (rateLimitBlock) return rateLimitBlock
   if (!mongoose.Types.ObjectId.isValid(params.id)) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
@@ -62,5 +62,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       logger.warn({ err }, 'broken-link telemetry write failed')
     }
   }
-  return NextResponse.json({ ok: true, alreadyReported: !result.recorded })
+  return NextResponse.json({
+    ok: true,
+    disposition: result.disposition,
+    alreadyReported: !result.recorded,
+  })
 }

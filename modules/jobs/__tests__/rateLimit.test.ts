@@ -32,6 +32,7 @@ describe('Jobs mutation rate-limit policy', () => {
 
   it.each<JobsRateLimitScope>([
     'ats-check',
+    'broken-link',
     'practice-email',
     'admin-command',
     'email-action',
@@ -77,6 +78,10 @@ describe('Jobs mutation rate-limit policy', () => {
 
   it('keeps expensive and operational scopes tighter than the global mutation budget', () => {
     expect(JOBS_RATE_LIMITS['ats-check'].maxRequests).toBeLessThan(JOBS_RATE_LIMITS.mutation.maxRequests)
+    expect(JOBS_RATE_LIMITS['broken-link']).toMatchObject({
+      windowMs: 60 * 60_000,
+      maxRequests: 6,
+    })
     expect(JOBS_RATE_LIMITS['admin-command'].maxRequests).toBeLessThan(JOBS_RATE_LIMITS.mutation.maxRequests)
     expect(JOBS_RATE_LIMITS.xray.maxRequests).toBeLessThan(JOBS_RATE_LIMITS.mutation.maxRequests)
     expect(JOBS_RATE_LIMITS['practice-email'].windowMs).toBeGreaterThan(JOBS_RATE_LIMITS.mutation.windowMs)

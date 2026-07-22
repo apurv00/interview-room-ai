@@ -5,6 +5,11 @@ import { JOB_SOURCE_LINEAGE_UNKNOWN, JobPosting, type IJobPosting } from '@share
 import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, displayJdBody, bodyHashOf, validThroughDate } from './qualityGate'
 import { companyKey, titleKey, titleTokens, locationKey, fingerprintOf, sourceKeyOf, isConfidentialCompany, titleJaccard, FUZZY_MERGE_JACCARD } from './identityResolver'
 import type { NormalizedJob } from '../adapters/types'
+import {
+  canonicalApplyUrl,
+  groupApplyLinkSubjects,
+  withReplicatedLinkGovernance,
+} from './linkGovernance'
 
 /**
  * Ingest pipeline — CLASSIFY → IDENTITY → STORE for one batch of normalized
@@ -107,6 +112,48 @@ function bestApplyUrl(urls: string[]): string | null {
   })[0]
 }
 
+function linkGenerationKeys(
+  provenance: ReadonlyArray<IJobPosting['provenance'][number]>,
+): Set<string> {
+  return new Set(
+    groupApplyLinkSubjects(provenance)
+      .map((group) => `${group.subject}:${group.generation}`),
+  )
+}
+
+function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && Array.from(left).every((value) => right.has(value))
+}
+
+function nextApplyUrlGenerationAt(previous: unknown, now: Date): Date {
+  const previousAt = previous instanceof Date ? previous.getTime() : new Date(previous as never).getTime()
+  return Number.isFinite(previousAt) && previousAt >= now.getTime()
+    ? new Date(previousAt + 1)
+    : now
+}
+
+/** Materialize one aggregate on every duplicate current rung. Hydrated
+ * Mongoose subdocuments are converted through `toObject`; spreading them
+ * would copy Mongoose internals instead of schema fields. */
+function reconcileCurrentLinkGovernance(
+  provenance: readonly IJobPosting['provenance'][number][],
+): IJobPosting['provenance'] {
+  let replicated = provenance.map((entry) => {
+    const toObject = (entry as unknown as { toObject?: () => IJobPosting['provenance'][number] }).toObject
+    return typeof toObject === 'function'
+      ? toObject.call(entry)
+      : { ...entry }
+  })
+  for (const group of groupApplyLinkSubjects(replicated)) {
+    replicated = withReplicatedLinkGovernance(
+      replicated,
+      group.subject,
+      group.governance,
+    ) as IJobPosting['provenance']
+  }
+  return replicated as IJobPosting['provenance']
+}
+
 /**
  * Provenance eviction preserving source diversity (guard #3): when over cap,
  * evict the stalest entry among sourceIds that have MORE THAN ONE entry
@@ -140,6 +187,24 @@ interface PreparedPosting {
 
 function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedFp?: string | null, initVerdictPending?: boolean) {
   const jdNorm = normalizeJdBody(p.job.description)
+  const provenance = p.job.externalId
+    ? [(() => {
+        const url = bestApplyUrl(p.usableUrls)
+        return {
+          sourceId,
+          externalId: p.job.externalId as string,
+          sourceKey: sourceKeyOf(sourceId, p.job.externalId as string),
+          // undefined, never '' — Mongoose treats '' as missing for
+          // required strings and the field is honest-optional now.
+          applyUrl: url ?? undefined,
+          applyUrlFirstSeenAt: url ? now : undefined,
+          applyTier: url ? classifyApplyUrl(url) : undefined,
+          viaSite: p.job.viaSite || undefined,
+          firstSeenAt: now,
+          lastSeenAt: now,
+        }
+      })()]
+    : []
   return {
     companyKey: p.cKey,
     titleKey: p.tKey,
@@ -162,23 +227,7 @@ function buildInsertDoc(p: PreparedPosting, sourceId: string, now: Date, saltedF
     // Unlike detailed provenance, legal lineage is never capped or evicted.
     // It also covers provider rows that have no external ID.
     sourceIds: [sourceId],
-    provenance: p.job.externalId
-      ? [(() => {
-          const url = bestApplyUrl(p.usableUrls)
-          return {
-            sourceId,
-            externalId: p.job.externalId,
-            sourceKey: sourceKeyOf(sourceId, p.job.externalId),
-            // undefined, never '' — Mongoose treats '' as missing for
-            // required strings and the field is honest-optional now.
-            applyUrl: url ?? undefined,
-            applyTier: url ? classifyApplyUrl(url) : undefined,
-            viaSite: p.job.viaSite || undefined,
-            firstSeenAt: now,
-            lastSeenAt: now,
-          }
-        })()]
-      : [],
+    provenance: reconcileCurrentLinkGovernance(provenance as IJobPosting['provenance']),
     flags: {
       staffing: p.flags.includes('staffing'),
       salaryConflict: false,
@@ -202,6 +251,8 @@ const REOPENABLE_CLOSE_REASONS = new Set(['aged-out', 'board-poll-miss', 'valid-
 
 /** Merge an incoming posting into an existing canonical doc (§4.2 policy). */
 export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: string, now: Date): void {
+  const previousLinkGenerations = linkGenerationKeys(doc.provenance)
+  let governanceMembershipChanged = false
   // Canonical freshness is independent of detailed provenance. Provider rows
   // without externalId deliberately have no provenance entry, and the cap-8
   // array may evict old contributors; neither may create an immortal posting.
@@ -249,61 +300,86 @@ export function mergeIntoDoc(doc: IJobPosting, p: PreparedPosting, sourceId: str
       // has since changed — must pick up the apply path the source serves
       // today. Absence in the incoming payload never erases a stored link.
       const url = bestApplyUrl(p.usableUrls)
-      if (url && url !== existing.applyUrl) {
+      if (url && canonicalApplyUrl(url) !== canonicalApplyUrl(existing.applyUrl)) {
         existing.applyUrl = url
+        // This is the generation epoch, not the source row's first sighting.
+        // It advances on every replacement, including A→B→A.
+        existing.applyUrlFirstSeenAt = nextApplyUrlGenerationAt(
+          existing.applyUrlFirstSeenAt ?? existing.firstSeenAt,
+          now,
+        )
         existing.applyTier = classifyApplyUrl(url)
         // Dead-click reports indict a URL, not a rung: the source shipping a
         // NEW url gets a clean slate — count > 0 would keep demoting a link
         // nobody reported (Codex on #522 round-3).
         existing.brokenReportCount = undefined
+        existing.linkGovernance = undefined
+        governanceMembershipChanged = true
         verdictInputsChanged = true
-        // A REPLACED apply URL is fresh liveness evidence (Codex #543): a
-        // dead-apply-link closure was earned by the OLD link — reopen and
-        // let the sweep re-verify from scratch. Same-URL refreshes stay
-        // closed (spam re-uploads must not resurrect themselves). The
-        // strike state clears on OPEN rows too (round 5): a stale strike-1
-        // earned by the old URL must never combine with one dead check of
-        // the new URL into a close — two strikes always mean two strikes
-        // against the CURRENT link.
-        doc.applyCheck = undefined
-        if (doc.status === 'closed' && doc.closedReason === 'dead-apply-link') {
-          doc.status = 'open'
-          doc.closedReason = undefined
-          doc.closedAt = undefined
-          doc.purgeAt = undefined
-        }
       }
       if (p.job.viaSite) existing.viaSite = p.job.viaSite
     } else {
       const url = bestApplyUrl(p.usableUrls)
-      // A NEW source key contributing a usable URL is the same fresh
-      // liveness evidence as a replaced one (Codex #543 round 2:
-      // aggregators rotate externalIds — the append path must reopen
-      // dead-apply-link closures too, or the fresh live URL is never
-      // re-evaluated).
-      if (url) {
-        // New rung with a usable URL = the posting's link set changed —
-        // stale strikes never carry across (round 5).
-        doc.applyCheck = undefined
-        if (doc.status === 'closed' && doc.closedReason === 'dead-apply-link') {
-          doc.status = 'open'
-          doc.closedReason = undefined
-          doc.closedAt = undefined
-          doc.purgeAt = undefined
-        }
-      }
+      // A duplicate provider joins the existing URL generation; it does not
+      // mint a new one. Materialize the aggregate on the new row before
+      // eviction/reconciliation so an ungoverned legacy rung (which has no
+      // applyUrlFirstSeenAt) keeps its stable `legacy` generation even when
+      // this newly observed provider carries a modern timestamp.
+      const canonicalUrl = canonicalApplyUrl(url)
+      const duplicateGroup = canonicalUrl
+        ? groupApplyLinkSubjects(doc.provenance)
+            .find((group) => group.canonicalUrl === canonicalUrl)
+        : undefined
       doc.provenance.push({
         sourceId,
         externalId: p.job.externalId as string,
         sourceKey: sk,
         applyUrl: url ?? undefined,
+        applyUrlFirstSeenAt: url ? now : undefined,
         applyTier: url ? classifyApplyUrl(url) : undefined,
         viaSite: p.job.viaSite || undefined,
         firstSeenAt: now,
         lastSeenAt: now,
+        ...(duplicateGroup
+          ? { linkGovernance: { ...duplicateGroup.governance } }
+          : {}),
       })
       doc.provenance = evictProvenance(doc.provenance)
-      if (url) verdictInputsChanged = true // new apply host joins the hash input
+      if (url) {
+        governanceMembershipChanged = true
+        verdictInputsChanged = true // new apply host joins the hash input
+      }
+    }
+  }
+  const currentLinkGenerations = linkGenerationKeys(doc.provenance)
+  const linkGenerationsChanged = !sameStringSet(previousLinkGenerations, currentLinkGenerations)
+  const linkGenerationAdded = Array.from(currentLinkGenerations)
+    .some((generation) => !previousLinkGenerations.has(generation))
+  if (governanceMembershipChanged || linkGenerationsChanged) {
+    doc.provenance = reconcileCurrentLinkGovernance(doc.provenance)
+  }
+  if (linkGenerationsChanged) {
+    // A new generation invalidates old liveness evidence. A removal-only
+    // change also needs a fresh aggregate while the row is open (the removed
+    // URL may have been its sole alive rung), but it cannot invalidate an
+    // all-dead closure: every remaining URL was already part of that evidence.
+    // Preserve the closed state so it stays in the normal recovery/recheck
+    // lane instead of being resurrected or stranded without applyCheck.
+    const removalOnlyDeadClosure =
+      !linkGenerationAdded &&
+      doc.status === 'closed' &&
+      doc.closedReason === 'dead-apply-link'
+    if (!removalOnlyDeadClosure) doc.applyCheck = undefined
+    verdictInputsChanged = true
+    if (
+      linkGenerationAdded &&
+      doc.status === 'closed' &&
+      doc.closedReason === 'dead-apply-link'
+    ) {
+      doc.status = 'open'
+      doc.closedReason = undefined
+      doc.closedAt = undefined
+      doc.purgeAt = undefined
     }
   }
   // JD: longest normalized body wins.

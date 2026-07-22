@@ -37,7 +37,7 @@ import { tierAScore, tierBScore, matchedSkillsOf, bestApplyTierOf, getFeed, getJ
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
 import { xrayHashOf } from '../services/xrayService'
 import { INTERVIEW_JOB_DESCRIPTION_MAX_CHARS } from '@shared/interviewContract'
-import { applyOptionIdOf } from '../services/applyOptionIdentity'
+import { applyOptionIdOf, canonicalApplyOptionsOf } from '../services/applyOptionIdentity'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
 const ACTIVE_CATALOG = {
@@ -65,6 +65,38 @@ function doc(over: Record<string, unknown> = {}) {
     flags: { staffing: false, salaryConflict: false, shortJd: false, repost: false, repostCount: 0 },
     provenance: [{ sourceId: 'gh:phonepe', externalId: '1', sourceKey: 'gh:phonepe:1', applyUrl: 'https://boards.greenhouse.io/x/1', applyTier: 'direct-ats' }],
     ...over,
+  }
+}
+
+function crowdDemoted<T extends { sourceKey: string; applyUrl: string; applyTier: string }>(source: T): T & { linkGovernance: Record<string, unknown> } {
+  const option = canonicalApplyOptionsOf([source])[0]
+  return {
+    ...source,
+    linkGovernance: {
+      subject: option.subject,
+      generation: option.generation,
+      incidentVersion: 1,
+      reportWindowStartedAt: NOW,
+      reportCount: 3,
+      lastReportedAt: NOW,
+      crowdDemotedAt: NOW,
+    },
+  }
+}
+
+function machineDemoted<T extends { sourceKey: string; applyUrl: string; applyTier: string }>(source: T): T & { linkGovernance: Record<string, unknown> } {
+  const option = canonicalApplyOptionsOf([source])[0]
+  return {
+    ...source,
+    linkGovernance: {
+      subject: option.subject,
+      generation: option.generation,
+      incidentVersion: 1,
+      reportCount: 0,
+      machineOutcome: 'dead',
+      machineCheckedAt: NOW,
+      machineDemotedAt: NOW,
+    },
   }
 }
 
@@ -101,16 +133,17 @@ describe('tierAScore (deterministic rank — rules only, §serving honesty)', ()
     expect(old).toBe(undated)
   })
 
-  it('bestApplyTierOf skips reported rungs when a clean one exists; falls back when all are reported', () => {
+  it('bestApplyTierOf skips quorum-demoted rungs, falls back when all are demoted, and ignores legacy counts', () => {
+    const direct = { applyTier: 'direct-ats' as const, applyUrl: 'https://d.example/1', sourceId: 'a', externalId: '1', sourceKey: 'a:1' }
     const mixed = doc({ provenance: [
-      { applyTier: 'direct-ats', applyUrl: 'https://d.example/1', brokenReportCount: 1, sourceId: 'a', externalId: '1', sourceKey: 'a:1' },
+      crowdDemoted(direct),
       { applyTier: 'aggregator-deep', applyUrl: 'https://b.example/2', sourceId: 'b', externalId: '2', sourceKey: 'b:2' },
     ] })
     expect(bestApplyTierOf(mixed as never)).toBe('aggregator-deep') // healing reaches the badge
-    const allBroken = doc({ provenance: [
-      { applyTier: 'direct-ats', applyUrl: 'https://d.example/1', brokenReportCount: 2, sourceId: 'a', externalId: '1', sourceKey: 'a:1' },
-    ] })
+    const allBroken = doc({ provenance: [crowdDemoted(direct)] })
     expect(bestApplyTierOf(allBroken as never)).toBe('direct-ats') // demote, never hide
+    expect(bestApplyTierOf(doc({ provenance: [{ ...direct, brokenReportCount: 500 }] }) as never))
+      .toBe('direct-ats')
   })
 
   it('bestApplyTierOf picks the best rung across provenance', () => {
@@ -615,7 +648,7 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
       jdCompressed: gzipSync(Buffer.from('body')),
       provenance: [
-        { sourceId: 'a', externalId: '1', sourceKey: 'a:1', applyUrl: 'https://direct.example/1', applyTier: 'direct-ats', brokenReportCount: 2 },
+        crowdDemoted({ sourceId: 'a', externalId: '1', sourceKey: 'a:1', applyUrl: 'https://direct.example/1', applyTier: 'direct-ats' }),
         { sourceId: 'b', externalId: '2', sourceKey: 'b:2', applyUrl: 'https://board.example/2', applyTier: 'aggregator-deep' },
       ],
     })) })
@@ -623,6 +656,29 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     if (!d!.gated) {
       expect(d!.applyOptions.map((o) => o.url)).toEqual(['https://board.example/2', 'https://direct.example/1'])
       expect(d!.applyOptions).toHaveLength(2) // demoted, still present
+      expect(d!.allApplyOptionsDemoted).toBe(false)
+    }
+  })
+
+  it('projects only a coarse signal when every usable apply option is demoted', async () => {
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from('body')),
+      provenance: [
+        crowdDemoted({ sourceId: 'a', externalId: '1', sourceKey: 'a:1', applyUrl: 'https://direct.example/1', applyTier: 'direct-ats' }),
+        machineDemoted({ sourceId: 'b', externalId: '2', sourceKey: 'b:2', applyUrl: 'https://board.example/2', applyTier: 'aggregator-deep' }),
+      ],
+    })) })
+
+    const detail = requireFullDetail(await getJobDetail('j1', 'u1'))
+
+    expect(detail.allApplyOptionsDemoted).toBe(true)
+    expect(detail.applyOptions).toHaveLength(2)
+    for (const option of detail.applyOptions) {
+      expect(option).toEqual(expect.objectContaining({ optionId: expect.any(String), url: expect.any(String), tier: expect.any(String) }))
+      expect(option).not.toHaveProperty('broken')
+      expect(option).not.toHaveProperty('governance')
+      expect(option).not.toHaveProperty('reportCount')
+      expect(option).not.toHaveProperty('machineCheckedAt')
     }
   })
 

@@ -43,6 +43,12 @@ export interface IJobIngestCycle extends Document {
     alive: number
     unverifiable: number
     closedNow: number
+    requestedProcessed?: number
+    crowdDispositionChanged?: number
+    machineDispositionChanged?: number
+    incidentsCleared?: number
+    casMisses?: number
+    reopenedNow?: number
   }
   llm?: {
     requested: number

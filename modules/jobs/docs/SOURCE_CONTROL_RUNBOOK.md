@@ -49,6 +49,15 @@ same posting rows and retained-corpus counter cross both policies.
   TTL index. The model never auto-creates it. Clear all historical `purgeAt`
   values and verify owner pins before first activation; index preparation
   refuses to create it while even one value remains.
+- The A09 crowd-request lane has exactly one key-identical
+  `jobpostings.linkCheckRequestedAt_1` index: key
+  `{linkCheckRequestedAt:1}`, non-unique, non-sparse, non-hidden, no TTL or
+  collation, with the exact partial filter
+  `{linkCheckRequestedAt:{$type:'date'}}`. It is schema-owned, unlike the
+  retention TTL index, but schema declaration is not evidence that the
+  deployed database built it. Verify it read-only before unpausing
+  `jobs-link-check`; never use `syncIndexes` or drop an existing index as an
+  activation shortcut.
 - The retained posting corpus must remain at or below 25,000 rows, including
   owner-pinned archives and tombstones. `check:jobs-source-control` enforces
   the same bound as the production-shaped staging smoke and requires the
@@ -229,6 +238,157 @@ These gates are mandatory before enabling any source in either environment:
 Keep all sources paused if any gate is unknown or failed. The CMS runtime cards
 are useful status inputs, not a replacement for the registration, delivery, or
 egress evidence above.
+
+## A09 link-check index and observability
+
+The hourly `jobs-link-check` run starts at minute `:40`, retries once, selects
+at most 150 postings, and reserves at most 50 first-lane slots for eligible
+crowd requests. The remaining lanes are machine restrikes/recovery, unchecked
+open rows, stale unverifiable rows, then stale alive rows. The crowd marker is
+a scheduling hint only: reports can soft-demote an apply option but cannot
+close a posting. Machine evidence remains the only close/reopen authority.
+
+### Non-dropping index gate
+
+Run the following **read-only** check from an approved operator shell against
+the exact staging database, retain its output, then repeat it against the exact
+production database. The URI must name the intended database. The command
+calls only `getIndexes()`; it neither creates nor drops anything and exits 42
+unless exactly one key-identical index has the complete A09 contract:
+
+```bash
+mongosh "$MONGODB_URI" --quiet --eval '
+const indexes = db.getCollection("jobpostings").getIndexes()
+const sameKey = indexes.filter((index) => {
+  const keys = Object.keys(index.key || {})
+  return keys.length === 1 &&
+    keys[0] === "linkCheckRequestedAt" &&
+    index.key.linkCheckRequestedAt === 1
+})
+const valid = sameKey.filter((index) => {
+  const partial = index.partialFilterExpression
+  const partialKeys = partial ? Object.keys(partial) : []
+  const predicate = partial?.linkCheckRequestedAt
+  return index.name === "linkCheckRequestedAt_1" &&
+    index.unique !== true &&
+    index.sparse !== true &&
+    index.hidden !== true &&
+    index.expireAfterSeconds === undefined &&
+    index.collation === undefined &&
+    partialKeys.length === 1 &&
+    predicate?.$type === "date" &&
+    Object.keys(predicate).length === 1
+})
+print(EJSON.stringify({ database: db.getName(), sameKey, validCount: valid.length }, null, 2))
+if (sameKey.length !== 1 || valid.length !== 1) quit(42)
+'
+```
+
+Checklist for each environment:
+
+1. Keep `jobs-link-check` paused and confirm no run is active before index
+   work. Record the database identity and a current index inventory.
+2. Run the read-only check above. A green result must show the intended
+   database, one `sameKey` entry, and `validCount:1`.
+3. If the index is absent and an approved database change grants `createIndex`,
+   create only the exact index below. This is additive and non-dropping:
+
+   ```bash
+   mongosh "$MONGODB_URI" --quiet --eval '
+   print(db.getCollection("jobpostings").createIndex(
+     { linkCheckRequestedAt: 1 },
+     {
+       name: "linkCheckRequestedAt_1",
+       partialFilterExpression: { linkCheckRequestedAt: { $type: "date" } }
+     }
+   ))
+   '
+   ```
+
+4. If a key-identical index exists with a different name or any different
+   option, do **not** drop or replace it during rollout. Keep the worker paused,
+   capture `getIndexes()` output, and open an explicit reviewed migration.
+5. Re-run the read-only check after an authorized create and before unpausing.
+   Confirm the deployed Inngest registration contains `jobs-link-check`, then
+   retain one terminal successful run and its `JobIngestCycle` row. A schema
+   test, successful deployment, or `createIndex` acknowledgement alone is not
+   completion evidence.
+
+### Cycle counters and alert contract
+
+Every terminally successful run writes one 30-day `jobingestcycles` row with
+`kind:'link-check'`, `sourceId:'link-check'`, `startedAt`, `finishedAt`, and the
+following `linkCheck` counters. The structured completion log emits the same
+counters.
+
+| Counter | Operator meaning |
+| --- | --- |
+| `checked` | Postings whose current lifecycle/provenance/apply-check snapshot won its final CAS and was persisted. Picks, URL attempts, and CAS losers are excluded. |
+| `dead` / `alive` / `unverifiable` | Posting-level persisted outcomes. Their sum must equal `checked`; these are not per-URL counts. |
+| `requestedProcessed` | Successful writes for postings picked with an eligible crowd-request marker; the same write clears the marker. Compare with live queue depth, not with all reports received. |
+| `casMisses` | Work discarded because authority changed during DNS/HTTP checking or the final lifecycle/provenance/request-marker/apply-check CAS lost. Non-zero can be a healthy race; sustained/high ratios mean churn or contention. |
+| `crowdDispositionChanged` | Current URL subject/generation transitions into or out of crowd soft-demotion. This is per link group and may exceed posting counts. |
+| `machineDispositionChanged` | Current URL subject/generation transitions into or out of single-check machine soft-demotion. This is per link group and may exceed posting counts. |
+| `incidentsCleared` | Current URL incidents advanced/cleared by authoritative machine evidence after reports or demotion state existed. Per link group. |
+| `closedNow` | Open postings closed as `dead-apply-link` after every current checkable URL met the two-dead, at-least-20-hour policy. Must not exceed `dead`. |
+| `reopenedNow` | `dead-apply-link` closures reopened after the same current URL generation accumulated two alive observations at least 20 hours apart. Must not exceed `alive`. |
+
+Read the latest cycles and the live eligible queue without mutating data:
+
+```javascript
+db.jobingestcycles.find(
+  { kind: 'link-check' },
+  { createdAt: 1, startedAt: 1, finishedAt: 1, linkCheck: 1 }
+).sort({ createdAt: -1 }).limit(24)
+
+const eligible = {
+  linkCheckRequestedAt: { $type: 'date' },
+  $or: [
+    { status: 'open' },
+    { status: 'closed', closedReason: 'dead-apply-link' }
+  ]
+}
+db.jobpostings.countDocuments(eligible, { hint: 'linkCheckRequestedAt_1' })
+db.jobpostings.find(
+  eligible,
+  { _id: 1, status: 1, closedReason: 1, linkCheckRequestedAt: 1 }
+).sort({ linkCheckRequestedAt: 1 }).hint('linkCheckRequestedAt_1').limit(1)
+
+db.jobpostings.countDocuments({
+  linkCheckRequestedAt: { $type: 'date' },
+  $nor: [
+    { status: 'open' },
+    { status: 'closed', closedReason: 'dead-apply-link' }
+  ]
+}, { hint: 'linkCheckRequestedAt_1' })
+```
+
+The third query inventories stale markers on ineligible restricted/other
+closures. They do not enter the worker queue, but growth wastes partial-index
+space and indicates a closure path is not clearing scheduling hints. Do not
+repair them with an ad-hoc bulk update; retain samples and fix the responsible
+lifecycle writer in a reviewed follow-up.
+
+Wire the following expectations into Inngest/log/database monitoring. Until a
+measured baseline justifies tighter thresholds:
+
+| Signal | Expected action |
+| --- | --- |
+| Inngest terminal failure, or no finished cycle | Alert on a terminal failure; page if no finished `link-check` cycle exists for two schedule intervals. Check worker registration, deployment/runtime errors, Mongo reachability, and outbound DNS/HTTP health. |
+| Eligible request queue | A non-zero queue is normal. Warn when its oldest marker is over 2 hours old; page at 6 hours. Compare arrivals with `requestedProcessed` and the 50-request first-lane cap before changing capacity. |
+| Counter integrity | Alert on `dead + alive + unverifiable != checked`, `closedNow > dead`, `reopenedNow > alive`, or `requestedProcessed > checked`; these indicate telemetry/transition drift. |
+| CAS contention | Investigate when `casMisses / (checked + casMisses) > 10%` for two consecutive cycles. Correlate with ingestion URL replacement, source revoke, Save/Apply activity, and overlapping link-check retries; never retry stale observations by bypassing the CAS. |
+| Network ambiguity | Investigate when `unverifiable / checked >= 50%` for two consecutive cycles with at least 20 checked rows. Correlate DNS, egress, WAF/bot blocks, 5xx, and timeouts; unverifiable evidence must not be promoted to dead. |
+| Close spike | Page and pause subsequent link-check dispatch when `closedNow >= 10` or `closedNow / checked >= 10%` in one cycle. Sample every affected host/source and confirm both spaced dead observations before resuming. |
+| Demotion/incident signals | Individual changes are expected. Investigate a crowd-demotion spike as possible coordinated abuse; investigate a machine-demotion spike with dead/unverifiable growth as possible provider or egress failure. `incidentsCleared` should rise when authoritative alive observations recover affected links. |
+| Reopens | Individual `reopenedNow` events are expected recovery, not pages. Investigate a reopen spike following a close spike as a likely transient provider/network incident or an overly broad dead classifier. |
+| Ineligible markers | Review any sustained increase weekly. This is index hygiene, not closure authority, and must not be “fixed” by deleting posting/governance evidence. |
+
+The A09 quorum/freshness values are suppression-safety policy and remain
+code-owned. There is intentionally no CMS control or manual close/reopen panel
+in this phase. Operators observe and pause the Inngest function during an
+incident; they do not edit report counts, incident versions, apply-check
+streaks, closure reasons, or provenance governance directly.
 
 ## Tracker-status sweep cursor
 
@@ -464,6 +624,12 @@ cleanup permissions before enabling the cron:
    npm run check:jobs-tracker-status
    ```
 
+   Before the link-check schedule is allowed to resume, run the
+   [A09 non-dropping index gate](#non-dropping-index-gate) against this exact
+   staging database and retain its read-only output. If the index is absent,
+   use only the reviewed additive `createIndex` path in that section and then
+   re-run the check; any incompatible key-identical index blocks rollout.
+
 4. Repair durable lineage and stamp the readiness marker only after its final
    all-corpus verification:
 
@@ -597,6 +763,12 @@ record.
    npm run repair:jobs-tracker-status -- --apply
    npm run check:jobs-tracker-status
    ```
+
+   Run the [A09 non-dropping index gate](#non-dropping-index-gate) against the
+   exact production database while link-check dispatch remains paused. Retain
+   both the pre-check and, if an authorized additive create was required, the
+   final green verification. A key-identical incompatible index is a stop
+   condition, not permission to drop it.
 
 5. Verify zero TTL values remain, then activate the exact index:
 

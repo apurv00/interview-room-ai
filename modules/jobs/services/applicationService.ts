@@ -23,6 +23,15 @@ import {
   type CanonicalApplyOption,
 } from './applyOptionIdentity'
 import type { ApplyTier } from '../config/spamRules'
+import {
+  APPLY_OPEN_ATTEMPT_TTL_MS,
+  BROKEN_LINK_REPORT_WINDOW_MS,
+  linkDispositionOf,
+  nextCrowdReportGovernance,
+  normalizeExpiredCrowdIncident,
+  withReplicatedLinkGovernance,
+  type BrokenLinkDisposition,
+} from './linkGovernance'
 
 /**
  * Application state transitions (PRODUCT_FLOW §2). `apply_clicked` is a
@@ -55,8 +64,9 @@ function exactApplyOptionPostingFilter(
     provenance: {
       $elemMatch: {
         sourceKey: option.sourceKey,
-        applyUrl: option.url,
+        applyUrl: option.storedUrl,
         applyTier: option.tier,
+        applyUrlFirstSeenAt: exactOptionalPostingCondition(option.sourceApplyUrlFirstSeenAt),
       },
     },
   }
@@ -72,6 +82,7 @@ class ApplyOptionTransactionRaceError extends Error {}
 // ids/reports so ordinary option replacement retains useful history without
 // letting repeated source churn grow an application document indefinitely.
 const MAX_TRACKED_APPLY_OPTIONS = 16
+const MAX_APPLY_OPEN_ATTEMPTS = 16
 const MAX_BROKEN_LINK_REPORTS = 16
 
 function boundedClickedOptionIds(
@@ -87,12 +98,38 @@ interface StoredBrokenLinkReport {
   url: string
   tier?: string
   reportedAt: Date
+  subject?: string
+  generation?: string
+  incidentVersion?: number
+  disposition?: BrokenLinkDisposition
+}
+
+interface StoredApplyOpenAttempt {
+  optionId: string
+  subject: string
+  generation: string
+  incidentVersion: number
+  openedAt: Date
+}
+
+function boundedApplyOpenAttempts(
+  existing: readonly StoredApplyOpenAttempt[] | null | undefined,
+  next: StoredApplyOpenAttempt,
+): StoredApplyOpenAttempt[] {
+  return [
+    ...(existing ?? []).filter((attempt) => !(
+      attempt.subject === next.subject &&
+      attempt.generation === next.generation &&
+      attempt.incidentVersion === next.incidentVersion
+    )),
+    next,
+  ].slice(-MAX_APPLY_OPEN_ATTEMPTS)
 }
 
 function boundedBrokenLinkReports(
   existing: readonly StoredBrokenLinkReport[] | null | undefined,
   next: StoredBrokenLinkReport,
-  currentOptionIds: ReadonlySet<string>,
+  currentIncidentKeys: ReadonlySet<string>,
 ): StoredBrokenLinkReport[] {
   const reports = [...(existing ?? []), next]
   const retainedCurrent: StoredBrokenLinkReport[] = []
@@ -102,19 +139,24 @@ function boundedBrokenLinkReports(
   for (let index = reports.length - 1; index >= 0; index -= 1) {
     const report = reports[index]
     if (
-      report.optionId &&
-      currentOptionIds.has(report.optionId) &&
-      !retainedCurrentIds.has(report.optionId)
+      report.subject && report.generation && report.incidentVersion &&
+      currentIncidentKeys.has(`${report.subject}:${report.generation}:${report.incidentVersion}`) &&
+      !retainedCurrentIds.has(`${report.subject}:${report.generation}:${report.incidentVersion}`)
     ) {
       retainedCurrent.unshift(report)
-      retainedCurrentIds.add(report.optionId)
+      retainedCurrentIds.add(`${report.subject}:${report.generation}:${report.incidentVersion}`)
     }
   }
   const historicalBudget = Math.max(0, MAX_BROKEN_LINK_REPORTS - retainedCurrent.length)
   const historical = historicalBudget === 0
     ? []
     : reports
-        .filter((report) => !report.optionId || !currentOptionIds.has(report.optionId))
+        .filter((report) => {
+          const key = report.subject && report.generation && report.incidentVersion
+            ? `${report.subject}:${report.generation}:${report.incidentVersion}`
+            : null
+          return !key || !currentIncidentKeys.has(key)
+        })
         .slice(-historicalBudget)
   return [...historical, ...retainedCurrent]
 }
@@ -401,11 +443,8 @@ export async function transitionStatus(
   return { ok: true, status: to, from: transition.from }
 }
 
-/**
- * Broken-link report (§4b): recorded on the application AND counted on the
- * posting's provenance entry — one user's dead click demotes that rung for
- * everyone (heals, never hides; the ladder sort sinks rungs with reports).
- */
+/** A report is advisory until either three distinct trusted openers agree in
+ * one seven-day incident or the pinned machine checker independently fails. */
 export type BrokenLinkResult =
   | {
       ok: true
@@ -413,6 +452,7 @@ export type BrokenLinkResult =
       optionId: string
       tier: ApplyTier
       hadFailover: boolean
+      disposition: BrokenLinkDisposition
     }
   | { ok: false }
 
@@ -424,53 +464,98 @@ async function reportBrokenLinkAttempt(
 ): Promise<BrokenLinkResult> {
   return runApplicationTransaction(userId, async (session) => {
     const posting = await JobPosting.findById(jobPostingId, undefined, { session })
-      .select('provenance status closedReason')
+      .select('provenance status closedReason linkCheckRequestedAt')
       .lean()
-    if (!posting || jobPostingStateOf(posting) === 'restricted') return { ok: false }
+    // Archived links are historical context, not mutable crowd authority.
+    if (!posting || jobPostingStateOf(posting) !== 'live') return { ok: false }
 
     const options = canonicalApplyOptionsOf(posting.provenance)
     const option = resolveApplyOption(posting.provenance, optionId)
     if (!option) return { ok: false }
-    const hadFailover = options.some(
-      (candidate) => candidate.optionId !== option.optionId && candidate.url !== option.url,
-    )
+    const hadFailover = options.length > 1
+    const governance = option.governance
+    if (
+      governance.reportWindowStartedAt &&
+      now.getTime() - governance.reportWindowStartedAt.getTime() >= BROKEN_LINK_REPORT_WINDOW_MS
+    ) {
+      // A fresh trusted open owns incident rollover. Never authorize against
+      // one incident and write the report into another.
+      return { ok: false }
+    }
 
     const application = await JobApplication.findOne(
       { userId, jobPostingId },
       undefined,
       { session },
-    ).select('clickedApplyOptionIds brokenLinkReports').lean()
-    if (!application || !(application.clickedApplyOptionIds ?? []).includes(optionId)) {
+    ).select('applyOpenAttempts brokenLinkReports').lean()
+    const openedAfter = new Date(now.getTime() - APPLY_OPEN_ATTEMPT_TTL_MS)
+    const trustedAttempt = (application?.applyOpenAttempts ?? []).some((attempt) => (
+      attempt.subject === option.subject &&
+      attempt.generation === option.generation &&
+      attempt.incidentVersion === option.incidentVersion &&
+      new Date(attempt.openedAt).getTime() >= openedAfter.getTime() &&
+      new Date(attempt.openedAt).getTime() <= now.getTime()
+    ))
+    if (!application || !trustedAttempt) {
       return { ok: false }
     }
-    if ((application.brokenLinkReports ?? []).some((report) => report.optionId === optionId)) {
+    const alreadyReported = (application.brokenLinkReports ?? []).some((report) => (
+      report.subject === option.subject &&
+      report.generation === option.generation &&
+      report.incidentVersion === option.incidentVersion
+    ))
+    if (alreadyReported) {
       return {
         ok: true,
         recorded: false,
         optionId,
         tier: option.tier,
         hadFailover,
+        disposition: linkDispositionOf(governance),
       }
     }
 
+    const nextGovernance = nextCrowdReportGovernance(governance, now)
+    const disposition = linkDispositionOf(nextGovernance)
     const report = {
       optionId,
       url: option.url,
       tier: option.tier,
       reportedAt: now,
+      subject: option.subject,
+      generation: option.generation,
+      incidentVersion: option.incidentVersion,
+      disposition,
     }
     const boundedReports = boundedBrokenLinkReports(
       application.brokenLinkReports,
       report,
-      new Set(options.map((candidate) => candidate.optionId)),
+      new Set(options.map((candidate) => (
+        `${candidate.subject}:${candidate.generation}:${candidate.incidentVersion}`
+      ))),
     )
     const applicationWrite = await JobApplication.updateOne(
       {
         _id: application._id,
         userId,
         jobPostingId,
-        clickedApplyOptionIds: optionId,
-        'brokenLinkReports.optionId': { $ne: optionId },
+        applyOpenAttempts: {
+          $elemMatch: {
+            subject: option.subject,
+            generation: option.generation,
+            incidentVersion: option.incidentVersion,
+            openedAt: { $gte: openedAfter, $lte: now },
+          },
+        },
+        brokenLinkReports: {
+          $not: {
+            $elemMatch: {
+              subject: option.subject,
+              generation: option.generation,
+              incidentVersion: option.incidentVersion,
+            },
+          },
+        },
       },
       {
         $set: { brokenLinkReports: boundedReports },
@@ -484,17 +569,30 @@ async function reportBrokenLinkAttempt(
       throw new ApplyOptionTransactionRaceError('application report edge changed')
     }
 
+    const governedProvenance = withReplicatedLinkGovernance(
+      posting.provenance,
+      option.subject,
+      nextGovernance,
+    )
     const postingWrite = await JobPosting.updateOne(
-      exactApplyOptionPostingFilter(jobPostingId, posting, option),
-      { $inc: { 'provenance.$[elem].brokenReportCount': 1 } },
       {
-        session,
-        arrayFilters: [{
-          'elem.sourceKey': option.sourceKey,
-          'elem.applyUrl': option.url,
-          'elem.applyTier': option.tier,
-        }],
+        _id: jobPostingId,
+        status: posting.status,
+        closedReason: exactOptionalPostingCondition(posting.closedReason),
+        linkCheckRequestedAt: exactOptionalPostingCondition(posting.linkCheckRequestedAt),
+        provenance: posting.provenance,
       },
+      {
+        $set: {
+          provenance: governedProvenance,
+          // One bounded priority signal per pending machine-check cycle.
+          // Later reports/quorum never refresh it into an endless hot loop.
+          ...(posting.linkCheckRequestedAt === undefined
+            ? { linkCheckRequestedAt: now }
+            : {}),
+        },
+      },
+      { session, runValidators: true },
     )
     if ((postingWrite?.modifiedCount ?? 0) !== 1) {
       // The application write must roll back with the posting write. This is
@@ -508,6 +606,7 @@ async function reportBrokenLinkAttempt(
       optionId,
       tier: option.tier,
       hadFailover,
+      disposition,
     }
   })
 }
@@ -518,17 +617,15 @@ export async function reportBrokenLink(
   optionId: string,
   now = new Date(),
 ): Promise<BrokenLinkResult> {
-  try {
-    return await reportBrokenLinkAttempt(userId, jobPostingId, optionId, now)
-  } catch (error) {
-    if (!(error instanceof ApplyOptionTransactionRaceError)) throw error
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return await reportBrokenLinkAttempt(userId, jobPostingId, optionId, now)
-    } catch (retryError) {
-      if (retryError instanceof ApplyOptionTransactionRaceError) return { ok: false }
-      throw retryError
+    } catch (error) {
+      if (!(error instanceof ApplyOptionTransactionRaceError)) throw error
+      if (attempt === 2) return { ok: false }
     }
   }
+  return { ok: false }
 }
 
 export interface EnsuredPracticeApplication {
@@ -849,8 +946,18 @@ export interface ApplyClickResult {
   status: string
   created: boolean
   transitioned: boolean
-  /** Server-resolved metadata for telemetry; never sourced from the request. */
-  canonicalOption: { optionId: string; tier: ApplyTier }
+  /** Internal server-resolved metadata. Routes must never serialize this
+   * object; `/open` uses only its safe URL for the immediate redirect. */
+  canonicalOption: {
+    optionId: string
+    url: string
+    tier: ApplyTier
+    viaSite?: string
+    subject: string
+    generation: string
+    incidentVersion: number
+    broken: boolean
+  }
 }
 
 async function recordApplyClickAttempt(
@@ -858,6 +965,7 @@ async function recordApplyClickAttempt(
   jobPostingId: string,
   optionId: string,
   now: Date,
+  trustedOpen = false,
 ): Promise<ApplyClickResult | null> {
   return runApplicationTransaction(userId, async (session) => {
     const posting = await JobPosting.findById(jobPostingId, undefined, { session })
@@ -868,12 +976,28 @@ async function recordApplyClickAttempt(
     if (postingState === 'restricted') return null
     const option = resolveApplyOption(posting.provenance, optionId)
     if (!option) return null
+    // Only a live posting can mint a trusted external-open proof. The legacy
+    // telemetry edge may still preserve an existing archived owner's status.
+    if (trustedOpen && postingState !== 'live') return null
+
+    const normalizedGovernance = trustedOpen
+      ? normalizeExpiredCrowdIncident(option.governance, now)
+      : option.governance
+    const incidentRolled = normalizedGovernance.incidentVersion !== option.incidentVersion
+    const authoritativeOption = incidentRolled
+      ? {
+          ...option,
+          governance: normalizedGovernance,
+          incidentVersion: normalizedGovernance.incidentVersion,
+          broken: linkDispositionOf(normalizedGovernance) !== 'pending-verification',
+        }
+      : option
 
     const existing = await JobApplication.findOne(
       { userId, jobPostingId },
       undefined,
       { session },
-    ).select('_id status clickedApplyOptionIds').lean()
+    ).select('_id status clickedApplyOptionIds applyOpenAttempts').lean()
     // A first click may create ownership only while discovery is live. A
     // normal archive preserves an existing owner's in-flight canonical click,
     // but a closed id alone never manufactures ownership.
@@ -882,27 +1006,70 @@ async function recordApplyClickAttempt(
     // The exact lifecycle + canonical provenance tuple is fenced in the same
     // transaction as the application write. A source revoke or option
     // replacement that wins forces a retry against the new truth.
+    const pinnedProvenance = incidentRolled
+      ? withReplicatedLinkGovernance(
+          posting.provenance,
+          authoritativeOption.subject,
+          normalizedGovernance,
+        )
+      : null
     const pin = await JobPosting.updateOne(
-      exactApplyOptionPostingFilter(jobPostingId, posting, option),
+      incidentRolled
+        ? {
+            _id: jobPostingId,
+            status: posting.status,
+            closedReason: exactOptionalPostingCondition(posting.closedReason),
+            provenance: posting.provenance,
+          }
+        : exactApplyOptionPostingFilter(jobPostingId, posting, authoritativeOption),
       {
-        $set: { userReferenced: true },
+        $set: {
+          userReferenced: true,
+          ...(pinnedProvenance ? { provenance: pinnedProvenance } : {}),
+        },
         $unset: { purgeAt: 1 },
         $inc: { derivedAuthorityRevision: 1 },
       },
-      { session, timestamps: false },
+      { session, timestamps: false, ...(pinnedProvenance ? { runValidators: true } : {}) },
     )
     if ((pin?.matchedCount ?? 0) !== 1) return null
 
-    const canonicalOption = { optionId: option.optionId, tier: option.tier }
+    const canonicalOption = {
+      optionId: authoritativeOption.optionId,
+      url: authoritativeOption.url,
+      tier: authoritativeOption.tier,
+      viaSite: authoritativeOption.viaSite,
+      subject: authoritativeOption.subject,
+      generation: authoritativeOption.generation,
+      incidentVersion: authoritativeOption.incidentVersion,
+      broken: authoritativeOption.broken,
+    }
+    const applyOpenAttempt: StoredApplyOpenAttempt | null = trustedOpen
+      ? {
+          optionId: authoritativeOption.optionId,
+          subject: authoritativeOption.subject,
+          generation: authoritativeOption.generation,
+          incidentVersion: authoritativeOption.incidentVersion,
+          openedAt: now,
+        }
+      : null
     if (existing) {
       const clickedApplyOptionIds = boundedClickedOptionIds(
         existing.clickedApplyOptionIds,
-        option.optionId,
+        authoritativeOption.optionId,
       )
+      const applyOpenAttempts = applyOpenAttempt
+        ? boundedApplyOpenAttempts(existing.applyOpenAttempts, applyOpenAttempt)
+        : undefined
       if (existing.status !== 'saved') {
         const tracked = await JobApplication.updateOne(
           { _id: existing._id, userId, jobPostingId },
-          { $set: { clickedApplyOptionIds } },
+          {
+            $set: {
+              clickedApplyOptionIds,
+              ...(applyOpenAttempts ? { applyOpenAttempts } : {}),
+            },
+          },
           { session },
         )
         if ((tracked?.matchedCount ?? 0) !== 1) {
@@ -920,9 +1087,10 @@ async function recordApplyClickAttempt(
         {
           $set: {
             status: 'apply_clicked',
-            'jobSnapshot.applyTierAtClick': option.tier,
-            'jobSnapshot.applyUrlAtClick': option.url,
+            'jobSnapshot.applyTierAtClick': authoritativeOption.tier,
+            'jobSnapshot.applyUrlAtClick': authoritativeOption.url,
             clickedApplyOptionIds,
+            ...(applyOpenAttempts ? { applyOpenAttempts } : {}),
           },
           $push: { statusHistory: { status: 'apply_clicked', at: now, source: 'system' } },
         },
@@ -947,12 +1115,13 @@ async function recordApplyClickAttempt(
         company: posting.company,
         location: (posting.locations ?? [])[0] ?? '',
         source: posting.provenance?.[0]?.sourceId ?? 'unknown',
-        applyTierAtClick: option.tier,
-        applyUrlAtClick: option.url,
+        applyTierAtClick: authoritativeOption.tier,
+        applyUrlAtClick: authoritativeOption.url,
       },
       status: 'apply_clicked',
       statusHistory: [{ status: 'apply_clicked', at: now, source: 'system' }],
-      clickedApplyOptionIds: [option.optionId],
+      clickedApplyOptionIds: [authoritativeOption.optionId],
+      ...(applyOpenAttempt ? { applyOpenAttempts: [applyOpenAttempt] } : {}),
     }], { session })
     return {
       status: 'apply_clicked',
@@ -976,6 +1145,26 @@ export async function recordApplyClick(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return await recordApplyClickAttempt(userId, jobPostingId, optionId, now)
+    } catch (error) {
+      const retryable = isDuplicateKeyError(error) ||
+        error instanceof ApplyOptionTransactionRaceError
+      if (!retryable) throw error
+      if (attempt === 2) return null
+    }
+  }
+  return null
+}
+
+/** Trusted navigation edge used only by `/open?intent=apply`. */
+export async function recordApplyOpenAttempt(
+  userId: string,
+  jobPostingId: string,
+  optionId: string,
+  now = new Date(),
+): Promise<ApplyClickResult | null> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await recordApplyClickAttempt(userId, jobPostingId, optionId, now, true)
     } catch (error) {
       const retryable = isDuplicateKeyError(error) ||
         error instanceof ApplyOptionTransactionRaceError

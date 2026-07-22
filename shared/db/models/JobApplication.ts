@@ -85,16 +85,28 @@ export interface IJobApplication extends Document {
    *  Pending = atsRequestedAt set AND (no atsResult OR older checkedAt). */
   atsRequestedAt?: Date
   notes?: string
-  /** Opaque ids of server-resolved provenance options this user actually
-   * clicked. Unlike the legacy URL snapshot, these are safe authorization
-   * inputs for a later broken-link report. */
+  /** Opaque ids observed by click telemetry. These are not proof that the
+   * server opened the external destination. */
   clickedApplyOptionIds: string[]
+  /** Trusted server-side Apply opens. A report is authorized only by a recent
+   * attempt for the exact current subject, generation, and incident. */
+  applyOpenAttempts: Array<{
+    optionId: string
+    subject: string
+    generation: string
+    incidentVersion: number
+    openedAt: Date
+  }>
   brokenLinkReports: Array<{
     /** Absent only on legacy reports written before canonical option ids. */
     optionId?: string
     url: string
     tier?: string
     reportedAt: Date
+    subject?: string
+    generation?: string
+    incidentVersion?: number
+    disposition?: 'pending-verification' | 'crowd-demoted' | 'machine-demoted'
   }>
   /** Historical attendance links, including rows created before signed Jobs
    * handoffs existed. Kept for operational/backcompat consumers only. */
@@ -207,6 +219,21 @@ const JobApplicationSchema = new Schema<IJobApplication>(
       type: [{ type: String, maxlength: 64 }],
       default: [],
     },
+    applyOpenAttempts: {
+      type: [
+        new Schema(
+          {
+            optionId: { type: String, required: true, maxlength: 64 },
+            subject: { type: String, required: true, maxlength: 64 },
+            generation: { type: String, required: true, maxlength: 64 },
+            incidentVersion: { type: Number, required: true, min: 1 },
+            openedAt: { type: Date, required: true },
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
     brokenLinkReports: {
       type: [
         new Schema(
@@ -215,6 +242,13 @@ const JobApplicationSchema = new Schema<IJobApplication>(
             url: { type: String, required: true, maxlength: 2000 },
             tier: { type: String, maxlength: 40 },
             reportedAt: { type: Date, required: true },
+            subject: { type: String, maxlength: 64 },
+            generation: { type: String, maxlength: 64 },
+            incidentVersion: { type: Number, min: 1 },
+            disposition: {
+              type: String,
+              enum: ['pending-verification', 'crowd-demoted', 'machine-demoted'],
+            },
           },
           { _id: false }
         ),
