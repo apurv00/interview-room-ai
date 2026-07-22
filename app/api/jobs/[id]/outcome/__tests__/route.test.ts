@@ -136,36 +136,38 @@ describe('POST /api/jobs/[id]/outcome', () => {
     expect(mockRecordInterviewOutcome).not.toHaveBeenCalled()
   })
 
-  it('returns 404 for an invalid id or a missing/ineligible owner application', async () => {
+  it('returns 404 for an invalid id or missing owner application', async () => {
     const invalidId = await POST(request(), { params: { id: 'not-an-object-id' } })
     expect(invalidId.status).toBe(404)
 
     mockRecordInterviewOutcome.mockResolvedValueOnce({
       ok: false,
-      reason: 'ineligible',
-      currentRound: 0,
+      reason: 'not-found',
     })
-    const ineligible = await POST(request(), { params: { id: JOB_ID } })
-    expect(ineligible.status).toBe(404)
-    expect(await ineligible.json()).toEqual({ error: 'not found' })
+    const missing = await POST(request(), { params: { id: JOB_ID } })
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual({ error: 'not found' })
   })
 
-  it('maps stale outcome state to a retryable 409', async () => {
-    mockRecordInterviewOutcome.mockResolvedValueOnce({
-      ok: false,
-      reason: 'round-conflict',
-      currentRound: 2,
-    })
+  it.each(['round-conflict', 'ineligible'] as const)(
+    'maps stale %s outcome state to a retryable 409',
+    async (reason) => {
+      mockRecordInterviewOutcome.mockResolvedValueOnce({
+        ok: false,
+        reason,
+        currentRound: 2,
+      })
 
-    const response = await POST(request(), { params: { id: JOB_ID } })
+      const response = await POST(request(), { params: { id: JOB_ID } })
 
-    expect(response.status).toBe(409)
-    expect(await response.json()).toEqual({
-      error: 'interview outcome changed; refresh and try again',
-      code: 'OUTCOME_STATE_CONFLICT',
-      currentRound: 2,
-    })
-  })
+      expect(response.status).toBe(409)
+      expect(await response.json()).toEqual({
+        error: 'interview outcome changed; refresh and try again',
+        code: 'OUTCOME_STATE_CONFLICT',
+        currentRound: 2,
+      })
+    },
+  )
 
   it('rejects declared and observed bodies above 1 KiB before database work', async () => {
     const declared = await POST(

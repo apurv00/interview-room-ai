@@ -134,7 +134,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
 
   if (!result.ok) {
-    if (result.reason === 'round-conflict') {
+    if (result.reason === 'round-conflict' || result.reason === 'ineligible') {
       return json({
         error: 'interview outcome changed; refresh and try again',
         code: 'OUTCOME_STATE_CONFLICT',
