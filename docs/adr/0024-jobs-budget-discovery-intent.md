@@ -9,7 +9,7 @@ Mongo-backed intent discovery. The Jobs-owned code adds query-bound cursor
 traversal, hard factual filters, non-excluding location and experience
 preferences, private resume personalization, stale-request protection, and a
 read-only quality report for supply, freshness, employer concentration,
-provider efficiency, and human-labeled remote precision.
+provider efficiency, and a deterministic manual remote-precision audit queue.
 
 The phase adds four counted files and 1,279 net counted lines, taking
 `modules/jobs` to 72 files and 17,881 lines. Combining the discovery engine and
