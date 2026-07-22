@@ -90,14 +90,20 @@ re-bill the LLM [R25]: `load-inputs` → `llm-attribute` → `persist`.
   to.
 - *llm-attribute*: task slot `jobs.evidence-attribution` = `{model:
   gpt-5.6-luna, maxTokens: 1400, reasoningEffort: 'low'}` [R15][R25] —
-  sized for the 30-answer worst case, G.3 truncation pattern (one in-step
-  retry at bumped budget), deploy-gate: verify no CMS ModelConfig row
+  originally sized around an invalid 30-answer assumption; the interview
+  contract permits indices through 500. G.3 truncation pattern (one in-step
+  retry at the active CMS slot's bumped budget), deploy-gate: verify no CMS ModelConfig row
   overrides the slot (the #487 lesson). Output per answered question:
   requirement ids evidenced + strength from the closed enum
   `strong | partial | none`. **Strength = depth of evidence; quality
   lives in answerScore — and a row only counts at all when answerScore
   ≥ 40** (the row-level quality floor [R0]). Zod-validated; parse-fail →
-  no write, never fabricated.
+  no write, never fabricated. Until deterministic chunking lands, v1 rejects
+  more than 40 answers before model egress instead of billing for an output
+  its response schema cannot represent. The session is stamped with both the
+  processed time and `evidenceUnsupportedContract: evidence-attribution.v1`,
+  preventing daily reconcile churn while giving the chunking migration an
+  exact replay query.
 - *persist* [R12][R24][R26]: evidence is its OWN collection —
 
 ```
@@ -135,12 +141,75 @@ unique index { sessionId, requirementId, xrayHash }   // real, DB-level
   segmented dashboard read them, and without them consumers would be
   forced into per-request recomputation or coverage-only mis-explanations.
 
-**Calibration gate before anything renders** [R10]: a ~30-item golden set
-(hand-labeled (answer, requirement) → strength triples from the founder's
-own prod sessions) with an agreement floor; re-run on any slot model
-change. A14.2 / PR-R2 does not ship until it passes. Until then no readiness
-band renders, no readiness or outcome label changes feed order, PR-R3 remains
-frozen, and cross-job evidence or outcome transfer remains off.
+**Calibration gate before anything renders** [R10]: grouped, production-shaped
+cases preserve the full answers + must-have context sent by the worker, while
+the founder labels every pair in each case's complete
+`answers × must-haves` matrix. Only explicitly consented founder sessions may
+enter the release corpus. Each case is manually redacted, points to its source
+with a random opaque UUIDv4 (never a deterministic hash of user data), and has
+its consent record held outside Git. The committed fixture asserts that both
+manual redaction and the off-repo consent record exist; it does not claim that
+a regex made the source anonymous.
+
+The release corpus requires at least 30 labeled pairs across at least five
+cases, at least eight labels for each of `strong | partial | none`, both
+fresher/professional segments with at least eight labels each, and at least
+three domains with at least five labels in every represented domain. It must
+include a negation case and a prompt-injection case. Challenge cases include an
+explicit `none` label so false evidence is measurable. It must also include a
+founder-consented session marked as observed production upper-tail with more
+than 40 answers. This deliberately crosses v1's single-response 40-group limit:
+the calibration cannot pass until attribution chunks long sessions
+deterministically or an explicit smaller bound is enforced end-to-end. Fixtures
+accept the interview contract's full 0–500 answer-index range rather than
+hiding this production gap behind a 30-answer test cap.
+
+The v1 prompt assigns one strength group per answer. A no-evidence answer is
+represented only as `{requirementIds: [], strength: "none"}`; strong/partial
+groups require ids, avoiding paid retries on an ambiguous empty group. V1 does not
+claim to distinguish `strong` for one requirement and `partial` for another in
+the same answer; the parser and corpus shape both reject that unversioned shape.
+A versioned pair-level contract,
+persisted provenance and legacy quarantine/replay remain activation blockers
+before A14.2b can show readiness, regardless of a v1 calibration result.
+
+`npm run eval:jobs-evidence` invokes the same production prompt, parser,
+schema and retry path. The operator must name the intended CMS slot model via
+`JOBS_EVIDENCE_EVAL_EXPECTED_MODEL` and
+`JOBS_EVIDENCE_EVAL_EXPECTED_PROVIDER`, and supplies `MONGODB_URI` so the
+router is compared with authoritative CMS state. The worktree must be clean
+before any model call. The harness captures the full effective slot plus the
+authoritative ModelConfig revision/digest before and after the run, and fails
+if they differ.
+
+The technical gates are: exact-strength agreement ≥ 80%; evidence-vs-none
+agreement ≥ 90%; `none` recall ≥ 90%; strong precision ≥ 80%; per-case
+macro exact agreement ≥ 75%; binary agreement ≥ 85% in each segment and
+≥ 80% in each represented domain; evaluator errors < 5%; and zero challenge
+false-evidence, upper-tail case failures, fallback use, model/provider drift,
+contract violations, or ModelConfig drift. The zero-tolerance upper-tail gate
+prevents a mandatory long-session failure from being diluted by a larger corpus.
+The same failure function has always-on boundary and dilution tests.
+
+Every artifact records the thresholds, technical `gatePassed` decision and
+failure codes, prompt/fixture/commit digests, and start/end ModelConfig
+revisions and full slot contracts. It contains only safe case/pair ids,
+predictions and aggregate metrics—never answer, question, requirement, or JD
+text. Failed diagnostics use ignored `evidence-failed-*` files. A technical
+pass uses reviewable `baseline-evidence-*` and carries
+`founderApproval.status = blocked`, `activation.eligible = false`, and a
+machine-readable blocker list. It cannot authorize a band until a later
+version removes those blockers and the founder approves that exact artifact.
+
+**Gate state (2026-07-22): CLOSED.** `evidenceGoldenSet.json` is intentionally
+empty and the manual command exits non-zero. Making the harness executable
+does not approve a model, corpus, historical evidence, band names or thresholds.
+A14.2 / PR-R2 does not ship until a passing founder-approved artifact exists,
+actual scoring + attribution provenance is persisted, legacy rows are
+quarantined/replayed without guessed epochs, and the relevant AI-data
+disclosure is accurate. Until then no readiness band renders, no readiness or
+outcome label changes feed order, PR-R3 remains frozen, and cross-job evidence
+or outcome transfer remains off.
 
 **Cost**: one bounded call per scored jobs session (version mismatch =
 terminal counted skip, no second parse in v1); never per-user×job. Module budgets: PR-R1
@@ -244,10 +313,14 @@ readiness consumer is enabled by that data.
    (incl. the fresher-segment question), the boost ordering-invariant X,
    the small-N guard, the new task slot.
 2. **PR-R1** attribution (dark) → prod verification on the founder's own
-   sessions → **calibration golden-set gate**.
-3. **A14.2 / PR-R2** bands + surfaces (visible, no rank change) + segment
+   sessions.
+3. **A14.2a** calibration integrity (dark): executable production-parity
+   harness → actual scoring/attribution provenance → legacy quarantine/replay
+   → founder-approved passing artifact. The empty corpus keeps this gate
+   closed; a passing harness alone cannot activate a surface.
+4. **A14.2b / PR-R2** bands + surfaces (visible, no rank change) + segment
    telemetry + chip-vocabulary reconciliation.
-4. **PR-R3 — FROZEN until A14.2 passes its calibration gate** — re-ranking
+5. **PR-R3 — FROZEN until A14.2 passes its calibration gate** — re-ranking
    + fact chips.
 
 ## 5. Explicitly out of scope
