@@ -1,27 +1,47 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'crypto'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   connectDB: vi.fn(),
   getFeed: vi.fn(),
   roleToJobsDomain: vi.fn(),
+  redisIncr: vi.fn(),
+  redisPexpire: vi.fn(),
+  InvalidFeedCursorError: class InvalidFeedCursorError extends Error {},
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: mocks.connectDB }))
+vi.mock('@shared/redis', () => ({
+  redis: {
+    incr: mocks.redisIncr,
+    pexpire: mocks.redisPexpire,
+  },
+}))
 vi.mock('@jobs', () => ({
   getFeed: mocks.getFeed,
   JOB_DOMAINS: [{ id: 'pm' }, { id: 'backend' }],
   roleToJobsDomain: mocks.roleToJobsDomain,
+  FEED_REMOTE_VALUES: ['remote'],
+  FEED_EXPERIENCE_VALUES: ['entry', 'mid', 'senior'],
+  FEED_FRESHNESS_VALUES: ['1d', '3d', '7d', '14d', '30d'],
+  FEED_SORT_VALUES: ['best', 'newest'],
+  FEED_CURSOR_DIRECTIONS: ['after', 'before'],
+  InvalidFeedCursorError: mocks.InvalidFeedCursorError,
 }))
 
 import { GET, POST } from '../route'
 
 const FEED = {
   cards: [],
-  page: 1,
   pageSize: 20,
   hasMore: false,
+  hasPrevious: false,
   total: 0,
+  accessibleTotal: 0,
+  resultCap: 400,
+  capped: false,
   sharpened: 0,
+  sort: 'best',
 }
 
 function post(body: unknown, headers?: HeadersInit) {
@@ -37,15 +57,45 @@ beforeEach(() => {
   mocks.connectDB.mockResolvedValue(undefined)
   mocks.getFeed.mockResolvedValue(FEED)
   mocks.roleToJobsDomain.mockReturnValue('backend')
+  mocks.redisIncr.mockResolvedValue(1)
+  mocks.redisPexpire.mockResolvedValue(1)
+  vi.stubEnv('VERCEL', '')
+  vi.stubEnv('NODE_ENV', 'test')
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
 })
 
 describe('/api/jobs/feed transport privacy', () => {
-  it('keeps GET public for non-sensitive domain/page navigation', async () => {
-    const response = await GET(new Request('http://localhost/api/jobs/feed?page=2&domain=pm'))
+  it('keeps validated discovery filters public and preserves the one-row count consumer', async () => {
+    const response = await GET(new Request(
+      'http://localhost/api/jobs/feed?page=1&pageSize=1&domain=pm&q=Product&location=Bangalore&remote=remote&experience=mid&company=Acme&freshness=7d&sort=newest',
+    ))
 
     expect(response.status).toBe(200)
-    expect(mocks.getFeed).toHaveBeenCalledWith({ domain: 'pm', page: 2 })
+    expect(mocks.getFeed).toHaveBeenCalledWith({
+      domain: 'pm',
+      search: 'Product',
+      location: 'Bangalore',
+      remote: 'remote',
+      experience: 'mid',
+      company: 'Acme',
+      freshness: '7d',
+      sort: 'newest',
+      cursor: undefined,
+      direction: undefined,
+      pageSize: 1,
+    })
     expect(mocks.roleToJobsDomain).not.toHaveBeenCalled()
+  })
+
+  it('rejects legacy offset pages after page one', async () => {
+    const response = await GET(new Request('http://localhost/api/jobs/feed?page=2&domain=pm'))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ code: 'CURSOR_PAGINATION_REQUIRED' })
+    expect(mocks.connectDB).not.toHaveBeenCalled()
   })
 
   it('rejects legacy resume-derived GET query values with a private migration error', async () => {
@@ -63,7 +113,7 @@ describe('/api/jobs/feed transport privacy', () => {
 
   it('accepts personalized signals only in a bounded POST body and deduplicates skills', async () => {
     const response = await post({
-      page: 3,
+      page: 1,
       targetRole: '  Backend Engineer  ',
       skills: [' TypeScript ', 'typescript', '', 'React', ' REACT '],
     })
@@ -73,7 +123,16 @@ describe('/api/jobs/feed transport privacy', () => {
     expect(mocks.getFeed).toHaveBeenCalledWith({
       domain: undefined,
       roleDomain: 'backend',
-      page: 3,
+      search: undefined,
+      location: undefined,
+      remote: undefined,
+      experience: undefined,
+      company: undefined,
+      freshness: undefined,
+      sort: undefined,
+      cursor: undefined,
+      direction: undefined,
+      pageSize: undefined,
       skills: ['TypeScript', 'React'],
       targetRole: 'Backend Engineer',
     })
@@ -97,7 +156,7 @@ describe('/api/jobs/feed transport privacy', () => {
     ['too many skills', { skills: Array.from({ length: 21 }, (_, index) => `skill-${index}`) }],
     ['oversized skill', { skills: ['x'.repeat(41)] }],
     ['oversized role', { targetRole: 'x'.repeat(81) }],
-    ['invalid page', { page: 0 }],
+    ['invalid page', { page: 2 }],
   ])('rejects %s before database work', async (_label, body) => {
     const response = await post(body)
 
@@ -136,6 +195,71 @@ describe('/api/jobs/feed transport privacy', () => {
 
     expect(response.status).toBe(400)
     expect(response.headers.get('cache-control')).toContain('no-store')
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+  })
+
+  it('maps malformed or query-mismatched cursors to an explicit 400', async () => {
+    mocks.getFeed.mockRejectedValueOnce(new mocks.InvalidFeedCursorError())
+
+    const response = await GET(new Request('http://localhost/api/jobs/feed?cursor=bad&direction=after'))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ code: 'INVALID_FEED_CURSOR' })
+  })
+
+  it('rate-limits database-backed public reads before connecting', async () => {
+    mocks.redisIncr.mockResolvedValueOnce(31)
+
+    const response = await GET(new Request('http://localhost/api/jobs/feed', {
+      headers: { 'x-forwarded-for': '203.0.113.9' },
+    }))
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(mocks.redisIncr).toHaveBeenCalledWith(expect.stringMatching(/^rl:jobs:feed:ip:[a-f0-9]{24}$/))
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+  })
+
+  it('prefers Cloudflare client identity over a spoofed forwarded chain', async () => {
+    await GET(new Request('http://localhost/api/jobs/feed', {
+      headers: {
+        'cf-connecting-ip': '198.51.100.7',
+        'x-forwarded-for': '203.0.113.99',
+      },
+    }))
+
+    const hash = createHash('sha256').update('198.51.100.7').digest('hex').slice(0, 24)
+    expect(mocks.redisIncr).toHaveBeenCalledWith(`rl:jobs:feed:ip:${hash}`)
+  })
+
+  it('places missing or malformed proxy identity in a bounded shared bucket', async () => {
+    await GET(new Request('http://localhost/api/jobs/feed', {
+      headers: { 'x-forwarded-for': 'not-an-ip' },
+    }))
+
+    const hash = createHash('sha256').update('unknown-client').digest('hex').slice(0, 24)
+    expect(mocks.redisIncr).toHaveBeenCalledWith(`rl:jobs:feed:ip:${hash}`)
+  })
+
+  it('fails the costly public read closed when Redis is unavailable', async () => {
+    mocks.redisIncr.mockRejectedValueOnce(new Error('redis unavailable'))
+
+    const response = await GET(new Request('http://localhost/api/jobs/feed'))
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toMatchObject({ code: 'FEED_RATE_LIMIT_UNAVAILABLE' })
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+  })
+
+  it('requires REDIS_URL for production feed reads instead of falling back to localhost', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('REDIS_URL', '')
+
+    const response = await GET(new Request('http://localhost/api/jobs/feed'))
+
+    expect(response.status).toBe(503)
+    expect(mocks.redisIncr).not.toHaveBeenCalled()
     expect(mocks.connectDB).not.toHaveBeenCalled()
   })
 

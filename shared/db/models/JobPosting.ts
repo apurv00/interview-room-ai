@@ -345,6 +345,24 @@ JobPostingSchema.index(
 JobPostingSchema.index({ 'provenance.sourceKey': 1 }, { unique: true })
 JobPostingSchema.index({ companyKey: 1, status: 1 })
 JobPostingSchema.index({ domain: 1, locationKeys: 1, status: 1, postedAt: -1 })
+// A12 discovery indexes. Partial-open shapes keep archived owner history out
+// of public-feed scans while serving newest, domain, remote, and title intent.
+JobPostingSchema.index(
+  { postedAt: -1, _id: -1 },
+  { name: 'jobs_feed_open_posted', partialFilterExpression: { status: 'open' } },
+)
+JobPostingSchema.index(
+  { domain: 1, postedAt: -1, _id: -1 },
+  { name: 'jobs_feed_open_domain_posted', partialFilterExpression: { status: 'open' } },
+)
+JobPostingSchema.index(
+  { isRemote: 1, postedAt: -1, _id: -1 },
+  { name: 'jobs_feed_open_remote_posted', partialFilterExpression: { status: 'open' } },
+)
+JobPostingSchema.index(
+  { titleTokens: 1, postedAt: -1, _id: -1 },
+  { name: 'jobs_feed_open_title_posted', partialFilterExpression: { status: 'open' } },
+)
 // Bounded first-lane crowd requests sort oldest-first. Keep ordinary postings
 // out of the index so baseline/restrike scans retain their independent budget.
 JobPostingSchema.index(

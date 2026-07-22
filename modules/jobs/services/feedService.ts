@@ -11,47 +11,35 @@ import {
 import { jobPostingStateOf, type JobPostingState } from './postingAccess'
 import { canonicalApplyOptionsOf } from './applyOptionIdentity'
 import { canonicalizeCheckableLink } from './safeLinkNetwork'
+import { discoverFeed } from './feedDiscovery'
+import type { PublicFeedQuery } from '../config/feedDiscovery'
 
 /**
- * Feed serving (PRODUCT_FLOW §1 Stage 0, Wave 3.1) — Tier-A DETERMINISTIC
- * ranking. Rules only:
+ * Feed serving (PRODUCT_FLOW §1 Stage 0) — database-backed deterministic
+ * discovery plus an optional, page-local private refinement. Rules only:
  * - Serving NEVER consumes llmVerdict fields at launch (ruling #16 serving
  *   honesty: rank may read typed verdict fields only once enforcement is on
  *   AND the reason-chip vocabulary names that basis). Soft-closed rows are
  *   already `status:'closed'` and excluded by the status filter.
  * - Demotion flags DEMOTE, never hide (ruling #15) — a staffing/short-JD
  *   row sinks, it does not disappear.
- * - Copy vocabulary for this tier stays claim-minimal — no resume/readiness
- *   claims exist at Tier-A (the UI owns the words; this module owns making
- *   them true: rank inputs are title/domain, recency, apply-path quality).
- *   City/location is NEITHER an input NOR a rank signal (founder directive
- *   2026-07-16, supersedes ruling #17's city-as-ranking-signal: typed
- *   cities hard-collapsed the pool — 'Bangalore' matched zero stored keys
- *   ('bengaluru') and left only the 354 remote rows).
+ * - Normalized location and deterministic title-based experience are soft
+ *   preferences only. They may improve order and can never empty the feed.
+ * - Apply-path badges use the canonical safe-option authority. DB ranking
+ *   deliberately does not duplicate that URL and governance logic.
  *
  * P-2 (founder ruling 2026-07-14): public feed, auth-gated detail — the
  * DETAIL projection is split anon-shell vs authed-full SERVER-SIDE here, so
  * no route can accidentally ship the JD/apply URLs to an anonymous client.
  */
 
-const PAGE_SIZE_DEFAULT = 20
-const PAGE_SIZE_MAX = 50
-/** Bounded candidate pull — scored in-app; index {domain, locationKeys, status, postedAt} serves the scan. */
-const CANDIDATE_POOL = 400
-/** When the pull is domain-first (derived roleDomain), a small recent
- *  cross-domain tail keeps thin domains from rendering an empty feed. */
-const MIXED_TAIL = 100
-
-export interface FeedQuery {
+export interface FeedQuery extends PublicFeedQuery {
   /** Explicit ?domain= (press surfaces) — a HARD filter: the link promised
    *  "N {domain} jobs" and must deliver exactly that pool. */
   domain?: string
-  /** Derived from targetRole server-side (roleToJobsDomain) — a SOFT
-   *  domain: pulls domain-first and ranks the domain as a class above
-   *  everything else, but never empties the feed (founder RCA 2026-07-16:
-   *  the 400-newest cross-domain pull admitted 15 of 125 open pm rows). */
+  /** Derived from targetRole server-side. This private soft signal refines
+   *  only the current Best-match page and never changes cursor membership. */
   roleDomain?: string
-  page?: number
   pageSize?: number
   /** Tier-B (stateless, PRODUCT_FLOW §1 Stage 1): extracted resume skills
    *  passed from the CLIENT's sessionStorage — never persisted server-side
@@ -73,32 +61,34 @@ export interface FeedCard {
   salaryText?: string
   /** Best apply path across provenance — badge copy is tier-honest. */
   applyTier?: ApplyTier
-  /** Tier-A cards claim ONLY "title & location match"; Tier-B cards may
-   *  name the resume evidence — but ONLY the skills that actually matched
-   *  (reveal honesty, §4a: claim "based on your resume: X, Y" solely from
-   *  this list). */
-  relevance: 'title-location' | 'resume'
+  /** Resume evidence may be named only when a title actually matched it. */
+  relevance: 'discovery' | 'location' | 'resume'
   matchedSkills: string[]
+  /** True only when the normalized soft preference matched this posting. */
+  locationPreferenceMatched: boolean
 }
 
-// ── Tier-A scoring (deterministic; every weight visible in one place) ────────
-const TIER_BONUS: Record<ApplyTier, number> = {
-  'direct-ats': 30,
-  employer: 25,
-  'aggregator-deep': 15,
-  'platform-funnel': 8,
-  'aggregator-redirect': 3,
+export interface FeedPayload {
+  cards: FeedCard[]
+  pageSize: number
+  hasMore: boolean
+  hasPrevious: boolean
+  nextCursor?: string
+  previousCursor?: string
+  total: number
+  accessibleTotal: number
+  resultCap: number
+  capped: boolean
+  sharpened: number
+  sort: 'best' | 'newest'
 }
+
 const DOMAIN_MATCH_BONUS = 25
 /** Tier-B: per matched resume skill (cap 3 count) + target-role title affinity. */
 const SKILL_MATCH_BONUS = 8
 const SKILL_MATCH_CAP = 3
 const ROLE_MATCH_BONUS = 20
 const ROLE_MATCH_JACCARD = 0.5
-const DEMOTION = { staffing: 10, shortJd: 8, repost: 6, confidential: 4 } as const
-/** Linear recency decay to zero over 21 days — beyond that, freshness stops discriminating. */
-const RECENCY_MAX = 25
-const RECENCY_WINDOW_DAYS = 21
 
 /** Browser-navigation policy shared with the production link checker: only
  * credential-free HTTP(S) on default ports, excluding localhost and every
@@ -110,9 +100,9 @@ export function isSafeHttpUrl(u: string): boolean {
 
 export function bestApplyTierOf(doc: Pick<IJobPosting, 'provenance'>): ApplyTier | undefined {
   // Crowd-healing reaches the FEED too (Codex on #522): a reported rung
-  // must not keep earning the 'Direct application' badge and its rank bonus
-  // while the detail ladder demotes it. Clean rungs win; if every rung is
-  // reported, fall back to the best of them (demote, never hide).
+  // must not keep earning the 'Direct application' badge while the detail
+  // ladder demotes it. Clean rungs win; if every rung is reported, fall back
+  // to the best of them (demote, never hide).
   let bestClean: ApplyTier | undefined
   let bestAny: ApplyTier | undefined
   for (const option of canonicalApplyOptionsOf(doc.provenance)) {
@@ -141,90 +131,26 @@ export function matchedSkillsOf(
   })
 }
 
-export function tierAScore(
-  doc: Pick<IJobPosting, 'provenance' | 'flags' | 'confidentialCompany' | 'domain' | 'isRemote' | 'postedAt'>,
-  q: { domain?: string },
-  now: Date
-): number {
-  let score = 0
-  const tier = bestApplyTierOf(doc)
-  if (tier) score += TIER_BONUS[tier]
-  if (q.domain && doc.domain === q.domain) score += DOMAIN_MATCH_BONUS
-  if (doc.postedAt) {
-    const ageDays = (now.getTime() - doc.postedAt.getTime()) / 86_400_000
-    if (ageDays >= 0 && ageDays < RECENCY_WINDOW_DAYS) {
-      score += RECENCY_MAX * (1 - ageDays / RECENCY_WINDOW_DAYS)
+export async function getFeed(query: FeedQuery, now = new Date()): Promise<FeedPayload> {
+  const discovery = await discoverFeed(query, now, query.pageSize)
+  const personalized = discovery.rows.map((d, index) => {
+    const matched = matchedSkillsOf(d, query.skills)
+    let privateScore = 0
+    if (query.roleDomain && d.domain === query.roleDomain) privateScore += DOMAIN_MATCH_BONUS
+    privateScore += Math.min(matched.length, SKILL_MATCH_CAP) * SKILL_MATCH_BONUS
+    if (query.targetRole && titleJaccard(query.targetRole, d.title ?? '') >= ROLE_MATCH_JACCARD) {
+      privateScore += ROLE_MATCH_BONUS
     }
+    return { d, index, matched, privateScore }
+  })
+  // Public filters own page membership and cursor order, so a copied URL is
+  // stable and contains no resume-derived state. Private signals may refine
+  // only the current "Best match" page; Newest remains strictly chronological.
+  if (discovery.sort === 'best' && (query.roleDomain || query.targetRole || query.skills?.length)) {
+    personalized.sort((a, b) => b.privateScore - a.privateScore || a.index - b.index)
   }
-  if (doc.flags?.staffing) score -= DEMOTION.staffing
-  if (doc.flags?.shortJd) score -= DEMOTION.shortJd
-  if (doc.flags?.repost) score -= DEMOTION.repost
-  if (doc.confidentialCompany) score -= DEMOTION.confidential
-  return score
-}
-
-/** Tier-B on top of Tier-A: same deterministic base, plus resume-skill and
- *  target-role affinity. With no skills/targetRole this is EXACTLY tierAScore
- *  (pinned by test) — the 3-questions path gets Tier-A + role filter and no
- *  resume-flavored claims. */
-export function tierBScore(
-  doc: Pick<IJobPosting, 'provenance' | 'flags' | 'confidentialCompany' | 'domain' | 'isRemote' | 'postedAt' | 'title' | 'titleTokens'>,
-  q: { domain?: string; skills?: string[]; targetRole?: string },
-  now: Date
-): number {
-  let score = tierAScore(doc, q, now)
-  const matched = matchedSkillsOf(doc, q.skills)
-  score += Math.min(matched.length, SKILL_MATCH_CAP) * SKILL_MATCH_BONUS
-  if (q.targetRole && titleJaccard(q.targetRole, doc.title ?? '') >= ROLE_MATCH_JACCARD) {
-    score += ROLE_MATCH_BONUS
-  }
-  return score
-}
-
-export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ cards: FeedCard[]; page: number; pageSize: number; hasMore: boolean; total: number; sharpened: number }> {
-  const page = Math.max(1, Math.floor(query.page ?? 1))
-  const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(1, Math.floor(query.pageSize ?? PAGE_SIZE_DEFAULT)))
-
-  const select = 'title titleTokens company locations isRemote domain postedAt salaryText provenance flags confidentialCompany'
-  const sort = { postedAt: -1 as const, _id: -1 as const }
-  let docs: Awaited<ReturnType<typeof pull>>
-  async function pull(filter: Record<string, unknown>, limit: number) {
-    return JobPosting.find(filter).select(select).sort(sort).limit(limit).lean()
-  }
-  if (!query.domain && query.roleDomain) {
-    // Domain-FIRST pull (founder RCA 2026-07-16): every open row of the
-    // seeker's domain reaches scoring — the newest-across-domains pull
-    // admitted 15 of 125 open pm rows and starved every non-fresh domain.
-    // The mixed tail keeps thin domains from rendering an empty feed.
-    const [domainRows, mixedTail] = await Promise.all([
-      pull({ status: 'open', domain: query.roleDomain }, CANDIDATE_POOL),
-      pull({ status: 'open', domain: { $ne: query.roleDomain } }, MIXED_TAIL),
-    ])
-    docs = [...domainRows, ...mixedTail]
-  } else {
-    const filter: Record<string, unknown> = { status: 'open' }
-    if (query.domain) filter.domain = query.domain
-    docs = await pull(filter, CANDIDATE_POOL)
-  }
-
-  const rankDomain = query.domain ?? query.roleDomain
-  const rankQ = { domain: rankDomain, skills: query.skills, targetRole: query.targetRole }
-  const scored = docs
-    .map((d) => ({ d, score: tierBScore(d as IJobPosting, rankQ, now), matched: matchedSkillsOf(d as IJobPosting, query.skills) }))
-    .sort((a, b) => {
-      // Domain CLASS first: when the seeker names a role, in-domain rows
-      // outrank every out-of-domain row — recency/apply-tier order only
-      // WITHIN the class (a fresh fullstack job must not beat a week-old
-      // pm job for a pm target; recency 25 alone outweighed domain 25).
-      const am = rankDomain && a.d.domain === rankDomain ? 1 : 0
-      const bm = rankDomain && b.d.domain === rankDomain ? 1 : 0
-      return bm - am || b.score - a.score || String(b.d._id).localeCompare(String(a.d._id))
-    })
-
-  const start = (page - 1) * pageSize
-  const slice = scored.slice(start, start + pageSize)
   return {
-    cards: slice.map(({ d, matched }) => ({
+    cards: personalized.map(({ d, matched }) => ({
       id: String(d._id),
       title: d.title,
       company: d.company,
@@ -233,17 +159,28 @@ export async function getFeed(query: FeedQuery, now = new Date()): Promise<{ car
       domain: d.domain,
       postedAt: d.postedAt ? new Date(d.postedAt).toISOString() : undefined,
       salaryText: d.salaryText,
-      applyTier: bestApplyTierOf(d as IJobPosting),
-      relevance: matched.length ? ('resume' as const) : ('title-location' as const),
+      applyTier: bestApplyTierOf(d),
+      relevance: matched.length
+        ? ('resume' as const)
+        : d.locationPreferenceMatched
+          ? ('location' as const)
+          : ('discovery' as const),
       matchedSkills: matched,
+      locationPreferenceMatched: d.locationPreferenceMatched,
     })),
-    page,
-    pageSize,
-    hasMore: start + pageSize < scored.length,
-    total: scored.length,
+    pageSize: discovery.pageSize,
+    hasMore: discovery.hasNext,
+    hasPrevious: discovery.hasPrevious,
+    nextCursor: discovery.nextCursor,
+    previousCursor: discovery.previousCursor,
+    total: discovery.total,
+    accessibleTotal: discovery.accessibleTotal,
+    resultCap: discovery.resultCap,
+    capped: discovery.capped,
     // Reveal honesty (§4a): "sharpened N matches" only when matched-skill
-    // sets actually changed something — otherwise the UI says "Feed refreshed."
-    sharpened: scored.filter((x) => x.matched.length > 0).length,
+    // sets on this returned page actually changed something.
+    sharpened: personalized.filter((x) => x.matched.length > 0).length,
+    sort: discovery.sort,
   }
 }
 

@@ -42,7 +42,7 @@ export default function JobsCountLink({
   }, [domain])
 
   if (!state || state.total === 0) return null
-  const count = `${state.total}${state.total >= 400 ? '+' : ''}`
+  const count = state.total.toLocaleString()
   const href = state.filtered && domain ? `/jobs?domain=${domain}` : '/jobs'
   const what = state.filtered && domain ? `${domain} jobs` : 'jobs'
 
