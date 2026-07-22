@@ -124,6 +124,10 @@ export interface IInterviewSession extends Document {
      *  reconciliation sweep only re-emits unstamped sessions (Codex #538:
      *  row existence alone re-billed processed zero-evidence sessions). */
     evidenceProcessedAt?: Date
+    /** Versioned terminal marker for input the current attribution contract
+     * cannot represent. A later contract migration can query this exact value,
+     * clear both markers, and replay without reprocessing every session. */
+    evidenceUnsupportedContract?: string
   }
 
   // Research donation — candidate opted in to contribute this session's
@@ -306,6 +310,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
           // Strict subdoc: without this declaration the worker's dot-path
           // $set would be silently stripped and the sweep would loop.
           evidenceProcessedAt: { type: Date },
+          evidenceUnsupportedContract: { type: String, maxlength: 64 },
         },
         { _id: false }
       ),

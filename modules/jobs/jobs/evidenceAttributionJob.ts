@@ -4,7 +4,6 @@ import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession, JobApplication, JobPosting, JobPracticeEvidence } from '@shared/db/models'
 import { completion, resolveModel } from '@shared/services/modelRouter'
-import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 import { logger } from '@shared/logger'
 import { xrayHashOf } from '../services/xrayService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
@@ -65,17 +64,81 @@ export async function currentScoringEpoch(): Promise<string> {
   return resolved.model
 }
 
+/**
+ * One version covers the prompt, response schema, and classification policy so
+ * offline calibration artifacts can prove which production contract they ran.
+ */
+export const EVIDENCE_ATTRIBUTION_CONTRACT_VERSION = 'evidence-attribution.v1' as const
+
+export const EVIDENCE_ATTRIBUTION_SYSTEM_PROMPT =
+  'You are a precise evidence-attribution classifier. Output only the requested JSON.'
+
+const MAX_ATTRIBUTION_GROUPS = 40
+
+const ATTRIBUTION_GROUP_SCHEMA = z.object({
+  answerIndex: z.number().int().min(0),
+  requirementIds: z.array(z.string().min(1).max(120)).max(6),
+  strength: z.enum(['strong', 'partial', 'none']),
+}).superRefine((group, ctx) => {
+  if (group.strength === 'none' && group.requirementIds.length !== 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['requirementIds'],
+      message: 'none strength must use an empty requirement list',
+    })
+  }
+  if (group.strength !== 'none' && group.requirementIds.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['requirementIds'],
+      message: 'evidence strength requires at least one requirement id',
+    })
+  }
+})
+
 const ATTRIBUTION_SCHEMA = z.object({
   attributions: z
-    .array(
-      z.object({
-        answerIndex: z.number().int().min(0),
-        requirementIds: z.array(z.string().min(1).max(120)).max(6),
-        strength: z.enum(['strong', 'partial', 'none']),
-      })
-    )
-    .max(40),
+    .array(ATTRIBUTION_GROUP_SCHEMA)
+    .max(MAX_ATTRIBUTION_GROUPS),
 })
+
+export type EvidenceAttributionPayload = z.infer<typeof ATTRIBUTION_SCHEMA>
+
+export interface EvidenceAttributionAttempt {
+  model: string
+  provider: string
+  usedFallback: boolean
+  truncated: boolean
+  inputTokens: number
+  outputTokens: number
+}
+
+export type EvidenceAttributionClassification = EvidenceAttributionPayload & {
+  attempts: EvidenceAttributionAttempt[]
+}
+
+export type EvidenceAttributionFailureReason =
+  | 'invalid-input'
+  | 'completion-failed'
+  | 'truncated'
+  | 'invalid-response'
+
+/** Safe classifier failure: no prompt, answer, requirement, or raw model text. */
+export class EvidenceAttributionClassificationError extends Error {
+  readonly reason: EvidenceAttributionFailureReason
+  readonly attempts: EvidenceAttributionAttempt[]
+
+  constructor(
+    reason: EvidenceAttributionFailureReason,
+    message: string,
+    attempts: EvidenceAttributionAttempt[] = [],
+  ) {
+    super(message)
+    this.name = 'EvidenceAttributionClassificationError'
+    this.reason = reason
+    this.attempts = attempts.map((attempt) => ({ ...attempt }))
+  }
+}
 
 interface LoadedInputs {
   outcome:
@@ -197,6 +260,7 @@ Rules:
 - Attribute ONLY against the requirement ids listed. Never invent ids.
 - An answer may evidence multiple requirements (rarely more than 3).
 - Output JSON only: {"attributions":[{"answerIndex":number,"requirementIds":[string],"strength":"strong"|"partial"|"none"}]} — one entry per answer index given.
+- For an answer with no evidence, output exactly {"answerIndex":n,"requirementIds":[],"strength":"none"}. Strong/partial groups require at least one listed id.
 
 <job_must_have_requirements>
 ${reqLines}
@@ -207,14 +271,166 @@ ${ansLines}
 </interview_answers>`
 }
 
+/** Parse the production response contract, tolerating provider code fences or
+ * short prose wrapped around the single JSON object. */
+export function parseEvidenceAttributionResponse(text: string): EvidenceAttributionPayload {
+  const objectStart = text.indexOf('{')
+  const objectEnd = text.lastIndexOf('}')
+  if (objectStart < 0 || objectEnd < objectStart) {
+    throw new Error('attribution response does not contain a JSON object')
+  }
+  return ATTRIBUTION_SCHEMA.parse(JSON.parse(text.slice(objectStart, objectEnd + 1)))
+}
+
+function validateAttributionInput(answers: LoadedInputs['answers']): Set<number> {
+  if (answers.length === 0) {
+    throw new EvidenceAttributionClassificationError(
+      'invalid-input',
+      'attribution requires at least one answer',
+    )
+  }
+  if (answers.length > MAX_ATTRIBUTION_GROUPS) {
+    throw new EvidenceAttributionClassificationError(
+      'invalid-input',
+      `attribution v1 supports at most ${MAX_ATTRIBUTION_GROUPS} answers per response`,
+    )
+  }
+  const answerIndices = new Set<number>()
+  for (const answer of answers) {
+    if (answerIndices.has(answer.index)) {
+      throw new EvidenceAttributionClassificationError(
+        'invalid-input',
+        'attribution answer indices must be unique',
+      )
+    }
+    answerIndices.add(answer.index)
+  }
+  return answerIndices
+}
+
+function validateAttributionOutput(
+  payload: EvidenceAttributionPayload,
+  answerIndices: Set<number>,
+): void {
+  const classifiedAnswers = new Set<number>()
+  const pairs = new Set<string>()
+  for (const attribution of payload.attributions) {
+    if (!answerIndices.has(attribution.answerIndex)) {
+      throw new Error('attribution response contains an unknown answer index')
+    }
+    // v1 assigns one depth to every requirement grouped under an answer.
+    // Repeating the answer with another depth would silently create a
+    // pair-level contract that v1 has not versioned or persisted.
+    if (classifiedAnswers.has(attribution.answerIndex)) {
+      throw new Error('attribution response contains more than one strength group for an answer')
+    }
+    classifiedAnswers.add(attribution.answerIndex)
+    for (const requirementId of attribution.requirementIds) {
+      const pair = `${attribution.answerIndex}\u0000${requirementId}`
+      if (pairs.has(pair)) {
+        throw new Error('attribution response contains a duplicate answer-requirement pair')
+      }
+      pairs.add(pair)
+    }
+  }
+  if (classifiedAnswers.size !== answerIndices.size) {
+    throw new Error('attribution response does not classify every answer index')
+  }
+}
+
+/**
+ * Production-faithful classifier shared by the worker and the golden-set
+ * harness. Its return keeps `attributions` at the top level so already
+ * memoized Inngest step output remains structurally backward compatible.
+ */
+export async function classifyEvidenceAttribution(input: {
+  answers: LoadedInputs['answers']
+  mustHaves: LoadedInputs['mustHaves']
+  beforeProviderCall?: () => Promise<boolean>
+}): Promise<EvidenceAttributionClassification> {
+  const answerIndices = validateAttributionInput(input.answers)
+  const activeSlot = await resolveModel('jobs.evidence-attribution')
+  const prompt = buildAttributionPrompt(input.answers, input.mustHaves)
+  const attempts: EvidenceAttributionAttempt[] = []
+
+  // G.3 truncation pattern: one retry at a bumped output-token budget.
+  for (const bump of [0, 600]) {
+    let response: Awaited<ReturnType<typeof completion>>
+    try {
+      response = await completion({
+        taskSlot: 'jobs.evidence-attribution',
+        system: EVIDENCE_ATTRIBUTION_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: prompt }],
+        ...(bump ? { maxTokens: activeSlot.maxTokens + bump } : {}),
+        beforeProviderCall: input.beforeProviderCall,
+      })
+    } catch (error) {
+      // This named authority error controls a worker outcome and must retain
+      // its exact identity; every other provider failure is sanitized.
+      if (error instanceof Error && error.name === 'ModelProviderPreconditionError') throw error
+      throw new EvidenceAttributionClassificationError(
+        'completion-failed',
+        'attribution completion failed',
+        attempts,
+      )
+    }
+    attempts.push({
+      model: response.model,
+      provider: response.provider,
+      usedFallback: response.usedFallback,
+      truncated: response.truncated === true,
+      inputTokens: response.inputTokens,
+      outputTokens: response.outputTokens,
+    })
+
+    // A truncated response can contain valid JSON with missing tail answers.
+    // Never accept that partial classification as durable evidence.
+    if (response.truncated) {
+      if (bump) {
+        throw new EvidenceAttributionClassificationError(
+          'truncated',
+          'attribution truncated after bumped retry',
+          attempts,
+        )
+      }
+      continue
+    }
+    try {
+      const payload = parseEvidenceAttributionResponse(response.text)
+      validateAttributionOutput(payload, answerIndices)
+      return { ...payload, attempts }
+    } catch {
+      if (bump) {
+        throw new EvidenceAttributionClassificationError(
+          'invalid-response',
+          'attribution parse failed after bumped retry',
+          attempts,
+        )
+      }
+    }
+  }
+  throw new Error('unreachable')
+}
+
 /** Terminal-outcome marker (Codex #538): row existence cannot signal
  *  "processed" — a session whose answers all came back 'none' stores zero
  *  rows yet is fully processed, and the sweep would re-emit (re-billing
  *  the LLM) every day for a week. Session missing = no-op update. */
-async function markEvidenceProcessed(sessionId: string, dbSession?: ClientSession): Promise<boolean> {
+async function markEvidenceProcessed(
+  sessionId: string,
+  dbSession?: ClientSession,
+  unsupportedContract?: string,
+): Promise<boolean> {
   const write = await InterviewSession.updateOne(
     { _id: sessionId },
-    { $set: { 'attribution.evidenceProcessedAt': new Date() } },
+    {
+      $set: {
+        'attribution.evidenceProcessedAt': new Date(),
+        ...(unsupportedContract
+          ? { 'attribution.evidenceUnsupportedContract': unsupportedContract }
+          : {}),
+      },
+    },
     dbSession ? { session: dbSession } : undefined,
   )
   return (write?.matchedCount ?? 0) === 1
@@ -416,41 +632,30 @@ export async function runEvidenceAttributionHandler(
     return { outcome: inputs.outcome }
   }
 
-  let verdicts: z.infer<typeof ATTRIBUTION_SCHEMA>
+  // Durable steps serialize thrown errors and do not preserve custom fields.
+  // Detect the known v1 support bound before entering `llm-attribute` so the
+  // versioned terminal marker is guaranteed to run in its own durable step.
+  if (inputs.answers.length > MAX_ATTRIBUTION_GROUPS) {
+    await step.run('mark-unsupported-contract', () => markEvidenceProcessed(
+      sessionId,
+      undefined,
+      EVIDENCE_ATTRIBUTION_CONTRACT_VERSION,
+    ))
+    logger.warn({ sessionId }, 'evidence attribution input exceeds v1 contract')
+    return { outcome: 'unsupported-input' }
+  }
+
+  let verdicts: EvidenceAttributionPayload
   try {
-    verdicts = await step.run('llm-attribute', async () => {
-      const prompt = buildAttributionPrompt(inputs.answers, inputs.mustHaves)
-      // G.3 truncation pattern: one in-step retry at a bumped budget.
-      for (const bump of [0, 600]) {
-        const res = await completion({
-          taskSlot: 'jobs.evidence-attribution',
-          system: 'You are a precise evidence-attribution classifier. Output only the requested JSON.',
-          messages: [{ role: 'user', content: prompt }],
-          ...(bump ? { maxTokens: TASK_SLOT_DEFAULTS['jobs.evidence-attribution'].maxTokens + bump } : {}),
-          beforeProviderCall: () => evidenceAuthorityIsCurrent(inputs, {
-            sessionId,
-            applicationId,
-            jobPostingId,
-          }),
-        })
-        // A truncated response can still parse as VALID JSON with the tail
-        // answers silently missing (the schema cannot require one entry per
-        // answer) — accepting it would permanently undercount readiness for
-        // this session (Codex #538 r4). Retry at the bumped budget; still
-        // truncated → throw (Inngest retries, the sweep is the net).
-        if (res.truncated) {
-          if (bump) throw new Error('attribution truncated after bumped retry')
-          continue
-        }
-        try {
-          const jsonText = res.text.slice(res.text.indexOf('{'), res.text.lastIndexOf('}') + 1)
-          return ATTRIBUTION_SCHEMA.parse(JSON.parse(jsonText))
-        } catch (err) {
-          if (bump) throw new Error(`attribution parse failed after bumped retry: ${(err as Error).message}`)
-        }
-      }
-      throw new Error('unreachable')
-    })
+    verdicts = await step.run('llm-attribute', () => classifyEvidenceAttribution({
+      answers: inputs.answers,
+      mustHaves: inputs.mustHaves,
+      beforeProviderCall: () => evidenceAuthorityIsCurrent(inputs, {
+        sessionId,
+        applicationId,
+        jobPostingId,
+      }),
+    }))
   } catch (err) {
     // modelRouter uses this named error for a denied/failed precondition and
     // must not reinterpret it as a provider failure eligible for fallback.

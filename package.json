@@ -27,6 +27,7 @@
     "test:pdf": "RESUME_PDF_E2E=1 vitest run modules/resume/services/__tests__/pdfRender.e2e.test.ts",
     "eval:harness": "npx tsx scripts/runEvalHarness.ts",
     "eval:load-fixtures": "npx tsx scripts/loadBenchmarkFixtures.ts",
+    "eval:jobs-evidence": "node scripts/jobs-evidence-eval.mjs",
     "check:links": "npx tsx scripts/check-internal-links.ts",
     "qa:report:browser": "node scripts/generate-qa-browser-report.mjs",
     "qa:build:browser": "node scripts/validate-qa-answer-coverage.mjs --strict && node scripts/build-qa-browser-inject.mjs",

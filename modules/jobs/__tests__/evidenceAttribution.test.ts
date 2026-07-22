@@ -77,12 +77,40 @@ vi.mock('@shared/db/models', () => ({
   JobPracticeEvidence: { deleteMany: mockEvidenceDeleteMany, insertMany: mockEvidenceInsertMany, find: mockEvidenceFind, exists: mockEvidenceExists },
 }))
 
-import { runEvidenceAttributionHandler, runEvidenceReconcileHandler, buildAttributionPrompt } from '../jobs/evidenceAttributionJob'
+import {
+  EvidenceAttributionClassificationError,
+  EVIDENCE_ATTRIBUTION_CONTRACT_VERSION,
+  EVIDENCE_ATTRIBUTION_SYSTEM_PROMPT,
+  buildAttributionPrompt,
+  classifyEvidenceAttribution,
+  parseEvidenceAttributionResponse,
+  runEvidenceAttributionHandler,
+  runEvidenceReconcileHandler,
+} from '../jobs/evidenceAttributionJob'
 import { xrayHashOf } from '../services/xrayService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
 
 /** What the mocked resolveModel returns — the epoch every row must carry. */
 const RESOLVED_MODEL = 'gpt-5.6-luna'
+const completionResult = (
+  text: string,
+  overrides: Partial<{
+    model: string
+    provider: string
+    usedFallback: boolean
+    inputTokens: number
+    outputTokens: number
+    truncated: boolean
+  }> = {},
+) => ({
+  text,
+  model: 'attribution-model',
+  provider: 'openai',
+  usedFallback: false,
+  inputTokens: 21,
+  outputTokens: 12,
+  ...overrides,
+})
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
 const selectLean = (v: unknown) => ({ select: () => ({ lean: () => Promise.resolve(v) }) })
@@ -140,7 +168,9 @@ beforeEach(() => {
   mockPostingFindById.mockReturnValue(selectLean({ status: 'open', parsedJD, parsedJDHash: HASH }))
   mockPostingExists.mockResolvedValue({ _id: 'job1' })
   mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
-  mockCompletion.mockResolvedValue({ text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay","req-nice","invented-id"],"strength":"strong"}]}' })
+  mockCompletion.mockResolvedValue(completionResult(
+    '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay","req-nice","invented-id"],"strength":"strong"}]}',
+  ))
   mockEvidenceDeleteMany.mockResolvedValue({})
   mockEvidenceInsertMany.mockResolvedValue({})
   mockEvidenceFind.mockReturnValue(selectLean([
@@ -150,7 +180,7 @@ beforeEach(() => {
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockSessionUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mockEvidenceExists.mockResolvedValue(null)
-  mockResolveModel.mockResolvedValue({ model: RESOLVED_MODEL })
+  mockResolveModel.mockResolvedValue({ model: RESOLVED_MODEL, maxTokens: 900 })
   mockSessionExists.mockResolvedValue({ _id: 'sess1' })
   mockIsJobsAccountActive.mockResolvedValue(true)
   mockWithActiveJobsAccountWrite.mockImplementation(
@@ -160,6 +190,204 @@ beforeEach(() => {
   mockHasCompletedScoredPractice.mockReturnValue(true)
   mockEnsurePracticeApplication.mockResolvedValue({
     applicationId: 'app1', jobPostingId: 'job1', sessionId: 'sess1', evidenceCount: 1, newlyAdded: false,
+  })
+})
+
+describe('evidence attribution classifier contract', () => {
+  it('uses the canonical system prompt and reports both truncated and successful attempts', async () => {
+    const text = '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}'
+    mockCompletion
+      .mockResolvedValueOnce(completionResult(text, {
+        model: 'first-model',
+        truncated: true,
+        outputTokens: 40,
+      }))
+      .mockResolvedValueOnce(completionResult(text, {
+        model: 'contract-model',
+        usedFallback: true,
+        inputTokens: 22,
+        outputTokens: 13,
+      }))
+
+    const result = await classifyEvidenceAttribution({
+      answers: [{ index: 0, question: 'Q', answer: 'A', answerScore: 70 }],
+      mustHaves: [{ id: 'req-node', requirement: 'Node.js' }],
+    })
+
+    expect(mockCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      taskSlot: 'jobs.evidence-attribution',
+      system: EVIDENCE_ATTRIBUTION_SYSTEM_PROMPT,
+    }))
+    expect(result.attributions).toHaveLength(1)
+    expect(result.attempts).toEqual([
+      {
+        model: 'first-model',
+        provider: 'openai',
+        usedFallback: false,
+        truncated: true,
+        inputTokens: 21,
+        outputTokens: 40,
+      },
+      {
+        model: 'contract-model',
+        provider: 'openai',
+        usedFallback: true,
+        truncated: false,
+        inputTokens: 22,
+        outputTokens: 13,
+      },
+    ])
+  })
+
+  it('uses the active CMS slot token budget for the bumped retry', async () => {
+    const valid = '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}'
+    mockResolveModel.mockResolvedValueOnce({ model: 'cms-attribution-model', maxTokens: 1_750 })
+    mockCompletion
+      .mockResolvedValueOnce(completionResult('not-json'))
+      .mockResolvedValueOnce(completionResult(valid))
+
+    await classifyEvidenceAttribution({
+      answers: [{ index: 0, question: 'Q', answer: 'A', answerScore: 70 }],
+      mustHaves: [{ id: 'req-node', requirement: 'Node.js' }],
+    })
+
+    expect(mockResolveModel).toHaveBeenCalledTimes(1)
+    expect(mockResolveModel).toHaveBeenCalledWith('jobs.evidence-attribution')
+    expect(mockCompletion.mock.calls[0][0]).not.toHaveProperty('maxTokens')
+    expect(mockCompletion.mock.calls[1][0]).toMatchObject({ maxTokens: 2_350 })
+  })
+
+  it('rejects unknown answer indices after one retry and retains sanitized attempt metadata', async () => {
+    const invalid = '{"attributions":[{"answerIndex":99,"requirementIds":["req-node"],"strength":"strong"}]}'
+    mockCompletion
+      .mockResolvedValueOnce(completionResult(invalid, { model: 'attempt-one' }))
+      .mockResolvedValueOnce(completionResult(invalid, { model: 'attempt-two', usedFallback: true }))
+
+    const error = await classifyEvidenceAttribution({
+      answers: [{ index: 0, question: 'Q', answer: 'A', answerScore: 70 }],
+      mustHaves: [{ id: 'req-node', requirement: 'Node.js' }],
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(EvidenceAttributionClassificationError)
+    expect(error).toMatchObject({
+      reason: 'invalid-response',
+      attempts: [
+        expect.objectContaining({ model: 'attempt-one', usedFallback: false }),
+        expect.objectContaining({ model: 'attempt-two', usedFallback: true }),
+      ],
+    })
+    expect(error).not.toHaveProperty('text')
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects duplicate answer-requirement pairs, including across strength groups', async () => {
+    const duplicate = '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"},{"answerIndex":0,"requirementIds":["req-node"],"strength":"partial"}]}'
+    mockCompletion.mockResolvedValue(completionResult(duplicate))
+
+    await expect(classifyEvidenceAttribution({
+      answers: [{ index: 0, question: 'Q', answer: 'A', answerScore: 70 }],
+      mustHaves: [{ id: 'req-node', requirement: 'Node.js' }],
+    })).rejects.toMatchObject({
+      name: 'EvidenceAttributionClassificationError',
+      reason: 'invalid-response',
+    })
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps v1 one-strength-per-answer instead of accepting an unversioned pair-level contract', async () => {
+    const mixedDepth = '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"},{"answerIndex":0,"requirementIds":["req-pay"],"strength":"partial"}]}'
+    mockCompletion.mockResolvedValue(completionResult(mixedDepth))
+
+    await expect(classifyEvidenceAttribution({
+      answers: [{ index: 0, question: 'Q', answer: 'A', answerScore: 70 }],
+      mustHaves: [
+        { id: 'req-node', requirement: 'Node.js' },
+        { id: 'req-pay', requirement: 'Payments' },
+      ],
+    })).rejects.toMatchObject({
+      name: 'EvidenceAttributionClassificationError',
+      reason: 'invalid-response',
+    })
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when a response omits an answer required by the v1 contract', async () => {
+    const missingTail = '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}'
+    mockCompletion.mockResolvedValue(completionResult(missingTail))
+
+    await expect(classifyEvidenceAttribution({
+      answers: [
+        { index: 0, question: 'Q1', answer: 'A1', answerScore: 70 },
+        { index: 1, question: 'Q2', answer: 'A2', answerScore: 70 },
+      ],
+      mustHaves: [{ id: 'req-node', requirement: 'Node.js' }],
+    })).rejects.toMatchObject({
+      name: 'EvidenceAttributionClassificationError',
+      reason: 'invalid-response',
+    })
+    expect(mockCompletion).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects sessions beyond the v1 response bound before any model call', async () => {
+    const answers = Array.from({ length: 41 }, (_, index) => ({
+      index,
+      question: `Q${index}`,
+      answer: `A${index}`,
+      answerScore: 70,
+    }))
+
+    await expect(classifyEvidenceAttribution({
+      answers,
+      mustHaves: [{ id: 'req-node', requirement: 'Node.js' }],
+    })).rejects.toMatchObject({
+      name: 'EvidenceAttributionClassificationError',
+      reason: 'invalid-input',
+    })
+    expect(mockResolveModel).not.toHaveBeenCalled()
+    expect(mockCompletion).not.toHaveBeenCalled()
+  })
+
+  it('parses a valid response wrapped in a provider code fence', () => {
+    expect(parseEvidenceAttributionResponse(
+      'Result:\n```json\n{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}\n```',
+    )).toEqual({
+      attributions: [{ answerIndex: 0, requirementIds: ['req-node'], strength: 'strong' }],
+    })
+  })
+
+  it('fails closed on malformed response JSON', () => {
+    expect(() => parseEvidenceAttributionResponse(
+      '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]',
+    )).toThrow()
+  })
+
+  it('fails closed on empty attribution groups', () => {
+    expect(() => parseEvidenceAttributionResponse(
+      '{"attributions":[{"answerIndex":0,"requirementIds":[],"strength":"strong"}]}',
+    )).toThrow()
+  })
+
+  it('uses one unambiguous empty none group for an answer with no evidence', () => {
+    expect(parseEvidenceAttributionResponse(
+      '{"attributions":[{"answerIndex":0,"requirementIds":[],"strength":"none"}]}',
+    )).toEqual({
+      attributions: [{ answerIndex: 0, requirementIds: [], strength: 'none' }],
+    })
+    expect(() => parseEvidenceAttributionResponse(
+      '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"none"}]}',
+    )).toThrow()
+  })
+
+  it('retains the production response-group bound and rejects overflow', () => {
+    const groups = Array.from({ length: 40 }, (_, index) => ({
+      answerIndex: index,
+      requirementIds: [`req-${index}`],
+      strength: 'strong',
+    }))
+    expect(parseEvidenceAttributionResponse(JSON.stringify({ attributions: groups })).attributions).toHaveLength(40)
+    expect(() => parseEvidenceAttributionResponse(JSON.stringify({
+      attributions: [...groups, { answerIndex: 40, requirementIds: ['overflow'], strength: 'strong' }],
+    }))).toThrow()
   })
 })
 
@@ -225,6 +453,63 @@ describe('runEvidenceAttributionHandler', () => {
     )
   })
 
+  it('continues a durable run whose llm step memoized the legacy payload shape', async () => {
+    const legacyMemoizedStep = {
+      run: async <T,>(name: string, fn: () => Promise<T> | T): Promise<T> => {
+        if (name === 'llm-attribute') {
+          return {
+            attributions: [{
+              answerIndex: 0,
+              requirementIds: ['req-node'],
+              strength: 'strong',
+            }],
+          } as unknown as T
+        }
+        return fn()
+      },
+    }
+
+    const result = await runEvidenceAttributionHandler(EVENT, legacyMemoizedStep)
+
+    expect(result).toEqual({ outcome: 'attributed', rows: 1 })
+    expect(mockCompletion).not.toHaveBeenCalled()
+    const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(docs).toEqual([
+      expect.objectContaining({ requirementId: 'req-node', strength: 'strong' }),
+    ])
+  })
+
+  it('returns a counted no-egress outcome when a session exceeds the v1 response bound', async () => {
+    const runStep = vi.spyOn(step, 'run')
+    mockSessionFindById.mockReturnValue(selectLean({
+      jobDescription: JD,
+      config: {},
+      evaluations: Array.from({ length: 41 }, (_, index) => evaluation({
+        questionIndex: index,
+        question: `Question ${index}`,
+      })),
+      userId: 'u1',
+      attribution: ATTRIBUTION,
+    }))
+
+    await expect(runEvidenceAttributionHandler(EVENT, step)).resolves.toEqual({
+      outcome: 'unsupported-input',
+    })
+    expect(mockResolveModel).not.toHaveBeenCalled()
+    expect(mockCompletion).not.toHaveBeenCalled()
+    expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
+    expect(runStep.mock.calls.map(([name]) => name)).toEqual(['load-inputs', 'mark-unsupported-contract'])
+    expect(mockSessionUpdateOne).toHaveBeenCalledWith(
+      { _id: 'sess1' },
+      { $set: expect.objectContaining({
+        'attribution.evidenceProcessedAt': expect.any(Date),
+        'attribution.evidenceUnsupportedContract': EVIDENCE_ATTRIBUTION_CONTRACT_VERSION,
+      }) },
+      undefined,
+    )
+    runStep.mockRestore()
+  })
+
   it('same requirement evidenced by two answers collapses to the BEST row before insert (Codex #538)', async () => {
     mockSessionFindById.mockReturnValue(selectLean({
       jobDescription: JD,
@@ -239,9 +524,9 @@ describe('runEvidenceAttributionHandler', () => {
     // partial×80 = 40 loses to strong×60 = 60 — insertMany must see ONE
     // req-node row (the unique index would otherwise silently drop
     // whichever duplicate arrived second, possibly the stronger one).
-    mockCompletion.mockResolvedValue({
-      text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"partial"},{"answerIndex":1,"requirementIds":["req-node"],"strength":"strong"}]}',
-    })
+    mockCompletion.mockResolvedValue(completionResult(
+      '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"partial"},{"answerIndex":1,"requirementIds":["req-node"],"strength":"strong"}]}',
+    ))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.rows).toBe(1)
     const docs = mockEvidenceInsertMany.mock.calls[0][0] as Array<Record<string, unknown>>
@@ -250,7 +535,7 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it('a CMS ModelConfig override flows into the epoch — resolved model, never the hardcoded default (Codex #538 r2)', async () => {
-    mockResolveModel.mockResolvedValue({ model: 'cms-override-model' })
+    mockResolveModel.mockResolvedValue({ model: 'cms-override-model', maxTokens: 900 })
     mockEvidenceFind.mockReturnValue(selectLean([
       { requirementId: 'req-node', xrayHash: HASH, strength: 'strong', answerScore: 80, scoringEpoch: 'cms-override-model', sessionId: 'sess1' },
     ]))
@@ -340,13 +625,15 @@ describe('runEvidenceAttributionHandler', () => {
 
   it('truncated-but-parseable output retries at the bumped budget instead of persisting a partial tail (Codex #538 r4)', async () => {
     mockCompletion
-      .mockResolvedValueOnce({
-        text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}',
-        truncated: true, // valid JSON, but the tail answers are missing
-      })
-      .mockResolvedValueOnce({
-        text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay"],"strength":"strong"}]}',
-      })
+      .mockResolvedValueOnce(completionResult(
+        '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}',
+        {
+          truncated: true, // valid JSON, but the tail answers are missing
+        },
+      ))
+      .mockResolvedValueOnce(completionResult(
+        '{"attributions":[{"answerIndex":0,"requirementIds":["req-node","req-pay"],"strength":"strong"}]}',
+      ))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.outcome).toBe('attributed')
     expect(mockCompletion).toHaveBeenCalledTimes(2)
@@ -358,10 +645,12 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it('still truncated after the bumped retry → throws, nothing persisted, nothing stamped', async () => {
-    mockCompletion.mockResolvedValue({
-      text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}',
-      truncated: true,
-    })
+    mockCompletion.mockResolvedValue(completionResult(
+      '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"strong"}]}',
+      {
+        truncated: true,
+      },
+    ))
     await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow('truncated after bumped retry')
     expect(mockCompletion).toHaveBeenCalledTimes(2)
     expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
@@ -509,7 +798,9 @@ describe('runEvidenceAttributionHandler', () => {
   })
 
   it("'none' strength verdicts are never stored — and zero-evidence is still PROCESSED (Codex #538)", async () => {
-    mockCompletion.mockResolvedValue({ text: '{"attributions":[{"answerIndex":0,"requirementIds":["req-node"],"strength":"none"}]}' })
+    mockCompletion.mockResolvedValue(completionResult(
+      '{"attributions":[{"answerIndex":0,"requirementIds":[],"strength":"none"}]}',
+    ))
     mockEvidenceFind.mockReturnValue(selectLean([]))
     const r = await runEvidenceAttributionHandler(EVENT, step)
     expect(r.rows).toBe(0)
@@ -623,16 +914,16 @@ describe('runEvidenceAttributionHandler', () => {
 
   it('unparseable output (throw path) does NOT stamp processed — retries and the sweep stay armed', async () => {
     mockCompletion
-      .mockResolvedValueOnce({ text: 'garbage' })
-      .mockResolvedValueOnce({ text: 'garbage' })
+      .mockResolvedValueOnce(completionResult('garbage'))
+      .mockResolvedValueOnce(completionResult('garbage'))
     await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow()
     expect(mockSessionUpdateOne).not.toHaveBeenCalled()
   })
 
   it('unparseable LLM output retries once at a bumped budget, then throws (never fabricated)', async () => {
     mockCompletion
-      .mockResolvedValueOnce({ text: 'not json at all' })
-      .mockResolvedValueOnce({ text: 'still garbage' })
+      .mockResolvedValueOnce(completionResult('not json at all'))
+      .mockResolvedValueOnce(completionResult('still garbage'))
     await expect(runEvidenceAttributionHandler(EVENT, step)).rejects.toThrow('parse failed after bumped retry')
     expect(mockCompletion).toHaveBeenCalledTimes(2)
     expect(mockEvidenceInsertMany).not.toHaveBeenCalled()
@@ -646,6 +937,7 @@ describe('runEvidenceAttributionHandler', () => {
     expect(prompt).toContain('<job_must_have_requirements>')
     expect(prompt).toContain('<interview_answers>')
     expect(prompt).toContain('Never invent ids')
+    expect(prompt).toContain('one entry per answer index given')
   })
 })
 
