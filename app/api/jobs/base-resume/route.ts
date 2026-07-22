@@ -12,56 +12,92 @@ import {
 
 export const dynamic = 'force-dynamic'
 
+const MAX_BASE_RESUME_BODY_BYTES = 1024 * 1024
+const PRIVATE_HEADERS = {
+  'Cache-Control': 'private, no-store, max-age=0',
+  Pragma: 'no-cache',
+} as const
+
+function privateJson(body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: PRIVATE_HEADERS })
+}
+
+function privateResponse(response: Response): Response {
+  response.headers.set('Cache-Control', PRIVATE_HEADERS['Cache-Control'])
+  response.headers.set('Pragma', PRIVATE_HEADERS.Pragma)
+  return response
+}
+
 /**
- * Base-resume endpoints (Wave 3.2b; authed — anonymous strangers keep their
- * structure in sessionStorage only and get 401 here, which the client
- * treats as "skip silently").
+ * Base-resume endpoints (Wave 3.2b; authed — anonymous uploads stay in page
+ * memory, while reviewed matching inputs are tab-scoped; anonymous callers
+ * get 401 here and the client treats that as "no import door").
  *
  * GET  — the import door: latest saved resume + flat skills.
- * POST — confirm-bar auto-save as "Base Resume — {role}" (update-on-re-upload,
- *        cap-honest: {saved:false, reason:'cap'} never blocks anything).
+ * POST — explicit-consent save as "Base Resume — {role}" (update-on-re-upload,
+ *        cap-honest: {saved:false, reason:'cap'} keeps the client on review
+ *        with an explicit tab-only fallback).
  */
 export async function GET() {
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
-  if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
+  if (!userId) return privateJson({ error: 'sign in required' }, 401)
   await connectDB()
   if (!(await isJobsAccountActive(userId))) {
-    return NextResponse.json(
+    return privateJson(
       { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
-      { status: 401 },
+      401,
     )
   }
   const base = await getBaseResume(userId)
   if (!(await isJobsAccountActive(userId))) {
-    return NextResponse.json(
+    return privateJson(
       { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
-      { status: 401 },
+      401,
     )
   }
-  return NextResponse.json({ base })
+  return privateJson({ base })
 }
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
-  if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
-  const rateLimitBlock = await checkJobsRateLimit(userId)
-  if (rateLimitBlock) return rateLimitBlock
-  let body: { resume?: Record<string, unknown>; targetRole?: string; fullText?: string }
-  try {
-    body = await req.json()
-  } catch {
-    return NextResponse.json({ error: 'invalid JSON' }, { status: 400 })
+  if (!userId) return privateJson({ error: 'sign in required' }, 401)
+  const originUserId = req.headers.get('x-origin-user-id')
+  if (originUserId !== userId) {
+    return privateJson(
+      { error: 'account changed', code: 'ACCOUNT_CHANGED' },
+      409,
+    )
   }
-  if (!body.resume || typeof body.resume !== 'object') {
-    return NextResponse.json({ error: 'resume required' }, { status: 400 })
+  const rateLimitBlock = await checkJobsRateLimit(userId)
+  if (rateLimitBlock) return privateResponse(rateLimitBlock)
+  const declaredLength = Number(req.headers.get('content-length') ?? 0)
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BASE_RESUME_BODY_BYTES) {
+    return privateJson({ error: 'request too large' }, 413)
+  }
+  let raw: unknown
+  try {
+    const text = await req.text()
+    if (new TextEncoder().encode(text).byteLength > MAX_BASE_RESUME_BODY_BYTES) {
+      return privateJson({ error: 'request too large' }, 413)
+    }
+    raw = JSON.parse(text)
+  } catch {
+    return privateJson({ error: 'invalid JSON' }, 400)
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return privateJson({ error: 'request object required' }, 400)
+  }
+  const body = raw as { resume?: Record<string, unknown>; targetRole?: string; fullText?: string }
+  if (!body.resume || typeof body.resume !== 'object' || Array.isArray(body.resume)) {
+    return privateJson({ error: 'resume required' }, 400)
   }
   await connectDB()
   if (!(await isJobsAccountActive(userId))) {
-    return NextResponse.json(
+    return privateJson(
       { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
-      { status: 401 },
+      401,
     )
   }
   try {
@@ -74,17 +110,17 @@ export async function POST(req: Request) {
       typeof body.fullText === 'string' ? body.fullText : undefined
     )
     if (result.saved === false && result.reason === 'invalid') {
-      return NextResponse.json({ error: 'resume failed validation' }, { status: 400 })
+      return privateJson({ error: 'resume failed validation' }, 400)
     }
-    return NextResponse.json(result)
+    return privateJson(result)
   } catch (err) {
     if (err instanceof JobsAccountInactiveError) {
-      return NextResponse.json(
+      return privateJson(
         { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
-        { status: 401 },
+        401,
       )
     }
-    logger.warn({ err }, 'base-resume auto-save failed — onboarding continues without it')
-    return NextResponse.json({ saved: false, reason: 'error' })
+    logger.warn({ err }, 'explicit base-resume save failed')
+    return privateJson({ saved: false, reason: 'error' })
   }
 }

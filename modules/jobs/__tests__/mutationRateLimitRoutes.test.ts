@@ -64,7 +64,10 @@ import { GET as getTracker } from '../../../app/api/jobs/tracker/route'
 
 const USER_ID = '507f1f77bcf86cd799439010'
 const JOB_ID = '507f1f77bcf86cd799439011'
-const request = { json: mockRequestJson } as unknown as Request
+const request = {
+  json: mockRequestJson,
+  headers: new Headers({ 'x-origin-user-id': USER_ID }),
+} as unknown as Request
 
 beforeEach(() => {
   vi.clearAllMocks()

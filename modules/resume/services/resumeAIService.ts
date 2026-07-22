@@ -4,6 +4,7 @@ import { getUserProfileContext } from './resumeService'
 import { extractJSON } from '@shared/utils'
 import { buildAtsCacheKey, getCachedAtsResult, setCachedAtsResult } from './atsCheckCache'
 import { salvageTruncatedJson, normalizeParsedResume } from '@resume/lib/parseSalvage'
+import { aiLogger } from '@shared/logger'
 
 // ─── Enhance Section ────────────────────────────────────────────────────────
 
@@ -276,6 +277,11 @@ export interface ParsedResumeResult {
   resume: Record<string, unknown>
   importedSections: string[]
   droppedSections: string[]
+  /** True when the caller supplied more text than the parser can inspect. */
+  inputTruncated: boolean
+  /** True when malformed JSON was recovered only up to its last complete value. */
+  salvaged: boolean
+  /** Provider-reported output truncation after the one larger-budget retry. */
   truncated: boolean
 }
 
@@ -307,6 +313,7 @@ const PARSE_RETRY_MAX_TOKENS = 8_000
  * Returns null only when nothing usable could be recovered.
  */
 export async function parseResumeToStructured(text: string): Promise<ParsedResumeResult | null> {
+  const inputTruncated = text.length > PARSE_INPUT_CHARS
   const input = text.slice(0, PARSE_INPUT_CHARS)
   const messages = [{ role: 'user' as const, content: `Parse this resume into structured JSON:\n\n${input}` }]
 
@@ -323,14 +330,25 @@ export async function parseResumeToStructured(text: string): Promise<ParsedResum
   const raw = parseResult.text || '{}'
   const cleaned = extractJSON(raw)
   let parsed: unknown = null
+  let salvaged = false
   try {
     parsed = JSON.parse(cleaned)
   } catch {
     parsed = salvageTruncatedJson(cleaned)
     if (parsed) {
-      console.error('parseResumeToStructured: salvaged truncated JSON. Raw head:', raw.slice(0, 200))
+      salvaged = true
+      // Resume output contains direct identifiers and employment history.
+      // Never write even a prefix to logs; operational diagnosis needs only
+      // shape/completion metadata.
+      aiLogger.warn(
+        { rawLength: raw.length, outputTruncated: !!parseResult.truncated },
+        'parseResumeToStructured salvaged incomplete JSON',
+      )
     } else {
-      console.error('parseResumeToStructured JSON parse failed. Raw:', raw.slice(0, 500))
+      aiLogger.warn(
+        { rawLength: raw.length, outputTruncated: !!parseResult.truncated },
+        'parseResumeToStructured JSON parse failed',
+      )
     }
   }
   if (!parsed || typeof parsed !== 'object') return null
@@ -338,7 +356,12 @@ export async function parseResumeToStructured(text: string): Promise<ParsedResum
   const normalized = normalizeParsedResume(parsed)
   if (normalized.importedSections.length === 0) return null
 
-  return { ...normalized, truncated: !!parseResult.truncated }
+  return {
+    ...normalized,
+    inputTruncated,
+    salvaged,
+    truncated: !!parseResult.truncated,
+  }
 }
 
 // ─── Generate STAR Stories ─────────────────────────────────────────────────

@@ -3,10 +3,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
 // Use vi.hoisted so the mock reference is available at module-load time.
-const { mockCompletion } = vi.hoisted(() => ({ mockCompletion: vi.fn() }))
+const { mockCompletion, mockAiWarn } = vi.hoisted(() => ({
+  mockCompletion: vi.fn(),
+  mockAiWarn: vi.fn(),
+}))
 
 vi.mock('@shared/services/modelRouter', () => ({
   completion: (...args: unknown[]) => mockCompletion(...args),
+}))
+
+vi.mock('@shared/logger', () => ({
+  aiLogger: { warn: mockAiWarn },
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
 
 // UAT-024 — checkATS now consults a Redis cache. Mock both the read
@@ -327,6 +335,8 @@ describe('resumeAIService', () => {
       expect(result!.resume.contactInfo).toEqual({ fullName: 'Jane', email: 'j@x.co' })
       expect(result!.resume.summary).toBe('text')
       expect(result!.importedSections).toEqual(['contact info', 'summary'])
+      expect(result!.inputTruncated).toBe(false)
+      expect(result!.salvaged).toBe(false)
       expect(result!.truncated).toBe(false)
     })
 
@@ -350,6 +360,21 @@ describe('resumeAIService', () => {
       const exp = result!.resume.experience as Array<Record<string, unknown>>
       expect(exp).toHaveLength(1)
       expect(exp[0].company).toBe('Acme')
+      expect(result!.salvaged).toBe(true)
+      expect(mockAiWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ rawLength: truncated.length, outputTruncated: false }),
+        'parseResumeToStructured salvaged incomplete JSON',
+      )
+    })
+
+    it('flags and bounds parser input longer than 24,000 characters', async () => {
+      mockTextResponse(JSON.stringify({ summary: 'bounded' }))
+
+      const result = await parseResumeToStructured('x'.repeat(24_001))
+
+      expect(result!.inputTruncated).toBe(true)
+      const sent = mockCompletion.mock.calls[0][0].messages[0].content as string
+      expect(sent.slice(sent.indexOf('\n\n') + 2)).toHaveLength(24_000)
     })
 
     it('retries once with a larger budget when the completion is truncated', async () => {
@@ -362,12 +387,51 @@ describe('resumeAIService', () => {
       expect(mockCompletion).toHaveBeenCalledTimes(2)
       expect(mockCompletion.mock.calls[1][0]).toMatchObject({ maxTokens: 8000 })
       expect(result!.resume.summary).toBe('retried fine')
+      expect(result!.truncated).toBe(false)
+    })
+
+    it('reports output truncation when the larger-budget retry is still truncated', async () => {
+      mockCompletion
+        .mockResolvedValueOnce({
+          text: '{"summary":"first partial"}', truncated: true,
+          model: 'm', provider: 'anthropic', inputTokens: 1, outputTokens: 1, usedFallback: false,
+        })
+        .mockResolvedValueOnce({
+          text: '{"summary":"second partial"}', truncated: true,
+          model: 'm', provider: 'anthropic', inputTokens: 1, outputTokens: 1, usedFallback: false,
+        })
+
+      const result = await parseResumeToStructured('text')
+
+      expect(mockCompletion).toHaveBeenCalledTimes(2)
+      expect(result!.truncated).toBe(true)
+    })
+
+    it('never writes resume output content to logs when JSON needs salvage', async () => {
+      const privateMarker = 'PRIVATE-CANDIDATE-EMAIL@example.com'
+      const raw = `{"summary":"${privateMarker}","experience":[{"company":"Half`
+      mockTextResponse(raw)
+
+      const result = await parseResumeToStructured('text')
+
+      expect(result!.salvaged).toBe(true)
+      expect(JSON.stringify(mockAiWarn.mock.calls)).not.toContain(privateMarker)
+      expect(mockAiWarn).toHaveBeenCalledWith(
+        { rawLength: raw.length, outputTruncated: false },
+        'parseResumeToStructured salvaged incomplete JSON',
+      )
     })
 
     it('returns null when nothing is salvageable', async () => {
-      mockTextResponse('not valid')
+      const privateMarker = 'PRIVATE-UNPARSEABLE-RESUME'
+      mockTextResponse(privateMarker)
       const result = await parseResumeToStructured('text')
       expect(result).toBeNull()
+      expect(JSON.stringify(mockAiWarn.mock.calls)).not.toContain(privateMarker)
+      expect(mockAiWarn).toHaveBeenCalledWith(
+        { rawLength: privateMarker.length, outputTruncated: false },
+        'parseResumeToStructured JSON parse failed',
+      )
     })
   })
 
