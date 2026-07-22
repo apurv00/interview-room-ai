@@ -427,10 +427,12 @@ export async function getTailoredVersion(
   }
 }
 
-/** Statuses a USER may set (loose machine: forward jumps and backward
- *  corrections both allowed; ghosted/rejected recoverable). apply_clicked
- *  is the MACHINE fact and is never user-settable. */
-export const USER_SETTABLE_STATUSES = ['saved', 'applied', 'interview_scheduled', 'offer', 'rejected', 'ghosted', 'withdrawn'] as const
+/** Statuses a USER may set through the generic lifecycle route (loose
+ *  machine: forward jumps and backward corrections both allowed;
+ *  ghosted/rejected recoverable). `apply_clicked` is a machine fact;
+ *  `interviewed` and `offer` are canonical outcome-service facts, so none
+ *  of those three is settable here. */
+export const USER_SETTABLE_STATUSES = ['saved', 'applied', 'interview_scheduled', 'rejected', 'ghosted', 'withdrawn'] as const
 export type UserSettableStatus = (typeof USER_SETTABLE_STATUSES)[number]
 
 export interface TransitionTelemetry {
@@ -495,7 +497,7 @@ export async function transitionStatus(
         ...(to === 'ghosted'
           ? {
               $or: [
-                { status: { $in: ['applied', 'interview_scheduled', 'offer', 'rejected'] } },
+                { status: { $in: ['applied', 'interview_scheduled', 'interviewed', 'offer', 'rejected'] } },
                 { appliedAt: { $type: 'date' } },
               ],
             }
@@ -508,6 +510,10 @@ export async function transitionStatus(
           ...(appliedWith ? { appliedWith } : {}),
         },
         ...(to === 'applied' && !appliedWith ? { $unset: { appliedWith: 1 } } : {}),
+        // One monotonic token fences outcome corrections and interview-date
+        // writes across lifecycle A→B→A cycles. Idempotent retries do not
+        // match the status guard and therefore do not advance it.
+        $inc: { 'outcome.revision': 1 },
         $push: { statusHistory: { status: to, at: now, source: 'user' } },
       },
       { new: false, session },

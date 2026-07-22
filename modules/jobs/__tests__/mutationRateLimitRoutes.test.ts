@@ -53,7 +53,7 @@ vi.mock('@jobs', () => ({
   saveNotes: mockSaveNotes,
   setInterviewDate: mockSetInterviewDate,
   transitionStatus: mockTransitionStatus,
-  USER_SETTABLE_STATUSES: ['saved', 'applied', 'interview_scheduled', 'offer', 'rejected'],
+  USER_SETTABLE_STATUSES: ['saved', 'applied', 'interview_scheduled', 'rejected'],
 }))
 
 import { POST as postInterviewDate } from '../../../app/api/jobs/[id]/interview-date/route'
@@ -64,6 +64,8 @@ import { GET as getTracker } from '../../../app/api/jobs/tracker/route'
 
 const USER_ID = '507f1f77bcf86cd799439010'
 const JOB_ID = '507f1f77bcf86cd799439011'
+const DATE_STATE_BODY = { expectedCompletedRounds: 2, expectedOutcomeRevision: 9 } as const
+const DATE_STATE_TOKEN = { interviewRounds: 2, outcomeRevision: 9 } as const
 const request = {
   json: mockRequestJson,
   headers: new Headers({ 'x-origin-user-id': USER_ID }),
@@ -132,15 +134,15 @@ describe('Jobs inactive-account HTTP contract', () => {
   }
 
   it('distinguishes an inactive account from an invalid interview-date domain request', async () => {
-    mockRequestJson.mockResolvedValue({ choice: 'not-sure' })
+    mockRequestJson.mockResolvedValue({ choice: 'not-sure', ...DATE_STATE_BODY })
     mockSetInterviewDate.mockRejectedValue(new MockJobsAccountInactiveError())
 
     await expectAccountUnavailable(await postInterviewDate(request, { params: { id: JOB_ID } }))
   })
 
   it('preserves the interview-date domain miss for an active account', async () => {
-    mockRequestJson.mockResolvedValue({ choice: 'not-sure' })
-    mockSetInterviewDate.mockResolvedValue({ ok: false, daysUntil: null })
+    mockRequestJson.mockResolvedValue({ choice: 'not-sure', ...DATE_STATE_BODY })
+    mockSetInterviewDate.mockResolvedValue({ ok: false, daysUntil: null, reason: 'invalid' })
 
     const response = await postInterviewDate(request, { params: { id: JOB_ID } })
 
@@ -214,7 +216,7 @@ describe('Interview-date calendar input', () => {
   })
 
   it('accepts only a real YYYY-MM-DD calendar date', async () => {
-    mockRequestJson.mockResolvedValue({ date: '2026-07-30' })
+    mockRequestJson.mockResolvedValue({ date: '2026-07-30', ...DATE_STATE_BODY })
 
     const response = await postInterviewDate(request, { params: { id: JOB_ID } })
 
@@ -223,13 +225,14 @@ describe('Interview-date calendar input', () => {
       USER_ID,
       JOB_ID,
       { date: new Date('2026-07-30T00:00:00.000Z'), confidence: 'exact' },
+      DATE_STATE_TOKEN,
     )
   })
 
   it.each(['2026-02-31', '2026-07-30T14:00:00.000Z', 'July 30, 2026'])(
     'rejects non-calendar precision: %s',
     async (date) => {
-      mockRequestJson.mockResolvedValue({ date })
+      mockRequestJson.mockResolvedValue({ date, ...DATE_STATE_BODY })
 
       const response = await postInterviewDate(request, { params: { id: JOB_ID } })
 
@@ -238,4 +241,46 @@ describe('Interview-date calendar input', () => {
       expect(mockConnectDB).not.toHaveBeenCalled()
     },
   )
+
+  it.each([
+    ['missing', { date: '2026-07-30' }],
+    ['fractional round', { date: '2026-07-30', expectedCompletedRounds: 1.5, expectedOutcomeRevision: 9 }],
+    ['excessive round', { date: '2026-07-30', expectedCompletedRounds: 101, expectedOutcomeRevision: 9 }],
+    ['negative revision', { date: '2026-07-30', expectedCompletedRounds: 2, expectedOutcomeRevision: -1 }],
+  ])('rejects a %s outcome state token before database work', async (_case, body) => {
+    mockRequestJson.mockResolvedValue(body)
+
+    const response = await postInterviewDate(request, { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({
+      error: 'choice or date and current outcome state required',
+    })
+    expect(mockSetInterviewDate).not.toHaveBeenCalled()
+    expect(mockConnectDB).not.toHaveBeenCalled()
+  })
+
+  it('returns a named conflict when the displayed outcome token is stale', async () => {
+    mockRequestJson.mockResolvedValue({ choice: 'not-sure', ...DATE_STATE_BODY })
+    mockDateForChoice.mockReturnValue({ date: null, confidence: 'unknown', preference: 'unknown' })
+    mockSetInterviewDate.mockResolvedValue({
+      ok: false,
+      daysUntil: null,
+      reason: 'state-conflict',
+    })
+
+    const response = await postInterviewDate(request, { params: { id: JOB_ID } })
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: 'interview state changed; refresh and try again',
+      code: 'INTERVIEW_STATE_CONFLICT',
+    })
+    expect(mockSetInterviewDate).toHaveBeenCalledWith(
+      USER_ID,
+      JOB_ID,
+      { date: null, confidence: 'unknown', preference: 'unknown' },
+      DATE_STATE_TOKEN,
+    )
+  })
 })

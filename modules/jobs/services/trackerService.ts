@@ -1,5 +1,6 @@
 import { JobApplication, JobPosting } from '@shared/db/models'
 import { jobPostingStateOf, type JobPostingState } from './postingAccess'
+import { INTERVIEW_OUTCOME_CORRECTION_STATUSES } from './outcomeService'
 import {
   isJobsAccountActive,
   JobsAccountInactiveError,
@@ -31,6 +32,9 @@ const NUDGE_GHOST_PROMPT_DAYS = 21
 const CONFIRM_MIN_HOURS = 20
 const CONFIRM_MAX_DAYS = 7
 const CARD_ASK_BUDGET = 1
+const OUTCOME_PROMPT_GRACE_MS = 36 * 3600_000
+const OUTCOME_RESULTS = new Set(['advanced', 'waiting', 'rejected', 'offer'])
+const OUTCOME_CORRECTION_STATUSES = new Set<string>(INTERVIEW_OUTCOME_CORRECTION_STATUSES)
 
 export interface TrackerRow {
   jobPostingId: string
@@ -52,6 +56,22 @@ export interface TrackerRow {
   nudge: 'waiting' | 'ghost-prompt' | null
   /** True while the "Clicked · not confirmed" one-tap flip should show. */
   unconfirmedClick: boolean
+  /** Candidate-authored interview outcome facts only. Readiness and score
+   * interpretation deliberately stay out of this projection. */
+  outcome: {
+    roundsCompleted: number
+    latestResult?: 'advanced' | 'waiting' | 'rejected' | 'offer'
+    latestRound?: number
+    latestReportedAt?: string
+    revision: number
+    lastInterviewedAt?: string
+  }
+  /** Round accepted by the outcome endpoint for a scheduled interview. */
+  nextOutcomeRound?: number
+  /** True only after an exact interview instant has passed by a safe grace. */
+  outcomePromptDue: boolean
+  /** Corrections require one complete, canonical latest report. */
+  canCorrectOutcome: boolean
 }
 
 export interface TrackerView {
@@ -70,8 +90,30 @@ function lastActivityAt(app: { statusHistory?: Array<{ at: Date | string }>; upd
   return last ? new Date(last) : new Date(0)
 }
 
+function safeNonNegativeInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 100 ? value : 0
+}
+
+function safePositiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 100 ? value : undefined
+}
+
+function safePositiveRevision(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+function safeOutcomeRevision(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
+
+function safeIso(value: unknown): string | undefined {
+  if (!value) return undefined
+  const date = new Date(value as Date | string)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined
+}
+
 /** Display order: action-needed first, terminal last. */
-const GROUP_ORDER = ['interview_scheduled', 'apply_clicked', 'applied', 'saved', 'offer', 'ghosted', 'rejected', 'withdrawn']
+const GROUP_ORDER = ['interview_scheduled', 'interviewed', 'apply_clicked', 'applied', 'saved', 'offer', 'ghosted', 'rejected', 'withdrawn']
 
 export async function getTracker(userId: string, now = new Date()): Promise<TrackerView> {
   const empty = (): TrackerView => ({ groups: [], confirmCard: null })
@@ -98,6 +140,41 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
     const responseNudgeEligible = a.status === 'applied' && !!a.appliedAt
     const postingState = postingStateById.get(String(a.jobPostingId)) ?? 'snapshot-only'
     const canNudgePreparation = postingState === 'live' || postingState === 'archived'
+    const rawOutcome = a.outcome as typeof a.outcome & {
+      interviewRounds?: unknown
+      latestResult?: unknown
+      latestRound?: unknown
+      latestReportedAt?: unknown
+      revision?: unknown
+      lastInterviewedAt?: unknown
+      lastDeferredRound?: unknown
+    }
+    const roundsCompleted = safeNonNegativeInteger(rawOutcome?.interviewRounds)
+    const candidateLatestResult = OUTCOME_RESULTS.has(String(rawOutcome?.latestResult))
+      ? rawOutcome?.latestResult as 'advanced' | 'waiting' | 'rejected' | 'offer'
+      : undefined
+    const candidateLatestRound = safePositiveInteger(rawOutcome?.latestRound)
+    const candidateLatestReportedAt = safeIso(rawOutcome?.latestReportedAt)
+    const outcomeRevision = safeOutcomeRevision(rawOutcome?.revision)
+    const candidateRevision = safePositiveRevision(outcomeRevision)
+    const lastInterviewedAt = safeIso(rawOutcome?.lastInterviewedAt)
+    const hasCanonicalOutcome = !!candidateLatestResult &&
+      !!candidateLatestRound &&
+      candidateLatestRound === roundsCompleted &&
+      !!candidateLatestReportedAt &&
+      !!candidateRevision
+    const canCorrectOutcome = hasCanonicalOutcome &&
+      OUTCOME_CORRECTION_STATUSES.has(a.status)
+    const nextOutcomeRound = a.status === 'interview_scheduled' && roundsCompleted < 100
+      ? roundsCompleted + 1
+      : undefined
+    const exactInterviewAt = a.interviewDateConfidence === 'exact' && a.interviewDate
+      ? new Date(a.interviewDate).getTime()
+      : Number.NaN
+    const outcomePromptDue = nextOutcomeRound !== undefined &&
+      Number.isFinite(exactInterviewAt) &&
+      now.getTime() >= exactInterviewAt + OUTCOME_PROMPT_GRACE_MS &&
+      safePositiveInteger(rawOutcome?.lastDeferredRound) !== nextOutcomeRound
     return {
       jobPostingId: String(a.jobPostingId),
       title: a.jobSnapshot?.title ?? 'Unknown role',
@@ -119,6 +196,21 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
         : {}),
       nudge: canNudgePreparation && responseNudgeEligible && ageDays >= NUDGE_GHOST_PROMPT_DAYS ? 'ghost-prompt' : canNudgePreparation && responseNudgeEligible && ageDays >= NUDGE_WAITING_DAYS ? 'waiting' : null,
       unconfirmedClick: a.status === 'apply_clicked',
+      outcome: {
+        roundsCompleted,
+        revision: outcomeRevision,
+        ...(hasCanonicalOutcome
+          ? {
+              latestResult: candidateLatestResult,
+              latestRound: candidateLatestRound,
+              latestReportedAt: candidateLatestReportedAt,
+            }
+          : {}),
+        ...(lastInterviewedAt ? { lastInterviewedAt } : {}),
+      },
+      ...(nextOutcomeRound !== undefined ? { nextOutcomeRound } : {}),
+      outcomePromptDue,
+      canCorrectOutcome,
     }
   })
 

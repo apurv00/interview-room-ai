@@ -222,6 +222,216 @@ describe('getTracker (Wave 4.2 — pure read-time derivation)', () => {
     })
   })
 
+  it('offers the next raw-outcome round only after an exact date plus the 36-hour safety grace', async () => {
+    reset()
+    const due = app({
+      status: 'interview_scheduled',
+      // Exactly date + 36h is due (NOW is 2026-07-14T12:00Z).
+      interviewDate: new Date('2026-07-13T00:00:00.000Z'),
+      interviewDateConfidence: 'exact',
+      outcome: { askCount: 0, interviewRounds: 1 },
+    })
+    const insideGrace = app({
+      status: 'interview_scheduled',
+      interviewDate: new Date('2026-07-13T00:01:00.000Z'),
+      interviewDateConfidence: 'exact',
+      outcome: { askCount: 0, interviewRounds: 0 },
+    })
+    const deferred = app({
+      status: 'interview_scheduled',
+      interviewDate: new Date('2026-07-10T00:00:00.000Z'),
+      interviewDateConfidence: 'exact',
+      outcome: { askCount: 0, interviewRounds: 2, lastDeferredRound: 3 },
+    })
+    const clickOnly = app({
+      status: 'apply_clicked',
+      interviewDate: new Date('2026-07-01T00:00:00.000Z'),
+      interviewDateConfidence: 'exact',
+      outcome: {
+        askCount: 0,
+        interviewRounds: 1,
+        latestResult: 'waiting',
+        latestRound: 1,
+        latestReportedAt: new Date('2026-07-10T00:00:00.000Z'),
+      },
+    })
+    chain([due, insideGrace, deferred, clickOnly])
+
+    const rows = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)
+
+    expect(rows.find((row) => row.jobPostingId === due.jobPostingId)).toMatchObject({
+      nextOutcomeRound: 2,
+      outcomePromptDue: true,
+      outcome: { roundsCompleted: 1 },
+    })
+    expect(rows.find((row) => row.jobPostingId === insideGrace.jobPostingId)).toMatchObject({
+      nextOutcomeRound: 1,
+      outcomePromptDue: false,
+    })
+    expect(rows.find((row) => row.jobPostingId === deferred.jobPostingId)).toMatchObject({
+      nextOutcomeRound: 3,
+      outcomePromptDue: false,
+    })
+    expect(rows.find((row) => row.jobPostingId === clickOnly.jobPostingId)).toMatchObject({
+      outcomePromptDue: false,
+      canCorrectOutcome: false,
+    })
+    expect(rows.find((row) => row.jobPostingId === clickOnly.jobPostingId)?.nextOutcomeRound).toBeUndefined()
+  })
+
+  it('projects only a complete canonical latest outcome and preserves candidate-authored history on unavailable postings', async () => {
+    reset()
+    const canonical = app({
+      status: 'interviewed',
+      outcome: {
+        askCount: 0,
+        interviewRounds: 2,
+        latestResult: 'waiting',
+        latestRound: 2,
+        latestReportedAt: new Date('2026-07-13T08:00:00.000Z'),
+        revision: 7,
+        lastInterviewedAt: new Date('2026-07-13T07:00:00.000Z'),
+        privateCalibrationNotes: 'MUST NOT LEAK',
+      },
+    })
+    const incomplete = app({
+      status: 'rejected',
+      outcome: {
+        askCount: 0,
+        interviewRounds: 2,
+        latestResult: 'rejected',
+        latestRound: 1,
+        latestReportedAt: new Date('2026-07-12T08:00:00.000Z'),
+        revision: 1,
+      },
+    })
+    chain([canonical, incomplete])
+    mockPostingFind.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve([]) }),
+    })
+
+    const rows = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)
+    const canonicalRow = rows.find((row) => row.jobPostingId === canonical.jobPostingId)
+    const incompleteRow = rows.find((row) => row.jobPostingId === incomplete.jobPostingId)
+
+    expect(canonicalRow).toMatchObject({
+      status: 'interviewed',
+      postingState: 'snapshot-only',
+      canCorrectOutcome: true,
+      outcome: {
+        roundsCompleted: 2,
+        latestResult: 'waiting',
+        latestRound: 2,
+        latestReportedAt: '2026-07-13T08:00:00.000Z',
+        revision: 7,
+        lastInterviewedAt: '2026-07-13T07:00:00.000Z',
+      },
+    })
+    expect(JSON.stringify(canonicalRow)).not.toContain('MUST NOT LEAK')
+    expect(incompleteRow).toMatchObject({
+      canCorrectOutcome: false,
+      outcome: { roundsCompleted: 2 },
+    })
+    expect(incompleteRow?.outcome.latestResult).toBeUndefined()
+  })
+
+  it('keeps a canonical latest outcome correctable after explicit no-response or withdrawal closure', async () => {
+    reset()
+    const rowsWithClosure = ['ghosted', 'withdrawn'].map((status) => app({
+      status,
+      outcome: {
+        askCount: 0,
+        interviewRounds: 1,
+        latestResult: 'waiting',
+        latestRound: 1,
+        latestReportedAt: new Date('2026-07-13T08:00:00.000Z'),
+        revision: 3,
+      },
+    }))
+    chain(rowsWithClosure)
+
+    const rows = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)
+
+    for (const application of rowsWithClosure) {
+      expect(rows.find((row) => row.jobPostingId === application.jobPostingId)).toMatchObject({
+        status: application.status,
+        canCorrectOutcome: true,
+        outcome: { latestResult: 'waiting', latestRound: 1, revision: 3 },
+      })
+    }
+  })
+
+  it('preserves a canonical outcome as read-only history after the application is reopened', async () => {
+    reset()
+    const reopened = ['saved', 'applied'].map((status) => app({
+      status,
+      outcome: {
+        askCount: 0,
+        interviewRounds: 2,
+        latestResult: 'advanced',
+        latestRound: 2,
+        latestReportedAt: new Date('2026-07-13T08:00:00.000Z'),
+        revision: 9,
+      },
+    }))
+    chain(reopened)
+
+    const rows = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)
+
+    for (const application of reopened) {
+      expect(rows.find((row) => row.jobPostingId === application.jobPostingId)).toMatchObject({
+        status: application.status,
+        canCorrectOutcome: false,
+        outcome: {
+          roundsCompleted: 2,
+          latestResult: 'advanced',
+          latestRound: 2,
+          latestReportedAt: '2026-07-13T08:00:00.000Z',
+          revision: 9,
+        },
+      })
+    }
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('requires a positive revision for correction without capping a long-lived revision token', async () => {
+    reset()
+    const highRevision = app({
+      status: 'interviewed',
+      outcome: {
+        askCount: 0,
+        interviewRounds: 1,
+        latestResult: 'waiting',
+        latestRound: 1,
+        latestReportedAt: new Date('2026-07-13T08:00:00.000Z'),
+        revision: 101,
+      },
+    })
+    const legacyWithoutRevision = app({
+      status: 'interviewed',
+      outcome: {
+        askCount: 0,
+        interviewRounds: 1,
+        latestResult: 'waiting',
+        latestRound: 1,
+        latestReportedAt: new Date('2026-07-13T08:00:00.000Z'),
+      },
+    })
+    chain([highRevision, legacyWithoutRevision])
+
+    const rows = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)
+
+    expect(rows.find((row) => row.jobPostingId === highRevision.jobPostingId)).toMatchObject({
+      canCorrectOutcome: true,
+      outcome: { revision: 101, latestResult: 'waiting', latestRound: 1 },
+    })
+    expect(rows.find((row) => row.jobPostingId === legacyWithoutRevision.jobPostingId)).toMatchObject({
+      canCorrectOutcome: false,
+      outcome: { revision: 0, roundsCompleted: 1 },
+    })
+  })
+
   it('projects Tailor and explicit applied-with metadata without exposing artifact text', async () => {
     reset()
     const tailored = app({

@@ -430,6 +430,14 @@ describe('Job detail Practice readiness', () => {
       ...TRACKED_INTERVIEW_DETAIL,
       application: { ...TRACKED_INTERVIEW_DETAIL.application, ats: { state: 'complete' } },
     })],
+    ['an excessive interview-round token', () => jsonResponse({
+      ...TRACKED_INTERVIEW_DETAIL,
+      application: { ...TRACKED_INTERVIEW_DETAIL.application, outcomeRoundsCompleted: 101 },
+    })],
+    ['a negative outcome-revision token', () => jsonResponse({
+      ...TRACKED_INTERVIEW_DETAIL,
+      application: { ...TRACKED_INTERVIEW_DETAIL.application, outcomeRevision: -1 },
+    })],
     ['a malformed Practice projection', () => jsonResponse({
       ...BASE_DETAIL,
       practiceExperience: '3-to-6',
@@ -1147,7 +1155,14 @@ describe('Job detail Practice readiness', () => {
       postingState: 'restricted' as const,
       capabilities: { apply: false, viewSource: false, xray: false, tailor: false, practice: false, atsCheck: false },
       jd: undefined,
-      application: { applicationId: 'app1', status: 'interview_scheduled', practiceCount: 2, ats: { state: 'none' as const } },
+      application: {
+        applicationId: 'app1',
+        status: 'interview_scheduled',
+        practiceCount: 2,
+        outcomeRoundsCompleted: 2,
+        outcomeRevision: 7,
+        ats: { state: 'none' as const },
+      },
     }
     mockFetch.mockImplementation((input: RequestInfo | URL) => (
       String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(restricted) : jsonResponse({})
@@ -1168,7 +1183,11 @@ describe('Job detail Practice readiness', () => {
       `/api/jobs/${JOB_ID}/interview-date`,
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ choice: 'tomorrow' }),
+        body: JSON.stringify({
+          choice: 'tomorrow',
+          expectedCompletedRounds: 2,
+          expectedOutcomeRevision: 7,
+        }),
       }),
     ))
 
@@ -1176,8 +1195,63 @@ describe('Job detail Practice readiness', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save exact date' }))
     await waitFor(() => expect(mockFetch).toHaveBeenCalledWith(
       `/api/jobs/${JOB_ID}/interview-date`,
-      expect.objectContaining({ body: JSON.stringify({ date: '2026-08-01' }) }),
+      expect.objectContaining({
+        body: JSON.stringify({
+          date: '2026-08-01',
+          expectedCompletedRounds: 2,
+          expectedOutcomeRevision: 7,
+        }),
+      }),
     ))
+  })
+
+  it('refreshes a stale date token after a lifecycle conflict before allowing retry', async () => {
+    const initial = {
+      ...TRACKED_INTERVIEW_DETAIL,
+      application: {
+        ...TRACKED_INTERVIEW_DETAIL.application,
+        outcomeRoundsCompleted: 2,
+        outcomeRevision: 7,
+      },
+    }
+    const refreshed = {
+      ...initial,
+      application: { ...initial.application, outcomeRevision: 9 },
+    }
+    let detailReads = 0
+    let dateWrites = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) {
+        detailReads += 1
+        return jsonResponse(detailReads === 1 ? initial : refreshed)
+      }
+      if (url.endsWith('/interview-date')) {
+        dateWrites += 1
+        return dateWrites === 1
+          ? Promise.resolve({
+              ok: false,
+              status: 409,
+              json: () => Promise.resolve({ code: 'INTERVIEW_STATE_CONFLICT' }),
+            })
+          : jsonResponse({ ok: true })
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Tomorrow' }))
+
+    expect(await screen.findByText(/Review the refreshed round/i)).toBeTruthy()
+    expect(detailReads).toBe(2)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tomorrow' }))
+    await waitFor(() => expect(dateWrites).toBe(2))
+    expect(JSON.parse(String(mockFetch.mock.calls
+      .filter(([url]) => String(url).endsWith('/interview-date'))[1][1]?.body))).toMatchObject({
+      expectedCompletedRounds: 2,
+      expectedOutcomeRevision: 9,
+    })
   })
 
   it('submits Apply through a native same-origin POST form and keeps View GET-only', async () => {
@@ -1477,13 +1551,13 @@ describe('Job detail Practice readiness', () => {
     expect(mockFetch.mock.calls.some(([url]) => String(url).endsWith('/apply-click'))).toBe(false)
   })
 
-  it('shows durable Tailor state and sends the explicit tailored version on apply confirmation', async () => {
+  it('keeps Tailor provenance in interviewed history and sends the explicit tailored version on apply confirmation', async () => {
     const tailoredAt = '2026-07-14T11:00:00.000Z'
     const tailoredDetail = {
       ...LIVE_APPLY_DETAIL,
       application: {
         applicationId: 'app-1',
-        status: 'interview_scheduled',
+        status: 'interviewed',
         practiceCount: 0,
         tailoredResume: { createdAt: tailoredAt, current: true },
         appliedWith: { wasTailored: true },

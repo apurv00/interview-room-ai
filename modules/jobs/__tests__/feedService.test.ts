@@ -577,10 +577,7 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
 
   it('authed detail carries the caller\'s own application summary (chip + ticker inputs)', async () => {
     const canonical = 'Current job description for Tailor metadata.'
-    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
-      jdCompressed: gzipSync(Buffer.from(canonical)),
-    })) })
-    mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
+    const select = vi.fn().mockReturnValue({ lean: () => Promise.resolve({
       _id: 'app-1',
       status: 'apply_clicked',
       tailoredVersion: { createdAt: NOW, jdHash: xrayHashOf(canonical) },
@@ -588,7 +585,12 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       verifiedPracticeSessionIds: ['a', 'b', 'c', 'd', 'e'],
       interviewDateConfidence: 'week',
       interviewDatePreference: 'this-week',
-    }) }) })
+      outcome: { interviewRounds: 2, revision: 9 },
+    }) })
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from(canonical)),
+    })) })
+    mockAppFindOne.mockReturnValueOnce({ select })
     const d = await getJobDetail('j1', 'u1')
     if (!d!.gated) expect(d!.application).toMatchObject({
       applicationId: 'app-1',
@@ -597,10 +599,13 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       interviewDate: undefined,
       interviewDateConfidence: 'week',
       interviewDatePreference: 'this-week',
+      outcomeRoundsCompleted: 2,
+      outcomeRevision: 9,
       tailoredResume: { createdAt: NOW.toISOString(), current: true },
       appliedWith: { wasTailored: true },
       ats: { state: 'none' },
     }) // practiceCount capped at 3
+    expect(select).toHaveBeenCalledWith(expect.stringContaining('outcome.interviewRounds outcome.revision'))
   })
 
   it('does not return a stale live application summary deleted during preparation', async () => {
@@ -887,6 +892,7 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       status: 'offer',
       jobSnapshot: { title: 'Saved role', company: 'Saved Co', location: 'Pune', applyUrlAtClick: 'https://secret.example/apply' },
       verifiedPracticeSessionIds: ['s1'],
+      outcome: { interviewRounds: 4, revision: 12 },
       atsResult: {
         score: 87,
         missingKeywords: ['deleted-JD-keyword'],
@@ -902,7 +908,13 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       company: 'Saved Co',
       locations: ['Pune'],
       isRemote: false,
-      application: { applicationId: 'app-snapshot', status: 'offer', practiceCount: 1 },
+      application: {
+        applicationId: 'app-snapshot',
+        status: 'offer',
+        practiceCount: 1,
+        outcomeRoundsCompleted: 4,
+        outcomeRevision: 12,
+      },
     })
     expect(detail.capabilities).toEqual({ apply: false, viewSource: false, xray: false, tailor: false, practice: false, atsCheck: false })
     expect(detail).not.toHaveProperty('practiceExperience')

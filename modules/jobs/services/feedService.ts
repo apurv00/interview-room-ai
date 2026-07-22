@@ -237,6 +237,9 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
     interviewDate?: string
     interviewDateConfidence?: 'exact' | 'week' | 'unknown'
     interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
+    /** Optimistic token for interview-date writes; neither value is a score. */
+    outcomeRoundsCompleted: number
+    outcomeRevision: number
     /** Metadata only. Full Tailor text is available from the owner-only
      *  tailored route, never from detail/list projections. */
     tailoredResume?: { createdAt: string; current: boolean }
@@ -267,6 +270,13 @@ function shellOf(doc: IJobPosting): Omit<JobDetailShell, 'gated'> {
   }
 }
 
+function safeOutcomeCounter(value: unknown, maximum?: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 &&
+    (maximum === undefined || value <= maximum)
+    ? value
+    : 0
+}
+
 function exactDetailPostingLifecycleFilter(
   id: string,
   doc: Pick<IJobPosting, 'status' | 'closedReason'>,
@@ -285,7 +295,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
   if (!doc) {
     if (!userId) return null
     const snapshotApp = await JobApplication.findOne({ userId, jobPostingId: id })
-      .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference appliedWith.wasTailored atsResult atsRequestedAt')
+      .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference outcome.interviewRounds outcome.revision appliedWith.wasTailored atsResult atsRequestedAt')
       .lean()
     if (!snapshotApp) return null
     const snapshotLocation = snapshotApp.jobSnapshot?.location?.trim() ?? ''
@@ -314,6 +324,8 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
         interviewDate: snapshotApp.interviewDate ? new Date(snapshotApp.interviewDate).toISOString() : undefined,
         interviewDateConfidence: snapshotApp.interviewDateConfidence,
         interviewDatePreference: snapshotApp.interviewDatePreference,
+        outcomeRoundsCompleted: safeOutcomeCounter(snapshotApp.outcome?.interviewRounds, 100),
+        outcomeRevision: safeOutcomeCounter(snapshotApp.outcome?.revision),
         ...(snapshotApp.appliedWith
           ? { appliedWith: { wasTailored: snapshotApp.appliedWith.wasTailored } }
           : {}),
@@ -349,7 +361,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
       : null
   }
   let app = await JobApplication.findOne({ userId, jobPostingId: id })
-    .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference tailoredVersion.createdAt tailoredVersion.jdHash appliedWith.wasTailored atsResult atsRequestedAt')
+    .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference outcome.interviewRounds outcome.revision tailoredVersion.createdAt tailoredVersion.jdHash appliedWith.wasTailored atsResult atsRequestedAt')
     .lean()
   if (doc.status === 'closed' && !app) {
     if (postingState !== 'archived') return null
@@ -478,6 +490,8 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
           interviewDate: app.interviewDate ? new Date(app.interviewDate).toISOString() : undefined,
           interviewDateConfidence: app.interviewDateConfidence,
           interviewDatePreference: app.interviewDatePreference,
+          outcomeRoundsCompleted: safeOutcomeCounter(app.outcome?.interviewRounds, 100),
+          outcomeRevision: safeOutcomeCounter(app.outcome?.revision),
           ...(postingState !== 'restricted' && app.tailoredVersion?.createdAt
             ? {
                 tailoredResume: {

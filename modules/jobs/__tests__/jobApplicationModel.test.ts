@@ -7,6 +7,34 @@ import {
 } from '../services/trackerStatusSweepService'
 
 describe('JobApplication tracker sweep index', () => {
+  it('supports the interviewed lifecycle state and additive canonical outcome fields', () => {
+    const status = JobApplication.schema.path('status') as unknown as {
+      options: { enum: string[] }
+    }
+    const result = JobApplication.schema.path('outcome.latestResult') as unknown as {
+      options: { enum: string[] }
+    }
+    const rounds = JobApplication.schema.path('outcome.interviewRounds') as unknown as {
+      options: { default?: number; min?: number }
+    }
+    const revision = JobApplication.schema.path('outcome.revision') as unknown as {
+      options: { default?: number; min?: number }
+    }
+
+    expect(status.options.enum).toContain('interviewed')
+    expect(result.options.enum).toEqual(['advanced', 'waiting', 'rejected', 'offer'])
+    expect(rounds.options).toMatchObject({ default: 0, min: 0 })
+    expect(revision.options).toMatchObject({ default: 0, min: 0 })
+    for (const path of [
+      'outcome.latestRound',
+      'outcome.latestReportedAt',
+      'outcome.lastInterviewedAt',
+      'outcome.lastDeferredRound',
+    ]) {
+      expect(JobApplication.schema.path(path)).toBeDefined()
+    }
+  })
+
   it('keeps the derived-authority transaction token private', () => {
     const path = JobApplication.schema.path('derivedAuthorityRevision')
 

@@ -25,11 +25,11 @@ import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 
 export type JobApplicationStatus =
   | 'saved' | 'apply_clicked' | 'applied' | 'interview_scheduled'
-  | 'offer' | 'rejected' | 'ghosted' | 'withdrawn'
+  | 'interviewed' | 'offer' | 'rejected' | 'ghosted' | 'withdrawn'
 
 export const JOB_APPLICATION_STATUSES: JobApplicationStatus[] = [
   'saved', 'apply_clicked', 'applied', 'interview_scheduled',
-  'offer', 'rejected', 'ghosted', 'withdrawn',
+  'interviewed', 'offer', 'rejected', 'ghosted', 'withdrawn',
 ]
 
 export interface IJobApplication extends Document {
@@ -56,6 +56,13 @@ export interface IJobApplication extends Document {
     passedScreen?: boolean
     interviewRounds?: number
     offerReceived?: boolean
+    latestResult?: 'advanced' | 'waiting' | 'rejected' | 'offer'
+    latestRound?: number
+    latestReportedAt?: Date
+    /** Monotonic optimistic token for lifecycle/outcome writes. */
+    revision?: number
+    lastInterviewedAt?: Date
+    lastDeferredRound?: number
     lastAskedAt?: Date
     /** Anti-nag budget — outcome prompts stop when this runs out. */
     askCount: number
@@ -181,8 +188,14 @@ const JobApplicationSchema = new Schema<IJobApplication>(
     interviewDatePreference: { type: String, enum: ['this-week', 'next-week', 'unknown'] },
     outcome: {
       passedScreen: { type: Boolean },
-      interviewRounds: { type: Number, min: 0 },
+      interviewRounds: { type: Number, min: 0, default: 0 },
       offerReceived: { type: Boolean },
+      latestResult: { type: String, enum: ['advanced', 'waiting', 'rejected', 'offer'] },
+      latestRound: { type: Number, min: 1 },
+      latestReportedAt: { type: Date },
+      revision: { type: Number, min: 0, default: 0 },
+      lastInterviewedAt: { type: Date },
+      lastDeferredRound: { type: Number, min: 1 },
       lastAskedAt: { type: Date },
       askCount: { type: Number, default: 0 },
     },

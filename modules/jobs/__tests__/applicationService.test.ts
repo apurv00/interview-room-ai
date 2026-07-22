@@ -531,15 +531,18 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
     const [filter, update] = mockAppFindOneAndUpdate.mock.calls[0]
     expect(filter).toEqual({ userId: 'u1', jobPostingId: 'j1', status: { $ne: 'applied' } })
     expect(update.$set).toEqual({ status: 'applied', appliedAt: NOW })
+    expect(update.$inc).toEqual({ 'outcome.revision': 1 })
     expect(update.$push.statusHistory).toMatchObject({ status: 'applied', source: 'user' })
   })
 
-  it('backward corrections and recoveries are allowed; machine-only apply_clicked is not settable', async () => {
+  it('allows generic corrections but reserves machine and canonical outcome states', async () => {
     reset()
     mockAppFindOneAndUpdate.mockResolvedValue({ status: 'applied' })
     expect((await transitionStatus('u1', 'j1', 'saved', NOW)).ok).toBe(true) // backward correction
     expect((await transitionStatus('u1', 'j1', 'ghosted', undefined, NOW)).ok).toBe(true)
     expect((await transitionStatus('u1', 'j1', 'apply_clicked' as never, undefined, NOW)).ok).toBe(false)
+    expect((await transitionStatus('u1', 'j1', 'interviewed' as never, undefined, NOW)).ok).toBe(false)
+    expect((await transitionStatus('u1', 'j1', 'offer' as never, undefined, NOW)).ok).toBe(false)
     expect((await transitionStatus('u1', 'j1', 'nonsense' as never, undefined, NOW)).ok).toBe(false)
   })
 
@@ -636,6 +639,7 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
     expect(filter).toEqual({ userId: 'u1', jobPostingId: 'j1', status: { $ne: 'applied' } })
     expect(update).toMatchObject({
       $set: { status: 'applied', appliedAt: NOW },
+      $inc: { 'outcome.revision': 1 },
       $push: { statusHistory: { status: 'applied', at: NOW, source: 'user' } },
     })
     expect(options.session).toBeDefined()
@@ -645,6 +649,21 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
       { session: options.session },
     )
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('advances the shared lifecycle token on every real generic status edge', async () => {
+    reset()
+    mockAppFindOneAndUpdate
+      .mockResolvedValueOnce({ status: 'interview_scheduled' })
+      .mockResolvedValueOnce({ status: 'ghosted' })
+
+    await transitionStatus('u1', 'j1', 'ghosted', undefined, NOW)
+    await transitionStatus('u1', 'j1', 'interview_scheduled', undefined, NOW)
+
+    expect(mockAppFindOneAndUpdate).toHaveBeenCalledTimes(2)
+    for (const [, update] of mockAppFindOneAndUpdate.mock.calls) {
+      expect(update.$inc).toEqual({ 'outcome.revision': 1 })
+    }
   })
 
   it('backfills a missing same-state resume claim without resetting appliedAt or history', async () => {
@@ -720,11 +739,24 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
       jobPostingId: 'j1',
       status: { $ne: 'ghosted' },
       $or: [
-        { status: { $in: ['applied', 'interview_scheduled', 'offer', 'rejected'] } },
+        { status: { $in: ['applied', 'interview_scheduled', 'interviewed', 'offer', 'rejected'] } },
         { appliedAt: { $type: 'date' } },
       ],
     })
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('allows an interviewed application to be marked No response', async () => {
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'interviewed' })
+
+    await expect(
+      transitionStatus('u1', 'j1', 'ghosted', { channel: 'web' }, NOW),
+    ).resolves.toEqual({ ok: true, status: 'ghosted', from: 'interviewed' })
+
+    expect(mockAppFindOneAndUpdate.mock.calls[0][0].$or[0]).toEqual({
+      status: { $in: ['applied', 'interview_scheduled', 'interviewed', 'offer', 'rejected'] },
+    })
   })
 
   it('emits transition telemetry through the fenced user-event helper', async () => {

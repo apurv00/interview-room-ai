@@ -23,6 +23,15 @@ self-practice API still trusts candidate-submitted answers/evaluations within
 the authenticated session. Readiness therefore remains coaching evidence, not
 an employer-verifiable credential or proof that an answer was spoken live.
 
+**Outcome-label boundary (A14.1):** owner-authored tracker reports
+(`advanced | waiting | rejected | offer`, plus a non-result Skip/defer) are
+factual calibration labels. They are never scored practice evidence, never an
+input to a readiness band, and never permission to infer competence, employer
+odds, or transfer across jobs. Revising the latest report while its application
+remains in the outcome lifecycle corrects the label; the same label becomes
+read-only history after a loose transition back to a pre-interview status. A
+revision never creates evidence or retroactively changes preparation history.
+
 **CMS availability is part of the Practice authorization boundary.** If the
 active role catalog cannot be loaded authoritatively, Jobs intentionally
 withholds the role and disables new job-specific Practice site-wide—even for a
@@ -129,7 +138,9 @@ unique index { sessionId, requirementId, xrayHash }   // real, DB-level
 **Calibration gate before anything renders** [R10]: a ~30-item golden set
 (hand-labeled (answer, requirement) → strength triples from the founder's
 own prod sessions) with an agreement floor; re-run on any slot model
-change. PR-R2 does not ship until it passes.
+change. A14.2 / PR-R2 does not ship until it passes. Until then no readiness
+band renders, no readiness or outcome label changes feed order, PR-R3 remains
+frozen, and cross-job evidence or outcome transfer remains off.
 
 **Cost**: one bounded call per scored jobs session (version mismatch =
 terminal counted skip, no second parse in v1); never per-user×job. Module budgets: PR-R1
@@ -225,21 +236,27 @@ bumps shared maxFiles with the paired ADR [R27].
 
 ## 4. Sequencing & founder-approval scope
 
+**A14.1 ships independently as label collection only:** the owner can close
+the interview lifecycle and correct the latest factual outcome, but no
+readiness consumer is enabled by that data.
+
 1. **PR-R0 (this doc)** — approve: band names + criteria + thresholds
    (incl. the fresher-segment question), the boost ordering-invariant X,
    the small-N guard, the new task slot.
 2. **PR-R1** attribution (dark) → prod verification on the founder's own
    sessions → **calibration golden-set gate**.
-3. **PR-R2** bands + surfaces (visible, no rank change) + segment
+3. **A14.2 / PR-R2** bands + surfaces (visible, no rank change) + segment
    telemetry + chip-vocabulary reconciliation.
-4. **PR-R3** re-ranking + fact chips.
+4. **PR-R3 — FROZEN until A14.2 passes its calibration gate** — re-ranking
+   + fact chips.
 
 ## 5. Explicitly out of scope
 
 Verdict-chip band-rule activation (own decision after R2); readiness
 history (Pro, ruling #13); embeddings (ruling #16 rejection stands);
 generation-time FOCUS targeting (hot-path); cross-job evidence transfer
-(claims-honesty minefield, deliberately deferred).
+(claims-honesty minefield, deliberately deferred); cross-job outcome transfer
+and any ranking use of outcome labels.
 
 ## 6. Standing-rule compliance
 
