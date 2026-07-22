@@ -61,6 +61,18 @@ export {
 export type { CanonicalApplyOption } from './services/applyOptionIdentity'
 export { recordApplyClick, recordApplyOpenAttempt, claimAtsRun, releaseAtsClaim, transitionStatus, reportBrokenLink, recordPracticeEvidence, saveTailoredVersion, getTailoredVersion, USER_SETTABLE_STATUSES } from './services/applicationService'
 export type { ApplyClickResult, BrokenLinkResult, UserSettableStatus } from './services/applicationService'
+export {
+  recordInterviewOutcome,
+  INTERVIEW_OUTCOME_RESULTS,
+  INTERVIEW_OUTCOME_CORRECTION_STATUSES,
+} from './services/outcomeService'
+export type {
+  CanonicalInterviewOutcomeResult,
+  InterviewOutcomeCorrectionStatus,
+  InterviewOutcomeResult,
+  RecordInterviewOutcomeInput,
+  RecordInterviewOutcomeResponse,
+} from './services/outcomeService'
 export { getOrParseXray } from './services/xrayService'
 export { preparePracticeHandoffPosting } from './services/practiceHandoff'
 export { jobPostingStateOf } from './services/postingAccess'
@@ -68,7 +80,14 @@ export type { JobPostingState } from './services/postingAccess'
 export { saveBaseResume, getBaseResume } from './services/baseResumeService'
 export { getTracker, dismissConfirmCard, saveNotes, GHOST_AFTER_DAYS } from './services/trackerService'
 export { buildPrepPlan, dateForChoice, setInterviewDate } from './services/prepPlanService'
-export type { InterviewDateCapture, InterviewDatePreference, PrepPlan, PrepPlanSession } from './services/prepPlanService'
+export type {
+  InterviewDateCapture,
+  InterviewDatePreference,
+  InterviewDateStateToken,
+  PrepPlan,
+  PrepPlanSession,
+  SetInterviewDateResult,
+} from './services/prepPlanService'
 export type { FeedQuery, FeedCard, FeedPayload, JobDetailShell, JobDetailFull } from './services/feedService'
 export { isSuppressed, buildFooterUrls, sendTransactional } from './services/emailSendService'
 export type { TailoredVersionView, TransitionTelemetry } from './services/applicationService'

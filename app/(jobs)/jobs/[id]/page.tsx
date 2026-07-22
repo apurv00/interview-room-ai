@@ -73,6 +73,8 @@ interface Detail {
     interviewDate?: string
     interviewDateConfidence?: 'exact' | 'week' | 'unknown'
     interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
+    outcomeRoundsCompleted?: number
+    outcomeRevision?: number
     tailoredResume?: { createdAt: string; current: boolean }
     appliedWith?: { wasTailored: boolean }
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[] }
@@ -189,6 +191,22 @@ function isDetailProjection(value: unknown, expectedId: string): value is Detail
       (
         application.interviewDatePreference !== undefined &&
         !['this-week', 'next-week', 'unknown'].includes(String(application.interviewDatePreference))
+      ) ||
+      (
+        application.outcomeRoundsCompleted !== undefined &&
+        (
+          typeof application.outcomeRoundsCompleted !== 'number' ||
+          !Number.isSafeInteger(application.outcomeRoundsCompleted) ||
+          application.outcomeRoundsCompleted < 0 || application.outcomeRoundsCompleted > 100
+        )
+      ) ||
+      (
+        application.outcomeRevision !== undefined &&
+        (
+          typeof application.outcomeRevision !== 'number' ||
+          !Number.isSafeInteger(application.outcomeRevision) ||
+          application.outcomeRevision < 0
+        )
       )
     ) return false
 
@@ -241,6 +259,7 @@ const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
 const APPLIED_HISTORY_STATUSES = new Set([
   'applied',
   'interview_scheduled',
+  'interviewed',
   'offer',
   'rejected',
   'ghosted',
@@ -581,13 +600,15 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         scrubAccountBoundState()
         return false
       }
-      if (r.ok) {
-        const nextDetail: unknown = await r.json()
-        if (!isDetailProjection(nextDetail, params.id)) return false
-        if (!accountUnavailableRef.current) setDetail(nextDetail)
-      }
-    } catch { /* keep the current view */ }
-    return !accountUnavailableRef.current
+      if (!r.ok) return false
+      const nextDetail: unknown = await r.json()
+      if (!isDetailProjection(nextDetail, params.id)) return false
+      if (accountUnavailableRef.current) return false
+      setDetail(nextDetail)
+      return true
+    } catch {
+      return false
+    }
   }
 
   function retryXray() {
@@ -662,18 +683,32 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
 
   async function captureDate(request: InterviewDateRequest) {
     if (accountUnavailableRef.current) return
+    const expectedCompletedRounds = detail?.application?.outcomeRoundsCompleted ?? 0
+    const expectedOutcomeRevision = detail?.application?.outcomeRevision ?? 0
     const response = await fetch(`/api/jobs/${params.id}/interview-date`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
+      body: JSON.stringify({
+        ...request,
+        expectedCompletedRounds,
+        expectedOutcomeRevision,
+      }),
     }).catch(() => null)
     if (response && await isAccountUnavailableResponse(response)) {
       scrubAccountBoundState()
       return
     }
     if (accountUnavailableRef.current) return
+    if (response?.status === 409) {
+      const body = await response.json().catch(() => null) as { code?: unknown } | null
+      if (body?.code === 'INTERVIEW_STATE_CONFLICT') {
+        return await refetchDetail()
+          ? 'state-conflict-refreshed' as const
+          : 'state-conflict-refresh-failed' as const
+      }
+    }
     if (!response?.ok) throw new Error('interview timing save failed')
-    refetchDetail()
+    await refetchDetail()
   }
 
   async function requestPracticeEmail() {

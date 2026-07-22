@@ -34,6 +34,17 @@ interface Row {
   appliedWith?: { wasTailored: boolean }
   nudge: 'waiting' | 'ghost-prompt' | null
   unconfirmedClick: boolean
+  outcome?: {
+    roundsCompleted: number
+    latestResult?: OutcomeResult
+    latestRound?: number
+    latestReportedAt?: string
+    revision: number
+    lastInterviewedAt?: string
+  }
+  nextOutcomeRound?: number
+  outcomePromptDue?: boolean
+  canCorrectOutcome?: boolean
 }
 interface View {
   groups: Array<{ status: string; count: number; rows: Row[] }>
@@ -50,6 +61,7 @@ const STATUS_LABEL: Record<string, string> = {
   apply_clicked: 'Clicked · not confirmed',
   applied: 'Applied',
   interview_scheduled: 'Interview scheduled',
+  interviewed: 'Interviewed',
   offer: 'Offer',
   rejected: 'Rejected',
   ghosted: 'No response',
@@ -59,20 +71,65 @@ const CHIP_TARGETS: Record<string, string[]> = {
   saved: ['applied', 'withdrawn'],
   apply_clicked: ['applied', 'withdrawn'],
   applied: ['interview_scheduled', 'rejected', 'ghosted', 'withdrawn'],
-  interview_scheduled: ['offer', 'rejected'],
+  interview_scheduled: ['ghosted', 'withdrawn'],
+  interviewed: ['ghosted', 'withdrawn'],
   ghosted: ['applied', 'interview_scheduled'],
   rejected: ['applied'],
   offer: [],
   withdrawn: ['saved'],
 }
+type OutcomeResult = 'advanced' | 'waiting' | 'rejected' | 'offer'
+type OutcomeAction = OutcomeResult | 'skip'
+type OutcomePanel =
+  | { jobPostingId: string; round: number; mode: 'record' }
+  | {
+      jobPostingId: string
+      round: number
+      mode: 'revise'
+      expectedRevision: number
+      expectedStatus: string
+      previousResult: OutcomeResult
+    }
+
+const OUTCOME_ACTIONS: Array<{ result: OutcomeAction; label: string }> = [
+  { result: 'advanced', label: 'Advanced to another round' },
+  { result: 'waiting', label: 'Waiting to hear' },
+  { result: 'rejected', label: 'Rejected' },
+  { result: 'offer', label: 'Received an offer' },
+  { result: 'skip', label: "Don’t remind me for this round" },
+]
+
+const OUTCOME_SUMMARY: Record<OutcomeResult, string> = {
+  advanced: 'Advanced to another round',
+  waiting: 'Interviewed · waiting to hear',
+  rejected: 'Rejected',
+  offer: 'Offer received',
+}
 const APPLIED_HISTORY_STATUSES = new Set([
   'applied',
   'interview_scheduled',
+  'interviewed',
   'offer',
   'rejected',
   'ghosted',
   'withdrawn',
 ])
+
+function outcomeRow(view: View, jobPostingId: string): Row | undefined {
+  return view.groups.flatMap((group) => group.rows)
+    .find((row) => row.jobPostingId === jobPostingId)
+}
+
+function panelMatchesRow(panel: OutcomePanel, row: Row | undefined): boolean {
+  if (!row) return false
+  if (panel.mode === 'record') {
+    return row.status === 'interview_scheduled' && row.nextOutcomeRound === panel.round
+  }
+  return row.canCorrectOutcome === true &&
+    row.status === panel.expectedStatus &&
+    row.outcome?.latestRound === panel.round &&
+    row.outcome.revision === panel.expectedRevision
+}
 
 export default function TrackerPage() {
   const [view, setView] = useState<View | null>(null)
@@ -82,9 +139,22 @@ export default function TrackerPage() {
   const [notesDraft, setNotesDraft] = useState('')
   const [dateSheetFor, setDateSheetFor] = useState<string | null>(null)
   const [applyChoiceFor, setApplyChoiceFor] = useState<string | null>(null)
+  const [outcomePanel, setOutcomePanel] = useState<OutcomePanel | null>(null)
+  const [outcomePendingFor, setOutcomePendingFor] = useState<string | null>(null)
+  const [outcomeSaving, setOutcomeSaving] = useState<{
+    jobPostingId: string
+    round: number
+    result: OutcomeAction
+    phase: 'saving' | 'refreshing'
+  } | null>(null)
+  const [datePendingFor, setDatePendingFor] = useState<string | null>(null)
+  const [outcomeError, setOutcomeError] = useState<{ jobPostingId: string; message: string } | null>(null)
   const [actionNotice, setActionNotice] = useState<string | null>(null)
   const accountUnavailableRef = useRef(false)
   const loadRequestRef = useRef(0)
+  const outcomePendingRef = useRef<string | null>(null)
+  const datePendingRef = useRef<string | null>(null)
+  const outcomeRefreshRequestRef = useRef<number | null>(null)
 
   const clearPrivateView = useCallback(() => {
     loadRequestRef.current += 1
@@ -94,7 +164,15 @@ export default function TrackerPage() {
     setNotesDraft('')
     setDateSheetFor(null)
     setApplyChoiceFor(null)
+    setOutcomePanel(null)
+    setOutcomePendingFor(null)
+    setOutcomeSaving(null)
+    setDatePendingFor(null)
+    setOutcomeError(null)
     setActionNotice(null)
+    outcomePendingRef.current = null
+    datePendingRef.current = null
+    outcomeRefreshRequestRef.current = null
   }, [])
 
   const handleUnauthorized = useCallback(async (response: Response | null): Promise<boolean> => {
@@ -116,21 +194,43 @@ export default function TrackerPage() {
     return true
   }, [clearPrivateView])
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<boolean> => {
     const requestId = ++loadRequestRef.current
     try {
       const r = await fetch('/api/jobs/tracker')
-      if (await handleUnauthorized(r)) return
-      if (accountUnavailableRef.current || requestId !== loadRequestRef.current) return
-      if (!r.ok) { setError('load'); return }
+      if (await handleUnauthorized(r)) return false
+      if (accountUnavailableRef.current || requestId !== loadRequestRef.current) return false
+      if (!r.ok) { setError('load'); return false }
       const nextView = await r.json() as View
-      if (accountUnavailableRef.current || requestId !== loadRequestRef.current) return
+      if (accountUnavailableRef.current || requestId !== loadRequestRef.current) return false
       setView(nextView)
+      setOutcomePanel((panel) => panel && panelMatchesRow(panel, outcomeRow(nextView, panel.jobPostingId))
+        ? panel
+        : null)
+      setDateSheetFor((jobPostingId) => jobPostingId &&
+        outcomeRow(nextView, jobPostingId)?.status === 'interview_scheduled'
+        ? jobPostingId
+        : null)
+      if (
+        outcomeRefreshRequestRef.current !== null &&
+        requestId >= outcomeRefreshRequestRef.current
+      ) {
+        outcomeRefreshRequestRef.current = null
+        outcomePendingRef.current = null
+        setOutcomePendingFor(null)
+        setOutcomeSaving(null)
+      }
       setError(null)
+      return true
     } catch {
       if (!accountUnavailableRef.current && requestId === loadRequestRef.current) setError('load')
+      return false
     }
   }, [handleUnauthorized])
+
+  const retryLoad = useCallback(async () => {
+    await load()
+  }, [load])
 
   useEffect(() => {
     load()
@@ -143,6 +243,10 @@ export default function TrackerPage() {
     to: string,
     appliedWith?: { wasTailored: boolean; tailoredAt?: string },
   ) {
+    if (
+      outcomePendingRef.current === jobPostingId ||
+      datePendingRef.current === jobPostingId
+    ) return
     const res = await fetch(`/api/jobs/${jobPostingId}/status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -169,13 +273,13 @@ export default function TrackerPage() {
       // §4c: landing on interview_scheduled opens the date sheet.
       if (to === 'interview_scheduled') setDateSheetFor(jobPostingId)
       setApplyChoiceFor(null)
+      setOutcomePanel((panel) => panel?.jobPostingId === jobPostingId ? null : panel)
+      setOutcomeError((current) => current?.jobPostingId === jobPostingId ? null : current)
       setActionNotice(null)
-      // Undo replays `from` through the USER status route — apply_clicked is
-      // the machine fact and deliberately not user-settable (letting undo
-      // restore it would let anyone fabricate clicks), so moves off a
-      // 'Clicked · not confirmed' row don't offer undo; the chip strip still
-      // reaches every legitimate state (Codex on #523).
-      if (from !== 'apply_clicked') {
+      // Undo replays `from` through the USER status route. `apply_clicked` is
+      // a machine fact and `interviewed` is written only by a canonical raw
+      // outcome, so neither may be fabricated through an undo status call.
+      if (from !== 'apply_clicked' && from !== 'interviewed') {
         setUndo({ jobPostingId, from, label: `Moved to ${STATUS_LABEL[to] ?? to}` })
       }
       load()
@@ -185,6 +289,10 @@ export default function TrackerPage() {
   async function undoLast() {
     if (!undo) return
     const { jobPostingId, from } = undo
+    if (
+      outcomePendingRef.current === jobPostingId ||
+      datePendingRef.current === jobPostingId
+    ) return
     setUndo(null)
     setDateSheetFor(null) // an undone transition must not leave its date sheet armed (Codex #525)
     const res = await fetch(`/api/jobs/${jobPostingId}/status`, {
@@ -241,17 +349,119 @@ export default function TrackerPage() {
     load()
   }
 
-  async function captureDate(jobPostingId: string, request: InterviewDateRequest) {
-    const res = await fetch(`/api/jobs/${jobPostingId}/interview-date`, {
+  async function captureDate(
+    jobPostingId: string,
+    request: InterviewDateRequest,
+    expectedCompletedRounds: number,
+    expectedOutcomeRevision: number,
+  ) {
+    if (
+      outcomePendingRef.current === jobPostingId ||
+      datePendingRef.current !== null ||
+      !Number.isSafeInteger(expectedCompletedRounds) || expectedCompletedRounds < 0 ||
+      !Number.isSafeInteger(expectedOutcomeRevision) || expectedOutcomeRevision < 0
+    ) throw new Error('interview timing save unavailable')
+
+    datePendingRef.current = jobPostingId
+    setDatePendingFor(jobPostingId)
+    try {
+      const res = await fetch(`/api/jobs/${jobPostingId}/interview-date`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...request,
+          expectedCompletedRounds,
+          expectedOutcomeRevision,
+        }),
+      }).catch(() => null)
+      if (await handleUnauthorized(res)) return
+      if (accountUnavailableRef.current) return
+      if (res?.status === 409) {
+        const refreshed = await load()
+        setActionNotice(refreshed
+          ? 'Interview timing changed with the outcome. Review the refreshed round and save its date again.'
+          : 'Interview timing changed elsewhere. Retry loading before saving a date.')
+        return refreshed
+          ? 'state-conflict-refreshed' as const
+          : 'state-conflict-refresh-failed' as const
+      }
+      if (!res?.ok) throw new Error('interview timing save failed')
+      setDateSheetFor(null)
+      await load()
+    } finally {
+      if (datePendingRef.current === jobPostingId) {
+        datePendingRef.current = null
+        setDatePendingFor(null)
+      }
+    }
+  }
+
+  async function recordOutcome(
+    jobPostingId: string,
+    round: number,
+    result: OutcomeAction,
+    revision?: { expectedRevision: number; expectedStatus: string },
+  ) {
+    if (
+      !Number.isSafeInteger(round) || round < 1 || round > 100 ||
+      outcomePendingRef.current !== null ||
+      datePendingRef.current === jobPostingId ||
+      (result === 'skip' && revision !== undefined)
+    ) return
+    outcomePendingRef.current = jobPostingId
+    setOutcomePendingFor(jobPostingId)
+    setOutcomeSaving({ jobPostingId, round, result, phase: 'saving' })
+    setOutcomeError(null)
+    const res = await fetch(`/api/jobs/${jobPostingId}/outcome`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ result, round, ...(revision ?? {}) }),
     }).catch(() => null)
-    if (await handleUnauthorized(res)) return
-    if (accountUnavailableRef.current) return
-    if (!res?.ok) throw new Error('interview timing save failed')
-    setDateSheetFor(null)
-    load()
+    if (await handleUnauthorized(res)) {
+      return
+    }
+    if (accountUnavailableRef.current) {
+      return
+    }
+    if (res?.status === 409) {
+      setOutcomePanel(null)
+      setOutcomeError(null)
+      setActionNotice('That interview outcome changed elsewhere. Refreshing the tracker…')
+      setOutcomeSaving((current) => current?.jobPostingId === jobPostingId
+        ? { ...current, phase: 'refreshing' }
+        : current)
+      outcomeRefreshRequestRef.current = loadRequestRef.current + 1
+      const refreshed = await load()
+      setActionNotice(refreshed
+        ? 'Tracker refreshed after another outcome update. Review the current round before trying again.'
+        : 'That outcome changed elsewhere. Retry loading the tracker before editing outcomes.')
+      return
+    }
+    if (!res?.ok) {
+      setOutcomeError({
+        jobPostingId,
+        message: 'Couldn’t save this interview outcome. Nothing changed — try again.',
+      })
+      outcomePendingRef.current = null
+      setOutcomePendingFor(null)
+      setOutcomeSaving(null)
+      return
+    }
+
+    setOutcomePanel(null)
+    setOutcomeError(null)
+    setActionNotice(result === 'skip'
+      ? 'Skipped for now. You can record the outcome from this row anytime.'
+      : `Round ${round} outcome saved: ${OUTCOME_SUMMARY[result]}.`)
+    setDateSheetFor(result === 'advanced' ? jobPostingId : null)
+    setOutcomeSaving((current) => current?.jobPostingId === jobPostingId
+      ? { ...current, phase: 'refreshing' }
+      : current)
+    outcomeRefreshRequestRef.current = loadRequestRef.current + 1
+    const refreshed = await load()
+    if (!refreshed && !accountUnavailableRef.current) {
+      setActionNotice('The outcome was saved, but the tracker did not refresh. Retry loading before another outcome update.')
+    }
   }
 
   async function saveNotes(jobPostingId: string) {
@@ -329,13 +539,20 @@ export default function TrackerPage() {
         </div>
       )}
 
-      {error === 'load' && <p className="mt-8 text-sm text-red-600">Couldn&apos;t load the tracker — refresh to retry.</p>}
+      {error === 'load' && (
+        <div role="alert" className="mt-8 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <p>Couldn&apos;t load the latest tracker state.</p>
+          <button onClick={() => void retryLoad()} className="mt-2 min-h-11 rounded-lg border border-red-300 bg-white px-3 py-2 font-medium">
+            Retry
+          </button>
+        </div>
+      )}
       {actionNotice && (
         <div role="status" aria-live="polite" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           {actionNotice}
         </div>
       )}
-      {!view && !error && <p className="mt-8 text-sm text-slate-500">Loading…</p>}
+      {!view && !error && <p role="status" aria-live="polite" className="mt-8 text-sm text-slate-500">Loading tracker…</p>}
 
       {view && view.groups.length === 0 && (
         <div className="mt-8 rounded-xl border border-slate-200 border-dashed p-6 bg-white">
@@ -398,15 +615,150 @@ export default function TrackerPage() {
                 {r.status === 'interview_scheduled' && (
                   <p className="mt-1 text-xs text-slate-600">
                     {interviewDateLabel(r.interviewDate, r.interviewDateConfidence, r.interviewDatePreference)}{' '}
-                    <button onClick={() => setDateSheetFor(r.jobPostingId)} className="text-blue-600 underline">
+                    <button
+                      disabled={outcomePendingFor === r.jobPostingId || datePendingFor === r.jobPostingId}
+                      onClick={() => setDateSheetFor(r.jobPostingId)}
+                      className="text-blue-600 underline disabled:cursor-wait disabled:opacity-60"
+                    >
                       {r.interviewDateConfidence === 'exact' ? 'Change date' : 'Add exact date'}
                     </button>
                   </p>
                 )}
+                {r.outcome?.latestResult && r.outcome.latestRound && r.outcome.revision && (
+                  <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-950">
+                    <p className="font-medium">
+                      Latest outcome · Round {r.outcome.latestRound}: {OUTCOME_SUMMARY[r.outcome.latestResult]}
+                    </p>
+                    {r.canCorrectOutcome && (
+                      <button
+                        type="button"
+                        aria-label={`${r.outcome.latestResult === 'waiting' ? 'Update' : 'Correct'} interview outcome for ${r.title} at ${r.company}`}
+                        aria-controls={`outcome-controls-${r.jobPostingId}`}
+                        aria-expanded={
+                          outcomePanel?.jobPostingId === r.jobPostingId &&
+                          outcomePanel.mode === 'revise' &&
+                          panelMatchesRow(outcomePanel, r)
+                        }
+                        disabled={outcomePendingFor !== null || datePendingFor === r.jobPostingId}
+                        onClick={() => {
+                          setOutcomeError(null)
+                          setOutcomePanel({
+                            jobPostingId: r.jobPostingId,
+                            round: r.outcome!.latestRound!,
+                            mode: 'revise',
+                            expectedRevision: r.outcome!.revision,
+                            expectedStatus: r.status,
+                            previousResult: r.outcome!.latestResult!,
+                          })
+                        }}
+                        className="mt-1 min-h-11 font-medium text-blue-700 underline disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {r.outcome.latestResult === 'waiting' ? 'Update outcome' : 'Correct outcome'}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {r.status === 'interview_scheduled' && !r.outcomePromptDue && r.nextOutcomeRound && (
+                  <button
+                    type="button"
+                    aria-label={`Record interview outcome for ${r.title} at ${r.company}`}
+                    aria-controls={`outcome-controls-${r.jobPostingId}`}
+                    aria-expanded={
+                      outcomePanel?.jobPostingId === r.jobPostingId &&
+                      outcomePanel.mode === 'record' &&
+                      panelMatchesRow(outcomePanel, r)
+                    }
+                    disabled={outcomePendingFor !== null || datePendingFor === r.jobPostingId}
+                    onClick={() => {
+                      setOutcomeError(null)
+                      setOutcomePanel({ jobPostingId: r.jobPostingId, round: r.nextOutcomeRound!, mode: 'record' })
+                    }}
+                    className="mt-2 min-h-11 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    Record interview outcome
+                  </button>
+                )}
+                {(() => {
+                  const candidatePanel = outcomePanel?.jobPostingId === r.jobPostingId ? outcomePanel : null
+                  const selected = candidatePanel && panelMatchesRow(candidatePanel, r) ? candidatePanel : null
+                  const automaticRound = r.outcomePromptDue ? r.nextOutcomeRound : undefined
+                  const round = selected?.round ?? automaticRound
+                  if (!round || (r.status !== 'interview_scheduled' && !selected)) return null
+                  const pending = outcomePendingFor === r.jobPostingId
+                  const anyOutcomePending = outcomePendingFor !== null || datePendingFor === r.jobPostingId
+                  const errorId = `outcome-error-${r.jobPostingId}`
+                  const savingLabel = outcomeSaving?.jobPostingId === r.jobPostingId
+                    ? OUTCOME_ACTIONS.find((action) => action.result === outcomeSaving.result)?.label
+                    : undefined
+                  return (
+                    <fieldset
+                      id={`outcome-controls-${r.jobPostingId}`}
+                      disabled={anyOutcomePending}
+                      aria-busy={pending}
+                      aria-describedby={outcomeError?.jobPostingId === r.jobPostingId ? errorId : undefined}
+                      className="mt-3 rounded-xl border border-blue-300 bg-blue-50 p-3"
+                    >
+                      <legend className="px-1 text-sm font-semibold text-slate-900">
+                        {selected?.mode === 'revise'
+                          ? `${selected.previousResult === 'waiting' ? 'Update' : 'Correct'} ${r.title}, round ${round}, at ${r.company || 'this company'}`
+                          : `How did ${r.title}, round ${round}, at ${r.company || 'this company'} go?`}
+                      </legend>
+                      <p className="mt-1 text-xs text-slate-600">Choose only what you know. This won&apos;t change readiness scores.</p>
+                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {OUTCOME_ACTIONS
+                          .filter((action) => action.result !== 'skip' || selected?.mode !== 'revise')
+                          .map((action) => (
+                            <button
+                              key={action.result}
+                              type="button"
+                              onClick={() => void recordOutcome(
+                                r.jobPostingId,
+                                round,
+                                action.result,
+                                selected?.mode === 'revise'
+                                  ? {
+                                      expectedRevision: selected.expectedRevision,
+                                      expectedStatus: selected.expectedStatus,
+                                    }
+                                  : undefined,
+                              )}
+                              className={`min-h-11 rounded-lg border px-3 py-2 text-left text-sm font-medium disabled:cursor-wait disabled:opacity-60 ${action.result === 'skip'
+                                ? 'border-slate-300 bg-white text-slate-700'
+                                : 'border-blue-200 bg-white text-blue-700'}`}
+                            >
+                              {action.label}
+                            </button>
+                          ))}
+                      </div>
+                      {pending && savingLabel && (
+                        <p role="status" aria-live="polite" className="mt-2 text-xs font-medium text-blue-800">
+                          {outcomeSaving?.phase === 'refreshing'
+                            ? `Saved “${savingLabel}”; refreshing round ${round}…`
+                            : `Saving “${savingLabel}” for round ${round}…`}
+                        </p>
+                      )}
+                      {selected && (
+                        <button
+                          type="button"
+                          onClick={() => { setOutcomePanel(null); setOutcomeError(null) }}
+                          className="mt-2 min-h-11 px-2 text-xs font-medium text-slate-600 underline"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                      {outcomeError?.jobPostingId === r.jobPostingId && (
+                        <p id={errorId} role="alert" className="mt-2 text-sm font-medium text-red-700">
+                          {outcomeError.message}
+                        </p>
+                      )}
+                    </fieldset>
+                  )
+                })()}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {(CHIP_TARGETS[r.status] ?? []).map((to) => (
                     <button
                       key={to}
+                      disabled={outcomePendingFor === r.jobPostingId || datePendingFor === r.jobPostingId}
                       onClick={() => {
                         if (to === 'applied' && r.tailoredResume) {
                           setApplyChoiceFor(r.jobPostingId)
@@ -414,7 +766,7 @@ export default function TrackerPage() {
                           void transition(r.jobPostingId, r.status, to)
                         }
                       }}
-                      className="rounded-full border border-slate-200 px-2 py-0.5 text-xs hover:bg-slate-50"
+                      className="rounded-full border border-slate-200 px-2 py-0.5 text-xs hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
                     >
                       → {STATUS_LABEL[to] ?? to}
                     </button>
@@ -457,8 +809,19 @@ export default function TrackerPage() {
                 )}
                 {dateSheetFor === r.jobPostingId && r.status === 'interview_scheduled' && (
                   <div className="mt-2 rounded-lg border border-blue-300 bg-blue-50 p-2 text-xs">
-                    <p className="font-medium">Interview timing</p>
-                    <InterviewDateControls onCapture={(request) => captureDate(r.jobPostingId, request)} />
+                    <p className="font-medium">{r.outcome?.latestResult === 'advanced' ? 'Next round timing' : 'Interview timing'}</p>
+                    <InterviewDateControls
+                      disabled={
+                        outcomePendingFor === r.jobPostingId ||
+                        datePendingFor === r.jobPostingId
+                      }
+                      onCapture={(request) => captureDate(
+                        r.jobPostingId,
+                        request,
+                        r.outcome?.roundsCompleted ?? 0,
+                        r.outcome?.revision ?? 0,
+                      )}
+                    />
                   </div>
                 )}
                 {r.notes && notesFor !== r.jobPostingId && <p className="mt-2 whitespace-pre-wrap text-xs text-slate-500">{r.notes}</p>}
@@ -481,7 +844,14 @@ export default function TrackerPage() {
         <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-3xl p-4">
           <div role="status" aria-live="polite" aria-atomic="true" className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 text-sm shadow-lg">
             <span>{undo.label}</span>
-            <button onClick={undoLast} className="ml-3 font-medium text-blue-600 hover:underline">Undo</button>
+            <button
+              disabled={
+                outcomePendingFor === undo.jobPostingId ||
+                datePendingFor === undo.jobPostingId
+              }
+              onClick={undoLast}
+              className="ml-3 font-medium text-blue-600 hover:underline disabled:cursor-wait disabled:opacity-60"
+            >Undo</button>
           </div>
         </div>
       )}

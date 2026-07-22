@@ -27,7 +27,9 @@ STRANGER ─► /jobs feed ─► UPLOAD RESUME ─► confirm bar ─► ranked
                                                      interview_scheduled ──► PREP PLAN ──► sessions
                                                                      │            (peak moment)
                                                                      ▼
-                                                          outcome capture ──► loops back to feed
+                                                     outcome check-in ──► interviewed / terminal
+                                                                     │
+                                                                     └──────────────► live feed
 ```
 
 **Stage 0 — Stranger on public `/jobs`.** Anonymous, card-only discovery with deterministic public ranking. A card may say only "Looks relevant" unless it can name an actual matched public signal; location copy appears only for a normalized location-preference match. Banner: *"Attach your resume — we'll sort these for you."* `anonId` (localStorage UUID) is minted on the first event.
@@ -59,7 +61,7 @@ STRANGER ─► /jobs feed ─► UPLOAD RESUME ─► confirm bar ─► ranked
 
 **Generic Jobs fallback boundary.** When exact-job reuse cannot be verified, the destination is always `/interview/setup?jobsFallback=1`; the URL is authoritative even if browser storage is unavailable. The client reconstructs the parent candidate-owned resume from the stored session’s top-level document fields, then strips posting-derived JD/company/attribution/token context. Because the benchmark has changed, this path is presented as a **new general practice** and intentionally carries no retake parent or comparison lineage. The retained retake intent described above applies only to the verified exact-job path.
 
-**Stage 5 — Track → outcome → loop.** Return-sheet claims, 21d ghost prompt, interview inference at practice time, post-interview check-in. Terminal outcomes offer a neutral route back to the live feed without claiming similarity.
+**Stage 5 — Track → outcome → loop.** Return-sheet claims, 21d ghost prompt, interview inference at practice time, and an owner-only post-interview tracker check-in. A completed round records exactly one factual result: **Advanced to another round**, **Waiting to hear**, **Rejected**, or **Offer**; **Skip for now** defers the prompt without fabricating a result. The latest canonical result can be corrected. Advanced returns the row to `interview_scheduled` for its next round, Waiting moves it to `interviewed`, and Rejected / Offer use their terminal statuses. The tracker may show this factual history, but it never converts an outcome into readiness evidence or a cross-job claim. Terminal outcomes offer a neutral route back to the live feed without claiming similarity or changing rank.
 
 ### Apply-then-prep vs prep-then-apply: the verdict chip
 
@@ -84,7 +86,7 @@ Deterministic (no LLM), recommends without gating. **Apply is never disabled; "n
 | `/jobs` | Public (deferred-auth block, `middleware.ts:143`) | URL-addressable search/filter/sort feed with soft normalized location and title-based experience preferences, remote-only/company/freshness filters, HMAC cursor navigation and a top-400 card window. Anon-no-resume → Tier-A + attach banner; anon-resume → private stateless Tier-B. Flags render as demotions, never hidden. |
 | `/jobs/start` | Public | Attach chooser → confirm bar. Authed users with base resume skip to confirm. |
 | `/jobs/[id]` | Public shell, authed body (Open Decision P-2) | Anon: title/company/tier badge/provenance + blurred X-ray → gate. Authed: lazy JD parse → Interview X-ray (must-haves), verified job-specific practice count, verdict chip, Apply block, Save, Tailor. Tailor metadata survives refresh; full tailored text stays behind the owner-only private read. `interview_scheduled` uses exact dates for spaced plans and reminders; week choices remain preferences. Separate low-key "View full posting ↗" link keeps Apply clicks distinct from read intent. |
-| `/jobs/tracker` | Authed (client-side gate) | Single mobile-first list grouped by status with counts. Row: title, company, status chip, days-in-status, job-specific practice count, tailored-resume/application provenance, [Practice] [View]. Chip-strip transitions + undo toast. Nudges render here from recorded tracker state. |
+| `/jobs/tracker` | Authed (client-side gate) | Single mobile-first list grouped by status with counts. Row: title, company, status chip, days-in-status, job-specific practice count, tailored-resume/application provenance, [Practice] [View]. Chip-strip transitions + undo toast. Owner-only post-interview check-in records or revises the latest round result; the no-reminder action only defers that round. Nudges render here from recorded tracker state. |
 | `/jobs/[id]/prep` | Fast-follow | Phase 1 = panel on detail. |
 
 Nav: `{ href: '/jobs', label: 'Jobs' }` at index 1 in `NAV_LINKS` (`shared/layout/AppShell.tsx:19`). Resume surfaces: `/jobs/start` → `/resume/builder?return=…`; detail → `/resume/tailor?jobId=` (Phase 1, small additive page edit — the page is paste-only today, verified).
@@ -95,12 +97,19 @@ Nav: `{ href: '/jobs', label: 'Jobs' }` at index 1 in `NAV_LINKS` (`shared/layou
 {
   userId, jobPostingId,                    // unique {userId, jobPostingId}; creation sets ingestion's userReferenced pin
   jobSnapshot: { title, company, location, source, applyTierAtClick?, applyUrlAtClick? },  // tracker survives posting close
-  status: 'saved'|'apply_clicked'|'applied'|'interview_scheduled'|'offer'|'rejected'|'ghosted'|'withdrawn',
+  status: 'saved'|'apply_clicked'|'applied'|'interview_scheduled'|'interviewed'|'offer'|'rejected'|'ghosted'|'withdrawn',
   statusHistory: [{ status, at, source: 'user'|'system' }],   // append-only
   appliedAt?, appliedWith?: { resumeId?, wasTailored, tailoredFromResumeId? },
   interviewDate?, interviewDateConfidence?: 'exact'|'week'|'unknown',
   interviewDatePreference?: 'this-week'|'next-week'|'unknown',
-  outcome: { passedScreen?, interviewRounds?, offerReceived?, lastAskedAt?, askCount },   // askCount = anti-nag budget
+  outcome: {
+    passedScreen?,                    // legacy only; A14 never derives this lossy boolean
+    interviewRounds, offerReceived?,  // canonical loop maintains these facts
+    latestResult?: 'advanced'|'waiting'|'rejected'|'offer', latestRound?,
+    latestReportedAt?, revision,      // monotonic lifecycle/outcome CAS token
+    lastInterviewedAt?, lastDeferredRound?,
+    lastAskedAt?, askCount                                                // askCount = anti-nag budget
+  },
   tailoredVersion?: { sourceResumeId, tailoredText, structured?, matchScore, addedKeywords[], missingKeywords[], jdHash, createdAt },
   notes?, clickedApplyOptionIds: string[],       // legacy status/telemetry only; not report authority
   applyOpenAttempts: [{ optionId, subject, generation, incidentVersion, openedAt }], // bounded trusted /open Apply attempts
@@ -123,7 +132,7 @@ Nav: `{ href: '/jobs', label: 'Jobs' }` at index 1 in `NAV_LINKS` (`shared/layou
 
 ### `ProductEvent`
 
-`{ name, anonId?, userId?, jobPostingId?, applicationId?, sessionId?, props, ts }` — TTL 180d. Server-side writes wherever a route exists; client keepalive `/api/events` only for anon surfaces. Signup writes `identity_aliased{anonId,userId}` + backfill. Event vocabulary: `jobs.feed_viewed`, `jobs.resume_attach_started/completed{method}`, `jobs.target_role_confirmed{edited}`, `jobs.signup_completed{trigger}`, `jobs.job_viewed{parsed,fitBand?}`, `jobs.job_saved`, `jobs.apply_click{tier,source=trusted-open,transitioned,evidenceVersion=1}`, `jobs.apply_confirmed{latencyMs,viaNudge}`, `jobs.broken_link{tier,hadFailover}`, `jobs.status_changed{from,to,source}`, `jobs.ghost_suggested/confirmed/auto`, `jobs.interview_scheduled{daysUntil,inferredFromPrep}`, `jobs.prep_started{applicationId,sessionOrdinal,evidenceCount}`, `jobs.prep_deferred_email`, `jobs.outcome_reported{passedScreen,offer}`, `jobs.tailor_run{jobId}`, `jobs.quickwins_viewed/clicked`, `jobs.ats_score_landed`, `jobs.wizard_started/completed`.
+`{ name, anonId?, userId?, jobPostingId?, applicationId?, sessionId?, props, ts }` — TTL 180d. Server-side writes wherever a route exists; client keepalive `/api/events` only for anon surfaces. Signup writes `identity_aliased{anonId,userId}` + backfill. Event vocabulary: `jobs.feed_viewed`, `jobs.resume_attach_started/completed{method}`, `jobs.target_role_confirmed{edited}`, `jobs.signup_completed{trigger}`, `jobs.job_viewed{parsed,fitBand?}`, `jobs.job_saved`, `jobs.apply_click{tier,source=trusted-open,transitioned,evidenceVersion=1}`, `jobs.apply_confirmed{latencyMs,viaNudge}`, `jobs.broken_link{tier,hadFailover}`, `jobs.status_changed{from,to,source}`, `jobs.ghost_suggested/confirmed/auto`, `jobs.interview_scheduled{daysUntil,inferredFromPrep}`, `jobs.prep_started{applicationId,sessionOrdinal,evidenceCount}`, `jobs.prep_deferred_email`, `jobs.outcome_reported{result,round,revision,correction,followUp,fromStatus,toStatus}`, `jobs.tailor_run{jobId}`, `jobs.quickwins_viewed/clicked`, `jobs.ats_score_landed`, `jobs.wizard_started/completed`.
 
 ### Other model additions
 
@@ -160,7 +169,10 @@ Tier-honest button subtitles ("Opens {company}'s application form" / "Opens on {
 **Anti-nag budget:** return-sheet = ask #1; ask #2 = in-app next-visit confirm card at top of feed/tracker ("You clicked {Company} {derived age} — did you apply?"). The age is derived from the recorded click and never collapses the full seven-day eligibility window into “yesterday.” After that the row reads "Clicked · not confirmed" forever, one tap to flip.
 
 ### 4c. `interview_scheduled` → prep plan (the peak moment)
-Two doors: tracker chip, and **the inference** — launching practice on an `applied` job asks one tap ("Prepping for a real interview at {Company}? [Yes — it's scheduled] [Just practicing]"), never delaying the session; date capture waits for the feedback page. The sheet distinguishes exact dates from preferences: Tomorrow or an explicit date writes `interviewDate`; This week / Next week writes only `interviewDatePreference`; Not sure leaves the exact date unset. Only an exact date produces a spaced plan and T-1 reminder. The visible counter is attendance truth — "Job-specific practice completed: 1/3 sessions" — not readiness evidence or cross-job transfer. The deferred CTA is "Email me this practice link" and success means only "Request received." T-1 skips the warm-up CTA only after a verified completed job-specific session in the last 24h.
+Two doors: tracker chip, and **the inference** — launching practice on an `applied` job asks one tap ("Prepping for a real interview at {Company}? [Yes — it's scheduled] [Just practicing]"), never delaying the session; date capture waits for the feedback page. The sheet distinguishes exact dates from preferences: Tomorrow or an explicit date writes `interviewDate`; This week / Next week writes only `interviewDatePreference`; Not sure leaves the exact date unset. Every timing write is bound to the completed-round and outcome-revision pair shown with the control, so a stale save cannot attach the prior round's date after `advanced` or an A→B→A correction cycle. Only an exact date produces a spaced plan and T-1 reminder. The visible counter is attendance truth — "Job-specific practice completed: 1/3 sessions" — not readiness evidence or cross-job transfer. The deferred CTA is "Email me this practice link" and success means only "Request received." T-1 skips the warm-up CTA only after a verified completed job-specific session in the last 24h.
+
+### 4d. A14.1 post-interview outcome loop
+The tracker owns the check-in and revision flow; feed cards and public job detail do not author candidate outcomes. A scheduled row can report the completed round manually, and a known interview date may surface the same check-in after the interview rather than assuming what happened. A new report advances the round exactly once; retrying the same report is a no-op, while revising the latest report changes the factual result without manufacturing another round. The correction token is `{revision,status}`; the revision is a lifecycle/outcome CAS token advanced by both canonical reports and every real generic status edge, so stale tabs and status or result A→B→A cycles return a refreshable conflict. A `waiting` result followed by the actual decision is a follow-up in telemetry, while other edits remain corrections. Revision stays available only while the row is in an outcome-stage status; a loose transition back to a pre-interview status preserves a visible read-only historical label but hides/rejects revision through this flow. The generic status route cannot author `interviewed` or `offer`. The no-reminder action records only a deferral for that round. `apply_clicked`, `saved`, and other pre-interview rows cannot fabricate interview outcomes. The resulting labels are calibration data for the later A14.2 readiness work, never readiness evidence themselves. Until READINESS.md's calibration gate passes, no band, feed boost, movement claim, ranking, or cross-job transfer may consume them; PR-R3 remains frozen.
 
 ---
 

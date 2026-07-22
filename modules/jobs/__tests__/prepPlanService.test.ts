@@ -25,6 +25,7 @@ import { setInterviewDate } from '../services/prepPlanService'
 
 const NOW = new Date('2026-07-15T09:00:00Z')
 const day = 24 * 3600_000
+const CURRENT_STATE = { interviewRounds: 2, outcomeRevision: 7 } as const
 
 describe('buildPrepPlan (§4c — instant, deterministic, no LLM)', () => {
   it('≥3 days → 3 sessions: today / midpoint / day-before', () => {
@@ -86,12 +87,33 @@ describe('setInterviewDate', () => {
     mockWithActiveJobsAccountWrite.mockReset().mockImplementation(
       async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
     )
-    const r = await setInterviewDate('u1', 'j1', { date: new Date(NOW.getTime() + 6 * day), confidence: 'exact' }, NOW)
+    const r = await setInterviewDate(
+      'u1',
+      'j1',
+      { date: new Date(NOW.getTime() + 6 * day), confidence: 'exact' },
+      CURRENT_STATE,
+      NOW,
+    )
     expect(r).toEqual({ ok: true, daysUntil: 6 })
+    expect(mockUpdateOne.mock.calls[0][0]).toEqual({
+      userId: 'u1',
+      jobPostingId: 'j1',
+      status: 'interview_scheduled',
+      $and: [
+        { 'outcome.interviewRounds': 2 },
+        { 'outcome.revision': 7 },
+      ],
+    })
     expect(mockUpdateOne.mock.calls[0][1].$set).toMatchObject({ interviewDateConfidence: 'exact' })
     expect(mockUpdateOne.mock.calls[0][2]).toEqual({ session: mockDbSession })
 
-    const r2 = await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown', preference: 'unknown' }, NOW)
+    const r2 = await setInterviewDate(
+      'u1',
+      'j1',
+      { date: null, confidence: 'unknown', preference: 'unknown' },
+      CURRENT_STATE,
+      NOW,
+    )
     expect(r2).toEqual({ ok: true, daysUntil: null })
     expect(mockUpdateOne.mock.calls[1][1].$unset).toEqual({ interviewDate: 1 })
     expect(mockUpdateOne.mock.calls[1][1].$set).toMatchObject({
@@ -106,7 +128,7 @@ describe('setInterviewDate', () => {
       async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
     )
 
-    const result = await setInterviewDate('u1', 'j1', dateForChoice('this-week', NOW), NOW)
+    const result = await setInterviewDate('u1', 'j1', dateForChoice('this-week', NOW), CURRENT_STATE, NOW)
 
     expect(result).toEqual({ ok: true, daysUntil: null })
     expect(mockUpdateOne.mock.calls[0][1]).toMatchObject({
@@ -115,16 +137,131 @@ describe('setInterviewDate', () => {
     })
   })
 
-  it('rejects nonsense dates (past beyond yesterday, >1y out) and missing rows', async () => {
+  it('rejects nonsense dates, missing rows, and rows no longer scheduled', async () => {
     mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 })
     mockWithActiveJobsAccountWrite.mockReset().mockImplementation(
       async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
     )
-    expect((await setInterviewDate('u1', 'j1', { date: new Date(NOW.getTime() - 3 * day), confidence: 'exact' }, NOW)).ok).toBe(false)
-    expect((await setInterviewDate('u1', 'j1', { date: new Date(NOW.getTime() + 400 * day), confidence: 'exact' }, NOW)).ok).toBe(false)
+    expect((await setInterviewDate(
+      'u1',
+      'j1',
+      { date: new Date(NOW.getTime() - 3 * day), confidence: 'exact' },
+      CURRENT_STATE,
+      NOW,
+    )).ok).toBe(false)
+    expect((await setInterviewDate(
+      'u1',
+      'j1',
+      { date: new Date(NOW.getTime() + 400 * day), confidence: 'exact' },
+      CURRENT_STATE,
+      NOW,
+    )).ok).toBe(false)
     expect(mockUpdateOne).not.toHaveBeenCalled()
     mockUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
-    expect((await setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown', preference: 'unknown' }, NOW)).ok).toBe(false)
+    await expect(setInterviewDate(
+      'u1',
+      'j1',
+      { date: null, confidence: 'unknown', preference: 'unknown' },
+      CURRENT_STATE,
+      NOW,
+    )).resolves.toEqual({ ok: false, daysUntil: null, reason: 'state-conflict' })
+  })
+
+  it('matches legacy missing counters only when the displayed state token is zero', async () => {
+    mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 })
+    mockWithActiveJobsAccountWrite.mockReset().mockImplementation(
+      async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
+    )
+
+    await setInterviewDate(
+      'u1',
+      'j1',
+      { date: null, confidence: 'unknown', preference: 'unknown' },
+      { interviewRounds: 0, outcomeRevision: 0 },
+      NOW,
+    )
+
+    expect(mockUpdateOne.mock.calls[0][0]).toMatchObject({
+      $and: [
+        { $or: [{ 'outcome.interviewRounds': 0 }, { 'outcome.interviewRounds': { $exists: false } }] },
+        { $or: [{ 'outcome.revision': 0 }, { 'outcome.revision': { $exists: false } }] },
+      ],
+    })
+  })
+
+  it('rejects an old timing token after an outcome update advances the round and revision', async () => {
+    mockUpdateOne.mockReset()
+      .mockResolvedValueOnce({ matchedCount: 1 })
+      // Models the outcome transaction committing round 2 / revision 4
+      // before the second timing write reaches Mongo.
+      .mockResolvedValueOnce({ matchedCount: 0 })
+    mockWithActiveJobsAccountWrite.mockReset().mockImplementation(
+      async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
+    )
+    const oldToken = { interviewRounds: 1, outcomeRevision: 3 }
+    const capture = { date: null, confidence: 'unknown' as const, preference: 'unknown' as const }
+
+    await expect(setInterviewDate('u1', 'j1', capture, oldToken, NOW)).resolves.toEqual({
+      ok: true,
+      daysUntil: null,
+    })
+    await expect(setInterviewDate('u1', 'j1', capture, oldToken, NOW)).resolves.toEqual({
+      ok: false,
+      daysUntil: null,
+      reason: 'state-conflict',
+    })
+    expect(mockUpdateOne.mock.calls[1][0]).toMatchObject({
+      status: 'interview_scheduled',
+      $and: [
+        { 'outcome.interviewRounds': 1 },
+        { 'outcome.revision': 3 },
+      ],
+    })
+  })
+
+  it('rejects an old timing token after scheduled → ghosted → scheduled lifecycle ABA', async () => {
+    mockUpdateOne.mockReset().mockResolvedValueOnce({ matchedCount: 0 })
+    mockWithActiveJobsAccountWrite.mockReset().mockImplementation(
+      async (_userId: string, work: (session: unknown) => Promise<unknown>) => work(mockDbSession),
+    )
+
+    await expect(setInterviewDate(
+      'u1',
+      'j1',
+      { date: null, confidence: 'unknown', preference: 'unknown' },
+      { interviewRounds: 1, outcomeRevision: 5 },
+      NOW,
+    )).resolves.toEqual({ ok: false, daysUntil: null, reason: 'state-conflict' })
+
+    expect(mockUpdateOne.mock.calls[0][0]).toMatchObject({
+      status: 'interview_scheduled',
+      $and: [
+        { 'outcome.interviewRounds': 1 },
+        { 'outcome.revision': 5 },
+      ],
+    })
+  })
+
+  it('rejects malformed state tokens before opening the account write fence', async () => {
+    mockUpdateOne.mockReset()
+    mockWithActiveJobsAccountWrite.mockReset()
+
+    await expect(setInterviewDate(
+      'u1',
+      'j1',
+      { date: null, confidence: 'unknown', preference: 'unknown' },
+      { interviewRounds: 101, outcomeRevision: 1 },
+      NOW,
+    )).resolves.toEqual({ ok: false, daysUntil: null, reason: 'invalid' })
+    await expect(setInterviewDate(
+      'u1',
+      'j1',
+      { date: null, confidence: 'unknown', preference: 'unknown' },
+      { interviewRounds: 1, outcomeRevision: -1 },
+      NOW,
+    )).resolves.toEqual({ ok: false, daysUntil: null, reason: 'invalid' })
+    expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
   })
 
   it('preserves the inactive-account signal and writes nothing when deletion owns the fence', async () => {
@@ -134,7 +271,13 @@ describe('setInterviewDate', () => {
     )
 
     await expect(
-      setInterviewDate('u1', 'j1', { date: null, confidence: 'unknown', preference: 'unknown' }, NOW),
+      setInterviewDate(
+        'u1',
+        'j1',
+        { date: null, confidence: 'unknown', preference: 'unknown' },
+        CURRENT_STATE,
+        NOW,
+      ),
     ).rejects.toBeInstanceOf(MockJobsAccountInactiveError)
     expect(mockUpdateOne).not.toHaveBeenCalled()
   })
