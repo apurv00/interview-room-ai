@@ -838,6 +838,48 @@ Escalate restoration rather than attempting an in-place partial reconstruction.
 Preserve dry-run, apply, gate, snapshot/PITR, adoption operation IDs, and
 affected row counts with deployment evidence.
 
+## A14 evidence-provenance rollout gate
+
+The normal merge pipeline remains authoritative: merging `main` triggers the
+Vercel deployment and the Coolify staging rollout at
+`staging.interviewprep.guru`. Do not SSH or start a second manual deployment.
+Before using this gate, configure Coolify runtime variable
+`DEPLOYMENT_COMMIT_SHA=$SOURCE_COMMIT`, keep `HEALTH_CHECK_TOKEN` on the app,
+and store the same token in the protected GitHub `jobs-staging` environment.
+The authenticated health response must expose the full deployed SHA; a missing,
+malformed, unhealthy, or different revision fails before any database command.
+After staging reports the new revision healthy, let pre-revision
+`jobs-evidence-attribution` work drain. This is an observable gate, not a timed
+guess: record the deployed commit, then confirm in Inngest that the function has
+zero running/retrying executions that began before that revision and zero queued
+pre-revision runs. Preserve that dashboard/API evidence with the release record.
+Only then run these as environment-scoped one-off release commands:
+
+```text
+npm run repair:jobs-evidence-provenance
+npm run repair:jobs-evidence-provenance -- --apply
+npm run check:jobs-evidence-provenance
+```
+
+For staging, dispatch **Jobs Evidence Provenance Gate** on `main`, enter the
+commit already healthy on `staging.interviewprep.guru`, and confirm the observed
+old-worker drain. The workflow checks that the commit belongs to `main`, applies
+the existing `jobs-staging` database-identity sentinel before any write, then
+runs the same preview/apply/check sequence. It does not deploy application code.
+
+The first command is read-only. All modes also fail closed when the current CMS
+model allowlist cannot be resolved authoritatively. Apply refuses malformed or
+future declared provenance and unsafe revision fences before writing, removes
+only legacy or valid-but-stale readiness snapshots first in bounded batches,
+advances their revision fences, and quarantines provenance-missing evidence
+without inventing an evaluator or replaying a model. `check` is mandatory after
+apply; it validates the exact current epoch/execution membership and fails while
+any unclassified row or invalid readiness snapshot remains.
+An explicit `legacy-unverifiable` total is expected historical state and does
+not fail the gate. Preserve all three outputs with rollout evidence, repeat the
+same sequence in production, and keep readiness surfaces dark regardless—the
+founder-approved calibration and AI-data-disclosure gates remain separate.
+
 ## Propagation and external-system boundary
 
 Evaluator, X-ray, and ATS paths re-read exact primary authority before every

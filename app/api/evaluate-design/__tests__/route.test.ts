@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   completion: vi.fn(),
   isFeatureEnabled: vi.fn(),
   trackUsage: vi.fn(),
+  captureScoringConfig: vi.fn(),
+  isCanonicalJobsSession: vi.fn(),
+  recordScoringReceipt: vi.fn(),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -34,6 +37,12 @@ vi.mock('@shared/middleware/composeApiRoute', () => ({
 vi.mock('@shared/services/modelRouter', () => ({ completion: mocks.completion }))
 vi.mock('@shared/featureFlags', () => ({ isFeatureEnabled: mocks.isFeatureEnabled }))
 vi.mock('@shared/services/usageTracking', () => ({ trackUsage: mocks.trackUsage }))
+vi.mock('@shared/services/scoringProvenance', () => ({
+  DESIGN_EVALUATION_CONTRACT_VERSION: 'design-evaluation.v1',
+  captureModelConfigSnapshot: mocks.captureScoringConfig,
+  isCanonicalJobsPracticeSession: mocks.isCanonicalJobsSession,
+  recordJobsAnswerScoringReceipt: mocks.recordScoringReceipt,
+}))
 vi.mock('@shared/services/promptSecurity', () => ({
   JSON_OUTPUT_RULE: 'JSON_OUTPUT_RULE',
   DATA_BOUNDARY_RULE: 'DATA_BOUNDARY_RULE',
@@ -56,6 +65,21 @@ const EVAL = {
   flags: [],
   grounded_follow_up: 'Your API Gateway connects straight to the Database — what happens under write bursts?',
   grounded_follow_up_2: 'You chose a single region — what does that trade away for your latency requirement?',
+}
+const DESIGN_MODEL = {
+  model: 'design-evaluator',
+  provider: 'openai',
+  maxTokens: 800,
+  useToonInput: false,
+}
+const DESIGN_RESULT = {
+  text: JSON.stringify(EVAL),
+  model: DESIGN_MODEL.model,
+  provider: DESIGN_MODEL.provider,
+  usedFallback: false,
+  attemptKind: 'primary' as const,
+  inputTokens: 120,
+  outputTokens: 70,
 }
 
 const makeReq = (extra: Record<string, unknown> = {}) =>
@@ -84,7 +108,15 @@ const promptOf = (n: number): string => mocks.completion.mock.calls[n][0].messag
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.trackUsage.mockResolvedValue(undefined)
-  mocks.completion.mockResolvedValue({ text: JSON.stringify(EVAL) })
+  mocks.isCanonicalJobsSession.mockResolvedValue(false)
+  mocks.captureScoringConfig.mockResolvedValue({
+    taskSlot: 'interview.evaluate-design',
+    resolved: DESIGN_MODEL,
+    source: 'L3-Mongo',
+    authoritative: true,
+  })
+  mocks.recordScoringReceipt.mockResolvedValue(true)
+  mocks.completion.mockResolvedValue(DESIGN_RESULT)
 })
 
 describe('POST /api/evaluate-design — grounded_followups ON', () => {
@@ -176,5 +208,63 @@ describe('POST /api/evaluate-design — grounded_followups OFF', () => {
     expect(data.grounded_follow_up).toBeUndefined()
     expect(data.grounded_follow_up_2).toBeUndefined()
     expect(data.follow_up_question).toBe(EVAL.follow_up_question)
+  })
+})
+
+describe('POST /api/evaluate-design — Jobs scorer receipt', () => {
+  beforeEach(() => mocks.isFeatureEnabled.mockReturnValue(false))
+
+  it('records normalized diagram scores only for explicit Jobs intent', async () => {
+    await POST(makeReq({ sessionId: 'session-1', jobsPractice: true }))
+    expect(mocks.isCanonicalJobsSession).not.toHaveBeenCalled()
+    expect(mocks.captureScoringConfig).toHaveBeenCalledWith('interview.evaluate-design')
+    expect(mocks.completion).toHaveBeenCalledWith(expect.objectContaining({
+      resolvedModel: DESIGN_MODEL,
+    }))
+    expect(mocks.recordScoringReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      userId: mocks.userId,
+      contractVersion: 'design-evaluation.v1',
+      evaluation: expect.objectContaining({
+        questionIndex: 1,
+        relevance: 70,
+        structure: 75,
+        specificity: 65,
+        ownership: 60,
+      }),
+      result: expect.objectContaining({ attemptKind: 'primary' }),
+    }))
+  })
+
+  it('uses canonical server attribution for a stale client with no Jobs hint', async () => {
+    mocks.isCanonicalJobsSession.mockResolvedValue(true)
+
+    await POST(makeReq({ sessionId: 'session-1' }))
+
+    expect(mocks.isCanonicalJobsSession).toHaveBeenCalledWith('session-1', mocks.userId)
+    expect(mocks.captureScoringConfig).toHaveBeenCalledWith('interview.evaluate-design')
+    expect(mocks.recordScoringReceipt).toHaveBeenCalledOnce()
+  })
+
+  it('does not capture when the client explicitly says non-Jobs or server authority is absent', async () => {
+    await POST(makeReq({ sessionId: 'session-1', jobsPractice: false }))
+    expect(mocks.isCanonicalJobsSession).not.toHaveBeenCalled()
+    expect(mocks.captureScoringConfig).not.toHaveBeenCalled()
+    expect(mocks.recordScoringReceipt).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    mocks.isFeatureEnabled.mockReturnValue(false)
+    mocks.isCanonicalJobsSession.mockResolvedValue(false)
+    mocks.completion.mockResolvedValue(DESIGN_RESULT)
+    await POST(makeReq({ sessionId: 'session-1' }))
+    expect(mocks.isCanonicalJobsSession).toHaveBeenCalledWith('session-1', mocks.userId)
+    expect(mocks.captureScoringConfig).not.toHaveBeenCalled()
+    expect(mocks.recordScoringReceipt).not.toHaveBeenCalled()
+  })
+
+  it('does not attest truncated output', async () => {
+    mocks.completion.mockResolvedValue({ ...DESIGN_RESULT, truncated: true })
+    await POST(makeReq({ sessionId: 'session-1', jobsPractice: true }))
+    expect(mocks.recordScoringReceipt).not.toHaveBeenCalled()
   })
 })

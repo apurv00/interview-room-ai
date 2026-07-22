@@ -46,6 +46,11 @@ vi.mock('@shared/db/models/UserBadge', () => ({
 }))
 
 import { generateDataExport } from '../services/dataExportService'
+import {
+  modelConfigSnapshotOf,
+  primaryModelExecutionProvenanceOf,
+} from '../services/scoringProvenance'
+import type { ResolvedModel } from '../services/modelRouter'
 
 const USER_ID = '507f1f77bcf86cd799439010'
 const APP_ID = '507f1f77bcf86cd799439011'
@@ -59,6 +64,23 @@ const REPORTED_AT = new Date('2026-07-21T09:30:00.000Z')
 const LEGACY_REPORTED_AT = new Date('2026-06-01T10:00:00.000Z')
 const EXACT_INTERVIEW_DATE = new Date('2026-08-04T00:00:00.000Z')
 const LEGACY_SYNTHETIC_WEEK_DATE = new Date('2026-08-12T09:30:00.000Z')
+const QUARANTINED_AT = new Date('2026-07-22T10:00:00.000Z')
+const RECORDED_AT = new Date('2026-07-22T09:00:00.000Z')
+const RESOLVED: ResolvedModel = {
+  model: 'gpt-5.6-luna',
+  provider: 'openai',
+  maxTokens: 500,
+  reasoningEffort: 'low',
+  useToonInput: false,
+}
+const SCORING_EXECUTION = primaryModelExecutionProvenanceOf({
+  snapshot: modelConfigSnapshotOf('interview.evaluate-answer', RESOLVED),
+  contractVersion: 'answer-evaluation.v1',
+})
+const ATTRIBUTION_EXECUTION = primaryModelExecutionProvenanceOf({
+  snapshot: modelConfigSnapshotOf('jobs.evidence-attribution', { ...RESOLVED, maxTokens: 1400 }),
+  contractVersion: 'evidence-attribution.v1',
+})
 
 function queryResult<T>(value: T) {
   const query = {
@@ -279,5 +301,212 @@ describe('GDPR Jobs apply-evidence export', () => {
       interviewDateConfidence: 'week',
       interviewDatePreference: null,
     })
+  })
+
+  it('exports scorer receipts, exact evidence provenance, quarantine state, and readiness provenance', async () => {
+    mocks.interviewSessionFind.mockReturnValue(queryResult([{
+      _id: { toString: () => 'session-1' },
+      config: { role: 'backend' },
+      status: 'completed',
+      answerScoringReceipts: [{
+        schemaVersion: 1,
+        bindingHash: 'b'.repeat(64),
+        execution: { ...SCORING_EXECUTION, internalPrompt: 'must-not-export' },
+        recordedAt: RECORDED_AT,
+        rawModelText: 'must-not-export',
+      }],
+    }]))
+    mocks.jobPracticeEvidenceFind.mockReturnValue(queryResult([
+      {
+        _id: 'evidence-1',
+        requirementId: 'req-node',
+        xrayHash: 'x'.repeat(64),
+        handoffVersion: 1,
+        handoffJdHash: 'j'.repeat(64),
+        strength: 'strong',
+        answerScore: 82,
+        scoringEpoch: SCORING_EXECUTION.fingerprint,
+        provenance: {
+          schemaVersion: 1,
+          status: 'attested',
+          scoring: { ...SCORING_EXECUTION, internalPrompt: 'must-not-export' },
+          attribution: ATTRIBUTION_EXECUTION,
+          rawModelText: 'must-not-export',
+        },
+        at: RECORDED_AT,
+        sessionId: 'session-1',
+        jobPostingId: 'job-1',
+      },
+      {
+        _id: 'evidence-legacy',
+        requirementId: 'req-payments',
+        xrayHash: 'y'.repeat(64),
+        strength: 'partial',
+        answerScore: 61,
+        scoringEpoch: 'historical-model-name',
+        provenance: {
+          schemaVersion: 1,
+          status: 'legacy-unverifiable',
+          quarantineReason: 'pre-provenance-contract',
+          quarantinedAt: QUARANTINED_AT,
+        },
+        at: RECORDED_AT,
+        sessionId: 'session-old',
+        jobPostingId: 'job-1',
+      },
+      {
+        _id: 'evidence-invalid-attestation',
+        requirementId: 'req-invalid',
+        xrayHash: 'z'.repeat(64),
+        strength: 'strong',
+        answerScore: 99,
+        scoringEpoch: '0'.repeat(64),
+        provenance: {
+          schemaVersion: 1,
+          status: 'attested',
+          scoring: SCORING_EXECUTION,
+          attribution: ATTRIBUTION_EXECUTION,
+        },
+        at: RECORDED_AT,
+        sessionId: 'session-invalid',
+        jobPostingId: 'job-1',
+      },
+    ]))
+    const readiness = {
+      handoffVersion: 1,
+      band: 'building',
+      sessions: 1,
+      practicedCount: 1,
+      mustHaveTotal: 3,
+      quality: 82,
+      strongCoverage: 0.33,
+      xrayHash: 'x'.repeat(64),
+      scoringEpoch: 'e'.repeat(64),
+      provenance: {
+        schemaVersion: 1,
+        scoring: [{ ...SCORING_EXECUTION, internalPrompt: 'must-not-export' }],
+        attribution: [ATTRIBUTION_EXECUTION],
+      },
+      at: RECORDED_AT,
+      rawModelText: 'must-not-export',
+    }
+    const appRows = (await mocks.jobApplicationFind().lean()) as Array<Record<string, unknown>>
+    mocks.jobApplicationFind.mockReturnValue(queryResult([
+      { ...appRows[0], readiness },
+      ...appRows.slice(1),
+    ]))
+
+    const exported = await generateDataExport(USER_ID)
+    expect(exported.interviewSessions).toEqual([
+      expect.objectContaining({
+        id: 'session-1',
+        answerScoringReceipts: [expect.objectContaining({ execution: SCORING_EXECUTION })],
+      }),
+    ])
+    expect(exported.jobPracticeEvidence).toEqual([
+      expect.objectContaining({
+        scoringEpochStatus: 'attested-execution-fingerprint',
+        provenance: expect.objectContaining({ status: 'attested', scoring: SCORING_EXECUTION }),
+      }),
+      expect.objectContaining({
+        scoringEpoch: 'historical-model-name',
+        scoringEpochStatus: 'legacy-unverified',
+        provenance: {
+          schemaVersion: 1,
+          status: 'legacy-unverifiable',
+          quarantineReason: 'pre-provenance-contract',
+          quarantinedAt: QUARANTINED_AT,
+        },
+      }),
+      expect.objectContaining({
+        scoringEpoch: '0'.repeat(64),
+        scoringEpochStatus: 'legacy-unverified',
+        provenance: null,
+      }),
+    ])
+    expect((exported.jobApplications as Array<Record<string, unknown>>)[0].readiness).toEqual({
+      handoffVersion: 1,
+      band: 'building',
+      sessions: 1,
+      practicedCount: 1,
+      mustHaveTotal: 3,
+      quality: 82,
+      strongCoverage: 0.33,
+      xrayHash: 'x'.repeat(64),
+      scoringEpoch: 'e'.repeat(64),
+      provenance: {
+        schemaVersion: 1,
+        scoring: [SCORING_EXECUTION],
+        attribution: [ATTRIBUTION_EXECUTION],
+      },
+      at: RECORDED_AT,
+    })
+
+    const roundTrip = JSON.parse(JSON.stringify(exported)) as {
+      interviewSessions: Array<Record<string, unknown>>
+      jobPracticeEvidence: Array<Record<string, unknown>>
+      jobApplications: Array<Record<string, unknown>>
+    }
+    expect(roundTrip.interviewSessions[0].answerScoringReceipts).toEqual([{
+      schemaVersion: 1,
+      bindingHash: 'b'.repeat(64),
+      execution: SCORING_EXECUTION,
+      recordedAt: RECORDED_AT.toISOString(),
+    }])
+    expect(roundTrip.jobPracticeEvidence[1].provenance).toEqual({
+      schemaVersion: 1,
+      status: 'legacy-unverifiable',
+      quarantineReason: 'pre-provenance-contract',
+      quarantinedAt: QUARANTINED_AT.toISOString(),
+    })
+    expect(roundTrip.jobApplications[0].readiness).toEqual({
+      handoffVersion: 1,
+      band: 'building',
+      sessions: 1,
+      practicedCount: 1,
+      mustHaveTotal: 3,
+      quality: 82,
+      strongCoverage: 0.33,
+      xrayHash: 'x'.repeat(64),
+      scoringEpoch: 'e'.repeat(64),
+      at: RECORDED_AT.toISOString(),
+      provenance: {
+        schemaVersion: 1,
+        scoring: [SCORING_EXECUTION],
+        attribution: [ATTRIBUTION_EXECUTION],
+      },
+    })
+    expect(JSON.stringify(roundTrip)).not.toContain('must-not-export')
+  })
+
+  it('cursor-pages every interview session instead of truncating at 100', async () => {
+    const firstPage = Array.from({ length: 500 }, (_, index) => ({
+      _id: `session-${1000 - index}`,
+      config: { role: 'backend' },
+      status: 'completed',
+      answerScoringReceipts: [],
+    }))
+    const finalPage = [{
+      _id: 'session-500',
+      config: { role: 'backend' },
+      status: 'completed',
+      answerScoringReceipts: [],
+    }]
+    const firstQuery = queryResult(firstPage)
+    const finalQuery = queryResult(finalPage)
+    mocks.interviewSessionFind
+      .mockReturnValueOnce(firstQuery)
+      .mockReturnValueOnce(finalQuery)
+
+    const exported = await generateDataExport(USER_ID)
+
+    expect(exported.interviewSessions).toHaveLength(501)
+    expect(mocks.interviewSessionFind).toHaveBeenCalledTimes(2)
+    expect(mocks.interviewSessionFind.mock.calls[1][0]).toMatchObject({
+      _id: { $lt: 'session-501' },
+    })
+    expect(firstQuery.select).toHaveBeenCalledWith(
+      '_id config status feedback answerScoringReceipts createdAt completedAt',
+    )
   })
 })

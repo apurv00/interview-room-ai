@@ -117,7 +117,7 @@ Nav: `{ href: '/jobs', label: 'Jobs' }` at index 1 in `NAV_LINKS` (`shared/layou
   practiceSessionIds: ObjectId[],               // all historical attendance
   verifiedPracticeSessionIds: ObjectId[],       // signed handoff v1; job-specific practice count
   readinessRevision: number,                    // CAS fence; evidence deletion invalidates stale snapshots
-  readiness?: { handoffVersion: 1, band, sessions, practicedCount, mustHaveTotal, quality, strongCoverage, xrayHash, scoringEpoch, at },
+  readiness?: { handoffVersion: 1, band, sessions, practicedCount, mustHaveTotal, quality, strongCoverage, xrayHash, scoringEpoch, provenance: { schemaVersion: 1, scoring: [...], attribution: [...] }, at },
   ghostSuggestedAt?
 }
 ```

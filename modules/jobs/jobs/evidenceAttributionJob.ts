@@ -3,7 +3,17 @@ import type { ClientSession } from 'mongoose'
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession, JobApplication, JobPosting, JobPracticeEvidence } from '@shared/db/models'
-import { completion, resolveModel } from '@shared/services/modelRouter'
+import { completion } from '@shared/services/modelRouter'
+import {
+  AI_EXECUTION_PROVENANCE_SCHEMA_VERSION,
+  answerScoringBindingHash,
+  captureModelConfigSnapshot,
+  isAnswerScoringReceipt,
+  isModelExecutionProvenance,
+  modelExecutionProvenanceOf,
+  type AnswerScoringReceipt,
+  type ModelExecutionProvenance,
+} from '@shared/services/scoringProvenance'
 import { logger } from '@shared/logger'
 import { xrayHashOf } from '../services/xrayService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
@@ -13,7 +23,18 @@ import {
   hasCompletedScoredPractice,
   isScorablePracticeEvaluation,
 } from '../services/applicationService'
-import { computeReadiness, STRENGTH_WEIGHT, type EvidenceRowLike } from '../config/readiness'
+import {
+  computeReadiness,
+  STRENGTH_WEIGHT,
+  type CurrentReadinessProvenance,
+  type EvidenceRowLike,
+} from '../config/readiness'
+import {
+  currentEvidenceProvenance,
+  EVIDENCE_ATTRIBUTION_CONTRACT_VERSION,
+  SCORING_PROVENANCE_CONTRACTS,
+} from '../services/evidenceProvenance'
+export { EVIDENCE_ATTRIBUTION_CONTRACT_VERSION } from '../services/evidenceProvenance'
 import {
   isJobsAccountActive,
   JobsAccountInactiveError,
@@ -23,7 +44,8 @@ import {
 /**
  * Per-answer → must-have attribution worker (READINESS.md §1, PR-R1).
  * Three steps so retries never re-bill the LLM (the memoized llm-attribute
- * output survives persist retries): load-inputs → llm-attribute → persist.
+ * output survives persist retries): load-inputs-provenance-v1 →
+ * llm-attribute-provenance-v1 → persist.
  *
  * Honesty invariants enforced here: failed/truncated evaluations are
  * excluded entirely; evidence binds to the JD VERSION the session actually
@@ -36,39 +58,6 @@ import {
 interface StepRunner {
   run: <T>(name: string, fn: () => Promise<T> | T) => Promise<T>
 }
-
-/**
- * Scoring epoch (panel R8). AnswerEvaluation does NOT persist its judge
- * model — /api/evaluate-answer stamps `result.model` onto trackUsage only
- * (Codex #538 P1), so per-row `modelUsed` would be 'unknown' for every
- * live session and the snapshot's epoch filter would zero readiness
- * forever. Instead, rows are epoch-stamped with the evaluate-answer
- * slot's model AT ATTRIBUTION TIME, and the snapshot filter reads the
- * SAME expression — writer and reader cannot disagree. Attribution fires
- * seconds after the session persists, so this equals the judge model
- * except inside a model-cutover window (bounded mislabel, acceptable
- * for R1's purpose: detecting stale-epoch evidence after a cutover).
- *
- * RESOLVED, not hardcoded (Codex #538 round 2): an active CMS ModelConfig
- * row overrides TASK_SLOT_DEFAULTS for the actual evaluator, so the epoch
- * must go through the same resolveModel() path completion() uses — else a
- * CMS cutover would never make older evidence stale. Config is cached
- * in-memory (60s), so this is cheap per persist. Known bounded window:
- * on a cold process with empty config cache, resolveModel falls back to
- * defaults (it never throws) — under an active CMS override that run
- * stamps+filters with the default epoch (internally consistent, heals on
- * the next attribution). Accepted; prod has no CMS ModelConfig doc today.
- */
-export async function currentScoringEpoch(): Promise<string> {
-  const resolved = await resolveModel('interview.evaluate-answer')
-  return resolved.model
-}
-
-/**
- * One version covers the prompt, response schema, and classification policy so
- * offline calibration artifacts can prove which production contract they ran.
- */
-export const EVIDENCE_ATTRIBUTION_CONTRACT_VERSION = 'evidence-attribution.v1' as const
 
 export const EVIDENCE_ATTRIBUTION_SYSTEM_PROMPT =
   'You are a precise evidence-attribution classifier. Output only the requested JSON.'
@@ -115,6 +104,7 @@ export interface EvidenceAttributionAttempt {
 
 export type EvidenceAttributionClassification = EvidenceAttributionPayload & {
   attempts: EvidenceAttributionAttempt[]
+  provenance: ModelExecutionProvenance
 }
 
 export type EvidenceAttributionFailureReason =
@@ -122,6 +112,7 @@ export type EvidenceAttributionFailureReason =
   | 'completion-failed'
   | 'truncated'
   | 'invalid-response'
+  | 'config-drift'
 
 /** Safe classifier failure: no prompt, answer, requirement, or raw model text. */
 export class EvidenceAttributionClassificationError extends Error {
@@ -146,6 +137,8 @@ interface LoadedInputs {
     | 'no-jd'
     | 'jd-version-mismatch' // TRANSIENT: posting cache may be stale — never stamped
     | 'no-scorable-answers'
+    | 'duplicate-scorable-evaluations'
+    | 'no-attested-scorable-answers'
     | 'no-parse' // TRANSIENT: X-ray parse not cached yet — never stamped
     | 'no-must-haves' // terminal: parse exists but lists zero must-haves
     | 'missing-context'
@@ -153,7 +146,13 @@ interface LoadedInputs {
     | 'not-scored' // TRANSIENT: feedback persistence must win before attribution
     | 'already-processed'
     | 'posting-restricted' // safety/legal closure: never derive new evidence
-  answers: Array<{ index: number; question: string; answer: string; answerScore: number }>
+  answers: Array<{
+    index: number
+    question: string
+    answer: string
+    answerScore: number
+    scoring: ModelExecutionProvenance
+  }>
   mustHaves: Array<{ id: string; requirement: string }>
   xrayHash: string
   handoffJdHash: string
@@ -349,7 +348,22 @@ export async function classifyEvidenceAttribution(input: {
   beforeProviderCall?: () => Promise<boolean>
 }): Promise<EvidenceAttributionClassification> {
   const answerIndices = validateAttributionInput(input.answers)
-  const activeSlot = await resolveModel('jobs.evidence-attribution')
+  const configBefore = await captureModelConfigSnapshot(
+    'jobs.evidence-attribution',
+    { waitForAuthoritative: true },
+  ).catch(() => {
+    throw new EvidenceAttributionClassificationError(
+      'config-drift',
+      'authoritative attribution config could not be resolved',
+    )
+  })
+  if (!configBefore.authoritative) {
+    throw new EvidenceAttributionClassificationError(
+      'config-drift',
+      'authoritative attribution config is unavailable',
+    )
+  }
+  const activeSlot = configBefore.resolved
   const prompt = buildAttributionPrompt(input.answers, input.mustHaves)
   const attempts: EvidenceAttributionAttempt[] = []
 
@@ -362,6 +376,7 @@ export async function classifyEvidenceAttribution(input: {
         system: EVIDENCE_ATTRIBUTION_SYSTEM_PROMPT,
         messages: [{ role: 'user', content: prompt }],
         ...(bump ? { maxTokens: activeSlot.maxTokens + bump } : {}),
+        resolvedModel: activeSlot,
         beforeProviderCall: input.beforeProviderCall,
       })
     } catch (error) {
@@ -398,8 +413,18 @@ export async function classifyEvidenceAttribution(input: {
     try {
       const payload = parseEvidenceAttributionResponse(response.text)
       validateAttributionOutput(payload, answerIndices)
-      return { ...payload, attempts }
-    } catch {
+      return {
+        ...payload,
+        attempts,
+        provenance: modelExecutionProvenanceOf({
+          snapshot: configBefore,
+          result: response,
+          contractVersion: EVIDENCE_ATTRIBUTION_CONTRACT_VERSION,
+          ...(bump ? { overrides: { maxTokens: activeSlot.maxTokens + bump } } : {}),
+        }),
+      }
+    } catch (error) {
+      if (error instanceof EvidenceAttributionClassificationError) throw error
       if (bump) {
         throw new EvidenceAttributionClassificationError(
           'invalid-response',
@@ -444,7 +469,7 @@ interface VerifiedReadinessInput {
   xrayHash: string
   handoffJdHash: string
   mustHaveIds: string[]
-  epoch: string
+  current: CurrentReadinessProvenance
 }
 
 /**
@@ -477,14 +502,14 @@ async function writeVerifiedReadinessSnapshot(
       handoffVersion: 1,
       handoffJdHash: input.handoffJdHash,
     })
-      .select('requirementId xrayHash strength answerScore scoringEpoch sessionId')
+      .select('requirementId xrayHash strength answerScore scoringEpoch sessionId provenance')
     if (dbSession) allRowsQuery.session(dbSession)
     const allRows = await allRowsQuery.lean()
     const snapshot = {
       ...computeReadiness(
         allRows.map((row) => ({ ...row, sessionId: String(row.sessionId) })) as unknown as EvidenceRowLike[],
         { xrayHash: input.xrayHash, mustHaveIds: input.mustHaveIds },
-        input.epoch
+        input.current,
       ),
       handoffVersion: 1 as const,
     }
@@ -511,12 +536,14 @@ export async function runEvidenceAttributionHandler(
   await connectDB()
   const { sessionId, applicationId, jobPostingId } = event.data
 
-  const inputs = await step.run('load-inputs', async (): Promise<LoadedInputs> => {
+  const inputs = await step.run('load-inputs-provenance-v1', async (): Promise<LoadedInputs> => {
     const none = (outcome: LoadedInputs['outcome']): LoadedInputs => ({
       outcome, answers: [], mustHaves: [], xrayHash: '', handoffJdHash: '', applicationId, userId: '',
     })
     const [session, application, posting] = await Promise.all([
-      InterviewSession.findById(sessionId).select('config evaluations userId jobDescription attribution status feedback').lean(),
+      InterviewSession.findById(sessionId).select(
+        'config evaluations answerScoringReceipts userId jobDescription attribution status feedback',
+      ).lean(),
       JobApplication.findById(applicationId).select('userId jobPostingId').lean(),
       JobPosting.findById(jobPostingId).select('status closedReason parsedJD parsedJDHash').lean(),
     ])
@@ -576,21 +603,62 @@ export async function runEvidenceAttributionHandler(
     // transient missing-parse case above.
     if (mustHaves.length === 0) return none('no-must-haves')
 
-    // Scorable answers only (panel R13): failed/truncated excluded;
-    // answerScore = round(mean of the 4 universal dims), recomputed here.
-    // Epoch is NOT read per-row — see currentScoringEpoch (Codex #538 P1).
-    const answers = evals
+    // Scorable answers only (panel R13): failed/truncated excluded. Every
+    // answer must also have one unambiguous server-owned scoring receipt
+    // hash-bound to the exact fields consumed below. Historical rows and
+    // browser-forged evaluation metadata are never assigned today's model.
+    const scorable = evals
       .map((e, i) => ({ e, i }))
       .filter(({ e }) => isScorablePracticeEvaluation(e))
-      .map(({ e, i }) => ({
+    if (scorable.length === 0) return none('no-scorable-answers')
+
+    // A receipt attests scored CONTENT, not an evaluation array position.
+    // Reusing one content-bound receipt for duplicate copies would make a
+    // single model execution look like multiple independently scored answers.
+    // Fail the whole session closed instead of counting the unique remainder.
+    const scorableBindings = scorable.map(({ e }) => answerScoringBindingHash(e))
+    if (new Set(scorableBindings).size !== scorableBindings.length) {
+      return none('duplicate-scorable-evaluations')
+    }
+
+    const receipts = ((session as { answerScoringReceipts?: unknown[] }).answerScoringReceipts ?? [])
+      .filter(isAnswerScoringReceipt) as AnswerScoringReceipt[]
+    const executionsByBinding = new Map<string, Map<string, ModelExecutionProvenance>>()
+    for (const receipt of receipts) {
+      const isKnownScorer = SCORING_PROVENANCE_CONTRACTS.some(
+        ([taskSlot, contractVersion]) =>
+          receipt.execution.taskSlot === taskSlot && receipt.execution.contractVersion === contractVersion,
+      )
+      if (!isKnownScorer) continue
+      const byFingerprint = executionsByBinding.get(receipt.bindingHash) ?? new Map()
+      byFingerprint.set(receipt.execution.fingerprint, receipt.execution)
+      executionsByBinding.set(receipt.bindingHash, byFingerprint)
+    }
+
+    const answers = scorable.flatMap(({ e, i }) => {
+      const executions = executionsByBinding.get(answerScoringBindingHash(e))
+      // Multiple distinct receipts for identical scored content cannot prove
+      // which execution produced the persisted evaluation. Quarantine that
+      // answer instead of guessing from receipt order or current CMS config.
+      if (!executions || executions.size !== 1) return []
+      const scoring = executions.values().next().value as ModelExecutionProvenance
+      return [{
         index: i,
         question: String(e.question ?? '').slice(0, 500),
         answer: String(e.answer ?? '').slice(0, 2000),
         answerScore: Math.round(
           ((Number(e.relevance) || 0) + (Number(e.structure) || 0) + (Number(e.specificity) || 0) + (Number(e.ownership) || 0)) / 4
         ),
-      }))
-    if (answers.length === 0) return none('no-scorable-answers')
+        scoring,
+      }]
+    })
+    if (answers.length === 0) return none('no-attested-scorable-answers')
+    if (answers.length !== scorable.length) {
+      logger.warn(
+        { sessionId, droppedAnswers: scorable.length - answers.length },
+        'scorable answers without unambiguous scoring receipts were excluded',
+      )
+    }
 
     return {
       outcome: 'ok',
@@ -645,9 +713,9 @@ export async function runEvidenceAttributionHandler(
     return { outcome: 'unsupported-input' }
   }
 
-  let verdicts: EvidenceAttributionPayload
+  let verdicts: EvidenceAttributionClassification
   try {
-    verdicts = await step.run('llm-attribute', () => classifyEvidenceAttribution({
+    verdicts = await step.run('llm-attribute-provenance-v1', () => classifyEvidenceAttribution({
       answers: inputs.answers,
       mustHaves: inputs.mustHaves,
       beforeProviderCall: () => evidenceAuthorityIsCurrent(inputs, {
@@ -666,6 +734,19 @@ export async function runEvidenceAttributionHandler(
     }
     throw err
   }
+  if (
+    !isModelExecutionProvenance(verdicts.provenance) ||
+    verdicts.provenance.taskSlot !== 'jobs.evidence-attribution' ||
+    verdicts.provenance.contractVersion !== EVIDENCE_ATTRIBUTION_CONTRACT_VERSION
+  ) {
+    await step.run('mark-unsupported-provenance', () => markEvidenceProcessed(
+      sessionId,
+      undefined,
+      'evidence-provenance.v1',
+    ))
+    logger.warn({ sessionId }, 'memoized attribution output lacks attested execution provenance')
+    return { outcome: 'unsupported-provenance' }
+  }
 
   const rows = await step.run('persist', async () => {
     // Delete-race guard: if the user GDPR-deleted this session between
@@ -676,8 +757,8 @@ export async function runEvidenceAttributionHandler(
       logger.warn({ sessionId }, 'posting/session authority changed mid-attribution — persist aborted')
       return 0
     }
-    const epoch = await currentScoringEpoch()
-    // resolveModel can cross an async config/cache boundary. Recheck after it
+    const current = await currentEvidenceProvenance()
+    // Model-config resolution can cross an async cache boundary. Recheck after it
     // so a revocation that committed during epoch resolution cannot be
     // followed by a new evidence or readiness write.
     if (!(await evidenceAuthorityIsCurrent(inputs, { sessionId, applicationId, jobPostingId }))) {
@@ -691,7 +772,14 @@ export async function runEvidenceAttributionHandler(
     // duplicate insertMany hits second — possibly the stronger one
     // (Codex #538). Collapse to the best row per requirement here, the
     // same best = strengthWeight × answerScore rule computeReadiness uses.
-    const bestByReq = new Map<string, { doc: Record<string, unknown>; score: number }>()
+    const currentScoring = new Set(current.scoring.map((execution) => execution.fingerprint))
+    const currentAttribution = new Set(current.attribution.map((execution) => execution.fingerprint))
+    const attributionIsCurrent = currentAttribution.has(verdicts.provenance.fingerprint)
+    const bestByReq = new Map<string, {
+      doc: Record<string, unknown>
+      score: number
+      countable: boolean
+    }>()
     for (const att of verdicts.attributions) {
       if (att.strength === 'none') continue
       const answer = byIndex.get(att.answerIndex)
@@ -701,10 +789,17 @@ export async function runEvidenceAttributionHandler(
         // dropped — the numerator's universe equals the denominator's.
         if (!mustHaveIds.has(reqId)) continue
         const score = STRENGTH_WEIGHT[att.strength] * answer.answerScore
+        const countable = attributionIsCurrent && currentScoring.has(answer.scoring.fingerprint)
         const prev = bestByReq.get(reqId)
-        if (prev && prev.score >= score) continue
+        if (
+          prev && (
+            (prev.countable && !countable) ||
+            (prev.countable === countable && prev.score >= score)
+          )
+        ) continue
         bestByReq.set(reqId, {
           score,
+          countable,
           doc: {
             sessionId, applicationId, jobPostingId,
             handoffVersion: 1,
@@ -713,7 +808,13 @@ export async function runEvidenceAttributionHandler(
             xrayHash: inputs.xrayHash,
             strength: att.strength,
             answerScore: answer.answerScore,
-            scoringEpoch: epoch,
+            scoringEpoch: answer.scoring.fingerprint,
+            provenance: {
+              schemaVersion: AI_EXECUTION_PROVENANCE_SCHEMA_VERSION,
+              status: 'attested',
+              scoring: answer.scoring,
+              attribution: verdicts.provenance,
+            },
             at: new Date(),
           },
         })
@@ -761,10 +862,14 @@ export async function runEvidenceAttributionHandler(
           { session: dbSession },
         )
         if (docs.length) {
-          await JobPracticeEvidence.insertMany(
-            docs.map((d) => ({ ...d, userId: app.userId })),
-            { ordered: false, session: dbSession },
+          const insertDocs = docs.map((d) => ({ ...d, userId: app.userId }))
+          const inserted = await JobPracticeEvidence.insertMany(
+            insertDocs,
+            { ordered: true, session: dbSession },
           )
+          if (inserted.length !== insertDocs.length) {
+            throw new Error('verified evidence insert did not persist the complete replacement set')
+          }
         }
 
         const readinessWritten = await writeVerifiedReadinessSnapshot({
@@ -775,7 +880,7 @@ export async function runEvidenceAttributionHandler(
           xrayHash: inputs.xrayHash,
           handoffJdHash: inputs.handoffJdHash,
           mustHaveIds: inputs.mustHaves.map((mustHave) => mustHave.id),
-          epoch,
+          current,
         }, dbSession)
         if (!readinessWritten) {
           throw new Error('verified readiness snapshot write missed canonical application')
@@ -802,8 +907,9 @@ export async function runEvidenceAttributionHandler(
 
 /** Reconciliation sweep (panel R14): eligible Jobs-attributed sessions from
  *  the last 7 days without the durable processed marker get re-emitted. Row
- *  existence is intentionally ignored because a partial unordered insert
- *  cannot prove that readiness was fully materialized. Capped per run. */
+ *  existence is intentionally ignored because rows from an older deployment
+ *  may be partial and cannot prove readiness was fully materialized. Capped
+ *  per run. */
 export async function runEvidenceReconcileHandler(step: StepRunner): Promise<{ reEmitted: number }> {
   await connectDB()
   const candidates = await step.run('find-missing', async () => {
@@ -856,8 +962,8 @@ export async function runEvidenceReconcileHandler(step: StepRunner): Promise<{ r
           return null
         })
         if (!ensured) continue
-        // Row existence cannot prove a previous unordered bulk insert was
-        // complete. Re-run attribution for every eligible unstamped session;
+        // Row existence from an older deployment cannot prove its replacement
+        // set was complete. Re-run attribution for every eligible unstamped session;
         // the worker replaces that session's entire verified row set before
         // atomically publishing the snapshot and processed marker.
         out.push({

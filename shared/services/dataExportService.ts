@@ -7,6 +7,141 @@ import { SessionSummary } from '@shared/db/models/SessionSummary'
 import { XpEvent } from '@shared/db/models/XpEvent'
 import { UserBadge } from '@shared/db/models/UserBadge'
 import { logger } from '@shared/logger'
+import {
+  isAnswerScoringReceipt,
+  isModelExecutionProvenance,
+  type ModelExecutionProvenance,
+} from '@shared/services/scoringProvenance'
+
+const EXPORT_BATCH_SIZE = 500
+const HEX_64 = /^[a-f0-9]{64}$/
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function safeDate(value: unknown): Date | null {
+  const date = value instanceof Date ? value : new Date(String(value ?? ''))
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function safeModelExecution(value: unknown): ModelExecutionProvenance | null {
+  if (!isModelExecutionProvenance(value)) return null
+  return {
+    schemaVersion: value.schemaVersion,
+    taskSlot: value.taskSlot,
+    contractVersion: value.contractVersion,
+    model: value.model,
+    provider: value.provider,
+    usedFallback: value.usedFallback,
+    attemptKind: value.attemptKind,
+    configDigest: value.configDigest,
+    fingerprint: value.fingerprint,
+  }
+}
+
+function safeAnswerScoringReceipt(value: unknown): Record<string, unknown> | null {
+  if (!isAnswerScoringReceipt(value)) return null
+  const execution = safeModelExecution(value.execution)
+  const recordedAt = safeDate(value.recordedAt)
+  if (!execution || !recordedAt) return null
+  return {
+    schemaVersion: value.schemaVersion,
+    bindingHash: value.bindingHash,
+    execution,
+    recordedAt,
+  }
+}
+
+function safeEvidenceProvenance(
+  value: unknown,
+  scoringEpoch: string,
+): Record<string, unknown> | null {
+  const provenance = recordOf(value)
+  if (!provenance || provenance.schemaVersion !== 1) return null
+  if (provenance.status === 'attested') {
+    const scoring = safeModelExecution(provenance.scoring)
+    const attribution = safeModelExecution(provenance.attribution)
+    if (!scoring || !attribution || scoringEpoch !== scoring.fingerprint) return null
+    return { schemaVersion: 1, status: 'attested', scoring, attribution }
+  }
+  if (provenance.status === 'legacy-unverifiable') {
+    const quarantinedAt = safeDate(provenance.quarantinedAt)
+    if (
+      provenance.quarantineReason !== 'pre-provenance-contract' ||
+      !quarantinedAt ||
+      provenance.scoring != null ||
+      provenance.attribution != null
+    ) return null
+    return {
+      schemaVersion: 1,
+      status: 'legacy-unverifiable',
+      quarantineReason: 'pre-provenance-contract',
+      quarantinedAt,
+    }
+  }
+  return null
+}
+
+function safeExecutionArray(value: unknown): ModelExecutionProvenance[] | null {
+  if (!Array.isArray(value)) return null
+  const executions = value.map(safeModelExecution)
+  return executions.every((execution): execution is ModelExecutionProvenance => execution !== null)
+    ? executions
+    : null
+}
+
+function safeReadinessSnapshot(value: unknown): Record<string, unknown> | null {
+  const readiness = recordOf(value)
+  const provenance = recordOf(readiness?.provenance)
+  if (!readiness || !provenance || provenance.schemaVersion !== 1) return null
+  const scoring = safeExecutionArray(provenance.scoring)
+  const attribution = safeExecutionArray(provenance.attribution)
+  const at = safeDate(readiness.at)
+  if (
+    !scoring || !attribution || !at ||
+    readiness.handoffVersion !== 1 ||
+    !['none', 'building', 'practiced', 'strong-evidence'].includes(String(readiness.band)) ||
+    typeof readiness.scoringEpoch !== 'string' || !HEX_64.test(readiness.scoringEpoch)
+  ) return null
+  return {
+    handoffVersion: 1,
+    band: readiness.band,
+    sessions: readiness.sessions,
+    practicedCount: readiness.practicedCount,
+    mustHaveTotal: readiness.mustHaveTotal,
+    quality: readiness.quality,
+    strongCoverage: readiness.strongCoverage,
+    xrayHash: readiness.xrayHash,
+    scoringEpoch: readiness.scoringEpoch,
+    provenance: { schemaVersion: 1, scoring, attribution },
+    at,
+  }
+}
+
+async function allInterviewSessions(userId: mongoose.Types.ObjectId): Promise<Array<Record<string, unknown>>> {
+  const sessions: Array<Record<string, unknown>> = []
+  let cursor: mongoose.Types.ObjectId | null = null
+  for (;;) {
+    const batch = await InterviewSession.find({
+      userId,
+      ...(cursor ? { _id: { $lt: cursor } } : {}),
+    })
+      // Do not hydrate transcripts, evaluations, JD/resume context, or other
+      // large session fields that this export projection never returns.
+      .select('_id config status feedback answerScoringReceipts createdAt completedAt')
+      .sort({ _id: -1 })
+      .limit(EXPORT_BATCH_SIZE)
+      .lean() as unknown as Array<Record<string, unknown>>
+    sessions.push(...batch)
+    if (batch.length < EXPORT_BATCH_SIZE) return sessions
+    const lastId = batch[batch.length - 1]._id
+    if (!lastId) throw new Error('InterviewSession export page is missing its cursor id')
+    cursor = lastId as mongoose.Types.ObjectId
+  }
+}
 
 /**
  * Generate a comprehensive data export for a user (GDPR Article 20).
@@ -28,11 +163,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     servedProblems,
   ] = await Promise.all([
     User.findById(uid).select('-password -__v').lean(),
-    InterviewSession.find({ userId: uid })
-      .select('-__v')
-      .sort({ createdAt: -1 })
-      .limit(100)
-      .lean(),
+    allInterviewSessions(uid),
     PathwayPlan.findOne({ userId: uid }).sort({ generatedAt: -1 }).lean(),
     UserCompetencyState.find({ userId: uid }).select('-__v').lean(),
     WeaknessCluster.find({ userId: uid }).select('-__v').lean(),
@@ -89,6 +220,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       createdAt: Date
     }
     atsResult?: Record<string, unknown>
+    readiness?: Record<string, unknown>
     createdAt?: Date
   }
   const jobApplications: LeanJobApplication[] = []
@@ -171,7 +303,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
 
   // Readiness evidence (READINESS.md §1) — cursor-paginated to exhaustion
   // like every per-user collection here.
-  interface LeanEvidence { _id: mongoose.Types.ObjectId; requirementId: string; xrayHash: string; handoffVersion?: number; handoffJdHash?: string; strength: string; answerScore: number; scoringEpoch: string; at: Date; sessionId: mongoose.Types.ObjectId; jobPostingId: mongoose.Types.ObjectId }
+  interface LeanEvidence { _id: mongoose.Types.ObjectId; requirementId: string; xrayHash: string; handoffVersion?: number; handoffJdHash?: string; strength: string; answerScore: number; scoringEpoch: string; provenance?: Record<string, unknown>; at: Date; sessionId: mongoose.Types.ObjectId; jobPostingId: mongoose.Types.ObjectId }
   const practiceEvidenceRows: LeanEvidence[] = []
   let evidenceCursor: mongoose.Types.ObjectId | null = null
   for (;;) {
@@ -179,7 +311,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       userId: uid,
       ...(evidenceCursor ? { _id: { $lt: evidenceCursor } } : {}),
     })
-      .select('requirementId xrayHash handoffVersion handoffJdHash strength answerScore scoringEpoch at sessionId jobPostingId')
+      .select('requirementId xrayHash handoffVersion handoffJdHash strength answerScore scoringEpoch provenance at sessionId jobPostingId')
       .sort({ _id: -1 })
       .limit(2000)
       .lean()) as unknown as LeanEvidence[]
@@ -187,11 +319,23 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     if (batch.length < 2000) break
     evidenceCursor = batch[batch.length - 1]._id
   }
-  const jobPracticeEvidence = practiceEvidenceRows.map(({ _id, ...rest }) => rest)
+  const jobPracticeEvidence = practiceEvidenceRows.map(({ _id, provenance, scoringEpoch, ...rest }) => {
+    const safeProvenance = safeEvidenceProvenance(provenance, scoringEpoch)
+    return {
+      ...rest,
+      scoringEpoch,
+      // Historical or malformed values remain visible as unverified epoch
+      // strings but are never relabelled as attested execution facts.
+      scoringEpochStatus: safeProvenance?.status === 'attested'
+        ? 'attested-execution-fingerprint'
+        : 'legacy-unverified',
+      provenance: safeProvenance,
+    }
+  })
 
   return {
     exportedAt: new Date().toISOString(),
-    exportVersion: '1.0',
+    exportVersion: '1.1',
     userId: user._id?.toString(),
 
     profile: {
@@ -225,11 +369,14 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       id: s._id?.toString(),
       config: s.config,
       status: s.status,
-      feedback: s.feedback ? {
-        overallScore: s.feedback.overall_score,
-        passProb: s.feedback.pass_probability,
-        improvements: s.feedback.top_3_improvements,
+      feedback: recordOf(s.feedback) ? {
+        overallScore: recordOf(s.feedback)!.overall_score,
+        passProb: recordOf(s.feedback)!.pass_probability,
+        improvements: recordOf(s.feedback)!.top_3_improvements,
       } : null,
+      answerScoringReceipts: (Array.isArray(s.answerScoringReceipts) ? s.answerScoringReceipts : [])
+        .map(safeAnswerScoringReceipt)
+        .filter((receipt): receipt is Record<string, unknown> => receipt !== null),
       createdAt: s.createdAt,
       completedAt: s.completedAt,
     })),
@@ -354,6 +501,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
         createdAt: a.tailoredVersion.createdAt,
       } : null,
       atsResult: a.atsResult ?? null,
+      readiness: safeReadinessSnapshot(a.readiness),
       createdAt: a.createdAt,
     })),
 

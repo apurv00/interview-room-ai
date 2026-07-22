@@ -18,10 +18,13 @@ is never disabled). Zero evidence = zero claims. Copy uses the verb
 the evidence cannot carry [R0].
 
 **Trust boundary:** the signed handoff authenticates which user intentionally
-started practice for which job/JD; it is not an anti-cheat attestation. The
-self-practice API still trusts candidate-submitted answers/evaluations within
-the authenticated session. Readiness therefore remains coaching evidence, not
-an employer-verifiable credential or proof that an answer was spoken live.
+started practice for which job/JD; it is not an anti-cheat attestation. Answers
+remain candidate-authored, but readiness no longer trusts browser-submitted
+scores: each scoring route appends a server-owned hash-bound receipt containing
+the actual task slot, contract, model, provider, fallback state and effective
+config digest. The browser cannot write that field. Readiness therefore remains
+coaching evidence, not an employer-verifiable credential or proof that an
+answer was spoken live.
 
 **Outcome-label boundary (A14.1):** owner-authored tracker reports
 (`advanced | waiting | rejected | offer`, plus a non-result Skip/defer) are
@@ -60,18 +63,24 @@ repairs the application row and stale session attribution, and re-emits every
 server-verified `completed` session with persisted feedback and the real
 type-aware scorable minimum (standard ≥3; coding/system-design ≥1). Completed
 but ineligible rows are terminally stamped so they cannot starve later work.
-Evidence-row existence is not treated as completion: an unordered bulk insert
-may have landed only a subset, so only `evidenceProcessedAt` closes the loop.
+Evidence-row existence is not treated as completion: rows written by an older
+deployment may be partial, so only `evidenceProcessedAt` closes the loop.
 
 **Worker** (`jobsEvidenceAttributionJob`) — three steps so retries never
-re-bill the LLM [R25]: `load-inputs` → `llm-attribute` → `persist`.
+re-bill the LLM [R25]: `load-inputs-provenance-v1` →
+`llm-attribute-provenance-v1` → `persist`.
 
-- *load-inputs*: the session's Q&A + per-answer evaluations. There is no
+- *load-inputs-provenance-v1*: the session's Q&A + per-answer evaluations. There is no
   persisted per-answer scalar: **answerScore = round(mean of the 4
   universal dims), recomputed here**; `failed`/`truncated` evaluations are
   EXCLUDED from attribution entirely [R13]. Missing/empty evaluations →
   throw (Inngest backoff covers the persist race), bounded retries, logged
-  terminal drop.
+  terminal drop. Every scorable answer must also match exactly one valid
+  server-owned scoring receipt. Missing or ambiguous receipts are excluded
+  before model egress; if none remain, the session is terminally quarantined
+  from evidence instead of being assigned the current CMS model. Duplicate
+  scorable evaluation content fails the whole session closed because one
+  content-bound receipt cannot attest multiple evaluation copies.
 - *Handoff/JD-version binding* [R23]: session attribution first carries a
   server-verified normalized SHA-256 `jdHash`; legacy/unverified rows cannot
   enter the evidence rail. The worker separately hashes the SESSION's own
@@ -111,7 +120,10 @@ JobPracticeEvidence {
   userId, applicationId, jobPostingId, sessionId,
   handoffVersion: 1, handoffJdHash,
   requirementId, xrayHash, strength: 'strong'|'partial',
-  answerScore, scoringEpoch, at
+  answerScore, scoringEpoch, at,
+  provenance: {schemaVersion: 1, status: 'attested',
+    scoring: ModelExecutionProvenance,
+    attribution: ModelExecutionProvenance}
 }
 unique index { sessionId, requirementId, xrayHash }   // real, DB-level
 ```
@@ -130,11 +142,12 @@ unique index { sessionId, requirementId, xrayHash }   // real, DB-level
   `readinessRevision` compare-and-swap. Every evidence deletion increments the
   same revision, so a worker that read rows before another session was deleted
   cannot resurrect an aggregate containing the deleted answers. After persist,
-  Legacy evidence rows remain exportable but lack handoff provenance and are
-  excluded from both snapshot recomputation and the candidate-facing verified
-  session ticker. The worker recomputes and **denormalizes a readiness snapshot onto
+  Legacy evidence rows remain exportable but lack execution provenance and are
+  explicitly marked `legacy-unverifiable`; they are excluded from snapshot
+  recomputation. The worker recomputes and **denormalizes a readiness snapshot onto
   JobApplication**: `readiness: {handoffVersion: 1, band, sessions, practicedCount,
-  mustHaveTotal, quality, strongCoverage, xrayHash, scoringEpoch, at}`
+  mustHaveTotal, quality, strongCoverage, xrayHash, scoringEpoch,
+  provenance: {schemaVersion: 1, scoring: [...], attribution: [...]}, at}`
   [R22] — every consumer reads the snapshot; nothing recomputes bands
   per-request. `quality` and `strongCoverage` are IN the snapshot (Codex
   #537): the blocked-state copy ("quality below the bar") and the
@@ -169,9 +182,11 @@ represented only as `{requirementIds: [], strength: "none"}`; strong/partial
 groups require ids, avoiding paid retries on an ambiguous empty group. V1 does not
 claim to distinguish `strong` for one requirement and `partial` for another in
 the same answer; the parser and corpus shape both reject that unversioned shape.
-A versioned pair-level contract,
-persisted provenance and legacy quarantine/replay remain activation blockers
-before A14.2b can show readiness, regardless of a v1 calibration result.
+A versioned pair-level contract remains an activation blocker before A14.2b
+can show readiness, regardless of a v1 calibration result. Execution provenance
+is now persisted. Historical rows cannot be truthfully replayed because their
+original scorer was never stored; rollout explicitly quarantines them instead
+of guessing or re-billing from current configuration.
 
 `npm run eval:jobs-evidence` invokes the same production prompt, parser,
 schema and retry path. The operator must name the intended CMS slot model via
@@ -205,11 +220,38 @@ version removes those blockers and the founder approves that exact artifact.
 empty and the manual command exits non-zero. Making the harness executable
 does not approve a model, corpus, historical evidence, band names or thresholds.
 A14.2 / PR-R2 does not ship until a passing founder-approved artifact exists,
-actual scoring + attribution provenance is persisted, legacy rows are
-quarantined/replayed without guessed epochs, and the relevant AI-data
+the provenance repair/check gate has quarantined historical rows without
+guessed epochs, and the relevant AI-data
 disclosure is accurate. Until then no readiness band renders, no readiness or
 outcome label changes feed order, PR-R3 remains frozen, and cross-job evidence
 or outcome transfer remains off.
+
+**Mandatory provenance rollout gate:** deploy the new writer/positive reader
+through the normal pipeline and let old attribution workers drain. Then run the
+environment-scoped release job (not an SSH/manual deploy):
+
+```bash
+npm run repair:jobs-evidence-provenance
+npm run repair:jobs-evidence-provenance -- --apply
+npm run check:jobs-evidence-provenance
+```
+
+Apply refuses malformed or unknown declared provenance and unsafe revision
+fences before any write. It removes only legacy or structurally valid-but-stale
+derived snapshots, using bounded batches and revision compare-and-swap, then
+marks historical rows `legacy-unverifiable`. The check resolves the authoritative
+current CMS allowlist and requires every surviving snapshot's epoch and execution
+members to match it exactly; an arbitrary 64-character value is not sufficient.
+The repair never invents provider/model facts, replays a model, clears a session
+marker, or deletes evidence. Quarantine totals are expected and do not fail the
+gate.
+
+Staging runs this sequence through the manually dispatched **Jobs Evidence
+Provenance Gate** workflow after the normal Vercel/Coolify deployment and the
+observable old-worker drain; the workflow is a data gate, not a second deploy.
+It fails unless the protected health check reports the exact entered commit
+from `staging.interviewprep.guru`, so an older main ancestor cannot authorize
+the repair.
 
 **Cost**: one bounded call per scored jobs session (version mismatch =
 terminal counted skip, no second parse in v1); never per-user×job. Module budgets: PR-R1
@@ -218,13 +260,16 @@ bumps shared maxFiles with the paired ADR [R27].
 
 ## 2. PR-R2 — Bands (deterministic, computed at evidence-write time)
 
-`computeReadiness(evidenceRows, currentParse, currentEpoch)` — pure, zero LLM:
+`computeReadiness(evidenceRows, currentParse, currentProvenance)` — pure, zero LLM:
 
 - Rows counted only when: `xrayHash` = the posting's current
-  `parsedJDHash` [R2], `answerScore ≥ 40` [R0], `scoringEpoch` = current
-  [R8] (epoch = `resolveModel('interview.evaluate-answer').model` at
-  attribution time — the RESOLVED model, honoring CMS overrides, since
-  AnswerEvaluation never persists its judge model; Codex #538 r1+r2),
+  `parsedJDHash` [R2], `answerScore ≥ 40` [R0], and both scoring and
+  attribution executions exactly match the current positive allowlist [R8].
+  Model/provider, contract, config digest, fallback state and fingerprint must
+  all agree; a copied model name, fallback execution, legacy row or quarantine
+  never counts. Each evidence row's `scoringEpoch` is its exact scorer execution
+  fingerprint; the denormalized snapshot's `scoringEpoch` is the deterministic
+  digest of the complete current allowlist rather than a guessed model name,
   and `requirementId ∈ current parse's MUST-HAVE id set` — the
   numerator's universe must equal the denominator's (Codex #537): a
   nice-to-have id inflating practicedCount against a must-have total is a

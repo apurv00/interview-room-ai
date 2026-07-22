@@ -1,0 +1,92 @@
+name: Jobs Evidence Provenance Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployed_commit:
+        description: Commit already healthy on staging.interviewprep.guru
+        required: true
+        type: string
+      old_workers_drained:
+        description: Confirm zero pre-revision attribution runs are queued/running/retrying
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jobs-evidence-provenance-jobs-staging
+  cancel-in-progress: false
+
+jobs:
+  repair-and-verify:
+    name: Repair evidence provenance on jobs-staging
+    runs-on: ubuntu-latest
+    environment: jobs-staging
+    timeout-minutes: 15
+
+    steps:
+      # Keep this as a real failing step. A job-level false condition is
+      # reported as skipped/success and cannot serve as rollout evidence.
+      - name: Enforce mandatory dispatch preconditions
+        env:
+          DEPLOYED_COMMIT: ${{ inputs.deployed_commit }}
+          OLD_WORKERS_DRAINED: ${{ inputs.old_workers_drained }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$OLD_WORKERS_DRAINED" = "true"
+          [[ "$DEPLOYED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.deployed_commit }}
+          fetch-depth: 0
+
+      - name: Require the deployed commit to belong to main
+        run: git merge-base --is-ancestor HEAD origin/main
+
+      - name: Require the exact revision to be healthy on Coolify staging
+        env:
+          DEPLOYED_COMMIT: ${{ inputs.deployed_commit }}
+          HEALTH_CHECK_TOKEN: ${{ secrets.HEALTH_CHECK_TOKEN }}
+        run: |
+          test -n "$HEALTH_CHECK_TOKEN"
+          response="$(curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            --header "Authorization: Bearer $HEALTH_CHECK_TOKEN" \
+            "https://staging.interviewprep.guru/api/health?gate_run=$GITHUB_RUN_ID")"
+          test "$(jq -r '.status' <<<"$response")" = "healthy"
+          test "$(jq -r '.releaseGateAuthenticated // false' <<<"$response")" = "true"
+          test "$(jq -r '.deploymentCommit // empty' <<<"$response")" = "$DEPLOYED_COMMIT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # This read-only identity fence runs before any repair command and
+      # rejects a production URI stored under the staging secret by mistake.
+      - name: Verify dedicated staging database identity
+        run: npx tsx scripts/verify-jobs-staging-database.ts
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          A02_STAGING_EXPECTED_DATABASE: ${{ vars.A02_STAGING_EXPECTED_DATABASE }}
+          A02_STAGING_SENTINEL_TOKEN: ${{ secrets.A02_STAGING_SENTINEL_TOKEN }}
+
+      - name: Preview evidence provenance repair
+        run: npm run repair:jobs-evidence-provenance
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Quarantine historical evidence and remove stale snapshots
+        run: npm run repair:jobs-evidence-provenance -- --apply
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+      - name: Fail unless the exact current provenance invariant converged
+        run: npm run check:jobs-evidence-provenance
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}

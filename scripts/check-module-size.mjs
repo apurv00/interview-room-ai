@@ -138,7 +138,10 @@ const BUDGETS = {
   // Bumped maxLOC 17,000 → 19,000 and maxFiles 70 → 73 on 2026-07-22
   // for A12's intent-driven discovery, private personalization boundary, and
   // read-only quality report. See docs/adr/0024-jobs-budget-discovery-intent.md.
-  'modules/jobs':      { maxLOC: 19_000, maxFiles: 73 },
+  // Bumped maxLOC 19,000 → 20,000 and maxFiles 73 → 75 on 2026-07-22
+  // for A14's exact evidence-attribution provenance and rollout verification.
+  // See docs/adr/0025-jobs-budget-evidence-provenance.md.
+  'modules/jobs':      { maxLOC: 20_000, maxFiles: 75 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])

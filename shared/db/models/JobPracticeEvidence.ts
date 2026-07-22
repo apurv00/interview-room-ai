@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
+import type { ModelExecutionProvenance } from '@shared/services/scoringProvenance'
 
 /**
  * JobPracticeEvidence — per-answer → must-have attribution rows
@@ -32,15 +33,48 @@ export interface IJobPracticeEvidence extends Document {
   strength: 'strong' | 'partial'
   /** round(mean of the 4 universal dims), recomputed by the worker. */
   answerScore: number
-  /** The evaluate-answer slot's model at ATTRIBUTION time — bands count
-   *  only current-epoch rows (panel finding R8). Not read per-evaluation:
-   *  AnswerEvaluation never persists its judge model (Codex #538 P1);
-   *  see currentScoringEpoch in evidenceAttributionJob. */
+  /** Exact scoring-execution fingerprint for attested rows. Historical
+   * model-only values remain exportable but never enter readiness. */
   scoringEpoch: string
+  provenance?: {
+    schemaVersion: 1
+    status: 'attested' | 'legacy-unverifiable'
+    scoring?: ModelExecutionProvenance
+    attribution?: ModelExecutionProvenance
+    quarantineReason?: 'pre-provenance-contract'
+    quarantinedAt?: Date
+  }
   at: Date
   createdAt: Date
   updatedAt: Date
 }
+
+const ModelExecutionProvenanceSchema = new Schema(
+  {
+    schemaVersion: { type: Number, enum: [1], required: true },
+    taskSlot: { type: String, required: true, maxlength: 100 },
+    contractVersion: { type: String, required: true, maxlength: 100 },
+    model: { type: String, required: true, maxlength: 200 },
+    provider: { type: String, required: true, maxlength: 60 },
+    usedFallback: { type: Boolean, required: true },
+    attemptKind: { type: String, enum: ['primary', 'configured-fallback', 'task-default'], required: true },
+    configDigest: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+    fingerprint: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+  },
+  { _id: false },
+)
+
+const EvidenceProvenanceSchema = new Schema(
+  {
+    schemaVersion: { type: Number, enum: [1], required: true },
+    status: { type: String, enum: ['attested', 'legacy-unverifiable'], required: true },
+    scoring: { type: ModelExecutionProvenanceSchema },
+    attribution: { type: ModelExecutionProvenanceSchema },
+    quarantineReason: { type: String, enum: ['pre-provenance-contract'] },
+    quarantinedAt: { type: Date },
+  },
+  { _id: false },
+)
 
 const JobPracticeEvidenceSchema = new Schema<IJobPracticeEvidence>(
   {
@@ -55,6 +89,31 @@ const JobPracticeEvidenceSchema = new Schema<IJobPracticeEvidence>(
     strength: { type: String, enum: ['strong', 'partial'], required: true },
     answerScore: { type: Number, required: true, min: 0, max: 100 },
     scoringEpoch: { type: String, required: true, maxlength: 120 },
+    provenance: {
+      type: EvidenceProvenanceSchema,
+      validate: {
+        validator(value: unknown) {
+          if (value == null) return true
+          const candidate = value as {
+            status?: string
+            scoring?: unknown
+            attribution?: unknown
+            quarantineReason?: string
+            quarantinedAt?: Date
+          }
+          if (candidate.status === 'attested') {
+            return !!candidate.scoring && !!candidate.attribution &&
+              candidate.quarantineReason == null && candidate.quarantinedAt == null
+          }
+          if (candidate.status === 'legacy-unverifiable') {
+            return candidate.scoring == null && candidate.attribution == null &&
+              candidate.quarantineReason === 'pre-provenance-contract' && !!candidate.quarantinedAt
+          }
+          return false
+        },
+        message: 'evidence provenance status and fields are inconsistent',
+      },
+    },
     at: { type: Date, required: true },
   },
   { timestamps: true }

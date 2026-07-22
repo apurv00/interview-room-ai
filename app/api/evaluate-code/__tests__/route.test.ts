@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   completion: vi.fn(),
   isFeatureEnabled: vi.fn(),
   trackUsage: vi.fn(),
+  captureScoringConfig: vi.fn(),
+  isCanonicalJobsSession: vi.fn(),
+  recordScoringReceipt: vi.fn(),
 }))
 
 vi.mock('@shared/middleware/composeApiRoute', () => ({
@@ -34,6 +37,12 @@ vi.mock('@shared/middleware/composeApiRoute', () => ({
 vi.mock('@shared/services/modelRouter', () => ({ completion: mocks.completion }))
 vi.mock('@shared/featureFlags', () => ({ isFeatureEnabled: mocks.isFeatureEnabled }))
 vi.mock('@shared/services/usageTracking', () => ({ trackUsage: mocks.trackUsage }))
+vi.mock('@shared/services/scoringProvenance', () => ({
+  CODE_EVALUATION_CONTRACT_VERSION: 'code-evaluation.v1',
+  captureModelConfigSnapshot: mocks.captureScoringConfig,
+  isCanonicalJobsPracticeSession: mocks.isCanonicalJobsSession,
+  recordJobsAnswerScoringReceipt: mocks.recordScoringReceipt,
+}))
 vi.mock('@shared/services/promptSecurity', () => ({
   JSON_OUTPUT_RULE: 'JSON_OUTPUT_RULE',
   DATA_BOUNDARY_RULE: 'DATA_BOUNDARY_RULE',
@@ -54,6 +63,21 @@ const EVAL = {
   complexity: 'O(n) time, O(1) space',
   flags: [],
   grounded_follow_up: 'Your processOrders uses a nested loop — what is its complexity?',
+}
+const CODE_MODEL = {
+  model: 'code-evaluator',
+  provider: 'openai',
+  maxTokens: 600,
+  useToonInput: false,
+}
+const CODE_RESULT = {
+  text: JSON.stringify(EVAL),
+  model: CODE_MODEL.model,
+  provider: CODE_MODEL.provider,
+  usedFallback: false,
+  attemptKind: 'primary' as const,
+  inputTokens: 100,
+  outputTokens: 50,
 }
 
 const makeReq = (extra: Record<string, unknown> = {}) =>
@@ -77,7 +101,15 @@ const promptOf = (n: number): string => mocks.completion.mock.calls[n][0].messag
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.trackUsage.mockResolvedValue(undefined)
-  mocks.completion.mockResolvedValue({ text: JSON.stringify(EVAL) })
+  mocks.isCanonicalJobsSession.mockResolvedValue(false)
+  mocks.captureScoringConfig.mockResolvedValue({
+    taskSlot: 'interview.evaluate-code',
+    resolved: CODE_MODEL,
+    source: 'L3-Mongo',
+    authoritative: true,
+  })
+  mocks.recordScoringReceipt.mockResolvedValue(true)
+  mocks.completion.mockResolvedValue(CODE_RESULT)
 })
 
 describe('POST /api/evaluate-code — grounded_followups ON', () => {
@@ -125,5 +157,63 @@ describe('POST /api/evaluate-code — grounded_followups OFF', () => {
     const data = await (await POST(makeReq())).json()
     expect(data.grounded_follow_up).toBeUndefined()
     expect(data.feedback).toBe('Solid solution.')
+  })
+})
+
+describe('POST /api/evaluate-code — Jobs scorer receipt', () => {
+  beforeEach(() => mocks.isFeatureEnabled.mockReturnValue(false))
+
+  it('records the same normalized evaluation the client persists, only with Jobs intent', async () => {
+    await POST(makeReq({ sessionId: 'session-1', jobsPractice: true }))
+    expect(mocks.isCanonicalJobsSession).not.toHaveBeenCalled()
+    expect(mocks.captureScoringConfig).toHaveBeenCalledWith('interview.evaluate-code')
+    expect(mocks.completion).toHaveBeenCalledWith(expect.objectContaining({
+      resolvedModel: CODE_MODEL,
+    }))
+    expect(mocks.recordScoringReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      userId: mocks.userId,
+      contractVersion: 'code-evaluation.v1',
+      evaluation: expect.objectContaining({
+        questionIndex: 1,
+        relevance: 80,
+        structure: 75,
+        specificity: 70,
+        ownership: 65,
+      }),
+      result: expect.objectContaining({ attemptKind: 'primary' }),
+    }))
+  })
+
+  it('uses canonical server attribution for a stale client with no Jobs hint', async () => {
+    mocks.isCanonicalJobsSession.mockResolvedValue(true)
+
+    await POST(makeReq({ sessionId: 'session-1' }))
+
+    expect(mocks.isCanonicalJobsSession).toHaveBeenCalledWith('session-1', mocks.userId)
+    expect(mocks.captureScoringConfig).toHaveBeenCalledWith('interview.evaluate-code')
+    expect(mocks.recordScoringReceipt).toHaveBeenCalledOnce()
+  })
+
+  it('does not capture when the client explicitly says non-Jobs or server authority is absent', async () => {
+    await POST(makeReq({ sessionId: 'session-1', jobsPractice: false }))
+    expect(mocks.isCanonicalJobsSession).not.toHaveBeenCalled()
+    expect(mocks.captureScoringConfig).not.toHaveBeenCalled()
+    expect(mocks.recordScoringReceipt).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    mocks.isFeatureEnabled.mockReturnValue(false)
+    mocks.isCanonicalJobsSession.mockResolvedValue(false)
+    mocks.completion.mockResolvedValue(CODE_RESULT)
+    await POST(makeReq({ sessionId: 'session-1' }))
+    expect(mocks.isCanonicalJobsSession).toHaveBeenCalledWith('session-1', mocks.userId)
+    expect(mocks.captureScoringConfig).not.toHaveBeenCalled()
+    expect(mocks.recordScoringReceipt).not.toHaveBeenCalled()
+  })
+
+  it('does not attest truncated output', async () => {
+    mocks.completion.mockResolvedValue({ ...CODE_RESULT, truncated: true })
+    await POST(makeReq({ sessionId: 'session-1', jobsPractice: true }))
+    expect(mocks.recordScoringReceipt).not.toHaveBeenCalled()
   })
 })
