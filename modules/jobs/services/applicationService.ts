@@ -1,6 +1,6 @@
 import { gunzipSync } from 'zlib'
 import { isValidObjectId, type ClientSession } from 'mongoose'
-import { JobApplication, JobPosting, InterviewSession } from '@shared/db/models'
+import { JobApplication, JobPosting, InterviewSession, User } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { inngest } from '@shared/services/inngest'
 import { getShortFormMinAnswers } from '@interview'
@@ -298,9 +298,18 @@ export async function saveTailoredVersion(
 
         // '' would fail the schema's string validation on create (Mongoose
         // treats empty as missing); paste/upload tailors have no source row.
+        let verifiedSourceResumeId: string | undefined
+        if (payload.sourceResumeId) {
+          const sourceResumeOwner = await User.findOne(
+            { _id: userId, 'savedResumes.id': payload.sourceResumeId },
+            undefined,
+            { session },
+          ).select('_id').lean()
+          verifiedSourceResumeId = sourceResumeOwner ? payload.sourceResumeId : undefined
+        }
         const tailoredVersion = {
           tailoredText: payload.tailoredText,
-          sourceResumeId: payload.sourceResumeId || undefined,
+          sourceResumeId: verifiedSourceResumeId,
           matchScore: payload.matchScore,
           addedKeywords: payload.addedKeywords,
           missingKeywords: payload.missingKeywords,
@@ -350,6 +359,74 @@ export async function saveTailoredVersion(
   }
 }
 
+export interface TailoredVersionView {
+  tailoredText: string
+  matchScore?: number
+  addedKeywords: string[]
+  missingKeywords: string[]
+  createdAt: string
+  state: 'current' | 'outdated'
+}
+
+/**
+ * Owner-only recovery for the latest per-job Tailor artifact. Detail and
+ * tracker deliberately expose metadata only; this narrow read is the only
+ * surface that returns the full text. Restricted/missing postings remain
+ * status-only and a concurrent lifecycle/account change invalidates the read.
+ */
+export async function getTailoredVersion(
+  userId: string,
+  jobPostingId: string,
+): Promise<TailoredVersionView | null> {
+  if (!(await isJobsAccountActive(userId))) throw new JobsAccountInactiveError(userId)
+
+  const posting = await JobPosting.findById(jobPostingId)
+    .select('status closedReason jdCompressed')
+    .lean()
+  if (!posting || jobPostingStateOf(posting) === 'restricted') return null
+
+  const application = await JobApplication.findOne({ userId, jobPostingId })
+    .select('_id tailoredVersion')
+    .lean()
+  const tailored = application?.tailoredVersion
+  if (!application || !tailored?.tailoredText || !tailored.createdAt) return null
+
+  let canonicalJd = ''
+  try {
+    canonicalJd = inflateJobDescription(posting.jdCompressed)
+  } catch { /* an unreadable current JD makes the saved version outdated */ }
+
+  // Keep the final guards sequential. With Promise.all an early `true` could
+  // become stale while another guard was still pending, after which the full
+  // private resume would have been returned from an obsolete snapshot.
+  const versionStillExists = await JobApplication.exists({
+    _id: application._id,
+    userId,
+    jobPostingId,
+    'tailoredVersion.createdAt': tailored.createdAt,
+  })
+  if (!versionStillExists) return null
+  const postingStillAuthoritative = await JobPosting.exists({
+    _id: jobPostingId,
+    status: posting.status,
+    closedReason: exactOptionalPostingCondition(posting.closedReason),
+    jdCompressed: exactOptionalPostingCondition(posting.jdCompressed),
+  })
+  if (!postingStillAuthoritative) return null
+  if (!(await isJobsAccountActive(userId))) throw new JobsAccountInactiveError(userId)
+
+  return {
+    tailoredText: tailored.tailoredText,
+    matchScore: tailored.matchScore,
+    addedKeywords: (tailored.addedKeywords ?? []).slice(0, 30),
+    missingKeywords: (tailored.missingKeywords ?? []).slice(0, 30),
+    createdAt: new Date(tailored.createdAt).toISOString(),
+    state: canonicalJd && tailored.jdHash === xrayHashOf(canonicalJd)
+      ? 'current'
+      : 'outdated',
+  }
+}
+
 /** Statuses a USER may set (loose machine: forward jumps and backward
  *  corrections both allowed; ghosted/rejected recoverable). apply_clicked
  *  is the MACHINE fact and is never user-settable. */
@@ -362,6 +439,11 @@ export interface TransitionTelemetry {
   latencyMs?: number
   viaNudge?: boolean
   inferredFromPrep?: boolean
+  /** Explicit user claim captured at apply confirmation. Never inferred from
+   *  the mere existence of a tailored artifact. */
+  appliedWith?:
+    | { wasTailored: false }
+    | { wasTailored: true; tailoredAt: Date }
 }
 
 export async function transitionStatus(
@@ -370,9 +452,36 @@ export async function transitionStatus(
   to: UserSettableStatus,
   telemetry?: TransitionTelemetry,
   now = new Date()
-): Promise<{ ok: boolean; status?: string; from?: string }> {
+): Promise<
+  | { ok: true; status: string; from: string }
+  | { ok: false; reason?: 'tailored-version-unavailable' | 'applied-with-conflict' }
+> {
   if (!(USER_SETTABLE_STATUSES as readonly string[]).includes(to)) return { ok: false }
   const transition = await withActiveJobsAccountWrite(userId, async (session) => {
+    let appliedWith: { wasTailored: boolean; tailoredFromResumeId?: string } | undefined
+    if (to === 'applied' && telemetry?.appliedWith?.wasTailored === true) {
+      const selectedVersion = await JobApplication.findOne(
+        {
+          userId,
+          jobPostingId,
+          'tailoredVersion.createdAt': telemetry.appliedWith.tailoredAt,
+        },
+        undefined,
+        { session },
+      ).select('tailoredVersion.createdAt tailoredVersion.sourceResumeId').lean()
+      if (!selectedVersion?.tailoredVersion) {
+        return { changed: false as const, reason: 'tailored-version-unavailable' as const }
+      }
+      appliedWith = {
+        wasTailored: true,
+        ...(selectedVersion.tailoredVersion.sourceResumeId
+          ? { tailoredFromResumeId: selectedVersion.tailoredVersion.sourceResumeId }
+          : {}),
+      }
+    } else if (to === 'applied' && telemetry?.appliedWith?.wasTailored === false) {
+      appliedWith = { wasTailored: false }
+    }
+
     // A target-status guard makes retries true no-ops: the original status
     // timestamp/history survive and telemetry below only sees a real edge.
     // `apply_clicked` is only evidence that a link opened, so it cannot jump
@@ -393,7 +502,12 @@ export async function transitionStatus(
           : {}),
       },
       {
-        $set: { status: to, ...(to === 'applied' ? { appliedAt: now } : {}) },
+        $set: {
+          status: to,
+          ...(to === 'applied' ? { appliedAt: now } : {}),
+          ...(appliedWith ? { appliedWith } : {}),
+        },
+        ...(to === 'applied' && !appliedWith ? { $unset: { appliedWith: 1 } } : {}),
         $push: { statusHistory: { status: to, at: now, source: 'user' } },
       },
       { new: false, session },
@@ -407,13 +521,33 @@ export async function transitionStatus(
       { userId, jobPostingId },
       undefined,
       { session },
-    ).select('status').lean()
+    ).select('status appliedWith').lean()
     if (current?.status === to) {
+      if (to === 'applied' && appliedWith) {
+        if (current.appliedWith) {
+          const sameClaim = current.appliedWith.wasTailored === appliedWith.wasTailored &&
+            (current.appliedWith.tailoredFromResumeId ?? undefined) ===
+              (appliedWith.tailoredFromResumeId ?? undefined)
+          if (!sameClaim) {
+            return { changed: false as const, reason: 'applied-with-conflict' as const }
+          }
+        } else {
+          const backfill = await JobApplication.updateOne(
+            { userId, jobPostingId, status: to, appliedWith: { $exists: false } },
+            { $set: { appliedWith } },
+            { session, runValidators: true },
+          )
+          if ((backfill?.matchedCount ?? 0) !== 1) {
+            return { changed: false as const, reason: 'applied-with-conflict' as const }
+          }
+        }
+      }
       return { changed: false as const, from: current.status }
     }
     return null
   })
   if (!transition) return { ok: false }
+  if ('reason' in transition) return { ok: false, reason: transition.reason }
   if (!transition.changed) return { ok: true, status: to, from: transition.from }
 
   // THE single emitter (EMAILS.md §4, Codex #530 R25): jobs.interview_scheduled

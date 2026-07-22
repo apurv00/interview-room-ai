@@ -1044,6 +1044,54 @@ describe('Job detail Practice readiness', () => {
     expect(screen.queryByText(/Couldn.t record that just now/i)).toBeNull()
   })
 
+  it('shows durable Tailor state and sends the explicit tailored version on apply confirmation', async () => {
+    const tailoredAt = '2026-07-14T11:00:00.000Z'
+    const tailoredDetail = {
+      ...LIVE_APPLY_DETAIL,
+      application: {
+        applicationId: 'app-1',
+        status: 'interview_scheduled',
+        practiceCount: 0,
+        tailoredResume: { createdAt: tailoredAt, current: true },
+        appliedWith: { wasTailored: true },
+        ats: { state: 'none' as const },
+      },
+    }
+    localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
+      clickedAt: Date.now() - 21_000,
+      optionId: APPLY_OPTION_ID,
+      url: 'https://apply.example/job',
+      tier: 'direct-ats',
+    }))
+    let statusBody: Record<string, unknown> | null = null
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(tailoredDetail)
+      if (url.endsWith('/status')) {
+        statusBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByText('Tailored resume saved for this job')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'View or update' })).toHaveAttribute(
+      'href',
+      `/resume/tailor?jobId=${JOB_ID}`,
+    )
+    expect(screen.getByText('This application used the tailored resume for this job.')).toBeTruthy()
+    fireEvent(document, new Event('visibilitychange'))
+    fireEvent.click(await screen.findByRole('button', { name: '✓ Yes, with tailored resume' }))
+
+    await waitFor(() => expect(statusBody).toMatchObject({
+      status: 'applied',
+      appliedWith: { wasTailored: true, tailoredAt },
+    }))
+    expect(await screen.findByText(/Marked as applied/i)).toBeTruthy()
+  })
+
   it('scrubs instead of showing stale-link fallback copy when broken-link reporting is account-unavailable', async () => {
     localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
       clickedAt: Date.now(),

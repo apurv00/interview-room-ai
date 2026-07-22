@@ -62,6 +62,8 @@ interface Detail {
     interviewDate?: string
     interviewDateConfidence?: 'exact' | 'week' | 'unknown'
     interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
+    tailoredResume?: { createdAt: string; current: boolean }
+    appliedWith?: { wasTailored: boolean }
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[] }
   } | null
 }
@@ -80,6 +82,14 @@ const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
 const LOST_XRAY_READINESS_DELAYS_MS = [0, 250, 750, 2_000, 4_000, 8_000, 8_000, 8_000] as const
 const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
 const APPLY_OPTION_ID_RE = /^ao2_[A-Za-z0-9_-]{43}$/
+const APPLIED_HISTORY_STATUSES = new Set([
+  'applied',
+  'interview_scheduled',
+  'offer',
+  'rejected',
+  'ghosted',
+  'withdrawn',
+])
 const ACTIVE_TAB_REVALIDATION_MS = 4 * 60_000
 
 function applyRedirectHref(
@@ -805,7 +815,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [closeReturnSheet, sheet])
 
-  async function sheetApplied() {
+  async function sheetApplied(appliedWith?: { wasTailored: boolean; tailoredAt?: string }) {
     if (accountUnavailableRef.current) return
     const clicked = sheet?.clicked
     const elapsedMs = sheet?.elapsedMs
@@ -814,7 +824,11 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       fetch(`/api/jobs/${params.id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'applied', latencyMs: elapsedMs }),
+        body: JSON.stringify({
+          status: 'applied',
+          latencyMs: elapsedMs,
+          ...(appliedWith ? { appliedWith } : {}),
+        }),
       }).catch(() => null)
     let res = await post()
     if (res && await isAccountUnavailableResponse(res)) {
@@ -846,6 +860,16 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
     if (res?.ok) {
       setSheetDone('Marked as applied ✓ — it’s on your tracker.')
       refetchDetail()
+    } else if (res?.status === 409) {
+      const conflict = await res.json().catch(() => null) as { code?: unknown } | null
+      if (conflict?.code === 'TAILORED_VERSION_UNAVAILABLE' || conflict?.code === 'APPLIED_WITH_CONFLICT') {
+        setSheetDone(conflict.code === 'TAILORED_VERSION_UNAVAILABLE'
+          ? 'The saved tailored version changed. Review it, then confirm your application again.'
+          : 'A different resume choice is already recorded. Refresh the job before changing it.')
+        refetchDetail()
+        return
+      }
+      setSheetDone('Couldn’t record that just now — open your tracker to update the status when you’re ready.')
     } else {
       setSheetDone('Couldn’t record that just now — open your tracker to update the status when you’re ready.')
     }
@@ -1032,7 +1056,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         </div>
       ) : (
         <>
-          <div className="mt-6 flex flex-wrap items-center gap-3">
+          <div id="apply" className="mt-6 flex flex-wrap items-center gap-3 scroll-mt-6">
             {primary && (
               <form
                 action={applyRedirectHref(detail.id, primary.optionId, 'apply')}
@@ -1114,6 +1138,34 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               </a>
             )}
           </div>
+          {detail.application?.tailoredResume && (
+            <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-slate-700">
+              <p className="font-medium">
+                {detail.application.tailoredResume.current
+                  ? 'Tailored resume saved for this job'
+                  : 'Saved tailored resume needs an update'}
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                {detail.application.tailoredResume.current
+                  ? 'It is attached to this tracked application and available after refresh.'
+                  : 'The job description changed after this version was created.'}{' '}
+                <Link href={`/resume/tailor?jobId=${detail.id}`} className="font-medium text-blue-700 hover:underline">
+                  {detail.application.tailoredResume.current ? 'View or update' : 'Create a new version'}
+                </Link>
+              </p>
+            </div>
+          )}
+          {detail.application?.appliedWith && APPLIED_HISTORY_STATUSES.has(detail.application.status) && (
+            <p className="mt-2 text-xs text-slate-600">
+              {detail.application.status === 'applied'
+                ? detail.application.appliedWith.wasTailored
+                  ? 'Applied with the tailored resume for this job.'
+                  : 'Applied with another resume.'
+                : detail.application.appliedWith.wasTailored
+                  ? 'This application used the tailored resume for this job.'
+                  : 'This application used another resume.'}
+            </p>
+          )}
           {practiceStart === 'error' && (
             <p role="alert" className="mt-2 text-sm text-red-600">
               We couldn&apos;t prepare this job practice. Refresh the posting and try again.
@@ -1387,9 +1439,29 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               {sheet.kind === 'normal' && (
-                <button onClick={sheetApplied} className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
-                  ✓ Yes, applied
-                </button>
+                detail.application?.tailoredResume ? (
+                  <>
+                    <button
+                      onClick={() => sheetApplied({
+                        wasTailored: true,
+                        tailoredAt: detail.application!.tailoredResume!.createdAt,
+                      })}
+                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      ✓ Yes, with tailored resume
+                    </button>
+                    <button
+                      onClick={() => sheetApplied({ wasTailored: false })}
+                      className="rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-sm font-medium text-blue-700"
+                    >
+                      Yes, with another resume
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => sheetApplied()} className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
+                    ✓ Yes, applied
+                  </button>
+                )
               )}
               <button
                 onClick={() => {

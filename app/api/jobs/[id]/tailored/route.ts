@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import mongoose from 'mongoose'
-import { saveTailoredVersion } from '@jobs'
+import { getTailoredVersion, saveTailoredVersion } from '@jobs'
 import { logger } from '@shared/logger'
 import { MAX_JOB_TAILORED_TEXT_CHARS } from '@shared/jobsContract'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
@@ -11,6 +11,39 @@ import { recordJobsUserEvent } from '@jobs/services/userEventService'
 import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
+const PRIVATE_NO_STORE = { 'Cache-Control': 'private, no-store' }
+
+/** GET returns full Tailor text only to the owning active account. */
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const session = await getServerSession(authOptions)
+  const userId = (session?.user as { id?: string } | undefined)?.id
+  if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401, headers: PRIVATE_NO_STORE })
+  // This is a bounded authenticated read, not a mutation/LLM action. Charging
+  // the shared write limiter here lets refreshes block Save/Apply/status.
+  if (!mongoose.Types.ObjectId.isValid(params.id)) {
+    return NextResponse.json({ error: 'not found' }, { status: 404, headers: PRIVATE_NO_STORE })
+  }
+  try {
+    await connectDB()
+    const version = await getTailoredVersion(userId, params.id)
+    if (!version) return NextResponse.json({ error: 'not found' }, { status: 404, headers: PRIVATE_NO_STORE })
+    return NextResponse.json(version, {
+      headers: PRIVATE_NO_STORE,
+    })
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401, headers: PRIVATE_NO_STORE },
+      )
+    }
+    logger.warn({ error }, 'tailored resume recovery failed')
+    return NextResponse.json(
+      { error: 'temporary recovery failure', code: 'TAILORED_RECOVERY_TEMPORARY' },
+      { status: 503, headers: PRIVATE_NO_STORE },
+    )
+  }
+}
 
 /**
  * POST /api/jobs/[id]/tailored — persist the tailored version on the

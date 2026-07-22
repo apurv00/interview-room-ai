@@ -99,6 +99,147 @@ async function switchSession(view: ReturnType<typeof render>, userId: string, wa
 }
 
 describe('Tailor tracked-job capability', () => {
+  it('ignores an invalid jobId before it can shape a fetch path or return link', async () => {
+    searchState.jobId = '../api/account'
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === '/api/resume/save' ? response({ resumes: [] }) : response({})
+    ))
+
+    render(<TailorPage />)
+
+    expect(await screen.findByRole('button', { name: 'Tailor My Resume' })).toBeTruthy()
+    expect(mockFetch.mock.calls.some(([input]) => String(input).startsWith('/api/jobs/'))).toBe(false)
+    expect(screen.queryByText(/Back to saved details/i)).toBeNull()
+  })
+
+  it('restores a persisted tailored result after refresh and preserves the job through Builder', async () => {
+    sessionState.status = 'authenticated'
+    sessionState.userId = USER_A_ID
+    const createdAt = '2026-07-14T11:00:00.000Z'
+    let recoveryCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+        application: { tailoredResume: { createdAt, current: true } },
+      })
+      if (url === `/api/jobs/${JOB_ID}/tailored` && !init?.method) {
+        recoveryCalls += 1
+        return response({
+          tailoredText: 'RESTORED TAILORED RESUME',
+          matchScore: 84,
+          addedKeywords: ['TypeScript'],
+          missingKeywords: [],
+          createdAt,
+          state: 'current',
+        })
+      }
+      if (url === '/api/resume/save' && init?.method === 'POST') return response({ id: RESUME_A_ID })
+      if (url === '/api/resume/save') return response({ resumes: [] })
+      return response({})
+    })
+
+    render(<TailorPage />)
+
+    expect(await screen.findByText('RESTORED TAILORED RESUME')).toBeTruthy()
+    expect(screen.getByText('84%')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Continue to job & apply' })).toHaveAttribute(
+      'href',
+      `/jobs/${JOB_ID}?from=tailor#apply`,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save as New Resume' }))
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(
+      `/resume/builder?id=${RESUME_A_ID}&jobId=${JOB_ID}`,
+    ))
+
+    expect(recoveryCalls).toBe(1)
+  })
+
+  it('does not immediately restore the old artifact after choosing Create a new version', async () => {
+    sessionState.status = 'authenticated'
+    sessionState.userId = USER_A_ID
+    const createdAt = '2026-07-14T11:00:00.000Z'
+    let recoveryCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+        application: { tailoredResume: { createdAt, current: true } },
+      })
+      if (url === `/api/jobs/${JOB_ID}/tailored`) {
+        recoveryCalls += 1
+        return response({
+          tailoredText: 'OLD RESTORED VERSION',
+          addedKeywords: [],
+          missingKeywords: [],
+          createdAt,
+          state: 'current',
+        })
+      }
+      if (url === '/api/resume/save') return response({ resumes: [] })
+      return response({})
+    })
+
+    render(<TailorPage />)
+    expect(await screen.findByText('OLD RESTORED VERSION')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Create a new version' }))
+
+    expect(await screen.findByRole('button', { name: 'Tailor My Resume' })).toBeTruthy()
+    await act(async () => { await Promise.resolve() })
+    expect(screen.queryByText('OLD RESTORED VERSION')).toBeNull()
+    expect(recoveryCalls).toBe(1)
+  })
+
+  it('keeps a transient restore failure retryable without claiming the artifact is gone', async () => {
+    sessionState.status = 'authenticated'
+    sessionState.userId = USER_A_ID
+    let recoveryCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return response({
+        gated: false,
+        postingState: 'live',
+        company: 'Acme',
+        jd: 'CURRENT JD',
+        tailorInputHash: INPUT_HASH,
+        capabilities: { tailor: true },
+        application: {
+          tailoredResume: { createdAt: '2026-07-14T11:00:00.000Z', current: true },
+        },
+      })
+      if (url === `/api/jobs/${JOB_ID}/tailored`) {
+        recoveryCalls += 1
+        return recoveryCalls === 1
+          ? response({ code: 'TAILORED_RECOVERY_TEMPORARY' }, false, 503)
+          : response({
+              tailoredText: 'RECOVERED AFTER RETRY',
+              addedKeywords: [],
+              missingKeywords: [],
+              createdAt: '2026-07-14T11:00:00.000Z',
+              state: 'current',
+            })
+      }
+      if (url === '/api/resume/save') return response({ resumes: [] })
+      return response({})
+    })
+
+    render(<TailorPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('RECOVERED AFTER RETRY')).toBeTruthy()
+    expect(recoveryCalls).toBe(2)
+  })
+
   it('scrubs account-bound inputs when the initial job context reports account deletion', async () => {
     sessionState.status = 'authenticated'
     sessionState.userId = USER_A_ID

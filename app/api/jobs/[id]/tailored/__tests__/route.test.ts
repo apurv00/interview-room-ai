@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
-  mockGetServerSession, mockConnectDB, mockSaveTailoredVersion, mockEventCreate, mockCheckJobsRateLimit,
+  mockGetServerSession, mockConnectDB, mockSaveTailoredVersion, mockGetTailoredVersion, mockEventCreate, mockCheckJobsRateLimit,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockConnectDB: vi.fn(),
   mockSaveTailoredVersion: vi.fn(),
+  mockGetTailoredVersion: vi.fn(),
   mockEventCreate: vi.fn(),
   mockCheckJobsRateLimit: vi.fn(),
 }))
@@ -13,12 +14,15 @@ const {
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
 vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
-vi.mock('@jobs', () => ({ saveTailoredVersion: mockSaveTailoredVersion }))
+vi.mock('@jobs', () => ({
+  saveTailoredVersion: mockSaveTailoredVersion,
+  getTailoredVersion: mockGetTailoredVersion,
+}))
 vi.mock('@shared/db/models', () => ({ ProductEvent: { create: mockEventCreate } }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@jobs/services/rateLimit', () => ({ checkJobsRateLimit: mockCheckJobsRateLimit }))
 
-import { POST } from '../route'
+import { GET, POST } from '../route'
 import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const USER_ID = '507f1f77bcf86cd799439010'
@@ -38,8 +42,59 @@ beforeEach(() => {
   mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
   mockConnectDB.mockResolvedValue(undefined)
   mockSaveTailoredVersion.mockResolvedValue({ ok: true })
+  mockGetTailoredVersion.mockResolvedValue(null)
   mockEventCreate.mockResolvedValue({})
   mockCheckJobsRateLimit.mockResolvedValue(null)
+})
+
+describe('GET /api/jobs/[id]/tailored owner recovery', () => {
+  it('returns the owner artifact privately without caching it', async () => {
+    mockGetTailoredVersion.mockResolvedValueOnce({
+      tailoredText: 'TAILORED',
+      matchScore: 81,
+      addedKeywords: ['TypeScript'],
+      missingKeywords: [],
+      createdAt: '2026-07-14T11:00:00.000Z',
+      state: 'current',
+    })
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}/tailored`), {
+      params: { id: JOB_ID },
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(await response.json()).toMatchObject({ tailoredText: 'TAILORED', state: 'current' })
+    expect(mockGetTailoredVersion).toHaveBeenCalledWith(USER_ID, JOB_ID)
+  })
+
+  it('keeps missing/non-owner artifacts indistinguishable and maps account deletion', async () => {
+    const missing = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}/tailored`), {
+      params: { id: JOB_ID },
+    })
+    expect(missing.status).toBe(404)
+    expect(missing.headers.get('Cache-Control')).toBe('private, no-store')
+
+    mockGetTailoredVersion.mockRejectedValueOnce(new JobsAccountInactiveError(USER_ID))
+    const unavailable = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}/tailored`), {
+      params: { id: JOB_ID },
+    })
+    expect(unavailable.status).toBe(401)
+    expect(unavailable.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(await unavailable.json()).toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
+  })
+
+  it('keeps recovery failures retryable and private instead of claiming no artifact exists', async () => {
+    mockGetTailoredVersion.mockRejectedValueOnce(new Error('database unavailable'))
+
+    const response = await GET(new Request(`http://localhost/api/jobs/${JOB_ID}/tailored`), {
+      params: { id: JOB_ID },
+    })
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(await response.json()).toMatchObject({ code: 'TAILORED_RECOVERY_TEMPORARY' })
+  })
 })
 
 describe('POST /api/jobs/[id]/tailored provenance contract', () => {

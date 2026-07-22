@@ -45,6 +45,9 @@ export interface TrackerRow {
   interviewDateConfidence?: 'exact' | 'week' | 'unknown'
   interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
   notes?: string
+  /** Metadata only; the 500-row tracker never selects Tailor text. */
+  tailoredResume?: { createdAt: string }
+  appliedWith?: { wasTailored: boolean }
   /** Read-time derived, never persisted. */
   nudge: 'waiting' | 'ghost-prompt' | null
   /** True while the "Clicked · not confirmed" one-tap flip should show. */
@@ -53,7 +56,12 @@ export interface TrackerRow {
 
 export interface TrackerView {
   groups: Array<{ status: string; count: number; rows: TrackerRow[] }>
-  confirmCard: { jobPostingId: string; company: string; clickedAgoHours: number } | null
+  confirmCard: {
+    jobPostingId: string
+    company: string
+    clickedAgoHours: number
+    tailoredResume?: { createdAt: string }
+  } | null
 }
 
 function lastActivityAt(app: { statusHistory?: Array<{ at: Date | string }>; updatedAt?: Date | string }): Date {
@@ -69,7 +77,7 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
   const empty = (): TrackerView => ({ groups: [], confirmCard: null })
   if (!(await isJobsAccountActive(userId))) throw new JobsAccountInactiveError(userId)
   const apps = await JobApplication.find({ userId })
-    .select('jobPostingId jobSnapshot status statusHistory appliedAt verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference notes outcome updatedAt')
+    .select('jobPostingId jobSnapshot status statusHistory appliedAt appliedWith.wasTailored tailoredVersion.createdAt verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference notes outcome updatedAt')
     .sort({ updatedAt: -1 })
     .limit(500)
     .lean()
@@ -103,6 +111,12 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
       interviewDateConfidence: a.interviewDateConfidence,
       interviewDatePreference: a.interviewDatePreference,
       notes: a.notes || undefined,
+      ...(canNudgePreparation && a.tailoredVersion?.createdAt
+        ? { tailoredResume: { createdAt: new Date(a.tailoredVersion.createdAt).toISOString() } }
+        : {}),
+      ...(a.appliedWith
+        ? { appliedWith: { wasTailored: a.appliedWith.wasTailored } }
+        : {}),
       nudge: canNudgePreparation && responseNudgeEligible && ageDays >= NUDGE_GHOST_PROMPT_DAYS ? 'ghost-prompt' : canNudgePreparation && responseNudgeEligible && ageDays >= NUDGE_WAITING_DAYS ? 'waiting' : null,
       unconfirmedClick: a.status === 'apply_clicked',
     }
@@ -130,6 +144,11 @@ export async function getTracker(userId: string, now = new Date()): Promise<Trac
           jobPostingId: String(candidate.jobPostingId),
           company: candidate.jobSnapshot?.company ?? 'that job',
           clickedAgoHours: Math.floor((now.getTime() - lastActivityAt(candidate).getTime()) / 3600_000),
+          ...((postingStateById.get(String(candidate.jobPostingId)) === 'live' ||
+            postingStateById.get(String(candidate.jobPostingId)) === 'archived') &&
+            candidate.tailoredVersion?.createdAt
+            ? { tailoredResume: { createdAt: new Date(candidate.tailoredVersion.createdAt).toISOString() } }
+            : {}),
         }
       : null,
   }

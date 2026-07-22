@@ -222,6 +222,25 @@ describe('getTracker (Wave 4.2 — pure read-time derivation)', () => {
     })
   })
 
+  it('projects Tailor and explicit applied-with metadata without exposing artifact text', async () => {
+    reset()
+    const tailored = app({
+      tailoredVersion: {
+        createdAt: NOW,
+        tailoredText: 'MUST NEVER REACH TRACKER',
+      },
+      appliedWith: { wasTailored: true, tailoredFromResumeId: 'resume-private' },
+    })
+    chain([tailored])
+
+    const row = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)[0]
+
+    expect(row.tailoredResume).toEqual({ createdAt: NOW.toISOString() })
+    expect(row.appliedWith).toEqual({ wasTailored: true })
+    expect(JSON.stringify(row)).not.toContain('MUST NEVER REACH TRACKER')
+    expect(JSON.stringify(row)).not.toContain('resume-private')
+  })
+
   it('batches posting lifecycle and marks closed or missing rows without changing application status', async () => {
     reset()
     const live = app({ status: 'applied' })
@@ -246,7 +265,11 @@ describe('getTracker (Wave 4.2 — pure read-time derivation)', () => {
 
   it('suppresses positive preparation nudges when posting context is restricted or missing', async () => {
     reset()
-    const restricted = app({ status: 'applied', statusHistory: [{ status: 'applied', at: daysAgo(8), source: 'user' }] })
+    const restricted = app({
+      status: 'applied',
+      statusHistory: [{ status: 'applied', at: daysAgo(8), source: 'user' }],
+      tailoredVersion: { createdAt: NOW, tailoredText: 'restricted artifact' },
+    })
     const missing = app({ status: 'applied', statusHistory: [{ status: 'applied', at: daysAgo(22), source: 'user' }] })
     chain([restricted, missing])
     mockPostingFind.mockReturnValueOnce({
@@ -258,19 +281,28 @@ describe('getTracker (Wave 4.2 — pure read-time derivation)', () => {
     const rows = (await getTracker('u1', NOW)).groups.flatMap((group) => group.rows)
 
     expect(rows.find((row) => row.jobPostingId === restricted.jobPostingId)).toMatchObject({ postingState: 'restricted', nudge: null })
+    expect(rows.find((row) => row.jobPostingId === restricted.jobPostingId)?.tailoredResume).toBeUndefined()
     expect(rows.find((row) => row.jobPostingId === missing.jobPostingId)).toMatchObject({ postingState: 'snapshot-only', nudge: null })
   })
 
   it('confirm card: freshest apply_clicked row inside 20h-7d, gated by the ask budget', async () => {
     reset()
     chain([
-      app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(1), source: 'system' }], jobSnapshot: { title: 'SDE', company: 'Meesho', location: '' } }),
+      app({
+        status: 'apply_clicked',
+        statusHistory: [{ status: 'apply_clicked', at: daysAgo(1), source: 'system' }],
+        jobSnapshot: { title: 'SDE', company: 'Meesho', location: '' },
+        tailoredVersion: { createdAt: NOW },
+      }),
       app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(0, 2), source: 'system' }] }), // too fresh (2h)
       app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(9), source: 'system' }] }), // too old
       app({ status: 'apply_clicked', statusHistory: [{ status: 'apply_clicked', at: daysAgo(2), source: 'system' }], outcome: { askCount: 1 } }), // ONE dismissal retires the card
     ])
     const v = await getTracker('u1', NOW)
-    expect(v.confirmCard).toMatchObject({ company: 'Meesho' })
+    expect(v.confirmCard).toMatchObject({
+      company: 'Meesho',
+      tailoredResume: { createdAt: NOW.toISOString() },
+    })
   })
 
   it('a single dismissal retires the card — no double-dismiss (Codex #523)', async () => {

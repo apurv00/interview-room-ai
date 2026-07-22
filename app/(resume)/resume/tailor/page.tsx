@@ -21,7 +21,7 @@ interface SavedResume {
 interface TailorResult {
   tailoredResume: string
   changes: Array<{ section: string; change: string; reason: string }>
-  matchScore: number
+  matchScore?: number
   missingKeywords: string[]
   addedKeywords: string[]
   /** Only part of the resume fit the analysis window. */
@@ -44,6 +44,7 @@ type JobAssociationState =
   | 'verification-error'
   | 'transient-error'
 type JobContextStatus = 'loading' | 'ready' | 'terminal' | 'transient-error'
+type RestoredTailorState = 'current' | 'outdated'
 type JobAssociationDisposition = 'display' | 'unverified' | 'discard' | 'stale'
 
 interface LoadedJobContext {
@@ -250,6 +251,14 @@ export default function TailorPage() {
   const [result, setResult] = useState<TailorResult | null>(null)
   const [resultResumeFileName, setResultResumeFileName] = useState('')
   const [resultOriginUserId, setResultOriginUserId] = useState<string | null>(null)
+  const [tailoredVersionSummary, setTailoredVersionSummary] = useState<{
+    createdAt: string
+    current: boolean
+  } | null>(null)
+  const [restoredTailorState, setRestoredTailorState] = useState<RestoredTailorState | null>(null)
+  const [restoreState, setRestoreState] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [restoreRetry, setRestoreRetry] = useState(0)
+  const [restoreDismissed, setRestoreDismissed] = useState(false)
   const [error, setError] = useState('')
   const [accountUnavailable, setAccountUnavailable] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -262,7 +271,8 @@ export default function TailorPage() {
   // Jobs hand-off (Wave 4.5, package 11): ?jobId= prefills the JD from the
   // posting and the tailored result persists on the application row.
   const searchParams = useSearchParams()
-  const jobId = searchParams?.get('jobId') ?? null
+  const rawJobId = searchParams?.get('jobId') ?? null
+  const jobId = rawJobId && OBJECT_ID_PATTERN.test(rawJobId) ? rawJobId : null
   const jobContextSessionKey = authStatus === 'authenticated'
     ? `user:${sessionUserId ?? 'unknown'}`
     : authStatus
@@ -278,6 +288,7 @@ export default function TailorPage() {
   const uploadRequestRef = useRef(0)
   const uploadAbortRef = useRef<AbortController | null>(null)
   const saveCopyRequestRef = useRef(0)
+  const restoreRequestRef = useRef(0)
   const heldResultRef = useRef<HeldTailorResult | null>(null)
   const accountUnavailableRef = useRef(false)
   const selectedResumeIdRef = useRef('')
@@ -313,6 +324,7 @@ export default function TailorPage() {
     uploadAbortRef.current?.abort()
     uploadAbortRef.current = null
     saveCopyRequestRef.current += 1
+    restoreRequestRef.current += 1
     heldResultRef.current = null
     selectedResumeIdRef.current = ''
     pendingRecoveryAttemptRef.current = null
@@ -328,6 +340,10 @@ export default function TailorPage() {
     setResult(null)
     setResultResumeFileName('')
     setResultOriginUserId(null)
+    setTailoredVersionSummary(null)
+    setRestoredTailorState(null)
+    setRestoreState('idle')
+    setRestoreDismissed(false)
     setPendingAssociation(null)
     setJobAssociation('idle')
     setLoadedJobContext(null)
@@ -355,6 +371,11 @@ export default function TailorPage() {
     setResult(null)
     setResultResumeFileName('')
     setResultOriginUserId(null)
+    setTailoredVersionSummary(null)
+    setRestoredTailorState(null)
+    setRestoreState('idle')
+    setRestoreDismissed(false)
+    restoreRequestRef.current += 1
     heldResultRef.current = null
     saveCopyRequestRef.current += 1
     setSavingCopy(false)
@@ -433,6 +454,13 @@ export default function TailorPage() {
           setJobContextStatus(allowed ? 'ready' : 'terminal')
           if (allowed) {
             setLoadedJobContext({ jobId, jobDescription: nextJd, companyName: nextCompany, sourceJdHash })
+            const tailoredSummary = d.application?.tailoredResume
+            setTailoredVersionSummary(
+              tailoredSummary && typeof tailoredSummary.createdAt === 'string' &&
+                typeof tailoredSummary.current === 'boolean'
+                ? { createdAt: tailoredSummary.createdAt, current: tailoredSummary.current }
+                : null,
+            )
           } else {
             setJobAssociation('detached')
           }
@@ -450,6 +478,110 @@ export default function TailorPage() {
       })
     return () => controller.abort()
   }, [enterAccountUnavailableState, jobId, jobContextRetry, jobContextSessionKey])
+
+  useEffect(() => {
+    if (
+      accountUnavailableRef.current ||
+      authStatus !== 'authenticated' ||
+      !sessionUserId ||
+      !jobId ||
+      !tailoredVersionSummary ||
+      restoreDismissed ||
+      jobContextStatus !== 'ready' ||
+      result ||
+      tailoring ||
+      pendingAssociation ||
+      readStoredPendingAssociation()
+    ) return
+
+    const requestId = ++restoreRequestRef.current
+    const controller = new AbortController()
+    setRestoreState('loading')
+    fetch(`/api/jobs/${jobId}/tailored`, { signal: controller.signal })
+      .then(async (response) => {
+        if (response.status === 404) return { kind: 'missing' as const }
+        if (response.status === 401) {
+          const body = await response.json().catch(() => null) as { code?: unknown } | null
+          if (body?.code === 'ACCOUNT_UNAVAILABLE') return { kind: 'account-unavailable' as const }
+        }
+        if (!response.ok) return { kind: 'error' as const }
+        const body = await response.json().catch(() => null) as Record<string, unknown> | null
+        const tailoredResume = boundedArtifact(body?.tailoredText, MAX_JOB_TAILORED_TEXT_CHARS)
+        const addedKeywords = cappedKeywords(body?.addedKeywords)
+        const missingKeywords = cappedKeywords(body?.missingKeywords)
+        const createdAt = cappedString(body?.createdAt, 64, true)
+        const state: RestoredTailorState | null = body?.state === 'current' || body?.state === 'outdated'
+          ? body.state
+          : null
+        const matchScore = typeof body?.matchScore === 'number' && Number.isFinite(body.matchScore)
+          ? Math.max(0, Math.min(100, body.matchScore))
+          : undefined
+        if (!tailoredResume || !addedKeywords || !missingKeywords || !createdAt || !state) {
+          return { kind: 'error' as const }
+        }
+        return {
+          kind: 'restored' as const,
+          result: {
+            tailoredResume,
+            changes: [],
+            matchScore,
+            addedKeywords,
+            missingKeywords,
+          } satisfies TailorResult,
+          createdAt,
+          state,
+        }
+      })
+      .then((resolution) => {
+        if (
+          controller.signal.aborted ||
+          requestId !== restoreRequestRef.current ||
+          activeJobIdRef.current !== jobId ||
+          sessionUserIdRef.current !== sessionUserId
+        ) return
+        if (resolution.kind === 'account-unavailable') {
+          enterAccountUnavailableState()
+          return
+        }
+        if (resolution.kind === 'missing') {
+          setTailoredVersionSummary(null)
+          setRestoreState('idle')
+          return
+        }
+        if (resolution.kind === 'error') {
+          setRestoreState('error')
+          return
+        }
+        setResult(resolution.result)
+        setResultResumeFileName('Saved tailored resume')
+        setResultOriginUserId(sessionUserId)
+        setTailoredVersionSummary({
+          createdAt: resolution.createdAt,
+          current: resolution.state === 'current',
+        })
+        setRestoredTailorState(resolution.state)
+        setJobAssociation('saved')
+        setRestoreState('idle')
+      })
+      .catch(() => {
+        if (!controller.signal.aborted && requestId === restoreRequestRef.current) {
+          setRestoreState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [
+    authStatus,
+    enterAccountUnavailableState,
+    jobContextStatus,
+    jobId,
+    pendingAssociation,
+    restoreRetry,
+    restoreDismissed,
+    result,
+    sessionUserId,
+    tailoredVersionSummary,
+    tailoring,
+  ])
   useEffect(() => () => {
     savedResumeAbortRef.current?.abort()
     savedResumeListAbortRef.current?.abort()
@@ -497,6 +629,11 @@ export default function TailorPage() {
       setResult(null)
       setResultResumeFileName('')
       setResultOriginUserId(null)
+      setTailoredVersionSummary(null)
+      setRestoredTailorState(null)
+      setRestoreState('idle')
+      setRestoreDismissed(false)
+      restoreRequestRef.current += 1
       setPendingAssociation(null)
       setJobAssociation('idle')
       setError('')
@@ -763,6 +900,9 @@ export default function TailorPage() {
     setResult(held.result)
     setResultResumeFileName(held.resumeFileName)
     setResultOriginUserId(payload.originUserId ?? null)
+    setRestoredTailorState('current')
+    setRestoreDismissed(false)
+    setTailoredVersionSummary({ createdAt: new Date().toISOString(), current: true })
     return true
   }, [])
 
@@ -844,6 +984,8 @@ export default function TailorPage() {
     setTailoring(true)
     setPendingAssociation(null)
     setJobAssociation('idle')
+    setRestoredTailorState(null)
+    restoreRequestRef.current += 1
     heldResultRef.current = null
     setResultOriginUserId(null)
     const requestId = ++tailorRequestRef.current
@@ -1005,7 +1147,10 @@ export default function TailorPage() {
         return
       }
       if (res.ok) {
-        router.push(`/resume/builder?id=${data.id}`)
+        router.push(
+          `/resume/builder?id=${encodeURIComponent(data.id)}` +
+          (jobId && OBJECT_ID_PATTERN.test(jobId) ? `&jobId=${encodeURIComponent(jobId)}` : ''),
+        )
       } else if (data.code === 'RESUME_LIMIT') {
         setError('Resume limit reached (max 3). Delete an existing resume from the Resume Builder page, then try saving again.')
       } else {
@@ -1123,6 +1268,23 @@ export default function TailorPage() {
 
       {!result ? (
         <div className="space-y-6">
+          {restoreState === 'loading' && (
+            <div role="status" className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+              Restoring your saved tailored resume…
+            </div>
+          )}
+          {restoreState === 'error' && (
+            <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+              We couldn&apos;t restore the saved tailored resume just now.{' '}
+              <button
+                type="button"
+                onClick={() => setRestoreRetry((attempt) => attempt + 1)}
+                className="font-medium text-blue-700 hover:underline"
+              >
+                Retry
+              </button>
+            </div>
+          )}
           {pendingAssociation && ['saving', 'context-error', 'verification-error', 'auth-required'].includes(jobAssociation) && (
             <div
               role="status"
@@ -1359,6 +1521,43 @@ export default function TailorPage() {
               )}
             </div>
           )}
+          {jobId && jobAssociation === 'saved' && (
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
+              <p className="text-sm font-semibold text-slate-900">
+                {restoredTailorState === 'outdated'
+                  ? 'Saved tailored resume · job description changed'
+                  : 'Tailored resume saved to this job'}
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                {restoredTailorState === 'outdated'
+                  ? 'Review the current job description and create a new version before relying on this match.'
+                  : 'Continue to the same job when you are ready to apply.'}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Link
+                  href={`/jobs/${encodeURIComponent(jobId)}${jobPostingState === 'live' ? '?from=tailor#apply' : ''}`}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  {jobPostingState === 'live' ? 'Continue to job & apply' : 'View saved job'}
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => {
+                    associationRequestRef.current += 1
+                    restoreRequestRef.current += 1
+                    setRestoreDismissed(true)
+                    setResult(null)
+                    setResultResumeFileName('')
+                    setResultOriginUserId(null)
+                    setRestoredTailorState(null)
+                  }}
+                  className="rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-medium text-blue-700"
+                >
+                  Create a new version
+                </button>
+              </div>
+            </div>
+          )}
           {error && (
             <div role="alert" className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" strokeWidth={2} />
@@ -1375,12 +1574,14 @@ export default function TailorPage() {
               </p>
             </div>
           )}
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center">
-            <p className="text-sm text-slate-500 mb-2">Job Match Score</p>
-            <p className={`text-4xl font-bold ${result.matchScore >= 80 ? 'text-[#059669]' : result.matchScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
-              {result.matchScore}%
-            </p>
-          </div>
+          {typeof result.matchScore === 'number' && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center">
+              <p className="text-sm text-slate-500 mb-2">Job Match Score</p>
+              <p className={`text-4xl font-bold ${result.matchScore >= 80 ? 'text-[#059669]' : result.matchScore >= 60 ? 'text-amber-400' : 'text-red-400'}`}>
+                {result.matchScore}%
+              </p>
+            </div>
+          )}
 
           <div className="grid md:grid-cols-2 gap-4">
             {result.addedKeywords.length > 0 && (
@@ -1442,7 +1643,7 @@ export default function TailorPage() {
                       : undefined}
                   className="px-3 py-1.5 bg-blue-600/10 border border-blue-500/20 text-blue-600 text-[10px] rounded-lg font-medium hover:bg-blue-600/20 transition-colors disabled:opacity-50"
                 >
-                  {savingCopy ? 'Parsing & Saving...' : 'Save as New Resume'}
+                  {savingCopy ? 'Saving…' : 'Save as New Resume'}
                 </button>
               </div>
             </div>
@@ -1451,20 +1652,23 @@ export default function TailorPage() {
             </pre>
           </div>
 
-          <button onClick={() => {
-            associationRequestRef.current += 1
-            saveCopyRequestRef.current += 1
-            clearStoredPendingAssociation(pendingAssociation ?? undefined)
-            heldResultRef.current = null
-            setPendingAssociation(null)
-            setJobAssociation('idle')
-            setResult(null)
-            setResultResumeFileName('')
-            setResultOriginUserId(null)
-            setSavingCopy(false)
-          }} className="text-sm text-blue-600 hover:text-blue-500 transition-colors">
-            Start Over
-          </button>
+          {!(jobId && jobAssociation === 'saved') && (
+            <button onClick={() => {
+              associationRequestRef.current += 1
+              saveCopyRequestRef.current += 1
+              clearStoredPendingAssociation(pendingAssociation ?? undefined)
+              heldResultRef.current = null
+              setPendingAssociation(null)
+              setJobAssociation('idle')
+              setRestoreDismissed(true)
+              setResult(null)
+              setResultResumeFileName('')
+              setResultOriginUserId(null)
+              setSavingCopy(false)
+            }} className="text-sm text-blue-600 hover:text-blue-500 transition-colors">
+              Create a new version
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -30,12 +30,19 @@ interface Row {
   interviewDateConfidence?: 'exact' | 'week' | 'unknown'
   interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
   notes?: string
+  tailoredResume?: { createdAt: string }
+  appliedWith?: { wasTailored: boolean }
   nudge: 'waiting' | 'ghost-prompt' | null
   unconfirmedClick: boolean
 }
 interface View {
   groups: Array<{ status: string; count: number; rows: Row[] }>
-  confirmCard: { jobPostingId: string; company: string; clickedAgoHours: number } | null
+  confirmCard: {
+    jobPostingId: string
+    company: string
+    clickedAgoHours: number
+    tailoredResume?: { createdAt: string }
+  } | null
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -58,6 +65,14 @@ const CHIP_TARGETS: Record<string, string[]> = {
   offer: [],
   withdrawn: ['saved'],
 }
+const APPLIED_HISTORY_STATUSES = new Set([
+  'applied',
+  'interview_scheduled',
+  'offer',
+  'rejected',
+  'ghosted',
+  'withdrawn',
+])
 
 export default function TrackerPage() {
   const [view, setView] = useState<View | null>(null)
@@ -66,6 +81,8 @@ export default function TrackerPage() {
   const [notesFor, setNotesFor] = useState<string | null>(null)
   const [notesDraft, setNotesDraft] = useState('')
   const [dateSheetFor, setDateSheetFor] = useState<string | null>(null)
+  const [applyChoiceFor, setApplyChoiceFor] = useState<string | null>(null)
+  const [actionNotice, setActionNotice] = useState<string | null>(null)
   const accountUnavailableRef = useRef(false)
   const loadRequestRef = useRef(0)
 
@@ -76,6 +93,8 @@ export default function TrackerPage() {
     setNotesFor(null)
     setNotesDraft('')
     setDateSheetFor(null)
+    setApplyChoiceFor(null)
+    setActionNotice(null)
   }, [])
 
   const handleUnauthorized = useCallback(async (response: Response | null): Promise<boolean> => {
@@ -118,17 +137,39 @@ export default function TrackerPage() {
     return () => { loadRequestRef.current += 1 }
   }, [load])
 
-  async function transition(jobPostingId: string, from: string, to: string) {
+  async function transition(
+    jobPostingId: string,
+    from: string,
+    to: string,
+    appliedWith?: { wasTailored: boolean; tailoredAt?: string },
+  ) {
     const res = await fetch(`/api/jobs/${jobPostingId}/status`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: to }),
+      body: JSON.stringify({ status: to, ...(appliedWith ? { appliedWith } : {}) }),
     }).catch(() => null)
     if (await handleUnauthorized(res)) return
     if (accountUnavailableRef.current) return
-    if (res?.ok) {
+    if (res?.status === 409) {
+      const conflict = await res.json().catch(() => null) as { code?: unknown } | null
+      if (conflict?.code === 'TAILORED_VERSION_UNAVAILABLE' || conflict?.code === 'APPLIED_WITH_CONFLICT') {
+        setApplyChoiceFor(null)
+        setActionNotice(conflict.code === 'TAILORED_VERSION_UNAVAILABLE'
+          ? 'The saved tailored version changed. Review the refreshed row, then confirm again.'
+          : 'A different resume choice is already recorded. Review the refreshed row before changing it.')
+        load()
+        return
+      }
+    }
+    if (!res?.ok) {
+      setActionNotice('Couldn’t record that update just now. Try again.')
+      return
+    }
+    if (res.ok) {
       // §4c: landing on interview_scheduled opens the date sheet.
       if (to === 'interview_scheduled') setDateSheetFor(jobPostingId)
+      setApplyChoiceFor(null)
+      setActionNotice(null)
       // Undo replays `from` through the USER status route — apply_clicked is
       // the machine fact and deliberately not user-settable (letting undo
       // restore it would let anyone fabricate clicks), so moves off a
@@ -153,22 +194,50 @@ export default function TrackerPage() {
     }).catch(() => null)
     if (await handleUnauthorized(res)) return
     if (accountUnavailableRef.current) return
+    if (!res?.ok) {
+      setActionNotice('Couldn’t record that update just now. Try again.')
+      return
+    }
+    setActionNotice(null)
     load()
   }
 
-  async function confirmCardAnswer(jobPostingId: string, applied: boolean) {
+  async function confirmCardAnswer(
+    jobPostingId: string,
+    applied: boolean,
+    appliedWith?: { wasTailored: boolean; tailoredAt?: string },
+  ) {
     let res: Response | null
     if (applied) {
       res = await fetch(`/api/jobs/${jobPostingId}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'applied', viaNudge: true }),
+        body: JSON.stringify({
+          status: 'applied',
+          viaNudge: true,
+          ...(appliedWith ? { appliedWith } : {}),
+        }),
       }).catch(() => null)
     } else {
       res = await fetch(`/api/jobs/${jobPostingId}/nudge-dismiss`, { method: 'POST' }).catch(() => null)
     }
     if (await handleUnauthorized(res)) return
     if (accountUnavailableRef.current) return
+    if (res?.status === 409) {
+      const conflict = await res.json().catch(() => null) as { code?: unknown } | null
+      if (conflict?.code === 'TAILORED_VERSION_UNAVAILABLE' || conflict?.code === 'APPLIED_WITH_CONFLICT') {
+        setActionNotice(conflict.code === 'TAILORED_VERSION_UNAVAILABLE'
+          ? 'The saved tailored version changed. Review the refreshed row, then confirm again.'
+          : 'A different resume choice is already recorded. Review the refreshed row before changing it.')
+        load()
+        return
+      }
+    }
+    if (!res?.ok) {
+      setActionNotice('Couldn’t record that update just now. Try again.')
+      return
+    }
+    setActionNotice(null)
     load()
   }
 
@@ -233,14 +302,39 @@ export default function TrackerPage() {
       {view?.confirmCard && (
         <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm">
           <p className="font-medium">You clicked {view.confirmCard.company} {clickAgeLabel(view.confirmCard.clickedAgoHours)} — did you apply?</p>
-          <div className="mt-2 flex gap-2">
-            <button onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, true)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white">✓ Yes, applied</button>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {view.confirmCard.tailoredResume ? (
+              <>
+                <button
+                  onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, true, {
+                    wasTailored: true,
+                    tailoredAt: view.confirmCard!.tailoredResume!.createdAt,
+                  })}
+                  className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white"
+                >
+                  ✓ Yes, with tailored resume
+                </button>
+                <button
+                  onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, true, { wasTailored: false })}
+                  className="rounded-lg border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700"
+                >
+                  Yes, with another resume
+                </button>
+              </>
+            ) : (
+              <button onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, true)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-medium text-white">✓ Yes, applied</button>
+            )}
             <button onClick={() => confirmCardAnswer(view.confirmCard!.jobPostingId, false)} className="rounded-lg border border-slate-200 px-3 py-1 text-xs bg-white">Not yet</button>
           </div>
         </div>
       )}
 
       {error === 'load' && <p className="mt-8 text-sm text-red-600">Couldn&apos;t load the tracker — refresh to retry.</p>}
+      {actionNotice && (
+        <div role="status" aria-live="polite" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {actionNotice}
+        </div>
+      )}
       {!view && !error && <p className="mt-8 text-sm text-slate-500">Loading…</p>}
 
       {view && view.groups.length === 0 && (
@@ -276,6 +370,25 @@ export default function TrackerPage() {
                     {r.postingState === 'archived' ? 'Posting no longer active · saved details available' : 'Posting unavailable · tracked history preserved'}
                   </p>
                 )}
+                {r.tailoredResume && (
+                  <p className="mt-1 text-xs text-blue-700">
+                    Tailored resume saved ·{' '}
+                    <Link href={`/resume/tailor?jobId=${r.jobPostingId}`} className="font-medium underline">
+                      View or update
+                    </Link>
+                  </p>
+                )}
+                {r.appliedWith && APPLIED_HISTORY_STATUSES.has(r.status) && (
+                  <p className="mt-1 text-xs text-slate-600">
+                    {r.status === 'applied'
+                      ? r.appliedWith.wasTailored
+                        ? 'Applied with the tailored resume.'
+                        : 'Applied with another resume.'
+                      : r.appliedWith.wasTailored
+                        ? 'This application used the tailored resume.'
+                        : 'This application used another resume.'}
+                  </p>
+                )}
                 {r.status === 'applied' && r.nudge === 'waiting' && <p className="mt-1 text-xs text-amber-700">Still marked Applied at {r.company}. Job-specific practice stays with this tracked job.</p>}
                 {r.status === 'applied' && r.nudge === 'ghost-prompt' && (
                   <p className="mt-1 text-xs text-amber-700">
@@ -292,7 +405,17 @@ export default function TrackerPage() {
                 )}
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {(CHIP_TARGETS[r.status] ?? []).map((to) => (
-                    <button key={to} onClick={() => transition(r.jobPostingId, r.status, to)} className="rounded-full border border-slate-200 px-2 py-0.5 text-xs hover:bg-slate-50">
+                    <button
+                      key={to}
+                      onClick={() => {
+                        if (to === 'applied' && r.tailoredResume) {
+                          setApplyChoiceFor(r.jobPostingId)
+                        } else {
+                          void transition(r.jobPostingId, r.status, to)
+                        }
+                      }}
+                      className="rounded-full border border-slate-200 px-2 py-0.5 text-xs hover:bg-slate-50"
+                    >
                       → {STATUS_LABEL[to] ?? to}
                     </button>
                   ))}
@@ -307,6 +430,31 @@ export default function TrackerPage() {
                     {r.postingState === 'live' ? 'View' : 'View saved details'}
                   </Link>
                 </div>
+                {applyChoiceFor === r.jobPostingId && r.tailoredResume && (
+                  <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs">
+                    <p className="font-medium">Which resume did you apply with?</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        onClick={() => transition(r.jobPostingId, r.status, 'applied', {
+                          wasTailored: true,
+                          tailoredAt: r.tailoredResume!.createdAt,
+                        })}
+                        className="rounded-lg bg-blue-600 px-3 py-1 font-medium text-white"
+                      >
+                        Tailored resume
+                      </button>
+                      <button
+                        onClick={() => transition(r.jobPostingId, r.status, 'applied', { wasTailored: false })}
+                        className="rounded-lg border border-blue-200 bg-white px-3 py-1 font-medium text-blue-700"
+                      >
+                        Another resume
+                      </button>
+                      <button onClick={() => setApplyChoiceFor(null)} className="px-2 py-1 text-slate-600 underline">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {dateSheetFor === r.jobPostingId && r.status === 'interview_scheduled' && (
                   <div className="mt-2 rounded-lg border border-blue-300 bg-blue-50 p-2 text-xs">
                     <p className="font-medium">Interview timing</p>
