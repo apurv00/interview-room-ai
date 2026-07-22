@@ -29,15 +29,36 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   let latencyMs: number | undefined
   let viaNudge = false
   let inferredFromPrep = false
+  let rawAppliedWith: unknown
   try {
     const body = await req.json()
     to = body?.status
     if (typeof body?.latencyMs === 'number' && body.latencyMs >= 0) latencyMs = Math.floor(body.latencyMs)
     viaNudge = body?.viaNudge === true
     inferredFromPrep = body?.inferredFromPrep === true
+    rawAppliedWith = body?.appliedWith
   } catch { /* fallthrough to validation */ }
   if (!to || !(USER_SETTABLE_STATUSES as readonly string[]).includes(to)) {
     return NextResponse.json({ error: `status must be one of ${USER_SETTABLE_STATUSES.join(', ')}` }, { status: 400 })
+  }
+  let appliedWith:
+    | { wasTailored: false }
+    | { wasTailored: true; tailoredAt: Date }
+    | undefined
+  if (rawAppliedWith !== undefined) {
+    if (to !== 'applied' || !rawAppliedWith || typeof rawAppliedWith !== 'object') {
+      return NextResponse.json({ error: 'appliedWith is only valid for applied status' }, { status: 400 })
+    }
+    const claim = rawAppliedWith as { wasTailored?: unknown; tailoredAt?: unknown }
+    if (claim.wasTailored === false) {
+      appliedWith = { wasTailored: false }
+    } else if (claim.wasTailored === true && typeof claim.tailoredAt === 'string') {
+      const tailoredAt = new Date(claim.tailoredAt)
+      if (!Number.isNaN(tailoredAt.getTime())) appliedWith = { wasTailored: true, tailoredAt }
+    }
+    if (!appliedWith) {
+      return NextResponse.json({ error: 'invalid appliedWith claim' }, { status: 400 })
+    }
   }
 
   await connectDB()
@@ -53,6 +74,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       latencyMs,
       viaNudge,
       inferredFromPrep,
+      appliedWith,
     })
   } catch (error) {
     if (error instanceof JobsAccountInactiveError) {
@@ -63,6 +85,16 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
     throw error
   }
-  if (!result.ok) return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
+  if (!result.ok) {
+    if (result.reason === 'tailored-version-unavailable' || result.reason === 'applied-with-conflict') {
+      return NextResponse.json(
+        result.reason === 'tailored-version-unavailable'
+          ? { error: 'tailored version changed or is unavailable', code: 'TAILORED_VERSION_UNAVAILABLE' }
+          : { error: 'a different resume choice is already recorded', code: 'APPLIED_WITH_CONFLICT' },
+        { status: 409 },
+      )
+    }
+    return NextResponse.json({ error: 'no application for this job' }, { status: 404 })
+  }
   return NextResponse.json({ ok: true, status: result.status })
 }

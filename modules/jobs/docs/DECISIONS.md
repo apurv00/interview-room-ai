@@ -58,7 +58,7 @@
 | Anonymous resume parse (authOptional, 10/IP/day, stateless) | `app/api/resume/parse/route.ts` |
 | `/api/documents/upload` auth-required, parse-only; originals are not retained in R2 | `app/api/documents/upload/route.ts` |
 | `/api/onboarding/extract` NOT feed-grade (4 coarse fields, 4-value role enum, 4k truncation) | `app/api/onboarding/extract/route.ts` |
-| Tailor page is paste-only today (no `?jobId=` support) | `app/(resume)/resume/tailor/page.tsx` |
+| Tailor accepts a validated `?jobId=`, persists latest-wins on `JobApplication`, restores owner-only artifacts after refresh, and returns through job detail/Builder without accepting arbitrary redirect URLs | `app/(resume)/resume/tailor/page.tsx`; `app/api/jobs/[id]/tailored/route.ts` |
 | `SavedJobDescription` + `/api/interview/saved-jds` = dead surfaces (zero UI consumers) | verified by critique; cleanup scheduled in product-flow package 1 |
 | Deletion cascade + export are hand-maintained lists | `accountDeletion.ts:212-228`; `dataExportService.ts` |
 | `fetchWithRetry` returns boolean, discards body; `cachedFetch` is client-side | `shared/fetchWithRetry.ts` — ingestion needs new `fetchJSONWithRetry<T>` |

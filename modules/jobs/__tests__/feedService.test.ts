@@ -543,10 +543,15 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
   })
 
   it('authed detail carries the caller\'s own application summary (chip + ticker inputs)', async () => {
-    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc()) })
+    const canonical = 'Current job description for Tailor metadata.'
+    mockFindById.mockReturnValue({ lean: () => Promise.resolve(doc({
+      jdCompressed: gzipSync(Buffer.from(canonical)),
+    })) })
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
       _id: 'app-1',
       status: 'apply_clicked',
+      tailoredVersion: { createdAt: NOW, jdHash: xrayHashOf(canonical) },
+      appliedWith: { wasTailored: true },
       verifiedPracticeSessionIds: ['a', 'b', 'c', 'd', 'e'],
       interviewDateConfidence: 'week',
       interviewDatePreference: 'this-week',
@@ -559,6 +564,8 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
       interviewDate: undefined,
       interviewDateConfidence: 'week',
       interviewDatePreference: 'this-week',
+      tailoredResume: { createdAt: NOW.toISOString(), current: true },
+      appliedWith: { wasTailored: true },
       ats: { state: 'none' },
     }) // practiceCount capped at 3
   })
@@ -756,6 +763,8 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     })) })
     mockAppFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve({
       _id: 'app-restricted', status: 'applied', verifiedPracticeSessionIds: ['s1', 's2'],
+      tailoredVersion: { createdAt: NOW, jdHash: xrayHashOf('sensitive removed body') },
+      appliedWith: { wasTailored: true },
       jobSnapshot: { title: 'Saved safe title', company: 'Saved safe company', location: 'Remote' },
       atsResult: {
         score: 91,
@@ -769,6 +778,8 @@ describe('getJobDetail (P-2: the anon/authed split is structural)', () => {
     expect(detail.postingState).toBe('restricted')
     expect(detail).toMatchObject({ title: 'Saved safe title', company: 'Saved safe company', locations: ['Remote'], isRemote: true })
     expect(detail.application).toMatchObject({ applicationId: 'app-restricted', practiceCount: 2 })
+    expect(detail.application).not.toHaveProperty('tailoredResume')
+    expect(detail.application?.appliedWith).toEqual({ wasTailored: true })
     expect(detail.application?.ats).toMatchObject({ state: 'done' })
     expect(detail.application?.ats).not.toHaveProperty('score')
     expect(detail.application?.ats).not.toHaveProperty('missingKeywords')

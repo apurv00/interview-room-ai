@@ -2,15 +2,17 @@ import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 import { JobApplication as RealJobApplication } from '@shared/db/models/JobApplication'
 
-const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockStartSession, mockWithTransaction, mockEndSession } = vi.hoisted(() => ({
+const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppExists, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockUserFindOne, mockStartSession, mockWithTransaction, mockEndSession } = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
   mockPostingExists: vi.fn(),
   mockAppFindOne: vi.fn(),
+  mockAppExists: vi.fn(),
   mockAppUpdateOne: vi.fn(),
   mockAppCreate: vi.fn(),
   mockAppFindOneAndUpdate: vi.fn(),
   mockAppDeleteOne: vi.fn(),
+  mockUserFindOne: vi.fn(),
   mockStartSession: vi.fn(),
   mockWithTransaction: vi.fn(),
   mockEndSession: vi.fn(),
@@ -35,12 +37,14 @@ vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne, exists: mockPostingExists },
   JobApplication: {
     findOne: mockAppFindOne,
+    exists: mockAppExists,
     updateOne: mockAppUpdateOne,
     create: mockAppCreate,
     findOneAndUpdate: mockAppFindOneAndUpdate,
     deleteOne: mockAppDeleteOne,
   },
   InterviewSession: { findById: mockSessionFindById, findOne: mockSessionFindOne, updateOne: mockSessionUpdateOne },
+  User: { findOne: mockUserFindOne },
 }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend } }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
@@ -63,6 +67,7 @@ import {
   reportBrokenLink,
   recordPracticeEvidence,
   saveTailoredVersion,
+  getTailoredVersion,
   hasCompletedScoredPractice,
 } from '../services/applicationService'
 import { xrayHashOf } from '../services/xrayService'
@@ -105,14 +110,16 @@ const APPLY_ATTEMPT = {
 }
 
 function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [APPLY_SOURCE], status: 'open', jdCompressed: PRACTICE_JD_COMPRESSED }) {
-  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockIsJobsAccountActive, mockWithActiveJobsAccountWrite, mockRecordJobsUserEvent, mockStartSession, mockWithTransaction, mockEndSession]) m.mockReset()
+  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppExists, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockUserFindOne, mockSessionFindOne, mockSessionUpdateOne, mockIsJobsAccountActive, mockWithActiveJobsAccountWrite, mockRecordJobsUserEvent, mockStartSession, mockWithTransaction, mockEndSession]) m.mockReset()
   mockInngestSend.mockReset()
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(posting) }) })
   mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockPostingExists.mockResolvedValue({ _id: 'posting' })
+  mockAppExists.mockResolvedValue({ _id: 'application' })
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockAppCreate.mockResolvedValue([])
   mockAppDeleteOne.mockResolvedValue({ deletedCount: 1 })
+  mockUserFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({ _id: 'u1' }) }) })
   mockSessionUpdateOne.mockResolvedValue({})
   mockIsJobsAccountActive.mockResolvedValue(true)
   mockInngestSend.mockResolvedValue(undefined)
@@ -536,6 +543,77 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
     expect((await transitionStatus('u1', 'j1', 'nonsense' as never, undefined, NOW)).ok).toBe(false)
   })
 
+  it('atomically records an explicit tailored-resume claim using server-derived provenance', async () => {
+    reset()
+    const tailoredAt = new Date('2026-07-14T11:00:00Z')
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ tailoredVersion: { sourceResumeId: 'resume-1' } }) }),
+    })
+    mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'apply_clicked' })
+
+    const result = await transitionStatus('u1', 'j1', 'applied', {
+      channel: 'web',
+      appliedWith: { wasTailored: true, tailoredAt },
+    }, NOW)
+
+    expect(result).toEqual({ ok: true, status: 'applied', from: 'apply_clicked' })
+    expect(mockAppFindOne).toHaveBeenCalledWith(
+      { userId: 'u1', jobPostingId: 'j1', 'tailoredVersion.createdAt': tailoredAt },
+      undefined,
+      expect.objectContaining({ session: expect.anything() }),
+    )
+    const update = mockAppFindOneAndUpdate.mock.calls[0][1]
+    expect(update.$set.appliedWith).toEqual({
+      wasTailored: true,
+      tailoredFromResumeId: 'resume-1',
+    })
+    expect(update.$unset).toBeUndefined()
+  })
+
+  it('accepts a paste/upload Tailor version without inventing saved-resume provenance', async () => {
+    reset()
+    const tailoredAt = new Date('2026-07-14T11:00:00Z')
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ tailoredVersion: { createdAt: tailoredAt } }) }),
+    })
+    mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'apply_clicked' })
+
+    await expect(transitionStatus('u1', 'j1', 'applied', {
+      channel: 'web',
+      appliedWith: { wasTailored: true, tailoredAt },
+    }, NOW)).resolves.toEqual({ ok: true, status: 'applied', from: 'apply_clicked' })
+    expect(mockAppFindOneAndUpdate.mock.calls[0][1].$set.appliedWith).toEqual({ wasTailored: true })
+  })
+
+  it('records another-resume explicitly and clears stale provenance when no choice is supplied', async () => {
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'apply_clicked' })
+    await transitionStatus('u1', 'j1', 'applied', {
+      channel: 'web',
+      appliedWith: { wasTailored: false },
+    }, NOW)
+    expect(mockAppFindOneAndUpdate.mock.calls[0][1].$set.appliedWith).toEqual({ wasTailored: false })
+
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce({ status: 'saved' })
+    await transitionStatus('u1', 'j1', 'applied', { channel: 'web' }, NOW)
+    expect(mockAppFindOneAndUpdate.mock.calls[0][1].$unset).toEqual({ appliedWith: 1 })
+  })
+
+  it('rejects a changed tailored version before status, history, or telemetry can mutate', async () => {
+    reset()
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve(null) }),
+    })
+
+    expect(await transitionStatus('u1', 'j1', 'applied', {
+      channel: 'web',
+      appliedWith: { wasTailored: true, tailoredAt: NOW },
+    }, NOW)).toEqual({ ok: false, reason: 'tailored-version-unavailable' })
+    expect(mockAppFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
   it('no application row → ok:false (route 404s)', async () => {
     reset()
     mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
@@ -566,6 +644,63 @@ describe('transitionStatus (user claims — loose machine, §2)', () => {
       undefined,
       { session: options.session },
     )
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('backfills a missing same-state resume claim without resetting appliedAt or history', async () => {
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({ status: 'applied' }) }),
+    })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
+
+    await expect(transitionStatus('u1', 'j1', 'applied', {
+      channel: 'web',
+      appliedWith: { wasTailored: false },
+    }, NOW)).resolves.toEqual({ ok: true, status: 'applied', from: 'applied' })
+    expect(mockAppUpdateOne).toHaveBeenCalledWith(
+      { userId: 'u1', jobPostingId: 'j1', status: 'applied', appliedWith: { $exists: false } },
+      { $set: { appliedWith: { wasTailored: false } } },
+      expect.objectContaining({ session: expect.anything(), runValidators: true }),
+    )
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+
+  it('treats the same applied-with retry as idempotent and rejects a conflicting claim', async () => {
+    const tailoredAt = new Date('2026-07-14T11:00:00Z')
+
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
+    mockAppFindOne
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({ tailoredVersion: { createdAt: tailoredAt, sourceResumeId: 'resume-1' } }) }),
+      })
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          status: 'applied',
+          appliedWith: { wasTailored: true, tailoredFromResumeId: 'resume-1' },
+        }) }),
+      })
+    await expect(transitionStatus('u1', 'j1', 'applied', {
+      channel: 'web',
+      appliedWith: { wasTailored: true, tailoredAt },
+    }, NOW)).resolves.toEqual({ ok: true, status: 'applied', from: 'applied' })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+
+    reset()
+    mockAppFindOneAndUpdate.mockResolvedValueOnce(null)
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve({
+        status: 'applied',
+        appliedWith: { wasTailored: true, tailoredFromResumeId: 'resume-1' },
+      }) }),
+    })
+    await expect(transitionStatus('u1', 'j1', 'applied', {
+      channel: 'web',
+      appliedWith: { wasTailored: false },
+    }, NOW)).resolves.toEqual({ ok: false, reason: 'applied-with-conflict' })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
@@ -1614,7 +1749,7 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     expect(r).toEqual({ ok: true })
     const [filter, update, options] = mockAppUpdateOne.mock.calls[0]
     expect(filter).toEqual({ _id: 'app1', userId: 'u1', jobPostingId: 'j1' })
-    expect(update.$set.tailoredVersion).toMatchObject({ tailoredText: 'TAILORED', matchScore: 78, createdAt: NOW })
+    expect(update.$set.tailoredVersion).toMatchObject({ tailoredText: 'TAILORED', sourceResumeId: 'r1', matchScore: 78, createdAt: NOW })
     expect(update.$set.tailoredVersion.jdHash).toHaveLength(20)
     expect(options).toMatchObject({ runValidators: true, session: expect.anything() })
     expect(mockAppCreate).not.toHaveBeenCalled()
@@ -1686,6 +1821,17 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     const created = mockAppCreate.mock.calls[0][0][0]
     expect(created.tailoredVersion.sourceResumeId).toBeUndefined() // absent, not ''
     expect('sourceResumeId' in created.tailoredVersion && created.tailoredVersion.sourceResumeId === '').toBe(false)
+    expect(mockUserFindOne).not.toHaveBeenCalled()
+  })
+
+  it('drops a stale or forged source resume id instead of persisting false provenance', async () => {
+    reset()
+    postingChain({ title: 'SDE', company: 'X', locations: [], provenance: [], status: 'open', jdCompressed: TAILOR_JD_COMPRESSED })
+    mockUserFindOne.mockReturnValueOnce({ select: () => ({ lean: () => Promise.resolve(null) }) })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1 })
+
+    expect(await saveTailoredVersion('u1', 'j1', PAYLOAD, NOW)).toEqual({ ok: true })
+    expect(mockAppUpdateOne.mock.calls[0][1].$set.tailoredVersion.sourceResumeId).toBeUndefined()
   })
 
   it('updates an existing normal archive but cannot manufacture closed or restricted ownership', async () => {
@@ -1799,5 +1945,145 @@ describe('saveTailoredVersion (§2 — latest-wins, never a cap seat)', () => {
     expect(mockAppFindOne).not.toHaveBeenCalled()
     expect(mockAppUpdateOne).not.toHaveBeenCalled()
     expect(mockAppCreate).not.toHaveBeenCalled()
+  })
+})
+
+describe('getTailoredVersion (owner-only durable recovery)', () => {
+  const JD = 'current canonical job description'
+  const COMPRESSED_JD = gzipSync(Buffer.from(JD))
+
+  it('returns the full owner artifact only after account, lifecycle, and version rechecks', async () => {
+    reset({ status: 'open', jdCompressed: COMPRESSED_JD })
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({
+        lean: () => Promise.resolve({
+          _id: 'app1',
+          tailoredVersion: {
+            tailoredText: 'TAILORED',
+            matchScore: 82,
+            addedKeywords: ['TypeScript'],
+            missingKeywords: ['Kafka'],
+            jdHash: xrayHashOf(JD),
+            createdAt: NOW,
+          },
+        }),
+      }),
+    })
+
+    await expect(getTailoredVersion('u1', 'j1')).resolves.toEqual({
+      tailoredText: 'TAILORED',
+      matchScore: 82,
+      addedKeywords: ['TypeScript'],
+      missingKeywords: ['Kafka'],
+      createdAt: NOW.toISOString(),
+      state: 'current',
+    })
+    expect(mockPostingExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'j1',
+      status: 'open',
+      closedReason: { $exists: false },
+      jdCompressed: COMPRESSED_JD,
+    }))
+    expect(mockAppExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: 'app1',
+      userId: 'u1',
+      jobPostingId: 'j1',
+      'tailoredVersion.createdAt': NOW,
+    }))
+  })
+
+  it('marks an older JD version outdated and withholds restricted artifacts', async () => {
+    reset({ status: 'closed', closedReason: 'aged-out', jdCompressed: COMPRESSED_JD })
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({
+        lean: () => Promise.resolve({
+          _id: 'app1',
+          tailoredVersion: {
+            tailoredText: 'OLDER',
+            addedKeywords: [],
+            missingKeywords: [],
+            jdHash: xrayHashOf('old jd'),
+            createdAt: NOW,
+          },
+        }),
+      }),
+    })
+    expect((await getTailoredVersion('u1', 'j1'))?.state).toBe('outdated')
+
+    reset({ status: 'closed', closedReason: 'source-revoked', jdCompressed: COMPRESSED_JD })
+    await expect(getTailoredVersion('u1', 'j1')).resolves.toBeNull()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when account deletion starts during recovery', async () => {
+    reset({ status: 'open', jdCompressed: COMPRESSED_JD })
+    mockIsJobsAccountActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({
+        lean: () => Promise.resolve({
+          _id: 'app1',
+          tailoredVersion: {
+            tailoredText: 'TAILORED',
+            addedKeywords: [],
+            missingKeywords: [],
+            jdHash: xrayHashOf(JD),
+            createdAt: NOW,
+          },
+        }),
+      }),
+    })
+
+    await expect(getTailoredVersion('u1', 'j1')).rejects.toBeInstanceOf(JobsAccountInactiveError)
+  })
+
+  it.each(['version', 'posting'] as const)('returns no text when the final %s guard loses authority', async (guard) => {
+    reset({ status: 'open', jdCompressed: COMPRESSED_JD })
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({
+        lean: () => Promise.resolve({
+          _id: 'app1',
+          tailoredVersion: {
+            tailoredText: 'PRIVATE',
+            addedKeywords: [],
+            missingKeywords: [],
+            jdHash: xrayHashOf(JD),
+            createdAt: NOW,
+          },
+        }),
+      }),
+    })
+    if (guard === 'version') mockAppExists.mockResolvedValueOnce(null)
+    else mockPostingExists.mockResolvedValueOnce(null)
+
+    await expect(getTailoredVersion('u1', 'j1')).resolves.toBeNull()
+  })
+
+  it('rechecks posting authority after a slow version guard before returning private text', async () => {
+    reset({ status: 'open', jdCompressed: COMPRESSED_JD })
+    mockAppFindOne.mockReturnValueOnce({
+      select: () => ({
+        lean: () => Promise.resolve({
+          _id: 'app1',
+          tailoredVersion: {
+            tailoredText: 'PRIVATE',
+            addedKeywords: [],
+            missingKeywords: [],
+            jdHash: xrayHashOf(JD),
+            createdAt: NOW,
+          },
+        }),
+      }),
+    })
+    let resolveVersion!: (value: unknown) => void
+    mockAppExists.mockReturnValueOnce(new Promise((resolve) => { resolveVersion = resolve }))
+    mockPostingExists.mockResolvedValueOnce(null)
+
+    const recovery = getTailoredVersion('u1', 'j1')
+    await Promise.resolve()
+    expect(mockPostingExists).not.toHaveBeenCalled()
+    resolveVersion({ _id: 'app1' })
+
+    await expect(recovery).resolves.toBeNull()
+    expect(mockPostingExists).toHaveBeenCalledOnce()
   })
 })

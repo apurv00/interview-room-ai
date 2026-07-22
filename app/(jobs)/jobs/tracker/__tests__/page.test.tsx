@@ -269,17 +269,18 @@ describe('Jobs tracker posting lifecycle', () => {
       status: 200,
       json: () => Promise.resolve({
         groups: [{
-          status: 'applied',
+          status: 'offer',
           count: 1,
           rows: [{
             jobPostingId: JOB_ID,
             title: 'Frontend Engineer',
             company: 'Acme',
             location: 'Remote',
-            status: 'applied',
+            status: 'offer',
             postingState: 'archived',
             daysInStatus: 3,
             practiceCount: 1,
+            appliedWith: { wasTailored: true },
             nudge: null,
             unconfirmedClick: false,
           }],
@@ -293,9 +294,143 @@ describe('Jobs tracker posting lifecycle', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Job tracker' })).toBeTruthy()
     expect(screen.getByText('Tracked jobs, grouped by your current status.')).toBeTruthy()
     expect(await screen.findByText('Posting no longer active · saved details available')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: /Applied · 1/i })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: /Offer · 1/i })).toBeTruthy()
+    expect(screen.getByText('This application used the tailored resume.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open saved details for Frontend Engineer at Acme' })).toHaveAttribute('href', `/jobs/${JOB_ID}`)
     expect(screen.getByRole('link', { name: 'View saved details for Frontend Engineer at Acme' })).toHaveAttribute('href', `/jobs/${JOB_ID}`)
+  })
+
+  it('renders durable Tailor history and asks which resume before marking a tailored row applied', async () => {
+    const tailoredAt = '2026-07-14T11:00:00.000Z'
+    const tracker = {
+      groups: [{
+        status: 'saved',
+        count: 1,
+        rows: [{
+          jobPostingId: JOB_ID,
+          title: 'Frontend Engineer',
+          company: 'Acme',
+          location: 'Remote',
+          status: 'saved',
+          postingState: 'live',
+          daysInStatus: 1,
+          practiceCount: 0,
+          tailoredResume: { createdAt: tailoredAt },
+          nudge: null,
+          unconfirmedClick: false,
+        }],
+      }],
+      confirmCard: null,
+    }
+    let statusBody: Record<string, unknown> | null = null
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/jobs/tracker') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(tracker) })
+      }
+      if (url.endsWith('/status')) {
+        statusBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<TrackerPage />)
+
+    expect(await screen.findByText(/Tailored resume saved/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'View or update' })).toHaveAttribute(
+      'href',
+      `/resume/tailor?jobId=${JOB_ID}`,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '→ Applied' }))
+    expect(screen.getByText('Which resume did you apply with?')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Tailored resume' }))
+
+    await waitFor(() => expect(statusBody).toMatchObject({
+      status: 'applied',
+      appliedWith: { wasTailored: true, tailoredAt },
+    }))
+  })
+
+  it('explains and refreshes a tailored-version conflict instead of silently dropping it', async () => {
+    const tracker = {
+      groups: [{
+        status: 'saved',
+        count: 1,
+        rows: [{
+          jobPostingId: JOB_ID,
+          title: 'Frontend Engineer',
+          company: 'Acme',
+          location: 'Remote',
+          status: 'saved',
+          postingState: 'live',
+          daysInStatus: 1,
+          practiceCount: 0,
+          tailoredResume: { createdAt: '2026-07-14T11:00:00.000Z' },
+          nudge: null,
+          unconfirmedClick: false,
+        }],
+      }],
+      confirmCard: null,
+    }
+    let trackerCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/jobs/tracker') {
+        trackerCalls += 1
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(tracker) })
+      }
+      if (url.endsWith('/status')) {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: () => Promise.resolve({ code: 'TAILORED_VERSION_UNAVAILABLE' }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<TrackerPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '→ Applied' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tailored resume' }))
+
+    expect(await screen.findByText(/saved tailored version changed/i)).toBeTruthy()
+    await waitFor(() => expect(trackerCalls).toBe(2))
+    expect(screen.queryByText('Which resume did you apply with?')).toBeNull()
+  })
+
+  it('keeps a failed tailored confirmation retryable instead of silently reloading', async () => {
+    let trackerCalls = 0
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/jobs/tracker') {
+        trackerCalls += 1
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            groups: [],
+            confirmCard: {
+              jobPostingId: JOB_ID,
+              company: 'Acme',
+              clickedAgoHours: 24,
+              tailoredResume: { createdAt: '2026-07-14T11:00:00.000Z' },
+            },
+          }),
+        })
+      }
+      if (url.endsWith('/status')) {
+        return Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({}) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    })
+
+    render(<TrackerPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '✓ Yes, with tailored resume' }))
+
+    expect(await screen.findByText(/Couldn’t record that update just now/i)).toBeTruthy()
+    expect(trackerCalls).toBe(1)
+    expect(screen.getByRole('button', { name: '✓ Yes, with tailored resume' })).toBeTruthy()
   })
 
   it('announces an undoable tracker status change atomically', async () => {

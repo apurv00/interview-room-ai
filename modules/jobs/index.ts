@@ -41,7 +41,7 @@ export {
   resolveApplyOption,
 } from './services/applyOptionIdentity'
 export type { CanonicalApplyOption } from './services/applyOptionIdentity'
-export { recordApplyClick, recordApplyOpenAttempt, claimAtsRun, releaseAtsClaim, transitionStatus, reportBrokenLink, recordPracticeEvidence, saveTailoredVersion, USER_SETTABLE_STATUSES } from './services/applicationService'
+export { recordApplyClick, recordApplyOpenAttempt, claimAtsRun, releaseAtsClaim, transitionStatus, reportBrokenLink, recordPracticeEvidence, saveTailoredVersion, getTailoredVersion, USER_SETTABLE_STATUSES } from './services/applicationService'
 export type { ApplyClickResult, BrokenLinkResult, UserSettableStatus } from './services/applicationService'
 export { getOrParseXray } from './services/xrayService'
 export { preparePracticeHandoffPosting } from './services/practiceHandoff'
@@ -53,4 +53,4 @@ export { buildPrepPlan, dateForChoice, setInterviewDate } from './services/prepP
 export type { InterviewDateCapture, InterviewDatePreference, PrepPlan, PrepPlanSession } from './services/prepPlanService'
 export type { FeedQuery, FeedCard, JobDetailShell, JobDetailFull } from './services/feedService'
 export { isSuppressed, buildFooterUrls, sendTransactional } from './services/emailSendService'
-export type { TransitionTelemetry } from './services/applicationService'
+export type { TailoredVersionView, TransitionTelemetry } from './services/applicationService'

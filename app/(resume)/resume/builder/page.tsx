@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import ResumeEditor from '@resume/components/ResumeEditor'
 import type { ResumeData } from '@resume/validators/resume'
 import { hasStructuredResumeContent } from '@resume/lib/structuredContent'
@@ -43,6 +44,9 @@ function safeParseDraft(raw: string | null): Partial<ResumeData> | null {
 
 export default function ResumeBuilderPage() {
   const searchParams = useSearchParams()
+  const returnJobId = /^[a-f0-9]{24}$/i.test(searchParams.get('jobId') ?? '')
+    ? searchParams.get('jobId')
+    : null
   const { status: authStatus, data: session } = useSession()
   const { requireAuth } = useAuthGate()
   const [initialData, setInitialData] = useState<Partial<ResumeData> | null>(null)
@@ -321,6 +325,17 @@ export default function ResumeBuilderPage() {
           You&apos;ve used all {atResumeCap.limit} resume slots — saving this new resume will fail
           until you delete one from{' '}
           <a href="/resume" className="font-medium underline hover:text-amber-800">your resumes</a>.
+        </div>
+      )}
+      {returnJobId && (
+        <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-slate-700">
+          This resume came from a tracked job.{' '}
+          <Link
+            href={`/jobs/${encodeURIComponent(returnJobId)}?from=tailor#apply`}
+            className="font-medium text-blue-700 underline"
+          >
+            Return to job application
+          </Link>
         </div>
       )}
       <ResumeEditor

@@ -295,6 +295,11 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
     interviewDate?: string
     interviewDateConfidence?: 'exact' | 'week' | 'unknown'
     interviewDatePreference?: 'this-week' | 'next-week' | 'unknown'
+    /** Metadata only. Full Tailor text is available from the owner-only
+     *  tailored route, never from detail/list projections. */
+    tailoredResume?: { createdAt: string; current: boolean }
+    /** Explicit user claim made at apply confirmation. */
+    appliedWith?: { wasTailored: boolean }
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[]; checkedAt?: string }
   } | null
 }
@@ -331,7 +336,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
   if (!doc) {
     if (!userId) return null
     const snapshotApp = await JobApplication.findOne({ userId, jobPostingId: id })
-      .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference atsResult atsRequestedAt')
+      .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference appliedWith.wasTailored atsResult atsRequestedAt')
       .lean()
     if (!snapshotApp) return null
     const snapshotLocation = snapshotApp.jobSnapshot?.location?.trim() ?? ''
@@ -360,6 +365,9 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
         interviewDate: snapshotApp.interviewDate ? new Date(snapshotApp.interviewDate).toISOString() : undefined,
         interviewDateConfidence: snapshotApp.interviewDateConfidence,
         interviewDatePreference: snapshotApp.interviewDatePreference,
+        ...(snapshotApp.appliedWith
+          ? { appliedWith: { wasTailored: snapshotApp.appliedWith.wasTailored } }
+          : {}),
         practiceCount: Math.min(3, snapshotApp.verifiedPracticeSessionIds?.length ?? 0),
         ats: snapshotApp.atsResult
           ? {
@@ -384,7 +392,9 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
       ? { ...shellOf(doc as IJobPosting), gated: true }
       : null
   }
-  let app = await JobApplication.findOne({ userId, jobPostingId: id }).select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference atsResult atsRequestedAt').lean()
+  let app = await JobApplication.findOne({ userId, jobPostingId: id })
+    .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference tailoredVersion.createdAt tailoredVersion.jdHash appliedWith.wasTailored atsResult atsRequestedAt')
+    .lean()
   if (doc.status === 'closed' && !app) return null
 
   const postingState = jobPostingStateOf(doc as IJobPosting)
@@ -493,6 +503,17 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
           interviewDate: app.interviewDate ? new Date(app.interviewDate).toISOString() : undefined,
           interviewDateConfidence: app.interviewDateConfidence,
           interviewDatePreference: app.interviewDatePreference,
+          ...(postingState !== 'restricted' && app.tailoredVersion?.createdAt
+            ? {
+                tailoredResume: {
+                  createdAt: new Date(app.tailoredVersion.createdAt).toISOString(),
+                  current: !!jd && app.tailoredVersion.jdHash === xrayHashOf(jd),
+                },
+              }
+            : {}),
+          ...(app.appliedWith
+            ? { appliedWith: { wasTailored: app.appliedWith.wasTailored } }
+            : {}),
           practiceCount: Math.min(3, app.verifiedPracticeSessionIds?.length ?? 0),
           ats: postingState === 'restricted' && app.atsResult
             ? { state: 'done' as const, checkedAt: new Date(app.atsResult.checkedAt).toISOString() }
