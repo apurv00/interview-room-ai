@@ -283,6 +283,9 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
   practiceHandoffToken?: string
   /** Tier-honest apply ladder, best-first — subtitles are the UI's job. */
   applyOptions: Array<{ optionId: string; url: string; tier: ApplyTier; viaSite?: string }>
+  /** Aggregate UX signal only. Never expose reporter counts, timestamps, or
+   *  per-option governance authority through the detail projection. */
+  allApplyOptionsDemoted: boolean
   flags: { staffing: boolean; shortJd: boolean; repost: boolean }
   /** The caller's own tracker row (chip + evidence ticker + ATS inputs). */
   application: {
@@ -349,6 +352,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
         atsCheck: false,
       },
       applyOptions: [],
+      allApplyOptionsDemoted: false,
       flags: { staffing: false, shortJd: false, repost: false },
       application: {
         applicationId: String(snapshotApp._id),
@@ -388,13 +392,16 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     ? { jobDescription: '' }
     : await preparePracticeHandoffPosting(doc)
   const jd = practice.jobDescription
-  const applyOptions = postingState === 'live'
+  const canonicalApplyOptions = postingState === 'live'
     ? canonicalApplyOptionsOf(doc.provenance)
         // Crowd-healed ladder (§4b): rungs with dead-click reports sink below
         // clean ones — demoted, never hidden (they may still work for others).
         .sort((a, b) => Number(a.broken) - Number(b.broken) || TIER_RANK[a.tier] - TIER_RANK[b.tier])
-        .map(({ optionId, url, tier, viaSite }) => ({ optionId, url, tier, viaSite }))
     : []
+  const allApplyOptionsDemoted =
+    canonicalApplyOptions.length > 0 && canonicalApplyOptions.every((option) => option.broken)
+  const applyOptions = canonicalApplyOptions
+    .map(({ optionId, url, tier, viaSite }) => ({ optionId, url, tier, viaSite }))
   // An atsResult is 'done' only for the CURRENT (resume x JD) pair (Codex
   // on #521): a JD merge OR a resume edit re-opens the check. The resume
   // comparison costs two User reads, so it runs only on the narrow path
@@ -475,6 +482,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
         }
       : {}),
     applyOptions,
+    allApplyOptionsDemoted,
     flags: postingState === 'restricted'
       ? { staffing: false, shortJd: false, repost: false }
       : { staffing: !!doc.flags?.staffing, shortJd: !!doc.flags?.shortJd, repost: !!doc.flags?.repost },

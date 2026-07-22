@@ -16,6 +16,11 @@ export const JOBS_RATE_LIMITS = {
     windowMs: 60_000,
     maxRequests: 5,
   },
+  'broken-link': {
+    keyPrefix: 'rl:jobs:broken-link',
+    windowMs: 60 * 60_000,
+    maxRequests: 6,
+  },
   'practice-email': {
     keyPrefix: 'rl:jobs:practice-email',
     windowMs: 60 * 60_000,

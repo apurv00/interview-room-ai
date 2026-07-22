@@ -28,4 +28,21 @@ describe('JobApplication tracker sweep index', () => {
 
     expect(path.options.enum).toEqual(['this-week', 'next-week', 'unknown'])
   })
+
+  it('persists bounded-shape trusted opens and incident-bound report metadata', () => {
+    const attempts = JobApplication.schema.path('applyOpenAttempts') as unknown as {
+      schema: { path: (name: string) => { instance?: string; options?: Record<string, unknown> } | undefined }
+    }
+    const reports = JobApplication.schema.path('brokenLinkReports') as unknown as {
+      schema: { path: (name: string) => { instance?: string; options?: Record<string, unknown> } | undefined }
+    }
+
+    expect(attempts.schema.path('subject')?.options).toMatchObject({ required: true, maxlength: 64 })
+    expect(attempts.schema.path('generation')?.options).toMatchObject({ required: true, maxlength: 64 })
+    expect(attempts.schema.path('incidentVersion')?.options).toMatchObject({ required: true, min: 1 })
+    expect(attempts.schema.path('openedAt')?.instance).toBe('Date')
+    expect(reports.schema.path('disposition')?.options?.enum).toEqual([
+      'pending-verification', 'crowd-demoted', 'machine-demoted',
+    ])
+  })
 })

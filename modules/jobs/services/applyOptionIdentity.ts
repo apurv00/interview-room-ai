@@ -1,36 +1,52 @@
 import { createHash } from 'crypto'
-import { APPLY_TIERS, type ApplyTier } from '../config/spamRules'
+import { APPLY_TIERS, TIER_RANK, type ApplyTier } from '../config/spamRules'
 import { isBlockedApplyUrl } from './qualityGate'
-import { canonicalizeCheckableLink } from './safeLinkNetwork'
+import {
+  applyLinkGenerationOf,
+  applyLinkSubjectOf,
+  canonicalApplyUrl,
+  groupApplyLinkSubjects,
+  linkDispositionOf,
+  type ApplyLinkGovernance,
+} from './linkGovernance'
 
 /**
- * Public apply-option identity. The id deliberately contains no source URL or
- * provider key, but changes whenever any server-authoritative part of the
- * option changes. Mutations resolve it against the posting again; possession
- * of an old id is never authority for a replaced option.
+ * Public apply-option identity. The id contains no source URL or provider key;
+ * it changes when the canonical URL generation changes, while presentation
+ * changes such as tier/provider remain stable. Mutations resolve it against
+ * the posting again, so possession of an old id is never authority.
  */
-const APPLY_OPTION_ID_PREFIX = 'ao1_'
-const APPLY_OPTION_ID_RE = /^ao1_[A-Za-z0-9_-]{43}$/
+const APPLY_OPTION_ID_PREFIX = 'ao2_'
+const APPLY_OPTION_ID_RE = /^ao2_[A-Za-z0-9_-]{43}$/
 
 export interface ApplyOptionSource {
   sourceKey?: unknown
   applyUrl?: unknown
+  applyUrlFirstSeenAt?: unknown
   applyTier?: unknown
   viaSite?: unknown
+  firstSeenAt?: unknown
+  linkGovernance?: unknown
+  /** Readable for legacy rows, but never current demotion authority. */
   brokenReportCount?: unknown
 }
 
 export interface CanonicalApplyOption {
   optionId: string
   sourceKey: string
+  sourceKeys: string[]
+  /** Canonical public URL. */
   url: string
+  /** Exact stored value used only by transactional authority filters. */
+  storedUrl: string
+  sourceApplyUrlFirstSeenAt?: Date
   tier: ApplyTier
   viaSite?: string
+  subject: string
+  generation: string
+  incidentVersion: number
+  governance: ApplyLinkGovernance
   broken: boolean
-}
-
-function isSafeHttpUrl(value: string): boolean {
-  return canonicalizeCheckableLink(value) !== null
 }
 
 function isApplyTier(value: unknown): value is ApplyTier {
@@ -38,13 +54,17 @@ function isApplyTier(value: unknown): value is ApplyTier {
 }
 
 export function applyOptionIdOf(input: {
-  sourceKey: string
+  sourceKey?: string
   url: string
-  tier: ApplyTier
+  tier?: ApplyTier
+  generation?: string
 }): string {
+  const canonicalUrl = canonicalApplyUrl(input.url) ?? input.url
+  const subject = applyLinkSubjectOf(canonicalUrl)
+  const generation = input.generation ?? applyLinkGenerationOf(subject, [])
   const digest = createHash('sha256')
-    .update('jobs.apply-option.v1\0')
-    .update(JSON.stringify([input.sourceKey, input.url, input.tier]))
+    .update('jobs.apply-option.v2\0')
+    .update(JSON.stringify([subject, generation]))
     .digest('base64url')
   return `${APPLY_OPTION_ID_PREFIX}${digest}`
 }
@@ -65,34 +85,48 @@ export function parseApplyOptionMutation(value: unknown): { optionId: string } |
 export function canonicalApplyOptionsOf(
   provenance: readonly ApplyOptionSource[] | null | undefined,
 ): CanonicalApplyOption[] {
-  const options: CanonicalApplyOption[] = []
-  const seen = new Set<string>()
-  for (const entry of provenance ?? []) {
-    if (
-      typeof entry.sourceKey !== 'string' || !entry.sourceKey ||
-      typeof entry.applyUrl !== 'string' || !isSafeHttpUrl(entry.applyUrl) ||
-      isBlockedApplyUrl(entry.applyUrl) ||
-      !isApplyTier(entry.applyTier)
-    ) continue
-    const optionId = applyOptionIdOf({
-      sourceKey: entry.sourceKey,
-      url: entry.applyUrl,
-      tier: entry.applyTier,
-    })
-    if (seen.has(optionId)) continue
-    seen.add(optionId)
-    options.push({
-      optionId,
-      sourceKey: entry.sourceKey,
-      url: entry.applyUrl,
-      tier: entry.applyTier,
-      viaSite: typeof entry.viaSite === 'string' && entry.viaSite
-        ? entry.viaSite
+  const eligible = (provenance ?? []).filter((entry) => {
+    const canonicalUrl = canonicalApplyUrl(entry.applyUrl)
+    return typeof entry.sourceKey === 'string' && !!entry.sourceKey &&
+      !!canonicalUrl && !isBlockedApplyUrl(canonicalUrl) && isApplyTier(entry.applyTier)
+  })
+  return groupApplyLinkSubjects(eligible).map((group) => {
+    const entries = group.entries as ApplyOptionSource[]
+    const representative = [...entries].sort((left, right) => {
+      const tierDiff = TIER_RANK[left.applyTier as ApplyTier] - TIER_RANK[right.applyTier as ApplyTier]
+      if (tierDiff !== 0) return tierDiff
+      return String(left.sourceKey).localeCompare(String(right.sourceKey))
+    })[0]
+    const sourceApplyUrlFirstSeenAt = representative.applyUrlFirstSeenAt instanceof Date
+      ? representative.applyUrlFirstSeenAt
+      : typeof representative.applyUrlFirstSeenAt === 'string' ||
+          typeof representative.applyUrlFirstSeenAt === 'number'
+        ? new Date(representative.applyUrlFirstSeenAt)
+        : undefined
+    return {
+      optionId: applyOptionIdOf({
+        url: group.canonicalUrl,
+        generation: group.generation,
+      }),
+      sourceKey: representative.sourceKey as string,
+      sourceKeys: Array.from(new Set(entries.map((entry) => entry.sourceKey as string))),
+      url: group.canonicalUrl,
+      storedUrl: representative.applyUrl as string,
+      sourceApplyUrlFirstSeenAt:
+        sourceApplyUrlFirstSeenAt && Number.isFinite(sourceApplyUrlFirstSeenAt.getTime())
+          ? sourceApplyUrlFirstSeenAt
+          : undefined,
+      tier: representative.applyTier as ApplyTier,
+      viaSite: typeof representative.viaSite === 'string' && representative.viaSite
+        ? representative.viaSite
         : undefined,
-      broken: typeof entry.brokenReportCount === 'number' && entry.brokenReportCount > 0,
-    })
-  }
-  return options
+      subject: group.subject,
+      generation: group.generation,
+      incidentVersion: group.governance.incidentVersion,
+      governance: group.governance,
+      broken: linkDispositionOf(group.governance) !== 'pending-verification',
+    }
+  })
 }
 
 export function resolveApplyOption(

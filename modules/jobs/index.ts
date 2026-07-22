@@ -41,8 +41,8 @@ export {
   resolveApplyOption,
 } from './services/applyOptionIdentity'
 export type { CanonicalApplyOption } from './services/applyOptionIdentity'
-export { recordApplyClick, claimAtsRun, releaseAtsClaim, transitionStatus, reportBrokenLink, recordPracticeEvidence, saveTailoredVersion, USER_SETTABLE_STATUSES } from './services/applicationService'
-export type { UserSettableStatus } from './services/applicationService'
+export { recordApplyClick, recordApplyOpenAttempt, claimAtsRun, releaseAtsClaim, transitionStatus, reportBrokenLink, recordPracticeEvidence, saveTailoredVersion, USER_SETTABLE_STATUSES } from './services/applicationService'
+export type { ApplyClickResult, BrokenLinkResult, UserSettableStatus } from './services/applicationService'
 export { getOrParseXray } from './services/xrayService'
 export { preparePracticeHandoffPosting } from './services/practiceHandoff'
 export { jobPostingStateOf } from './services/postingAccess'

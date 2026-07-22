@@ -57,6 +57,7 @@ vi.mock('../services/userEventService', () => ({ recordJobsUserEvent: mockRecord
 
 import {
   recordApplyClick,
+  recordApplyOpenAttempt,
   claimAtsRun,
   transitionStatus,
   reportBrokenLink,
@@ -66,7 +67,7 @@ import {
 } from '../services/applicationService'
 import { xrayHashOf } from '../services/xrayService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
-import { applyOptionIdOf } from '../services/applyOptionIdentity'
+import { applyOptionIdOf, canonicalApplyOptionsOf } from '../services/applyOptionIdentity'
 import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
 
 const NOW = new Date('2026-07-14T12:00:00Z')
@@ -84,6 +85,24 @@ const APPLY_OPTION_ID = applyOptionIdOf({
   url: APPLY_SOURCE.applyUrl,
   tier: APPLY_SOURCE.applyTier,
 })
+const APPLY_OPTION = canonicalApplyOptionsOf([APPLY_SOURCE])[0]
+const CANONICAL_OPTION_RESULT = {
+  optionId: APPLY_OPTION_ID,
+  url: APPLY_SOURCE.applyUrl,
+  tier: 'direct-ats',
+  viaSite: undefined,
+  subject: APPLY_OPTION.subject,
+  generation: APPLY_OPTION.generation,
+  incidentVersion: 1,
+  broken: false,
+}
+const APPLY_ATTEMPT = {
+  optionId: APPLY_OPTION_ID,
+  subject: APPLY_OPTION.subject,
+  generation: APPLY_OPTION.generation,
+  incidentVersion: 1,
+  openedAt: new Date(NOW.getTime() - 60_000),
+}
 
 function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [APPLY_SOURCE], status: 'open', jdCompressed: PRACTICE_JD_COMPRESSED }) {
   for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockSessionFindOne, mockSessionUpdateOne, mockIsJobsAccountActive, mockWithActiveJobsAccountWrite, mockRecordJobsUserEvent, mockStartSession, mockWithTransaction, mockEndSession]) m.mockReset()
@@ -133,7 +152,7 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
       status: 'apply_clicked',
       created: true,
       transitioned: true,
-      canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+      canonicalOption: CANONICAL_OPTION_RESULT,
     })
     const created = mockAppCreate.mock.calls[0][0][0]
     expect(created.status).toBe('apply_clicked')
@@ -141,6 +160,7 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     expect(created.jobSnapshot.applyTierAtClick).toBe('direct-ats')
     expect(created.jobSnapshot.applyUrlAtClick).toBe(APPLY_SOURCE.applyUrl)
     expect(created.clickedApplyOptionIds).toEqual([APPLY_OPTION_ID])
+    expect(created).not.toHaveProperty('applyOpenAttempts')
     expect(mockPostingUpdateOne).toHaveBeenCalledWith(
       {
         _id: 'j1',
@@ -151,6 +171,7 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
             sourceKey: APPLY_SOURCE.sourceKey,
             applyUrl: APPLY_SOURCE.applyUrl,
             applyTier: APPLY_SOURCE.applyTier,
+            applyUrlFirstSeenAt: { $exists: false },
           },
         },
       },
@@ -171,7 +192,7 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
       status: 'apply_clicked',
       created: false,
       transitioned: true,
-      canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+      canonicalOption: CANONICAL_OPTION_RESULT,
     })
     const [filter, update] = mockAppUpdateOne.mock.calls[0]
     expect(filter.status).toBe('saved') // race guard: a concurrent forward move wins
@@ -193,7 +214,7 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
         status,
         created: false,
         transitioned: false,
-        canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+        canonicalOption: CANONICAL_OPTION_RESULT,
       })
       expect(mockAppUpdateOne).toHaveBeenCalledWith(
         { _id: 'app1', userId: 'u1', jobPostingId: 'j1' },
@@ -236,7 +257,7 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
       status: 'applied',
       created: false,
       transitioned: false,
-      canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+      canonicalOption: CANONICAL_OPTION_RESULT,
     })
     expect(mockStartSession).toHaveBeenCalledTimes(3)
     expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
@@ -308,7 +329,7 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
       status: 'applied',
       created: false,
       transitioned: false,
-      canonicalOption: { optionId: APPLY_OPTION_ID, tier: 'direct-ats' },
+      canonicalOption: CANONICAL_OPTION_RESULT,
     })
     expect(mockAppUpdateOne).toHaveBeenLastCalledWith(
       { _id: 'winner', userId: 'u1', jobPostingId: 'j1' },
@@ -401,6 +422,72 @@ describe('recordApplyClick (machine fact — never conflated with the user claim
     expect(mockAppFindOne).not.toHaveBeenCalled()
     expect(mockAppCreate).not.toHaveBeenCalled()
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
+  })
+})
+
+describe('recordApplyOpenAttempt (trusted server redirect proof)', () => {
+  it('records the exact current subject/generation/incident while preserving the status machine', async () => {
+    reset()
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app1',
+      status: 'applied',
+      clickedApplyOptionIds: [],
+      applyOpenAttempts: [],
+    }) }) })
+
+    const result = await recordApplyOpenAttempt('u1', 'j1', APPLY_OPTION_ID, NOW)
+
+    expect(result).toMatchObject({
+      status: 'applied',
+      created: false,
+      transitioned: false,
+      canonicalOption: CANONICAL_OPTION_RESULT,
+    })
+    expect(mockAppUpdateOne.mock.calls[0][1].$set).toMatchObject({
+      clickedApplyOptionIds: [APPLY_OPTION_ID],
+      applyOpenAttempts: [{ ...APPLY_ATTEMPT, openedAt: NOW }],
+    })
+  })
+
+  it('never mints proof for an archived posting, even for an existing owner', async () => {
+    reset({
+      title: 'SDE', company: 'X', locations: [], provenance: [APPLY_SOURCE],
+      status: 'closed', closedReason: 'aged-out',
+    })
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app1', status: 'saved', clickedApplyOptionIds: [], applyOpenAttempts: [],
+    }) }) })
+
+    expect(await recordApplyOpenAttempt('u1', 'j1', APPLY_OPTION_ID, NOW)).toBeNull()
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('rolls an expired crowd window before storing a new trusted attempt', async () => {
+    const expiredStart = new Date(NOW.getTime() - 7 * 24 * 60 * 60_000)
+    const source = {
+      ...APPLY_SOURCE,
+      linkGovernance: {
+        subject: APPLY_OPTION.subject,
+        generation: APPLY_OPTION.generation,
+        incidentVersion: 1,
+        reportWindowStartedAt: expiredStart,
+        reportCount: 3,
+        crowdDemotedAt: expiredStart,
+      },
+    }
+    reset({ title: 'SDE', company: 'X', locations: [], provenance: [source], status: 'open' })
+    mockAppFindOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve({
+      _id: 'app1', status: 'applied', clickedApplyOptionIds: [], applyOpenAttempts: [],
+    }) }) })
+
+    const result = await recordApplyOpenAttempt('u1', 'j1', APPLY_OPTION_ID, NOW)
+
+    expect(result?.canonicalOption).toMatchObject({ incidentVersion: 2, broken: false })
+    expect(mockPostingUpdateOne.mock.calls[0][1].$set.provenance[0].linkGovernance)
+      .toMatchObject({ incidentVersion: 2, reportCount: 0 })
+    expect(mockAppUpdateOne.mock.calls[0][1].$set.applyOpenAttempts[0])
+      .toMatchObject({ incidentVersion: 2, openedAt: NOW })
   })
 })
 
@@ -550,7 +637,7 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
   })
 
-  it('rejects missing/cross-user rows and options this user never clicked', async () => {
+  it('rejects missing/cross-user rows and legacy click telemetry without trusted open proof', async () => {
     reset()
     mockAppFindOne.mockReturnValue(appQuery(null))
     expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
@@ -560,7 +647,8 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     reset()
     mockAppFindOne.mockReturnValue(appQuery({
       _id: 'other-users-shape-is-invisible-to-owner-query',
-      clickedApplyOptionIds: [],
+      clickedApplyOptionIds: [APPLY_OPTION_ID],
+      applyOpenAttempts: [],
       brokenLinkReports: [],
     }))
     expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
@@ -572,11 +660,11 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     expect(mockAppUpdateOne).not.toHaveBeenCalled()
   })
 
-  it('records the canonical report and increments exactly its source/url/tier rung', async () => {
+  it('records a trusted report, starts one bounded check signal, and keeps the first report advisory', async () => {
     reset()
     mockAppFindOne.mockReturnValue(appQuery({
       _id: 'app1',
-      clickedApplyOptionIds: [APPLY_OPTION_ID],
+      applyOpenAttempts: [APPLY_ATTEMPT],
       brokenLinkReports: [],
     }))
     expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({
@@ -585,65 +673,215 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
       optionId: APPLY_OPTION_ID,
       tier: 'direct-ats',
       hadFailover: false,
+      disposition: 'pending-verification',
     })
     const [appFilter, appUpdate] = mockAppUpdateOne.mock.calls[0]
     expect(appFilter).toMatchObject({
       _id: 'app1',
       userId: 'u1',
       jobPostingId: 'j1',
-      clickedApplyOptionIds: APPLY_OPTION_ID,
-      'brokenLinkReports.optionId': { $ne: APPLY_OPTION_ID },
+      applyOpenAttempts: { $elemMatch: expect.objectContaining({
+        subject: APPLY_OPTION.subject,
+        generation: APPLY_OPTION.generation,
+        incidentVersion: 1,
+      }) },
     })
     expect(appUpdate.$set.brokenLinkReports).toEqual([{
       optionId: APPLY_OPTION_ID,
       url: APPLY_SOURCE.applyUrl,
       tier: 'direct-ats',
       reportedAt: NOW,
+      subject: APPLY_OPTION.subject,
+      generation: APPLY_OPTION.generation,
+      incidentVersion: 1,
+      disposition: 'pending-verification',
     }])
     const [postFilter, postUpdate, postOpts] = mockPostingUpdateOne.mock.calls[0]
     expect(postFilter).toMatchObject({
       _id: 'j1',
       status: 'open',
       closedReason: { $exists: false },
-      provenance: { $elemMatch: {
-        sourceKey: APPLY_SOURCE.sourceKey,
-        applyUrl: APPLY_SOURCE.applyUrl,
-        applyTier: APPLY_SOURCE.applyTier,
-      } },
+      linkCheckRequestedAt: { $exists: false },
+      provenance: [APPLY_SOURCE],
     })
-    expect(postUpdate).toEqual({ $inc: { 'provenance.$[elem].brokenReportCount': 1 } })
-    expect(postOpts).toMatchObject({
-      arrayFilters: [{
-        'elem.sourceKey': APPLY_SOURCE.sourceKey,
-        'elem.applyUrl': APPLY_SOURCE.applyUrl,
-        'elem.applyTier': APPLY_SOURCE.applyTier,
-      }],
-      session: expect.anything(),
+    expect(postUpdate.$set.linkCheckRequestedAt).toBe(NOW)
+    expect(postUpdate.$set.provenance[0]).toMatchObject({
+      sourceKey: APPLY_SOURCE.sourceKey,
+      linkGovernance: {
+        subject: APPLY_OPTION.subject,
+        generation: APPLY_OPTION.generation,
+        incidentVersion: 1,
+        reportCount: 1,
+        reportWindowStartedAt: NOW,
+      },
     })
+    expect(postUpdate.$set.provenance[0]).not.toHaveProperty('brokenReportCount')
+    expect(postOpts).toMatchObject({ session: expect.anything(), runValidators: true })
   })
 
   it('is idempotent per user+option and does not increment a duplicate report', async () => {
     reset()
     mockAppFindOne.mockReturnValue(appQuery({
       _id: 'app1',
-      clickedApplyOptionIds: [APPLY_OPTION_ID],
+      applyOpenAttempts: [APPLY_ATTEMPT],
       brokenLinkReports: [{
         optionId: APPLY_OPTION_ID,
         url: APPLY_SOURCE.applyUrl,
         tier: APPLY_SOURCE.applyTier,
         reportedAt: NOW,
+        subject: APPLY_OPTION.subject,
+        generation: APPLY_OPTION.generation,
+        incidentVersion: 1,
+        disposition: 'pending-verification',
       }],
     }))
 
     expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toMatchObject({
       ok: true,
       recorded: false,
+      disposition: 'pending-verification',
     })
     expect(mockAppUpdateOne).not.toHaveBeenCalled()
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
   })
 
-  it('rejects an alternate until that exact current option has been clicked', async () => {
+  it('rejects an expired incident even when the caller has a fresh exact attempt', async () => {
+    const expiredStart = new Date(NOW.getTime() - 7 * 24 * 60 * 60_000)
+    const source = {
+      ...APPLY_SOURCE,
+      linkGovernance: {
+        subject: APPLY_OPTION.subject,
+        generation: APPLY_OPTION.generation,
+        incidentVersion: 1,
+        reportWindowStartedAt: expiredStart,
+        reportCount: 2,
+        lastReportedAt: expiredStart,
+      },
+    }
+    reset({
+      title: 'SDE', company: 'X', locations: [], provenance: [source], status: 'open',
+    })
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1', applyOpenAttempts: [APPLY_ATTEMPT], brokenLinkReports: [],
+    }))
+
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('rejects a fresh attempt from the previous incident for the same current option', async () => {
+    const source = {
+      ...APPLY_SOURCE,
+      linkGovernance: {
+        subject: APPLY_OPTION.subject,
+        generation: APPLY_OPTION.generation,
+        incidentVersion: 2,
+        reportCount: 0,
+      },
+    }
+    reset({
+      title: 'SDE', company: 'X', locations: [], provenance: [source], status: 'open',
+    })
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1',
+      applyOpenAttempts: [APPLY_ATTEMPT],
+      brokenLinkReports: [],
+    }))
+
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
+    expect(mockAppFindOne).toHaveBeenCalledOnce()
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('requires the exact attempt to be no more than 24 hours old', async () => {
+    reset()
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1',
+      applyOpenAttempts: [{
+        ...APPLY_ATTEMPT,
+        openedAt: new Date(NOW.getTime() - 24 * 60 * 60_000 - 1),
+      }],
+      brokenLinkReports: [],
+    }))
+
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
+    expect(mockAppUpdateOne).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('demotes only at quorum, replicates duplicate-URL state, and does not refresh a pending check signal', async () => {
+    const reportWindowStartedAt = new Date(NOW.getTime() - 60 * 60_000)
+    const linkCheckRequestedAt = new Date(NOW.getTime() - 30 * 60_000)
+    const governance = {
+      subject: APPLY_OPTION.subject,
+      generation: APPLY_OPTION.generation,
+      incidentVersion: 1,
+      reportWindowStartedAt,
+      reportCount: 2,
+      lastReportedAt: reportWindowStartedAt,
+    }
+    const duplicate = {
+      ...APPLY_SOURCE,
+      sourceId: 'greenhouse',
+      sourceKey: 'greenhouse:2',
+      linkGovernance: governance,
+    }
+    const source = { ...APPLY_SOURCE, linkGovernance: governance }
+    reset({
+      title: 'SDE', company: 'X', locations: [],
+      provenance: [source, duplicate], status: 'open', linkCheckRequestedAt,
+    })
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app1', applyOpenAttempts: [APPLY_ATTEMPT], brokenLinkReports: [],
+    }))
+
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toMatchObject({
+      ok: true,
+      recorded: true,
+      disposition: 'crowd-demoted',
+      hadFailover: false,
+    })
+    const [filter, update] = mockPostingUpdateOne.mock.calls[0]
+    expect(filter.linkCheckRequestedAt).toBe(linkCheckRequestedAt)
+    expect(update.$set).not.toHaveProperty('linkCheckRequestedAt')
+    expect(update.$set.provenance).toHaveLength(2)
+    for (const entry of update.$set.provenance) {
+      expect(entry.linkGovernance).toMatchObject({
+        incidentVersion: 1,
+        reportCount: 3,
+        crowdDemotedAt: NOW,
+      })
+    }
+  })
+
+  it('requests a new machine check when a later reporter arrives after the prior signal was cleared', async () => {
+    const reportWindowStartedAt = new Date(NOW.getTime() - 60 * 60_000)
+    const source = {
+      ...APPLY_SOURCE,
+      linkGovernance: {
+        subject: APPLY_OPTION.subject,
+        generation: APPLY_OPTION.generation,
+        incidentVersion: 1,
+        reportWindowStartedAt,
+        reportCount: 1,
+        lastReportedAt: reportWindowStartedAt,
+      },
+    }
+    reset({ title: 'SDE', company: 'X', locations: [], provenance: [source], status: 'open' })
+    mockAppFindOne.mockReturnValue(appQuery({
+      _id: 'app2', applyOpenAttempts: [APPLY_ATTEMPT], brokenLinkReports: [],
+    }))
+
+    expect(await reportBrokenLink('u2', 'j1', APPLY_OPTION_ID, NOW)).toMatchObject({
+      ok: true, disposition: 'pending-verification',
+    })
+    expect(mockPostingUpdateOne.mock.calls[0][1].$set.linkCheckRequestedAt).toBe(NOW)
+  })
+
+  it('rejects an alternate until that exact current option has a trusted open', async () => {
     const alternate = {
       sourceId: 'greenhouse',
       sourceKey: 'greenhouse:2',
@@ -656,22 +894,31 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
       tier: alternate.applyTier,
     })
     const posting = { title: 'SDE', company: 'X', locations: [], provenance: [APPLY_SOURCE, alternate], status: 'open' }
+    const alternateOption = canonicalApplyOptionsOf([alternate])[0]
+    const alternateAttempt = {
+      optionId: alternateId,
+      subject: alternateOption.subject,
+      generation: alternateOption.generation,
+      incidentVersion: 1,
+      openedAt: APPLY_ATTEMPT.openedAt,
+    }
     reset(posting)
     mockAppFindOne.mockReturnValue(appQuery({
-      _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID], brokenLinkReports: [],
+      _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID, alternateId], applyOpenAttempts: [APPLY_ATTEMPT], brokenLinkReports: [],
     }))
     expect(await reportBrokenLink('u1', 'j1', alternateId, NOW)).toEqual({ ok: false })
     expect(mockPostingUpdateOne).not.toHaveBeenCalled()
 
     reset(posting)
     mockAppFindOne.mockReturnValue(appQuery({
-      _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID, alternateId], brokenLinkReports: [],
+      _id: 'app1', applyOpenAttempts: [APPLY_ATTEMPT, alternateAttempt], brokenLinkReports: [],
     }))
     expect(await reportBrokenLink('u1', 'j1', alternateId, NOW)).toMatchObject({
       ok: true,
       recorded: true,
       tier: 'employer',
       hadFailover: true,
+      disposition: 'pending-verification',
     })
   })
 
@@ -680,6 +927,13 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
       title: 'SDE', company: 'X', locations: [],
       provenance: [{ ...APPLY_SOURCE, applyUrl: 'https://x.example/new' }],
       status: 'open',
+    })
+    expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
+    expect(mockAppFindOne).not.toHaveBeenCalled()
+
+    reset({
+      title: 'SDE', company: 'X', locations: [], provenance: [APPLY_SOURCE],
+      status: 'closed', closedReason: 'aged-out',
     })
     expect(await reportBrokenLink('u1', 'j1', APPLY_OPTION_ID, NOW)).toEqual({ ok: false })
     expect(mockAppFindOne).not.toHaveBeenCalled()
@@ -696,11 +950,19 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     reset()
     mockAppFindOne
       .mockReturnValueOnce(appQuery({
-        _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID], brokenLinkReports: [],
+        _id: 'app1', applyOpenAttempts: [APPLY_ATTEMPT], brokenLinkReports: [],
       }))
       .mockReturnValueOnce(appQuery({
-        _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID],
-        brokenLinkReports: [{ optionId: APPLY_OPTION_ID, url: APPLY_SOURCE.applyUrl, reportedAt: NOW }],
+        _id: 'app1', applyOpenAttempts: [APPLY_ATTEMPT],
+        brokenLinkReports: [{
+          optionId: APPLY_OPTION_ID,
+          url: APPLY_SOURCE.applyUrl,
+          reportedAt: NOW,
+          subject: APPLY_OPTION.subject,
+          generation: APPLY_OPTION.generation,
+          incidentVersion: 1,
+          disposition: 'pending-verification',
+        }],
       }))
     mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
 
@@ -715,7 +977,7 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
   it('propagates account deletion between a broken-link race and its retry', async () => {
     reset()
     mockAppFindOne.mockReturnValueOnce(appQuery({
-      _id: 'app1', clickedApplyOptionIds: [APPLY_OPTION_ID], brokenLinkReports: [],
+      _id: 'app1', applyOpenAttempts: [APPLY_ATTEMPT], brokenLinkReports: [],
     }))
     mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 })
     mockWithActiveJobsAccountWrite
@@ -734,17 +996,18 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
       applyUrl: `https://example.com/apply/${index}`,
       applyTier: 'employer' as const,
     }))
-    const optionIds = provenance.map((entry) => applyOptionIdOf({
-      sourceKey: entry.sourceKey,
-      url: entry.applyUrl,
-      tier: entry.applyTier,
-    }))
+    const currentOptions = provenance.map((entry) => canonicalApplyOptionsOf([entry])[0])
+    const optionIds = currentOptions.map((option) => option.optionId)
     reset({ title: 'SDE', company: 'X', locations: [], provenance, status: 'open' })
     const currentReports = provenance.slice(0, 7).map((entry, index) => ({
       optionId: optionIds[index],
       url: entry.applyUrl,
       tier: entry.applyTier,
       reportedAt: new Date(NOW.getTime() - index - 1),
+      subject: currentOptions[index].subject,
+      generation: currentOptions[index].generation,
+      incidentVersion: 1,
+      disposition: 'pending-verification' as const,
     }))
     const historical = Array.from({ length: 30 }, (_, index) => ({
       optionId: `legacy-${index}`,
@@ -753,7 +1016,13 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
     }))
     mockAppFindOne.mockReturnValue(appQuery({
       _id: 'app1',
-      clickedApplyOptionIds: [optionIds[7]],
+      applyOpenAttempts: [{
+        optionId: optionIds[7],
+        subject: currentOptions[7].subject,
+        generation: currentOptions[7].generation,
+        incidentVersion: 1,
+        openedAt: APPLY_ATTEMPT.openedAt,
+      }],
       brokenLinkReports: [...historical, ...currentReports],
     }))
 

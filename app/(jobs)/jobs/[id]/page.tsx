@@ -18,14 +18,14 @@ import { retakeParentFromSearch } from '@interview/utils/retakeNavigation'
  * /jobs/[id] — public SHELL, authed BODY (founder ruling P-2, 2026-07-14).
  * The API enforces the split server-side; this page renders whatever
  * projection it was given. Anon = title/company/tier + a blurred stand-in
- * over the sign-in gate. Authed = JD, tier-honest apply ladder (sync
- * window.open to the server navigation boundary — popup blockers kill async
- * opens), Save, and a low-key "view full posting" link so Apply clicks aren't
- * polluted by read intent.
+ * over the sign-in gate. Authed = JD, tier-honest apply ladder (native
+ * same-origin POST to a new tab), Save, and a low-key "view full posting" GET
+ * link so Apply clicks aren't polluted by read intent.
  */
 
 interface ApplyOption { optionId: string; url: string; tier: string; viaSite?: string }
 interface ApplyReturnArm extends ApplyOption { clickedAt: number }
+type BrokenLinkDisposition = 'pending-verification' | 'crowd-demoted' | 'machine-demoted'
 interface XrayReq { id: string; category: string; requirement: string; importance: 'must-have' | 'nice-to-have' }
 interface Xray { role: string; inferredDomain?: string; keyThemes: string[]; requirements: XrayReq[]; retryable?: boolean }
 interface Detail {
@@ -52,6 +52,8 @@ interface Detail {
   practiceHandoffToken?: string
   jd?: string
   applyOptions?: ApplyOption[]
+  /** Coarse server projection; governance counts/timestamps stay private. */
+  allApplyOptionsDemoted?: boolean
   flags?: { staffing: boolean; shortJd: boolean; repost: boolean }
   application?: {
     applicationId: string
@@ -77,11 +79,15 @@ const TIER_SUBTITLE: Record<string, (co: string, via?: string) => string> = {
 // Practice; successful X-ray responses keep the normal bounded read retries.
 const LOST_XRAY_READINESS_DELAYS_MS = [0, 250, 750, 2_000, 4_000, 8_000, 8_000, 8_000] as const
 const NORMAL_READINESS_DELAYS_MS = [0, 250, 500] as const
-const APPLY_OPTION_ID_RE = /^ao1_[A-Za-z0-9_-]{43}$/
+const APPLY_OPTION_ID_RE = /^ao2_[A-Za-z0-9_-]{43}$/
 const ACTIVE_TAB_REVALIDATION_MS = 4 * 60_000
 
-function applyRedirectHref(jobId: string, optionId: string): string {
-  return `/api/jobs/${encodeURIComponent(jobId)}/open?optionId=${encodeURIComponent(optionId)}`
+function applyRedirectHref(
+  jobId: string,
+  optionId: string,
+  intent: 'apply' | 'view',
+): string {
+  return `/api/jobs/${encodeURIComponent(jobId)}/open?optionId=${encodeURIComponent(optionId)}&intent=${intent}`
 }
 
 async function isAccountUnavailableResponse(response: Response): Promise<boolean> {
@@ -608,8 +614,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
   function onApply(opt: ApplyOption, invoker: HTMLElement) {
     if (accountUnavailableRef.current) return
     sheetInvokerRef.current = invoker
-    // SYNC open inside the click handler — never after an await.
-    window.open(applyRedirectHref(params.id, opt.optionId), '_blank', 'noopener')
+    // This handler remains synchronous so the native target=_blank POST form
+    // can submit immediately after the return-sheet arm is stored. The server
+    // converts the successful POST to an external GET with a 303 redirect.
     // Arm the return-sheet (§4b): fires on visibilitychange→visible, ≥20s
     // after the click, within 45 minutes. localStorage — survives the
     // external-tab excursion.
@@ -622,9 +629,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         viaSite: opt.viaSite,
       }))
     } catch { /* private mode — no sheet, the next-visit confirm card (4.2) catches it */ }
-    // Machine fact (apply_clicked) + server-side telemetry in one call —
-    // the JobApplication row transitions/creates even if this tab dies
-    // (keepalive). Never conflated with the user claim 'applied' (Wave 4).
+    // Best-effort status/telemetry compatibility only. POST /open?intent=apply
+    // owns the trusted attempt; this directly callable keepalive creates no
+    // broken-link governance proof.
     fetch(`/api/jobs/${params.id}/apply-click`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -815,9 +822,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
       return
     }
     if (accountUnavailableRef.current) return
-    // 404 = the apply-click keepalive row hasn't landed (in flight or lost) —
-    // recreate the machine fact, then retry the claim. The user's 'Yes,
-    // applied' must never be silently dropped (Codex on #522 round-3).
+    // Historical/direct flows may not have an application row. The legacy
+    // status edge can recreate apply_clicked before retrying the user's claim,
+    // but it deliberately creates no broken-link governance proof.
     if (res && res.status === 404 && clicked) {
       const applyResponse = await fetch(`/api/jobs/${params.id}/apply-click`, {
         method: 'POST',
@@ -856,34 +863,37 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ optionId: clicked.optionId }),
       }).catch(() => null)
-    // The apply-click keepalive creates the application row this report
-    // attaches to — if it's still in flight the first POST 404s; one retry
-    // covers that. A report that never lands must NOT claim global healing
-    // (Codex on #522).
-    let res = await post()
+    const res = await post()
     if (res && await isAccountUnavailableResponse(res)) {
       scrubAccountBoundState()
       return
     }
     if (accountUnavailableRef.current) return
-    if (res && res.status === 404) {
-      await new Promise((r) => setTimeout(r, 1500))
-      res = await post()
-      if (res && await isAccountUnavailableResponse(res)) {
-        scrubAccountBoundState()
+    const alt = alternates.length > 0 ? `Try “${alternates[0].viaSite ?? alternates[0].tier}” instead.` : ''
+    if (res?.ok) {
+      const body = await res.json().catch(() => null) as {
+        disposition?: BrokenLinkDisposition
+        alreadyReported?: boolean
+      } | null
+      const copy = body?.disposition === 'pending-verification'
+        ? 'Thanks—we’re checking this link.'
+        : body?.disposition === 'crowd-demoted'
+          ? 'Several people reported this link, so we only moved it lower while we verify it.'
+        : body?.disposition === 'machine-demoted'
+            ? 'A recent check found this link unavailable.'
+            : null
+      if (copy) {
+        setSheetDone(`${copy}${alt ? ` ${alt}` : ''}`)
+        void refetchDetail()
         return
       }
     }
-    if (accountUnavailableRef.current) return
-    const alt = alternates.length > 0 ? `Try “${alternates[0].viaSite ?? alternates[0].tier}” below instead.` : ''
-    if (res?.ok) {
-      setSheetDone(alternates.length > 0
-        ? `Thanks — that link is demoted for everyone. ${alt}`
-        : 'Thanks — noted. This posting’s links may have gone stale; it stays saved on your tracker.')
-      refetchDetail() // ladder re-sorts with the reported rung demoted
+    if (res?.status === 404) {
+      setSheetDone(`We couldn’t verify this report against the current link and a recent Apply attempt, so nothing changed.${alt ? ` ${alt}` : ''}`)
+    } else if (res?.status === 429) {
+      setSheetDone(`Too many reports right now—please try again later.${alt ? ` ${alt}` : ''}`)
     } else {
-      // Honest fallback: the report didn't record — still locally useful.
-      setSheetDone(alt || 'That link may be stale — use “View full posting” above to reach the source directly.')
+      setSheetDone(`We couldn’t submit that report just now.${alt ? ` ${alt}` : ''}`)
     }
   }
 
@@ -1024,8 +1034,14 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         <>
           <div className="mt-6 flex flex-wrap items-center gap-3">
             {primary && (
-              <div>
+              <form
+                action={applyRedirectHref(detail.id, primary.optionId, 'apply')}
+                method="post"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 <button
+                  type="submit"
                   onClick={(event) => onApply(primary, event.currentTarget)}
                   className="rounded-lg bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
                 >
@@ -1034,7 +1050,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
                 <p className="mt-1 text-xs text-slate-500">
                   {(TIER_SUBTITLE[primary.tier] ?? (() => ''))(detail.company, primary.viaSite)}
                 </p>
-              </div>
+              </form>
             )}
             {postingState === 'archived' && (
               <span className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600">
@@ -1089,7 +1105,7 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
             )}
             {primary && detail.capabilities?.viewSource !== false && (
               <a
-                href={applyRedirectHref(detail.id, primary.optionId)}
+                href={applyRedirectHref(detail.id, primary.optionId, 'view')}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-slate-500 hover:underline"
@@ -1103,14 +1119,32 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
               We couldn&apos;t prepare this job practice. Refresh the posting and try again.
             </p>
           )}
-          {isLive && alternates.length > 0 && (
-            <p className="mt-2 text-xs text-slate-500">
-              Also available: {alternates.map((o, i) => (
-                <button key={o.optionId} onClick={(event) => onApply(o, event.currentTarget)} className="underline decoration-dotted hover:text-slate-600">
-                  {o.viaSite ?? o.tier}{i < alternates.length - 1 ? ', ' : ''}
-                </button>
-              ))}
+          {primary && detail.allApplyOptionsDemoted === true && (
+            <p className="mt-2 text-xs text-amber-700">
+              This link is being verified; it may still work.
             </p>
+          )}
+          {isLive && alternates.length > 0 && (
+            <div className="mt-2 text-xs text-slate-500">
+              Also available: {alternates.map((o, i) => (
+                <form
+                  key={o.optionId}
+                  action={applyRedirectHref(detail.id, o.optionId, 'apply')}
+                  method="post"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline"
+                >
+                  <button
+                    type="submit"
+                    onClick={(event) => onApply(o, event.currentTarget)}
+                    className="underline decoration-dotted hover:text-slate-600"
+                  >
+                    {o.viaSite ?? o.tier}{i < alternates.length - 1 ? ', ' : ''}
+                  </button>
+                </form>
+              ))}
+            </div>
           )}
 
           {inference === 'asking' && (

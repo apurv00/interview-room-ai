@@ -112,7 +112,7 @@ describe('POST /api/jobs/[id]/apply-click canonical option boundary', () => {
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
-  it('derives telemetry from the server result and never returns internal option metadata', async () => {
+  it('keeps the direct edge to backward-compatible status/telemetry and returns no governance metadata', async () => {
     const response = await POST(request(JSON.stringify({ optionId: OPTION_ID })), { params: { id: JOB_ID } })
 
     expect(response.status).toBe(200)

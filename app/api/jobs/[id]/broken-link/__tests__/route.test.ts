@@ -59,6 +59,7 @@ beforeEach(() => {
     optionId: OPTION_ID,
     tier: 'employer',
     hadFailover: true,
+    disposition: 'pending-verification',
   })
 })
 
@@ -70,7 +71,7 @@ describe('POST /api/jobs/[id]/broken-link canonical option boundary', () => {
     const response = await POST({ json } as unknown as Request, { params: { id: JOB_ID } })
 
     expect(response.status).toBe(429)
-    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(USER_ID)
+    expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(USER_ID, 'broken-link')
     expect(json).not.toHaveBeenCalled()
     expect(mockConnectDB).not.toHaveBeenCalled()
   })
@@ -113,10 +114,23 @@ describe('POST /api/jobs/[id]/broken-link canonical option boundary', () => {
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
-  it('derives tier/failover telemetry from the server result', async () => {
+  it.each([
+    'pending-verification',
+    'crowd-demoted',
+    'machine-demoted',
+  ] as const)('returns the truthful %s disposition without exposing quorum counts', async (disposition) => {
+    mockReportBrokenLink.mockResolvedValueOnce({
+      ok: true,
+      recorded: true,
+      optionId: OPTION_ID,
+      tier: 'employer',
+      hadFailover: true,
+      disposition,
+    })
+
     const response = await POST(request(JSON.stringify({ optionId: OPTION_ID })), { params: { id: JOB_ID } })
 
-    expect(await response.json()).toEqual({ ok: true, alreadyReported: false })
+    expect(await response.json()).toEqual({ ok: true, disposition, alreadyReported: false })
     expect(mockRecordJobsUserEvent).toHaveBeenCalledWith(expect.objectContaining({
       name: 'jobs.broken_link',
       props: { tier: 'employer', hadFailover: true },
@@ -130,11 +144,16 @@ describe('POST /api/jobs/[id]/broken-link canonical option boundary', () => {
       optionId: OPTION_ID,
       tier: 'employer',
       hadFailover: true,
+      disposition: 'crowd-demoted',
     })
 
     const response = await POST(request(JSON.stringify({ optionId: OPTION_ID })), { params: { id: JOB_ID } })
 
-    expect(await response.json()).toEqual({ ok: true, alreadyReported: true })
+    expect(await response.json()).toEqual({
+      ok: true,
+      disposition: 'crowd-demoted',
+      alreadyReported: true,
+    })
     expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 })

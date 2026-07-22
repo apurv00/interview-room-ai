@@ -61,11 +61,22 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     outcome?: Record<string, unknown>
     notes?: string
     clickedApplyOptionIds?: string[]
+    applyOpenAttempts?: Array<{
+      optionId: string
+      subject: string
+      generation: string
+      incidentVersion: number
+      openedAt: Date
+    }>
     brokenLinkReports?: Array<{
       optionId?: string
       url: string
       tier?: string
       reportedAt: Date
+      subject?: string
+      generation?: string
+      incidentVersion?: number
+      disposition?: 'pending-verification' | 'crowd-demoted' | 'machine-demoted'
     }>
     tailoredVersion?: {
       sourceResumeId: string
@@ -313,11 +324,22 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       // rows predate canonical option ids/tiers, so null means "not recorded"
       // rather than silently dropping those fields during JSON serialization.
       clickedApplyOptionIds: a.clickedApplyOptionIds ?? [],
+      applyOpenAttempts: (a.applyOpenAttempts ?? []).map((attempt) => ({
+        optionId: attempt.optionId,
+        subject: attempt.subject,
+        generation: attempt.generation,
+        incidentVersion: attempt.incidentVersion,
+        openedAt: attempt.openedAt,
+      })),
       brokenLinkReports: (a.brokenLinkReports ?? []).map((report) => ({
         optionId: report.optionId ?? null,
         url: report.url,
         tier: report.tier ?? null,
         reportedAt: report.reportedAt,
+        subject: report.subject ?? null,
+        generation: report.generation ?? null,
+        incidentVersion: report.incidentVersion ?? null,
+        disposition: report.disposition ?? null,
       })),
       // The tailored resume is the user's ONLY per-job copy — export it
       // in full, not just its metadata (Codex #508).

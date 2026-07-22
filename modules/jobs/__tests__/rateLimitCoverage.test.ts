@@ -10,6 +10,7 @@ const EXPECTED_POST_ROUTES = [
   '[id]/broken-link/route.ts',
   '[id]/interview-date/route.ts',
   '[id]/nudge-dismiss/route.ts',
+  '[id]/open/route.ts',
   '[id]/practice-link-email/route.ts',
   '[id]/save/route.ts',
   '[id]/status/route.ts',

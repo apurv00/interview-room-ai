@@ -51,7 +51,10 @@ const USER_ID = '507f1f77bcf86cd799439010'
 const APP_ID = '507f1f77bcf86cd799439011'
 const LEGACY_APP_ID = '507f1f77bcf86cd799439012'
 const PREFERENCE_APP_ID = '507f1f77bcf86cd799439013'
-const OPTION_ID = `ao1_${'A'.repeat(43)}`
+const OPTION_ID = `ao2_${'A'.repeat(43)}`
+const SUBJECT = `ls1_${'B'.repeat(43)}`
+const GENERATION = `lg1_${'C'.repeat(43)}`
+const OPENED_AT = new Date('2026-07-21T09:00:00.000Z')
 const REPORTED_AT = new Date('2026-07-21T09:30:00.000Z')
 const LEGACY_REPORTED_AT = new Date('2026-06-01T10:00:00.000Z')
 const EXACT_INTERVIEW_DATE = new Date('2026-08-04T00:00:00.000Z')
@@ -104,12 +107,23 @@ beforeEach(() => {
       interviewDate: EXACT_INTERVIEW_DATE,
       interviewDateConfidence: 'exact',
       clickedApplyOptionIds: [OPTION_ID],
+      applyOpenAttempts: [{
+        optionId: OPTION_ID,
+        subject: SUBJECT,
+        generation: GENERATION,
+        incidentVersion: 2,
+        openedAt: OPENED_AT,
+      }],
       brokenLinkReports: [
         {
           optionId: OPTION_ID,
           url: 'https://jobs.example.test/backend',
           tier: 'direct-ats',
           reportedAt: REPORTED_AT,
+          subject: SUBJECT,
+          generation: GENERATION,
+          incidentVersion: 2,
+          disposition: 'pending-verification',
         },
         {
           url: 'https://legacy.example.test/backend',
@@ -145,24 +159,40 @@ describe('GDPR Jobs apply-evidence export', () => {
     expect(applications[0]).toMatchObject({
       id: APP_ID,
       clickedApplyOptionIds: [OPTION_ID],
+      applyOpenAttempts: [{
+        optionId: OPTION_ID,
+        subject: SUBJECT,
+        generation: GENERATION,
+        incidentVersion: 2,
+        openedAt: OPENED_AT,
+      }],
       brokenLinkReports: [
         {
           optionId: OPTION_ID,
           url: 'https://jobs.example.test/backend',
           tier: 'direct-ats',
           reportedAt: REPORTED_AT,
+          subject: SUBJECT,
+          generation: GENERATION,
+          incidentVersion: 2,
+          disposition: 'pending-verification',
         },
         {
           optionId: null,
           url: 'https://legacy.example.test/backend',
           tier: null,
           reportedAt: LEGACY_REPORTED_AT,
+          subject: null,
+          generation: null,
+          incidentVersion: null,
+          disposition: null,
         },
       ],
     })
     expect(applications[1]).toMatchObject({
       id: LEGACY_APP_ID,
       clickedApplyOptionIds: [],
+      applyOpenAttempts: [],
       brokenLinkReports: [],
     })
   })
@@ -176,23 +206,39 @@ describe('GDPR Jobs apply-evidence export', () => {
         interviewDateConfidence: 'exact' | 'week' | 'unknown' | null
         interviewDatePreference: 'this-week' | 'next-week' | 'unknown' | null
         clickedApplyOptionIds: string[]
+        applyOpenAttempts: Array<Record<string, unknown>>
         brokenLinkReports: Array<Record<string, unknown>>
       }>
     }
 
     expect(roundTripped.jobApplications[0].clickedApplyOptionIds).toEqual([OPTION_ID])
+    expect(roundTripped.jobApplications[0].applyOpenAttempts).toEqual([{
+      optionId: OPTION_ID,
+      subject: SUBJECT,
+      generation: GENERATION,
+      incidentVersion: 2,
+      openedAt: OPENED_AT.toISOString(),
+    }])
     expect(roundTripped.jobApplications[0].brokenLinkReports).toEqual([
       {
         optionId: OPTION_ID,
         url: 'https://jobs.example.test/backend',
         tier: 'direct-ats',
         reportedAt: REPORTED_AT.toISOString(),
+        subject: SUBJECT,
+        generation: GENERATION,
+        incidentVersion: 2,
+        disposition: 'pending-verification',
       },
       {
         optionId: null,
         url: 'https://legacy.example.test/backend',
         tier: null,
         reportedAt: LEGACY_REPORTED_AT.toISOString(),
+        subject: null,
+        generation: null,
+        incidentVersion: null,
+        disposition: null,
       },
     ])
   })

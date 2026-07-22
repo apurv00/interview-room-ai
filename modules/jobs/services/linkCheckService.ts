@@ -128,6 +128,21 @@ export interface ApplyCheckState {
   deadStreak?: number
   lastCheckedAt?: Date
   lastDeadAt?: Date
+  /** Recovery evidence for a posting closed by the dead-link checker. Two
+   * spaced alive observations are required before the lifecycle may reopen. */
+  aliveStreak?: number
+  lastAliveAt?: Date
+  /** Exact current link whose positive evidence owns the recovery streak.
+   * Both fields are required together; partial or stale legacy state fails
+   * clean and cannot contribute to reopening. */
+  recoverySubject?: string
+  recoveryGeneration?: string
+}
+
+export interface ApplyRecoveryObservation {
+  subject: string
+  generation: string
+  outcome: LinkOutcome
 }
 
 /** Two-strike close policy: a posting is closable only after TWO dead
@@ -136,12 +151,23 @@ export interface ApplyCheckState {
  *  nothing but the timestamp. */
 export const MIN_RESTRIKE_MS = 20 * 3600 * 1000
 
+function withoutRecoveryEvidence(state: ApplyCheckState): ApplyCheckState {
+  const next = { ...state }
+  delete next.aliveStreak
+  delete next.lastAliveAt
+  delete next.recoverySubject
+  delete next.recoveryGeneration
+  return next
+}
+
 export function nextApplyCheckState(
   prev: ApplyCheckState | undefined,
   outcome: LinkOutcome,
   now: Date
 ): { state: ApplyCheckState; shouldClose: boolean } {
-  const base: ApplyCheckState = { ...prev, status: outcome, lastCheckedAt: now }
+  // Recovery strikes belong only to the current CLOSED lifecycle. Once the
+  // posting is open, no transition may carry them into a later closure.
+  const base = withoutRecoveryEvidence({ ...prev, status: outcome, lastCheckedAt: now })
   if (outcome === 'alive') return { state: { ...base, deadStreak: 0, lastDeadAt: undefined }, shouldClose: false }
   if (outcome === 'unverifiable') {
     // A timeout/bot-block on a pending RESTRIKE is a non-event: keep the
@@ -165,4 +191,117 @@ export function nextApplyCheckState(
     return { state: { ...base, deadStreak, lastDeadAt: now }, shouldClose: deadStreak >= 2 }
   }
   return { state: { ...base, deadStreak: prevStreak, lastDeadAt: prev!.lastDeadAt }, shouldClose: false }
+}
+
+/** Recovery policy for a posting already closed by `dead-apply-link`.
+ *
+ * Recovery deliberately mirrors the close policy: one live response is not
+ * enough to resurrect a temporarily redirected or intermittently healthy
+ * destination. Unverifiable observations preserve a prior live strike just
+ * as they preserve a prior dead strike; a positive dead observation resets
+ * recovery evidence. The caller remains responsible for fencing the lifecycle
+ * to `closedReason: 'dead-apply-link'` before acting on `shouldReopen`.
+ */
+export function nextClosedApplyCheckState(
+  prev: ApplyCheckState | undefined,
+  outcome: LinkOutcome,
+  now: Date,
+  recoveryObservation?: ApplyRecoveryObservation,
+): { state: ApplyCheckState; shouldReopen: boolean } {
+  if (outcome === 'dead') {
+    const next = nextApplyCheckState(prev, outcome, now)
+    return {
+      state: next.state,
+      shouldReopen: false,
+    }
+  }
+  if (outcome === 'unverifiable') {
+    const next = nextApplyCheckState(prev, outcome, now).state
+    const sameRecoveryLink =
+      recoveryObservation?.outcome === 'unverifiable' &&
+      typeof prev?.recoverySubject === 'string' &&
+      typeof prev?.recoveryGeneration === 'string' &&
+      recoveryObservation.subject === prev.recoverySubject &&
+      recoveryObservation.generation === prev.recoveryGeneration
+    return {
+      // Unlike an open transition, an ambiguous recovery observation must
+      // preserve the current closed lifecycle's first positive strike only
+      // when the SAME current link remained ambiguous. A removed, replaced,
+      // or positively dead recovery link cannot lend its strike to a sibling.
+      state: {
+        ...next,
+        ...(sameRecoveryLink && prev?.aliveStreak !== undefined
+          ? { aliveStreak: prev.aliveStreak }
+          : {}),
+        ...(sameRecoveryLink && prev?.lastAliveAt !== undefined
+          ? { lastAliveAt: prev.lastAliveAt }
+          : {}),
+        ...(sameRecoveryLink ? {
+          recoverySubject: prev!.recoverySubject,
+          recoveryGeneration: prev!.recoveryGeneration,
+        } : {}),
+      },
+      shouldReopen: false,
+    }
+  }
+
+  const base: ApplyCheckState = {
+    ...prev,
+    status: 'alive',
+    deadStreak: 0,
+    lastCheckedAt: now,
+    lastDeadAt: undefined,
+  }
+  // A posting may have several apply URLs. Recovery evidence belongs to one
+  // exact subject:generation, never merely to "some URL was alive". If the
+  // currently alive link differs, it starts its own first strike.
+  if (!recoveryObservation || recoveryObservation.outcome !== 'alive') {
+    return { state: withoutRecoveryEvidence(base), shouldReopen: false }
+  }
+  const sameRecoveryLink =
+    recoveryObservation.subject === prev?.recoverySubject &&
+    recoveryObservation.generation === prev?.recoveryGeneration
+  const prevStreak = sameRecoveryLink ? prev?.aliveStreak ?? 0 : 0
+  const prevAliveAt = sameRecoveryLink && prev?.lastAliveAt
+    ? new Date(prev.lastAliveAt).getTime()
+    : undefined
+  if (prevStreak === 0 || prevAliveAt === undefined) {
+    return {
+      state: {
+        ...base,
+        aliveStreak: 1,
+        lastAliveAt: now,
+        recoverySubject: recoveryObservation.subject,
+        recoveryGeneration: recoveryObservation.generation,
+      },
+      shouldReopen: false,
+    }
+  }
+  if (now.getTime() - prevAliveAt >= MIN_RESTRIKE_MS) {
+    const aliveStreak = prevStreak + 1
+    const shouldReopen = aliveStreak >= 2
+    const state = {
+      ...base,
+      aliveStreak,
+      lastAliveAt: now,
+      recoverySubject: recoveryObservation.subject,
+      recoveryGeneration: recoveryObservation.generation,
+    }
+    return {
+      state: shouldReopen ? withoutRecoveryEvidence(state) : state,
+      shouldReopen,
+    }
+  }
+  const shouldReopen = prevStreak >= 2
+  const state = {
+    ...base,
+    aliveStreak: prevStreak,
+    lastAliveAt: prev!.lastAliveAt,
+    recoverySubject: recoveryObservation.subject,
+    recoveryGeneration: recoveryObservation.generation,
+  }
+  return {
+    state: shouldReopen ? withoutRecoveryEvidence(state) : state,
+    shouldReopen,
+  }
 }

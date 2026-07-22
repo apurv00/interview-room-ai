@@ -18,7 +18,8 @@ import { STORAGE_KEYS } from '@shared/storageKeys'
 
 const JOB_ID = '507f1f77bcf86cd799439011'
 const RETAKE_ID = '507f1f77bcf86cd799439099'
-const APPLY_OPTION_ID = `ao1_${'a'.repeat(43)}`
+const APPLY_OPTION_ID = `ao2_${'a'.repeat(43)}`
+const ALTERNATE_OPTION_ID = `ao2_${'b'.repeat(43)}`
 const BASE_DETAIL = {
   id: JOB_ID,
   title: 'Frontend Engineer',
@@ -57,6 +58,18 @@ const LIVE_APPLY_DETAIL = {
     atsCheck: false,
   },
   applyOptions: [{ optionId: APPLY_OPTION_ID, url: 'https://apply.example/job', tier: 'direct-ats' }],
+}
+const LIVE_APPLY_DETAIL_WITH_ALTERNATE = {
+  ...LIVE_APPLY_DETAIL,
+  applyOptions: [
+    ...LIVE_APPLY_DETAIL.applyOptions,
+    {
+      optionId: ALTERNATE_OPTION_ID,
+      url: 'https://careers.example/job',
+      tier: 'employer',
+      viaSite: 'Company careers',
+    },
+  ],
 }
 
 function jsonResponse(value: unknown, ok = true) {
@@ -811,19 +824,26 @@ describe('Job detail Practice readiness', () => {
     ))
   })
 
-  it('opens the server-mediated route and sends only its opaque optionId to mutation routes', async () => {
+  it('submits Apply through a native same-origin POST form and keeps View GET-only', async () => {
     mockFetch.mockImplementation((input: RequestInfo | URL) => (
       String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(LIVE_APPLY_DETAIL) : jsonResponse({})
     ))
 
     render(<JobDetailPage params={{ id: JOB_ID }} />)
     const apply = await screen.findByRole('button', { name: 'Apply ↗' })
-    const redirectHref = `/api/jobs/${JOB_ID}/open?optionId=${APPLY_OPTION_ID}`
+    const applyRedirectHref = `/api/jobs/${JOB_ID}/open?optionId=${APPLY_OPTION_ID}&intent=apply`
+    const viewRedirectHref = `/api/jobs/${JOB_ID}/open?optionId=${APPLY_OPTION_ID}&intent=view`
+    const applyForm = apply.closest('form')
+    expect(applyForm).not.toBeNull()
+    expect(applyForm).toHaveAttribute('action', applyRedirectHref)
+    expect(applyForm).toHaveAttribute('method', 'post')
+    expect(applyForm).toHaveAttribute('target', '_blank')
+    expect(applyForm).toHaveAttribute('rel', 'noopener noreferrer')
     expect(screen.getByRole('link', { name: /View full posting/i }))
-      .toHaveAttribute('href', redirectHref)
+      .toHaveAttribute('href', viewRedirectHref)
     fireEvent.click(apply)
 
-    expect(window.open).toHaveBeenCalledWith(redirectHref, '_blank', 'noopener')
+    expect(window.open).not.toHaveBeenCalled()
     const arm = JSON.parse(localStorage.getItem(`JOBS_RETURN_${JOB_ID}`) ?? '{}')
     expect(arm).toMatchObject({
       optionId: APPLY_OPTION_ID,
@@ -841,6 +861,48 @@ describe('Job detail Practice readiness', () => {
       `/api/jobs/${JOB_ID}/broken-link`,
       expect.objectContaining({ body: JSON.stringify({ optionId: APPLY_OPTION_ID }) }),
     ))
+  })
+
+  it('keeps Apply and source actions available while every link is being verified', async () => {
+    const allDemotedDetail = {
+      ...LIVE_APPLY_DETAIL,
+      allApplyOptionsDemoted: true,
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}` ? jsonResponse(allDemotedDetail) : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByText('This link is being verified; it may still work.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Apply ↗' })).toBeEnabled()
+    expect(screen.getByRole('link', { name: /View full posting/i })).toHaveAttribute(
+      'href',
+      `/api/jobs/${JOB_ID}/open?optionId=${APPLY_OPTION_ID}&intent=view`,
+    )
+    expect(screen.queryByText(/report count|reports|timestamp|machine-demoted|crowd-demoted/i)).toBeNull()
+  })
+
+  it('does not show verification copy while at least one clean option remains', async () => {
+    mockFetch.mockImplementation((input: RequestInfo | URL) => (
+      String(input) === `/api/jobs/${JOB_ID}`
+        ? jsonResponse({ ...LIVE_APPLY_DETAIL_WITH_ALTERNATE, allApplyOptionsDemoted: false })
+        : jsonResponse({})
+    ))
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+
+    expect(await screen.findByRole('button', { name: 'Apply ↗' })).toBeEnabled()
+    expect(screen.queryByText('This link is being verified; it may still work.')).toBeNull()
+    const alternate = screen.getByRole('button', { name: 'Company careers' })
+    expect(screen.getByText(/Also available:/i)).toBeTruthy()
+    expect(alternate.closest('form')).toHaveAttribute(
+      'action',
+      `/api/jobs/${JOB_ID}/open?optionId=${ALTERNATE_OPTION_ID}&intent=apply`,
+    )
+    expect(alternate.closest('form')).toHaveAttribute('method', 'post')
+    expect(alternate.closest('form')).toHaveAttribute('target', '_blank')
+    expect(alternate.closest('form')).toHaveAttribute('rel', 'noopener noreferrer')
   })
 
   it('scrubs the job when the Apply keepalive reports account unavailability', async () => {
@@ -1005,7 +1067,75 @@ describe('Job detail Practice readiness', () => {
     expect(screen.queryByText(/That link may be stale/i)).toBeNull()
   })
 
-  it('clears legacy or replaced return arms instead of authorizing a stale report sheet', async () => {
+  it.each([
+    ['pending-verification', /Thanks—we’re checking this link/i],
+    ['crowd-demoted', /Several people reported this link, so we only moved it lower while we verify it/i],
+    ['machine-demoted', /A recent check found this link unavailable/i],
+  ] as const)('renders truthful %s broken-link copy and offers the current alternate', async (disposition, copy) => {
+    localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
+      clickedAt: Date.now(),
+      optionId: APPLY_OPTION_ID,
+      url: 'https://apply.example/job',
+      tier: 'direct-ats',
+    }))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL_WITH_ALTERNATE)
+      if (url.endsWith('/broken-link')) {
+        return jsonResponse({ ok: true, disposition, alreadyReported: false })
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    await screen.findByRole('button', { name: 'Apply ↗' })
+    fireEvent(document, new Event('visibilitychange'))
+    fireEvent.click(await screen.findByRole('button', { name: /Link didn.t work/i }))
+
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent(copy)
+    expect(status).toHaveTextContent('Try “Company careers” instead.')
+    expect(status).not.toHaveTextContent(/three|3 reports|report count/i)
+  })
+
+  it.each([
+    [404, /couldn’t verify this report against the current link and a recent Apply attempt, so nothing changed/i],
+    [429, /Too many reports right now—please try again later/i],
+    [503, /couldn’t submit that report just now/i],
+  ] as const)('does not invent a global effect when broken-link reporting returns %i', async (statusCode, copy) => {
+    localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
+      clickedAt: Date.now(),
+      optionId: APPLY_OPTION_ID,
+      url: 'https://apply.example/job',
+      tier: 'direct-ats',
+    }))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/jobs/${JOB_ID}`) return jsonResponse(LIVE_APPLY_DETAIL_WITH_ALTERNATE)
+      if (url.endsWith('/broken-link')) {
+        return Promise.resolve({
+          ok: false,
+          status: statusCode,
+          json: () => Promise.resolve({ error: 'not accepted' }),
+        })
+      }
+      return jsonResponse({})
+    })
+
+    render(<JobDetailPage params={{ id: JOB_ID }} />)
+    await screen.findByRole('button', { name: 'Apply ↗' })
+    fireEvent(document, new Event('visibilitychange'))
+    fireEvent.click(await screen.findByRole('button', { name: /Link didn.t work/i }))
+
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent(copy)
+    expect(status).toHaveTextContent('Try “Company careers” instead.')
+    expect(status).not.toHaveTextContent(/demoted for everyone|recent check found this link unavailable/i)
+    const reports = mockFetch.mock.calls.filter(([url]) => String(url).endsWith('/broken-link'))
+    expect(reports).toHaveLength(1)
+  })
+
+  it('clears legacy or cross-tab replaced return arms instead of authorizing a stale report sheet', async () => {
     localStorage.setItem(`JOBS_RETURN_${JOB_ID}`, JSON.stringify({
       clickedAt: Date.now(),
       url: 'https://apply.example/job',

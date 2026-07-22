@@ -33,10 +33,28 @@ export interface IJobProvenance {
   /** `${sourceId}:${externalId}` — the source-tier identity. */
   sourceKey: string
   applyUrl?: string
+  /** Starts a new apply-link generation whenever this source replaces or
+   * re-adds its URL. `firstSeenAt` remains source-row history. */
+  applyUrlFirstSeenAt?: Date
   applyTier?: 'direct-ats' | 'employer' | 'aggregator-deep' | 'platform-funnel' | 'aggregator-redirect'
   viaSite?: string
-  /** §4b crowd-healing: dead-click reports demote this rung for everyone. */
+  /** Legacy telemetry only; it never authorizes a current-link demotion. */
   brokenReportCount?: number
+  /** Anonymous authority for the exact canonical URL generation. Duplicated
+   * URLs carry the same replicated aggregate; reporter identity stays on the
+   * user's JobApplication only. */
+  linkGovernance?: {
+    subject: string
+    generation: string
+    incidentVersion: number
+    reportWindowStartedAt?: Date
+    reportCount: number
+    lastReportedAt?: Date
+    crowdDemotedAt?: Date
+    machineDemotedAt?: Date
+    machineOutcome?: 'dead' | 'alive' | 'unverifiable'
+    machineCheckedAt?: Date
+  }
   firstSeenAt: Date
   lastSeenAt: Date
 }
@@ -125,7 +143,16 @@ export interface IJobPosting extends Document {
     deadStreak: number
     lastCheckedAt: Date
     lastDeadAt?: Date
+    /** Recovery evidence used only while closedReason is dead-apply-link. */
+    aliveStreak?: number
+    lastAliveAt?: Date
+    /** Exact current link generation that owns the recovery streak. */
+    recoverySubject?: string
+    recoveryGeneration?: string
   }
+  /** Fresh crowd signal requesting bounded-priority machine verification.
+   * Cleared only by a successful current-authority checker write. */
+  linkCheckRequestedAt?: Date
   postedAt?: Date
   validThrough?: Date
   /** Canonical source freshness, updated on every insert/merge even when a
@@ -160,9 +187,27 @@ const ProvenanceSchema = new Schema<IJobProvenance>(
     // Mongoose treats '' as missing for required strings, so required:true
     // aborted whole batches (Codex on #510).
     applyUrl: { type: String },
+    applyUrlFirstSeenAt: { type: Date },
     applyTier: { type: String, enum: ['direct-ats', 'employer', 'aggregator-deep', 'platform-funnel', 'aggregator-redirect'] },
     viaSite: { type: String },
     brokenReportCount: { type: Number },
+    linkGovernance: {
+      type: new Schema(
+        {
+          subject: { type: String, required: true, maxlength: 64 },
+          generation: { type: String, required: true, maxlength: 64 },
+          incidentVersion: { type: Number, required: true, min: 1 },
+          reportWindowStartedAt: { type: Date },
+          reportCount: { type: Number, required: true, min: 0, max: 3 },
+          lastReportedAt: { type: Date },
+          crowdDemotedAt: { type: Date },
+          machineDemotedAt: { type: Date },
+          machineOutcome: { type: String, enum: ['dead', 'alive', 'unverifiable'] },
+          machineCheckedAt: { type: Date },
+        },
+        { _id: false },
+      ),
+    },
     firstSeenAt: { type: Date, required: true },
     lastSeenAt: { type: Date, required: true },
   },
@@ -258,10 +303,15 @@ const JobPostingSchema = new Schema<IJobPosting>(
           deadStreak: { type: Number, default: 0 },
           lastCheckedAt: { type: Date, required: true },
           lastDeadAt: { type: Date },
+          aliveStreak: { type: Number, min: 0 },
+          lastAliveAt: { type: Date },
+          recoverySubject: { type: String, match: /^ls1_[A-Za-z0-9_-]{43}$/ },
+          recoveryGeneration: { type: String, match: /^lg1_[A-Za-z0-9_-]{43}$/ },
         },
         { _id: false }
       ),
     },
+    linkCheckRequestedAt: { type: Date },
     postedAt: { type: Date },
     validThrough: { type: Date },
     lastSeenAt: { type: Date },
@@ -295,6 +345,12 @@ JobPostingSchema.index(
 JobPostingSchema.index({ 'provenance.sourceKey': 1 }, { unique: true })
 JobPostingSchema.index({ companyKey: 1, status: 1 })
 JobPostingSchema.index({ domain: 1, locationKeys: 1, status: 1, postedAt: -1 })
+// Bounded first-lane crowd requests sort oldest-first. Keep ordinary postings
+// out of the index so baseline/restrike scans retain their independent budget.
+JobPostingSchema.index(
+  { linkCheckRequestedAt: 1 },
+  { partialFilterExpression: { linkCheckRequestedAt: { $type: 'date' } } },
+)
 // The purgeAt TTL is deliberately NOT schema-owned. Creating it before the
 // pre-index lifecycle repair could immediately delete historical rows with a
 // stale TTL. `prepare:jobs-retention-index` is its sole, non-dropping owner.
