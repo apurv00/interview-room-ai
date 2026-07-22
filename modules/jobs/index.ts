@@ -18,6 +18,23 @@ export {
   JOB_DOMAINS, JOB_DOMAIN_IDS, FRESHER_DOMAINS, FRESHER_DOMAIN_PATTERNS, matchFresherDomain, interviewSlugForDomain, roleToJobsDomain,
 } from './config/domains'
 export type { JobDomainId } from './config/domains'
+export {
+  FEED_CURSOR_DIRECTIONS,
+  FEED_RESULT_CAP,
+  FEED_EXPERIENCE_VALUES,
+  FEED_FRESHNESS_DAYS,
+  FEED_FRESHNESS_VALUES,
+  FEED_REMOTE_VALUES,
+  FEED_SORT_VALUES,
+} from './config/feedDiscovery'
+export type {
+  FeedCursorDirection,
+  FeedExperience,
+  FeedFreshness,
+  FeedRemote,
+  FeedSort,
+  PublicFeedQuery,
+} from './config/feedDiscovery'
 export { APPLY_TIERS, TIER_RANK } from './config/spamRules'
 export type { ApplyTier } from './config/spamRules'
 export { PRODUCT_EVENT_NAMES, ProductEventInputSchema } from './validators/productEvents'
@@ -32,7 +49,8 @@ export type { IngestCounters, RepostCounterDeps } from './services/ingestPipelin
 export { atsBoardAdapter } from './adapters/atsBoardAdapter'
 export { BOARD_REGISTRY } from './config/boardRegistry'
 export type { BoardSeed } from './config/boardRegistry'
-export { getFeed, getJobDetail, tierAScore, bestApplyTierOf, isSafeHttpUrl } from './services/feedService'
+export { getFeed, getJobDetail, bestApplyTierOf, isSafeHttpUrl } from './services/feedService'
+export { InvalidFeedCursorError } from './services/feedDiscovery'
 export {
   applyOptionIdOf,
   canonicalApplyOptionsOf,
@@ -51,6 +69,6 @@ export { saveBaseResume, getBaseResume } from './services/baseResumeService'
 export { getTracker, dismissConfirmCard, saveNotes, GHOST_AFTER_DAYS } from './services/trackerService'
 export { buildPrepPlan, dateForChoice, setInterviewDate } from './services/prepPlanService'
 export type { InterviewDateCapture, InterviewDatePreference, PrepPlan, PrepPlanSession } from './services/prepPlanService'
-export type { FeedQuery, FeedCard, JobDetailShell, JobDetailFull } from './services/feedService'
+export type { FeedQuery, FeedCard, FeedPayload, JobDetailShell, JobDetailFull } from './services/feedService'
 export { isSuppressed, buildFooterUrls, sendTransactional } from './services/emailSendService'
 export type { TailoredVersionView, TransitionTelemetry } from './services/applicationService'

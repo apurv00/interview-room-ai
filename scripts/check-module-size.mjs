@@ -135,7 +135,10 @@ const BUDGETS = {
   // Bumped maxLOC 16,000 → 17,000 on 2026-07-22 for A09's transactional
   // broken-link governance and reversible machine arbitration. File count
   // remains capped at 70. See docs/adr/0023-jobs-budget-link-governance.md.
-  'modules/jobs':      { maxLOC: 17_000, maxFiles: 70 },
+  // Bumped maxLOC 17,000 → 19,000 and maxFiles 70 → 73 on 2026-07-22
+  // for A12's intent-driven discovery, private personalization boundary, and
+  // read-only quality report. See docs/adr/0024-jobs-budget-discovery-intent.md.
+  'modules/jobs':      { maxLOC: 19_000, maxFiles: 73 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])

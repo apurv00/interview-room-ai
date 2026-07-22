@@ -14,11 +14,12 @@
  */
 
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-const { mockUseSearchParams, mockFetch, sessionState } = vi.hoisted(() => ({
+const { mockUseSearchParams, mockFetch, mockRouter, sessionState } = vi.hoisted(() => ({
   mockUseSearchParams: vi.fn(),
   mockFetch: vi.fn(),
+  mockRouter: { push: vi.fn(), replace: vi.fn() },
   sessionState: {
     value: {
       status: 'unauthenticated' as 'loading' | 'authenticated' | 'unauthenticated',
@@ -29,6 +30,8 @@ const { mockUseSearchParams, mockFetch, sessionState } = vi.hoisted(() => ({
 
 vi.mock('next/navigation', () => ({
   useSearchParams: () => mockUseSearchParams(),
+  usePathname: () => '/jobs',
+  useRouter: () => mockRouter,
 }))
 vi.mock('next-auth/react', () => ({
   useSession: () => sessionState.value,
@@ -47,13 +50,43 @@ function personalizedFeedCalls(): Array<[RequestInfo | URL, RequestInit]> {
     .filter((c) => String(c[0]) === '/api/jobs/feed' && c[1]?.method === 'POST') as Array<[RequestInfo | URL, RequestInit]>
 }
 
+function feedPayload(over: Record<string, unknown> = {}) {
+  return {
+    cards: [],
+    pageSize: 20,
+    hasMore: false,
+    hasPrevious: false,
+    total: 0,
+    accessibleTotal: 0,
+    resultCap: 400,
+    capped: false,
+    sharpened: 0,
+    sort: 'best',
+    ...over,
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch)
+  mockRouter.push.mockReset()
+  mockRouter.replace.mockReset()
   mockFetch.mockReset().mockImplementation((url: string) => {
     if (String(url).startsWith('/api/jobs/feed')) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ cards: [], page: 1, hasMore: false }),
+        status: 200,
+        json: () => Promise.resolve({
+          cards: [],
+          pageSize: 20,
+          hasMore: false,
+          hasPrevious: false,
+          total: 0,
+          accessibleTotal: 0,
+          resultCap: 400,
+          capped: false,
+          sharpened: 0,
+          sort: 'best',
+        }),
       })
     }
     // quick-wins (401 for anon) + events fire-and-forget
@@ -74,9 +107,9 @@ describe('/jobs ?domain= param (Codex #527 — press links must land on the filt
     const url = new URL(feedCallUrls()[0], 'http://x')
     expect(url.searchParams.get('domain')).toBe('data-science')
 
-    expect(await screen.findByText(/Showing data-science jobs/)).toBeTruthy()
-    const clear = screen.getByRole('link', { name: 'Clear filter' })
-    expect(clear.getAttribute('href')).toBe('/jobs')
+    const chip = await screen.findByRole('button', { name: /Remove Domain: data-science filter/ })
+    fireEvent.click(chip)
+    expect(mockRouter.push).toHaveBeenCalledWith('/jobs', { scroll: false })
   })
 
   it('ignores an unknown domain slug — no filter forwarded, no chip', async () => {
@@ -86,7 +119,7 @@ describe('/jobs ?domain= param (Codex #527 — press links must land on the filt
     await waitFor(() => expect(feedCallUrls().length).toBeGreaterThan(0))
     const url = new URL(feedCallUrls()[0], 'http://x')
     expect(url.searchParams.get('domain')).toBeNull()
-    expect(screen.queryByText(/Showing .* jobs/)).toBeNull()
+    expect(screen.queryByText(/Domain:/)).toBeNull()
   })
 
   it('no domain param behaves as before — unfiltered feed, no chip', async () => {
@@ -96,7 +129,7 @@ describe('/jobs ?domain= param (Codex #527 — press links must land on the filt
     await waitFor(() => expect(feedCallUrls().length).toBeGreaterThan(0))
     const url = new URL(feedCallUrls()[0], 'http://x')
     expect(url.searchParams.get('domain')).toBeNull()
-    expect(screen.queryByText('Clear filter')).toBeNull()
+    expect(screen.queryByText('Clear all')).toBeNull()
   })
 })
 
@@ -206,7 +239,6 @@ describe('/jobs personalized-feed privacy', () => {
     expect(String(url)).not.toContain('SQL')
     expect(init.cache).toBe('no-store')
     expect(JSON.parse(String(init.body))).toEqual({
-      page: 1,
       domain: 'pm',
       targetRole: 'Product Manager',
       skills: ['Roadmaps', 'SQL'],
@@ -226,7 +258,7 @@ describe('/jobs personalized-feed privacy', () => {
 
     await waitFor(() => expect(feedCallUrls().length).toBeGreaterThan(0))
     expect(personalizedFeedCalls()).toHaveLength(0)
-    expect(feedCallUrls()[0]).toBe('/api/jobs/feed?page=1')
+    expect(feedCallUrls()[0]).toBe('/api/jobs/feed')
     expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
   })
 
@@ -243,7 +275,6 @@ describe('/jobs personalized-feed privacy', () => {
 
     await waitFor(() => expect(personalizedFeedCalls()).toHaveLength(1))
     expect(JSON.parse(String(personalizedFeedCalls()[0][1].body))).toEqual({
-      page: 1,
       targetRole: 'Sales Executive',
     })
   })
@@ -262,7 +293,7 @@ describe('/jobs personalized-feed privacy', () => {
 
     await waitFor(() => expect(feedCallUrls().length).toBeGreaterThan(0))
     expect(personalizedFeedCalls()).toHaveLength(0)
-    expect(feedCallUrls()[0]).toBe('/api/jobs/feed?page=1')
+    expect(feedCallUrls()[0]).toBe('/api/jobs/feed')
     expect(sessionStorage.getItem('JOBS_TARGET')).toBeNull()
     expect(screen.queryByText(/User A Secret Role/i)).toBeNull()
   })
@@ -327,6 +358,118 @@ describe('/jobs personalized-feed privacy', () => {
     view.rerender(<JobsPage />)
     expect(await screen.findByText('Public Job')).toBeTruthy()
     expect(personalizedFeedCalls()).toHaveLength(1)
+  })
+})
+
+describe('/jobs URL discovery and request lifecycle', () => {
+  it('hydrates every public control and removes cursors when filters change', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(
+      'q=Backend&location=Bangalore&remote=remote&experience=mid&company=Acme&freshness=7d&sort=newest&cursor=old&direction=after',
+    ))
+    render(<JobsPage />)
+
+    expect(await screen.findByDisplayValue('Backend')).toBeTruthy()
+    expect(screen.getByDisplayValue('Bangalore')).toBeTruthy()
+    expect(screen.getByDisplayValue('Remote only')).toBeTruthy()
+    expect(screen.getByDisplayValue('Mid level')).toBeTruthy()
+    expect(screen.getByDisplayValue('Acme')).toBeTruthy()
+    expect(screen.getByDisplayValue('Past week')).toBeTruthy()
+    expect(screen.getByDisplayValue('Newest')).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Search jobs'), { target: { value: 'Platform Engineer' } })
+    fireEvent.submit(screen.getByRole('search'))
+
+    expect(mockRouter.push).toHaveBeenCalledWith(
+      '/jobs?q=Platform+Engineer&location=Bangalore&remote=remote&experience=mid&company=Acme&freshness=7d&sort=newest',
+      { scroll: false },
+    )
+  })
+
+  it('synchronizes editable controls when Back or Forward changes URL state', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('q=First'))
+    const view = render(<JobsPage />)
+    expect(await screen.findByDisplayValue('First')).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Search jobs'), { target: { value: 'Unsaved draft' } })
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('q=Second&location=Pune'))
+    view.rerender(<JobsPage />)
+
+    await waitFor(() => expect((screen.getByLabelText('Search jobs') as HTMLInputElement).value).toBe('Second'))
+    expect((screen.getByLabelText('Location preference') as HTMLInputElement).value).toBe('Pune')
+  })
+
+  it('aborts superseded requests and ignores a late stale response', async () => {
+    let resolveFirst!: (response: unknown) => void
+    let resolveSecond!: (response: unknown) => void
+    const firstResponse = new Promise((resolve) => { resolveFirst = resolve })
+    const secondResponse = new Promise((resolve) => { resolveSecond = resolve })
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('q=First'))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/jobs/feed?q=First')) return firstResponse
+      if (url.includes('/api/jobs/feed?q=Second')) return secondResponse
+      return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve(null) })
+    })
+
+    const view = render(<JobsPage />)
+    await waitFor(() => expect(feedCallUrls()).toContain('/api/jobs/feed?q=First'))
+    const firstCall = mockFetch.mock.calls.find((call) => String(call[0]).includes('q=First'))!
+    const firstSignal = firstCall[1]?.signal as AbortSignal
+
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('q=Second'))
+    view.rerender(<JobsPage />)
+    await waitFor(() => expect(feedCallUrls()).toContain('/api/jobs/feed?q=Second'))
+    expect(firstSignal.aborted).toBe(true)
+
+    await act(async () => {
+      resolveSecond({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(feedPayload({
+          cards: [{ id: 'second', title: 'Second result', company: 'Acme', locations: [], isRemote: false }],
+          total: 1,
+          accessibleTotal: 1,
+        })),
+      })
+    })
+    expect(await screen.findByText('Second result')).toBeTruthy()
+
+    await act(async () => {
+      resolveFirst({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(feedPayload({
+          cards: [{ id: 'first', title: 'Stale first result', company: 'Old Co', locations: [], isRemote: false }],
+          total: 1,
+          accessibleTotal: 1,
+        })),
+      })
+    })
+    expect(screen.queryByText('Stale first result')).toBeNull()
+  })
+
+  it('renders cursor navigation as a shareable public URL', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('q=Backend'))
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/jobs/feed')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(feedPayload({
+            cards: [{ id: 'one', title: 'Backend role', company: 'Acme', locations: [], isRemote: false }],
+            total: 2,
+            accessibleTotal: 2,
+            hasMore: true,
+            nextCursor: 'next-token',
+          })),
+        })
+      }
+      return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve(null) })
+    })
+    render(<JobsPage />)
+
+    const next = await screen.findByRole('link', { name: 'Next →' })
+    expect(next.getAttribute('href')).toBe('/jobs?q=Backend&cursor=next-token&direction=after')
   })
 })
 

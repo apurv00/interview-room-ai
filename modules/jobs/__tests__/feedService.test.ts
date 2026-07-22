@@ -2,7 +2,6 @@ import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 
 const {
-  mockFind,
   mockFindById,
   mockPostingExists,
   mockAppFindOne,
@@ -10,8 +9,8 @@ const {
   mockGetBase,
   mockGetResume,
   mockGetActiveCatalog,
+  mockDiscoverFeed,
 } = vi.hoisted(() => ({
-  mockFind: vi.fn(),
   mockFindById: vi.fn(),
   mockPostingExists: vi.fn().mockResolvedValue({ _id: 'posting-authoritative' }),
   mockAppFindOne: vi.fn(),
@@ -19,9 +18,10 @@ const {
   mockGetBase: vi.fn(),
   mockGetResume: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
+  mockDiscoverFeed: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
-  JobPosting: { find: mockFind, findById: mockFindById, exists: mockPostingExists },
+  JobPosting: { findById: mockFindById, exists: mockPostingExists },
   JobApplication: { findOne: mockAppFindOne, exists: mockAppExists },
 }))
 vi.mock('../services/baseResumeService', () => ({ getBaseResume: mockGetBase }))
@@ -32,8 +32,11 @@ vi.mock('@resume', async (importOriginal) => {
 vi.mock('@interview/services/persona/domainCatalogService', () => ({
   getActiveInterviewDomainCatalog: mockGetActiveCatalog,
 }))
+vi.mock('../services/feedDiscovery', () => ({
+  discoverFeed: mockDiscoverFeed,
+}))
 
-import { tierAScore, tierBScore, matchedSkillsOf, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
+import { matchedSkillsOf, bestApplyTierOf, getFeed, getJobDetail } from '../services/feedService'
 import { practiceHandoffHashOf } from '../services/practiceHandoff'
 import { xrayHashOf } from '../services/xrayService'
 import { INTERVIEW_JOB_DESCRIPTION_MAX_CHARS } from '@shared/interviewContract'
@@ -106,33 +109,7 @@ function requireFullDetail(detail: Awaited<ReturnType<typeof getJobDetail>>) {
   return detail
 }
 
-describe('tierAScore (deterministic rank — rules only, §serving honesty)', () => {
-  it('apply-path quality orders the tiers; demotions SINK flagged rows but never hide them', () => {
-    const direct = tierAScore(doc() as never, {}, NOW)
-    const redirect = tierAScore(doc({ provenance: [{ applyTier: 'aggregator-redirect', applyUrl: 'x', sourceId: 's', externalId: 'e', sourceKey: 's:e' }] }) as never, {}, NOW)
-    expect(direct).toBeGreaterThan(redirect)
-    const flagged = tierAScore(doc({ flags: { staffing: true, shortJd: true, repost: true, repostCount: 4, salaryConflict: false } }) as never, {}, NOW)
-    expect(flagged).toBeLessThan(direct)
-    expect(Number.isFinite(flagged)).toBe(true) // a score, not an exclusion
-  })
-
-  it('domain match boosts; location/city is NOT a rank input (founder directive 2026-07-16, ruling #21)', () => {
-    const base = tierAScore(doc() as never, {}, NOW)
-    expect(tierAScore(doc() as never, { domain: 'backend' }, NOW)).toBeGreaterThan(base)
-    // Same doc, wildly different locations → identical score. City must
-    // never re-enter rank math (the typed-city filter collapsed the feed).
-    expect(tierAScore(doc({ locations: ['Pune'], locationKeys: ['pune'] }) as never, {}, NOW)).toBe(base)
-    expect(tierAScore(doc({ isRemote: true, locationKeys: ['remote-in'] }) as never, {}, NOW)).toBe(base)
-  })
-
-  it('recency decays linearly to zero at 21 days — stale postings stop earning freshness', () => {
-    const fresh = tierAScore(doc({ postedAt: NOW }) as never, {}, NOW)
-    const old = tierAScore(doc({ postedAt: new Date('2026-06-01') }) as never, {}, NOW)
-    const undated = tierAScore(doc({ postedAt: undefined }) as never, {}, NOW)
-    expect(fresh).toBeGreaterThan(old)
-    expect(old).toBe(undated)
-  })
-
+describe('feed card evidence helpers', () => {
   it('bestApplyTierOf skips quorum-demoted rungs, falls back when all are demoted, and ignores legacy counts', () => {
     const direct = { applyTier: 'direct-ats' as const, applyUrl: 'https://d.example/1', sourceId: 'a', externalId: '1', sourceKey: 'a:1' }
     const mixed = doc({ provenance: [
@@ -153,91 +130,67 @@ describe('tierAScore (deterministic rank — rules only, §serving honesty)', ()
     ] })
     expect(bestApplyTierOf(d as never)).toBe('employer')
   })
-})
-
-describe('tierBScore (stateless resume rank — Tier-A + evidence)', () => {
-  const D = doc({ title: 'Senior Node.js Backend Engineer', titleTokens: ['senior', 'node.js', 'backend', 'engineer'] })
-
-  it('with no skills/targetRole it IS tierAScore — the 3-questions path never gets resume math', () => {
-    expect(tierBScore(D as never, {}, NOW)).toBe(tierAScore(D as never, {}, NOW))
-  })
-
-  it('matched skills boost (capped at 3) and matchedSkillsOf names ONLY real matches', () => {
+  it('matchedSkillsOf names only real title evidence', () => {
+    const D = doc({ title: 'Senior Node.js Backend Engineer', titleTokens: ['senior', 'node.js', 'backend', 'engineer'] })
     const skills = ['Node.js', 'Kafka', 'SQL']
     expect(matchedSkillsOf(D as never, skills)).toEqual(['Node.js'])
-    expect(tierBScore(D as never, { skills }, NOW)).toBeGreaterThan(tierAScore(D as never, {}, NOW))
     const many = matchedSkillsOf(D as never, ['node.js', 'backend', 'engineer', 'senior'])
-    expect(many.length).toBe(4) // all matched...
-    const capped = tierBScore(D as never, { skills: ['node.js', 'backend', 'engineer', 'senior'] }, NOW)
-    const three = tierBScore(D as never, { skills: ['node.js', 'backend', 'engineer'] }, NOW)
-    expect(capped).toBe(three) // ...but the bonus caps at 3
-  })
-
-  it('target-role affinity boosts on high title overlap only', () => {
-    const hit = tierBScore(D as never, { targetRole: 'Backend Engineer Node.js Senior' }, NOW)
-    const miss = tierBScore(D as never, { targetRole: 'Product Designer' }, NOW)
-    expect(hit).toBeGreaterThan(miss)
-    expect(miss).toBe(tierAScore(D as never, {}, NOW))
+    expect(many).toEqual(['node.js', 'backend', 'engineer', 'senior'])
   })
 })
 
 describe('getFeed (public cards — never JD, never apply URLs)', () => {
-  function feedChain(docs: unknown[]) {
-    mockFind.mockClear()
-    mockFind.mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ lean: () => Promise.resolve(docs) }) }),
-      }),
+  function discoveryRow(over: Record<string, unknown> = {}) {
+    const posting = doc(over)
+    return {
+      ...posting,
+      discoveryScore: 0,
+      sortPostedAt: posting.postedAt ?? new Date(0),
+      locationPreferenceMatched: false,
+    }
+  }
+
+  function feedRows(rows: unknown[], over: Record<string, unknown> = {}) {
+    mockDiscoverFeed.mockResolvedValueOnce({
+      rows,
+      pageSize: 20,
+      total: rows.length,
+      accessibleTotal: rows.length,
+      resultCap: 400,
+      capped: false,
+      hasNext: false,
+      hasPrevious: false,
+      sort: 'best',
+      ...over,
     })
   }
 
-  it('cards carry display fields + tier badge + the ONLY permitted relevance claim — no JD, no URLs', async () => {
-    feedChain([doc()])
+  beforeEach(() => mockDiscoverFeed.mockReset())
+
+  it('maps card-safe fields and the canonical tier badge without JD or URLs', async () => {
+    feedRows([discoveryRow()])
     const feed = await getFeed({}, NOW)
     expect(feed.cards).toHaveLength(1)
     const card = feed.cards[0] as Record<string, unknown>
-    expect(card.relevance).toBe('title-location')
+    expect(card.relevance).toBe('discovery')
     expect(card.applyTier).toBe('direct-ats')
     expect(JSON.stringify(card)).not.toContain('applyUrl')
     expect(card.jd).toBeUndefined()
     expect(card.jdCompressed).toBeUndefined()
   })
 
-  it('only open postings are queried; NO location filter exists in any pull (ruling #21 regression pin)', async () => {
-    feedChain([])
-    await getFeed({}, NOW)
-    const filter = mockFind.mock.calls[0][0]
-    expect(filter.status).toBe('open')
-    expect(JSON.stringify(filter)).not.toContain('locationKeys')
-    expect(JSON.stringify(filter)).not.toContain('$or')
+  it('passes public discovery intent and page size to the database query', async () => {
+    feedRows([])
+    const query = { domain: 'backend', location: 'Bangalore', pageSize: 1 } as const
+    await getFeed(query, NOW)
+    expect(mockDiscoverFeed).toHaveBeenCalledWith(query, NOW, 1)
   })
 
-  it('explicit ?domain= (press links) stays a HARD filter — one pull, domain in the query', async () => {
-    feedChain([doc()])
-    await getFeed({ domain: 'backend' }, NOW)
-    expect(mockFind).toHaveBeenCalledTimes(1)
-    expect(mockFind.mock.calls[0][0]).toEqual({ status: 'open', domain: 'backend' })
-  })
-
-  it('derived roleDomain pulls DOMAIN-FIRST plus a mixed tail — the pm rows all reach scoring (founder RCA 2026-07-16)', async () => {
-    feedChain([])
-    await getFeed({ roleDomain: 'pm', targetRole: 'Product Management' }, NOW)
-    expect(mockFind).toHaveBeenCalledTimes(2)
-    expect(mockFind.mock.calls[0][0]).toEqual({ status: 'open', domain: 'pm' })
-    expect(mockFind.mock.calls[1][0]).toEqual({ status: 'open', domain: { $ne: 'pm' } })
-  })
-
-  it('domain CLASS outranks recency: a week-old pm row beats a fresh direct-ats fullstack row for a pm target', async () => {
-    // The two pulls are disjoint in prod ($ne) — mock each separately.
-    const chain = (docs: unknown[]) => ({
-      select: vi.fn().mockReturnValue({
-        sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ lean: () => Promise.resolve(docs) }) }),
-      }),
-    })
-    mockFind.mockClear()
-    mockFind
-      .mockReturnValueOnce(chain([doc({ _id: 'old-pm', domain: 'pm', postedAt: new Date('2026-07-07T12:00:00Z') })]))
-      .mockReturnValueOnce(chain([doc({ _id: 'fresh-fullstack', domain: 'fullstack', postedAt: NOW })]))
+  it('private role signals refine only the returned Best-match page', async () => {
+    feedRows([
+      discoveryRow({ _id: 'fresh-fullstack', domain: 'fullstack', postedAt: NOW }),
+      discoveryRow({ _id: 'old-pm', domain: 'pm', postedAt: new Date('2026-07-07T12:00:00Z') }),
+    ])
     const feed = await getFeed({ roleDomain: 'pm' }, NOW)
     expect(feed.cards.map((c) => c.id)).toEqual(['old-pm', 'fresh-fullstack'])
     expect(feed.total).toBe(2)
@@ -245,9 +198,9 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
   })
 
   it('reveal honesty: sharpened counts ONLY cards with real matched skills; cards carry them', async () => {
-    feedChain([
-      doc({ _id: 'hit', title: 'SQL Analyst', titleTokens: ['sql', 'analyst'] }),
-      doc({ _id: 'miss', title: 'Sales Executive', titleTokens: ['sales', 'executive'] }),
+    feedRows([
+      discoveryRow({ _id: 'hit', title: 'SQL Analyst', titleTokens: ['sql', 'analyst'] }),
+      discoveryRow({ _id: 'miss', title: 'Sales Executive', titleTokens: ['sales', 'executive'] }),
     ])
     const feed = await getFeed({ skills: ['SQL', 'Tableau'] }, NOW)
     expect(feed.sharpened).toBe(1)
@@ -256,17 +209,40 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
     expect(hit.matchedSkills).toEqual(['SQL'])
     expect(hit.relevance).toBe('resume')
     expect(miss.matchedSkills).toEqual([])
-    expect(miss.relevance).toBe('title-location') // never claims resume evidence it lacks
+    expect(miss.relevance).toBe('discovery')
   })
 
-  it('paginates deterministically over the scored pool', async () => {
-    feedChain(Array.from({ length: 45 }, (_, i) => doc({ _id: `j${i}` })))
-    const p1 = await getFeed({ pageSize: 20 }, NOW)
-    const p3 = await getFeed({ page: 3, pageSize: 20 }, NOW)
-    expect(p1.cards).toHaveLength(20)
-    expect(p1.hasMore).toBe(true)
-    expect(p3.cards).toHaveLength(5)
-    expect(p3.hasMore).toBe(false)
+  it('keeps Newest chronological even when private matches exist', async () => {
+    feedRows([
+      discoveryRow({ _id: 'newest', title: 'Sales Executive', titleTokens: ['sales'], postedAt: NOW }),
+      discoveryRow({ _id: 'older-hit', title: 'SQL Analyst', titleTokens: ['sql'], postedAt: new Date('2026-07-13') }),
+    ], { sort: 'newest' })
+    const feed = await getFeed({ sort: 'newest', skills: ['SQL'] }, NOW)
+    expect(feed.cards.map((card) => card.id)).toEqual(['newest', 'older-hit'])
+    expect(feed.sharpened).toBe(1)
+  })
+
+  it('preserves exact/capped totals and opaque cursor navigation', async () => {
+    feedRows([discoveryRow()], {
+      total: 912,
+      accessibleTotal: 400,
+      capped: true,
+      hasNext: true,
+      hasPrevious: true,
+      nextCursor: 'next-token',
+      previousCursor: 'previous-token',
+    })
+    const feed = await getFeed({ cursor: 'current-token', direction: 'after' }, NOW)
+    expect(feed).toMatchObject({
+      total: 912,
+      accessibleTotal: 400,
+      resultCap: 400,
+      capped: true,
+      hasMore: true,
+      hasPrevious: true,
+      nextCursor: 'next-token',
+      previousCursor: 'previous-token',
+    })
   })
 })
 
