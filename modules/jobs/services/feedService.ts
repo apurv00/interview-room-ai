@@ -1,10 +1,12 @@
-import { JobPosting, JobApplication, type IJobPosting } from '@shared/db/models'
+import { JobPosting, JobApplication, User, type IJobPosting } from '@shared/db/models'
+import type { ExperienceLevel } from '@shared/types'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
 import { titleJaccard } from './identityResolver'
 import { xrayHashOf, legacyXrayHashOf } from './xrayService'
 import { getBaseResume } from './baseResumeService'
 import { getResume } from '@resume'
 import {
+  asPracticeExperienceLevel,
   mintPracticeHandoffToken,
   preparePracticeHandoffPosting,
 } from './practiceHandoff'
@@ -218,6 +220,9 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
   /** Server-authoritative Practice readiness. Both fields appear together. */
   practiceRole?: string
   practiceHandoffToken?: string
+  practiceExperience?: ExperienceLevel
+  /** Present only when experience is the sole missing Practice prerequisite. */
+  practiceBlocker?: 'experience-required'
   /** Tier-honest apply ladder, best-first — subtitles are the UI's job. */
   applyOptions: Array<{ optionId: string; url: string; tier: ApplyTier; viaSite?: string }>
   /** Aggregate UX signal only. Never expose reporter counts, timestamps, or
@@ -240,6 +245,13 @@ export interface JobDetailFull extends Omit<JobDetailShell, 'gated'> {
     ats: { state: 'none' | 'pending' | 'done'; score?: number; missingKeywords?: string[]; checkedAt?: string }
   } | null
 }
+
+/** Internal lookup outcome: the posting is a normal archive, but this caller
+ * does not own retained preparation context. Routes map it to 410 without
+ * serializing posting data or disclosing restricted/policy closures. */
+export const JOB_DETAIL_GONE = Object.freeze({ unavailable: 'gone' as const })
+export type JobDetailGone = typeof JOB_DETAIL_GONE
+export type JobDetailResult = JobDetailShell | JobDetailFull | JobDetailGone | null
 
 function shellOf(doc: IJobPosting): Omit<JobDetailShell, 'gated'> {
   return {
@@ -268,7 +280,7 @@ function exactDetailPostingLifecycleFilter(
   }
 }
 
-export async function getJobDetail(id: string, userId?: string | null): Promise<JobDetailShell | JobDetailFull | null> {
+export async function getJobDetail(id: string, userId?: string | null): Promise<JobDetailResult> {
   const doc = await JobPosting.findById(id).lean()
   if (!doc) {
     if (!userId) return null
@@ -316,12 +328,19 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     }
   }
   if (doc.status !== 'open' && doc.status !== 'closed') return null
+  const postingState = jobPostingStateOf(doc as IJobPosting)
   // Closed postings leave public discovery, but an existing tracker row is
   // durable user-owned context. Resolve that ownership before preparing or
-  // projecting any JD-derived content; non-owners receive the same 404 as an
-  // unknown posting so closure never widens the private-detail boundary.
+  // projecting any JD-derived content. A normal archive is a typed 410
+  // outcome for non-owners; restricted/policy closures remain 404-equivalent.
   if (!userId) {
-    if (doc.status !== 'open') return null
+    if (doc.status !== 'open') {
+      if (postingState !== 'archived') return null
+      const postingStillAuthoritative = await JobPosting.exists(
+        exactDetailPostingLifecycleFilter(id, doc as IJobPosting),
+      )
+      return postingStillAuthoritative ? JOB_DETAIL_GONE : null
+    }
     const postingStillAuthoritative = await JobPosting.exists(
       exactDetailPostingLifecycleFilter(id, doc as IJobPosting),
     )
@@ -332,13 +351,25 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
   let app = await JobApplication.findOne({ userId, jobPostingId: id })
     .select('_id status jobSnapshot verifiedPracticeSessionIds interviewDate interviewDateConfidence interviewDatePreference tailoredVersion.createdAt tailoredVersion.jdHash appliedWith.wasTailored atsResult atsRequestedAt')
     .lean()
-  if (doc.status === 'closed' && !app) return null
+  if (doc.status === 'closed' && !app) {
+    if (postingState !== 'archived') return null
+    const postingStillAuthoritative = await JobPosting.exists(
+      exactDetailPostingLifecycleFilter(id, doc as IJobPosting),
+    )
+    return postingStillAuthoritative ? JOB_DETAIL_GONE : null
+  }
 
-  const postingState = jobPostingStateOf(doc as IJobPosting)
   const practice = postingState === 'restricted'
     ? { jobDescription: '' }
     : await preparePracticeHandoffPosting(doc)
   const jd = practice.jobDescription
+  const hasPracticePostingContext = postingState !== 'restricted' &&
+    !!practice.role &&
+    !!practice.jdHash
+  const practiceProfile = hasPracticePostingContext
+    ? await User.findById(userId).select('experienceLevel').lean()
+    : null
+  const practiceExperience = asPracticeExperienceLevel(practiceProfile?.experienceLevel)
   const canonicalApplyOptions = postingState === 'live'
     ? canonicalApplyOptionsOf(doc.provenance)
         // Crowd-healed ladder (§4b): rungs with dead-click reports sink below
@@ -379,7 +410,10 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
       ? JobApplication.exists({ _id: app._id, userId, jobPostingId: id })
       : Promise.resolve(true),
   ])
-  if (!postingStillAuthoritative || (doc.status === 'closed' && !applicationStillExists)) return null
+  if (!postingStillAuthoritative) return null
+  if (doc.status === 'closed' && !applicationStillExists) {
+    return postingState === 'archived' ? JOB_DETAIL_GONE : null
+  }
   if (!applicationStillExists) {
     app = null
     atsCurrent = false
@@ -403,7 +437,7 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     viewSource: postingState === 'live' && applyOptions.length > 0,
     xray: hasCanonicalJd && (postingState === 'live' || hasCachedXray),
     tailor: postingState !== 'restricted' && !!jd.trim(),
-    practice: postingState !== 'restricted' && !!practice.role && hasCanonicalJd,
+    practice: hasPracticePostingContext && !!practiceExperience,
     atsCheck: postingState !== 'restricted' && !!app && hasCanonicalJd,
   }
   const tailorInputHash = capabilities.tailor ? practice.jdHash : undefined
@@ -418,15 +452,19 @@ export async function getJobDetail(id: string, userId?: string | null): Promise<
     capabilities,
     ...(tailorInputHash ? { tailorInputHash } : {}),
     ...(postingState !== 'restricted' ? { jd } : {}),
-    ...(capabilities.practice && practice.role && practice.jdHash
+    ...(capabilities.practice && practice.role && practice.jdHash && practiceExperience
       ? {
           practiceRole: practice.role,
+          practiceExperience,
           practiceHandoffToken: mintPracticeHandoffToken({
             userId,
             jobId: String(doc._id),
             jdHash: practice.jdHash,
           }),
         }
+      : {}),
+    ...(hasPracticePostingContext && !practiceExperience
+      ? { practiceBlocker: 'experience-required' as const }
       : {}),
     applyOptions,
     allApplyOptionsDemoted,

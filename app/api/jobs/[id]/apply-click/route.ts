@@ -1,67 +1,57 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
-import { connectDB } from '@shared/db/connection'
-import mongoose from 'mongoose'
-import { parseApplyOptionMutation, recordApplyClick } from '@jobs'
-import { logger } from '@shared/logger'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
-import { recordJobsUserEvent } from '@jobs/services/userEventService'
-import { JobsAccountInactiveError } from '@shared/services/jobsAccountFence'
+import { connectDB } from '@shared/db/connection'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 
+const PRIVATE_NO_STORE_HEADERS = {
+  'Cache-Control': 'private, no-store',
+  Pragma: 'no-cache',
+  'X-Robots-Tag': 'noindex, nofollow',
+}
+
+function withPrivateHeaders(response: Response): Response {
+  for (const [name, value] of Object.entries(PRIVATE_NO_STORE_HEADERS)) {
+    response.headers.set(name, value)
+  }
+  return response
+}
+
 /**
- * POST /api/jobs/[id]/apply-click — legacy/backward-compatible status edge.
- * It may record apply_clicked (never conflated with the user's applied
- * claim), but deliberately creates no trusted attempt or broken-link
- * governance proof. New detail-page Apply navigation uses /open?intent=apply.
+ * POST /api/jobs/[id]/apply-click — retired compatibility signal.
+ *
+ * The endpoint intentionally performs no parsing, application mutation, or
+ * telemetry write. It retains the account-lifecycle read so a stale client
+ * can still scrub private state during a rolling deployment.
  */
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(_req: Request, _context: { params: { id: string } }) {
   const session = await getServerSession(authOptions)
   const userId = (session?.user as { id?: string } | undefined)?.id
-  if (!userId) return NextResponse.json({ error: 'sign in required' }, { status: 401 })
+  if (!userId) {
+    return NextResponse.json(
+      { error: 'sign in required' },
+      { status: 401, headers: PRIVATE_NO_STORE_HEADERS },
+    )
+  }
   const rateLimitBlock = await checkJobsRateLimit(userId)
-  if (rateLimitBlock) return rateLimitBlock
-  if (!mongoose.Types.ObjectId.isValid(params.id)) {
-    return NextResponse.json({ error: 'not found' }, { status: 404 })
-  }
-  let input: unknown
-  try {
-    input = await req.json()
-  } catch {
-    return NextResponse.json({ error: 'invalid JSON' }, { status: 400 })
-  }
-  const parsed = parseApplyOptionMutation(input)
-  if (!parsed) {
-    return NextResponse.json({ error: 'a valid optionId is required' }, { status: 400 })
+  if (rateLimitBlock) return withPrivateHeaders(rateLimitBlock)
+  await connectDB()
+  if (!(await isJobsAccountActive(userId))) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401, headers: PRIVATE_NO_STORE_HEADERS },
+    )
   }
 
-  await connectDB()
-  let result: Awaited<ReturnType<typeof recordApplyClick>>
-  try {
-    result = await recordApplyClick(userId, params.id, parsed.optionId)
-  } catch (error) {
-    if (error instanceof JobsAccountInactiveError) {
-      return NextResponse.json(
-        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
-        { status: 401 },
-      )
-    }
-    throw error
-  }
-  if (!result) return NextResponse.json({ error: 'not found' }, { status: 404 })
-  const { canonicalOption, ...publicResult } = result
-  try {
-    await recordJobsUserEvent({
-      name: 'jobs.apply_click',
-      userId,
-      jobPostingId: params.id,
-      props: { tier: canonicalOption.tier, source: 'detail', transitioned: result.transitioned },
-      ts: new Date(),
-    })
-  } catch (err) {
-    logger.warn({ err }, 'jobs.apply_click telemetry write failed') // telemetry never breaks the flow
-  }
-  return NextResponse.json({ ok: true, ...publicResult })
+  return NextResponse.json(
+    {
+      error: 'apply-click endpoint retired',
+      code: 'APPLY_CLICK_DEPRECATED',
+      replacement: '/api/jobs/[id]/open?intent=apply',
+    },
+    { status: 410, headers: PRIVATE_NO_STORE_HEADERS },
+  )
 }

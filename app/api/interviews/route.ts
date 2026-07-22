@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { ClientSession } from 'mongoose'
 import { ZodError } from 'zod'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
@@ -11,7 +12,12 @@ import {
 } from '@shared/services/jobsAccountFence'
 import { connectDB } from '@shared/db/connection'
 import { AppError } from '@shared/errors'
-import { practiceHandoffHashOf, resolvePracticeHandoff } from '@jobs/services/practiceHandoff'
+import {
+  practiceHandoffHashOf,
+  fencePracticeSessionWrite,
+  resolvePracticeHandoff,
+  type JobsPracticeParsedJobDescription,
+} from '@jobs/services/practiceHandoff'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,7 +40,10 @@ export async function POST(req: NextRequest) {
 
     let config = validated.config
     let jobDescription = validated.config.jobDescription
-    let beforeJobDescriptionProviderCall: (() => Promise<boolean>) | undefined
+    let verifiedJobsParsedJobDescription: JobsPracticeParsedJobDescription | undefined
+    let beforeVerifiedJobsSessionWrite:
+      | ((dbSession: ClientSession) => Promise<boolean>)
+      | undefined
     let verifiedJobsAttribution:
       | {
           source: 'jobs'
@@ -58,13 +67,15 @@ export async function POST(req: NextRequest) {
         validated.jobsHandoffToken,
         session.user.id
       )
+      const handoffRole = handoff?.role
       if (
         !handoff ||
-        !handoff.role ||
+        !handoffRole ||
         claimedAttribution.jobId !== handoff.jobId ||
         !validated.config.jobDescription ||
         practiceHandoffHashOf(validated.config.jobDescription) !== handoff.jdHash ||
-        validated.config.role !== handoff.role
+        validated.config.role !== handoffRole ||
+        validated.config.experience !== handoff.experience
       ) {
         throw new AppError(
           'This job practice link expired or changed. Return to the job and start again.',
@@ -79,7 +90,8 @@ export async function POST(req: NextRequest) {
       }
       config = {
         ...validated.config,
-        role: handoff.role,
+        role: handoffRole,
+        experience: handoff.experience,
         jobDescription: handoff.jobDescription,
         targetCompany: handoff.company,
         attribution: canonicalAttribution,
@@ -91,22 +103,21 @@ export async function POST(req: NextRequest) {
         jdHash: handoff.jdHash,
         verifiedAt: new Date(),
       }
-      // The handoff check above proves authority at request time. JD parsing
-      // can start later and modelRouter may try more than one adapter, so
-      // re-resolve the same server token before every provider attempt. A
-      // revoked posting, ownership change, expired token, or CMS role outage
-      // therefore closes the model boundary instead of authorizing from this
-      // stale in-memory handoff.
-      beforeJobDescriptionProviderCall = async () => {
-        const current = await resolvePracticeHandoff(
-          validated.jobsHandoffToken!,
-          session.user.id
-        )
-        return !!current &&
-          current.jobId === handoff.jobId &&
-          current.jdHash === handoff.jdHash &&
-          current.role === handoff.role
-      }
+      verifiedJobsParsedJobDescription = handoff.parsedJobDescription
+      // Session creation performs no second JD model call. This Jobs-owned
+      // callback runs inside the same Mongo transaction as the User/profile
+      // fence and InterviewSession.create(), ordering source revoke and
+      // tracker deletion against the final persistence boundary.
+      beforeVerifiedJobsSessionWrite = (dbSession) => fencePracticeSessionWrite(
+        {
+          userId: session.user.id,
+          jobId: handoff.jobId,
+          jdHash: handoff.jdHash,
+          role: handoffRole,
+          ...(handoff.applicationId ? { applicationId: handoff.applicationId } : {}),
+        },
+        dbSession,
+      )
     }
 
     const interviewSession = await createSession({
@@ -114,7 +125,8 @@ export async function POST(req: NextRequest) {
       organizationId: session.user.organizationId,
       config,
       verifiedJobsAttribution,
-      beforeJobDescriptionProviderCall,
+      verifiedJobsParsedJobDescription,
+      beforeVerifiedJobsSessionWrite,
       templateId: validated.templateId,
       candidateEmail: validated.candidateEmail,
       candidateName: validated.candidateName,

@@ -7,6 +7,7 @@ const {
   mockGetSession,
   mockJobPostingFindById,
   mockJobApplicationExists,
+  mockUserFindById,
   mockPreparePractice,
   mockIsJobsAccountActive,
   mockConnectDB,
@@ -15,6 +16,7 @@ const {
   mockGetSession: vi.fn(),
   mockJobPostingFindById: vi.fn(),
   mockJobApplicationExists: vi.fn(),
+  mockUserFindById: vi.fn(),
   mockPreparePractice: vi.fn(),
   mockIsJobsAccountActive: vi.fn(),
   mockConnectDB: vi.fn(),
@@ -34,8 +36,11 @@ vi.mock('@interview/services/core/interviewService', () => ({
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: (...args: unknown[]) => mockJobPostingFindById(...args) },
   JobApplication: { exists: (...args: unknown[]) => mockJobApplicationExists(...args) },
+  User: { findById: (...args: unknown[]) => mockUserFindById(...args) },
 }))
 vi.mock('@jobs/services/practiceHandoff', () => ({
+  asPracticeExperienceLevel: (value: unknown) =>
+    value === '0-2' || value === '3-6' || value === '7+' ? value : undefined,
   preparePracticeHandoffPosting: (...args: unknown[]) => mockPreparePractice(...args),
 }))
 vi.mock('@shared/logger', () => ({
@@ -49,12 +54,21 @@ const VIEWER_ID = new mongoose.Types.ObjectId().toString()
 const SESSION_ID = new mongoose.Types.ObjectId().toString()
 const ROOT_ID = new mongoose.Types.ObjectId().toString()
 const JOB_ID = new mongoose.Types.ObjectId().toString()
+const OTHER_JOB_ID = new mongoose.Types.ObjectId().toString()
 const JD_HASH = 'a'.repeat(64)
 
 function postingResult(posting: { status: string; closedReason?: string } | null) {
   return {
     select: vi.fn().mockReturnValue({
       lean: vi.fn().mockResolvedValue(posting),
+    }),
+  }
+}
+
+function userResult(user: { experienceLevel?: string } | null) {
+  return {
+    select: vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue(user),
     }),
   }
 }
@@ -91,6 +105,7 @@ describe('POST /api/interviews/[id]/retake', () => {
     mockGetSession.mockResolvedValue(parent())
     mockJobPostingFindById.mockReturnValue(postingResult({ status: 'open' }))
     mockJobApplicationExists.mockResolvedValue(null)
+    mockUserFindById.mockReturnValue(userResult({ experienceLevel: '3-6' }))
     mockPreparePractice.mockResolvedValue({ jobDescription: 'JD', role: 'backend', jdHash: JD_HASH })
     mockConnectDB.mockResolvedValue(undefined)
     mockIsJobsAccountActive.mockResolvedValue(true)
@@ -129,15 +144,18 @@ describe('POST /api/interviews/[id]/retake', () => {
   })
 
   it('returns a verified Jobs practice intent and the root of a retake chain', async () => {
-    mockGetSession.mockResolvedValue(parent({
-      parentSessionId: { toString: () => ROOT_ID },
-      attribution: {
-        source: 'jobs',
-        jobId: JOB_ID,
-        handoffVersion: 1,
-        jdHash: JD_HASH,
-      },
-    }))
+    const attribution = {
+      source: 'jobs',
+      jobId: JOB_ID,
+      handoffVersion: 1,
+      jdHash: JD_HASH,
+    }
+    mockGetSession
+      .mockResolvedValueOnce(parent({
+        parentSessionId: { toString: () => ROOT_ID },
+        attribution,
+      }))
+      .mockResolvedValueOnce(parent({ _id: ROOT_ID, attribution }))
 
     const response = await callRoute()
     const body = await response.json()
@@ -148,6 +166,135 @@ describe('POST /api/interviews/[id]/retake', () => {
     expect(body.jobsPractice).toEqual({ jobId: JOB_ID })
     expect(mockJobPostingFindById).toHaveBeenCalledWith(JOB_ID)
     expect(mockJobApplicationExists).not.toHaveBeenCalled()
+    expect(mockGetSession).toHaveBeenNthCalledWith(
+      2,
+      ROOT_ID,
+      USER_ID,
+      'user',
+      undefined,
+      { excludeTranscript: true },
+    )
+  })
+
+  it.each([
+    [
+      'job identity',
+      parent({
+        _id: ROOT_ID,
+        attribution: {
+          source: 'jobs',
+          jobId: OTHER_JOB_ID,
+          handoffVersion: 1,
+          jdHash: JD_HASH,
+        },
+      }),
+    ],
+    [
+      'JD identity',
+      parent({
+        _id: ROOT_ID,
+        attribution: {
+          source: 'jobs',
+          jobId: JOB_ID,
+          handoffVersion: 1,
+          jdHash: 'b'.repeat(64),
+        },
+      }),
+    ],
+    [
+      'role',
+      parent({
+        _id: ROOT_ID,
+        config: {
+          role: 'frontend',
+          interviewType: 'behavioral',
+          experience: '3-6',
+          duration: 20,
+        },
+        attribution: {
+          source: 'jobs',
+          jobId: JOB_ID,
+          handoffVersion: 1,
+          jdHash: JD_HASH,
+        },
+      }),
+    ],
+    [
+      'experience',
+      parent({
+        _id: ROOT_ID,
+        config: {
+          role: 'backend',
+          interviewType: 'behavioral',
+          experience: '7+',
+          duration: 20,
+        },
+        attribution: {
+          source: 'jobs',
+          jobId: JOB_ID,
+          handoffVersion: 1,
+          jdHash: JD_HASH,
+        },
+      }),
+    ],
+    [
+      'ownership',
+      parent({
+        _id: ROOT_ID,
+        userId: { toString: () => VIEWER_ID },
+        attribution: {
+          source: 'jobs',
+          jobId: JOB_ID,
+          handoffVersion: 1,
+          jdHash: JD_HASH,
+        },
+      }),
+    ],
+  ])('falls back to generic retake when the root has %s drift', async (_label, root) => {
+    mockGetSession
+      .mockResolvedValueOnce(parent({
+        parentSessionId: { toString: () => ROOT_ID },
+        attribution: {
+          source: 'jobs',
+          jobId: JOB_ID,
+          handoffVersion: 1,
+          jdHash: JD_HASH,
+        },
+      }))
+      .mockResolvedValueOnce(root)
+
+    const response = await callRoute()
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.parentSessionId).toBe(ROOT_ID)
+    expect(body.jobsOrigin).toBe(true)
+    expect(body.jobsPractice).toBeUndefined()
+    expect(mockJobPostingFindById).not.toHaveBeenCalled()
+    expect(mockPreparePractice).not.toHaveBeenCalled()
+  })
+
+  it('falls back to generic retake when the root can no longer be loaded', async () => {
+    mockGetSession
+      .mockResolvedValueOnce(parent({
+        parentSessionId: { toString: () => ROOT_ID },
+        attribution: {
+          source: 'jobs',
+          jobId: JOB_ID,
+          handoffVersion: 1,
+          jdHash: JD_HASH,
+        },
+      }))
+      .mockRejectedValueOnce(new Error('root unavailable'))
+
+    const response = await callRoute()
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.parentSessionId).toBe(ROOT_ID)
+    expect(body.jobsOrigin).toBe(true)
+    expect(body.jobsPractice).toBeUndefined()
+    expect(mockJobPostingFindById).not.toHaveBeenCalled()
   })
 
   it('keeps a normally archived posting exact for its authenticated tracker owner', async () => {
@@ -214,6 +361,7 @@ describe('POST /api/interviews/[id]/retake', () => {
   it.each([
     ['the current JD hash changed', { jobDescription: 'Changed JD', role: 'backend', jdHash: 'b'.repeat(64) }],
     ['the CMS role is no longer active', { jobDescription: 'JD', jdHash: JD_HASH }],
+    ['the canonical role changed', { jobDescription: 'JD', role: 'frontend', jdHash: JD_HASH }],
   ])('falls back to generic retake when %s', async (_label, prepared) => {
     mockGetSession.mockResolvedValue(parent({
       attribution: {
@@ -224,6 +372,25 @@ describe('POST /api/interviews/[id]/retake', () => {
       },
     }))
     mockPreparePractice.mockResolvedValue(prepared)
+
+    const response = await callRoute()
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.jobsOrigin).toBe(true)
+    expect(body.jobsPractice).toBeUndefined()
+  })
+
+  it('falls back to generic retake when the profile experience benchmark changed', async () => {
+    mockGetSession.mockResolvedValue(parent({
+      attribution: {
+        source: 'jobs',
+        jobId: JOB_ID,
+        handoffVersion: 1,
+        jdHash: JD_HASH,
+      },
+    }))
+    mockUserFindById.mockReturnValue(userResult({ experienceLevel: '7+' }))
 
     const response = await callRoute()
     const body = await response.json()

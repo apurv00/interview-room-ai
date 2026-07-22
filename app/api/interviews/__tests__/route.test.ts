@@ -6,6 +6,7 @@ const {
   mockCreateSession,
   mockListSessions,
   mockResolvePracticeHandoff,
+  mockFencePracticeSessionWrite,
   mockConnectDB,
   mockIsJobsAccountActive,
   mockActiveJobsAccountIds,
@@ -14,6 +15,7 @@ const {
   mockCreateSession: vi.fn(),
   mockListSessions: vi.fn(),
   mockResolvePracticeHandoff: vi.fn(),
+  mockFencePracticeSessionWrite: vi.fn(),
   mockConnectDB: vi.fn(),
   mockIsJobsAccountActive: vi.fn(),
   mockActiveJobsAccountIds: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('@shared/services/jobsAccountFence', () => ({
 vi.mock('@jobs/services/practiceHandoff', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@jobs/services/practiceHandoff')>()),
   resolvePracticeHandoff: mockResolvePracticeHandoff,
+  fencePracticeSessionWrite: mockFencePracticeSessionWrite,
 }))
 vi.mock('@shared/logger', () => ({ logger: { error: vi.fn() } }))
 
@@ -44,6 +47,21 @@ const JOB_ID = '507f1f77bcf86cd799439011'
 const OTHER_JOB_ID = '507f1f77bcf86cd799439012'
 const JD = 'Backend role requiring Node.js and MongoDB. '.repeat(3)
 const SERVER_JD = JD.replace(/\. /g, '.\n\n').trim()
+const SERVER_PARSED_JD = {
+  rawText: SERVER_JD,
+  company: 'PhonePe',
+  role: 'Backend Engineer',
+  inferredDomain: 'backend',
+  requirements: [{
+    id: 'req-1',
+    category: 'technical' as const,
+    requirement: 'Build Node.js services',
+    importance: 'must-have' as const,
+    targetCompetencies: ['backend'],
+  }],
+  keyThemes: ['services'],
+  modelParsingSuppressed: true as const,
+}
 
 const baseConfig = {
   role: 'backend',
@@ -78,9 +96,12 @@ beforeEach(() => {
     jobDescription: SERVER_JD,
     jdHash: practiceHandoffHashOf(JD),
     company: 'PhonePe',
+    experience: '3-6',
+    parsedJobDescription: SERVER_PARSED_JD,
     role: 'backend',
     applicationId: 'canonical-app',
   })
+  mockFencePracticeSessionWrite.mockResolvedValue(true)
 })
 
 describe('GET /api/interviews account lifecycle', () => {
@@ -306,6 +327,7 @@ describe('POST /api/interviews Jobs handoff', () => {
     expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
       config: expect.objectContaining({
         role: 'backend',
+        experience: '3-6',
         jobDescription: SERVER_JD,
         targetCompany: 'PhonePe',
         attribution: {
@@ -323,27 +345,17 @@ describe('POST /api/interviews Jobs handoff', () => {
         jdHash: practiceHandoffHashOf(JD),
         verifiedAt: expect.any(Date),
       }),
-      beforeJobDescriptionProviderCall: expect.any(Function),
+      verifiedJobsParsedJobDescription: SERVER_PARSED_JD,
+      beforeVerifiedJobsSessionWrite: expect.any(Function),
     }))
   })
 
-  it('returns 409 when source revocation wins after handoff but before JD model egress', async () => {
-    mockResolvePracticeHandoff
-      .mockResolvedValueOnce({
-        jobId: JOB_ID,
-        jobDescription: SERVER_JD,
-        jdHash: practiceHandoffHashOf(JD),
-        company: 'PhonePe',
-        role: 'backend',
-        applicationId: 'canonical-app',
-      })
-      // Source revocation wins after the request handoff but before the
-      // parser's first provider attempt.
-      .mockResolvedValueOnce(null)
+  it('returns 409 when source revocation wins the transactional session fence', async () => {
+    mockFencePracticeSessionWrite.mockResolvedValueOnce(false)
     mockCreateSession.mockImplementationOnce(async (input: {
-      beforeJobDescriptionProviderCall?: () => Promise<boolean>
+      beforeVerifiedJobsSessionWrite?: (session: unknown) => Promise<boolean>
     }) => {
-      if (!(await input.beforeJobDescriptionProviderCall?.())) {
+      if (!(await input.beforeVerifiedJobsSessionWrite?.({ id: 'db-session' }))) {
         throw Object.assign(new Error('model provider precondition failed'), {
           name: 'ModelProviderPreconditionError',
         })
@@ -361,7 +373,17 @@ describe('POST /api/interviews Jobs handoff', () => {
 
     expect(response.status).toBe(409)
     expect(await response.json()).toMatchObject({ code: 'JOBS_HANDOFF_INVALID' })
-    expect(mockResolvePracticeHandoff).toHaveBeenNthCalledWith(2, 'signed-token', USER_ID)
+    expect(mockResolvePracticeHandoff).toHaveBeenCalledOnce()
+    expect(mockFencePracticeSessionWrite).toHaveBeenCalledWith(
+      {
+        userId: USER_ID,
+        jobId: JOB_ID,
+        jdHash: practiceHandoffHashOf(JD),
+        role: 'backend',
+        applicationId: 'canonical-app',
+      },
+      { id: 'db-session' },
+    )
   })
 
   it('rejects a browser role that differs from the re-resolved server role', async () => {
@@ -377,6 +399,76 @@ describe('POST /api/interviews Jobs handoff', () => {
     expect(response.status).toBe(409)
     expect(await response.json()).toMatchObject({ code: 'JOBS_HANDOFF_INVALID' })
     expect(mockCreateSession).not.toHaveBeenCalled()
+  })
+
+  it('rejects a browser experience that differs from the server profile', async () => {
+    const response = await POST(request({
+      config: {
+        ...baseConfig,
+        experience: '7+',
+        attribution: { source: 'jobs', jobId: JOB_ID },
+      },
+      jobsHandoffToken: 'signed-token',
+    }))
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ code: 'JOBS_HANDOFF_INVALID' })
+    expect(mockCreateSession).not.toHaveBeenCalled()
+  })
+
+  it.each(['0-2', '7+'] as const)(
+    'canonicalizes a valid Jobs session to server experience %s',
+    async (experience) => {
+      mockResolvePracticeHandoff.mockResolvedValue({
+        jobId: JOB_ID,
+        jobDescription: SERVER_JD,
+        jdHash: practiceHandoffHashOf(JD),
+        company: 'PhonePe',
+        experience,
+        parsedJobDescription: SERVER_PARSED_JD,
+        role: 'backend',
+        applicationId: 'canonical-app',
+      })
+
+      const response = await POST(request({
+        config: {
+          ...baseConfig,
+          experience,
+          attribution: { source: 'jobs', jobId: JOB_ID },
+        },
+        jobsHandoffToken: 'signed-token',
+      }))
+
+      expect(response.status).toBe(201)
+      expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+        config: expect.objectContaining({ experience }),
+      }))
+    },
+  )
+
+  it('fails the transactional fence when profile authority changes mid-flight', async () => {
+    mockFencePracticeSessionWrite.mockResolvedValueOnce(false)
+    mockCreateSession.mockImplementationOnce(async (input: {
+      beforeVerifiedJobsSessionWrite?: (session: unknown) => Promise<boolean>
+    }) => {
+      if (!(await input.beforeVerifiedJobsSessionWrite?.({ id: 'db-session' }))) {
+        throw Object.assign(new Error('model provider precondition failed'), {
+          name: 'ModelProviderPreconditionError',
+        })
+      }
+      return { _id: { toString: () => 'session-must-not-exist' } }
+    })
+
+    const response = await POST(request({
+      config: {
+        ...baseConfig,
+        attribution: { source: 'jobs', jobId: JOB_ID },
+      },
+      jobsHandoffToken: 'signed-token',
+    }))
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ code: 'JOBS_HANDOFF_INVALID' })
   })
 
   it.each([
@@ -430,6 +522,7 @@ describe('POST /api/interviews Jobs handoff', () => {
       jobDescription: SERVER_JD,
       jdHash: practiceHandoffHashOf(JD),
       company: 'PhonePe',
+      experience: '3-6',
     })
 
     const response = await POST(request({

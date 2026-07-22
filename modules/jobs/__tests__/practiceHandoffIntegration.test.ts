@@ -8,6 +8,8 @@ const {
   mockPostingExists,
   mockApplicationFindOne,
   mockApplicationExists,
+  mockUserFindById,
+  mockUserExists,
   mockGetServerSession,
   mockCreateSession,
   mockGetActiveCatalog,
@@ -18,6 +20,8 @@ const {
   mockPostingExists: vi.fn().mockResolvedValue({ _id: 'posting-authoritative' }),
   mockApplicationFindOne: vi.fn(),
   mockApplicationExists: vi.fn().mockResolvedValue({ _id: 'application-authoritative' }),
+  mockUserFindById: vi.fn(),
+  mockUserExists: vi.fn().mockResolvedValue({ _id: 'user-authoritative' }),
   mockGetServerSession: vi.fn(),
   mockCreateSession: vi.fn(),
   mockGetActiveCatalog: vi.fn(),
@@ -28,6 +32,7 @@ vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockPostingFindById, exists: mockPostingExists },
   JobApplication: { findOne: mockApplicationFindOne, exists: mockApplicationExists },
+  User: { findById: mockUserFindById, exists: mockUserExists },
 }))
 vi.mock('../services/baseResumeService', () => ({ getBaseResume: vi.fn() }))
 vi.mock('@resume', () => ({ getResume: vi.fn() }))
@@ -43,6 +48,13 @@ vi.mock('@interview/services/persona/domainCatalogService', () => ({
 }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
   isJobsAccountActive: mockIsJobsAccountActive,
+  activeJobsAccountFilter: (userId: string) => ({
+    _id: userId,
+    $or: [
+      { accountState: 'active' },
+      { accountState: { $exists: false } },
+    ],
+  }),
 }))
 
 import { getJobDetail } from '../services/feedService'
@@ -63,6 +75,20 @@ const ACTIVE_CATALOG = {
   authoritative: true,
   source: 'cms' as const,
 }
+const PARSED_JD = {
+  rawText: CANONICAL_JD,
+  company: 'Acme',
+  role: 'Mobile Engineer',
+  inferredDomain: 'mobile',
+  requirements: [{
+    id: 'req-1',
+    category: 'technical' as const,
+    requirement: 'Build reliable Kotlin applications',
+    importance: 'must-have' as const,
+    targetCompetencies: ['mobile'],
+  }],
+  keyThemes: ['reliability'],
+}
 
 function query(value: unknown) {
   return {
@@ -80,6 +106,8 @@ describe('authenticated Job detail → verified interview session', () => {
     mockCreateSession.mockResolvedValue({ _id: { toString: () => SESSION_ID } })
     mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
     mockIsJobsAccountActive.mockResolvedValue(true)
+    mockUserFindById.mockImplementation(() => query({ experienceLevel: '3-6' }))
+    mockUserExists.mockResolvedValue({ _id: USER_ID })
 
     const posting = {
       _id: JOB_ID,
@@ -92,7 +120,7 @@ describe('authenticated Job detail → verified interview session', () => {
       flags: {},
       // The source omitted a top-level domain. Practice becomes eligible
       // only through the current persisted X-ray and closed mapper.
-      parsedJD: { inferredDomain: 'mobile' },
+      parsedJD: PARSED_JD,
       parsedJDHash: xrayHashOf(CANONICAL_JD),
       parsedJDRoleVersion: ACTIVE_CATALOG.revision,
       jdCompressed: gzipSync(Buffer.from(CANONICAL_JD)),
@@ -115,6 +143,7 @@ describe('authenticated Job detail → verified interview session', () => {
     expect(detail).toMatchObject({
       jd: DISPLAY_JD,
       practiceRole: 'mobile',
+      practiceExperience: '3-6',
       practiceHandoffToken: expect.any(String),
     })
 
@@ -124,7 +153,7 @@ describe('authenticated Job detail → verified interview session', () => {
       body: JSON.stringify({
         config: {
           role: detail.practiceRole,
-          experience: '3-6',
+          experience: detail.practiceExperience,
           duration: 20,
           jobDescription: detail.jd,
           targetCompany: detail.company,
@@ -144,6 +173,7 @@ describe('authenticated Job detail → verified interview session', () => {
       userId: USER_ID,
       config: expect.objectContaining({
         role: 'mobile',
+        experience: '3-6',
         jobDescription: DISPLAY_JD,
         targetCompany: 'Acme',
         attribution: {
@@ -158,6 +188,11 @@ describe('authenticated Job detail → verified interview session', () => {
         applicationId: '507f1f77bcf86cd799439013',
         handoffVersion: 1,
       }),
+      verifiedJobsParsedJobDescription: {
+        ...PARSED_JD,
+        rawText: DISPLAY_JD,
+        modelParsingSuppressed: true,
+      },
     }))
   })
 
@@ -183,6 +218,9 @@ describe('authenticated Job detail → verified interview session', () => {
       status: 'open',
       provenance: [],
       flags: {},
+      parsedJD: PARSED_JD,
+      parsedJDHash: xrayHashOf(CANONICAL_JD),
+      parsedJDRoleVersion: customCatalog.revision,
       jdCompressed: gzipSync(Buffer.from(CANONICAL_JD)),
     }
     const application = {
@@ -203,7 +241,7 @@ describe('authenticated Job detail → verified interview session', () => {
       body: JSON.stringify({
         config: {
           role: detail.practiceRole,
-          experience: '3-6',
+          experience: detail.practiceExperience,
           duration: 20,
           jobDescription: detail.jd,
           targetCompany: detail.company,
@@ -215,7 +253,7 @@ describe('authenticated Job detail → verified interview session', () => {
 
     expect(response.status).toBe(201)
     expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
-      config: expect.objectContaining({ role: customRole }),
+      config: expect.objectContaining({ role: customRole, experience: '3-6' }),
     }))
   })
 })

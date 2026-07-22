@@ -1,17 +1,25 @@
 import { createHash, createHmac, timingSafeEqual } from 'crypto'
 import { gunzipSync } from 'zlib'
-import { isValidObjectId } from 'mongoose'
+import { isValidObjectId, type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { JobApplication, JobPosting, type IJobPosting } from '@shared/db/models'
+import { JobApplication, JobPosting, User, type IJobPosting } from '@shared/db/models'
+import type {
+  ExperienceLevel,
+  IParsedJobDescription,
+  ParsedRequirement,
+} from '@shared/types'
 import {
   INTERVIEW_JOB_DESCRIPTION_MAX_CHARS,
   INTERVIEW_TARGET_COMPANY_MAX_CHARS,
 } from '@shared/interviewContract'
-import { getActiveInterviewDomainCatalog } from '@interview/services/persona/domainCatalogService'
+import { getActiveInterviewDomainCatalog } from '@interview'
 import { interviewSlugForDomain } from '../config/domains'
-import { xrayHashOf } from './xrayService'
+import { getOrParseXray, xrayHashOf } from './xrayService'
 import { jobPostingStateOf } from './postingAccess'
-import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
+import {
+  activeJobsAccountFilter,
+  isJobsAccountActive,
+} from '@shared/services/jobsAccountFence'
 
 const TOKEN_TYPE = 'jobs-practice'
 const TOKEN_VERSION = 1
@@ -32,8 +40,37 @@ export interface ResolvedPracticeHandoff {
   jobDescription: string
   jdHash: string
   company: string
+  experience: ExperienceLevel
+  parsedJobDescription: JobsPracticeParsedJobDescription
   role?: string
   applicationId?: string
+}
+
+export interface PracticeSessionWriteFenceInput {
+  userId: string
+  jobId: string
+  jdHash: string
+  role: string
+  applicationId?: string
+}
+
+/**
+ * A Jobs Practice session must never invoke the interview module's second JD
+ * parser. Exact cached X-ray evidence is carried through as-is; raw-only
+ * archived/fallback context carries this marker so later runtime cache misses
+ * also remain on the raw-JD path.
+ */
+export type JobsPracticeParsedJobDescription = IParsedJobDescription & {
+  modelParsingSuppressed: true
+}
+
+const PRACTICE_EXPERIENCE_LEVELS = new Set<ExperienceLevel>(['0-2', '3-6', '7+'])
+
+/** Narrow untrusted profile data to the shared interview experience contract. */
+export function asPracticeExperienceLevel(value: unknown): ExperienceLevel | undefined {
+  return typeof value === 'string' && PRACTICE_EXPERIENCE_LEVELS.has(value as ExperienceLevel)
+    ? value as ExperienceLevel
+    : undefined
 }
 
 interface PracticePostingSnapshot {
@@ -55,6 +92,81 @@ export interface PreparedPracticeHandoff {
   jdHash?: string
   /** Present only when the canonical snapshot resolves through the closed taxonomy. */
   role?: string
+  /** Exact persisted X-ray for this JD version, restored with its raw text. */
+  parsedJobDescription?: JobsPracticeParsedJobDescription
+}
+
+const PARSED_REQUIREMENT_CATEGORIES = new Set<ParsedRequirement['category']>([
+  'technical',
+  'behavioral',
+  'experience',
+  'education',
+  'cultural',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function practiceParsedJobDescriptionOf(
+  value: unknown,
+  jobDescription: string,
+): JobsPracticeParsedJobDescription | undefined {
+  if (!isRecord(value)) return undefined
+  if (
+    typeof value.company !== 'string' ||
+    typeof value.role !== 'string' ||
+    typeof value.inferredDomain !== 'string' ||
+    !Array.isArray(value.keyThemes) ||
+    !value.keyThemes.every((theme) => typeof theme === 'string') ||
+    !Array.isArray(value.requirements)
+  ) return undefined
+
+  const requirements: ParsedRequirement[] = []
+  for (const candidate of value.requirements) {
+    if (
+      !isRecord(candidate) ||
+      typeof candidate.id !== 'string' ||
+      !candidate.id ||
+      !PARSED_REQUIREMENT_CATEGORIES.has(candidate.category as ParsedRequirement['category']) ||
+      typeof candidate.requirement !== 'string' ||
+      !candidate.requirement ||
+      (candidate.importance !== 'must-have' && candidate.importance !== 'nice-to-have') ||
+      !Array.isArray(candidate.targetCompetencies) ||
+      !candidate.targetCompetencies.every((competency) => typeof competency === 'string')
+    ) return undefined
+    requirements.push({
+      id: candidate.id,
+      category: candidate.category as ParsedRequirement['category'],
+      requirement: candidate.requirement,
+      importance: candidate.importance,
+      targetCompetencies: [...candidate.targetCompetencies] as string[],
+    })
+  }
+
+  return {
+    rawText: jobDescription,
+    company: value.company,
+    role: value.role,
+    inferredDomain: value.inferredDomain,
+    requirements,
+    keyThemes: [...value.keyThemes] as string[],
+    modelParsingSuppressed: true,
+  }
+}
+
+function rawOnlyPracticeParsedJobDescription(
+  jobDescription: string,
+): JobsPracticeParsedJobDescription {
+  return {
+    rawText: jobDescription,
+    company: '',
+    role: '',
+    inferredDomain: '',
+    requirements: [],
+    keyThemes: [],
+    modelParsingSuppressed: true,
+  }
 }
 
 function exactPracticePostingAuthorityFilter(
@@ -168,6 +280,9 @@ export async function preparePracticeHandoffPosting(
     ? (posting.parsedJD as { inferredDomain?: unknown } | null | undefined)?.inferredDomain
     : undefined
   const cachedParsedRole = typeof parsedDomain === 'string' ? parsedDomain : undefined
+  const parsedJobDescription = posting.parsedJDHash === xrayHashOf(canonicalJd)
+    ? practiceParsedJobDescriptionOf(posting.parsedJD, jobDescription)
+    : undefined
   // A declared domain is an explicit classification. If it is malformed or
   // CMS-inactive, do not bypass that operator decision with an inferred role.
   const role = hasDeclaredDomain
@@ -178,6 +293,7 @@ export async function preparePracticeHandoffPosting(
     jobDescription,
     jdHash,
     ...(role ? { role } : {}),
+    ...(parsedJobDescription ? { parsedJobDescription } : {}),
   }
 }
 
@@ -241,6 +357,68 @@ function verifyPracticeHandoffToken(
 }
 
 /**
+ * Final Jobs authority fence for interview-session persistence.
+ *
+ * The caller runs this inside the same Mongo transaction as the User fence
+ * and InterviewSession.create(). The revision writes force a document-level
+ * conflict with source revoke/JD lifecycle changes and tracker deletion:
+ * revoke/delete-first makes this retry against new truth; session-first
+ * establishes that the session was authorized earlier in the total order.
+ * This function never parses a JD or calls a model.
+ */
+export async function fencePracticeSessionWrite(
+  input: PracticeSessionWriteFenceInput,
+  dbSession: ClientSession,
+): Promise<boolean> {
+  const posting = await JobPosting.findById(input.jobId)
+    .select('domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
+    .session(dbSession)
+    .lean()
+  if (!posting || (posting.status !== 'open' && posting.status !== 'closed')) return false
+  const postingState = jobPostingStateOf(posting)
+  if (postingState === 'restricted') return false
+  if (postingState === 'archived' && !input.applicationId) return false
+
+  const prepared = await preparePracticeHandoffPosting(posting)
+  if (
+    prepared.jdHash !== input.jdHash ||
+    prepared.role !== input.role ||
+    prepared.jobDescription.length > INTERVIEW_JOB_DESCRIPTION_MAX_CHARS
+  ) return false
+
+  const postingFence = await JobPosting.updateOne(
+    {
+      ...exactPracticePostingAuthorityFilter(input.jobId, posting),
+      domain: posting.domain === undefined ? { $exists: false } : posting.domain,
+      parsedJDHash: posting.parsedJDHash === undefined
+        ? { $exists: false }
+        : posting.parsedJDHash,
+      parsedJDRoleVersion: posting.parsedJDRoleVersion === undefined
+        ? { $exists: false }
+        : posting.parsedJDRoleVersion,
+    },
+    { $inc: { derivedAuthorityRevision: 1 } },
+    { session: dbSession, timestamps: false },
+  )
+  if ((postingFence.matchedCount ?? 0) !== 1) return false
+
+  if (input.applicationId) {
+    const applicationFence = await JobApplication.updateOne(
+      {
+        _id: input.applicationId,
+        userId: input.userId,
+        jobPostingId: input.jobId,
+      },
+      { $inc: { derivedAuthorityRevision: 1 } },
+      { session: dbSession, timestamps: false },
+    )
+    if ((applicationFence.matchedCount ?? 0) !== 1) return false
+  }
+
+  return true
+}
+
+/**
  * Verify the user-bound intent, then re-resolve JD and application identity
  * from server state. Browser job/JD/application fields are never authority.
  */
@@ -259,56 +437,87 @@ export async function resolvePracticeHandoff(
 
   await connectDB()
   if (!(await isJobsAccountActive(userId))) return null
-  const posting = await JobPosting.findById(payload.jid)
-    .select('company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
+  const profile = await User.findById(userId)
+    .select('experienceLevel')
     .lean()
-  if (!posting || (posting.status !== 'open' && posting.status !== 'closed')) return null
-  const postingState = jobPostingStateOf(posting)
-  if (postingState === 'restricted') return null
+  const experience = asPracticeExperienceLevel(profile?.experienceLevel)
+  if (!experience) return null
+  let liveParseResult: unknown
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const posting = await JobPosting.findById(payload.jid)
+      .select('company domain status closedReason parsedJD parsedJDHash parsedJDRoleVersion jdCompressed jdDisplayCompressed updatedAt')
+      .lean()
+    if (!posting || (posting.status !== 'open' && posting.status !== 'closed')) return null
+    const postingState = jobPostingStateOf(posting)
+    if (postingState === 'restricted') return null
 
-  // A token minted while a posting was open must not become an archive
-  // entitlement by itself. Once closed, the tracker row is the durable
-  // ownership proof; resolve it before returning any saved JD context.
-  let application = postingState === 'archived'
-    ? await JobApplication.findOne({ userId, jobPostingId: payload.jid })
+    // A token minted while a posting was open must not become an archive
+    // entitlement by itself. Once closed, the tracker row is the durable
+    // ownership proof; resolve it before returning any saved JD context.
+    let application = postingState === 'archived'
+      ? await JobApplication.findOne({ userId, jobPostingId: payload.jid })
+          .select('_id')
+          .lean()
+      : null
+    if (postingState === 'archived' && !application) return null
+
+    const prepared = await preparePracticeHandoffPosting(posting)
+    if (!prepared.jdHash || prepared.jdHash !== payload.jdh) return null
+
+    let parsedJobDescription = prepared.parsedJobDescription ?? (
+      liveParseResult
+        ? practiceParsedJobDescriptionOf(liveParseResult, prepared.jobDescription)
+        : undefined
+    )
+    if (postingState === 'live' && !parsedJobDescription && attempt === 0) {
+      // The detail can offer immediate Practice for a declared domain before
+      // X-ray has been opened. Route that first structured parse through the
+      // posting cache, then re-read the exact lifecycle/JD snapshot; never
+      // run the interview session's private second parser.
+      const xray = await getOrParseXray(payload.jid, userId)
+      if (!xray) return null
+      liveParseResult = xray.parsed
+      continue
+    }
+    parsedJobDescription ??= rawOnlyPracticeParsedJobDescription(prepared.jobDescription)
+
+    if (postingState === 'live') {
+      application = await JobApplication.findOne({ userId, jobPostingId: payload.jid })
         .select('_id')
         .lean()
-    : null
-  if (postingState === 'archived' && !application) return null
+    }
 
-  const prepared = await preparePracticeHandoffPosting(posting)
-  if (!prepared.jdHash || prepared.jdHash !== payload.jdh) return null
+    const exactPostingAuthority = exactPracticePostingAuthorityFilter(payload.jid, posting)
+    const [postingStillAuthoritative, applicationStillExists, profileStillAuthoritative] = await Promise.all([
+      JobPosting.exists(exactPostingAuthority),
+      application
+        ? JobApplication.exists({ _id: application._id, userId, jobPostingId: payload.jid })
+        : Promise.resolve(true),
+      User.exists({
+        ...activeJobsAccountFilter(userId),
+        experienceLevel: experience,
+      }),
+    ])
+    // Preparation awaits CMS authority and archived ownership is itself an
+    // entitlement. Neither a stale token nor an earlier read may outlive a
+    // committed source restriction/ownership deletion.
+    if (
+      !profileStillAuthoritative ||
+      !postingStillAuthoritative ||
+      (postingState === 'archived' && !applicationStillExists)
+    ) return null
+    if (!applicationStillExists) application = null
 
-  if (postingState === 'live') {
-    application = await JobApplication.findOne({ userId, jobPostingId: payload.jid })
-      .select('_id')
-      .lean()
+    return {
+      jobId: payload.jid,
+      jobDescription: prepared.jobDescription,
+      jdHash: payload.jdh,
+      company: String(posting.company ?? '').slice(0, INTERVIEW_TARGET_COMPANY_MAX_CHARS),
+      experience,
+      parsedJobDescription,
+      ...(prepared.role ? { role: prepared.role } : {}),
+      applicationId: application ? String(application._id) : undefined,
+    }
   }
-
-  const exactPostingAuthority = exactPracticePostingAuthorityFilter(payload.jid, posting)
-  const [postingStillAuthoritative, applicationStillExists, accountStillActive] = await Promise.all([
-    JobPosting.exists(exactPostingAuthority),
-    application
-      ? JobApplication.exists({ _id: application._id, userId, jobPostingId: payload.jid })
-      : Promise.resolve(true),
-    isJobsAccountActive(userId),
-  ])
-  // Preparation awaits CMS authority and archived ownership is itself an
-  // entitlement. Neither a stale token nor an earlier read may outlive a
-  // committed source restriction/ownership deletion.
-  if (
-    !accountStillActive ||
-    !postingStillAuthoritative ||
-    (postingState === 'archived' && !applicationStillExists)
-  ) return null
-  if (!applicationStillExists) application = null
-
-  return {
-    jobId: payload.jid,
-    jobDescription: prepared.jobDescription,
-    jdHash: payload.jdh,
-    company: String(posting.company ?? '').slice(0, INTERVIEW_TARGET_COMPANY_MAX_CHARS),
-    ...(prepared.role ? { role: prepared.role } : {}),
-    applicationId: application ? String(application._id) : undefined,
-  }
+  return null
 }
