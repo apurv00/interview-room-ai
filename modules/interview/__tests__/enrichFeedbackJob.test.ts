@@ -106,10 +106,6 @@ describe('enrichFeedbackJob handler', () => {
             enrichmentClaimToken: { $in: [null, ''] },
           },
           { enrichmentStatus: { $exists: false } },
-          {
-            enrichmentStatus: 'running',
-            enrichmentClaimToken: { $in: [null, ''] },
-          },
           { enrichmentStatus: 'running', enrichmentClaimToken: 'event-1' },
         ],
       },
@@ -247,6 +243,23 @@ describe('enrichFeedbackJob handler', () => {
 
     expect(mockUpdateOne).not.toHaveBeenCalled()
     expect(mockRunEnrichment).not.toHaveBeenCalled()
+  })
+
+  it('does not adopt a tokenless running row from an active old worker', async () => {
+    mockUpdateOne.mockResolvedValue({ matchedCount: 0, modifiedCount: 0 })
+
+    const out = await runEnrichFeedbackJobHandler(
+      { id: 'delayed-event', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+      step,
+    )
+
+    expect(out.status).toBe('skipped')
+    expect(mockRunEnrichment).not.toHaveBeenCalled()
+    const filter = mockUpdateOne.mock.calls[0][0] as { $or: unknown[] }
+    expect(filter.$or).not.toContainEqual({
+      enrichmentStatus: 'running',
+      enrichmentClaimToken: { $in: [null, ''] },
+    })
   })
 
   it('union-merges ideal_answers by questionIndex — a backfill run never drops existing entries', async () => {

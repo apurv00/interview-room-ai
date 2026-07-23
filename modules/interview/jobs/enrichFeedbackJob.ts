@@ -85,12 +85,6 @@ export async function runEnrichFeedbackJobHandler(
           // Compatibility for events accepted just before the pending-first
           // enqueue rollout. The CAS still admits only one worker.
           { [STATUS_FIELDS.status]: { $exists: false } },
-          // Rolling-deploy compatibility for an old mark-running step whose
-          // Mongo write committed before its step result was checkpointed.
-          {
-            [STATUS_FIELDS.status]: 'running',
-            [STATUS_FIELDS.claimToken]: { $in: [null, ''] },
-          },
           // The same Inngest event may retry after Mongo committed this
           // claim but before the step result was checkpointed.
           {
