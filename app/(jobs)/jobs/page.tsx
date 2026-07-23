@@ -171,6 +171,20 @@ const TIER_BADGE: Record<string, string> = {
   'aggregator-redirect': 'Redirect link',
 }
 
+function JobsFeedHeader() {
+  return (
+    <>
+      <div className="flex items-baseline justify-between">
+        <h1 className="text-2xl font-semibold">Jobs</h1>
+        <Link href="/jobs/tracker" className="text-sm text-blue-600 hover:underline">My tracker</Link>
+      </div>
+      <p className="mt-2 text-sm text-slate-600">
+        Browse live job postings and filter by role, company, location, experience, or freshness.
+      </p>
+    </>
+  )
+}
+
 function JobsFeedSkeleton() {
   return (
     <div className="mt-8 space-y-3" aria-label="Loading jobs">
@@ -381,6 +395,7 @@ function JobsFeed() {
   if (!targetIdentityReady) {
     return (
       <main className="mx-auto max-w-4xl px-4 py-10" aria-label="Job feed">
+        <JobsFeedHeader />
         <JobsFeedSkeleton />
       </main>
     )
@@ -401,10 +416,7 @@ function JobsFeed() {
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10" aria-label="Job feed">
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold">Jobs</h1>
-        <Link href="/jobs/tracker" className="text-sm text-blue-600 hover:underline">My tracker</Link>
-      </div>
+      <JobsFeedHeader />
 
       <JobsDiscoveryControls value={publicQuery} onApply={(next) => navigateToQuery(next)} />
 
@@ -557,7 +569,12 @@ function JobsFeed() {
 
 export default function JobsPage() {
   return (
-    <Suspense fallback={<main className="mx-auto max-w-4xl px-4 py-10"><JobsFeedSkeleton /></main>}>
+    <Suspense fallback={(
+      <main className="mx-auto max-w-4xl px-4 py-10" aria-label="Job feed">
+        <JobsFeedHeader />
+        <JobsFeedSkeleton />
+      </main>
+    )}>
       <JobsFeed />
     </Suspense>
   )
