@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import mongoose from 'mongoose'
+import { randomUUID } from 'node:crypto'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
@@ -17,6 +18,7 @@ import { inngest } from '@shared/services/inngest'
  * questions deserve coaching.
  */
 const WEAK_QUESTION_SCORE_THRESHOLD = 60
+const PENDING_RECOVERY_AFTER_MS = 2 * 60 * 1000
 
 function avgEvaluationScore(evaluation: AnswerEvaluation): number {
   return Math.round(
@@ -83,12 +85,16 @@ export async function GET(req: NextRequest) {
         evaluations: 1,
         'feedback.ideal_answers': 1,
         enrichmentStatus: 1,
+        updatedAt: 1,
       })
+      .select('+enrichmentClaimToken')
       .lean<{
         config?: { role?: string; interviewType?: string }
         evaluations?: AnswerEvaluation[]
         feedback?: Pick<FeedbackData, 'ideal_answers'>
         enrichmentStatus?: string
+        enrichmentClaimToken?: string
+        updatedAt?: Date
       }>()
 
     if (!doc) {
@@ -107,29 +113,89 @@ export async function GET(req: NextRequest) {
     // the feedback slot). The job regenerates the complete ideal_answers
     // set at 'high' and persists it; THIS request returns the existing
     // QuestionInsightStrip fallback immediately, and the outline is there
-    // for the next visit (or the page's own refresh). Dedupe: skip the
-    // send when a job is already pending/running for this session.
+    // for the next visit (or the page's own refresh). A conditional pending
+    // claim, not this read projection, is the concurrency authority.
     if (!idealAnswer && evaluation) {
       const avg = avgEvaluationScore(evaluation)
-      const jobActive = doc.enrichmentStatus === 'pending' || doc.enrichmentStatus === 'running'
+      const pendingClaimToken =
+        typeof doc.enrichmentClaimToken === 'string' && doc.enrichmentClaimToken.length > 0
+          ? doc.enrichmentClaimToken
+          : null
+      const stalePendingBefore = new Date(Date.now() - PENDING_RECOVERY_AFTER_MS)
+      const updatedAtMs = doc.updatedAt?.getTime() ?? Number.NaN
+      const tokenlessPendingIsStale =
+        doc.enrichmentStatus === 'pending' &&
+        !pendingClaimToken &&
+        (!Number.isFinite(updatedAtMs) || updatedAtMs <= stalePendingBefore.getTime())
+      const jobActive =
+        doc.enrichmentStatus === 'running' ||
+        (doc.enrichmentStatus === 'pending' && !pendingClaimToken && !tokenlessPendingIsStale)
       if (avg < WEAK_QUESTION_SCORE_THRESHOLD && !jobActive) {
-        inngest
-          .send({
-            name: 'feedback/enrich.requested',
-            data: { sessionId, userId: session.user.id, reason: 'drill-backfill', questionIndex },
-          })
-          .then(() =>
-            InterviewSession.updateOne(
-              { _id: new mongoose.Types.ObjectId(sessionId) },
-              { $set: { enrichmentStatus: 'pending' } },
-            ),
+        const sessionObjectId = new mongoose.Types.ObjectId(sessionId)
+        const userObjectId = new mongoose.Types.ObjectId(session.user.id)
+        let enqueueToken = pendingClaimToken
+        if (!enqueueToken) {
+          const candidateToken = randomUUID()
+          const claim = await InterviewSession.updateOne(
+            {
+              _id: sessionObjectId,
+              userId: userObjectId,
+              $or: [
+                { enrichmentStatus: { $nin: ['pending', 'running'] } },
+                {
+                  enrichmentStatus: 'pending',
+                  enrichmentClaimToken: { $in: [null, ''] },
+                  $or: [
+                    { updatedAt: { $lte: stalePendingBefore } },
+                    { updatedAt: { $exists: false } },
+                  ],
+                },
+              ],
+            },
+            {
+              $set: {
+                enrichmentStatus: 'pending',
+                enrichmentClaimToken: candidateToken,
+              },
+              $unset: { enrichmentError: 1, enrichmentCompletedAt: 1 },
+            },
           )
-          .catch((err) =>
+          if ((claim.modifiedCount ?? 0) === 1) enqueueToken = candidateToken
+        }
+        if (enqueueToken) {
+          try {
+            await inngest.send({
+              id: enqueueToken,
+              name: 'feedback/enrich.requested',
+              data: { sessionId, userId: session.user.id, reason: 'drill-backfill', questionIndex },
+            })
+          } catch (err) {
+            await InterviewSession.updateOne(
+              {
+                _id: sessionObjectId,
+                userId: userObjectId,
+                enrichmentStatus: 'pending',
+                enrichmentClaimToken: enqueueToken,
+              },
+              {
+                $set: {
+                  enrichmentStatus: 'failed',
+                  enrichmentError: `enqueue failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
+                },
+                $unset: { enrichmentClaimToken: 1 },
+              },
+            ).catch((rollbackErr) => {
+              logger.error(
+                { err: rollbackErr, sessionId, questionIndex },
+                'drill-backfill enrichment claim rollback failed',
+              )
+            })
             logger.warn(
               { err, sessionId, questionIndex },
               'drill-backfill enrichment enqueue failed; falling back to insight strip',
-            ),
-          )
+            )
+          }
+        }
       }
     }
 

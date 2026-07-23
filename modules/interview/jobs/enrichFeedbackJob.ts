@@ -54,20 +54,62 @@ const STATUS_FIELDS = {
   status: 'enrichmentStatus',
   error: 'enrichmentError',
   completedAt: 'enrichmentCompletedAt',
+  claimToken: 'enrichmentClaimToken',
 } as const
 
 export async function runEnrichFeedbackJobHandler(
-  event: { data: EnrichFeedbackJobEventData },
+  event: { id: string; data: EnrichFeedbackJobEventData },
   step: EnrichJobStepRunner,
 ): Promise<{ sessionId: string; status: 'completed' | 'skipped'; idealAnswers?: number }> {
   const { sessionId, userId, reason, questionIndex } = event.data
+  if (typeof event.id !== 'string' || event.id.trim().length === 0) {
+    throw new Error('enrichFeedbackJob: missing Inngest event id')
+  }
+  const claimToken = event.id
 
-  await step.run('mark-running', async () => {
+  const claimed = await step.run<boolean | null | undefined>('mark-running', async () => {
     await connectDB()
-    await InterviewSession.findByIdAndUpdate(sessionId, {
-      $set: { [STATUS_FIELDS.status]: 'running' },
-    })
+    const result = await InterviewSession.updateOne(
+      {
+        _id: sessionId,
+        userId,
+        $or: [
+          {
+            [STATUS_FIELDS.status]: 'pending',
+            [STATUS_FIELDS.claimToken]: claimToken,
+          },
+          {
+            [STATUS_FIELDS.status]: 'pending',
+            [STATUS_FIELDS.claimToken]: { $in: [null, ''] },
+          },
+          // Compatibility for events accepted just before the pending-first
+          // enqueue rollout. The CAS still admits only one worker.
+          { [STATUS_FIELDS.status]: { $exists: false } },
+          // The same Inngest event may retry after Mongo committed this
+          // claim but before the step result was checkpointed.
+          {
+            [STATUS_FIELDS.status]: 'running',
+            [STATUS_FIELDS.claimToken]: claimToken,
+          },
+        ],
+      },
+      {
+        $set: {
+          [STATUS_FIELDS.status]: 'running',
+          [STATUS_FIELDS.claimToken]: claimToken,
+        },
+        $unset: {
+          [STATUS_FIELDS.error]: 1,
+          [STATUS_FIELDS.completedAt]: 1,
+        },
+      },
+    )
+    return (result.matchedCount ?? result.modifiedCount ?? 0) === 1
   })
+  // Keep the pre-rollout step id so an invocation resumed during deployment
+  // reuses its completed step. Its legacy callback returned no value; only an
+  // explicit false can mean the new CAS lost to another worker.
+  if (claimed === false) return { sessionId, status: 'skipped' }
 
   // Minimal event payload discipline: re-read the heavy data here. By the
   // time Inngest delivers (typically <2s), generate-feedback's awaited
@@ -149,7 +191,10 @@ export async function runEnrichFeedbackJobHandler(
         setFields['feedback.drill_recommendations'] = enrichment.drill_recommendations
       }
     }
-    await InterviewSession.findByIdAndUpdate(sessionId, { $set: setFields })
+    await InterviewSession.findByIdAndUpdate(sessionId, {
+      $set: setFields,
+      $unset: { [STATUS_FIELDS.claimToken]: 1 },
+    })
   })
 
   if (enrichment) {
@@ -193,6 +238,7 @@ async function markFailed(sessionId: string, message: string): Promise<void> {
         [STATUS_FIELDS.status]: 'failed',
         [STATUS_FIELDS.error]: message.slice(0, 500),
       },
+      $unset: { [STATUS_FIELDS.claimToken]: 1 },
     })
   } catch (dbErr) {
     aiLogger.error(
@@ -224,7 +270,7 @@ export const enrichFeedbackJob = inngest.createFunction(
   },
   async ({ event, step }) =>
     runEnrichFeedbackJobHandler(
-      event as unknown as { data: EnrichFeedbackJobEventData },
+      event as unknown as { id: string; data: EnrichFeedbackJobEventData },
       step as unknown as EnrichJobStepRunner,
     ),
 )
