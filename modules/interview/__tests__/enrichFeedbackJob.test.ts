@@ -226,6 +226,18 @@ describe('enrichFeedbackJob handler', () => {
     expect(mockTrackUsage).toHaveBeenCalledTimes(1)
   })
 
+  it('fails closed before Mongo when the claim token is missing', async () => {
+    await expect(
+      runEnrichFeedbackJobHandler(
+        { id: '', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+        step,
+      ),
+    ).rejects.toThrow('missing Inngest event id')
+
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockRunEnrichment).not.toHaveBeenCalled()
+  })
+
   it('union-merges ideal_answers by questionIndex — a backfill run never drops existing entries', async () => {
     mockFindOne.mockReturnValue(
       sessionDoc({

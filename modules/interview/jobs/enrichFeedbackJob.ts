@@ -62,6 +62,9 @@ export async function runEnrichFeedbackJobHandler(
   step: EnrichJobStepRunner,
 ): Promise<{ sessionId: string; status: 'completed' | 'skipped'; idealAnswers?: number }> {
   const { sessionId, userId, reason, questionIndex } = event.data
+  if (typeof event.id !== 'string' || event.id.trim().length === 0) {
+    throw new Error('enrichFeedbackJob: missing Inngest event id')
+  }
   const claimToken = event.id
 
   const claimed = await step.run<boolean | null | undefined>('mark-running', async () => {
