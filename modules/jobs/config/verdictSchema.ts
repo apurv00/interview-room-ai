@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { JOB_DOMAINS } from './domains'
 
@@ -10,10 +11,10 @@ import { JOB_DOMAINS } from './domains'
  * verdict stays `pending` (≡ rules-only serving), never a fabricated
  * `genuine`.
  *
- * PROMPT_VERSION is part of the epoch (`model:promptVersion`) and of
- * verdictInputHash — bump it whenever buildVerdictPrompt's wording, field
- * set, or this schema changes, or cached/stored verdicts would silently
- * carry semantics the new prompt no longer has.
+ * PROMPT_VERSION is part of the full execution epoch and verdictInputHash —
+ * bump it whenever buildVerdictPrompt's wording, field set, or this schema
+ * changes, or cached/stored verdicts would silently carry semantics the new
+ * prompt no longer has.
  */
 export const PROMPT_VERSION = 'v2' // v2 2026-07-14: explicit code-class coherence rule in the calibration line
 
@@ -91,6 +92,19 @@ export const JobVerdictSchema = z
 export type JobVerdict = z.infer<typeof JobVerdictSchema>
 
 /** Verdicts are immutable within an epoch; cutover = founder-triggered re-classification (ruling #8). */
-export function epochOf(model: string): string {
-  return `${model}:${PROMPT_VERSION}`
+export function epochOf(config: {
+  model: string
+  provider: string
+  maxTokens: number
+  temperature?: number
+  reasoningEffort?: string
+}): string {
+  const digest = createHash('sha256').update(JSON.stringify({
+    model: config.model,
+    provider: config.provider,
+    maxTokens: config.maxTokens,
+    temperature: config.temperature ?? null,
+    reasoningEffort: config.reasoningEffort ?? null,
+  })).digest('hex')
+  return `${config.provider}:${config.model}:${PROMPT_VERSION}:${digest}`
 }

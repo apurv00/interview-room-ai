@@ -1,8 +1,9 @@
 import {
   completion,
   ModelProviderPreconditionError,
-  resolveModel,
+  resolveModelWithAuthority,
   type CompletionResult,
+  type ResolvedModel,
 } from '@shared/services/modelRouter'
 import { TASK_SLOT_DEFAULTS } from '@shared/services/taskSlots'
 import { logger } from '@shared/logger'
@@ -31,24 +32,28 @@ const CACHE_TTL_SECONDS = 30 * 24 * 3600
 
 export const VERDICT_SLOT = 'jobs.evaluate-posting' as const
 
-export function expectedVerdictModel(): string {
-  return TASK_SLOT_DEFAULTS[VERDICT_SLOT].model
+export function defaultVerdictRoute(): ResolvedModel {
+  return {
+    ...TASK_SLOT_DEFAULTS[VERDICT_SLOT],
+    useToonInput: false,
+  }
 }
 
 /**
- * The epoch model must be the model completion() will actually serve — an
- * active CMS ModelConfig row overrides code defaults (established router
- * behavior), and pinning the epoch to defaults would turn every verdict
- * into a paid-then-rejected model-mismatch after a CMS cutover
- * (adversarial review of Wave 2.3). Falls back to the code default when
- * the router config is unreadable.
+ * Resolve the complete route once so epoch/hash identity and completion()
+ * use the same provider, model, and controls throughout one worker run.
+ * A synthetic cold default cannot authorize durable verdicts because it may
+ * differ from the CMS route that finishes loading moments later.
  */
-export async function resolveExpectedVerdictModel(): Promise<string> {
-  try {
-    return (await resolveModel(VERDICT_SLOT)).model
-  } catch {
-    return expectedVerdictModel()
+export async function resolveExpectedVerdictRoute(): Promise<ResolvedModel> {
+  const authority = await resolveModelWithAuthority(
+    VERDICT_SLOT,
+    { waitForAuthoritative: true },
+  )
+  if (!authority.authoritative) {
+    throw new Error('authoritative Jobs verdict route is unavailable')
   }
+  return authority.resolved
 }
 
 export type EvaluationOutcome =
@@ -85,8 +90,8 @@ export interface EvaluatorDeps {
    * budget, and prompt work that may have raced a legal source transition.
    */
   beforeModelCall?: () => Promise<boolean>
-  /** CMS-resolved epoch model (resolveExpectedVerdictModel) — callers resolve once per run. */
-  expectedModel?: string
+  /** CMS-resolved route — callers resolve once per run and pin every attempt to it. */
+  resolvedModel?: ResolvedModel
   /** USD per 1M tokens — data-tunable via JobsVerdictConfig, defaults there. */
   pricing: { inputUsdPerMTok: number; outputUsdPerMTok: number }
 }
@@ -135,10 +140,13 @@ function extractJson(text: string): string {
 
 export async function evaluatePosting(input: EvaluatePostingInput, deps: EvaluatorDeps): Promise<EvaluationOutcome> {
   const complete = deps.completionFn ?? completion
+  const resolvedModel = deps.resolvedModel ?? defaultVerdictRoute()
+  const epoch = epochOf(resolvedModel)
   const guardedComplete = async (
     options: Parameters<typeof completion>[0],
   ): Promise<CompletionResult> => {
-    if (!deps.beforeModelCall) return complete(options)
+    const pinnedOptions = { ...options, resolvedModel }
+    if (!deps.beforeModelCall) return complete(pinnedOptions)
     // Injected completionFn is a test seam and may not be the shared router,
     // so preserve the evaluator-level guard for it. Production completion()
     // receives the callback and re-runs it inside every primary/fallback/
@@ -147,14 +155,13 @@ export async function evaluatePosting(input: EvaluatePostingInput, deps: Evaluat
       if (!(await modelAuthorityStillValid(deps))) {
         throw new ModelProviderPreconditionError()
       }
-      return complete(options)
+      return complete(pinnedOptions)
     }
     return complete({
-      ...options,
+      ...pinnedOptions,
       beforeProviderCall: () => modelAuthorityStillValid(deps),
     })
   }
-  const epochModel = deps.expectedModel ?? expectedVerdictModel()
   // Slice BEFORE the PII strip: the strip's regexes must only ever see the
   // ≤4.5k chars the model sees — running them on an unbounded body is a
   // ReDoS surface (adversarial review of Wave 2.3). This also means the
@@ -169,7 +176,7 @@ export async function evaluatePosting(input: EvaluatePostingInput, deps: Evaluat
     normalizedBody: body,
     applyHosts: input.prompt.applyHosts,
     salaryText: input.prompt.salaryText,
-    epochModel,
+    epoch,
   }
   const inputHash = verdictInputHash(hashInput)
 
@@ -180,7 +187,7 @@ export async function evaluatePosting(input: EvaluatePostingInput, deps: Evaluat
       if (hit) {
         const parsed = JobVerdictSchema.safeParse(JSON.parse(hit))
         if (parsed.success) {
-          return { ok: true, verdict: parsed.data, model: epochModel, epoch: epochOf(epochModel), inputHash, inputTokens: 0, outputTokens: 0, costUsd: 0, cached: true }
+          return { ok: true, verdict: parsed.data, model: resolvedModel.model, epoch, inputHash, inputTokens: 0, outputTokens: 0, costUsd: 0, cached: true }
         }
       }
     } catch (err) {
@@ -208,9 +215,13 @@ export async function evaluatePosting(input: EvaluatePostingInput, deps: Evaluat
   }
 
   // Epoch homogeneity: a fallback-served result belongs to a different epoch.
-  if (raw.usedFallback || raw.model !== epochModel) {
+  if (
+    raw.usedFallback ||
+    raw.model !== resolvedModel.model ||
+    raw.provider !== resolvedModel.provider
+  ) {
     await deps.recordSpend(input.companyKey, input.sourceId, costUsd)
-    return { ok: false, kind: 'model-mismatch', message: `served by ${raw.model}${raw.usedFallback ? ' (fallback)' : ''}`, inputHash, costUsd }
+    return { ok: false, kind: 'model-mismatch', message: `served by ${raw.provider}/${raw.model}${raw.usedFallback ? ' (fallback)' : ''}`, inputHash, costUsd }
   }
 
   let parsed: unknown | undefined
@@ -225,9 +236,13 @@ export async function evaluatePosting(input: EvaluatePostingInput, deps: Evaluat
         messages: [{ role: 'user', content: raw.text.slice(0, 4000) }],
       }))
       costUsd += costOf(repair, deps.pricing)
-      if (repair.usedFallback || repair.model !== epochModel) {
+      if (
+        repair.usedFallback ||
+        repair.model !== resolvedModel.model ||
+        repair.provider !== resolvedModel.provider
+      ) {
         await deps.recordSpend(input.companyKey, input.sourceId, costUsd)
-        return { ok: false, kind: 'model-mismatch', message: `repair served by ${repair.model}`, inputHash, costUsd }
+        return { ok: false, kind: 'model-mismatch', message: `repair served by ${repair.provider}/${repair.model}`, inputHash, costUsd }
       }
       parsed = JSON.parse(extractJson(repair.text))
     } catch (err) {
@@ -258,7 +273,7 @@ export async function evaluatePosting(input: EvaluatePostingInput, deps: Evaluat
     ok: true,
     verdict: validated.data,
     model: raw.model,
-    epoch: epochOf(raw.model),
+    epoch,
     inputHash,
     inputTokens: raw.inputTokens,
     outputTokens: raw.outputTokens,

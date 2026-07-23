@@ -76,7 +76,19 @@ describe('JobVerdictSchema (§4.5 layer 2 output contract)', () => {
     expect(JobVerdictSchema.safeParse({ ...valid, verdict: 'genuine', reasonCodes: ['legit_staffing'] }).success).toBe(true)
   })
 
-  it('epochOf = model:promptVersion', () => {
-    expect(epochOf('gpt-5.6-luna')).toBe(`gpt-5.6-luna:${PROMPT_VERSION}`)
+  it('epochOf binds provider, model, and effective execution controls', () => {
+    const route = {
+      model: 'gpt-5.6-luna',
+      provider: 'openai',
+      maxTokens: 800,
+      reasoningEffort: 'low',
+    }
+    const epoch = epochOf(route)
+
+    expect(epoch).toMatch(new RegExp(`^openai:gpt-5\\.6-luna:${PROMPT_VERSION}:[a-f0-9]{64}$`))
+    expect(epochOf({ ...route, provider: 'openrouter' })).not.toBe(epoch)
+    expect(epochOf({ ...route, maxTokens: 1600 })).not.toBe(epoch)
+    expect(epochOf({ ...route, reasoningEffort: 'high' })).not.toBe(epoch)
+    expect(epochOf({ ...route, temperature: 0.2 })).not.toBe(epoch)
   })
 })
