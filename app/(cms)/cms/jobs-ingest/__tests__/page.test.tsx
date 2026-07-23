@@ -92,6 +92,18 @@ function payload(overrides: Partial<JobsOperationsPayload> = {}): JobsOperations
       attempts24h: 2,
       new24h: 4,
     },
+    funnelReconciliation: {
+      status: 'ready',
+      eventName: 'jobs.apply_confirmed',
+      windowStart: '2026-07-22T11:55:00.000Z',
+      windowEnd: '2026-07-23T11:55:00.000Z',
+      settlingDelayMinutes: 5,
+      mismatchCount: 0,
+      factCount: 2,
+      eventCount: 2,
+      missingEvents: 0,
+      extraEvents: 0,
+    },
     sources: [SOURCE],
     audit: [],
     verdict: {
@@ -118,6 +130,75 @@ beforeEach(() => {
 })
 
 describe('/cms/jobs-ingest Jobs Operations', () => {
+  it('shows exact funnel drift as an accessible warning', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(payload({
+      funnelReconciliation: {
+        status: 'warning',
+        eventName: 'jobs.apply_confirmed',
+        windowStart: '2026-07-22T11:55:00.000Z',
+        windowEnd: '2026-07-23T11:55:00.000Z',
+        settlingDelayMinutes: 5,
+        mismatchCount: 2,
+        factCount: 4,
+        eventCount: 2,
+        missingEvents: 2,
+        extraEvents: 0,
+      },
+    }))))
+
+    render(<JobsIngestPage />)
+
+    const heading = await screen.findByRole('heading', { name: 'Funnel telemetry integrity' })
+    const section = heading.closest('section')
+    expect(section).toBeTruthy()
+    expect(within(section!).getByRole('alert')).toHaveTextContent(
+      /2 transitions differ from the telemetry store/i,
+    )
+    const row = within(section!).getByRole('row', { name: /Confirmed applications/ })
+    expect(row).toHaveTextContent(/4/)
+    expect(row).toHaveTextContent(/2/)
+    expect(row).toHaveTextContent(/warning/i)
+  })
+
+  it('keeps source controls usable when funnel reconciliation is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(payload({
+      funnelReconciliation: {
+        status: 'unavailable',
+        eventName: 'jobs.apply_confirmed',
+        windowStart: '2026-07-22T11:55:00.000Z',
+        windowEnd: '2026-07-23T11:55:00.000Z',
+        settlingDelayMinutes: 5,
+        mismatchCount: null,
+        factCount: null,
+        eventCount: null,
+        missingEvents: null,
+        extraEvents: null,
+      },
+    }))))
+
+    render(<JobsIngestPage />)
+
+    const heading = await screen.findByRole('heading', { name: 'Funnel telemetry integrity' })
+    const section = heading.closest('section')
+    expect(section).toBeTruthy()
+    expect(within(section!).getByRole('alert')).toHaveTextContent(
+      /source controls remain available/i,
+    )
+    expect(await screen.findByRole('button', { name: 'Run now JSearch source' })).toBeEnabled()
+  })
+
+  it('renders reconciled funnel counts without an alert', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(payload())))
+
+    render(<JobsIngestPage />)
+
+    const heading = await screen.findByRole('heading', { name: 'Funnel telemetry integrity' })
+    const section = heading.closest('section')
+    expect(section).toBeTruthy()
+    expect(within(section!).queryByRole('alert')).toBeNull()
+    expect(within(section!).getByRole('row', { name: /Confirmed applications/ })).toHaveTextContent(/ready/i)
+  })
+
   it('renders the isolated email-control surface', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(payload())))
 

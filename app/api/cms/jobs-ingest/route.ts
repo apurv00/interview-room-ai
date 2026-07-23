@@ -7,6 +7,7 @@ import {
   JobsVerdictConfig,
 } from '@shared/db/models'
 import { requireCurrentPlatformAdmin } from '@jobs/services/adminAuth'
+import { reconcileJobsFunnelTelemetry } from '@jobs/services/funnelReconciliation'
 import { getJobSourceControlPlane } from '@jobs/services/sourceOperations'
 import {
   JOB_SOURCE_CONTROL_MAX_POSTINGS,
@@ -79,6 +80,7 @@ export async function GET() {
     verdictDist,
     tombstones,
     legalAudit,
+    funnelReconciliation,
   ] = await Promise.all([
     getJobSourceControlPlane(),
     JobPosting.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
@@ -96,6 +98,7 @@ export async function GET() {
       .limit(100)
       .select('sourceId operationId action actorUserId reason revision affectedPostings unknownLineagePostings occurredAt')
       .lean(),
+    reconcileJobsFunnelTelemetry(),
   ])
 
   const corpusByStatus: Record<string, number> = {}
@@ -436,6 +439,7 @@ export async function GET() {
       },
     },
     summary,
+    funnelReconciliation,
     sources,
     audit,
     verdict: {

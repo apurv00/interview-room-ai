@@ -126,6 +126,19 @@ export interface VerdictLlmBlock {
   skips?: Record<string, number>
 }
 
+export interface FunnelReconciliation {
+  status: 'ready' | 'warning' | 'unavailable'
+  eventName: 'jobs.apply_confirmed'
+  windowStart: string
+  windowEnd: string
+  settlingDelayMinutes: number
+  mismatchCount: number | null
+  factCount: number | null
+  eventCount: number | null
+  missingEvents: number | null
+  extraEvents: number | null
+}
+
 export interface JobsOperationsPayload {
   bootstrap: {
     required: boolean
@@ -153,6 +166,7 @@ export interface JobsOperationsPayload {
     attempts24h: number
     new24h: number
   }
+  funnelReconciliation: FunnelReconciliation
   sources: SourceRow[]
   audit: AuditRow[]
   verdict: {
