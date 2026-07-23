@@ -47,6 +47,16 @@ interface EmailConfigDraft {
   globalWeeklyCap: string
 }
 
+interface EmailHealth {
+  sentByStream: Record<(typeof STREAMS)[number]['id'], number>
+  staleReservations: number
+  unstampedTransactional: number
+}
+
+interface EmailOperationsPayload extends EmailHealth {
+  config: EmailConfig
+}
+
 function draftOf(config: EmailConfig): EmailConfigDraft {
   return {
     e0Enabled: config.e0Enabled,
@@ -66,6 +76,7 @@ function messageFrom(response: Response): Promise<string> {
 export function EmailOperationsPanel() {
   const [config, setConfig] = useState<EmailConfig | null>(null)
   const [draft, setDraft] = useState<EmailConfigDraft | null>(null)
+  const [health, setHealth] = useState<EmailHealth | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -79,9 +90,14 @@ export function EmailOperationsPanel() {
       if (response.status === 403) throw new Error('Your current account no longer has platform-admin access.')
       throw new Error(await messageFrom(response))
     }
-    const payload = await response.json() as { config: EmailConfig }
+    const payload = await response.json() as EmailOperationsPayload
     setConfig(payload.config)
     setDraft(draftOf(payload.config))
+    setHealth({
+      sentByStream: payload.sentByStream,
+      staleReservations: payload.staleReservations,
+      unstampedTransactional: payload.unstampedTransactional,
+    })
   }, [])
 
   useEffect(() => {
@@ -149,7 +165,7 @@ export function EmailOperationsPanel() {
     )
   }
 
-  if (!config || !draft) {
+  if (!config || !draft || !health) {
     return (
       <section aria-labelledby="email-operations-heading" className="rounded-2xl border border-slate-200 bg-white p-6">
         <h2 id="email-operations-heading" className="text-xl font-semibold text-slate-950">Jobs email controls</h2>
@@ -204,6 +220,70 @@ export function EmailOperationsPanel() {
         {status ? <div role="status" className="mt-4 rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-800">{status}</div> : null}
       </div>
       {error ? <div role="alert" className="mt-4 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</div> : null}
+
+      <section aria-labelledby="email-delivery-health-heading" className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <h3 id="email-delivery-health-heading" className="text-base font-semibold text-slate-950">
+          Email delivery health
+        </h3>
+        <p className="mt-1 text-xs leading-5 text-slate-600">
+          Read-only ledger snapshot from page load. Recorded sends mean the provider
+          accepted the request; they do not prove inbox delivery.
+        </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <div className={`rounded-lg border p-3 ${
+            health.unstampedTransactional > 0
+              ? 'border-red-300 bg-red-50'
+              : 'border-green-200 bg-green-50'
+          }`}>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Time-critical delivery alerts
+            </div>
+            <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-950">
+              {health.unstampedTransactional}
+            </div>
+            <p className="mt-1 text-xs leading-5 text-slate-700">
+              {health.unstampedTransactional > 0
+                ? 'Unstamped E0/E2 rows mean delivery failed or is uncertain. Automatic resend remains blocked.'
+                : 'No unstamped E0/E2 delivery rows require investigation.'}
+            </p>
+          </div>
+
+          <div className={`rounded-lg border p-3 ${
+            health.staleReservations > 0
+              ? 'border-amber-300 bg-amber-50'
+              : 'border-green-200 bg-green-50'
+          }`}>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Stale solicitation reservations
+            </div>
+            <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-950">
+              {health.staleReservations}
+            </div>
+            <p className="mt-1 text-xs leading-5 text-slate-700">
+              {health.staleReservations > 0
+                ? 'Unsent E1/E4 or legacy E3 reservations are older than 24 hours and are not auto-retried.'
+                : 'No solicitation reservation has remained unstamped for more than 24 hours.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Recorded sends by stream
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {STREAMS.map((stream) => (
+              <div key={stream.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <div className="text-xs font-medium text-slate-600">{stream.id.toUpperCase()}</div>
+                <div className="mt-1 text-lg font-semibold tabular-nums text-slate-950">
+                  {health.sentByStream[stream.id]}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
       <fieldset disabled={saving} className="mt-5 grid gap-3 md:grid-cols-2">
         <legend className="sr-only">Jobs email stream switches</legend>

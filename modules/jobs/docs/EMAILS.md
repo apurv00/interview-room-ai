@@ -67,8 +67,9 @@ fully implemented stream.
      alert and a human decides** (Codex #530). E2's due-window makes this
      natural (T-1 → interview date, never re-derived after the date
      passes); E0's dedupeKey embeds the request hour, bounding it the
-     same way. Manual dashboard kicks check the ledger first and refuse
-     past-window sends. Resend binds a key to the complete payload: signed
+     same way. Manual resend/recovery is not exposed yet; alerts remain
+     read-only and their keys stay burned. Resend binds a key to the
+     complete payload: signed
      one-click headers are therefore minted once and frozen across same-run
      attempts. Before **each** provider call, account existence, unchanged
      recipient, suppression, tracker authority, and posting/content policy
@@ -78,6 +79,11 @@ fully implemented stream.
      uncertain. A later durable render that differs under the same key may
      be rejected by Resend and is dashboard-alerted, never worked around with
      a new key that could duplicate the original delivery.
+   - *CMS health snapshot*: recorded sends are `sentAt`-stamped rows and mean
+     provider acceptance, not inbox delivery. Unstamped E0/E2 rows are the
+     immediate failed-or-uncertain alert class. Unstamped E1/E4 (plus legacy
+     E3) reservations become stale after 24 hours. The latter two classes are
+     never auto-retried.
 2. **Pagination by `_id` cursor** until exhaustion; per-run hard stop (500)
    with remainder logged. No `limit(50)` head-reads.
 3. **Preferences at the query** — filter shape is explicitly

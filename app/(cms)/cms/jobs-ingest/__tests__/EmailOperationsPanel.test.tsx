@@ -10,6 +10,17 @@ const CONFIG = {
   globalWeeklyCap: 3,
 }
 
+const HEALTH = {
+  sentByStream: { e0: 3, e1: 2, e2: 4, e4: 1 },
+  staleReservations: 2,
+  unstampedTransactional: 1,
+}
+
+const payload = (config = CONFIG, health = HEALTH) => ({
+  config,
+  ...health,
+})
+
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -23,9 +34,7 @@ beforeEach(() => {
 
 describe('EmailOperationsPanel', () => {
   it('renders only the four real email streams and explains the cap boundary', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
-      config: { ...CONFIG, e3Enabled: true },
-    })))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(payload())))
 
     render(<EmailOperationsPanel />)
 
@@ -33,14 +42,22 @@ describe('EmailOperationsPanel', () => {
     expect(screen.getByRole('checkbox', { name: /E1 — Response nudge/i })).not.toBeChecked()
     expect(screen.getByRole('checkbox', { name: /E2 — Interview reminder/i })).toBeChecked()
     expect(screen.getByRole('checkbox', { name: /E4 — Deferred practice/i })).not.toBeChecked()
-    expect(screen.queryByText(/E3/i)).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /E3/i })).toBeNull()
     expect(screen.getByRole('spinbutton', { name: /Weekly solicitation cap per user/i })).toHaveValue(3)
     expect(screen.getByText(/Applies to E1 and E4; E0 and E2 remain cap-exempt/i)).toBeTruthy()
+    expect(screen.getByText('Email delivery health')).toBeTruthy()
+    expect(screen.getByText('Time-critical delivery alerts').nextElementSibling).toHaveTextContent('1')
+    expect(screen.getByText(/delivery failed or is uncertain/i)).toBeTruthy()
+    expect(screen.getByText('Stale solicitation reservations').nextElementSibling).toHaveTextContent('2')
+    expect(screen.getByText(/legacy E3 reservations are older than 24 hours/i)).toBeTruthy()
+    expect(screen.getByText('Recorded sends by stream')).toBeTruthy()
+    expect(screen.getByText('E2').nextElementSibling).toHaveTextContent('4')
+    expect(screen.getByText(/do not prove inbox delivery/i)).toBeTruthy()
   })
 
   it('patches only changed four-stream controls and the bounded cap', async () => {
     const fetch = vi.fn()
-      .mockResolvedValueOnce(response({ config: CONFIG }))
+      .mockResolvedValueOnce(response(payload()))
       .mockResolvedValueOnce(response({
         config: { ...CONFIG, e1Enabled: true, globalWeeklyCap: 5 },
       }))
@@ -70,7 +87,7 @@ describe('EmailOperationsPanel', () => {
   })
 
   it('blocks an out-of-range or fractional cap before PATCH', async () => {
-    const fetch = vi.fn().mockResolvedValue(response({ config: CONFIG }))
+    const fetch = vi.fn().mockResolvedValue(response(payload()))
     vi.stubGlobal('fetch', fetch)
 
     render(<EmailOperationsPanel />)
@@ -82,6 +99,20 @@ describe('EmailOperationsPanel', () => {
     expect(screen.getByText('Enter a whole number from 0 to 20.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save email controls' })).toBeDisabled()
     expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('renders explicit zero-alert states without claiming provider health', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(payload(CONFIG, {
+      sentByStream: { e0: 0, e1: 0, e2: 0, e4: 0 },
+      staleReservations: 0,
+      unstampedTransactional: 0,
+    }))))
+
+    render(<EmailOperationsPanel />)
+
+    expect(await screen.findByText(/No unstamped E0\/E2 delivery rows/i)).toBeTruthy()
+    expect(screen.getByText(/No solicitation reservation has remained unstamped/i)).toBeTruthy()
+    expect(screen.getByText(/do not prove inbox delivery/i)).toBeTruthy()
   })
 
   it('surfaces authorization failures without exposing an editable fallback', async () => {
