@@ -888,8 +888,9 @@ function inflateJobDescription(value: unknown): string {
 
 /**
  * Resolve a scored Jobs session to its canonical user+posting relationship.
- * Kept separate from event emission so the reconciliation sweep can repair
- * already-lost practice-first sessions without recursively emitting work.
+ * Kept separate from attribution-work enqueueing so the reconciliation sweep
+ * can repair already-lost practice-first sessions without recursively
+ * emitting work. Verified telemetry is emitted here so both callers agree.
  */
 export async function ensurePracticeApplication(
   userId: string,
@@ -1114,10 +1115,26 @@ export async function ensurePracticeApplication(
     return null
   }
 
-  return {
+  const ensured = {
     ...persisted,
     sessionId: String(session._id),
   }
+  if (ensured.newlyAdded) {
+    try {
+      await recordJobsUserEvent({
+        name: 'jobs.prep_started',
+        userId,
+        jobPostingId: ensured.jobPostingId,
+        applicationId: ensured.applicationId,
+        sessionId: ensured.sessionId,
+        props: { evidenceCount: ensured.evidenceCount },
+        ts: now,
+      })
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'jobs.prep_started emit failed')
+    }
+  }
+  return ensured
 }
 
 /**
@@ -1135,19 +1152,6 @@ export async function recordPracticeEvidence(
   if (!ensured) return { recorded: false }
 
   if (ensured.newlyAdded && await isJobsAccountActive(userId)) {
-    try {
-      await recordJobsUserEvent({
-        name: 'jobs.prep_started',
-        userId,
-        jobPostingId: ensured.jobPostingId,
-        applicationId: ensured.applicationId,
-        sessionId: ensured.sessionId,
-        props: { evidenceCount: ensured.evidenceCount },
-        ts: now,
-      })
-    } catch (err) {
-      logger.warn({ err, sessionId }, 'jobs.prep_started emit failed')
-    }
     try {
       await inngest.send({
         id: `jobs-evidence-${ensured.sessionId}`,
