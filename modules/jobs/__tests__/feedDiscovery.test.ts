@@ -32,6 +32,7 @@ function row(index: number, over: Record<string, unknown> = {}) {
     provenance: [],
     flags: {},
     confidentialCompany: false,
+    personalizationScore: 0,
     discoveryScore: 100 - index,
     sortPostedAt: postedAt,
     locationPreferenceMatched: false,
@@ -128,20 +129,137 @@ describe('database-backed Jobs discovery', () => {
     expect(ranking).not.toContain('manager')
   })
 
-  it('authenticates and query-binds cursors before any database work', async () => {
-    aggregateResult([row(0), row(1)], 2)
-    const first = await discoverFeed({}, NOW, 1)
-    const token = first.nextCursor!
-    const [payload, signature] = token.split('.')
-    const forgedSignature = `${signature[0] === 'A' ? 'B' : 'A'}${signature.slice(1)}`
+  it('prioritizes generic target-role and resume evidence before the Best-match cap without hard-filtering', async () => {
+    aggregateResult([], 22)
 
-    await expect(discoverFeed({ cursor: `${payload}.${forgedSignature}` }, NOW, 1))
+    await discoverFeed({
+      roleDomain: 'backend',
+      targetRole: 'Platform Engineer',
+      skills: ['Kubernetes', 'SQL'],
+    }, NOW, 20)
+
+    const pipeline = mockAggregate.mock.calls[0][0] as Array<Record<string, unknown>>
+    const baseMatch = JSON.stringify(pipeline[0].$match)
+    expect(baseMatch).not.toContain('backend')
+    expect(baseMatch).not.toContain('platform')
+    expect(baseMatch).not.toContain('kubernetes')
+    const facet = pipeline.find((stage) => '$facet' in stage)?.$facet as {
+      rows: Array<Record<string, unknown>>
+      metadata: Array<Record<string, unknown>>
+    }
+    expect(facet.metadata).toEqual([{ $count: 'total' }])
+
+    const personalizationIndex = facet.rows.findIndex((stage) =>
+      '$set' in stage &&
+      JSON.stringify(stage.$set).includes('"personalizationScore"') &&
+      JSON.stringify(stage.$set).includes('"kubernetes"'))
+    const personalizationSortIndices = facet.rows.flatMap((stage, index) =>
+      '$sort' in stage && (stage.$sort as Record<string, unknown>).personalizationScore === -1
+        ? [index]
+        : [])
+    const capIndex = facet.rows.findIndex((stage) => stage.$limit === 400)
+    expect(personalizationIndex).toBeGreaterThan(-1)
+    expect(personalizationSortIndices).toHaveLength(2)
+    expect(personalizationSortIndices[0]).toBeGreaterThan(personalizationIndex)
+    expect(capIndex).toBeGreaterThan(personalizationSortIndices[0])
+    expect(personalizationSortIndices[1]).toBeGreaterThan(capIndex)
+  })
+
+  it.each([
+    ['custom target role', { targetRole: 'Customer Success Manager' }, 'customer'],
+    ['resume skill', { skills: ['Kubernetes'] }, 'kubernetes'],
+  ])('moves %s evidence into candidate ranking before the cap', async (_name, privateQuery, evidence) => {
+    aggregateResult([], 22)
+
+    await discoverFeed(privateQuery, NOW, 20)
+
+    const pipeline = mockAggregate.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(JSON.stringify(pipeline[0].$match)).not.toContain(evidence)
+    const rows = rowsFacetPipeline()
+    const scoreIndex = rows.findIndex((stage) =>
+      '$set' in stage && JSON.stringify(stage.$set).includes(evidence))
+    const capIndex = rows.findIndex((stage) => stage.$limit === 400)
+    expect(scoreIndex).toBeGreaterThan(-1)
+    expect(scoreIndex).toBeLessThan(capIndex)
+  })
+
+  it('counts each normalized full resume skill once using visible title evidence', async () => {
+    aggregateResult([], 22)
+
+    await discoverFeed({
+      skills: [' Product Management ', 'SQL', 'product management'],
+    }, NOW, 20)
+
+    const scoreStage = rowsFacetPipeline().find((stage) =>
+      '$set' in stage && 'personalizationScore' in (stage.$set as Record<string, unknown>))
+    const score = (scoreStage?.$set as { personalizationScore?: {
+      $add?: Array<Record<string, unknown>>
+    } })?.personalizationScore
+    const skillTerm = score?.$add?.[2] as {
+      $multiply?: [{ $min?: [{ $add?: unknown[] }, number] }, number]
+    } | undefined
+    const perSkill = skillTerm?.$multiply?.[0].$min?.[0].$add
+    expect(perSkill).toHaveLength(2)
+    expect(JSON.stringify(perSkill)).toContain('product management')
+    expect(JSON.stringify(perSkill)).toContain('$indexOfCP')
+  })
+
+  it('authenticates and query-binds cursors before any database work', async () => {
+    const privateQuery = {
+      roleDomain: 'backend',
+      targetRole: 'Platform Engineer',
+      skills: ['Kubernetes'],
+    }
+    aggregateResult([row(0, { personalizationScore: 168, domain: 'backend' }), row(1)], 2)
+    const first = await discoverFeed(privateQuery, NOW, 1)
+    const token = first.nextCursor!
+    const parts = token.split('.')
+    expect(parts).toHaveLength(3)
+    expect(() => JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))).toThrow()
+    expect(parts.map((part) => Buffer.from(part, 'base64url').toString('utf8')).join(' '))
+      .not.toMatch(/backend|platform|kubernetes|168/i)
+    const forgedCiphertext = `${parts[1][0] === 'A' ? 'B' : 'A'}${parts[1].slice(1)}`
+    const forgedToken = [parts[0], forgedCiphertext, parts[2]].join('.')
+
+    await expect(discoverFeed({ ...privateQuery, cursor: forgedToken }, NOW, 1))
       .rejects.toBeInstanceOf(InvalidFeedCursorError)
-    await expect(discoverFeed({ cursor: token, search: 'different query' }, NOW, 1))
+    await expect(discoverFeed({ ...privateQuery, cursor: token, search: 'different query' }, NOW, 1))
       .rejects.toBeInstanceOf(InvalidFeedCursorError)
-    await expect(discoverFeed({ cursor: token }, new Date(NOW.getTime() + 7 * 60 * 60_000), 1))
+    await expect(discoverFeed({ cursor: token }, NOW, 1))
+      .rejects.toBeInstanceOf(InvalidFeedCursorError)
+    await expect(discoverFeed({ ...privateQuery, cursor: token, targetRole: 'Program Manager' }, NOW, 1))
+      .rejects.toBeInstanceOf(InvalidFeedCursorError)
+    await expect(discoverFeed({ ...privateQuery, cursor: token, skills: ['SQL'] }, NOW, 1))
+      .rejects.toBeInstanceOf(InvalidFeedCursorError)
+    await expect(discoverFeed({ ...privateQuery, cursor: token, roleDomain: 'frontend' }, NOW, 1))
+      .rejects.toBeInstanceOf(InvalidFeedCursorError)
+    await expect(discoverFeed({ ...privateQuery, cursor: token }, new Date(NOW.getTime() + 7 * 60 * 60_000), 1))
       .rejects.toBeInstanceOf(InvalidFeedCursorError)
     expect(mockAggregate).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts a private cursor with the same signals and compares personalization first', async () => {
+    const privateQuery = {
+      roleDomain: 'backend',
+      targetRole: 'Platform Engineer',
+      skills: ['SQL', 'Kubernetes'],
+    }
+    const firstRow = row(0, { personalizationScore: 176 })
+    const secondRow = row(1, { personalizationScore: 60 })
+    aggregateResult([firstRow, secondRow], 2)
+    const first = await discoverFeed(privateQuery, NOW, 1)
+
+    aggregateResult([secondRow], 2)
+    const next = await discoverFeed({
+      ...privateQuery,
+      skills: ['Kubernetes', 'SQL'],
+      cursor: first.nextCursor,
+    }, NOW, 1)
+
+    expect(next.rows.map((posting) => posting._id)).toEqual([secondRow._id])
+    const cursorStage = rowsFacetPipeline().find((stage) => '$match' in stage)
+    const alternatives = (cursorStage?.$match as { $or?: Array<Record<string, unknown>> })?.$or
+    expect(alternatives?.[0]).toHaveProperty('personalizationScore')
   })
 
   it('places cursor comparison after the global top-400 window and supports Previous', async () => {
@@ -190,7 +308,12 @@ describe('database-backed Jobs discovery', () => {
   it('clamps invalid page size and quarantines future dates before the indexed newest window', async () => {
     aggregateResult([], 0)
 
-    const page = await discoverFeed({ sort: 'newest' }, NOW, Number.NaN)
+    const page = await discoverFeed({
+      sort: 'newest',
+      roleDomain: 'pm',
+      targetRole: 'Product Manager',
+      skills: ['SQL'],
+    }, NOW, Number.NaN)
 
     expect(page.pageSize).toBe(20)
     const pipeline = mockAggregate.mock.calls.at(-1)?.[0] as Array<Record<string, unknown>>
@@ -204,6 +327,35 @@ describe('database-backed Jobs discovery', () => {
     const serialized = JSON.stringify(rowsPipeline)
     expect(serialized).toContain('$lte')
     expect(serialized).toContain('1970-01-01T00:00:00.000Z')
+    expect(serialized).not.toContain('"pm"')
+    expect(serialized).not.toContain('"product"')
+    expect(serialized).not.toContain('"sql"')
+    expect(rowsPipeline.filter((stage) => '$sort' in stage)).toEqual(
+      expect.arrayContaining([{ $sort: { sortPostedAt: -1, _id: -1 } }]),
+    )
+  })
+
+  it('keeps Newest cursors reusable when private target and resume signals change', async () => {
+    const firstRow = row(0)
+    const secondRow = row(1)
+    aggregateResult([firstRow, secondRow], 2)
+    const first = await discoverFeed({
+      sort: 'newest',
+      roleDomain: 'backend',
+      targetRole: 'Platform Engineer',
+      skills: ['Kubernetes'],
+    }, NOW, 1)
+
+    aggregateResult([secondRow], 2)
+    const next = await discoverFeed({
+      sort: 'newest',
+      cursor: first.nextCursor,
+      roleDomain: 'sales',
+      targetRole: 'Sales Executive',
+      skills: ['CRM'],
+    }, NOW, 1)
+
+    expect(next.rows.map((posting) => posting._id)).toEqual([secondRow._id])
   })
 
   it.each(['', 'too-short'])('refuses a weak production cursor secret before database work', async (secret) => {

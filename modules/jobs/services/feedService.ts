@@ -1,7 +1,6 @@
 import { JobPosting, JobApplication, User, type IJobPosting } from '@shared/db/models'
 import type { ExperienceLevel } from '@shared/types'
 import { TIER_RANK, type ApplyTier } from '../config/spamRules'
-import { titleJaccard } from './identityResolver'
 import { xrayHashOf, legacyXrayHashOf } from './xrayService'
 import { getBaseResume } from './baseResumeService'
 import { getResume } from '@resume'
@@ -18,7 +17,7 @@ import type { PublicFeedQuery } from '../config/feedDiscovery'
 
 /**
  * Feed serving (PRODUCT_FLOW §1 Stage 0) — database-backed deterministic
- * discovery plus an optional, page-local private refinement. Rules only:
+ * discovery plus optional private Best-match preferences. Rules only:
  * - Serving NEVER consumes llmVerdict fields at launch (ruling #16 serving
  *   honesty: rank may read typed verdict fields only once enforcement is on
  *   AND the reason-chip vocabulary names that basis). Soft-closed rows are
@@ -39,8 +38,8 @@ export interface FeedQuery extends PublicFeedQuery {
   /** Explicit ?domain= (press surfaces) — a HARD filter: the link promised
    *  "N {domain} jobs" and must deliver exactly that pool. */
   domain?: string
-  /** Derived from targetRole server-side. This private soft signal refines
-   *  only the current Best-match page and never changes cursor membership. */
+  /** Derived from targetRole server-side. Together with target-title and
+   *  resume-skill evidence, this is cursor-bound and never hard-filters. */
   roleDomain?: string
   pageSize?: number
   /** Tier-B (stateless, PRODUCT_FLOW §1 Stage 1): extracted resume skills
@@ -85,13 +84,6 @@ export interface FeedPayload {
   sort: 'best' | 'newest'
 }
 
-const DOMAIN_MATCH_BONUS = 25
-/** Tier-B: per matched resume skill (cap 3 count) + target-role title affinity. */
-const SKILL_MATCH_BONUS = 8
-const SKILL_MATCH_CAP = 3
-const ROLE_MATCH_BONUS = 20
-const ROLE_MATCH_JACCARD = 0.5
-
 /** Browser-navigation policy shared with the production link checker: only
  * credential-free HTTP(S) on default ports, excluding localhost and every
  * non-global IP literal, may reach a candidate. DNS names remain subject to
@@ -135,22 +127,10 @@ export function matchedSkillsOf(
 
 export async function getFeed(query: FeedQuery, now = new Date()): Promise<FeedPayload> {
   const discovery = await discoverFeed(query, now, query.pageSize)
-  const personalized = discovery.rows.map((d, index) => {
-    const matched = matchedSkillsOf(d, query.skills)
-    let privateScore = 0
-    if (query.roleDomain && d.domain === query.roleDomain) privateScore += DOMAIN_MATCH_BONUS
-    privateScore += Math.min(matched.length, SKILL_MATCH_CAP) * SKILL_MATCH_BONUS
-    if (query.targetRole && titleJaccard(query.targetRole, d.title ?? '') >= ROLE_MATCH_JACCARD) {
-      privateScore += ROLE_MATCH_BONUS
-    }
-    return { d, index, matched, privateScore }
-  })
-  // Public filters own page membership and cursor order, so a copied URL is
-  // stable and contains no resume-derived state. Private signals may refine
-  // only the current "Best match" page; Newest remains strictly chronological.
-  if (discovery.sort === 'best' && (query.roleDomain || query.targetRole || query.skills?.length)) {
-    personalized.sort((a, b) => b.privateScore - a.privateScore || a.index - b.index)
-  }
+  const personalized = discovery.rows.map((d) => ({
+    d,
+    matched: matchedSkillsOf(d, query.skills),
+  }))
   return {
     cards: personalized.map(({ d, matched }) => ({
       id: String(d._id),

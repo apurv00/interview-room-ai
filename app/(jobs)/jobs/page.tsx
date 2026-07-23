@@ -7,8 +7,6 @@ import { useSession } from 'next-auth/react'
 import { JobsDiscoveryControls } from '@jobs/components/JobsDiscoveryControls'
 import {
   FEED_EXPERIENCE_VALUES,
-  FEED_FRESHNESS_VALUES,
-  FEED_REMOTE_VALUES,
   FEED_SORT_VALUES,
   type PublicFeedQuery,
 } from '@jobs/config/feedDiscovery'
@@ -34,7 +32,6 @@ interface FeedCard {
   salaryText?: string
   applyTier?: string
   matchedSkills?: string[]
-  locationPreferenceMatched?: boolean
 }
 
 interface FeedPayload {
@@ -65,6 +62,7 @@ interface FeedRequestError extends Error {
 }
 
 const JOBS_TARGET_METHODS = new Set<JobsTarget['method']>(['paste', 'upload', 'questions', 'import'])
+const RETIRED_DISCOVERY_PARAMS = ['location', 'remote', 'company', 'freshness'] as const
 
 function parseJobsTarget(raw: string | null): JobsTarget | null {
   if (!raw) return null
@@ -115,6 +113,19 @@ function enumParam<T extends string>(
   return value && values.includes(value as T) ? value as T : undefined
 }
 
+function sanitizeDiscoveryParams(params: URLSearchParams): {
+  params: URLSearchParams
+  changed: boolean
+} {
+  const sanitized = new URLSearchParams(params)
+  const changed = RETIRED_DISCOVERY_PARAMS.some((name) => sanitized.has(name))
+  if (!changed) return { params: sanitized, changed: false }
+  for (const name of RETIRED_DISCOVERY_PARAMS) sanitized.delete(name)
+  sanitized.delete('cursor')
+  sanitized.delete('direction')
+  return { params: sanitized, changed: true }
+}
+
 function publicQueryFromParams(params: URLSearchParams): PublicFeedQuery {
   const domainParam = cleanParam(params, 'domain', 50)
   const domainCapability = resolveJobsDomainCapability(domainParam)
@@ -130,11 +141,7 @@ function publicQueryFromParams(params: URLSearchParams): PublicFeedQuery {
   return {
     domain,
     search: cleanParam(params, 'q', 80),
-    location: cleanParam(params, 'location', 80),
-    remote: enumParam(params, 'remote', FEED_REMOTE_VALUES),
     experience: enumParam(params, 'experience', FEED_EXPERIENCE_VALUES),
-    company: cleanParam(params, 'company', 100),
-    freshness: enumParam(params, 'freshness', FEED_FRESHNESS_VALUES),
     sort: enumParam(params, 'sort', FEED_SORT_VALUES),
     cursor,
     direction,
@@ -145,11 +152,7 @@ function paramsForPublicQuery(query: PublicFeedQuery): URLSearchParams {
   const params = new URLSearchParams()
   if (query.domain) params.set('domain', query.domain)
   if (query.search) params.set('q', query.search)
-  if (query.location) params.set('location', query.location)
-  if (query.remote) params.set('remote', query.remote)
   if (query.experience) params.set('experience', query.experience)
-  if (query.company) params.set('company', query.company)
-  if (query.freshness) params.set('freshness', query.freshness)
   if (query.sort && query.sort !== 'best') params.set('sort', query.sort)
   if (query.cursor) {
     params.set('cursor', query.cursor)
@@ -179,7 +182,7 @@ function JobsFeedHeader() {
         <Link href="/jobs/tracker" className="text-sm text-blue-600 hover:underline">My tracker</Link>
       </div>
       <p className="mt-2 text-sm text-slate-600">
-        Browse live job postings and filter by role, company, location, experience, or freshness.
+        Search live jobs, set your experience preference, and choose Best match or Newest.
       </p>
     </>
   )
@@ -201,7 +204,12 @@ function JobsFeed() {
   const pathname = usePathname() || '/jobs'
   const { data: session, status: authStatus } = useSession()
   const currentUserId = session?.user?.id ?? null
-  const searchParamsKey = searchParams.toString()
+  const rawSearchParamsKey = searchParams.toString()
+  const sanitizedSearchParams = useMemo(
+    () => sanitizeDiscoveryParams(new URLSearchParams(rawSearchParamsKey)),
+    [rawSearchParamsKey],
+  )
+  const searchParamsKey = sanitizedSearchParams.params.toString()
   const publicQuery = useMemo(
     () => publicQueryFromParams(new URLSearchParams(searchParamsKey)),
     [searchParamsKey],
@@ -231,6 +239,12 @@ function JobsFeed() {
   const effectiveTarget = targetIdentityReady && target?.ownerId !== undefined && target.ownerId === currentUserId
     ? target
     : null
+
+  useEffect(() => {
+    if (!sanitizedSearchParams.changed) return
+    const query = sanitizedSearchParams.params.toString()
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
+  }, [pathname, router, sanitizedSearchParams])
 
   // The confirm bar's output is tab-scoped and owner-scoped. A target from a
   // prior account is deleted before any personalized request can use it.
@@ -387,7 +401,7 @@ function JobsFeed() {
       : effectiveTarget.method === 'questions'
         ? `Best match includes your private target role — ${effectiveTarget.role}. Sharing keeps only public filters.`
         : (data?.sharpened ?? 0) > 0 && revealSkills.length
-          ? `Best match uses private resume signals on this page: ${revealSkills.join(', ')}. Sharing keeps only public filters.`
+          ? `Best match uses private resume signals: ${revealSkills.join(', ')}. Sharing keeps only public filters.`
           : effectiveTarget.role
             ? `Best match includes your private target role — ${effectiveTarget.role}. Sharing keeps only public filters.`
             : 'Best match checked your private resume signals on this page.'
@@ -402,10 +416,10 @@ function JobsFeed() {
   }
 
   const hasHardFilters = Boolean(
-    publicQuery.domain || publicQuery.search || publicQuery.remote || publicQuery.company || publicQuery.freshness,
+    publicQuery.domain || publicQuery.search,
   )
   const hasAnyDiscoveryPreference = Boolean(
-    hasHardFilters || publicQuery.location || publicQuery.experience || publicQuery.sort,
+    hasHardFilters || publicQuery.experience || publicQuery.sort,
   )
   const previousHref = data?.previousCursor
     ? hrefForPublicQuery(pathname, { ...publicQuery, cursor: data.previousCursor, direction: 'before' })
@@ -528,11 +542,6 @@ function JobsFeed() {
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
                   {card.applyTier && TIER_BADGE[card.applyTier] && (
                     <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-500">{TIER_BADGE[card.applyTier]}</span>
-                  )}
-                  {card.locationPreferenceMatched && publicQuery.location && (
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
-                      Matches location preference
-                    </span>
                   )}
                   {card.matchedSkills?.length ? (
                     <span className="rounded-full border border-blue-300 bg-white px-2 py-0.5 text-blue-700">

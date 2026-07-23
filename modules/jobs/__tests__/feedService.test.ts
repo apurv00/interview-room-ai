@@ -153,6 +153,7 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
     const posting = doc(over)
     return {
       ...posting,
+      personalizationScore: 0,
       discoveryScore: 0,
       sortPostedAt: posting.postedAt ?? new Date(0),
       locationPreferenceMatched: false,
@@ -195,13 +196,31 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
     expect(mockDiscoverFeed).toHaveBeenCalledWith(query, NOW, 1)
   })
 
-  it('private role signals refine only the returned Best-match page', async () => {
+  it('forwards generic target/resume signals to discovery and refines its returned Best-match page', async () => {
     feedRows([
-      discoveryRow({ _id: 'fresh-fullstack', domain: 'fullstack', postedAt: NOW }),
-      discoveryRow({ _id: 'old-pm', domain: 'pm', postedAt: new Date('2026-07-07T12:00:00Z') }),
+      discoveryRow({
+        _id: 'fresh-fullstack',
+        title: 'Kubernetes Developer',
+        titleTokens: ['developer', 'kubernetes'],
+        domain: 'fullstack',
+        postedAt: NOW,
+      }),
+      discoveryRow({
+        _id: 'older-backend',
+        title: 'Platform Engineer',
+        titleTokens: ['engineer', 'platform'],
+        domain: 'backend',
+        postedAt: new Date('2026-07-07T12:00:00Z'),
+      }),
     ])
-    const feed = await getFeed({ roleDomain: 'pm' }, NOW)
-    expect(feed.cards.map((c) => c.id)).toEqual(['old-pm', 'fresh-fullstack'])
+    const query = {
+      roleDomain: 'backend',
+      targetRole: 'Platform Engineer',
+      skills: ['Kubernetes'],
+    }
+    const feed = await getFeed(query, NOW)
+    expect(mockDiscoverFeed).toHaveBeenCalledWith(query, NOW, undefined)
+    expect(feed.cards.map((c) => c.id)).toEqual(['fresh-fullstack', 'older-backend'])
     expect(feed.total).toBe(2)
     expect(feed.pageSize).toBe(20)
   })
@@ -226,7 +245,12 @@ describe('getFeed (public cards — never JD, never apply URLs)', () => {
       discoveryRow({ _id: 'newest', title: 'Sales Executive', titleTokens: ['sales'], postedAt: NOW }),
       discoveryRow({ _id: 'older-hit', title: 'SQL Analyst', titleTokens: ['sql'], postedAt: new Date('2026-07-13') }),
     ], { sort: 'newest' })
-    const feed = await getFeed({ sort: 'newest', skills: ['SQL'] }, NOW)
+    const feed = await getFeed({
+      sort: 'newest',
+      roleDomain: 'backend',
+      targetRole: 'SQL Analyst',
+      skills: ['SQL'],
+    }, NOW)
     expect(feed.cards.map((card) => card.id)).toEqual(['newest', 'older-hit'])
     expect(feed.sharpened).toBe(1)
   })

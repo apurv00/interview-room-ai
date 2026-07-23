@@ -3,8 +3,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import {
   type FeedExperience,
-  type FeedFreshness,
-  type FeedRemote,
   type FeedSort,
   type PublicFeedQuery,
 } from '../config/feedDiscovery'
@@ -17,15 +15,11 @@ interface JobsDiscoveryControlsProps {
 
 interface DraftValues {
   search: string
-  location: string
-  remote: '' | FeedRemote
   experience: '' | FeedExperience
-  company: string
-  freshness: '' | FeedFreshness
   sort: FeedSort
 }
 
-type RemovableFilter = Exclude<keyof PublicFeedQuery, 'cursor' | 'direction'>
+type RemovableFilter = 'domain' | 'search' | 'experience' | 'sort'
 
 const EXPERIENCE_LABELS: Record<FeedExperience, string> = {
   entry: 'Entry level',
@@ -33,22 +27,10 @@ const EXPERIENCE_LABELS: Record<FeedExperience, string> = {
   senior: 'Senior or lead',
 }
 
-const FRESHNESS_LABELS: Record<FeedFreshness, string> = {
-  '1d': 'Past 24 hours',
-  '3d': 'Past 3 days',
-  '7d': 'Past week',
-  '14d': 'Past 2 weeks',
-  '30d': 'Past month',
-}
-
 function initialDraft(value: PublicFeedQuery): DraftValues {
   return {
     search: value.search ?? '',
-    location: value.location ?? '',
-    remote: value.remote ?? '',
     experience: value.experience ?? '',
-    company: value.company ?? '',
-    freshness: value.freshness ?? '',
     sort: value.sort ?? 'best',
   }
 }
@@ -60,11 +42,7 @@ function cleaned(value: string): string | undefined {
 function chipEntries(value: PublicFeedQuery): Array<{ key: RemovableFilter; label: string }> {
   const entries: Array<{ key: RemovableFilter; label: string }> = []
   if (value.search) entries.push({ key: 'search', label: `Search: ${value.search}` })
-  if (value.location) entries.push({ key: 'location', label: `Location preference: ${value.location}` })
-  if (value.remote) entries.push({ key: 'remote', label: 'Remote only' })
   if (value.experience) entries.push({ key: 'experience', label: `Experience preference: ${EXPERIENCE_LABELS[value.experience]}` })
-  if (value.company) entries.push({ key: 'company', label: `Company: ${value.company}` })
-  if (value.freshness) entries.push({ key: 'freshness', label: FRESHNESS_LABELS[value.freshness] })
   if (value.domain) entries.push({ key: 'domain', label: `Domain: ${value.domain}` })
   if (value.sort === 'newest') entries.push({ key: 'sort', label: 'Sort: Newest' })
   return entries
@@ -74,6 +52,7 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
   const [draft, setDraft] = useState<DraftValues>(() => initialDraft(value))
   const [showFilters, setShowFilters] = useState(false)
   const chips = chipEntries(value)
+  const secondaryFilterCount = Number(!!value.experience) + Number(value.sort === 'newest')
 
   // URL state is authoritative. Browser Back/Forward and chip removal must
   // also update the editable controls instead of resurrecting stale drafts.
@@ -86,11 +65,7 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
     onApply({
       domain: value.domain,
       search: cleaned(draft.search),
-      location: cleaned(draft.location),
-      remote: draft.remote || undefined,
       experience: draft.experience || undefined,
-      company: cleaned(draft.company),
-      freshness: draft.freshness || undefined,
       sort: draft.sort === 'best' ? undefined : draft.sort,
     })
   }
@@ -102,7 +77,7 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
   return (
     <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" aria-label="Find jobs">
       <form role="search" onSubmit={submit}>
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto] md:items-end">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
           <label className="block text-sm font-medium text-slate-700" htmlFor="jobs-search">
             Search jobs
             <input
@@ -115,21 +90,10 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
               className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             />
           </label>
-          <label className="block text-sm font-medium text-slate-700" htmlFor="jobs-location">
-            Location preference
-            <input
-              id="jobs-location"
-              value={draft.location}
-              maxLength={80}
-              onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))}
-              placeholder="City, state, or country"
-              className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-            />
-          </label>
           <button
             type="submit"
             disabled={disabled}
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
+            className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60 md:w-auto"
           >
             Search
           </button>
@@ -142,25 +106,13 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
           aria-controls="jobs-secondary-filters"
           onClick={() => setShowFilters((visible) => !visible)}
         >
-          {showFilters ? 'Hide filters' : `Filters${chips.length ? ` (${chips.length})` : ''}`}
+          {showFilters ? 'Hide filters' : `Filters${secondaryFilterCount ? ` (${secondaryFilterCount})` : ''}`}
         </button>
 
         <div
           id="jobs-secondary-filters"
-          className={`${showFilters ? 'grid' : 'hidden'} mt-4 gap-3 sm:grid-cols-2 md:grid md:grid-cols-5`}
+          className={`${showFilters ? 'grid' : 'hidden'} mt-4 gap-3 sm:grid-cols-2 md:grid md:max-w-2xl md:grid-cols-2`}
         >
-          <label className="text-xs font-medium text-slate-600" htmlFor="jobs-remote">
-            Work mode
-            <select
-              id="jobs-remote"
-              value={draft.remote}
-              onChange={(event) => setDraft((current) => ({ ...current, remote: event.target.value as DraftValues['remote'] }))}
-              className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
-            >
-              <option value="">Any</option>
-              <option value="remote">Remote only</option>
-            </select>
-          </label>
           <label className="text-xs font-medium text-slate-600" htmlFor="jobs-experience">
             Experience preference
             <select
@@ -174,33 +126,6 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
               <option value="mid">Mid level</option>
               <option value="senior">Senior or lead</option>
             </select>
-          </label>
-          <label className="text-xs font-medium text-slate-600" htmlFor="jobs-freshness">
-            Date posted
-            <select
-              id="jobs-freshness"
-              value={draft.freshness}
-              onChange={(event) => setDraft((current) => ({ ...current, freshness: event.target.value as DraftValues['freshness'] }))}
-              className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
-            >
-              <option value="">Any time</option>
-              <option value="1d">Past 24 hours</option>
-              <option value="3d">Past 3 days</option>
-              <option value="7d">Past week</option>
-              <option value="14d">Past 2 weeks</option>
-              <option value="30d">Past month</option>
-            </select>
-          </label>
-          <label className="text-xs font-medium text-slate-600" htmlFor="jobs-company">
-            Company
-            <input
-              id="jobs-company"
-              value={draft.company}
-              maxLength={100}
-              onChange={(event) => setDraft((current) => ({ ...current, company: event.target.value }))}
-              placeholder="Any company"
-              className="mt-1 block w-full rounded-lg border border-slate-300 px-2 py-2 text-sm"
-            />
           </label>
           <label className="text-xs font-medium text-slate-600" htmlFor="jobs-sort">
             Sort
@@ -216,7 +141,7 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
           </label>
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          Location and experience improve ordering without hiding roles whose details are unclear.
+          Experience improves Best match ordering without hiding roles whose level is unclear.
         </p>
       </form>
 

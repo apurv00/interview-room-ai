@@ -1,7 +1,8 @@
 /**
- * Public Jobs discovery contract. These values are intentionally client-safe:
- * users may keep, reload, and share them in `/jobs` URLs. Resume-derived role
- * and skill signals are a separate POST-only concern and never belong here.
+ * Public Jobs feed transport contract. The current `/jobs` surface exposes
+ * search, experience and sort; location, remote, company and freshness remain
+ * accepted here only for backwards-compatible API consumers. Resume-derived
+ * role and skill signals are a separate POST-only concern.
  */
 
 export const FEED_REMOTE_VALUES = ['remote'] as const
@@ -23,15 +24,15 @@ export interface PublicFeedQuery {
   domain?: string
   /** Public, shareable role/title/company query. */
   search?: string
-  /** A normalized soft preference: it changes rank, never result inclusion. */
+  /** Compatibility-only API preference; the current `/jobs` client omits it. */
   location?: string
-  /** Explicit hard work-mode filter over the stored deterministic field. */
+  /** Compatibility-only API filter; the current `/jobs` client omits it. */
   remote?: FeedRemote
   /** Deterministic title-based preference: it changes rank, never inclusion. */
   experience?: FeedExperience
-  /** Public employer-name filter. */
+  /** Compatibility-only API filter; the current `/jobs` client omits it. */
   company?: string
-  /** Explicit hard date-posted window. */
+  /** Compatibility-only API filter; the current `/jobs` client omits it. */
   freshness?: FeedFreshness
   sort?: FeedSort
   cursor?: string
