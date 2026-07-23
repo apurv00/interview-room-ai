@@ -406,6 +406,34 @@ describe('/api/cms/jobs-ingest/email', () => {
     expect(existing.select).toHaveBeenCalledWith('userId sentAt operatorResolution')
   })
 
+  it('POST treats a concurrent operator resolution as an idempotent replay', async () => {
+    mockSendUpdateOne.mockResolvedValue({ modifiedCount: 0 })
+    mockFindById
+      .mockReturnValueOnce(existingIncidentQuery({ userId: OWNER_ID }).query)
+      .mockReturnValueOnce(existingIncidentQuery({
+        operatorResolution: {
+          kind: 'closed-without-resend',
+          reason: 'Another operator won the race',
+        },
+      }).query)
+
+    const response = await POST(request({
+      action: 'closed-without-resend',
+      incidentId: INCIDENT_ID,
+      reason: 'This operator reached the incident at the same time',
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      idempotent: true,
+      incidentId: INCIDENT_ID,
+    })
+    expect(mockWithActiveJobsAccountWrite).toHaveBeenCalledWith(OWNER_ID, expect.any(Function))
+    expect(mockSendUpdateOne).toHaveBeenCalledTimes(1)
+    expect(mockFindById).toHaveBeenCalledTimes(2)
+  })
+
   it('POST returns conflict for stamped or fresh rows and 404 only when the row is missing', async () => {
     mockSendUpdateOne.mockResolvedValue({ modifiedCount: 0 })
 
