@@ -13,7 +13,7 @@ import { companyKey, locationKey, titleTokens } from './identityResolver'
 
 const PAGE_SIZE_DEFAULT = 20
 const PAGE_SIZE_MAX = 50
-const CURSOR_VERSION = 4
+const CURSOR_VERSION = 5
 const CURSOR_MAX_CHARS = 512
 const CURSOR_MAX_AGE_MS = 6 * 60 * 60 * 1_000
 const CURSOR_FUTURE_SKEW_MS = 5 * 60 * 1_000
@@ -30,7 +30,8 @@ const RESUME_SKILL_CAP = 3
 const TARGET_TITLE_JACCARD = 0.5
 
 const ENTRY_TITLE_TOKENS = ['intern', 'internship', 'trainee', 'apprentice', 'fresher', 'graduate', 'junior', 'jr']
-const SENIOR_TITLE_TOKENS = ['senior', 'sr', 'lead', 'principal', 'staff', 'head', 'director', 'vp', 'vice']
+const MID_TITLE_TOKENS = ['midlevel', 'intermediate']
+const SENIOR_TITLE_TOKENS = ['senior', 'sr', 'principal', 'head', 'director', 'vp', 'vice']
 
 interface FeedDiscoveryQuery extends PublicFeedQuery {
   /** Private role preference. It changes Best-match order, never eligibility. */
@@ -305,14 +306,56 @@ function encodeCursor(
   ].join('.')
 }
 
-function experienceMatchExpression(experience: FeedExperience | undefined): Record<string, unknown> | boolean {
-  if (!experience) return false
+function experienceBandExpressions(): Record<FeedExperience, Record<string, unknown>> {
   const tokens = { $ifNull: ['$titleTokens', []] }
-  const senior = { $gt: [{ $size: { $setIntersection: [tokens, SENIOR_TITLE_TOKENS] } }, 0] }
-  const entry = { $gt: [{ $size: { $setIntersection: [tokens, ENTRY_TITLE_TOKENS] } }, 0] }
-  if (experience === 'senior') return senior
-  if (experience === 'entry') return { $and: [{ $not: [senior] }, entry] }
-  return { $and: [{ $not: [senior] }, { $not: [entry] }] }
+  const hasAny = (values: string[]) => ({
+    $gt: [{ $size: { $setIntersection: [tokens, values] } }, 0],
+  })
+  const hasAll = (values: string[]) => ({
+    $setIsSubset: [values, tokens],
+  })
+  const entry = {
+    $or: [
+      hasAny(ENTRY_TITLE_TOKENS),
+      // Bare "entry" is not enough: "Data Entry Operator" is not an
+      // experience claim. Both spaced and hyphenated "entry level" tokenize
+      // to this exact pair.
+      hasAll(['entry', 'level']),
+    ],
+  }
+  const mid = {
+    $or: [
+      hasAny(MID_TITLE_TOKENS),
+      hasAll(['mid', 'level']),
+    ],
+  }
+  const senior = {
+    $or: [
+      hasAny(SENIOR_TITLE_TOKENS),
+      {
+        // "Lead Generation" is a job function, not a seniority declaration.
+        $and: [
+          { $in: ['lead', tokens] },
+          { $not: [{ $in: ['generation', tokens] }] },
+        ],
+      },
+      {
+        // "Hiring staff" describes candidates being recruited, while Staff
+        // Product Manager / Engineer / Data Scientist is a senior IC level.
+        $and: [
+          { $in: ['staff', tokens] },
+          { $not: [{ $in: ['hiring', tokens] }] },
+        ],
+      },
+    ],
+  }
+  return {
+    // A malformed title that declares conflicting levels is not guessed into
+    // any specific band. It remains visible only under "Any".
+    entry: { $and: [entry, { $not: [mid] }, { $not: [senior] }] },
+    mid: { $and: [mid, { $not: [entry] }, { $not: [senior] }] },
+    senior: { $and: [senior, { $not: [entry] }, { $not: [mid] }] },
+  }
 }
 
 function buildBaseMatch(query: NormalizedDiscoveryQuery, snapshotAt: Date): Record<string, unknown> {
@@ -352,6 +395,11 @@ function buildBaseMatch(query: NormalizedDiscoveryQuery, snapshotAt: Date): Reco
       $gte: new Date(snapshotAt.getTime() - FEED_FRESHNESS_DAYS[query.freshness] * DAY_MS),
       $lte: snapshotAt,
     }
+  }
+  if (query.experience) {
+    // Experience is an eligibility filter, not a score. Unknown titles stay
+    // available under "Any" instead of being silently guessed as mid-level.
+    clauses.push({ $expr: experienceBandExpressions()[query.experience] })
   }
   if (query.search) {
     const searchChoices: Record<string, unknown>[] = []
@@ -405,7 +453,6 @@ function discoveryScoreExpression(query: NormalizedDiscoveryQuery, snapshotAt: D
       { $cond: [companySearchMatch, 40, 0] },
       { $cond: [query.searchDomain ? { $eq: ['$domain', query.searchDomain] } : false, 60, 0] },
       { $cond: [locationMatch, 25, 0] },
-      { $cond: [experienceMatchExpression(query.experience), 15, 0] },
       { $cond: ['$flags.staffing', -10, 0] },
       { $cond: ['$flags.shortJd', -8, 0] },
       { $cond: ['$flags.repost', -6, 0] },
@@ -512,8 +559,9 @@ function databaseSort(sort: FeedSort, direction: 'after' | 'before'): Record<str
  * request-time recency clock and excludes later inserts; existing live rows
  * may still close or receive corrected facts between pages. The hard 25k
  * retained-corpus rail and maxTimeMS keep this appropriate for self-hosted
- * Mongo without Atlas Search. Public soft preferences plus private target
- * role/title and resume-title evidence change ordering, never eligibility.
+ * Mongo without Atlas Search. Experience is a deterministic title-evidence
+ * eligibility filter; private target role/title and resume-title evidence
+ * rank only inside that eligible pool.
  */
 export async function discoverFeed(
   input: FeedDiscoveryQuery,

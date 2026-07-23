@@ -233,7 +233,7 @@ describe('/jobs account deletion cleanup', () => {
 describe('/jobs personalized-feed privacy', () => {
   it('sends resume-derived role and skills in a POST body, never the request URL', async () => {
     mockUseSearchParams.mockReturnValue(new URLSearchParams(
-      'domain=pm&location=Pune&remote=remote&company=Acme&freshness=7d',
+      'domain=pm&experience=entry&location=Pune&remote=remote&company=Acme&freshness=7d',
     ))
     sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
       method: 'upload',
@@ -253,10 +253,11 @@ describe('/jobs personalized-feed privacy', () => {
     expect(init.cache).toBe('no-store')
     expect(JSON.parse(String(init.body))).toEqual({
       domain: 'pm',
+      experience: 'entry',
       targetRole: 'Product Manager',
       skills: ['Roadmaps', 'SQL'],
     })
-    expect(mockRouter.replace).toHaveBeenCalledWith('/jobs?domain=pm', { scroll: false })
+    expect(mockRouter.replace).toHaveBeenCalledWith('/jobs?domain=pm&experience=entry', { scroll: false })
   })
 
   it('removes corrupt target storage and falls back to a public GET without throwing', async () => {
@@ -385,6 +386,8 @@ describe('/jobs URL discovery and request lifecycle', () => {
     expect(await screen.findByDisplayValue('Backend')).toBeTruthy()
     expect(screen.getByDisplayValue('Mid level')).toBeTruthy()
     expect(screen.getByDisplayValue('Newest')).toBeTruthy()
+    expect(screen.getByLabelText('Experience level')).toBeTruthy()
+    expect(screen.getByText(/show only jobs whose title clearly states that level/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
     expect(screen.queryByLabelText('Location preference')).toBeNull()
     expect(screen.queryByLabelText('Work mode')).toBeNull()
@@ -408,6 +411,15 @@ describe('/jobs URL discovery and request lifecycle', () => {
     )
   })
 
+  it('treats an experience-only selection as a hard filter in the empty state', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('experience=entry'))
+    render(<JobsPage />)
+
+    expect(await screen.findByText('No jobs match these filters.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Remove Experience level: Entry level filter/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeTruthy()
+  })
+
   it('turns a retired-only URL into the unfiltered first page', async () => {
     mockUseSearchParams.mockReturnValue(new URLSearchParams(
       'location=Pune&remote=remote&company=Acme&freshness=7d&cursor=old&direction=after',
@@ -429,7 +441,7 @@ describe('/jobs URL discovery and request lifecycle', () => {
     view.rerender(<JobsPage />)
 
     await waitFor(() => expect((screen.getByLabelText('Search jobs') as HTMLInputElement).value).toBe('Second'))
-    expect((screen.getByLabelText('Experience preference') as HTMLSelectElement).value).toBe('senior')
+    expect((screen.getByLabelText('Experience level') as HTMLSelectElement).value).toBe('senior')
   })
 
   it('aborts superseded requests and ignores a late stale response', async () => {

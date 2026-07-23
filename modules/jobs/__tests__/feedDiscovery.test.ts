@@ -13,6 +13,7 @@ vi.mock('@shared/db/models', () => ({
 }))
 
 import { discoverFeed, InvalidFeedCursorError } from '../services/feedDiscovery'
+import { titleTokens } from '../services/identityResolver'
 
 const NOW = new Date('2026-07-22T06:30:00.000Z')
 
@@ -53,6 +54,54 @@ function rowsFacetPipeline(): Array<Record<string, unknown>> {
   return facet.rows
 }
 
+function evaluateMongoExpression(value: unknown, postingTokens: string[]): unknown {
+  if (value === '$titleTokens') return postingTokens
+  if (Array.isArray(value)) return value.map((item) => evaluateMongoExpression(item, postingTokens))
+  if (!value || typeof value !== 'object') return value
+
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length !== 1) throw new Error('unexpected experience expression')
+  const [operator, rawArgument] = entries[0]
+  const argument = rawArgument as unknown[]
+
+  switch (operator) {
+    case '$ifNull': {
+      const candidate = evaluateMongoExpression(argument[0], postingTokens)
+      return candidate == null
+        ? evaluateMongoExpression(argument[1], postingTokens)
+        : candidate
+    }
+    case '$setIntersection': {
+      const [left, right] = evaluateMongoExpression(argument, postingTokens) as string[][]
+      const rightSet = new Set(right)
+      return Array.from(new Set(left.filter((item) => rightSet.has(item))))
+    }
+    case '$size':
+      return (evaluateMongoExpression(rawArgument, postingTokens) as unknown[]).length
+    case '$gt': {
+      const [left, right] = evaluateMongoExpression(argument, postingTokens) as number[]
+      return left > right
+    }
+    case '$setIsSubset': {
+      const [left, right] = evaluateMongoExpression(argument, postingTokens) as string[][]
+      const rightSet = new Set(right)
+      return left.every((item) => rightSet.has(item))
+    }
+    case '$in': {
+      const [candidate, list] = evaluateMongoExpression(argument, postingTokens) as [string, string[]]
+      return list.includes(candidate)
+    }
+    case '$and':
+      return (evaluateMongoExpression(argument, postingTokens) as unknown[]).every(Boolean)
+    case '$or':
+      return (evaluateMongoExpression(argument, postingTokens) as unknown[]).some(Boolean)
+    case '$not':
+      return !Boolean(evaluateMongoExpression(argument[0], postingTokens))
+    default:
+      throw new Error(`unexpected Mongo operator ${operator}`)
+  }
+}
+
 beforeEach(() => {
   vi.stubEnv('NEXTAUTH_SECRET', 'test-secret-longer-than-sixteen-characters')
   mockAggregate.mockReset().mockReturnValue({ option: mockOption })
@@ -81,6 +130,7 @@ describe('database-backed Jobs discovery', () => {
     expect(page.nextCursor).toContain('.')
     const pipeline = mockAggregate.mock.calls[0][0]
     expect(pipeline[0]).toMatchObject({ $match: { status: 'open' } })
+    expect(JSON.stringify(pipeline[0].$match)).not.toContain('$expr')
     const facet = pipeline.find((stage: Record<string, unknown>) => '$facet' in stage)?.$facet as {
       metadata: Array<Record<string, unknown>>
     } | undefined
@@ -116,17 +166,66 @@ describe('database-backed Jobs discovery', () => {
     expect(JSON.stringify(baseMatch)).not.toContain('$regex')
   })
 
-  it('uses deterministic title intent without an unindexed regex scan', async () => {
+  it('uses deterministic title intent and hard-filters experience before ranking', async () => {
     aggregateResult([], 0)
 
     await discoverFeed({ search: 'Backend Engineer', experience: 'senior' }, NOW)
 
     const baseMatch = (mockAggregate.mock.calls[0][0] as Array<Record<string, unknown>>)[0].$match
     expect(JSON.stringify(baseMatch)).toContain('$all')
+    expect(JSON.stringify(baseMatch)).toContain('$expr')
+    expect(JSON.stringify(baseMatch)).toContain('senior')
     expect(JSON.stringify(baseMatch)).not.toContain('$regex')
     const ranking = JSON.stringify(rowsFacetPipeline())
-    expect(ranking).toContain('senior')
+    expect(ranking).not.toContain('senior')
     expect(ranking).not.toContain('manager')
+  })
+
+  it.each([
+    ['entry', 'Entry-Level Product Manager', true],
+    ['entry', 'Junior Product Manager', true],
+    ['entry', 'Senior Junior Product Manager', false],
+    ['entry', 'Data Entry Operator', false],
+    ['entry', 'Product Manager', false],
+    ['mid', 'Mid-Level Product Manager', true],
+    ['mid', 'Intermediate Product Manager', true],
+    ['mid', 'Junior Product Manager', false],
+    ['mid', 'Senior Product Manager', false],
+    ['mid', 'Product Manager', false],
+    ['senior', 'Senior Product Manager', true],
+    ['senior', 'Staff Product Manager', true],
+    ['senior', 'HR Recruiter Hiring Staff', false],
+    ['senior', 'Tech Lead', true],
+    ['senior', 'Senior Junior Product Manager', false],
+    ['senior', 'Senior Mid-Level Product Manager', false],
+    ['senior', 'Lead Generation Executive', false],
+    ['senior', 'Product Manager', false],
+  ] as const)(
+    'filters %s titles exactly: %s → %s',
+    async (experience, title, expected) => {
+      aggregateResult([], 0)
+
+      await discoverFeed({ experience }, NOW)
+
+      const pipeline = mockAggregate.mock.calls[0][0] as Array<Record<string, unknown>>
+      const clauses = pipeline[0].$match.$and as Array<Record<string, unknown>>
+      const filter = clauses.find((clause) => '$expr' in clause)?.$expr
+      expect(filter).toBeTruthy()
+      expect(evaluateMongoExpression(filter, titleTokens(title))).toBe(expected)
+    },
+  )
+
+  it('applies the same hard experience pool to Newest while preserving chronological sorting', async () => {
+    aggregateResult([], 0)
+
+    await discoverFeed({ experience: 'entry', sort: 'newest' }, NOW)
+
+    const pipeline = mockAggregate.mock.calls[0][0] as Array<Record<string, unknown>>
+    expect(JSON.stringify(pipeline[0].$match)).toContain('$expr')
+    expect(pipeline[1]).toEqual({ $sort: { postedAt: -1, _id: -1 } })
+    expect(rowsFacetPipeline().filter((stage) => '$sort' in stage)).toEqual(
+      expect.arrayContaining([{ $sort: { sortPostedAt: -1, _id: -1 } }]),
+    )
   })
 
   it('prioritizes generic target-role and resume evidence before the Best-match cap without hard-filtering', async () => {

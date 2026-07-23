@@ -182,7 +182,7 @@ function JobsFeedHeader() {
         <Link href="/jobs/tracker" className="text-sm text-blue-600 hover:underline">My tracker</Link>
       </div>
       <p className="mt-2 text-sm text-slate-600">
-        Search live jobs, set your experience preference, and choose Best match or Newest.
+        Search live jobs, filter by experience level, and choose Best match or Newest.
       </p>
     </>
   )
@@ -416,10 +416,10 @@ function JobsFeed() {
   }
 
   const hasHardFilters = Boolean(
-    publicQuery.domain || publicQuery.search,
+    publicQuery.domain || publicQuery.search || publicQuery.experience,
   )
   const hasAnyDiscoveryPreference = Boolean(
-    hasHardFilters || publicQuery.experience || publicQuery.sort,
+    hasHardFilters || publicQuery.sort,
   )
   const previousHref = data?.previousCursor
     ? hrefForPublicQuery(pathname, { ...publicQuery, cursor: data.previousCursor, direction: 'before' })
