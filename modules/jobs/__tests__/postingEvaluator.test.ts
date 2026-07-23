@@ -185,6 +185,24 @@ describe('postingEvaluator (§4.5 — never throws, never fabricates)', () => {
     expect(await evaluatePosting(INPUT, wrongProvider)).toMatchObject({ ok: false, kind: 'model-mismatch' })
   })
 
+  it('records a task-default fallback at the conservative attempted-route price', async () => {
+    const deps = makeDeps({
+      resolvedModel: { ...DEFAULT_ROUTE, model: 'gpt-5.4-mini' },
+      pricing: { inputUsdPerMTok: 1, outputUsdPerMTok: 6 },
+      completionFn: vi.fn().mockResolvedValue(completionOf(
+        JSON.stringify(VALID_VERDICT),
+        { model: DEFAULT_ROUTE.model, provider: DEFAULT_ROUTE.provider, usedFallback: true },
+      )) as never,
+    })
+
+    const out = await evaluatePosting(INPUT, deps)
+
+    expect(out).toMatchObject({ ok: false, kind: 'model-mismatch' })
+    const expectedCost = (4000 * 1 + 300 * 6) / 1_000_000
+    expect(out.costUsd).toBeCloseTo(expectedCost)
+    expect(deps.recorded).toEqual([expectedCost])
+  })
+
   it('pins the complete CMS-resolved route instead of only its model', async () => {
     const resolvedModel = {
       ...DEFAULT_ROUTE,

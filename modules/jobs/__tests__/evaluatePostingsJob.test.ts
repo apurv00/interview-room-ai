@@ -482,6 +482,89 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(evaluateFn.mock.calls[0][1]).toMatchObject({ resolvedModel: DEFAULT_ROUTE })
   })
 
+  it('uses the supported route price when the configured floor is stale', async () => {
+    resetAll()
+    mockPostingFindById.mockReturnValue({
+      lean: () => Promise.resolve(posting()),
+    })
+    const evaluateFn = vi.fn().mockResolvedValue(okOutcome())
+
+    await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )
+
+    expect(evaluateFn.mock.calls[0][1]).toMatchObject({
+      pricing: { inputUsdPerMTok: 1, outputUsdPerMTok: 6 },
+    })
+  })
+
+  it('covers the task-default fallback when a cheaper primary route is configured', async () => {
+    resetAll()
+    vi.mocked(resolveModelWithAuthority).mockResolvedValueOnce({
+      resolved: { ...DEFAULT_ROUTE, model: 'gpt-5.4-mini' },
+      source: 'L3-Mongo',
+      authoritative: true,
+    })
+    mockPostingFindById.mockReturnValue({
+      lean: () => Promise.resolve(posting()),
+    })
+    const evaluateFn = vi.fn().mockResolvedValue(okOutcome())
+
+    await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )
+
+    expect(evaluateFn.mock.calls[0][1]).toMatchObject({
+      pricing: { inputUsdPerMTok: 1, outputUsdPerMTok: 6 },
+    })
+  })
+
+  it('blocks an unpriced legacy route before reading a posting or invoking the evaluator', async () => {
+    resetAll()
+    vi.mocked(resolveModelWithAuthority).mockResolvedValueOnce({
+      resolved: { ...DEFAULT_ROUTE, model: 'unpriced-model' },
+      source: 'L3-Mongo',
+      authoritative: true,
+    })
+    const evaluateFn = vi.fn()
+
+    await expect(runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )).rejects.toThrow('Jobs verdict pricing is unavailable for openai/unpriced-model')
+
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(evaluateFn).not.toHaveBeenCalled()
+  })
+
+  it('blocks an unpriced legacy fallback before reading a posting or invoking the evaluator', async () => {
+    resetAll()
+    vi.mocked(resolveModelWithAuthority).mockResolvedValueOnce({
+      resolved: {
+        ...DEFAULT_ROUTE,
+        fallbackModel: 'unpriced-fallback',
+        fallbackProvider: 'openai',
+      },
+      source: 'L3-Mongo',
+      authoritative: true,
+    })
+    const evaluateFn = vi.fn()
+
+    await expect(runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )).rejects.toThrow('Jobs verdict pricing is unavailable for openai/unpriced-fallback')
+
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+    expect(evaluateFn).not.toHaveBeenCalled()
+  })
+
   it('verdict writes are freshness-guarded: a mid-flight merge supersedes the result (Codex #515)', async () => {
     resetAll()
     const doc = posting()
@@ -808,7 +891,7 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
 
   it('cycle rows stamp the CMS-RESOLVED epoch, not the code default (Codex #515)', async () => {
     resetAll()
-    const resolvedModel = { ...DEFAULT_ROUTE, model: 'gpt-9-zeta', maxTokens: 1600 }
+    const resolvedModel = { ...DEFAULT_ROUTE, maxTokens: 1600 }
     vi.mocked(resolveModelWithAuthority).mockResolvedValueOnce({
       resolved: resolvedModel,
       source: 'L3-Mongo',

@@ -18,6 +18,44 @@ import { JOB_DOMAINS } from './domains'
  */
 export const PROMPT_VERSION = 'v2' // v2 2026-07-14: explicit code-class coherence rule in the calibration line
 
+export interface JobsVerdictTokenPricing {
+  inputUsdPerMTok: number
+  outputUsdPerMTok: number
+}
+
+/**
+ * Conservative minimum prices for routes allowed to run the Jobs verdict
+ * worker. An unpriced provider/model pair must not make an external call
+ * under a dollar budget.
+ */
+const ROUTE_PRICE_FLOORS: Readonly<Record<string, JobsVerdictTokenPricing>> = {
+  'openai:gpt-5.4-mini': { inputUsdPerMTok: 0.3, outputUsdPerMTok: 1.2 },
+  'openai:gpt-5.6-luna': { inputUsdPerMTok: 1, outputUsdPerMTok: 6 },
+  'anthropic:claude-haiku-4-5': { inputUsdPerMTok: 1, outputUsdPerMTok: 5 },
+  'anthropic:claude-sonnet-4-6': { inputUsdPerMTok: 3, outputUsdPerMTok: 15 },
+  'anthropic:claude-opus-4-6': { inputUsdPerMTok: 15, outputUsdPerMTok: 75 },
+}
+
+export function jobsVerdictRoutePriceFloor(
+  provider: string,
+  model: string,
+): JobsVerdictTokenPricing | null {
+  return ROUTE_PRICE_FLOORS[`${provider}:${model}`] ?? null
+}
+
+export function effectiveJobsVerdictPricing(
+  provider: string,
+  model: string,
+  configuredFloor: JobsVerdictTokenPricing,
+): JobsVerdictTokenPricing | null {
+  const routeFloor = jobsVerdictRoutePriceFloor(provider, model)
+  if (!routeFloor) return null
+  return {
+    inputUsdPerMTok: Math.max(routeFloor.inputUsdPerMTok, configuredFloor.inputUsdPerMTok),
+    outputUsdPerMTok: Math.max(routeFloor.outputUsdPerMTok, configuredFloor.outputUsdPerMTok),
+  }
+}
+
 /** Frozen reason-code enums — snapshot-tested; additions require a PROMPT_VERSION bump. */
 export const FRAUD_REASON_CODES = [
   'fee_fraud',

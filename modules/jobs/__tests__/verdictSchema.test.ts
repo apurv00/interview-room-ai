@@ -7,9 +7,12 @@ import {
   CLEAN_REASON_CODES,
   VERDICT_DOMAIN_IDS,
   PROMPT_VERSION,
+  effectiveJobsVerdictPricing,
+  jobsVerdictRoutePriceFloor,
   epochOf,
 } from '../config/verdictSchema'
 import { JOB_DOMAINS } from '../config/domains'
+import { __PRICING } from '@shared/services/usageTracking'
 
 const valid = {
   verdict: 'genuine',
@@ -90,5 +93,45 @@ describe('JobVerdictSchema (§4.5 layer 2 output contract)', () => {
     expect(epochOf({ ...route, maxTokens: 1600 })).not.toBe(epoch)
     expect(epochOf({ ...route, reasoningEffort: 'high' })).not.toBe(epoch)
     expect(epochOf({ ...route, temperature: 0.2 })).not.toBe(epoch)
+  })
+})
+
+describe('Jobs verdict route pricing', () => {
+  it('applies the greater of the supported-route floor and the CMS floor', () => {
+    expect(effectiveJobsVerdictPricing('openai', 'gpt-5.6-luna', {
+      inputUsdPerMTok: 0.5,
+      outputUsdPerMTok: 2,
+    })).toEqual({
+      inputUsdPerMTok: 1,
+      outputUsdPerMTok: 6,
+    })
+    expect(effectiveJobsVerdictPricing('openai', 'gpt-5.6-luna', {
+      inputUsdPerMTok: 2,
+      outputUsdPerMTok: 8,
+    })).toEqual({
+      inputUsdPerMTok: 2,
+      outputUsdPerMTok: 8,
+    })
+  })
+
+  it('prices supported model switches and rejects unknown route identities', () => {
+    expect(jobsVerdictRoutePriceFloor('anthropic', 'claude-opus-4-6')).toEqual({
+      inputUsdPerMTok: 15,
+      outputUsdPerMTok: 75,
+    })
+    expect(jobsVerdictRoutePriceFloor('anthropic', 'gpt-5.6-luna')).toBeNull()
+    expect(jobsVerdictRoutePriceFloor('openai', 'unpriced-model')).toBeNull()
+  })
+
+  it.each([
+    ['openai', 'gpt-5.4-mini'],
+    ['openai', 'gpt-5.6-luna'],
+    ['anthropic', 'claude-haiku-4-5'],
+    ['anthropic', 'claude-sonnet-4-6'],
+    ['anthropic', 'claude-opus-4-6'],
+  ])('never falls below shared usage pricing for %s/%s', (provider, model) => {
+    const floor = jobsVerdictRoutePriceFloor(provider, model)
+    expect(floor?.inputUsdPerMTok).toBeGreaterThanOrEqual(__PRICING[model].input * 1_000)
+    expect(floor?.outputUsdPerMTok).toBeGreaterThanOrEqual(__PRICING[model].output * 1_000)
   })
 })
