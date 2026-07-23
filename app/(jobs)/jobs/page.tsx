@@ -12,7 +12,7 @@ import {
   FEED_SORT_VALUES,
   type PublicFeedQuery,
 } from '@jobs/config/feedDiscovery'
-import { JOB_DOMAIN_IDS } from '@jobs/config/domains'
+import { resolveJobsDomainCapability } from '@jobs/config/domains'
 import { JOB_TARGET_QUESTION_CTA, postedAgeLabel } from '@jobs/config/truthfulLabels'
 import { clearAllInterviewStorage } from '@shared/storageKeys'
 
@@ -117,9 +117,12 @@ function enumParam<T extends string>(
 
 function publicQueryFromParams(params: URLSearchParams): PublicFeedQuery {
   const domainParam = cleanParam(params, 'domain', 50)
-  const domain = domainParam && (JOB_DOMAIN_IDS as readonly string[]).includes(domainParam)
-    ? domainParam
-    : undefined
+  const domainCapability = resolveJobsDomainCapability(domainParam)
+  const domain = domainCapability.kind === 'filtered'
+    ? domainCapability.domain
+    : domainCapability.kind === 'unsupported'
+      ? domainParam
+      : undefined
   const cursor = cleanParam(params, 'cursor', 512)
   const direction = cursor && (params.get('direction') === 'before' || params.get('direction') === 'after')
     ? params.get('direction') as 'before' | 'after'
@@ -190,6 +193,8 @@ function JobsFeed() {
     [searchParamsKey],
   )
   const publicQueryKey = useMemo(() => paramsForPublicQuery(publicQuery).toString(), [publicQuery])
+  const unsupportedDomain = publicQuery.domain &&
+    resolveJobsDomainCapability(publicQuery.domain).kind === 'unsupported'
 
   const [data, setData] = useState<FeedPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -289,6 +294,13 @@ function JobsFeed() {
   useEffect(() => {
     if (!targetIdentityReady) return
     const requestId = ++feedRequestRef.current
+    if (unsupportedDomain) {
+      setData(null)
+      hasFeedDataRef.current = false
+      setError('This job category is not supported in Jobs yet.')
+      setIsUpdating(false)
+      return
+    }
     const controller = new AbortController()
     const personalized = !!effectiveTarget && (!!effectiveTarget.role || effectiveTarget.skills.length > 0)
     setIsUpdating(true)
@@ -351,7 +363,7 @@ function JobsFeed() {
     }).catch(() => {})
 
     return () => controller.abort()
-  }, [effectiveTarget, feedRevision, pathname, publicQuery, publicQueryKey, router, targetIdentityReady])
+  }, [effectiveTarget, feedRevision, pathname, publicQuery, publicQueryKey, router, targetIdentityReady, unsupportedDomain])
 
   const revealSkills = Array.from(new Set((data?.cards ?? []).flatMap((card) => card.matchedSkills ?? []))).slice(0, 3)
   const revealLine = !effectiveTarget
@@ -438,8 +450,14 @@ function JobsFeed() {
       {error && (
         <div role="alert" className="mt-6 flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           <span>{error}</span>
-          <button type="button" onClick={() => setFeedRevision((revision) => revision + 1)} className="font-medium underline">
-            Retry
+          <button
+            type="button"
+            onClick={() => unsupportedDomain
+              ? navigateToQuery({ ...publicQuery, domain: undefined })
+              : setFeedRevision((revision) => revision + 1)}
+            className="font-medium underline"
+          >
+            {unsupportedDomain ? 'Clear category' : 'Retry'}
           </button>
         </div>
       )}

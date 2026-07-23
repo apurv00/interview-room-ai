@@ -63,6 +63,37 @@ export const JOB_DOMAINS: readonly JobDomain[] = [
 export type JobDomainId = (typeof JOB_DOMAINS)[number]['id']
 export const JOB_DOMAIN_IDS = JOB_DOMAINS.map((d) => d.id) as JobDomainId[]
 
+export type JobsDomainCapability =
+  | { kind: 'filtered'; domain: JobDomainId }
+  | { kind: 'unfiltered' }
+  | { kind: 'unsupported' }
+
+const INTERVIEW_ROLE_JOB_ALIASES: Readonly<Record<string, JobDomainId>> = {
+  'ui-designer': 'design',
+  'product-designer': 'design',
+}
+
+/**
+ * Resolves an Interview role/domain at the explicit Jobs capability boundary.
+ * General intentionally means all jobs; custom CMS roles remain unsupported
+ * until a reviewed Jobs harvest domain exists for them.
+ */
+export function resolveJobsDomainCapability(
+  value: string | undefined | null,
+): JobsDomainCapability {
+  if (value == null || value.trim() === '') return { kind: 'unfiltered' }
+  const normalized = normalizeInterviewRoleSlug(value)
+  if (!normalized) return { kind: 'unsupported' }
+  if (normalized === 'general') return { kind: 'unfiltered' }
+  if ((JOB_DOMAIN_IDS as readonly string[]).includes(normalized)) {
+    return { kind: 'filtered', domain: normalized as JobDomainId }
+  }
+  const alias = INTERVIEW_ROLE_JOB_ALIASES[normalized]
+  return alias
+    ? { kind: 'filtered', domain: alias }
+    : { kind: 'unsupported' }
+}
+
 /**
  * Fresher-heavy domains measured by the probe's G1f/G6 cells. Kept aligned
  * with the probe matrix for measurement continuity ('data-analyst' is the

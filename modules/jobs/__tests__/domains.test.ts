@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { JOB_DOMAINS, JOB_DOMAIN_IDS, FRESHER_DOMAINS, FRESHER_DOMAIN_PATTERNS, matchFresherDomain } from '../config/domains'
+import {
+  JOB_DOMAINS,
+  JOB_DOMAIN_IDS,
+  FRESHER_DOMAINS,
+  FRESHER_DOMAIN_PATTERNS,
+  matchFresherDomain,
+  resolveJobsDomainCapability,
+} from '../config/domains'
 import { FALLBACK_DOMAINS } from '@shared/db/seed'
 
 // The unified-namespace drift guard (founder ruling 2026-07-12): the jobs
@@ -7,6 +14,16 @@ import { FALLBACK_DOMAINS } from '@shared/db/seed'
 // on either side must fail HERE, never become a silent disjoint.
 
 describe('unified taxonomy', () => {
+  it('resolves the explicit Interview-role → Jobs capability boundary', () => {
+    expect(resolveJobsDomainCapability('backend')).toEqual({ kind: 'filtered', domain: 'backend' })
+    expect(resolveJobsDomainCapability('ui-designer')).toEqual({ kind: 'filtered', domain: 'design' })
+    expect(resolveJobsDomainCapability('product-designer')).toEqual({ kind: 'filtered', domain: 'design' })
+    expect(resolveJobsDomainCapability('general')).toEqual({ kind: 'unfiltered' })
+    expect(resolveJobsDomainCapability(undefined)).toEqual({ kind: 'unfiltered' })
+    expect(resolveJobsDomainCapability('custom-cms-role')).toEqual({ kind: 'unsupported' })
+    expect(resolveJobsDomainCapability('Product Designer')).toEqual({ kind: 'unsupported' })
+  })
+
   const interviewSlugs = new Set(FALLBACK_DOMAINS.map((d: { slug: string }) => d.slug))
 
   it('every mapped jobs domain exists in the interview catalog', () => {

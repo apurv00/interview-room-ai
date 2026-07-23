@@ -90,6 +90,37 @@ describe('/api/jobs/feed transport privacy', () => {
     expect(mocks.roleToJobsDomain).not.toHaveBeenCalled()
   })
 
+  it('maps supported Interview-role aliases to the canonical Jobs domain', async () => {
+    const response = await GET(new Request(
+      'http://localhost/api/jobs/feed?domain=product-designer',
+    ))
+
+    expect(response.status).toBe(200)
+    expect(mocks.getFeed).toHaveBeenCalledWith(expect.objectContaining({ domain: 'design' }))
+  })
+
+  it('rejects an unsupported public domain before database work', async () => {
+    const response = await GET(new Request(
+      'http://localhost/api/jobs/feed?domain=custom-cms-role',
+    ))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ code: 'UNSUPPORTED_JOB_DOMAIN' })
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+    expect(mocks.getFeed).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed domain instead of treating it as unfiltered', async () => {
+    const response = await GET(new Request(
+      'http://localhost/api/jobs/feed?domain=Product%20Designer',
+    ))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ code: 'UNSUPPORTED_JOB_DOMAIN' })
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+    expect(mocks.getFeed).not.toHaveBeenCalled()
+  })
+
   it('rejects legacy offset pages after page one', async () => {
     const response = await GET(new Request('http://localhost/api/jobs/feed?page=2&domain=pm'))
 
@@ -139,6 +170,16 @@ describe('/api/jobs/feed transport privacy', () => {
     expect(response.headers.get('cache-control')).toContain('private')
     expect(response.headers.get('cache-control')).toContain('no-store')
     expect(response.headers.get('pragma')).toBe('no-cache')
+  })
+
+  it('rejects an unsupported personalized domain before database work', async () => {
+    const response = await post({ domain: 'custom-cms-role', targetRole: 'Backend Engineer' })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ code: 'UNSUPPORTED_JOB_DOMAIN' })
+    expect(response.headers.get('cache-control')).toContain('private')
+    expect(mocks.connectDB).not.toHaveBeenCalled()
+    expect(mocks.getFeed).not.toHaveBeenCalled()
   })
 
   it('lets an explicit public domain override role-derived soft-domain ranking', async () => {

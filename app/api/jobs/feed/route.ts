@@ -11,11 +11,11 @@ import {
   FEED_REMOTE_VALUES,
   FEED_SORT_VALUES,
   InvalidFeedCursorError,
-  JOB_DOMAINS,
   getFeed,
   roleToJobsDomain,
   type FeedQuery,
 } from '@jobs'
+import { resolveJobsDomainCapability } from '@jobs/config/domains'
 
 export const dynamic = 'force-dynamic'
 
@@ -131,10 +131,10 @@ function clean(value: string | undefined): string | undefined {
 
 function toPublicFeedQuery(input: PublicFeedInput): FeedQuery | null {
   if (input.direction && !input.cursor) return null
+  const domainCapability = resolveJobsDomainCapability(input.domain)
+  if (domainCapability.kind === 'unsupported') return null
   return {
-    domain: input.domain && JOB_DOMAINS.some((candidate) => candidate.id === input.domain)
-      ? input.domain
-      : undefined,
+    domain: domainCapability.kind === 'filtered' ? domainCapability.domain : undefined,
     search: clean(input.search),
     location: clean(input.location),
     remote: input.remote,
@@ -192,6 +192,9 @@ export async function GET(req: Request) {
   if (legacyPage && legacyPage !== '1') return invalidQuery(false, 'CURSOR_PAGINATION_REQUIRED')
   const parsed = PublicFeedSchema.safeParse(publicInputFromUrl(url))
   if (!parsed.success) return invalidQuery(false)
+  if (resolveJobsDomainCapability(parsed.data.domain).kind === 'unsupported') {
+    return invalidQuery(false, 'UNSUPPORTED_JOB_DOMAIN')
+  }
   const query = toPublicFeedQuery(parsed.data)
   if (!query) return invalidQuery(false)
   try {
@@ -230,6 +233,9 @@ export async function POST(req: Request) {
   const parsed = PersonalizedFeedSchema.safeParse(raw)
   if (!parsed.success) {
     return privateJson({ error: 'Invalid feed preferences' }, 400)
+  }
+  if (resolveJobsDomainCapability(parsed.data.domain).kind === 'unsupported') {
+    return invalidQuery(true, 'UNSUPPORTED_JOB_DOMAIN')
   }
 
   const publicQuery = toPublicFeedQuery(parsed.data)
