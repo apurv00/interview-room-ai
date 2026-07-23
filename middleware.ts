@@ -13,6 +13,14 @@ export default withAuth(
     const isResume = hostname.startsWith('resume.')
     const isLearn = hostname.startsWith('learn.')
 
+    const redirectToPrimaryApp = () => {
+      const configuredAppUrl = process.env.APP_URL || process.env.NEXTAUTH_URL
+      const url = configuredAppUrl ? new URL('/', configuredAppUrl) : req.nextUrl.clone()
+      url.pathname = configuredAppUrl ? '/' : '/signin'
+      url.search = ''
+      return NextResponse.redirect(url)
+    }
+
     // Paths excluded from subdomain rewriting
     const subdomainExcludedPaths = [
       '/signin',
@@ -31,6 +39,9 @@ export default withAuth(
       !subdomainExcludedPaths.some((p) => pathname.startsWith(p))
 
     if (shouldRewriteToCms) {
+      if (token?.role !== 'platform_admin') {
+        return redirectToPrimaryApp()
+      }
       const url = req.nextUrl.clone()
       url.pathname = `/cms${pathname}`
       return NextResponse.rewrite(url)
@@ -94,7 +105,7 @@ export default withAuth(
     // CMS routes require platform_admin role
     if (pathname.startsWith('/cms')) {
       if (token?.role !== 'platform_admin') {
-        return NextResponse.redirect(new URL('/', req.url))
+        return redirectToPrimaryApp()
       }
     }
 
