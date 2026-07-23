@@ -447,12 +447,21 @@ function JobsFeed() {
         </div>
       ) : (
         <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-white p-4">
-          <p className="text-sm font-medium">Attach your resume to refine Best match using private signals.</p>
-          <div className="mt-3 flex gap-3">
-            <Link href="/jobs/start" className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
-              Attach or build
+          <p className="text-sm font-medium">Personalize Best match</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Upload a PDF to rank jobs using your target role and skills.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:gap-3">
+            <Link
+              href="/jobs/start?intent=upload"
+              className="inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Upload resume
             </Link>
-            <Link href="/jobs/start" className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
+            <Link
+              href="/jobs/start"
+              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-50"
+            >
               {JOB_TARGET_QUESTION_CTA}
             </Link>
           </div>
