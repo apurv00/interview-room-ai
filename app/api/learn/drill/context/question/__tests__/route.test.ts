@@ -21,7 +21,7 @@ import mongoose from 'mongoose'
 const { mockGetServerSession, mockFindOne, mockUpdateOne, mockInngestSend, mockGetDomainLabel } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockFindOne: vi.fn(),
-  mockUpdateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+  mockUpdateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
   // Default: backfill returns null so legacy tests (which exercised the
   // "no ideal answer" branch back when there was no JIT) stay no-ops.
   // Tests that want to assert backfill happened override per-case.
@@ -67,7 +67,7 @@ function chain(result: unknown) {
 beforeEach(() => {
   mockGetServerSession.mockReset()
   mockFindOne.mockReset()
-  mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 })
+  mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockInngestSend.mockReset().mockResolvedValue({ ids: ['evt-1'] })
   mockGetDomainLabel.mockReset().mockImplementation((role: string) => `Domain ${role}`)
 })
@@ -181,6 +181,26 @@ describe('GET /api/learn/drill/context/question', () => {
   it('returns fallback (null idealAnswer) and stays 200 when the enrichment enqueue fails', async () => {
     mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
     mockInngestSend.mockRejectedValueOnce(new Error('inngest unavailable'))
+    let enrichmentStatus: string | undefined
+    mockUpdateOne.mockImplementation(async (filter, update) => {
+      const nextStatus = (update as { $set?: { enrichmentStatus?: string } }).$set?.enrichmentStatus
+      if (nextStatus === 'pending') {
+        if (enrichmentStatus === 'pending' || enrichmentStatus === 'running') {
+          return { matchedCount: 0, modifiedCount: 0 }
+        }
+        enrichmentStatus = 'pending'
+        return { matchedCount: 1, modifiedCount: 1 }
+      }
+      if (
+        nextStatus === 'failed'
+        && (filter as { enrichmentStatus?: string }).enrichmentStatus === 'pending'
+        && enrichmentStatus === 'pending'
+      ) {
+        enrichmentStatus = 'failed'
+        return { matchedCount: 1, modifiedCount: 1 }
+      }
+      return { matchedCount: 0, modifiedCount: 0 }
+    })
     mockFindOne.mockReturnValue(
       chain({
         config: { role: 'pm' },
@@ -210,8 +230,24 @@ describe('GET /api/learn/drill/context/question', () => {
     expect(res.status).toBe(200)
     expect(body.idealAnswer).toBeNull()
     expect(mockInngestSend).toHaveBeenCalledTimes(1)
-    // Enqueue failed → no pending-status write.
-    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockUpdateOne).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        enrichmentStatus: 'pending',
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ enrichmentStatus: 'failed' }),
+      }),
+    )
+    expect(enrichmentStatus).toBe('failed')
+
+    mockInngestSend.mockResolvedValueOnce({ ids: ['evt-retry'] })
+    const retry = await GET(new NextRequest(
+      `http://localhost/api/learn/drill/context/question?sessionId=${SESSION_ID}&questionIndex=0`,
+    ))
+    expect(retry.status).toBe(200)
+    expect(mockInngestSend).toHaveBeenCalledTimes(2)
+    expect(enrichmentStatus).toBe('pending')
     // Scores + primaryGap still flow through so the fallback strip works.
     expect(body.primaryGap).toBe('specificity')
     expect(body.scores).toBeTruthy()
@@ -256,8 +292,56 @@ describe('GET /api/learn/drill/context/question', () => {
       data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill', questionIndex: 3 },
     })
     expect(mockUpdateOne).toHaveBeenCalledTimes(1)
-    const [, update] = mockUpdateOne.mock.calls[0]
-    expect(update.$set.enrichmentStatus).toBe('pending')
+    const [filter, update] = mockUpdateOne.mock.calls[0]
+    expect(filter).toMatchObject({
+      _id: new mongoose.Types.ObjectId(SESSION_ID),
+      userId: new mongoose.Types.ObjectId(USER_ID),
+      enrichmentStatus: { $nin: ['pending', 'running'] },
+    })
+    expect(update).toEqual({
+      $set: { enrichmentStatus: 'pending' },
+      $unset: { enrichmentError: 1, enrichmentCompletedAt: 1 },
+    })
+    expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(
+      mockInngestSend.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('allows only one concurrent weak-question request to enqueue', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockFindOne.mockReturnValue(
+      chain({
+        config: { role: 'pm', interviewType: 'behavioral' },
+        evaluations: [{
+          questionIndex: 3,
+          question: 'Walk me through a decision under constraint',
+          answer: 'We had limited time',
+          relevance: 40,
+          structure: 40,
+          specificity: 30,
+          ownership: 40,
+          primaryGap: 'specificity',
+        }],
+        feedback: { ideal_answers: [] },
+      }),
+    )
+    let claimed = false
+    mockUpdateOne.mockImplementation(async (_filter, update) => {
+      if ((update as { $set?: { enrichmentStatus?: string } }).$set?.enrichmentStatus !== 'pending') {
+        return { matchedCount: 0, modifiedCount: 0 }
+      }
+      if (claimed) return { matchedCount: 0, modifiedCount: 0 }
+      claimed = true
+      return { matchedCount: 1, modifiedCount: 1 }
+    })
+    const request = () => new NextRequest(
+      `http://localhost/api/learn/drill/context/question?sessionId=${SESSION_ID}&questionIndex=3`,
+    )
+
+    const responses = await Promise.all([GET(request()), GET(request())])
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200])
+    expect(mockInngestSend).toHaveBeenCalledTimes(1)
   })
 
   it('does not enqueue when an enrichment job is already pending/running (dedupe)', async () => {

@@ -107,29 +107,56 @@ export async function GET(req: NextRequest) {
     // the feedback slot). The job regenerates the complete ideal_answers
     // set at 'high' and persists it; THIS request returns the existing
     // QuestionInsightStrip fallback immediately, and the outline is there
-    // for the next visit (or the page's own refresh). Dedupe: skip the
-    // send when a job is already pending/running for this session.
+    // for the next visit (or the page's own refresh). A conditional pending
+    // claim, not this read projection, is the concurrency authority.
     if (!idealAnswer && evaluation) {
       const avg = avgEvaluationScore(evaluation)
       const jobActive = doc.enrichmentStatus === 'pending' || doc.enrichmentStatus === 'running'
       if (avg < WEAK_QUESTION_SCORE_THRESHOLD && !jobActive) {
-        inngest
-          .send({
-            name: 'feedback/enrich.requested',
-            data: { sessionId, userId: session.user.id, reason: 'drill-backfill', questionIndex },
-          })
-          .then(() =>
-            InterviewSession.updateOne(
-              { _id: new mongoose.Types.ObjectId(sessionId) },
-              { $set: { enrichmentStatus: 'pending' } },
-            ),
-          )
-          .catch((err) =>
+        const sessionObjectId = new mongoose.Types.ObjectId(sessionId)
+        const userObjectId = new mongoose.Types.ObjectId(session.user.id)
+        const claim = await InterviewSession.updateOne(
+          {
+            _id: sessionObjectId,
+            userId: userObjectId,
+            enrichmentStatus: { $nin: ['pending', 'running'] },
+          },
+          {
+            $set: { enrichmentStatus: 'pending' },
+            $unset: { enrichmentError: 1, enrichmentCompletedAt: 1 },
+          },
+        )
+        if ((claim.modifiedCount ?? 0) === 1) {
+          try {
+            await inngest.send({
+              name: 'feedback/enrich.requested',
+              data: { sessionId, userId: session.user.id, reason: 'drill-backfill', questionIndex },
+            })
+          } catch (err) {
+            await InterviewSession.updateOne(
+              {
+                _id: sessionObjectId,
+                userId: userObjectId,
+                enrichmentStatus: 'pending',
+              },
+              {
+                $set: {
+                  enrichmentStatus: 'failed',
+                  enrichmentError: `enqueue failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
+                },
+              },
+            ).catch((rollbackErr) => {
+              logger.error(
+                { err: rollbackErr, sessionId, questionIndex },
+                'drill-backfill enrichment claim rollback failed',
+              )
+            })
             logger.warn(
               { err, sessionId, questionIndex },
               'drill-backfill enrichment enqueue failed; falling back to insight strip',
-            ),
-          )
+            )
+          }
+        }
       }
     }
 

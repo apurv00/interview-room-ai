@@ -62,12 +62,30 @@ export async function runEnrichFeedbackJobHandler(
 ): Promise<{ sessionId: string; status: 'completed' | 'skipped'; idealAnswers?: number }> {
   const { sessionId, userId, reason, questionIndex } = event.data
 
-  await step.run('mark-running', async () => {
+  const claimed = await step.run('claim-running', async () => {
     await connectDB()
-    await InterviewSession.findByIdAndUpdate(sessionId, {
-      $set: { [STATUS_FIELDS.status]: 'running' },
-    })
+    const result = await InterviewSession.updateOne(
+      {
+        _id: sessionId,
+        userId,
+        $or: [
+          { [STATUS_FIELDS.status]: 'pending' },
+          // Compatibility for events accepted just before the pending-first
+          // enqueue rollout. The CAS still admits only one worker.
+          { [STATUS_FIELDS.status]: { $exists: false } },
+        ],
+      },
+      {
+        $set: { [STATUS_FIELDS.status]: 'running' },
+        $unset: {
+          [STATUS_FIELDS.error]: 1,
+          [STATUS_FIELDS.completedAt]: 1,
+        },
+      },
+    )
+    return (result.modifiedCount ?? 0) === 1
   })
+  if (!claimed) return { sessionId, status: 'skipped' }
 
   // Minimal event payload discipline: re-read the heavy data here. By the
   // time Inngest delivers (typically <2s), generate-feedback's awaited

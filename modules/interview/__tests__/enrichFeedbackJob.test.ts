@@ -2,12 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const {
   mockFindByIdAndUpdate,
+  mockUpdateOne,
   mockFindOne,
   mockRunEnrichment,
   mockTrackUsage,
   mockFlushUsage,
 } = vi.hoisted(() => ({
   mockFindByIdAndUpdate: vi.fn().mockResolvedValue(undefined),
+  mockUpdateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
   mockFindOne: vi.fn(),
   mockRunEnrichment: vi.fn(),
   mockTrackUsage: vi.fn().mockResolvedValue(undefined),
@@ -24,6 +26,7 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
 vi.mock('@shared/db/models', () => ({
   InterviewSession: {
     findByIdAndUpdate: (...a: unknown[]) => mockFindByIdAndUpdate(...a),
+    updateOne: (...a: unknown[]) => mockUpdateOne(...a),
     findOne: (...a: unknown[]) => mockFindOne(...a),
   },
 }))
@@ -72,6 +75,7 @@ function enrichmentResult() {
 describe('enrichFeedbackJob handler', () => {
   beforeEach(() => {
     mockFindByIdAndUpdate.mockReset().mockResolvedValue(undefined)
+    mockUpdateOne.mockReset().mockResolvedValue({ modifiedCount: 1 })
     mockFindOne.mockReset()
     mockRunEnrichment.mockReset()
     mockTrackUsage.mockReset().mockResolvedValue(undefined)
@@ -88,10 +92,20 @@ describe('enrichFeedbackJob handler', () => {
     )
 
     expect(out).toMatchObject({ sessionId: SESSION_ID, status: 'completed', idealAnswers: 2 })
-    // First write: running
-    expect(mockFindByIdAndUpdate.mock.calls[0][1]).toMatchObject({
-      $set: { enrichmentStatus: 'running' },
-    })
+    expect(mockUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: SESSION_ID,
+        userId: USER_ID,
+        $or: [
+          { enrichmentStatus: 'pending' },
+          { enrichmentStatus: { $exists: false } },
+        ],
+      },
+      {
+        $set: { enrichmentStatus: 'running' },
+        $unset: { enrichmentError: 1, enrichmentCompletedAt: 1 },
+      },
+    )
     // Final write: succeeded + both feedback fields
     const persist = mockFindByIdAndUpdate.mock.calls.at(-1)![1] as { $set: Record<string, unknown> }
     expect(persist.$set.enrichmentStatus).toBe('succeeded')
@@ -131,6 +145,33 @@ describe('enrichFeedbackJob handler', () => {
     )
 
     expect(mockRunEnrichment.mock.calls[0][0]).toMatchObject({ mustIncludeQuestionIndex: 11 })
+  })
+
+  it('admits only one concurrent event to paid enrichment and usage', async () => {
+    let status = 'pending'
+    mockUpdateOne.mockImplementation(async () => {
+      if (status !== 'pending') return { modifiedCount: 0 }
+      status = 'running'
+      return { modifiedCount: 1 }
+    })
+    mockFindOne.mockReturnValue(sessionDoc())
+    mockRunEnrichment.mockResolvedValue(enrichmentResult())
+
+    const results = await Promise.all([
+      runEnrichFeedbackJobHandler(
+        { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+        step,
+      ),
+      runEnrichFeedbackJobHandler(
+        { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+        step,
+      ),
+    ])
+
+    expect(results.map((result) => result.status).sort()).toEqual(['completed', 'skipped'])
+    expect(mockRunEnrichment).toHaveBeenCalledTimes(1)
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1)
+    expect(mockFlushUsage).toHaveBeenCalledTimes(1)
   })
 
   it('union-merges ideal_answers by questionIndex — a backfill run never drops existing entries', async () => {
