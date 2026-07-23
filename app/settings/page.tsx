@@ -9,6 +9,7 @@ import { PLANS } from '@shared/services/stripe'
 import { ROLE_LABELS, EXPERIENCE_LABELS } from '@interview/config/interviewConfig'
 import type { Role, ExperienceLevel } from '@shared/types'
 import { clearAllInterviewStorage } from '@shared/storageKeys'
+import JobsEmailPreferences from './JobsEmailPreferences'
 
 interface OnboardingProfile {
   targetRole: string | null
@@ -606,6 +607,8 @@ export default function SettingsPage() {
           </div>
         )}
       </section>
+
+      <JobsEmailPreferences />
 
       {/* Quick Links */}
       <section className="bg-white border border-[#e1e8ed] rounded-2xl p-6 animate-fade-in">
