@@ -28,12 +28,10 @@ export interface IJobIngestCycle extends Document {
   /** Rows that failed at the store layer (isolated per-row; health-relevant). */
   storeErrors?: number
   closed?: number
-  dupCollapsedPct?: number
   quotaSpent?: number
   /** A local hard rail stopped outbound work. Partial persisted yield remains
    * visible without misclassifying the provider as unhealthy. */
   requestStopReason?: 'quota-exhausted' | 'quota-unavailable'
-  stubRate?: number
   healthTransitions?: string[]
   // llm-verdict counters (ruling #16)
   // link-check counters (ruling #22)
@@ -93,10 +91,8 @@ const JobIngestCycleSchema = new Schema<IJobIngestCycle>(
     refreshed: { type: Number },
     storeErrors: { type: Number },
     closed: { type: Number },
-    dupCollapsedPct: { type: Number },
     quotaSpent: { type: Number },
     requestStopReason: { type: String, enum: ['quota-exhausted', 'quota-unavailable'] },
-    stubRate: { type: Number },
     healthTransitions: { type: [String], default: undefined },
     llm: { type: Schema.Types.Mixed },
     linkCheck: { type: Schema.Types.Mixed },
