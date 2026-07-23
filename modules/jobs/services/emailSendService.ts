@@ -1,5 +1,5 @@
 import mongoose from 'mongoose'
-import { JobsEmailSend, User } from '@shared/db/models'
+import { JobsEmailSend, User, type JobsEmailIncidentKind } from '@shared/db/models'
 import { sendEmail } from '@shared/services/emailService'
 import { mintActionToken } from '@shared/services/signedActionToken'
 import { logger } from '@shared/logger'
@@ -87,6 +87,26 @@ export type TransactionalSendOutcome =
   | { outcome: 'delivery-uncertain-alerted' }
   | { outcome: 'failed-alerted' }
 
+export async function recordTransactionalIncident(
+  input: Pick<TransactionalSendInput, 'userId' | 'stream' | 'dedupeKey'> & {
+    incidentKind: JobsEmailIncidentKind
+  },
+): Promise<void> {
+  try {
+    await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
+      await JobsEmailSend.create([{
+        userId: input.userId,
+        stream: input.stream,
+        dedupeKey: input.dedupeKey,
+        incidentKind: input.incidentKind,
+      }], { session: dbSession })
+    })
+  } catch (createError) {
+    if (createError instanceof JobsAccountInactiveError) return
+    if ((createError as { code?: number }).code !== 11000) throw createError
+  }
+}
+
 async function burnTransactionalKey(
   input: Pick<TransactionalSendInput, 'userId' | 'stream' | 'dedupeKey'>,
   message: string,
@@ -96,18 +116,7 @@ async function burnTransactionalKey(
     { ...(err ? { err } : {}), userId: input.userId, stream: input.stream, dedupeKey: input.dedupeKey },
     message,
   )
-  try {
-    await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
-      await JobsEmailSend.create([{
-        userId: input.userId,
-        stream: input.stream,
-        dedupeKey: input.dedupeKey,
-      }], { session: dbSession })
-    })
-  } catch (createError) {
-    if (createError instanceof JobsAccountInactiveError) return
-    if ((createError as { code?: number }).code !== 11000) throw createError
-  }
+  await recordTransactionalIncident({ ...input, incidentKind: 'delivery-uncertain' })
 }
 
 export async function sendTransactional(input: TransactionalSendInput): Promise<TransactionalSendOutcome> {
@@ -266,7 +275,7 @@ export async function sendTransactional(input: TransactionalSendInput): Promise<
   // dashboard's alert-now class — and log at error level immediately.
   await burnTransactionalKey(
     input,
-    'transactional email send failed after retries — unstamped ledger row written (alert-now)',
+    'transactional email send failed or remained uncertain after retries — unstamped ledger row written (alert-now)',
   )
   return { outcome: 'failed-alerted' }
 }

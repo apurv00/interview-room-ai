@@ -303,6 +303,47 @@ describe('GDPR Jobs apply-evidence export', () => {
     })
   })
 
+  it('exports structured email-incident resolution evidence without internal operator metadata', async () => {
+    const resolvedAt = new Date('2026-07-23T07:00:00.000Z')
+    const createdAt = new Date('2026-07-22T03:30:00.000Z')
+    const query = queryResult([{
+      _id: 'email-send-1',
+      stream: 'e2',
+      dedupeKey: 'app1:v2:2026-07-22',
+      incidentKind: 'past-window',
+      operatorResolution: {
+        kind: 'closed-without-resend',
+        reason: 'Provider delivery could not be confirmed; no resend approved.',
+        at: resolvedAt,
+        actorUserId: '507f1f77bcf86cd799439099',
+      },
+      createdAt,
+    }])
+    mocks.jobsEmailSendFind.mockReturnValue(query)
+
+    const exported = await generateDataExport(USER_ID)
+
+    expect(exported.jobsEmailSends).toEqual([
+      expect.objectContaining({
+        stream: 'e2',
+        dedupeKey: 'app1:v2:2026-07-22',
+        incidentKind: 'past-window',
+        operatorResolution: {
+          kind: 'closed-without-resend',
+          at: resolvedAt,
+        },
+        createdAt,
+      }),
+    ])
+    expect(query.select).toHaveBeenCalledWith(
+      'stream dedupeKey incidentKind sentAt operatorResolution.kind operatorResolution.at createdAt',
+    )
+    expect(JSON.stringify(exported.jobsEmailSends)).not.toContain('507f1f77bcf86cd799439099')
+    expect(JSON.stringify(exported.jobsEmailSends)).not.toContain(
+      'Provider delivery could not be confirmed; no resend approved.',
+    )
+  })
+
   it('exports scorer receipts, exact evidence provenance, quarantine state, and readiness provenance', async () => {
     mocks.interviewSessionFind.mockReturnValue(queryResult([{
       _id: { toString: () => 'session-1' },

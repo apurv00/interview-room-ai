@@ -5,7 +5,14 @@ import { logger } from '@shared/logger'
 import { buildE0Email } from '../emails/e0'
 import { buildE2Email } from '../emails/e2'
 import { buildE1Email, buildE4Email } from '../emails/e1'
-import { buildFooterUrls, sendTransactional, sendSolicitation, solicitationSentLast7d, isSuppressed } from '../services/emailSendService'
+import {
+  buildFooterUrls,
+  sendTransactional,
+  sendSolicitation,
+  solicitationSentLast7d,
+  isSuppressed,
+  recordTransactionalIncident,
+} from '../services/emailSendService'
 import { mintActionToken } from '@shared/services/signedActionToken'
 import { isInSendWindow, nextSendSlot, e2SendInstant, istCalendarDaysBetween, istDateKey } from '../config/emailTiming'
 import { jobPostingStateOf } from '../services/postingAccess'
@@ -78,8 +85,23 @@ export async function runE0Handler(
 
   const { userId, jobPostingId, requestedAt } = event.data
   // 24h idempotency-window bound (Codex #530): a replay arriving a day
-  // late must not honor a stale deferred-link request.
+  // late must not honor a stale deferred-link request. Persist the same
+  // application/hour identity as an incident so an operator can see why
+  // the structurally burned key was never sent.
   if (Date.now() - new Date(requestedAt).getTime() > 24 * 3600_000) {
+    await step.run('record-past-window-e0', async () => {
+      const application = await JobApplication.findOne({ userId, jobPostingId })
+        .select('_id')
+        .lean()
+      if (!application) return
+      const hourKey = new Date(requestedAt).toISOString().slice(0, 13)
+      await recordTransactionalIncident({
+        userId,
+        stream: 'e0',
+        dedupeKey: `${application._id}:${hourKey}`,
+        incidentKind: 'past-window',
+      })
+    })
     logger.warn({ userId, jobPostingId }, 'E0 request older than 24h — dropped (past idempotency window)')
     return { outcome: 'past-window' }
   }
@@ -265,6 +287,12 @@ export async function runEmailSweepHandler(step: StepRunner): Promise<{ e2Sent: 
             dedupeKey: { $in: [c.dedupeKey, c.legacyDedupeKey] },
           }).lean()
           if (!recorded) {
+            await recordTransactionalIncident({
+              userId: c.userId,
+              stream: 'e2',
+              dedupeKey: c.dedupeKey,
+              incidentKind: 'past-window',
+            })
             logger.error(
               { applicationId: c.applicationId, interviewDateISO: c.interviewDateISO },
               'E2 reminder past the 24h idempotency window with NO ledger row — human review required, auto-send refused'

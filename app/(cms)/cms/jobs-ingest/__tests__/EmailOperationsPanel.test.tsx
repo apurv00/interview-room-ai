@@ -14,6 +14,30 @@ const HEALTH = {
   sentByStream: { e0: 3, e1: 2, e2: 4, e4: 1 },
   staleReservations: 2,
   unstampedTransactional: 1,
+  incidents: {
+    transactional: [{
+      id: '507f1f77bcf86cd799439020',
+      userId: '507f1f77bcf86cd799439010',
+      stream: 'e2' as const,
+      dedupeKey: 'app1:v2:2026-07-22',
+      incidentKind: 'past-window' as const,
+      createdAt: '2026-07-23T06:00:00.000Z',
+    }],
+    staleSolicitation: [{
+      id: '507f1f77bcf86cd799439021',
+      userId: '507f1f77bcf86cd799439011',
+      stream: 'e1' as const,
+      dedupeKey: 'app2',
+      incidentKind: 'delivery-uncertain' as const,
+      createdAt: '2026-07-21T06:00:00.000Z',
+    }, {
+      id: '507f1f77bcf86cd799439022',
+      userId: '507f1f77bcf86cd799439012',
+      stream: 'e4' as const,
+      dedupeKey: 'app3',
+      createdAt: '2026-07-21T05:00:00.000Z',
+    }],
+  },
 }
 
 const payload = (config = CONFIG, health = HEALTH) => ({
@@ -106,6 +130,10 @@ describe('EmailOperationsPanel', () => {
       sentByStream: { e0: 0, e1: 0, e2: 0, e4: 0 },
       staleReservations: 0,
       unstampedTransactional: 0,
+      incidents: {
+        transactional: [],
+        staleSolicitation: [],
+      },
     }))))
 
     render(<EmailOperationsPanel />)
@@ -113,6 +141,65 @@ describe('EmailOperationsPanel', () => {
     expect(await screen.findByText(/No unstamped E0\/E2 delivery rows/i)).toBeTruthy()
     expect(screen.getByText(/No solicitation reservation has remained unstamped/i)).toBeTruthy()
     expect(screen.getByText(/do not prove inbox delivery/i)).toBeTruthy()
+  })
+
+  it('closes an incident without resend while preserving unsaved config edits', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response(payload(CONFIG, {
+        ...HEALTH,
+        staleReservations: 0,
+        incidents: {
+          transactional: [{
+            id: '507f1f77bcf86cd799439020',
+            userId: '507f1f77bcf86cd799439010',
+            stream: 'e2' as const,
+            dedupeKey: 'app1:v2:2026-07-22',
+            incidentKind: 'past-window' as const,
+            createdAt: '2026-07-23T06:00:00.000Z',
+          }],
+          staleSolicitation: [],
+        },
+      })))
+      .mockResolvedValueOnce(response({ ok: true, idempotent: false }))
+      .mockResolvedValueOnce(response(payload(CONFIG, {
+        ...HEALTH,
+        staleReservations: 0,
+        unstampedTransactional: 0,
+        incidents: {
+          transactional: [],
+          staleSolicitation: [],
+        },
+      })))
+    vi.stubGlobal('fetch', fetch)
+
+    render(<EmailOperationsPanel />)
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /E1 — Response nudge/i }))
+    fireEvent.change(screen.getByLabelText('Incident to investigate'), {
+      target: { value: '507f1f77bcf86cd799439020' },
+    })
+    fireEvent.change(screen.getByLabelText('Resolution reason'), {
+      target: { value: 'Provider delivery could not be confirmed.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Close without resend' }))
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3))
+    expect(fetch.mock.calls[1][0]).toBe('/api/cms/jobs-ingest/email')
+    expect(fetch.mock.calls[1][1]).toMatchObject({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    expect(JSON.parse(String(fetch.mock.calls[1][1]?.body))).toEqual({
+      action: 'closed-without-resend',
+      incidentId: '507f1f77bcf86cd799439020',
+      reason: 'Provider delivery could not be confirmed.',
+    })
+    expect(fetch.mock.calls[2][0]).toBe('/api/cms/jobs-ingest/email')
+    expect(fetch.mock.calls[2][1]).toEqual({ cache: 'no-store' })
+    expect(await screen.findByRole('status')).toHaveTextContent(/dedupe key remains burned/i)
+    expect(screen.getByRole('checkbox', { name: /E1 — Response nudge/i })).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Save email controls' })).toBeEnabled()
+    expect(screen.getByText(/No actionable email incidents/i)).toBeTruthy()
   })
 
   it('surfaces authorization failures without exposing an editable fallback', async () => {

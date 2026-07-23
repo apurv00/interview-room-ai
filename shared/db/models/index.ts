@@ -160,7 +160,13 @@ export {
   JobsVerdictConfigAudit,
   JOBS_VERDICT_CONFIG_ACTIONS,
 } from './JobsVerdictConfigAudit'
-export { JobsEmailSend, JOBS_EMAIL_STREAMS, type JobsEmailStream, type IJobsEmailSend } from './JobsEmailSend'
+export {
+  JobsEmailSend,
+  JOBS_EMAIL_STREAMS,
+  type JobsEmailStream,
+  type JobsEmailIncidentKind,
+  type IJobsEmailSend,
+} from './JobsEmailSend'
 export { JobPracticeEvidence, type IJobPracticeEvidence } from './JobPracticeEvidence'
 export { JobsEmailConfig, JOBS_EMAIL_DEFAULTS, type JobsEmailConfigValues, type IJobsEmailConfig } from './JobsEmailConfig'
 export type {

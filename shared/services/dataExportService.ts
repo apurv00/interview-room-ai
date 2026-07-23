@@ -281,7 +281,12 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     _id: mongoose.Types.ObjectId
     stream: string
     dedupeKey: string
+    incidentKind?: string
     sentAt?: Date
+    operatorResolution?: {
+      kind: string
+      at: Date
+    }
     createdAt: Date
   }
   const jobsEmailSendRows: LeanEmailSend[] = []
@@ -291,7 +296,9 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       userId: uid,
       ...(emailCursor ? { _id: { $lt: emailCursor } } : {}),
     })
-      .select('stream dedupeKey sentAt createdAt')
+      .select(
+        'stream dedupeKey incidentKind sentAt operatorResolution.kind operatorResolution.at createdAt',
+      )
       .sort({ _id: -1 })
       .limit(2000)
       .lean()) as unknown as LeanEmailSend[]
@@ -299,7 +306,28 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     if (batch.length < 2000) break
     emailCursor = batch[batch.length - 1]._id
   }
-  const jobsEmailSends = jobsEmailSendRows.map(({ stream, dedupeKey, sentAt, createdAt }) => ({ stream, dedupeKey, sentAt, createdAt }))
+  const jobsEmailSends = jobsEmailSendRows.map(({
+    stream,
+    dedupeKey,
+    incidentKind,
+    sentAt,
+    operatorResolution,
+    createdAt,
+  }) => ({
+    stream,
+    dedupeKey,
+    ...(incidentKind ? { incidentKind } : {}),
+    sentAt,
+    ...(operatorResolution
+      ? {
+          operatorResolution: {
+            kind: operatorResolution.kind,
+            at: operatorResolution.at,
+          },
+        }
+      : {}),
+    createdAt,
+  }))
 
   // Readiness evidence (READINESS.md §1) — cursor-paginated to exhaustion
   // like every per-user collection here.
