@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { ModelConfig, TASK_SLOTS, TASK_SLOT_DEFAULTS } from '@shared/db/models'
 import { UpdateModelConfigSchema } from '@cms/validators/cms'
@@ -8,18 +6,28 @@ import { replaceModelConfigCache } from '@shared/services/modelRouter'
 import { getAllProviders } from '@shared/services/providers'
 import { logger } from '@shared/logger'
 import { jobsVerdictRoutePriceFloor } from '@jobs/config/verdictSchema'
+import { requireCurrentPlatformAdmin } from '@jobs/services/adminAuth'
 
 export const dynamic = 'force-dynamic'
 
 async function requireAdmin() {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) {
-    return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
+  const authorization = await requireCurrentPlatformAdmin()
+  if (!authorization.ok) {
+    if (authorization.cause) {
+      logger.error({
+        error: authorization.cause,
+        actorUserId: authorization.actorUserId,
+      }, 'model config authorization lookup failed')
+    }
+    return {
+      error: NextResponse.json({
+        error: authorization.error,
+        code: authorization.code,
+        retryable: authorization.status === 503,
+      }, { status: authorization.status }),
+    }
   }
-  if (session.user.role !== 'platform_admin') {
-    return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
-  }
-  return { session }
+  return { actorUserId: authorization.actorUserId }
 }
 
 export async function GET() {
@@ -146,7 +154,7 @@ export async function PUT(req: NextRequest) {
         $set: {
           routingEnabled: parsed.data.routingEnabled,
           slots: parsed.data.slots,
-          updatedBy: auth.session!.user.id,
+          updatedBy: auth.actorUserId,
         },
       },
       { upsert: true, returnDocument: 'after' }

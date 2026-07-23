@@ -33,6 +33,28 @@ beforeEach(() => {
 })
 
 describe('requireCurrentPlatformAdmin', () => {
+  it('rejects an unauthenticated request before connecting to Mongo', async () => {
+    mockGetServerSession.mockResolvedValueOnce(null)
+
+    await expect(requireCurrentPlatformAdmin()).resolves.toMatchObject({
+      ok: false,
+      status: 401,
+      code: 'ADMIN_REQUIRED',
+    })
+    expect(mockConnectDB).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed actor ID before connecting to Mongo', async () => {
+    mockGetServerSession.mockResolvedValueOnce({ user: { id: 'not-an-object-id' } })
+
+    await expect(requireCurrentPlatformAdmin()).resolves.toMatchObject({
+      ok: false,
+      status: 403,
+      code: 'ADMIN_REQUIRED',
+    })
+    expect(mockConnectDB).not.toHaveBeenCalled()
+  })
+
   it('rechecks both the current database role and active account state', async () => {
     await expect(requireCurrentPlatformAdmin()).resolves.toEqual({
       ok: true,

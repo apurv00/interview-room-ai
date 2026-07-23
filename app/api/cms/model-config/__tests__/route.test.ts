@@ -3,27 +3,26 @@ import { NextRequest } from 'next/server'
 
 const {
   mockConnectDB,
+  mockFindOne,
   mockFindOneAndUpdate,
   mockGetAllProviders,
-  mockGetServerSession,
+  mockRequireCurrentPlatformAdmin,
   mockReplaceModelConfigCache,
 } = vi.hoisted(() => ({
   mockConnectDB: vi.fn(),
+  mockFindOne: vi.fn(),
   mockFindOneAndUpdate: vi.fn(),
   mockGetAllProviders: vi.fn(),
-  mockGetServerSession: vi.fn(),
+  mockRequireCurrentPlatformAdmin: vi.fn(),
   mockReplaceModelConfigCache: vi.fn(),
 }))
 
-vi.mock('next-auth', () => ({
-  getServerSession: (...args: unknown[]) => mockGetServerSession(...args),
-}))
-vi.mock('@shared/auth/authOptions', () => ({ authOptions: {} }))
 vi.mock('@shared/db/connection', () => ({
   connectDB: (...args: unknown[]) => mockConnectDB(...args),
 }))
 vi.mock('@shared/db/models', () => ({
   ModelConfig: {
+    findOne: (...args: unknown[]) => mockFindOne(...args),
     findOneAndUpdate: (...args: unknown[]) => mockFindOneAndUpdate(...args),
   },
   TASK_SLOTS: ['jobs.evaluate-posting', 'interview.generate-feedback'],
@@ -49,8 +48,13 @@ vi.mock('@shared/services/providers', () => ({
 vi.mock('@shared/logger', () => ({
   logger: { error: vi.fn() },
 }))
+vi.mock('@jobs/services/adminAuth', () => ({
+  requireCurrentPlatformAdmin: (...args: unknown[]) => mockRequireCurrentPlatformAdmin(...args),
+}))
 
-import { PUT } from '../route'
+import { GET, PUT } from '../route'
+
+const ACTOR_ID = '507f1f77bcf86cd799439011'
 
 function requestWithSlots(slots: Array<Record<string, unknown>>, routingEnabled = true) {
   return new NextRequest('http://localhost/api/cms/model-config', {
@@ -76,16 +80,63 @@ function requestWith(slot: Record<string, unknown>, routingEnabled = true) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockGetServerSession.mockResolvedValue({
-    user: { id: '507f1f77bcf86cd799439011', role: 'platform_admin' },
-  })
+  mockRequireCurrentPlatformAdmin.mockResolvedValue({ ok: true, actorUserId: ACTOR_ID })
   mockConnectDB.mockResolvedValue(undefined)
+  mockFindOne.mockReturnValue({
+    lean: vi.fn().mockResolvedValue(null),
+  })
   mockGetAllProviders.mockReturnValue([
     { name: 'anthropic', label: 'Anthropic', configured: true },
     { name: 'openai', label: 'OpenAI', configured: true },
   ])
   mockFindOneAndUpdate.mockResolvedValue({ _id: 'config-1' })
   mockReplaceModelConfigCache.mockResolvedValue(undefined)
+})
+
+describe('GET/PUT /api/cms/model-config current authority', () => {
+  it.each([
+    [401, 'ADMIN_REQUIRED', false],
+    [403, 'ADMIN_REQUIRED', false],
+    [503, 'AUTHORITY_UNAVAILABLE', true],
+  ] as const)('fails closed with %s before model config access', async (status, code, retryable) => {
+    mockRequireCurrentPlatformAdmin.mockResolvedValue({
+      ok: false,
+      status,
+      code,
+      error: code === 'AUTHORITY_UNAVAILABLE'
+        ? 'Jobs operations authorization is unavailable'
+        : 'platform_admin required',
+    })
+
+    const [getResponse, putResponse] = await Promise.all([
+      GET(),
+      PUT(requestWith({})),
+    ])
+
+    expect(getResponse.status).toBe(status)
+    expect(putResponse.status).toBe(status)
+    await expect(getResponse.json()).resolves.toMatchObject({ code, retryable })
+    await expect(putResponse.json()).resolves.toMatchObject({ code, retryable })
+    expect(mockConnectDB).not.toHaveBeenCalled()
+    expect(mockFindOne).not.toHaveBeenCalled()
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockReplaceModelConfigCache).not.toHaveBeenCalled()
+  })
+
+  it('persists the current authoritative actor rather than a JWT role snapshot', async () => {
+    const response = await PUT(requestWith({}))
+
+    expect(response.status).toBe(200)
+    expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
+      {},
+      {
+        $set: expect.objectContaining({
+          updatedBy: ACTOR_ID,
+        }),
+      },
+      { upsert: true, returnDocument: 'after' },
+    )
+  })
 })
 
 describe('PUT /api/cms/model-config provider validation', () => {
