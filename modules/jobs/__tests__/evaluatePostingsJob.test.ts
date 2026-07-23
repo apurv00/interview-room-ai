@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest'
 
 const {
   mockSend, mockGetConfig, mockPostingFindById, mockPostingExists, mockPostingUpdateOne, mockPostingFind,
-  mockSourceFind, mockCycleCreate, mockRedis,
+  mockSourceFind, mockCycleCreate, mockRedis, mockHasRestoredQualityDecision,
+  mockRecordAutomaticQualityDecision, mockWithQualityDecisionTransaction,
+  mockGetGovernedConfig, mockFenceSources, mockFenceConfig,
 } = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockGetConfig: vi.fn(),
@@ -12,6 +14,12 @@ const {
   mockPostingFind: vi.fn(),
   mockSourceFind: vi.fn(),
   mockCycleCreate: vi.fn(),
+  mockHasRestoredQualityDecision: vi.fn(),
+  mockRecordAutomaticQualityDecision: vi.fn(),
+    mockWithQualityDecisionTransaction: vi.fn(),
+    mockGetGovernedConfig: vi.fn(),
+    mockFenceSources: vi.fn(),
+    mockFenceConfig: vi.fn(),
   mockRedis: { get: vi.fn(), set: vi.fn(), incr: vi.fn(), incrbyfloat: vi.fn(), expire: vi.fn() },
 }))
 
@@ -32,6 +40,16 @@ vi.mock('@shared/db/models', () => ({
   JobIngestCycle: { create: mockCycleCreate },
   JobsVerdictConfig: { getConfig: mockGetConfig },
 }))
+vi.mock('../services/qualityDecisionService', () => ({
+  fenceQualityDecisionSources: mockFenceSources,
+  hasRestoredQualityDecision: mockHasRestoredQualityDecision,
+  recordAutomaticQualityDecision: mockRecordAutomaticQualityDecision,
+  withQualityDecisionTransaction: mockWithQualityDecisionTransaction,
+}))
+vi.mock('../services/verdictConfigControl', () => ({
+  fenceJobsVerdictConfigRevision: mockFenceConfig,
+  getJobsVerdictConfigSnapshot: mockGetGovernedConfig,
+}))
 
 import { runEvaluatePostingsHandler, runVerdictSweeperHandler } from '../jobs/evaluatePostingsJob'
 import { resolveModel } from '@shared/services/modelRouter'
@@ -48,12 +66,24 @@ const FIXTURE_HASH = verdictInputHash({
 })
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
+const QUALITY_SESSION = { id: 'verdict-quality-session' }
 
 const CFG_ON = {
-  collectionEnabled: true, enforceEnabled: false,
+  revision: 7, collectionEnabled: true, enforceEnabled: false, rankingEnabled: false,
   dailyVerdictCap: 900, dailyBudgetUsd: 2.5, monthlyBudgetUsd: 75,
   perCompanyDailyCap: 25, perSourceDailyCap: 500,
   inputUsdPerMTok: 0.5, outputUsdPerMTok: 2.0,
+}
+
+function completeSourceSubset(sourceIds: string[]) {
+  return {
+    $expr: {
+      $setIsSubset: [
+        { $cond: [{ $isArray: '$sourceIds' }, '$sourceIds', []] },
+        sourceIds,
+      ],
+    },
+  }
 }
 
 function posting(over: Record<string, unknown> = {}) {
@@ -70,6 +100,15 @@ function posting(over: Record<string, unknown> = {}) {
   }
 }
 
+function postingQuery(value: unknown) {
+  const query = {
+    lean: () => Promise.resolve(value),
+    session: vi.fn(),
+  }
+  query.session.mockReturnValue(query)
+  return query
+}
+
 const OK_VERDICT = {
   verdict: 'fraud', reasonCodes: ['fee_fraud'], genuineness: 0.1, quality: 0.2, completeness: 0.4,
   domain: JOB_DOMAINS[0].id, domainConfidence: 0.9, seniority: 'fresher', fresherFriendly: true,
@@ -81,13 +120,49 @@ function okOutcome(verdict = OK_VERDICT) {
 }
 
 function resetAll(): void {
-  for (const m of [mockSend, mockGetConfig, mockPostingFindById, mockPostingExists, mockPostingUpdateOne, mockPostingFind, mockSourceFind, mockCycleCreate]) m.mockReset()
+  for (const m of [
+    mockSend, mockGetConfig, mockPostingFindById, mockPostingExists, mockPostingUpdateOne,
+    mockPostingFind, mockSourceFind, mockCycleCreate, mockHasRestoredQualityDecision,
+    mockRecordAutomaticQualityDecision, mockWithQualityDecisionTransaction,
+    mockGetGovernedConfig, mockFenceSources, mockFenceConfig,
+  ]) m.mockReset()
   for (const m of Object.values(mockRedis)) (m as ReturnType<typeof vi.fn>).mockReset()
   mockGetConfig.mockResolvedValue({ ...CFG_ON })
-  mockSourceFind.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([]) }) })
+  mockGetGovernedConfig.mockImplementation(() => mockGetConfig())
+  mockFenceSources.mockResolvedValue(undefined)
+  mockFenceConfig.mockResolvedValue(true)
+  mockSourceFind.mockImplementation((filter: Record<string, unknown>) => ({
+    select: () => ({
+      lean: () => Promise.resolve(
+        'sourceId' in filter
+          ? [{
+            sourceId: 'jsearch',
+            health: 'active',
+            llmVerdictOptOut: false,
+            controlRevision: 2,
+            operationalRevision: 5,
+          }]
+          : filter.llmVerdictOptOut === true
+            ? []
+            : [{
+                sourceId: 'jsearch',
+                health: 'active',
+                llmVerdictOptOut: false,
+              }]
+      ),
+    }),
+  }))
   mockPostingExists.mockResolvedValue({ _id: 'p1' })
   mockPostingUpdateOne.mockResolvedValue({})
   mockCycleCreate.mockResolvedValue({})
+  mockHasRestoredQualityDecision.mockResolvedValue(false)
+  mockRecordAutomaticQualityDecision.mockResolvedValue({
+    decisionKey: `quality:v1:${'b'.repeat(64)}`,
+    inserted: true,
+  })
+  mockWithQualityDecisionTransaction.mockImplementation(
+    (work: (session: unknown) => Promise<unknown>) => work(QUALITY_SESSION),
+  )
   mockRedis.get.mockResolvedValue(null)
   mockRedis.incr.mockResolvedValue(2)
   mockRedis.incrbyfloat.mockResolvedValue('1')
@@ -113,6 +188,8 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(set.llmVerdict).toMatchObject({ status: 'scored', verdict: 'fraud', verdictInputHash: 'h1', epoch: `gpt-5.6-luna:${PROMPT_VERSION}`, attempts: 1, disagreesWithRules: true })
     expect(set.status).toBeUndefined()
     expect(set.closedReason).toBeUndefined()
+    expect(mockWithQualityDecisionTransaction).not.toHaveBeenCalled()
+    expect(mockRecordAutomaticQualityDecision).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -180,6 +257,145 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(set.closedAt).toBeInstanceOf(Date)
   })
 
+  it('commits the LLM close and revisioned evidence through the same quality transaction', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValue({ ...CFG_ON, revision: 12, enforceEnabled: true })
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+
+    const result = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never },
+    )
+
+    expect(result).toMatchObject({ scored: 1 })
+    expect(mockWithQualityDecisionTransaction).toHaveBeenCalledOnce()
+    expect(mockFenceConfig).toHaveBeenCalledWith(12, QUALITY_SESSION)
+    expect(mockFenceSources).toHaveBeenCalledWith(
+      [{ sourceId: 'jsearch', controlRevision: 2, operationalRevision: 5 }],
+      QUALITY_SESSION,
+      { requireVerdictEligibility: true },
+    )
+    expect(mockHasRestoredQualityDecision).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'llm-verdict',
+      action: 'close',
+      subjectKey: 'p1',
+      postingId: 'p1',
+      inputHash: 'h1',
+      policyRevision: `jobs-verdict:${PROMPT_VERSION}:reconcile-v1`,
+      configRevision: 12,
+      sourceRevisions: [{ sourceId: 'jsearch', controlRevision: 2, operationalRevision: 5 }],
+    }), QUALITY_SESSION)
+    expect(mockPostingUpdateOne.mock.calls[0][2]).toEqual({ session: QUALITY_SESSION })
+    const closeSet = mockPostingUpdateOne.mock.calls[0][1].$set
+    expect(closeSet).toMatchObject({ status: 'closed', closedReason: 'llm-verdict' })
+    expect(mockRecordAutomaticQualityDecision).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'llm-verdict',
+      action: 'close',
+      inputHash: 'h1',
+      configRevision: 12,
+      sourceRevisions: [{ sourceId: 'jsearch', controlRevision: 2, operationalRevision: 5 }],
+      occurredAt: closeSet.closedAt,
+      evidence: {
+        kind: 'llm-verdict',
+        verdict: 'fraud',
+        reasonCodes: ['fee_fraud'],
+        genuineness: 0.1,
+        model: 'gpt-5.6-luna',
+        promptVersion: PROMPT_VERSION,
+        epoch: `gpt-5.6-luna:${PROMPT_VERSION}`,
+      },
+    }), QUALITY_SESSION)
+  })
+
+  it('does not close when enforcement is disabled while the model call is in flight', async () => {
+    resetAll()
+    mockGetConfig
+      .mockResolvedValueOnce({ ...CFG_ON, revision: 12, enforceEnabled: true })
+      .mockResolvedValue({ ...CFG_ON, revision: 13, enforceEnabled: false })
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+
+    const result = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never },
+    )
+
+    expect(mockWithQualityDecisionTransaction).toHaveBeenCalledOnce()
+    expect(mockGetGovernedConfig).toHaveBeenCalledWith(QUALITY_SESSION)
+    expect(mockFenceConfig).not.toHaveBeenCalled()
+    expect(mockFenceSources).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne.mock.calls[0][1].$set).toMatchObject({
+      llmVerdict: { status: 'scored', verdict: 'fraud' },
+    })
+    expect(mockPostingUpdateOne.mock.calls[0][1].$set.status).toBeUndefined()
+    expect(mockRecordAutomaticQualityDecision).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ scored: 1 })
+  })
+
+  it('requeues instead of attributing enforcement to a different config revision', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValueOnce({ ...CFG_ON, revision: 12, enforceEnabled: true })
+    mockGetGovernedConfig.mockResolvedValueOnce({ ...CFG_ON, revision: 13, enforceEnabled: true })
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+
+    const result = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never },
+    )
+
+    expect(mockFenceConfig).not.toHaveBeenCalled()
+    expect(mockFenceSources).not.toHaveBeenCalled()
+    expect(mockPostingUpdateOne).not.toHaveBeenCalled()
+    expect(mockRecordAutomaticQualityDecision).not.toHaveBeenCalled()
+    expect(mockCycleCreate.mock.calls.at(-1)![0].llm.skips).toMatchObject({ 'config-changed': 1 })
+    expect(result).toMatchObject({ scored: 0 })
+  })
+
+  it('persists the score without serving changes when the config write fence is unavailable', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValue({ ...CFG_ON, revision: 12, enforceEnabled: true })
+    mockFenceConfig.mockResolvedValue(false)
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+
+    const result = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never },
+    )
+
+    expect(result).toMatchObject({ scored: 1 })
+    expect(mockPostingUpdateOne.mock.calls[0][1].$set).toMatchObject({
+      llmVerdict: { status: 'scored', verdict: 'fraud' },
+    })
+    expect(mockPostingUpdateOne.mock.calls[0][1].$set.status).toBeUndefined()
+    expect(mockFenceSources).not.toHaveBeenCalled()
+    expect(mockRecordAutomaticQualityDecision).not.toHaveBeenCalled()
+  })
+
+  it('suppresses only the exact restored LLM close while still persisting its scored verdict', async () => {
+    resetAll()
+    mockGetConfig.mockResolvedValue({ ...CFG_ON, revision: 12, enforceEnabled: true })
+    mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
+    mockHasRestoredQualityDecision.mockResolvedValue(true)
+
+    const result = await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never },
+    )
+
+    const set = mockPostingUpdateOne.mock.calls[0][1].$set
+    expect(set.llmVerdict).toMatchObject({ status: 'scored', verdict: 'fraud', verdictInputHash: 'h1' })
+    expect(set.status).toBeUndefined()
+    expect(set.closedReason).toBeUndefined()
+    expect(mockPostingUpdateOne.mock.calls[0][2]).toEqual({ session: QUALITY_SESSION })
+    expect(mockRecordAutomaticQualityDecision).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ scored: 1 })
+    expect(mockCycleCreate.mock.calls.at(-1)![0].llm.softClosed).toBe(0)
+  })
+
   it('skips: missing, closed, already-scored, attempts-exhausted, opted-out source', async () => {
     resetAll()
     mockSourceFind.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ sourceId: 'optout-src' }]) }) })
@@ -222,8 +438,8 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
       updatedAt: new Date('2026-07-20T01:00:00Z'),
     })
     mockPostingFindById
-      .mockReturnValueOnce({ lean: () => Promise.resolve(initial) })
-      .mockReturnValueOnce({ lean: () => Promise.resolve(archived) })
+      .mockReturnValueOnce(postingQuery(initial))
+      .mockReturnValueOnce(postingQuery(archived))
     mockPostingUpdateOne
       .mockResolvedValueOnce({ matchedCount: 0 })
       .mockResolvedValueOnce({ matchedCount: 1 })
@@ -263,9 +479,9 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
       updatedAt: new Date('2026-07-20T02:00:00Z'),
     })
     mockPostingFindById
-      .mockReturnValueOnce({ lean: () => Promise.resolve(initial) })
-      .mockReturnValueOnce({ lean: () => Promise.resolve(firstArchive) })
-      .mockReturnValueOnce({ lean: () => Promise.resolve(retryArchive) })
+      .mockReturnValueOnce(postingQuery(initial))
+      .mockReturnValueOnce(postingQuery(firstArchive))
+      .mockReturnValueOnce(postingQuery(retryArchive))
     mockPostingUpdateOne
       .mockResolvedValueOnce({ matchedCount: 0 })
       .mockResolvedValueOnce({ matchedCount: 0 })
@@ -312,9 +528,9 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
       updatedAt: new Date('2026-07-20T02:00:00Z'),
     })
     mockPostingFindById
-      .mockReturnValueOnce({ lean: () => Promise.resolve(initial) })
-      .mockReturnValueOnce({ lean: () => Promise.resolve(firstArchive) })
-      .mockReturnValueOnce({ lean: () => Promise.resolve(retryArchive) })
+      .mockReturnValueOnce(postingQuery(initial))
+      .mockReturnValueOnce(postingQuery(firstArchive))
+      .mockReturnValueOnce(postingQuery(retryArchive))
     mockPostingUpdateOne
       .mockResolvedValueOnce({ matchedCount: 0 })
       .mockResolvedValueOnce({ matchedCount: 0 })
@@ -348,13 +564,13 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     resetAll()
     mockGetConfig.mockResolvedValue({ ...CFG_ON, enforceEnabled: true })
     mockPostingFindById
-      .mockReturnValueOnce({ lean: () => Promise.resolve(posting()) })
-      .mockReturnValueOnce({ lean: () => Promise.resolve(posting({
+      .mockReturnValueOnce(postingQuery(posting()))
+      .mockReturnValueOnce(postingQuery(posting({
         status: 'closed',
         closedReason: 'dead-apply-link',
         titleKey: 'changed title',
         updatedAt: new Date('2026-07-20T01:00:00Z'),
-      })) })
+      })))
     mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
 
     const r = await runEvaluatePostingsHandler(
@@ -371,12 +587,12 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     resetAll()
     mockGetConfig.mockResolvedValue({ ...CFG_ON, enforceEnabled: true })
     mockPostingFindById
-      .mockReturnValueOnce({ lean: () => Promise.resolve(posting()) })
-      .mockReturnValueOnce({ lean: () => Promise.resolve(posting({
+      .mockReturnValueOnce(postingQuery(posting()))
+      .mockReturnValueOnce(postingQuery(posting({
         status: 'closed',
         closedReason: 'source-revoked',
         updatedAt: new Date('2026-07-20T01:00:00Z'),
-      })) })
+      })))
     mockPostingUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
 
     const r = await runEvaluatePostingsHandler(
@@ -596,7 +812,8 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
     ])
     expect(query.$and[2]).toEqual({ 'sourceIds.0': { $exists: true } })
     expect(query.$and[3]).toEqual({ sourceIds: { $nin: ['__legacy_unknown__'] } })
-    expect(query.$and).toHaveLength(4)
+    expect(query.$and[4]).toEqual(completeSourceSubset(['jsearch']))
+    expect(query.$and).toHaveLength(5)
     expect(mockSend.mock.calls[0][0].name).toBe('jobs/verdict.requested')
     expect(mockSend.mock.calls[0][0].data.postingIds).toHaveLength(40)
     expect(mockSend.mock.calls[1][0].data.postingIds).toHaveLength(5)
@@ -630,7 +847,15 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
 
   it('opted-out sources are excluded IN THE QUERY — pinned pending rows cannot starve the sweep', async () => {
     resetAll()
-    mockSourceFind.mockReturnValue({ select: () => ({ lean: () => Promise.resolve([{ sourceId: 'optout-src' }]) }) })
+    mockSourceFind.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve([{
+          sourceId: 'optout-src',
+          health: 'active',
+          llmVerdictOptOut: true,
+        }]),
+      }),
+    })
     sweepChain([])
     await runVerdictSweeperHandler(step)
     const query = mockPostingFind.mock.calls[0][0]
@@ -638,10 +863,39 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
     expect(query.$and[3]).toEqual({
       sourceIds: { $nin: ['__legacy_unknown__', 'optout-src'] },
     })
-    expect(query.$and[4]).toEqual({ 'provenance.sourceId': { $nin: ['optout-src'] } })
+    expect(query.$and[4]).toEqual(completeSourceSubset([]))
+    expect(query.$and[5]).toEqual({ 'provenance.sourceId': { $nin: ['optout-src'] } })
 
     const staleQuery = mockPostingFind.mock.calls[1][0]
     expect(staleQuery.$and.slice(2)).toEqual(query.$and.slice(2))
+  })
+
+  it('complete-source allow-set excludes missing/revoked lineage while preserving paused sources', async () => {
+    resetAll()
+    mockSourceFind.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve([
+          { sourceId: 'active-src', health: 'active', llmVerdictOptOut: false },
+          { sourceId: 'paused-src', enabled: false, health: 'active', llmVerdictOptOut: false },
+          { sourceId: 'revoked-src', health: 'revoked', llmVerdictOptOut: false },
+          { sourceId: 'optout-src', health: 'active', llmVerdictOptOut: true },
+        ]),
+      }),
+    })
+    sweepChain([{ _id: 'later-eligible' }])
+
+    const result = await runVerdictSweeperHandler(step, { limit: 10 })
+
+    expect(result).toMatchObject({ enqueued: 1 })
+    const query = mockPostingFind.mock.calls[0][0]
+    expect(query.$and[2]).toEqual({ 'sourceIds.0': { $exists: true } })
+    expect(query.$and[3]).toEqual({
+      sourceIds: { $nin: ['__legacy_unknown__', 'optout-src'] },
+    })
+    // A posting carrying even one missing/revoked/opted-out source fails this
+    // complete-set check and cannot occupy the oldest-first result window.
+    expect(query.$and[4]).toEqual(completeSourceSubset(['active-src', 'paused-src']))
+    expect(mockSend.mock.calls[0][0].data.postingIds).toEqual(['later-eligible'])
   })
 
   it('≥80% budget softening HALVES the sweep limit', async () => {

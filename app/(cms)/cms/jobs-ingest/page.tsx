@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { SourceOperationDialog } from './SourceOperationDialog'
 import { SourcesTable } from './SourcesTable'
 import { VerdictMonitor } from './VerdictMonitor'
+import { VerdictGovernancePanel } from './VerdictGovernancePanel'
 import type {
   ApiFailure,
   JobsOperationsPayload,
@@ -371,6 +372,7 @@ export default function JobsIngestPage() {
       </section>
 
       <VerdictMonitor verdict={data.verdict} />
+      <VerdictGovernancePanel />
 
       {dialog ? (
         <SourceOperationDialog

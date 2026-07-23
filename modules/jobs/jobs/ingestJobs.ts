@@ -272,6 +272,8 @@ async function processTarget(
           repostCounts,
           initVerdictPending,
           session,
+          sourceControlRevision: controlRevision,
+          sourceOperationalRevision: operationalRevision,
         }),
         { insertedPostings: (result) => result.newCount },
       )

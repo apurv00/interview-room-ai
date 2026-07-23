@@ -2,10 +2,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { gzipSync } from 'zlib'
 import { JobApplication as RealJobApplication } from '@shared/db/models/JobApplication'
 
-const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppExists, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockUserFindOne, mockStartSession, mockWithTransaction, mockEndSession } = vi.hoisted(() => ({
+const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockSourceFind, mockAppFindOne, mockAppExists, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockUserFindOne, mockStartSession, mockWithTransaction, mockEndSession, mockRecordAutomaticQualityDecision, mockFenceQualityDecisionSources } = vi.hoisted(() => ({
   mockPostingFindById: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
   mockPostingExists: vi.fn(),
+  mockSourceFind: vi.fn(),
   mockAppFindOne: vi.fn(),
   mockAppExists: vi.fn(),
   mockAppUpdateOne: vi.fn(),
@@ -16,6 +17,8 @@ const { mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFin
   mockStartSession: vi.fn(),
   mockWithTransaction: vi.fn(),
   mockEndSession: vi.fn(),
+  mockRecordAutomaticQualityDecision: vi.fn(),
+  mockFenceQualityDecisionSources: vi.fn(),
 }))
 const { mockSessionFindById, mockSessionFindOne, mockSessionUpdateOne } = vi.hoisted(() => ({
   mockSessionFindById: vi.fn(),
@@ -34,7 +37,9 @@ const {
   mockRecordJobsUserEvent: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
+  JOB_SOURCE_LINEAGE_UNKNOWN: '__unknown__',
   JobPosting: { findById: mockPostingFindById, updateOne: mockPostingUpdateOne, exists: mockPostingExists },
+  JobSourceConfig: { find: mockSourceFind },
   JobApplication: {
     findOne: mockAppFindOne,
     exists: mockAppExists,
@@ -45,6 +50,14 @@ vi.mock('@shared/db/models', () => ({
   },
   InterviewSession: { findById: mockSessionFindById, findOne: mockSessionFindOne, updateOne: mockSessionUpdateOne },
   User: { findOne: mockUserFindOne },
+}))
+vi.mock('../services/sourceControl', () => ({
+  controlRevisionOf: (source: { controlRevision?: number }) => source.controlRevision ?? 0,
+  operationalRevisionOf: (source: { operationalRevision?: number }) => source.operationalRevision ?? 0,
+}))
+vi.mock('../services/qualityDecisionService', () => ({
+  fenceQualityDecisionSources: mockFenceQualityDecisionSources,
+  recordAutomaticQualityDecision: mockRecordAutomaticQualityDecision,
 }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { send: mockInngestSend } }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
@@ -110,11 +123,19 @@ const APPLY_ATTEMPT = {
 }
 
 function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations: ['Pune'], provenance: [APPLY_SOURCE], status: 'open', jdCompressed: PRACTICE_JD_COMPRESSED }) {
-  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockAppFindOne, mockAppExists, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockUserFindOne, mockSessionFindOne, mockSessionUpdateOne, mockIsJobsAccountActive, mockWithActiveJobsAccountWrite, mockRecordJobsUserEvent, mockStartSession, mockWithTransaction, mockEndSession]) m.mockReset()
+  for (const m of [mockPostingFindById, mockPostingUpdateOne, mockPostingExists, mockSourceFind, mockAppFindOne, mockAppExists, mockAppUpdateOne, mockAppCreate, mockAppFindOneAndUpdate, mockAppDeleteOne, mockUserFindOne, mockSessionFindOne, mockSessionUpdateOne, mockIsJobsAccountActive, mockWithActiveJobsAccountWrite, mockRecordJobsUserEvent, mockStartSession, mockWithTransaction, mockEndSession, mockRecordAutomaticQualityDecision, mockFenceQualityDecisionSources]) m.mockReset()
   mockInngestSend.mockReset()
   mockPostingFindById.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(posting) }) })
   mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockPostingExists.mockResolvedValue({ _id: 'posting' })
+  mockSourceFind.mockReturnValue({
+    select: () => ({
+      lean: () => Promise.resolve([
+        { sourceId: 'jsearch', health: 'active', controlRevision: 0, operationalRevision: 0 },
+        { sourceId: 'greenhouse', health: 'active', controlRevision: 0, operationalRevision: 0 },
+      ]),
+    }),
+  })
   mockAppExists.mockResolvedValue({ _id: 'application' })
   mockAppUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mockAppCreate.mockResolvedValue([])
@@ -124,6 +145,8 @@ function reset(posting: unknown = { title: 'SDE', company: 'PhonePe', locations:
   mockIsJobsAccountActive.mockResolvedValue(true)
   mockInngestSend.mockResolvedValue(undefined)
   mockRecordJobsUserEvent.mockResolvedValue(true)
+  mockRecordAutomaticQualityDecision.mockResolvedValue({ decisionKey: 'quality:test', inserted: true })
+  mockFenceQualityDecisionSources.mockResolvedValue(undefined)
   mockWithTransaction.mockImplementation(async (work: () => Promise<unknown>) => work())
   mockStartSession.mockResolvedValue({
     withTransaction: mockWithTransaction,
@@ -1022,6 +1045,22 @@ describe('reportBrokenLink (§4b crowd healing)', () => {
         crowdDemotedAt: NOW,
       })
     }
+    expect(mockFenceQualityDecisionSources).toHaveBeenCalledWith(
+      [
+        { sourceId: 'jsearch', controlRevision: 0, operationalRevision: 0 },
+        { sourceId: 'greenhouse', controlRevision: 0, operationalRevision: 0 },
+      ],
+      expect.anything(),
+    )
+    expect(mockRecordAutomaticQualityDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: 'apply-link',
+        action: 'demote',
+        serviceActor: 'jobs-link-quorum',
+        evidence: expect.objectContaining({ basis: 'crowd', reportCount: 3, quorum: 3 }),
+      }),
+      expect.anything(),
+    )
   })
 
   it('requests a new machine check when a later reporter arrives after the prior signal was cleared', async () => {

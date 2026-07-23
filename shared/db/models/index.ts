@@ -149,11 +149,30 @@ export type { IJobIngestCursor } from './JobIngestCursor'
 
 export { JobIngestCycle } from './JobIngestCycle'
 export type { IJobIngestCycle } from './JobIngestCycle'
-export { JobsVerdictConfig, JOBS_VERDICT_DEFAULTS } from './JobsVerdictConfig'
+export {
+  JobsVerdictConfig,
+  JOBS_VERDICT_CONFIG_ID,
+  JOBS_VERDICT_DEFAULTS,
+  jobsVerdictConfigSnapshotOf,
+  jobsVerdictConfigValuesOf,
+} from './JobsVerdictConfig'
+export {
+  JobsVerdictConfigAudit,
+  JOBS_VERDICT_CONFIG_ACTIONS,
+} from './JobsVerdictConfigAudit'
 export { JobsEmailSend, JOBS_EMAIL_STREAMS, type JobsEmailStream, type IJobsEmailSend } from './JobsEmailSend'
 export { JobPracticeEvidence, type IJobPracticeEvidence } from './JobPracticeEvidence'
 export { JobsEmailConfig, JOBS_EMAIL_DEFAULTS, type JobsEmailConfigValues, type IJobsEmailConfig } from './JobsEmailConfig'
-export type { IJobsVerdictConfig, JobsVerdictConfigValues } from './JobsVerdictConfig'
+export type {
+  IJobsVerdictConfig,
+  JobsVerdictConfigSnapshot,
+  JobsVerdictConfigState,
+  JobsVerdictConfigValues,
+} from './JobsVerdictConfig'
+export type {
+  IJobsVerdictConfigAudit,
+  JobsVerdictConfigAction,
+} from './JobsVerdictConfigAudit'
 
 export { JobApplication, JOB_APPLICATION_STATUSES } from './JobApplication'
 export type { IJobApplication, JobApplicationStatus } from './JobApplication'

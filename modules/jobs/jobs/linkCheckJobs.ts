@@ -1,6 +1,13 @@
+import { createHash } from 'crypto'
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
-import { JobPosting, JobIngestCycle, type IJobProvenance } from '@shared/db/models'
+import {
+  JOB_SOURCE_LINEAGE_UNKNOWN,
+  JobPosting,
+  JobIngestCycle,
+  JobSourceConfig,
+  type IJobProvenance,
+} from '@shared/db/models'
 import { logger } from '@shared/logger'
 import {
   checkApplyLink,
@@ -22,6 +29,13 @@ import {
   withReplicatedLinkGovernance,
   type ApplyLinkSubjectGroup,
 } from '../services/linkGovernance'
+import { controlRevisionOf, operationalRevisionOf } from '../services/sourceControl'
+import {
+  fenceQualityDecisionSources,
+  recordAutomaticQualityDecision,
+  withQualityDecisionTransaction,
+  type ApplyLinkQualityDecisionIdentity,
+} from '../services/qualityDecisionService'
 
 /**
  * Hourly apply-link liveness sweep (founder directive 2026-07-16, ruling
@@ -60,17 +74,23 @@ const RECHECK_ALIVE_MS = 14 * 24 * 3600 * 1000
  *  so bot-blocking ATS hosts are not hammered hourly. */
 const RECHECK_UNVERIFIABLE_MS = 48 * 3600 * 1000
 const PACING_MS = 400
+const LINK_DECISION_POLICY_REVISION = `jobs-link-check:two-strike:${MIN_RESTRIKE_MS}`
 
-const PICK_PROJECTION = '_id provenance applyCheck userReferenced status closedReason linkCheckRequestedAt'
+const PICK_PROJECTION = '_id sourceIds provenance applyCheck userReferenced status closedReason linkCheckRequestedAt'
 
 type PickedPosting = {
   _id: unknown
+  sourceIds?: string[]
   provenance?: IJobProvenance[]
   applyCheck?: Record<string, unknown>
   userReferenced?: boolean
   status?: 'open' | 'closed'
   closedReason?: string
   linkCheckRequestedAt?: Date
+}
+
+function linkInputHash(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
 function excludingPicked(docs: PickedPosting[]): Record<string, unknown> {
@@ -318,6 +338,13 @@ export async function runLinkCheckHandler(
         let crowdDispositionChanged = 0
         let machineDispositionChanged = 0
         let incidentsCleared = 0
+        const machineTransitions: Array<{
+          action: 'demote' | 'restore'
+          subject: string
+          generation: string
+          incidentVersion: number
+          outcome: 'dead' | 'alive'
+        }> = []
         for (const observation of observations) {
           const current = observation.group.governance
           const next = nextMachineGovernance(current, observation.outcome, checkedAt)
@@ -326,6 +353,13 @@ export async function runLinkCheckHandler(
           }
           if (!!current.machineDemotedAt !== !!next.machineDemotedAt) {
             machineDispositionChanged += 1
+            machineTransitions.push({
+              action: next.machineDemotedAt ? 'demote' : 'restore',
+              subject: observation.group.subject,
+              generation: observation.group.generation,
+              incidentVersion: current.incidentVersion,
+              outcome: next.machineDemotedAt ? 'dead' : 'alive',
+            })
           }
           if (
             next.incidentVersion > current.incidentVersion &&
@@ -382,12 +416,133 @@ export async function runLinkCheckHandler(
         const token = prev?.lastCheckedAt
           ? { 'applyCheck.lastCheckedAt': prev.lastCheckedAt }
           : { applyCheck: { $exists: false } }
-        const write = await JobPosting.updateOne(
-          { ...lifecycleFilter, ...token } as never,
-          update,
-          { runValidators: true },
-        )
-        if ((write?.matchedCount ?? 0) === 0) {
+        const needsDecisionEvidence = machineTransitions.length > 0 || shouldClose || shouldReopen
+        const persist = async (session?: import('mongoose').ClientSession) => {
+          const sourceIds = Array.from(new Set([
+            ...(doc.sourceIds ?? []),
+            ...(doc.provenance ?? []).map((entry) => entry.sourceId),
+          ]))
+          let sourceRevisions: Array<{ sourceId: string; controlRevision: number; operationalRevision: number }> = []
+          if (needsDecisionEvidence) {
+            if (!session || sourceIds.length === 0 || sourceIds.includes(JOB_SOURCE_LINEAGE_UNKNOWN)) {
+              return { matched: false, authorityChanged: true }
+            }
+            const sources = await JobSourceConfig.find(
+              { sourceId: { $in: sourceIds } },
+              null,
+              { session },
+            ).select('sourceId health controlRevision operationalRevision').lean()
+            const sourceById = new Map(sources.map((source) => [source.sourceId, source]))
+            if (!sourceIds.every((sourceId) => {
+              const source = sourceById.get(sourceId)
+              return !!source && source.health !== 'revoked'
+            })) return { matched: false, authorityChanged: true }
+            sourceRevisions = sourceIds.map((sourceId) => {
+              const source = sourceById.get(sourceId)!
+              return {
+                sourceId,
+                controlRevision: controlRevisionOf(source),
+                operationalRevision: operationalRevisionOf(source),
+              }
+            })
+            await fenceQualityDecisionSources(sourceRevisions, session)
+          }
+
+          const write = await JobPosting.updateOne(
+            { ...lifecycleFilter, ...token } as never,
+            update,
+            { runValidators: true, ...(session ? { session } : {}) },
+          )
+          if ((write?.matchedCount ?? 0) === 0) return { matched: false, authorityChanged: false }
+
+          for (const transition of machineTransitions) {
+            const identity: ApplyLinkQualityDecisionIdentity = {
+              domain: 'apply-link',
+              action: transition.action,
+              subjectKey: `${String(doc._id)}:${transition.subject}:${transition.generation}:${transition.incidentVersion}`,
+              postingId: String(doc._id),
+              serviceActor: 'jobs-link-check',
+              inputHash: linkInputHash({
+                subject: transition.subject,
+                generation: transition.generation,
+                incidentVersion: transition.incidentVersion,
+                outcome: transition.outcome,
+              }),
+              policyRevision: LINK_DECISION_POLICY_REVISION,
+              sourceRevisions,
+            }
+            await recordAutomaticQualityDecision({
+              ...identity,
+              occurredAt: checkedAt,
+              evidence: {
+                kind: 'apply-link',
+                basis: 'machine' as const,
+                outcome: transition.outcome,
+                generation: transition.generation,
+                observedAt: checkedAt,
+                checkedOptionCount: observations.length,
+              },
+            }, session)
+          }
+          if (shouldClose || shouldReopen) {
+            const incidents = observations
+              .map((observation) => ({
+                generation: observation.group.generation,
+                incidentVersion: observation.group.governance.incidentVersion,
+              }))
+              .sort((left, right) => (
+                left.generation.localeCompare(right.generation) ||
+                left.incidentVersion - right.incidentVersion
+              ))
+            const generation = linkInputHash(incidents)
+            const priorObservedAt = shouldClose ? prev?.lastDeadAt : prev?.lastAliveAt
+            if (!priorObservedAt) throw new Error('link lifecycle transition is missing its first observation')
+            await recordAutomaticQualityDecision({
+              domain: 'apply-link',
+              action: shouldClose ? 'close' : 'reopen',
+              subjectKey: String(doc._id),
+              postingId: String(doc._id),
+              serviceActor: 'jobs-link-check',
+              inputHash: linkInputHash({ incidents, outcome, lifecycle: shouldClose ? 'close' : 'reopen' }),
+              policyRevision: LINK_DECISION_POLICY_REVISION,
+              sourceRevisions,
+              occurredAt: checkedAt,
+              evidence: {
+                kind: 'apply-link',
+                basis: 'machine' as const,
+                outcome: shouldClose ? 'dead' : 'alive',
+                generation,
+                observedAt: checkedAt,
+                priorObservedAt: new Date(priorObservedAt),
+                checkedOptionCount: observations.length,
+              },
+            }, session)
+          }
+
+          if (closedAt) {
+            const closeFilter = {
+              _id: doc._id as never,
+              status: 'closed',
+              closedReason: 'dead-apply-link',
+              closedAt,
+            }
+            await JobPosting.updateOne(
+              { ...closeFilter, userReferenced: true } as never,
+              { $unset: { purgeAt: 1 } },
+              session ? { session } : undefined,
+            )
+            await JobPosting.updateOne(
+              { ...closeFilter, userReferenced: { $ne: true } } as never,
+              { $set: { purgeAt: new Date(closedAt.getTime() + 7 * 24 * 3600 * 1000) } },
+              session ? { session } : undefined,
+            )
+          }
+          return { matched: true, authorityChanged: false }
+        }
+        const persisted = needsDecisionEvidence
+          ? await withQualityDecisionTransaction((session) => persist(session))
+          : await persist()
+        if (!persisted.matched) {
           counters.casMisses += 1
           continue
         }
@@ -401,23 +556,6 @@ export async function runLinkCheckHandler(
         if (shouldReopen) counters.reopenedNow += 1
 
         if (closedAt) {
-          // Resolve TTL eligibility from the CURRENT retention pin. A
-          // concurrent first Save/Apply/Tailor either makes the true branch
-          // clear a stale purgeAt or runs after this and clears it itself.
-          const closeFilter = {
-            _id: doc._id as never,
-            status: 'closed',
-            closedReason: 'dead-apply-link',
-            closedAt,
-          }
-          await JobPosting.updateOne(
-            { ...closeFilter, userReferenced: true } as never,
-            { $unset: { purgeAt: 1 } },
-          )
-          await JobPosting.updateOne(
-            { ...closeFilter, userReferenced: { $ne: true } } as never,
-            { $set: { purgeAt: new Date(closedAt.getTime() + 7 * 24 * 3600 * 1000) } },
-          )
           counters.closedNow += 1
         }
       }

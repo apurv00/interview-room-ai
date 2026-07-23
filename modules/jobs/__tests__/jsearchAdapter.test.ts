@@ -2,6 +2,13 @@ import { describe, it, expect, vi } from 'vitest'
 import { jsearchAdapter, buildHarvestBuckets } from '@jobs'
 import type { FetchTarget } from '@jobs'
 
+const { mockFetchJSONWithRetry } = vi.hoisted(() => ({
+  mockFetchJSONWithRetry: vi.fn(),
+}))
+vi.mock('@shared/fetchJSONWithRetry', () => ({
+  fetchJSONWithRetry: mockFetchJSONWithRetry,
+}))
+
 const bucketTarget: FetchTarget = { kind: 'bucket', bucketId: 'backend:in', query: 'backend developer india', datePostedWindow: 'week', page: 1 }
 
 // Fixture mirrors the probe-validated JSearch wire shape (PR #503).
@@ -74,16 +81,18 @@ describe('jsearchAdapter.buildTargets', () => {
   it('an authority revoke blocks the metered request and is not a provider-health error', async () => {
     const previousKey = process.env.RAPIDAPI_KEY
     process.env.RAPIDAPI_KEY = 'test-key'
-    const fetchSpy = vi.fn()
     const beforePhysicalRequest = vi.fn().mockResolvedValue(false)
-    vi.stubGlobal('fetch', fetchSpy)
+    mockFetchJSONWithRetry.mockImplementationOnce(async (_url, _init, options) => {
+      const allowed = await options.beforePhysicalRequest()
+      return allowed
+        ? { ok: true, data: { data: [] }, status: 200, attempts: 1 }
+        : { ok: false, status: 0, error: 'source-authority-changed', attempts: 0, authorityChanged: true }
+    })
     try {
       const res = await jsearchAdapter.fetch(bucketTarget, { beforePhysicalRequest })
       expect(res).toEqual({ ok: false, status: 0, raw: [], attempts: 0, authorityChanged: true })
       expect(beforePhysicalRequest).toHaveBeenCalledOnce()
-      expect(fetchSpy).not.toHaveBeenCalled()
     } finally {
-      vi.unstubAllGlobals()
       if (previousKey === undefined) delete process.env.RAPIDAPI_KEY
       else process.env.RAPIDAPI_KEY = previousKey
     }

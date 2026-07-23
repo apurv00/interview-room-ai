@@ -1,19 +1,33 @@
 import { describe, it, expect, vi } from 'vitest'
 
-const { mockFindOne, mockFindById, mockFind, mockCreate } = vi.hoisted(() => ({
+const {
+  mockFindOne,
+  mockFindById,
+  mockFind,
+  mockCreate,
+  mockHasRestoredQualityDecision,
+  mockRecordAutomaticQualityDecision,
+} = vi.hoisted(() => ({
   mockFindOne: vi.fn(),
   mockFindById: vi.fn(),
   mockFind: vi.fn(),
   mockCreate: vi.fn(),
+  mockHasRestoredQualityDecision: vi.fn(),
+  mockRecordAutomaticQualityDecision: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
   JOB_SOURCE_LINEAGE_UNKNOWN: '__legacy_unknown__',
   JobPosting: { findOne: mockFindOne, findById: mockFindById, find: mockFind, create: mockCreate },
 }))
+vi.mock('../services/qualityDecisionService', () => ({
+  hasRestoredQualityDecision: mockHasRestoredQualityDecision,
+  recordAutomaticQualityDecision: mockRecordAutomaticQualityDecision,
+}))
 
 import { ingestBatch, evictProvenance, makeRedisRepostCounter } from '../services/ingestPipeline'
 import type { NormalizedJob } from '../adapters/types'
 import { groupApplyLinkSubjects } from '../services/linkGovernance'
+import { normalizeJdBody } from '../services/qualityGate'
 
 const LONG_JD = 'A genuine role with real responsibilities and requirements. '.repeat(10)
 
@@ -39,6 +53,11 @@ function reset(): void {
   mockFindById.mockReset().mockResolvedValue(null)
   mockFind.mockReset().mockReturnValue({ limit: () => Promise.resolve([]) })
   mockCreate.mockReset().mockResolvedValue({})
+  mockHasRestoredQualityDecision.mockReset().mockResolvedValue(false)
+  mockRecordAutomaticQualityDecision.mockReset().mockResolvedValue({
+    decisionKey: `quality:v1:${'a'.repeat(64)}`,
+    inserted: true,
+  })
 }
 
 function docStub(overrides: Record<string, unknown> = {}) {
@@ -132,6 +151,194 @@ describe('ingestBatch — identity ladder', () => {
     reset()
     const c = await ingestBatch([job({ description: `${LONG_JD} Pay Rs 500 before joining` })], 'jsearch')
     expect(c.drops['fee-fraud']).toBe(1)
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('records hard-drop evidence in the source transaction before discarding the row', async () => {
+    reset()
+    const session = { id: 'source-fence-session' }
+    const rejected = job({ description: `${LONG_JD} Pay Rs 500 before joining` })
+
+    const counters = await ingestBatch([rejected], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+    })
+
+    expect(counters.drops).toMatchObject({ 'fee-fraud': 1 })
+    expect(mockCreate).not.toHaveBeenCalled()
+    expect(mockHasRestoredQualityDecision).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'hard-drop',
+      action: 'drop',
+      subjectKey: expect.stringMatching(/^jsearch:content:[a-f0-9]{64}$/),
+      inputHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      policyRevision: 'jobs-quality-gate:v1',
+      sourceRevisions: [{ sourceId: 'jsearch', controlRevision: 4, operationalRevision: 9 }],
+    }), session)
+    expect(mockRecordAutomaticQualityDecision).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'hard-drop',
+      action: 'drop',
+      evidence: {
+        kind: 'hard-drop',
+        reasonCodes: ['fee-fraud'],
+        bodyLength: normalizeJdBody(rejected.description).length,
+        applyHosts: ['careers.acme.com'],
+      },
+      reviewOverlay: rejected,
+    }), session)
+  })
+
+  it('admits only the exact restored hard-drop input and re-audits changed content', async () => {
+    reset()
+    const session = { id: 'source-fence-session' }
+    const rejected = job({ description: `${LONG_JD} Pay Rs 500 before joining` })
+    mockHasRestoredQualityDecision
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    const restored = await ingestBatch([rejected], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+    })
+    const changed = await ingestBatch([{ ...rejected, description: `${rejected.description} Updated.` }], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+    })
+
+    expect(restored).toMatchObject({ newCount: 1, drops: {} })
+    expect(changed.drops).toMatchObject({ 'fee-fraud': 1 })
+    expect(mockCreate).toHaveBeenCalledTimes(1)
+    expect(mockRecordAutomaticQualityDecision).toHaveBeenCalledTimes(1)
+    const firstIdentity = mockHasRestoredQualityDecision.mock.calls[0][0]
+    const changedIdentity = mockHasRestoredQualityDecision.mock.calls[1][0]
+    expect(firstIdentity).toMatchObject({
+      subjectKey: changedIdentity.subjectKey,
+      sourceRevisions: changedIdentity.sourceRevisions,
+    })
+    expect(firstIdentity.inputHash).not.toBe(changedIdentity.inputHash)
+  })
+
+  it('does not reuse a restore after the same provider payload gains another drop reason', async () => {
+    reset()
+    const session = { id: 'source-fence-session' }
+    const rejected = job({ description: `${LONG_JD} Pay Rs 500 before joining` })
+    mockHasRestoredQualityDecision
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    await ingestBatch([rejected], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+    })
+    const later = await ingestBatch([rejected], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+      registerRepost: async () => 4,
+    })
+
+    const originalIdentity = mockHasRestoredQualityDecision.mock.calls[0][0]
+    const expandedIdentity = mockHasRestoredQualityDecision.mock.calls[1][0]
+    expect(originalIdentity.subjectKey).toBe(expandedIdentity.subjectKey)
+    expect(originalIdentity.inputHash).not.toBe(expandedIdentity.inputHash)
+    expect(later.drops).toMatchObject({ 'fee-fraud': 1, 'mass-repost': 1 })
+    expect(mockRecordAutomaticQualityDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputHash: expandedIdentity.inputHash,
+        evidence: expect.objectContaining({
+          reasonCodes: ['fee-fraud', 'mass-repost'],
+          massRepostCompanyCount: 4,
+        }),
+      }),
+      session,
+    )
+  })
+
+  it('keeps a mass-repost restore stable when only the observed company count changes', async () => {
+    reset()
+    const session = { id: 'source-fence-session' }
+    const rejected = job({ description: `${LONG_JD} Pay Rs 500 before joining` })
+    mockHasRestoredQualityDecision
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+
+    await ingestBatch([rejected], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+      registerRepost: async () => 4,
+    })
+    const later = await ingestBatch([rejected], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+      registerRepost: async () => 100,
+    })
+
+    const countFourIdentity = mockHasRestoredQualityDecision.mock.calls[0][0]
+    const countHundredIdentity = mockHasRestoredQualityDecision.mock.calls[1][0]
+    expect(countFourIdentity.subjectKey).toBe(countHundredIdentity.subjectKey)
+    expect(countFourIdentity.inputHash).toBe(countHundredIdentity.inputHash)
+    expect(later).toMatchObject({ newCount: 1, drops: {} })
+    expect(mockRecordAutomaticQualityDecision).not.toHaveBeenCalled()
+  })
+
+  it('keeps hard-drop identity stable across rotating provider metadata and tracking URLs', async () => {
+    reset()
+    const session = { id: 'source-fence-session' }
+    const first = job({
+      externalId: 'rotating-id-1',
+      postedAt: '2026-07-10T00:00:00Z',
+      description: `${LONG_JD} Pay Rs 500 before joining`,
+      applyOptions: [{ url: 'https://careers.acme.com/roles/1?utm_source=first' }],
+    })
+    const second = {
+      ...first,
+      externalId: 'rotating-id-2',
+      postedAt: '2026-07-10T05:30:00+05:30',
+      applyOptions: [{ url: 'https://careers.acme.com/other-provider-path?tracking=second' }],
+    }
+    mockHasRestoredQualityDecision.mockResolvedValue(true)
+
+    await ingestBatch([first], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+    })
+    await ingestBatch([second], 'jsearch', {
+      session: session as never,
+      sourceControlRevision: 4,
+      sourceOperationalRevision: 9,
+    })
+
+    expect(mockHasRestoredQualityDecision.mock.calls[0][0])
+      .toEqual(mockHasRestoredQualityDecision.mock.calls[1][0])
+  })
+
+  it('aborts when hard-drop evidence cannot be recorded', async () => {
+    reset()
+    const session = { id: 'source-fence-session' }
+    const malformed = Object.assign(new Error('review overlay is malformed'), {
+      name: 'QualityDecisionValidationError',
+    })
+    mockRecordAutomaticQualityDecision.mockRejectedValueOnce(malformed)
+    const rejected = (externalId: string) =>
+      job({ externalId, description: `${LONG_JD} Pay Rs 500 before joining` })
+
+    await expect(ingestBatch(
+      [rejected('bad-ledger-row'), rejected('valid-ledger-row')],
+      'jsearch',
+      {
+        session: session as never,
+        sourceControlRevision: 4,
+        sourceOperationalRevision: 9,
+      },
+    )).rejects.toBe(malformed)
+
+    expect(mockRecordAutomaticQualityDecision).toHaveBeenCalledOnce()
     expect(mockCreate).not.toHaveBeenCalled()
   })
 

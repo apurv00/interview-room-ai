@@ -453,34 +453,14 @@ export async function GET() {
   })
 }
 
-/** PATCH /api/cms/jobs-ingest — verdict rollout settings only. */
-export async function PATCH(req: Request) {
+/** The unversioned verdict writer was retired by A09. All mutations now use
+ * the audited, revision-fenced governance endpoint. */
+export async function PATCH() {
   const authorization = await requireCurrentPlatformAdmin()
   const denied = readinessResponse(authorization)
   if (denied) return denied
-
-  let body: Record<string, unknown>
-  try {
-    body = await req.json()
-  } catch {
-    return NextResponse.json({ error: 'invalid JSON' }, { status: 400 })
-  }
-
-  const set: Record<string, unknown> = {}
-  const bools = ['collectionEnabled', 'enforceEnabled'] as const
-  const nums = ['dailyVerdictCap', 'dailyBudgetUsd', 'monthlyBudgetUsd', 'perCompanyDailyCap', 'perSourceDailyCap', 'inputUsdPerMTok', 'outputUsdPerMTok'] as const
-  for (const key of bools) if (typeof body[key] === 'boolean') set[key] = body[key]
-  for (const key of nums) if (typeof body[key] === 'number' && body[key] >= 0 && Number.isFinite(body[key])) set[key] = body[key]
-  if (typeof body.notes === 'string') set.notes = body.notes.slice(0, 2000)
-  if (!Object.keys(set).length) return NextResponse.json({ error: 'no valid fields' }, { status: 400 })
-
-  const current = await JobsVerdictConfig.getConfig()
-  const next = { ...current, ...set }
-  if (next.enforceEnabled && !next.collectionEnabled) {
-    return NextResponse.json({ error: 'enforceEnabled requires collectionEnabled' }, { status: 400 })
-  }
-  await JobsVerdictConfig.updateOne({}, {
-    $set: { ...set, updatedBy: authorization.actorUserId },
-  }, { upsert: true })
-  return NextResponse.json({ ok: true, config: next })
+  return NextResponse.json({
+    error: 'use /api/cms/jobs-ingest/verdict-governance for audited verdict changes',
+    code: 'VERDICT_GOVERNANCE_REQUIRED',
+  }, { status: 410 })
 }
