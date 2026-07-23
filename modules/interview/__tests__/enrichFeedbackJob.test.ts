@@ -174,6 +174,27 @@ describe('enrichFeedbackJob handler', () => {
     expect(mockFlushUsage).toHaveBeenCalledTimes(1)
   })
 
+  it('resumes a pre-rollout job whose completed mark-running step returned no value', async () => {
+    mockFindOne.mockReturnValue(sessionDoc())
+    mockRunEnrichment.mockResolvedValue(enrichmentResult())
+    const resumedStep = {
+      run: async <T,>(name: string, fn: () => Promise<T> | T): Promise<T> => {
+        if (name === 'mark-running') return undefined as T
+        return fn()
+      },
+    }
+
+    const out = await runEnrichFeedbackJobHandler(
+      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+      resumedStep,
+    )
+
+    expect(out.status).toBe('completed')
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockRunEnrichment).toHaveBeenCalledTimes(1)
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1)
+  })
+
   it('union-merges ideal_answers by questionIndex — a backfill run never drops existing entries', async () => {
     mockFindOne.mockReturnValue(
       sessionDoc({

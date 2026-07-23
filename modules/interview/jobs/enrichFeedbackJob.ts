@@ -62,7 +62,7 @@ export async function runEnrichFeedbackJobHandler(
 ): Promise<{ sessionId: string; status: 'completed' | 'skipped'; idealAnswers?: number }> {
   const { sessionId, userId, reason, questionIndex } = event.data
 
-  const claimed = await step.run('claim-running', async () => {
+  const claimed = await step.run<boolean | null | undefined>('mark-running', async () => {
     await connectDB()
     const result = await InterviewSession.updateOne(
       {
@@ -85,7 +85,10 @@ export async function runEnrichFeedbackJobHandler(
     )
     return (result.modifiedCount ?? 0) === 1
   })
-  if (!claimed) return { sessionId, status: 'skipped' }
+  // Keep the pre-rollout step id so an invocation resumed during deployment
+  // reuses its completed step. Its legacy callback returned no value; only an
+  // explicit false can mean the new CAS lost to another worker.
+  if (claimed === false) return { sessionId, status: 'skipped' }
 
   // Minimal event payload discipline: re-read the heavy data here. By the
   // time Inngest delivers (typically <2s), generate-feedback's awaited
