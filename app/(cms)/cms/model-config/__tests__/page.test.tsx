@@ -39,6 +39,9 @@ describe('ModelConfigPage', () => {
 
     expect(screen.getAllByRole('combobox')[0]).toHaveValue('openai')
     expect(screen.getByText(/each task uses its code-owned default/i)).toBeInTheDocument()
+    expect(screen.getByText(/primary-only, attributable output/i)).toBeInTheDocument()
+    expect(screen.queryByText('Fallback Model')).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: 'TOON input encoding' })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Config' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
@@ -51,7 +54,6 @@ describe('ModelConfigPage', () => {
         provider: 'openai',
         maxTokens: 800,
         isActive: true,
-        useToonInput: false,
       }],
     })
   })
