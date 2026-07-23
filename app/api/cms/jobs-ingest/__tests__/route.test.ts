@@ -7,6 +7,7 @@ const {
   mockGetControlPlane,
   mockLegalAuditFind,
   mockPostingAggregate,
+  mockReconcileFunnel,
   mockRequireCurrentPlatformAdmin,
 } = vi.hoisted(() => ({
   mockCountDocuments: vi.fn(),
@@ -15,6 +16,7 @@ const {
   mockGetControlPlane: vi.fn(),
   mockLegalAuditFind: vi.fn(),
   mockPostingAggregate: vi.fn(),
+  mockReconcileFunnel: vi.fn(),
   mockRequireCurrentPlatformAdmin: vi.fn(),
 }))
 
@@ -23,6 +25,9 @@ vi.mock('@jobs/services/adminAuth', () => ({
 }))
 vi.mock('@jobs/services/sourceOperations', () => ({
   getJobSourceControlPlane: (...args: unknown[]) => mockGetControlPlane(...args),
+}))
+vi.mock('@jobs/services/funnelReconciliation', () => ({
+  reconcileJobsFunnelTelemetry: (...args: unknown[]) => mockReconcileFunnel(...args),
 }))
 vi.mock('@shared/db/models', () => ({
   JobIngestCycle: { find: (...args: unknown[]) => mockCycleFind(...args) },
@@ -133,9 +138,49 @@ beforeEach(() => {
     dailyBudgetUsd: 2.5,
     monthlyBudgetUsd: 75,
   })
+  mockReconcileFunnel.mockResolvedValue({
+    status: 'ready',
+    eventName: 'jobs.apply_confirmed',
+    windowStart: '2026-07-22T11:55:00.000Z',
+    windowEnd: '2026-07-23T11:55:00.000Z',
+    settlingDelayMinutes: 5,
+    mismatchCount: 0,
+    factCount: 2,
+    eventCount: 2,
+    missingEvents: 0,
+    extraEvents: 0,
+  })
 })
 
 describe('GET /api/cms/jobs-ingest', () => {
+  it('returns the read-only funnel reconciliation report', async () => {
+    mockReconcileFunnel.mockResolvedValue({
+      status: 'warning',
+      eventName: 'jobs.apply_confirmed',
+      windowStart: '2026-07-22T11:55:00.000Z',
+      windowEnd: '2026-07-23T11:55:00.000Z',
+      settlingDelayMinutes: 5,
+      mismatchCount: 2,
+      factCount: 4,
+      eventCount: 2,
+      missingEvents: 2,
+      extraEvents: 0,
+    })
+
+    const response = await GET()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      funnelReconciliation: {
+        status: 'warning',
+        mismatchCount: 2,
+        eventName: 'jobs.apply_confirmed',
+        factCount: 4,
+        eventCount: 2,
+      },
+    })
+  })
+
   it('uses exact backend aggregates rather than truncating telemetry to recent cycle rows', async () => {
     const response = await GET()
     const payload = await response.json()
@@ -338,5 +383,6 @@ describe('GET /api/cms/jobs-ingest', () => {
 
     expect(response.status).toBe(403)
     expect(mockGetControlPlane).not.toHaveBeenCalled()
+    expect(mockReconcileFunnel).not.toHaveBeenCalled()
   })
 })

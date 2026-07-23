@@ -8,6 +8,7 @@ import { VerdictGovernancePanel } from './VerdictGovernancePanel'
 import { EmailOperationsPanel } from './EmailOperationsPanel'
 import type {
   ApiFailure,
+  FunnelReconciliation,
   JobsOperationsPayload,
   JobsSourceAction,
   ReadinessItem,
@@ -54,6 +55,81 @@ function ReadinessCard({ item }: { item: ReadinessItem }) {
 function formatDate(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString()
+}
+
+function FunnelIntegrityPanel({ report }: { report: FunnelReconciliation }) {
+  return (
+    <section aria-labelledby="funnel-integrity-heading">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 id="funnel-integrity-heading" className="text-xl font-semibold text-slate-950">
+            Funnel telemetry integrity
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Server-owned events compared with their durable application transitions.
+          </p>
+        </div>
+        <span className="text-xs text-slate-500">
+          {formatDate(report.windowStart)}–{formatDate(report.windowEnd)}
+        </span>
+      </div>
+      {report.status === 'warning' ? (
+        <div role="alert" className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+          <p className="font-semibold">Funnel telemetry does not reconcile.</p>
+          <p className="mt-1">
+            {(report.mismatchCount ?? 0).toLocaleString()} transition{report.mismatchCount === 1 ? '' : 's'} differ from the telemetry store.
+            Inspect producer errors before using these funnel counts.
+          </p>
+        </div>
+      ) : report.status === 'unavailable' ? (
+        <div role="alert" className="mt-4 rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">Funnel telemetry reconciliation is unavailable.</p>
+          <p className="mt-1">Application and event counts could not be compared. The source controls remain available; inspect the reconciliation query logs.</p>
+        </div>
+      ) : null}
+      {report.factCount !== null ? (
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          <table className="w-full min-w-[680px] text-left text-sm">
+            <caption className="sr-only">Jobs funnel event and durable transition reconciliation</caption>
+            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+              <tr>
+                <th scope="col" className="px-4 py-3">Transition</th>
+                <th scope="col" className="px-4 py-3">Durable facts</th>
+                <th scope="col" className="px-4 py-3">Events</th>
+                <th scope="col" className="px-4 py-3">Missing</th>
+                <th scope="col" className="px-4 py-3">Extra</th>
+                <th scope="col" className="px-4 py-3">State</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row" className="px-4 py-3">
+                  <span className="font-medium text-slate-950">Confirmed applications</span>
+                  <span className="mt-1 block font-mono text-xs font-normal text-slate-500">{report.eventName}</span>
+                </th>
+                <td className="px-4 py-3 tabular-nums text-slate-700">{report.factCount.toLocaleString()}</td>
+                <td className="px-4 py-3 tabular-nums text-slate-700">{report.eventCount?.toLocaleString()}</td>
+                <td className="px-4 py-3 tabular-nums text-slate-700">{report.missingEvents?.toLocaleString()}</td>
+                <td className="px-4 py-3 tabular-nums text-slate-700">{report.extraEvents?.toLocaleString()}</td>
+                <td className="px-4 py-3">
+                  <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${
+                    report.status === 'ready'
+                      ? 'bg-green-100 text-green-800'
+                      : 'bg-amber-100 text-amber-900'
+                  }`}>
+                    {report.status}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <p className="mt-2 text-xs text-slate-500">
+        Window: 24 hours. The newest {report.settlingDelayMinutes} minutes are excluded to avoid alerting on in-flight event writes.
+      </p>
+    </section>
+  )
 }
 
 async function readFailure(response: Response): Promise<ApiFailure> {
@@ -283,6 +359,8 @@ export default function JobsIngestPage() {
           </div>
         ) : null}
       </section>
+
+      <FunnelIntegrityPanel report={data.funnelReconciliation} />
 
       {data.bootstrap.required ? (
         <section aria-labelledby="bootstrap-heading" className="rounded-2xl border border-blue-200 bg-blue-50 p-6">

@@ -57,6 +57,21 @@ describe('JobApplication tracker sweep index', () => {
     ])
   })
 
+  it('indexes exact user-authored lifecycle edges for funnel reconciliation', () => {
+    const reconciliationIndex = JobApplication.schema.indexes().find(
+      ([, options]) => options.name === 'jobs_funnel_reconciliation_history',
+    )
+
+    expect(reconciliationIndex).toEqual([
+      {
+        'statusHistory.source': 1,
+        'statusHistory.status': 1,
+        'statusHistory.at': 1,
+      },
+      { name: 'jobs_funnel_reconciliation_history' },
+    ])
+  })
+
   it('stores coarse interview timing separately from an exact date', () => {
     const path = JobApplication.schema.path('interviewDatePreference') as unknown as {
       options: { enum: string[] }

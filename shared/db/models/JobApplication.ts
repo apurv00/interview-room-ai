@@ -338,6 +338,16 @@ JobApplicationSchema.add({
 JobApplicationSchema.index({ userId: 1, jobPostingId: 1 }, { unique: true })
 // Tracker list: grouped by status, most recently touched first.
 JobApplicationSchema.index({ userId: 1, status: 1, updatedAt: -1 })
+// Admin telemetry reconciliation: locate exact user-authored apply edges
+// without scanning and unwinding every application's full history.
+JobApplicationSchema.index(
+  {
+    'statusHistory.source': 1,
+    'statusHistory.status': 1,
+    'statusHistory.at': 1,
+  },
+  { name: 'jobs_funnel_reconciliation_history' },
+)
 // Global scheduled work: confirmed applications that crossed the 35-day
 // response threshold. The partial predicate keeps clicks and terminal rows
 // out of the index entirely.
