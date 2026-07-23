@@ -111,6 +111,14 @@ fully implemented stream.
   toggles (it is a direct request) but honors the same suppression gate
   (`e0` or `all`); the request UI shows "email is off for your account"
   instead of silently accepting a request it won't honor.
+- Candidate Settings exposes only active E0/E1/E2/E4 consent through
+  `GET/PATCH /api/settings/jobs-email`. PATCH accepts a non-empty partial
+  stream change and merges it with current preferences inside the active
+  account transaction, so saving one setting cannot clear a newer
+  unsubscribe for another stream. "Turn on/off all" sends all four decisions
+  explicitly. Retired E3 is never displayed, and an E3 suppression implied
+  by a legacy `all` marker remains suppressed when active streams are
+  resubscribed.
 - **Two unsubscribe paths** [R17]:
   - `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
     headers point at a dedicated endpoint that commits suppression
