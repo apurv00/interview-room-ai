@@ -33,19 +33,24 @@ Two classes with different rules [R1]:
 | # | Stream | Trigger | Discipline |
 |---|--------|---------|------------|
 | E1 | Response nudge | status = `applied` (NEVER `apply_clicked` — an unconfirmed apply gets no response-status email, ever; the in-app confirm card owns that question and its 2-ask budget is closed [R0]) + 14 calendar days without a user-sourced tracker touch | ONE per application, ever. Never sent after day 28 of silence — it must land before the 35-day auto-ghost, not after it [R2]. Shares the response-status ask ledger with the in-app 7d/21d nudges: reads/writes `outcome.{lastAskedAt, askCount}`; an in-app answer or ask inside 7 days defers/consumes E1 [R4]. ≥3 due for one user → ONE batched email listing all rows with per-row one-taps, consuming one cap slot and one ask per application [R2]. |
-| E3 | Weekly digest | Cron Tue 10:00 IST; users with ≥1 tracker row or base resume | Weekly. Zero new content → no send (silence is the honest state). Sunset: paused after 8 consecutive zero-click digests, resumed by any site visit or tracker action; stopped at `offer` with no other active applications [R8]. **Wave 1.5, not wave 1**: E3 does not enable until Resend bounce/complaint webhooks feed a suppression set (hard bounce → suppress; complaint → suppress + unsubscribe). A bulk stream without a feedback loop is a reputation death spiral with no brake [R20]. |
 | E4 | Deferred practice | status `apply_clicked` or `applied` (merely-saved jobs never trigger per-application mail — that's the engagement spam §0 forbids; saved-not-practiced becomes one batched digest line) + 0 practice sessions after 3 calendar days | ONE per application, ever. At send time, the posting must still be open and able to mint exact-JD Practice (readable canonical JD hash + active CMS-supported role). Readiness is checked before reservation and again immediately before provider delivery; failure releases the unstamped reservation so the candidate can be re-derived if readiness returns. Not sent when the application is >14 days stale [R2][R7]. Suppressed if an E0 was honored for the application. |
 
 **Caps & priority:** max 3 solicitation emails per user per rolling 7 days
 (E0/E2 exempt). Cap-miss for E1/E4 = DROP, not queue — the moment passed;
 a retrying sweep must never turn the cap into a target [R2]. Slot priority
-when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
+when competing: E1 > E4 [R11]. All sends land 08:00–21:00 IST.
+
+E3 is retired from the active contract. It never had a worker or the
+required bounce/complaint feedback loop, so exposing an enable switch was
+misleading. Legacy `e3` unsubscribe and ledger values remain readable for
+backward compatibility; any future digest must be introduced as a new,
+fully implemented stream.
 
 ## 2. The structural guards
 
 1. **Send ledger** — `JobsEmailSend` `{ userId, stream, dedupeKey, sentAt,
    resendId }`, UNIQUE `{userId, stream, dedupeKey}`.
-   - *Solicitation streams (E1/E3/E4)*: reserve-first (insert ledger row →
+   - *Solicitation streams (E1/E4)*: reserve-first (insert ledger row →
      send → stamp `resendId`). Duplicate key = skip. A reserved-unstamped
      row is dashboard-surfaced, never auto-retried — losing a nudge is
      acceptable; double-sending is not.
@@ -73,9 +78,6 @@ when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
      uncertain. A later durable render that differs under the same key may
      be rejected by Resend and is dashboard-alerted, never worked around with
      a new key that could duplicate the original delivery.
-   - *Ordering*: any content-dependent skip (E3's zero-content rule) is
-     decided BEFORE reservation — a skipped digest is not a false alarm
-     [R32].
 2. **Pagination by `_id` cursor** until exhaustion; per-run hard stop (500)
    with remainder logged. No `limit(50)` head-reads.
 3. **Preferences at the query** — filter shape is explicitly
@@ -85,7 +87,7 @@ when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
    before the Resend call (post-reserve); an in-window unsubscribe releases
    the reservation [R24].
 4. **Switches are data** — singleton `JobsEmailConfig` `{ e0Enabled,
-   e1Enabled, e2Enabled, e3Enabled, e4Enabled, globalWeeklyCap }`, all
+   e1Enabled, e2Enabled, e4Enabled, globalWeeklyCap }`, all
    default OFF, served by its OWN admin sub-route
    `app/api/cms/jobs-ingest/email/route.ts` (the existing PATCH is
    hard-wired to the JobsVerdictConfig singleton; one handler per
@@ -95,8 +97,9 @@ when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
 
 - `User.emailPreferences.jobs = { nudges: boolean, digest: boolean,
   unsubscribedStreams: string[] }` [R5][R27]. Coarse toggles for settings
-  UI (E1/E4 ride `nudges`, E3 rides `digest`); the suppression list is what
-  unsubscribe links write. **Entries are the closed enum `e0`…`e4` plus the
+  UI (E1/E4 ride `nudges`; `digest` is retained only as legacy data); the
+  suppression list is what unsubscribe links write. **Entries are the
+  legacy-compatible closed enum `e0`…`e4` plus the
   explicit marker `all` — the all-jobs link writes `all` itself, never a
   fan-out to per-stream entries** (a fan-out loses the global-intent fact
   and leaves streams without their own entry, E0 included, nothing to
@@ -198,10 +201,9 @@ when competing: E1 > E4 > E3 [R11]. All sends land 08:00–21:00 IST.
    no backfill).
 2. Founder self-test per stream from the dashboard (`?to=self` kick).
 3. Flip order: E0 + E2 (transactional, highest value) → E1 → E4.
-4. E3 waits for wave 1.5 (bounce/complaint webhook suppression live) [R20].
 
 ## 8. Explicitly out of scope (wave 1)
 
-E3 bulk digest (wave 1.5 behind webhook suppression); open-tracking pixels
-(never); learn-digest resurrection; Gmail-inbox response detection
+Bulk digest (the former E3 concept is retired, not parked); open-tracking
+pixels (never); learn-digest resurrection; Gmail-inbox response detection
 (privacy posture); per-user send-time optimization.

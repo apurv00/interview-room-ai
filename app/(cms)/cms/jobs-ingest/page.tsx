@@ -5,6 +5,7 @@ import { SourceOperationDialog } from './SourceOperationDialog'
 import { SourcesTable } from './SourcesTable'
 import { VerdictMonitor } from './VerdictMonitor'
 import { VerdictGovernancePanel } from './VerdictGovernancePanel'
+import { EmailOperationsPanel } from './EmailOperationsPanel'
 import type {
   ApiFailure,
   JobsOperationsPayload,
@@ -373,6 +374,7 @@ export default function JobsIngestPage() {
 
       <VerdictMonitor verdict={data.verdict} />
       <VerdictGovernancePanel />
+      <EmailOperationsPanel />
 
       {dialog ? (
         <SourceOperationDialog
