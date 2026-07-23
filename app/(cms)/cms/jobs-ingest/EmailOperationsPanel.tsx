@@ -47,10 +47,25 @@ interface EmailConfigDraft {
   globalWeeklyCap: string
 }
 
+type EmailStream = (typeof STREAMS)[number]['id'] | 'e3'
+
+interface EmailIncident {
+  id: string
+  userId: string
+  stream: EmailStream
+  dedupeKey: string
+  incidentKind?: 'delivery-uncertain' | 'past-window'
+  createdAt: string
+}
+
 interface EmailHealth {
   sentByStream: Record<(typeof STREAMS)[number]['id'], number>
   staleReservations: number
   unstampedTransactional: number
+  incidents: {
+    transactional: EmailIncident[]
+    staleSolicitation: EmailIncident[]
+  }
 }
 
 interface EmailOperationsPayload extends EmailHealth {
@@ -67,6 +82,15 @@ function draftOf(config: EmailConfig): EmailConfigDraft {
   }
 }
 
+function healthOf(payload: EmailOperationsPayload): EmailHealth {
+  return {
+    sentByStream: payload.sentByStream,
+    staleReservations: payload.staleReservations,
+    unstampedTransactional: payload.unstampedTransactional,
+    incidents: payload.incidents,
+  }
+}
+
 function messageFrom(response: Response): Promise<string> {
   return response.json()
     .then((body: { error?: string }) => body.error || `Request failed with HTTP ${response.status}`)
@@ -79,6 +103,9 @@ export function EmailOperationsPanel() {
   const [health, setHealth] = useState<EmailHealth | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [resolving, setResolving] = useState(false)
+  const [selectedIncidentId, setSelectedIncidentId] = useState('')
+  const [resolutionReason, setResolutionReason] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
 
@@ -93,11 +120,17 @@ export function EmailOperationsPanel() {
     const payload = await response.json() as EmailOperationsPayload
     setConfig(payload.config)
     setDraft(draftOf(payload.config))
-    setHealth({
-      sentByStream: payload.sentByStream,
-      staleReservations: payload.staleReservations,
-      unstampedTransactional: payload.unstampedTransactional,
-    })
+    setHealth(healthOf(payload))
+  }, [])
+
+  const refreshHealth = useCallback(async () => {
+    const response = await fetch(endpoint, { cache: 'no-store' })
+    if (!response.ok) {
+      if (response.status === 401) throw new Error('Your admin session expired. Sign in again and reload this page.')
+      if (response.status === 403) throw new Error('Your current account no longer has platform-admin access.')
+      throw new Error(await messageFrom(response))
+    }
+    setHealth(healthOf(await response.json() as EmailOperationsPayload))
   }, [])
 
   useEffect(() => {
@@ -152,6 +185,69 @@ export function EmailOperationsPanel() {
     }
   }
 
+  async function closeIncidentWithoutResend() {
+    if (!health || !selectedIncidentId || resolving) return
+    const reason = resolutionReason.trim()
+    if (reason.length < 8 || reason.length > 1000) return
+
+    const incident = [
+      ...health.incidents.transactional,
+      ...health.incidents.staleSolicitation,
+    ].find((candidate) => candidate.id === selectedIncidentId)
+    if (!incident) return
+
+    setResolving(true)
+    setError(null)
+    setStatus(null)
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'closed-without-resend',
+          incidentId: incident.id,
+          reason,
+        }),
+      })
+      if (!response.ok) {
+        if (response.status === 401) throw new Error('Your admin session expired. Sign in again before resolving this incident.')
+        if (response.status === 403) throw new Error('Your current role no longer authorizes this action.')
+        throw new Error(await messageFrom(response))
+      }
+
+      const transactional = incident.stream === 'e0' || incident.stream === 'e2'
+      setHealth((current) => current ? {
+        ...current,
+        unstampedTransactional: transactional
+          ? Math.max(0, current.unstampedTransactional - 1)
+          : current.unstampedTransactional,
+        staleReservations: transactional
+          ? current.staleReservations
+          : Math.max(0, current.staleReservations - 1),
+        incidents: {
+          transactional: current.incidents.transactional.filter(({ id }) => id !== incident.id),
+          staleSolicitation: current.incidents.staleSolicitation.filter(({ id }) => id !== incident.id),
+        },
+      } : current)
+      setSelectedIncidentId('')
+      setResolutionReason('')
+      setStatus('Incident closed without resend. The original dedupe key remains burned.')
+      try {
+        await refreshHealth()
+      } catch (refreshError) {
+        setError(
+          refreshError instanceof Error
+            ? `Incident closed, but the queue could not refresh: ${refreshError.message}`
+            : 'Incident closed, but the queue could not refresh.',
+        )
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to resolve the email incident.')
+    } finally {
+      setResolving(false)
+    }
+  }
+
   if (loading) {
     return (
       <section
@@ -192,11 +288,20 @@ export function EmailOperationsPanel() {
   const capValid = draft.globalWeeklyCap.trim() !== '' && Number.isInteger(cap) && cap >= 0 && cap <= 20
   const changed = STREAMS.some(({ key }) => draft[key] !== config[key]) ||
     (capValid && cap !== config.globalWeeklyCap)
+  const incidents = [
+    ...health.incidents.transactional,
+    ...health.incidents.staleSolicitation,
+  ]
+  const openIncidentCount = health.unstampedTransactional + health.staleReservations
+  const selectedIncident = incidents.find(({ id }) => id === selectedIncidentId)
+  const normalizedResolutionReason = resolutionReason.trim()
+  const resolutionReasonValid = normalizedResolutionReason.length >= 8 &&
+    normalizedResolutionReason.length <= 1000
 
   return (
     <section
       aria-labelledby="email-operations-heading"
-      aria-busy={saving}
+      aria-busy={saving || resolving}
       className="rounded-2xl border border-slate-200 bg-white p-6"
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -266,6 +371,121 @@ export function EmailOperationsPanel() {
                 : 'No solicitation reservation has remained unstamped for more than 24 hours.'}
             </p>
           </div>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Open incident queue
+          </div>
+          {incidents.length === 0 ? (
+            <p className="mt-2 text-xs leading-5 text-slate-600">
+              {openIncidentCount === 0
+                ? 'No actionable email incidents are waiting for operator resolution.'
+                : `${openIncidentCount} open incidents were counted, but this snapshot contains no rows. Reload to reconcile the queue.`}
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 text-xs leading-5 text-slate-600">
+                Showing {incidents.length} of{' '}
+                {openIncidentCount} open incidents.
+                Closing an incident never sends email and never releases its dedupe key.
+              </p>
+              <label htmlFor="jobs-email-incident" className="mt-3 block text-sm font-semibold text-slate-900">
+                Incident to investigate
+              </label>
+              <select
+                id="jobs-email-incident"
+                value={selectedIncidentId}
+                disabled={resolving}
+                onChange={(event) => {
+                  setSelectedIncidentId(event.target.value)
+                  setResolutionReason('')
+                  setError(null)
+                  setStatus(null)
+                }}
+                className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-60"
+              >
+                <option value="">Select an incident</option>
+                {health.incidents.transactional.length ? (
+                  <optgroup label="Time-critical E0/E2">
+                    {health.incidents.transactional.map((incident) => (
+                      <option key={incident.id} value={incident.id}>
+                        {incident.stream.toUpperCase()} · {incident.dedupeKey}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+                {health.incidents.staleSolicitation.length ? (
+                  <optgroup label="Stale E1/E3/E4">
+                    {health.incidents.staleSolicitation.map((incident) => (
+                      <option key={incident.id} value={incident.id}>
+                        {incident.stream.toUpperCase()} · {incident.dedupeKey}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+              </select>
+
+              {selectedIncident ? (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <dl className="grid gap-2 text-xs text-slate-700 sm:grid-cols-2">
+                    <div>
+                      <dt className="font-semibold text-slate-900">User ID</dt>
+                      <dd className="mt-1 break-all font-mono">{selectedIncident.userId}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-900">Incident class</dt>
+                      <dd className="mt-1">
+                        {selectedIncident.incidentKind?.replaceAll('-', ' ') ??
+                          (selectedIncident.stream === 'e0' || selectedIncident.stream === 'e2'
+                            ? 'legacy unknown'
+                            : 'stale unstamped reservation')}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-900">Created</dt>
+                      <dd className="mt-1">
+                        <time dateTime={selectedIncident.createdAt}>
+                          {new Date(selectedIncident.createdAt).toLocaleString('en-IN')}
+                        </time>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold text-slate-900">Dedupe key</dt>
+                      <dd className="mt-1 break-all font-mono">{selectedIncident.dedupeKey}</dd>
+                    </div>
+                  </dl>
+                  <label htmlFor="jobs-email-resolution-reason" className="mt-3 block text-sm font-semibold text-slate-900">
+                    Resolution reason
+                  </label>
+                  <textarea
+                    id="jobs-email-resolution-reason"
+                    value={resolutionReason}
+                    minLength={8}
+                    maxLength={1000}
+                    rows={3}
+                    disabled={resolving}
+                    aria-invalid={resolutionReason.length > 0 && !resolutionReasonValid}
+                    aria-describedby="jobs-email-resolution-help"
+                    onChange={(event) => setResolutionReason(event.target.value)}
+                    className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:opacity-60"
+                  />
+                  <p id="jobs-email-resolution-help" className="mt-1 text-xs leading-5 text-slate-600">
+                    Internal operator note: record what was checked, without secrets or unrelated personal data.
+                    This closes the alert without claiming delivery and without resending.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={!resolutionReasonValid || resolving}
+                    onClick={() => void closeIncidentWithoutResend()}
+                    className="mt-3 rounded-lg border border-amber-500 bg-white px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {resolving ? 'Closing…' : 'Close without resend'}
+                  </button>
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
 
         <div className="mt-4">

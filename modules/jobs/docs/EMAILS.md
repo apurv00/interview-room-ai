@@ -49,7 +49,8 @@ fully implemented stream.
 ## 2. The structural guards
 
 1. **Send ledger** — `JobsEmailSend` `{ userId, stream, dedupeKey, sentAt,
-   resendId }`, UNIQUE `{userId, stream, dedupeKey}`.
+   resendId, incidentKind?, operatorResolution? }`, UNIQUE
+   `{userId, stream, dedupeKey}`.
    - *Solicitation streams (E1/E4)*: reserve-first (insert ledger row →
      send → stamp `resendId`). Duplicate key = skip. A reserved-unstamped
      row is dashboard-surfaced, never auto-retried — losing a nudge is
@@ -67,9 +68,13 @@ fully implemented stream.
      alert and a human decides** (Codex #530). E2's due-window makes this
      natural (T-1 → interview date, never re-derived after the date
      passes); E0's dedupeKey embeds the request hour, bounding it the
-     same way. Manual resend/recovery is not exposed yet; alerts remain
-     read-only and their keys stay burned. Resend binds a key to the
-     complete payload: signed
+     same way. Unstamped transactional rows name the truthful cause:
+     `delivery-uncertain` or `past-window`; provider errors and timeouts are
+     never misrepresented as a confirmed delivery failure. An operator can
+     close an incident without resending by adding a one-time resolution
+     reason, time, and actor. Resolution annotates the existing
+     row; it never deletes it or unlocks the UNIQUE key. Resend binds a key
+     to the complete payload: signed
      one-click headers are therefore minted once and frozen across same-run
      attempts. Before **each** provider call, account existence, unchanged
      recipient, suppression, tracker authority, and posting/content policy
@@ -83,7 +88,8 @@ fully implemented stream.
      provider acceptance, not inbox delivery. Unstamped E0/E2 rows are the
      immediate failed-or-uncertain alert class. Unstamped E1/E4 (plus legacy
      E3) reservations become stale after 24 hours. The latter two classes are
-     never auto-retried.
+     never auto-retried. Candidate data export includes the structured
+     resolution kind/time but omits the internal operator identity and note.
 2. **Pagination by `_id` cursor** until exhaustion; per-run hard stop (500)
    with remainder logged. No `limit(50)` head-reads.
 3. **Preferences at the query** — filter shape is explicitly

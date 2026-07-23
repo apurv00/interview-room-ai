@@ -270,6 +270,26 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('a closed-without-resend incident remains burned', async () => {
+    const beforeDelivery = vi.fn().mockResolvedValue(true)
+    mockSendFindOne.mockReturnValue(lean({
+      dedupeKey: 'app1:2026-07-22',
+      incidentKind: 'delivery-uncertain',
+      operatorResolution: {
+        kind: 'closed-without-resend',
+        reason: 'Provider confirmed no delivery',
+        at: new Date(),
+        actorUserId: 'admin1',
+      },
+    }))
+
+    expect(await sendTransactional({ ...input, beforeDelivery })).toEqual({
+      outcome: 'already-sent',
+    })
+    expect(beforeDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('suppression re-checked immediately before send (R24): e2 or all blocks', async () => {
     const beforeDelivery = vi.fn().mockResolvedValue(true)
     mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { unsubscribedStreams: ['all'] } } }))
@@ -339,7 +359,12 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     expect(beforeDelivery).toHaveBeenCalledTimes(2)
     expect(mockSendEmail).toHaveBeenCalledOnce()
     expect(mockSendCreate).toHaveBeenCalledWith(
-      [expect.objectContaining({ userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22' })],
+      [expect.objectContaining({
+        userId: 'u1',
+        stream: 'e2',
+        dedupeKey: 'app1:2026-07-22',
+        incidentKind: 'delivery-uncertain',
+      })],
       { session: mockDbSession },
     )
   })
@@ -367,7 +392,12 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     })
     expect(mockSendEmail).toHaveBeenCalledOnce()
     expect(mockSendCreate).toHaveBeenCalledWith(
-      [expect.objectContaining({ userId: 'u1', stream: 'e2', dedupeKey: 'app1:2026-07-22' })],
+      [expect.objectContaining({
+        userId: 'u1',
+        stream: 'e2',
+        dedupeKey: 'app1:2026-07-22',
+        incidentKind: 'delivery-uncertain',
+      })],
       { session: mockDbSession },
     )
     expect(mockLoggerError).toHaveBeenCalledWith(
@@ -411,7 +441,11 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     expect(await sendTransactional(input)).toEqual({ outcome: 'delivery-uncertain-alerted' })
     expect(mockSendEmail).toHaveBeenCalledOnce()
     expect(mockSendCreate).toHaveBeenCalledWith(
-      [expect.objectContaining({ stream: 'e2', dedupeKey: 'app1:2026-07-22' })],
+      [expect.objectContaining({
+        stream: 'e2',
+        dedupeKey: 'app1:2026-07-22',
+        incidentKind: 'delivery-uncertain',
+      })],
       { session: mockDbSession },
     )
   })
@@ -424,6 +458,7 @@ describe('sendTransactional (EMAILS.md §2)', () => {
     const row = mockSendCreate.mock.calls[0][0][0]
     expect(row.sentAt).toBeUndefined()
     expect(row.resendId).toBeUndefined()
+    expect(row.incidentKind).toBe('delivery-uncertain')
     expect(mockLoggerError).toHaveBeenCalled()
   })
 
@@ -473,6 +508,15 @@ describe('runE0Handler', () => {
     const stale = new Date(Date.now() - 25 * 3600_000).toISOString()
     expect(await runE0Handler(evt(stale), step)).toEqual({ outcome: 'past-window' })
     expect(mockSendEmail).not.toHaveBeenCalled()
+    expect(mockSendCreate).toHaveBeenCalledWith(
+      [{
+        userId: 'u1',
+        stream: 'e0',
+        dedupeKey: `app1:${stale.slice(0, 13)}`,
+        incidentKind: 'past-window',
+      }],
+      { session: mockDbSession },
+    )
   })
 
   it('happy path: sends with the hour-bucketed dedupeKey', async () => {
@@ -737,6 +781,15 @@ describe('runEmailSweepHandler', () => {
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({ applicationId: 'app1' }),
       expect.stringContaining('human review required')
+    )
+    expect(mockSendCreate).toHaveBeenCalledWith(
+      [{
+        userId: 'u1',
+        stream: 'e2',
+        dedupeKey: 'app1:v2:2026-07-21',
+        incidentKind: 'past-window',
+      }],
+      { session: mockDbSession },
     )
   })
 

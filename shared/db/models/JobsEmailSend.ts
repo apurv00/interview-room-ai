@@ -18,6 +18,18 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
 
 export const JOBS_EMAIL_STREAMS = ['e0', 'e1', 'e2', 'e3', 'e4'] as const
 export type JobsEmailStream = (typeof JOBS_EMAIL_STREAMS)[number]
+export const JOBS_EMAIL_INCIDENT_KINDS = [
+  'delivery-uncertain',
+  'past-window',
+] as const
+export type JobsEmailIncidentKind = (typeof JOBS_EMAIL_INCIDENT_KINDS)[number]
+
+interface IJobsEmailOperatorResolution {
+  kind: 'closed-without-resend'
+  reason: string
+  at: Date
+  actorUserId: mongoose.Types.ObjectId
+}
 
 export interface IJobsEmailSend extends Document {
   _id: mongoose.Types.ObjectId
@@ -28,6 +40,8 @@ export interface IJobsEmailSend extends Document {
    *  reservation (solicitation) or an in-flight transactional record. */
   sentAt?: Date
   resendId?: string
+  incidentKind?: JobsEmailIncidentKind
+  operatorResolution?: IJobsEmailOperatorResolution
   createdAt: Date
   updatedAt: Date
 }
@@ -39,6 +53,18 @@ const JobsEmailSendSchema = new Schema<IJobsEmailSend>(
     dedupeKey: { type: String, required: true, maxlength: 200 },
     sentAt: { type: Date },
     resendId: { type: String, maxlength: 100 },
+    incidentKind: { type: String, enum: JOBS_EMAIL_INCIDENT_KINDS },
+    operatorResolution: {
+      type: new Schema<IJobsEmailOperatorResolution>(
+        {
+          kind: { type: String, enum: ['closed-without-resend'], required: true },
+          reason: { type: String, required: true, maxlength: 1000 },
+          at: { type: Date, required: true },
+          actorUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+        },
+        { _id: false },
+      ),
+    },
   },
   { timestamps: true }
 )
