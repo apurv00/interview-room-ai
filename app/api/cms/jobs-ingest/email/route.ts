@@ -3,6 +3,10 @@ import { z } from 'zod'
 import { JobsEmailConfig, JobsEmailSend } from '@shared/db/models'
 import { requireCurrentPlatformAdmin } from '@jobs/services/adminAuth'
 import { checkJobsRateLimit } from '@jobs/services/rateLimit'
+import {
+  JobsAccountInactiveError,
+  withActiveJobsAccountWrite,
+} from '@shared/services/jobsAccountFence'
 
 export const dynamic = 'force-dynamic'
 const ACTIVE_EMAIL_STREAMS = ['e0', 'e1', 'e2', 'e4'] as const
@@ -31,6 +35,7 @@ interface IncidentRow {
 }
 
 interface ExistingIncident {
+  userId?: unknown
   sentAt?: Date
   operatorResolution?: {
     kind: string
@@ -217,6 +222,29 @@ export async function POST(req: Request) {
     }, { status: 400 })
   }
 
+  const target = await JobsEmailSend.findById(parsed.data.incidentId)
+    .select('userId sentAt operatorResolution')
+    .lean() as ExistingIncident | null
+  if (!target) {
+    return NextResponse.json({
+      error: 'email incident not found',
+      code: 'EMAIL_INCIDENT_NOT_FOUND',
+    }, { status: 404 })
+  }
+  if (target.operatorResolution) {
+    return NextResponse.json({
+      ok: true,
+      idempotent: true,
+      incidentId: parsed.data.incidentId,
+    })
+  }
+  if (target.sentAt) {
+    return NextResponse.json({
+      error: 'email incident is no longer eligible for resolution',
+      code: 'EMAIL_INCIDENT_NOT_RESOLVABLE',
+    }, { status: 409 })
+  }
+
   const now = new Date()
   const staleBefore = new Date(now.getTime() - STALE_SOLICITATION_AGE_MS)
   const operatorResolution = {
@@ -225,19 +253,34 @@ export async function POST(req: Request) {
     actorUserId: authorization.actorUserId,
     at: now,
   }
-  const result = await JobsEmailSend.updateOne({
-    _id: parsed.data.incidentId,
-    ...UNRESOLVED_FILTER,
-    $or: [
-      { stream: { $in: TRANSACTIONAL_STREAMS } },
-      {
-        stream: { $in: SOLICITATION_STREAMS },
-        createdAt: { $lt: staleBefore },
-      },
-    ],
-  }, {
-    $set: { operatorResolution },
-  })
+  const ownerUserId = String(target.userId)
+  let result: { modifiedCount: number }
+  try {
+    result = await withActiveJobsAccountWrite(ownerUserId, (session) =>
+      JobsEmailSend.updateOne({
+        _id: parsed.data.incidentId,
+        userId: ownerUserId,
+        ...UNRESOLVED_FILTER,
+        $or: [
+          { stream: { $in: TRANSACTIONAL_STREAMS } },
+          {
+            stream: { $in: SOLICITATION_STREAMS },
+            createdAt: { $lt: staleBefore },
+          },
+        ],
+      }, {
+        $set: { operatorResolution },
+      }, { session })
+    )
+  } catch (error) {
+    if (error instanceof JobsAccountInactiveError) {
+      return NextResponse.json({
+        error: 'email incident owner is unavailable',
+        code: 'EMAIL_INCIDENT_OWNER_UNAVAILABLE',
+      }, { status: 409 })
+    }
+    throw error
+  }
 
   if (result.modifiedCount === 1) {
     return NextResponse.json({

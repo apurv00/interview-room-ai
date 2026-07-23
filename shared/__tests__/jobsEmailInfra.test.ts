@@ -7,9 +7,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * headers/replyTo/idempotencyKey passthrough — review R31).
  */
 
+const MockJobsAccountInactiveError = vi.hoisted(() => class extends Error {
+  constructor(public readonly userId: string) {
+    super('account is missing or being deleted')
+    this.name = 'JobsAccountInactiveError'
+  }
+})
+
 const {
   mockRequireCurrentPlatformAdmin,
   mockCheckJobsRateLimit,
+  mockWithActiveJobsAccountWrite,
+  mockDbSession,
   mockGetConfig,
   mockConfigUpdateOne,
   mockSendUpdateOne,
@@ -21,6 +30,8 @@ const {
 } = vi.hoisted(() => ({
   mockRequireCurrentPlatformAdmin: vi.fn(),
   mockCheckJobsRateLimit: vi.fn(),
+  mockWithActiveJobsAccountWrite: vi.fn(),
+  mockDbSession: { id: 'email-incident-session' },
   mockGetConfig: vi.fn(),
   mockConfigUpdateOne: vi.fn(),
   mockSendUpdateOne: vi.fn(),
@@ -36,6 +47,10 @@ vi.mock('@jobs/services/adminAuth', () => ({
 }))
 vi.mock('@jobs/services/rateLimit', () => ({
   checkJobsRateLimit: (...args: unknown[]) => mockCheckJobsRateLimit(...args),
+}))
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  JobsAccountInactiveError: MockJobsAccountInactiveError,
+  withActiveJobsAccountWrite: (...args: unknown[]) => mockWithActiveJobsAccountWrite(...args),
 }))
 vi.mock('@shared/db/models', () => ({
   JobsEmailConfig: { getConfig: mockGetConfig, updateOne: mockConfigUpdateOne },
@@ -58,6 +73,7 @@ import { GET, PATCH, POST } from '../../app/api/cms/jobs-ingest/email/route'
 import { JOBS_EMAIL_DEFAULTS } from '../db/models/JobsEmailConfig'
 
 const ACTOR_ID = '507f1f77bcf86cd799439011'
+const OWNER_ID = '507f1f77bcf86cd799439012'
 const INCIDENT_ID = '507f191e810c19729de860ea'
 
 function incidentQuery(rows: unknown[]) {
@@ -85,6 +101,10 @@ function request(body: unknown, method: 'PATCH' | 'POST' = 'POST') {
 beforeEach(() => {
   vi.clearAllMocks()
   mockCheckJobsRateLimit.mockResolvedValue(null)
+  mockWithActiveJobsAccountWrite.mockImplementation(async (
+    _userId: string,
+    work: (session: unknown) => Promise<unknown>,
+  ) => work(mockDbSession))
   mockRequireCurrentPlatformAdmin.mockImplementation(async (
     options?: { beforeAuthorityLookup?: (actorUserId: string) => Promise<Response | null> },
   ) => {
@@ -310,6 +330,9 @@ describe('/api/cms/jobs-ingest/email', () => {
   })
 
   it('POST atomically closes one eligible unresolved incident without changing delivery truth', async () => {
+    const target = existingIncidentQuery({ userId: OWNER_ID })
+    mockFindById.mockReturnValue(target.query)
+
     const response = await POST(request({
       action: 'closed-without-resend',
       incidentId: INCIDENT_ID,
@@ -323,10 +346,12 @@ describe('/api/cms/jobs-ingest/email', () => {
       incidentId: INCIDENT_ID,
     })
     expect(mockCheckJobsRateLimit).toHaveBeenCalledWith(ACTOR_ID, 'admin-command')
+    expect(mockWithActiveJobsAccountWrite).toHaveBeenCalledWith(OWNER_ID, expect.any(Function))
     expect(mockSendUpdateOne).toHaveBeenCalledTimes(1)
-    const [filter, update] = mockSendUpdateOne.mock.calls[0]
+    const [filter, update, options] = mockSendUpdateOne.mock.calls[0]
     expect(filter).toEqual({
       _id: INCIDENT_ID,
+      userId: OWNER_ID,
       sentAt: { $exists: false },
       operatorResolution: { $exists: false },
       $or: [
@@ -347,13 +372,15 @@ describe('/api/cms/jobs-ingest/email', () => {
         },
       },
     })
+    expect(options).toEqual({ session: mockDbSession })
     expect(JSON.stringify(update)).not.toContain('sentAt')
-    expect(mockFindById).not.toHaveBeenCalled()
+    expect(mockFindById).toHaveBeenCalledWith(INCIDENT_ID)
+    expect(target.select).toHaveBeenCalledWith('userId sentAt operatorResolution')
   })
 
   it('POST treats an already-resolved row as an idempotent replay without overwriting it', async () => {
-    mockSendUpdateOne.mockResolvedValue({ modifiedCount: 0 })
     const existing = existingIncidentQuery({
+      userId: OWNER_ID,
       operatorResolution: {
         kind: 'closed-without-resend',
         reason: 'Original operator decision',
@@ -373,15 +400,17 @@ describe('/api/cms/jobs-ingest/email', () => {
       idempotent: true,
       incidentId: INCIDENT_ID,
     })
-    expect(mockSendUpdateOne).toHaveBeenCalledTimes(1)
+    expect(mockWithActiveJobsAccountWrite).not.toHaveBeenCalled()
+    expect(mockSendUpdateOne).not.toHaveBeenCalled()
     expect(mockFindById).toHaveBeenCalledWith(INCIDENT_ID)
-    expect(existing.select).toHaveBeenCalledWith('sentAt operatorResolution')
+    expect(existing.select).toHaveBeenCalledWith('userId sentAt operatorResolution')
   })
 
   it('POST returns conflict for stamped or fresh rows and 404 only when the row is missing', async () => {
     mockSendUpdateOne.mockResolvedValue({ modifiedCount: 0 })
 
     mockFindById.mockReturnValueOnce(existingIncidentQuery({
+      userId: OWNER_ID,
       sentAt: new Date('2026-07-20T00:00:00.000Z'),
     }).query)
     const stamped = await POST(request({
@@ -392,7 +421,9 @@ describe('/api/cms/jobs-ingest/email', () => {
     expect(stamped.status).toBe(409)
     await expect(stamped.json()).resolves.toMatchObject({ code: 'EMAIL_INCIDENT_NOT_RESOLVABLE' })
 
-    mockFindById.mockReturnValueOnce(existingIncidentQuery({}).query)
+    mockFindById
+      .mockReturnValueOnce(existingIncidentQuery({ userId: OWNER_ID }).query)
+      .mockReturnValueOnce(existingIncidentQuery({ userId: OWNER_ID }).query)
     const fresh = await POST(request({
       action: 'closed-without-resend',
       incidentId: INCIDENT_ID,
@@ -409,6 +440,27 @@ describe('/api/cms/jobs-ingest/email', () => {
     }))
     expect(missing.status).toBe(404)
     await expect(missing.json()).resolves.toMatchObject({ code: 'EMAIL_INCIDENT_NOT_FOUND' })
+  })
+
+  it('POST rejects resolution when the incident owner is deleting or missing', async () => {
+    mockFindById.mockReturnValue(existingIncidentQuery({ userId: OWNER_ID }).query)
+    mockWithActiveJobsAccountWrite.mockRejectedValueOnce(
+      new MockJobsAccountInactiveError(OWNER_ID),
+    )
+
+    const response = await POST(request({
+      action: 'closed-without-resend',
+      incidentId: INCIDENT_ID,
+      reason: 'Owner lifecycle no longer permits this mutation',
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: 'email incident owner is unavailable',
+      code: 'EMAIL_INCIDENT_OWNER_UNAVAILABLE',
+    })
+    expect(mockWithActiveJobsAccountWrite).toHaveBeenCalledWith(OWNER_ID, expect.any(Function))
+    expect(mockSendUpdateOne).not.toHaveBeenCalled()
   })
 })
 
