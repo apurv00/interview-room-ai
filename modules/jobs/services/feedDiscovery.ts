@@ -13,20 +13,39 @@ import { companyKey, locationKey, titleTokens } from './identityResolver'
 
 const PAGE_SIZE_DEFAULT = 20
 const PAGE_SIZE_MAX = 50
-const CURSOR_VERSION = 2
+const CURSOR_VERSION = 4
 const CURSOR_MAX_CHARS = 512
 const CURSOR_MAX_AGE_MS = 6 * 60 * 60 * 1_000
 const CURSOR_FUTURE_SKEW_MS = 5 * 60 * 1_000
+const CURSOR_IV_BYTES = 12
+const CURSOR_AUTH_TAG_BYTES = 16
 const AGGREGATION_MAX_TIME_MS = 3_000
 const DAY_MS = 24 * 60 * 60 * 1_000
 const RECENCY_WINDOW_DAYS = 21
 const RECENCY_MAX = 25
+const TARGET_DOMAIN_BONUS = 100
+const TARGET_TITLE_BONUS = 60
+const RESUME_SKILL_BONUS = 8
+const RESUME_SKILL_CAP = 3
+const TARGET_TITLE_JACCARD = 0.5
 
 const ENTRY_TITLE_TOKENS = ['intern', 'internship', 'trainee', 'apprentice', 'fresher', 'graduate', 'junior', 'jr']
 const SENIOR_TITLE_TOKENS = ['senior', 'sr', 'lead', 'principal', 'staff', 'head', 'director', 'vp', 'vice']
 
+interface FeedDiscoveryQuery extends PublicFeedQuery {
+  /** Private role preference. It changes Best-match order, never eligibility. */
+  roleDomain?: string
+  /** Private target intent. Only bounded normalized tokens enter aggregation. */
+  targetRole?: string
+  /** Private resume evidence. Only bounded normalized tokens enter aggregation. */
+  skills?: string[]
+}
+
 interface NormalizedDiscoveryQuery {
   domain?: string
+  roleDomain?: string
+  targetRoleTokens: string[]
+  skillSignals: string[]
   search?: string
   searchTokens: string[]
   searchCompanyKey?: string
@@ -43,6 +62,7 @@ interface FeedCursorPayload {
   v: typeof CURSOR_VERSION
   h: string
   a: number
+  p: number
   s: number
   t: number
   i: string
@@ -64,6 +84,7 @@ export type FeedDiscoveryRow = Pick<
   | 'flags'
   | 'confidentialCompany'
 > & {
+  personalizationScore: number
   discoveryScore: number
   sortPostedAt: Date
   locationPreferenceMatched: boolean
@@ -95,13 +116,35 @@ function cleanText(value: string | undefined, max: number): string | undefined {
   return cleaned || undefined
 }
 
-function normalizeDiscoveryQuery(query: PublicFeedQuery): NormalizedDiscoveryQuery {
+function boundedPrivateTokens(values: string[], limit: number): string[] {
+  const tokens = new Set<string>()
+  for (const value of values) {
+    for (const token of titleTokens(value)) tokens.add(token)
+  }
+  return Array.from(tokens).sort().slice(0, limit)
+}
+
+function boundedSkillSignals(values: string[], limit: number): string[] {
+  const signals = new Set<string>()
+  for (const value of values) {
+    const normalized = cleanText(value, 40)?.toLowerCase()
+    if (normalized) signals.add(normalized)
+  }
+  return Array.from(signals).sort().slice(0, limit)
+}
+
+function normalizeDiscoveryQuery(query: FeedDiscoveryQuery): NormalizedDiscoveryQuery {
   const search = cleanText(query.search, 80)
   const location = cleanText(query.location, 80)
   const company = cleanText(query.company, 100)
   const normalizedLocation = location ? locationKey(location) : undefined
+  const sort = query.sort ?? 'best'
+  const targetRole = sort === 'best' ? cleanText(query.targetRole, 80) : undefined
   return {
     domain: cleanText(query.domain, 50),
+    roleDomain: sort === 'best' ? cleanText(query.roleDomain, 50) : undefined,
+    targetRoleTokens: targetRole ? boundedPrivateTokens([targetRole], 8) : [],
+    skillSignals: sort === 'best' ? boundedSkillSignals(query.skills ?? [], 20) : [],
     search,
     searchTokens: search ? titleTokens(search).slice(0, 8) : [],
     searchCompanyKey: search ? companyKey(search) || undefined : undefined,
@@ -111,13 +154,16 @@ function normalizeDiscoveryQuery(query: PublicFeedQuery): NormalizedDiscoveryQue
     experience: query.experience,
     companyKey: company ? companyKey(company) || undefined : undefined,
     freshness: query.freshness,
-    sort: query.sort ?? 'best',
+    sort,
   }
 }
 
 function queryFingerprint(query: NormalizedDiscoveryQuery, pageSize: number): string {
   const canonical = JSON.stringify({
     domain: query.domain ?? '',
+    roleDomain: query.roleDomain ?? '',
+    targetRoleTokens: query.targetRoleTokens,
+    skillSignals: query.skillSignals,
     searchTokens: query.searchTokens,
     searchCompanyKey: query.searchCompanyKey ?? '',
     searchDomain: query.searchDomain ?? '',
@@ -134,7 +180,7 @@ function queryFingerprint(query: NormalizedDiscoveryQuery, pageSize: number): st
 
 function cursorSecret(): string {
   // NEXTAUTH_SECRET is boot-required in production. Domain separation keeps
-  // this low-sensitivity public cursor independent from auth token formats.
+  // feed cursor encryption independent from auth token formats.
   const configured = process.env.NEXTAUTH_SECRET?.trim()
   if (configured && (process.env.NODE_ENV !== 'production' || configured.length >= 16)) {
     return configured
@@ -145,43 +191,55 @@ function cursorSecret(): string {
   return 'dev-only-jobs-feed-cursor-secret'
 }
 
-function cursorSignature(payload: string): Buffer {
-  return crypto.createHmac('sha256', cursorSecret())
-    .update(`jobs-feed-cursor:v${CURSOR_VERSION}:${payload}`)
+function cursorEncryptionKey(): Buffer {
+  return crypto.createHash('sha256')
+    .update(`jobs-feed-cursor-encryption:v${CURSOR_VERSION}\0`)
+    .update(cursorSecret())
     .digest()
+}
+
+function decodeCursorPart(value: string): Buffer {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new InvalidFeedCursorError()
+  try {
+    return Buffer.from(value, 'base64url')
+  } catch {
+    throw new InvalidFeedCursorError()
+  }
 }
 
 function parseCursor(token: string, expectedHash: string, now: Date): FeedCursorPayload {
   if (!token || token.length > CURSOR_MAX_CHARS) throw new InvalidFeedCursorError()
   const parts = token.split('.')
-  if (parts.length !== 2 || !parts[0] || !parts[1]) throw new InvalidFeedCursorError()
-  let suppliedSignature: Buffer
-  try {
-    suppliedSignature = Buffer.from(parts[1], 'base64url')
-  } catch {
-    throw new InvalidFeedCursorError()
-  }
-  const expectedSignature = cursorSignature(parts[0])
+  if (parts.length !== 3 || parts.some((part) => !part)) throw new InvalidFeedCursorError()
+  const iv = decodeCursorPart(parts[0])
+  const ciphertext = decodeCursorPart(parts[1])
+  const authTag = decodeCursorPart(parts[2])
   if (
-    suppliedSignature.length !== expectedSignature.length ||
-    !crypto.timingSafeEqual(suppliedSignature, expectedSignature)
+    iv.length !== CURSOR_IV_BYTES ||
+    authTag.length !== CURSOR_AUTH_TAG_BYTES ||
+    ciphertext.length === 0
   ) {
     throw new InvalidFeedCursorError()
   }
   let value: unknown
   try {
-    value = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'))
+    const decipher = crypto.createDecipheriv('aes-256-gcm', cursorEncryptionKey(), iv)
+    decipher.setAAD(Buffer.from(`jobs-feed-cursor:v${CURSOR_VERSION}`))
+    decipher.setAuthTag(authTag)
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+    value = JSON.parse(plaintext.toString('utf8'))
   } catch {
     throw new InvalidFeedCursorError()
   }
   if (!value || typeof value !== 'object') throw new InvalidFeedCursorError()
   const cursor = value as Record<string, unknown>
   const snapshotAt = cursor.a
+  const personalizationScore = cursor.p
   const score = cursor.s
   const postedAt = cursor.t
   const id = cursor.i
   if (
-    Object.keys(cursor).length !== 6 ||
+    Object.keys(cursor).length !== 7 ||
     cursor.v !== CURSOR_VERSION ||
     typeof cursor.h !== 'string' ||
     cursor.h !== expectedHash ||
@@ -189,6 +247,11 @@ function parseCursor(token: string, expectedHash: string, now: Date): FeedCursor
     !Number.isFinite(snapshotAt) ||
     snapshotAt > now.getTime() + CURSOR_FUTURE_SKEW_MS ||
     snapshotAt < now.getTime() - CURSOR_MAX_AGE_MS ||
+    typeof personalizationScore !== 'number' ||
+    !Number.isFinite(personalizationScore) ||
+    !Number.isInteger(personalizationScore) ||
+    personalizationScore < 0 ||
+    personalizationScore > 1_000 ||
     typeof score !== 'number' ||
     !Number.isFinite(score) ||
     score < -1_000 ||
@@ -206,6 +269,7 @@ function parseCursor(token: string, expectedHash: string, now: Date): FeedCursor
     v: CURSOR_VERSION,
     h: expectedHash,
     a: snapshotAt,
+    p: personalizationScore,
     s: score,
     t: postedAt,
     i: id,
@@ -221,12 +285,24 @@ function encodeCursor(
     v: CURSOR_VERSION,
     h: hash,
     a: snapshotAt.getTime(),
+    p: Number(row.personalizationScore) || 0,
     s: Number(row.discoveryScore) || 0,
     t: new Date(row.sortPostedAt).getTime(),
     i: String(row._id),
   }
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
-  return `${encoded}.${cursorSignature(encoded).toString('base64url')}`
+  const iv = crypto.randomBytes(CURSOR_IV_BYTES)
+  const cipher = crypto.createCipheriv('aes-256-gcm', cursorEncryptionKey(), iv)
+  cipher.setAAD(Buffer.from(`jobs-feed-cursor:v${CURSOR_VERSION}`))
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(payload), 'utf8'),
+    cipher.final(),
+  ])
+  const authTag = cipher.getAuthTag()
+  return [
+    iv.toString('base64url'),
+    ciphertext.toString('base64url'),
+    authTag.toString('base64url'),
+  ].join('.')
 }
 
 function experienceMatchExpression(experience: FeedExperience | undefined): Record<string, unknown> | boolean {
@@ -338,6 +414,60 @@ function discoveryScoreExpression(query: NormalizedDiscoveryQuery, snapshotAt: D
   }
 }
 
+function personalizationScoreExpression(query: NormalizedDiscoveryQuery): Record<string, unknown> | number {
+  if (!query.roleDomain && !query.targetRoleTokens.length && !query.skillSignals.length) return 0
+  const postingTokens = { $setUnion: [{ $ifNull: ['$titleTokens', []] }, []] }
+  const targetIntersection = {
+    $size: { $setIntersection: [postingTokens, query.targetRoleTokens] },
+  }
+  const targetUnion = {
+    $size: { $setUnion: [postingTokens, query.targetRoleTokens] },
+  }
+  const targetTitleMatch = query.targetRoleTokens.length
+    ? {
+        $gte: [
+          {
+            $divide: [
+              targetIntersection,
+              targetUnion,
+            ],
+          },
+          TARGET_TITLE_JACCARD,
+        ],
+      }
+    : false
+  const skillMatches = query.skillSignals.length
+    ? {
+        $min: [
+          {
+            $add: query.skillSignals.map((skill) => ({
+              $cond: [
+                {
+                  $or: [
+                    { $in: [skill, postingTokens] },
+                    ...(skill.length >= 3
+                      ? [{ $gte: [{ $indexOfCP: [{ $toLower: { $ifNull: ['$title', ''] } }, skill] }, 0] }]
+                      : []),
+                  ],
+                },
+                1,
+                0,
+              ],
+            })),
+          },
+          RESUME_SKILL_CAP,
+        ],
+      }
+    : 0
+  return {
+    $add: [
+      { $cond: [query.roleDomain ? { $eq: ['$domain', query.roleDomain] } : false, TARGET_DOMAIN_BONUS, 0] },
+      { $cond: [targetTitleMatch, TARGET_TITLE_BONUS, 0] },
+      { $multiply: [skillMatches, RESUME_SKILL_BONUS] },
+    ],
+  }
+}
+
 function cursorMatch(
   cursor: FeedCursorPayload,
   sort: FeedSort,
@@ -356,9 +486,10 @@ function cursorMatch(
   }
   return {
     $or: [
-      { discoveryScore: { [comparison]: cursor.s } },
-      { discoveryScore: cursor.s, sortPostedAt: { [comparison]: postedAt } },
-      { discoveryScore: cursor.s, sortPostedAt: postedAt, _id: { [comparison]: id } },
+      { personalizationScore: { [comparison]: cursor.p } },
+      { personalizationScore: cursor.p, discoveryScore: { [comparison]: cursor.s } },
+      { personalizationScore: cursor.p, discoveryScore: cursor.s, sortPostedAt: { [comparison]: postedAt } },
+      { personalizationScore: cursor.p, discoveryScore: cursor.s, sortPostedAt: postedAt, _id: { [comparison]: id } },
     ],
   }
 }
@@ -369,6 +500,7 @@ function databaseSort(sort: FeedSort, direction: 'after' | 'before'): Record<str
     return { sortPostedAt: descending ? -1 : 1, _id: descending ? -1 : 1 }
   }
   return {
+    personalizationScore: descending ? -1 : 1,
     discoveryScore: descending ? -1 : 1,
     sortPostedAt: descending ? -1 : 1,
     _id: descending ? -1 : 1,
@@ -380,15 +512,16 @@ function databaseSort(sort: FeedSort, direction: 'after' | 'before'): Record<str
  * request-time recency clock and excludes later inserts; existing live rows
  * may still close or receive corrected facts between pages. The hard 25k
  * retained-corpus rail and maxTimeMS keep this appropriate for self-hosted
- * Mongo without Atlas Search. Location and experience are score-only.
+ * Mongo without Atlas Search. Public soft preferences plus private target
+ * role/title and resume-title evidence change ordering, never eligibility.
  */
 export async function discoverFeed(
-  input: PublicFeedQuery,
+  input: FeedDiscoveryQuery,
   now = new Date(),
   requestedPageSize = PAGE_SIZE_DEFAULT,
 ): Promise<FeedDiscoveryPage> {
-  // Validate signing configuration before starting a database aggregation;
-  // production must never serve cursors signed by the development fallback.
+  // Validate encryption configuration before starting a database aggregation;
+  // production must never serve cursors using the development fallback.
   cursorSecret()
   const query = normalizeDiscoveryQuery(input)
   const finitePageSize = Number.isFinite(requestedPageSize) ? requestedPageSize : PAGE_SIZE_DEFAULT
@@ -445,6 +578,9 @@ export async function discoverFeed(
     },
     {
       $set: {
+        personalizationScore: query.sort === 'best'
+          ? personalizationScoreExpression(query)
+          : 0,
         discoveryScore: query.sort === 'best'
           ? discoveryScoreExpression(query, snapshotAt)
           : 0,

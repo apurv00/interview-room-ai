@@ -8,6 +8,13 @@ test('an anonymous user can search and open a live job with the keyboard', async
   expect(response?.status()).toBeGreaterThanOrEqual(200)
   expect(response?.status()).toBeLessThan(300)
   await expect(page.getByRole('heading', { name: 'Jobs', level: 1 })).toBeVisible()
+  await expect(page.getByRole('searchbox', { name: 'Search jobs' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Experience preference' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: 'Sort' })).toBeVisible()
+  await expect(page.getByLabel('Location preference')).toHaveCount(0)
+  await expect(page.getByLabel('Work mode')).toHaveCount(0)
+  await expect(page.getByLabel('Date posted')).toHaveCount(0)
+  await expect(page.getByLabel('Company')).toHaveCount(0)
 
   const results = page.getByRole('region', { name: 'Job results' })
   await expect(results).toHaveAttribute('aria-busy', 'false', { timeout: 30_000 })

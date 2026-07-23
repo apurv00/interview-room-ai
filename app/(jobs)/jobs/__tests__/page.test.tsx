@@ -140,6 +140,7 @@ describe('/jobs ?domain= param (Codex #527 — press links must land on the filt
     const url = new URL(feedCallUrls()[0], 'http://x')
     expect(url.searchParams.get('domain')).toBeNull()
     expect(screen.queryByText('Clear all')).toBeNull()
+    expect(mockRouter.replace).not.toHaveBeenCalled()
   })
 })
 
@@ -231,7 +232,9 @@ describe('/jobs account deletion cleanup', () => {
 
 describe('/jobs personalized-feed privacy', () => {
   it('sends resume-derived role and skills in a POST body, never the request URL', async () => {
-    mockUseSearchParams.mockReturnValue(new URLSearchParams('domain=pm'))
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(
+      'domain=pm&location=Pune&remote=remote&company=Acme&freshness=7d',
+    ))
     sessionStorage.setItem('JOBS_TARGET', JSON.stringify({
       method: 'upload',
       role: ' Product Manager ',
@@ -253,6 +256,7 @@ describe('/jobs personalized-feed privacy', () => {
       targetRole: 'Product Manager',
       skills: ['Roadmaps', 'SQL'],
     })
+    expect(mockRouter.replace).toHaveBeenCalledWith('/jobs?domain=pm', { scroll: false })
   })
 
   it('removes corrupt target storage and falls back to a public GET without throwing', async () => {
@@ -372,27 +376,47 @@ describe('/jobs personalized-feed privacy', () => {
 })
 
 describe('/jobs URL discovery and request lifecycle', () => {
-  it('hydrates every public control and removes cursors when filters change', async () => {
+  it('shows only retained controls and removes retired filters and their cursor state', async () => {
     mockUseSearchParams.mockReturnValue(new URLSearchParams(
-      'q=Backend&location=Bangalore&remote=remote&experience=mid&company=Acme&freshness=7d&sort=newest&cursor=old&direction=after',
+      'q=Backend&location=Bangalore&remote=remote&experience=mid&company=Acme&freshness=7d&sort=newest&cursor=old&direction=after&utm_campaign=spring',
     ))
     render(<JobsPage />)
 
     expect(await screen.findByDisplayValue('Backend')).toBeTruthy()
-    expect(screen.getByDisplayValue('Bangalore')).toBeTruthy()
-    expect(screen.getByDisplayValue('Remote only')).toBeTruthy()
     expect(screen.getByDisplayValue('Mid level')).toBeTruthy()
-    expect(screen.getByDisplayValue('Acme')).toBeTruthy()
-    expect(screen.getByDisplayValue('Past week')).toBeTruthy()
     expect(screen.getByDisplayValue('Newest')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
+    expect(screen.queryByLabelText('Location preference')).toBeNull()
+    expect(screen.queryByLabelText('Work mode')).toBeNull()
+    expect(screen.queryByLabelText('Date posted')).toBeNull()
+    expect(screen.queryByLabelText('Company')).toBeNull()
+
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith(
+      '/jobs?q=Backend&experience=mid&sort=newest&utm_campaign=spring',
+      { scroll: false },
+    ))
+    await waitFor(() => expect(feedCallUrls()).toContain(
+      '/api/jobs/feed?q=Backend&experience=mid&sort=newest',
+    ))
 
     fireEvent.change(screen.getByLabelText('Search jobs'), { target: { value: 'Platform Engineer' } })
     fireEvent.submit(screen.getByRole('search'))
 
     expect(mockRouter.push).toHaveBeenCalledWith(
-      '/jobs?q=Platform+Engineer&location=Bangalore&remote=remote&experience=mid&company=Acme&freshness=7d&sort=newest',
+      '/jobs?q=Platform+Engineer&experience=mid&sort=newest',
       { scroll: false },
     )
+  })
+
+  it('turns a retired-only URL into the unfiltered first page', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams(
+      'location=Pune&remote=remote&company=Acme&freshness=7d&cursor=old&direction=after',
+    ))
+    render(<JobsPage />)
+
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/jobs', { scroll: false }))
+    await waitFor(() => expect(feedCallUrls()).toContain('/api/jobs/feed'))
+    expect(screen.queryByLabelText('Location preference')).toBeNull()
   })
 
   it('synchronizes editable controls when Back or Forward changes URL state', async () => {
@@ -401,11 +425,11 @@ describe('/jobs URL discovery and request lifecycle', () => {
     expect(await screen.findByDisplayValue('First')).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Search jobs'), { target: { value: 'Unsaved draft' } })
-    mockUseSearchParams.mockReturnValue(new URLSearchParams('q=Second&location=Pune'))
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('q=Second&experience=senior'))
     view.rerender(<JobsPage />)
 
     await waitFor(() => expect((screen.getByLabelText('Search jobs') as HTMLInputElement).value).toBe('Second'))
-    expect((screen.getByLabelText('Location preference') as HTMLInputElement).value).toBe('Pune')
+    expect((screen.getByLabelText('Experience preference') as HTMLSelectElement).value).toBe('senior')
   })
 
   it('aborts superseded requests and ignores a late stale response', async () => {
@@ -502,7 +526,7 @@ describe('/jobs truthful product copy', () => {
           ok: true,
           json: () => Promise.resolve({
             cards: [
-              { id: 'undated', title: 'Undated role', company: 'Acme', locations: [], isRemote: false },
+              { id: 'undated', title: 'Undated role', company: 'Acme', locations: ['Pune'], isRemote: true },
               { id: 'future', title: 'Future-dated role', company: 'Beta', locations: [], isRemote: false, postedAt: '2026-07-23T00:00:00.000Z' },
               { id: 'listed', title: 'Listed role', company: 'Gamma', locations: [], isRemote: false, postedAt: '2026-07-21T05:00:00.000Z' },
             ],
@@ -521,5 +545,6 @@ describe('/jobs truthful product copy', () => {
     expect(screen.queryByText('Recently posted')).toBeNull()
     expect(screen.queryByText(/Posted /)).toBeNull()
     expect(screen.getByText('Listed yesterday')).toBeTruthy()
+    expect(screen.getByText('Acme · Pune · Remote')).toBeTruthy()
   })
 })
