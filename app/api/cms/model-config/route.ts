@@ -65,6 +65,46 @@ export async function PUT(req: NextRequest) {
       }
     }
 
+    const providers = new Map(getAllProviders().map((provider) => [provider.name, provider]))
+    for (let index = 0; index < parsed.data.slots.length; index += 1) {
+      const slot = parsed.data.slots[index]
+      const primary = providers.get(slot.provider)
+      if (!primary) {
+        return NextResponse.json(
+          { error: `Unknown provider for slots.${index}.provider: ${slot.provider}` },
+          { status: 400 },
+        )
+      }
+      if (parsed.data.routingEnabled && slot.isActive && !primary.configured) {
+        return NextResponse.json(
+          { error: `Provider "${slot.provider}" is not configured` },
+          { status: 400 },
+        )
+      }
+
+      if ((slot.fallbackModel === undefined) !== (slot.fallbackProvider === undefined)) {
+        return NextResponse.json(
+          { error: `slots.${index} must set fallbackModel and fallbackProvider together` },
+          { status: 400 },
+        )
+      }
+      if (slot.fallbackProvider) {
+        const fallback = providers.get(slot.fallbackProvider)
+        if (!fallback) {
+          return NextResponse.json(
+            { error: `Unknown provider for slots.${index}.fallbackProvider: ${slot.fallbackProvider}` },
+            { status: 400 },
+          )
+        }
+        if (parsed.data.routingEnabled && slot.isActive && !fallback.configured) {
+          return NextResponse.json(
+            { error: `Fallback provider "${slot.fallbackProvider}" is not configured` },
+            { status: 400 },
+          )
+        }
+      }
+    }
+
     const config = await ModelConfig.findOneAndUpdate(
       {},
       {

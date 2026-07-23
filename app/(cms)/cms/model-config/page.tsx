@@ -27,7 +27,13 @@ interface SlotConfig {
 const REASONING_EFFORT_OPTIONS = ['none', 'low', 'medium', 'high', 'xhigh'] as const
 
 interface Defaults {
-  [key: string]: { model: string; maxTokens: number; provider: string }
+  [key: string]: {
+    model: string
+    maxTokens: number
+    provider: string
+    fallbackModel?: string
+    fallbackProvider?: string
+  }
 }
 
 export default function ModelConfigPage() {
@@ -72,9 +78,9 @@ export default function ModelConfigPage() {
           return existing || {
             taskSlot: ts,
             model: def?.model || '',
-            provider: 'anthropic',
-            fallbackModel: '',
-            fallbackProvider: 'anthropic',
+            provider: def?.provider || 'anthropic',
+            fallbackModel: def?.fallbackModel || '',
+            fallbackProvider: def?.fallbackProvider || 'anthropic',
             maxTokens: def?.maxTokens || 1000,
             temperature: undefined,
             reasoningEffort: undefined,
@@ -108,7 +114,9 @@ export default function ModelConfigPage() {
           model: s.model,
           provider: s.provider,
           fallbackModel: s.fallbackModel || undefined,
-          fallbackProvider: s.fallbackProvider || undefined,
+          fallbackProvider: s.fallbackModel
+            ? s.fallbackProvider || undefined
+            : undefined,
           maxTokens: s.maxTokens,
           temperature: s.temperature ?? undefined,
           reasoningEffort: s.reasoningEffort || undefined,
@@ -170,7 +178,7 @@ export default function ModelConfigPage() {
         <div>
           <p className="font-medium text-[#0f1419]">Model Routing</p>
           <p className="text-sm text-[#536471]">
-            When enabled, active slots route through their configured provider. When disabled, all calls use Anthropic defaults.
+            When enabled, active slots route through their configured provider. When disabled, each task uses its code-owned default.
           </p>
         </div>
         <button

@@ -97,10 +97,10 @@ export const UpdateWizardCostCapSchema = z.object({
 
 const ModelSlotSchema = z.object({
   taskSlot: z.string().min(1),
-  model: z.string().min(1).max(200),
-  provider: z.string().min(1).max(50),
-  fallbackModel: z.string().max(200).optional(),
-  fallbackProvider: z.string().max(50).optional(),
+  model: z.string().trim().min(1).max(200),
+  provider: z.string().trim().min(1).max(50),
+  fallbackModel: z.string().trim().min(1).max(200).optional(),
+  fallbackProvider: z.string().trim().min(1).max(50).optional(),
   maxTokens: z.number().int().min(100).max(16000),
   temperature: z.number().min(0).max(2).optional(),
   // 'max' intentionally excluded — every GPT-5.6 tier 400s on it despite the
