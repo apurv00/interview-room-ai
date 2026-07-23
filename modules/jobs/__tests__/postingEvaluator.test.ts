@@ -2,11 +2,16 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 
-import { evaluatePosting, expectedVerdictModel, type EvaluatorDeps } from '../services/postingEvaluator'
+import {
+  defaultVerdictRoute,
+  evaluatePosting,
+  type EvaluatorDeps,
+} from '../services/postingEvaluator'
 import { JOB_DOMAINS } from '../config/domains'
-import { PROMPT_VERSION } from '../config/verdictSchema'
+import { epochOf } from '../config/verdictSchema'
 
-const MODEL = expectedVerdictModel()
+const DEFAULT_ROUTE = defaultVerdictRoute()
+const MODEL = DEFAULT_ROUTE.model
 
 const VALID_VERDICT = {
   verdict: 'genuine',
@@ -37,8 +42,18 @@ const INPUT = {
   },
 }
 
-function completionOf(text: string, over: Partial<{ model: string; usedFallback: boolean }> = {}) {
-  return { text, model: over.model ?? MODEL, provider: 'openai', inputTokens: 4000, outputTokens: 300, usedFallback: over.usedFallback ?? false }
+function completionOf(
+  text: string,
+  over: Partial<{ model: string; provider: string; usedFallback: boolean }> = {},
+) {
+  return {
+    text,
+    model: over.model ?? MODEL,
+    provider: over.provider ?? DEFAULT_ROUTE.provider,
+    inputTokens: 4000,
+    outputTokens: 300,
+    usedFallback: over.usedFallback ?? false,
+  }
 }
 
 function makeDeps(over: Partial<EvaluatorDeps> = {}): EvaluatorDeps & { recorded: number[] } {
@@ -62,7 +77,7 @@ describe('postingEvaluator (§4.5 — never throws, never fabricates)', () => {
     expect(out.ok).toBe(true)
     if (out.ok) {
       expect(out.verdict.verdict).toBe('genuine')
-      expect(out.epoch).toBe(`${MODEL}:${PROMPT_VERSION}`)
+      expect(out.epoch).toBe(epochOf(DEFAULT_ROUTE))
       expect(out.costUsd).toBeCloseTo((4000 * 0.5 + 300 * 2.0) / 1_000_000)
       expect(out.cached).toBe(false)
     }
@@ -161,22 +176,65 @@ describe('postingEvaluator (§4.5 — never throws, never fabricates)', () => {
     expect(out).toMatchObject({ ok: false, kind: 'schema' })
   })
 
-  it('fallback-served or wrong-model results are REJECTED — epochs stay homogeneous', async () => {
+  it('fallback-served, wrong-model, or wrong-provider results are REJECTED — epochs stay homogeneous', async () => {
     const fallback = makeDeps({ completionFn: vi.fn().mockResolvedValue(completionOf(JSON.stringify(VALID_VERDICT), { usedFallback: true })) as never })
     expect(await evaluatePosting(INPUT, fallback)).toMatchObject({ ok: false, kind: 'model-mismatch' })
     const wrongModel = makeDeps({ completionFn: vi.fn().mockResolvedValue(completionOf(JSON.stringify(VALID_VERDICT), { model: 'claude-haiku-4-5' })) as never })
     expect(await evaluatePosting(INPUT, wrongModel)).toMatchObject({ ok: false, kind: 'model-mismatch' })
+    const wrongProvider = makeDeps({ completionFn: vi.fn().mockResolvedValue(completionOf(JSON.stringify(VALID_VERDICT), { provider: 'openrouter' })) as never })
+    expect(await evaluatePosting(INPUT, wrongProvider)).toMatchObject({ ok: false, kind: 'model-mismatch' })
   })
 
-  it('deps.expectedModel (CMS-resolved epoch) overrides the code default', async () => {
-    // served model matches the CMS-resolved model but NOT the code default → accepted
+  it('pins the complete CMS-resolved route instead of only its model', async () => {
+    const resolvedModel = {
+      ...DEFAULT_ROUTE,
+      model: 'gpt-7-nova',
+      provider: 'openrouter',
+      maxTokens: 1200,
+      reasoningEffort: 'high' as const,
+    }
+    const completionFn = vi.fn().mockResolvedValue(completionOf(
+      JSON.stringify(VALID_VERDICT),
+      { model: resolvedModel.model, provider: resolvedModel.provider },
+    ))
     const deps = makeDeps({
-      expectedModel: 'gpt-7-nova',
-      completionFn: vi.fn().mockResolvedValue(completionOf(JSON.stringify(VALID_VERDICT), { model: 'gpt-7-nova' })) as never,
+      resolvedModel,
+      completionFn: completionFn as never,
     })
     const out = await evaluatePosting(INPUT, deps)
     expect(out.ok).toBe(true)
-    if (out.ok) expect(out.epoch).toBe(`gpt-7-nova:${PROMPT_VERSION}`)
+    if (out.ok) expect(out.epoch).toBe(epochOf(resolvedModel))
+    expect(completionFn.mock.calls[0][0].resolvedModel).toEqual(resolvedModel)
+  })
+
+  it('invalidates epoch and cache identity for every same-model route change', async () => {
+    const base = await evaluatePosting(INPUT, makeDeps({ resolvedModel: DEFAULT_ROUTE }))
+    expect(base.ok).toBe(true)
+
+    const variants = [
+      { provider: 'openrouter' },
+      { maxTokens: DEFAULT_ROUTE.maxTokens + 800 },
+      { reasoningEffort: 'high' as const },
+      { temperature: 0.2 },
+    ]
+    for (const override of variants) {
+      const resolvedModel = { ...DEFAULT_ROUTE, ...override }
+      const completionFn = vi.fn().mockResolvedValue(completionOf(
+        JSON.stringify(VALID_VERDICT),
+        { model: resolvedModel.model, provider: resolvedModel.provider },
+      ))
+      const outcome = await evaluatePosting(INPUT, makeDeps({
+        resolvedModel,
+        completionFn: completionFn as never,
+      }))
+
+      expect(outcome.ok).toBe(true)
+      if (base.ok && outcome.ok) {
+        expect(outcome.epoch).not.toBe(base.epoch)
+        expect(outcome.inputHash).not.toBe(base.inputHash)
+      }
+      expect(completionFn.mock.calls[0][0].resolvedModel).toEqual(resolvedModel)
+    }
   })
 
   it('the hash binds to the model-visible slice: a middle-only change re-uses the verdict', async () => {

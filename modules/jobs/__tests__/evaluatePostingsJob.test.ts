@@ -31,7 +31,21 @@ vi.mock('@shared/redis', () => ({ redis: mockRedis }))
 vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 vi.mock('@shared/services/modelRouter', async (importOriginal) => {
   const real = await importOriginal<typeof import('@shared/services/modelRouter')>()
-  return { ...real, resolveModel: vi.fn().mockResolvedValue({ model: 'gpt-5.6-luna' }), completion: vi.fn() }
+  return {
+    ...real,
+    resolveModelWithAuthority: vi.fn().mockResolvedValue({
+      resolved: {
+        model: 'gpt-5.6-luna',
+        provider: 'openai',
+        maxTokens: 800,
+        reasoningEffort: 'low',
+        useToonInput: false,
+      },
+      source: 'L3-Mongo',
+      authoritative: true,
+    }),
+    completion: vi.fn(),
+  }
 })
 vi.mock('@shared/db/models', () => ({
   JOB_SOURCE_LINEAGE_UNKNOWN: '__legacy_unknown__',
@@ -52,17 +66,21 @@ vi.mock('../services/verdictConfigControl', () => ({
 }))
 
 import { runEvaluatePostingsHandler, runVerdictSweeperHandler } from '../jobs/evaluatePostingsJob'
-import { resolveModel } from '@shared/services/modelRouter'
+import { resolveModelWithAuthority } from '@shared/services/modelRouter'
+import { defaultVerdictRoute } from '../services/postingEvaluator'
 import { verdictInputHash } from '../config/verdictPrompt'
-import { PROMPT_VERSION } from '../config/verdictSchema'
+import { PROMPT_VERSION, epochOf } from '../config/verdictSchema'
 import { JOB_DOMAINS } from '../config/domains'
 
+const DEFAULT_ROUTE = defaultVerdictRoute()
+const DEFAULT_EPOCH = epochOf(DEFAULT_ROUTE)
+
 // The CURRENT hash of the default posting() fixture as the worker computes it
-// (empty body, greenhouse apply host, no salary, default epoch model).
+// (empty body, greenhouse apply host, no salary, default execution epoch).
 const FIXTURE_HASH = verdictInputHash({
   companyKey: 'phonepe', titleKey: 'backend engineer', locationKey: 'bengaluru',
   normalizedBody: '', applyHosts: ['boards.greenhouse.io'], salaryText: null,
-  epochModel: 'gpt-5.6-luna',
+  epoch: DEFAULT_EPOCH,
 })
 
 const step = { run: <T,>(_n: string, fn: () => Promise<T> | T) => Promise.resolve(fn()) }
@@ -116,7 +134,7 @@ const OK_VERDICT = {
 }
 
 function okOutcome(verdict = OK_VERDICT) {
-  return { ok: true as const, verdict, model: 'gpt-5.6-luna', epoch: `gpt-5.6-luna:${PROMPT_VERSION}`, inputHash: 'h1', inputTokens: 100, outputTokens: 50, costUsd: 0.001, cached: false }
+  return { ok: true as const, verdict, model: 'gpt-5.6-luna', epoch: DEFAULT_EPOCH, inputHash: 'h1', inputTokens: 100, outputTokens: 50, costUsd: 0.001, cached: false }
 }
 
 function resetAll(): void {
@@ -177,6 +195,21 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     expect(mockPostingFindById).not.toHaveBeenCalled()
   })
 
+  it('fails closed before posting access when the model route is non-authoritative', async () => {
+    resetAll()
+    vi.mocked(resolveModelWithAuthority).mockResolvedValueOnce({
+      resolved: DEFAULT_ROUTE,
+      source: 'cold-defaults-synthetic',
+      authoritative: false,
+    })
+
+    await expect(runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+    )).rejects.toThrow('authoritative Jobs verdict route is unavailable')
+    expect(mockPostingFindById).not.toHaveBeenCalled()
+  })
+
   it('shadow mode: verdict persisted, fraud+0.1 does NOT close the row (enforce off)', async () => {
     resetAll()
     mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
@@ -185,7 +218,7 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     )
     expect(r).toMatchObject({ evaluated: 1, scored: 1, breakerTripped: false })
     const set = mockPostingUpdateOne.mock.calls[0][1].$set
-    expect(set.llmVerdict).toMatchObject({ status: 'scored', verdict: 'fraud', verdictInputHash: 'h1', epoch: `gpt-5.6-luna:${PROMPT_VERSION}`, attempts: 1, disagreesWithRules: true })
+    expect(set.llmVerdict).toMatchObject({ status: 'scored', verdict: 'fraud', verdictInputHash: 'h1', epoch: DEFAULT_EPOCH, attempts: 1, disagreesWithRules: true })
     expect(set.status).toBeUndefined()
     expect(set.closedReason).toBeUndefined()
     expect(mockWithQualityDecisionTransaction).not.toHaveBeenCalled()
@@ -303,7 +336,7 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
         genuineness: 0.1,
         model: 'gpt-5.6-luna',
         promptVersion: PROMPT_VERSION,
-        epoch: `gpt-5.6-luna:${PROMPT_VERSION}`,
+        epoch: DEFAULT_EPOCH,
       },
     }), QUALITY_SESSION)
   })
@@ -413,6 +446,40 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
     )
     expect(evaluateFn).not.toHaveBeenCalled()
     expect(r).toMatchObject({ evaluated: 0, scored: 0 })
+  })
+
+  it('re-evaluates a same-model scored row after execution controls change', async () => {
+    resetAll()
+    const previousRoute = { ...DEFAULT_ROUTE, maxTokens: DEFAULT_ROUTE.maxTokens - 100 }
+    const previousHash = verdictInputHash({
+      companyKey: 'phonepe',
+      titleKey: 'backend engineer',
+      locationKey: 'bengaluru',
+      normalizedBody: '',
+      applyHosts: ['boards.greenhouse.io'],
+      salaryText: null,
+      epoch: epochOf(previousRoute),
+    })
+    mockPostingFindById.mockReturnValue({
+      lean: () => Promise.resolve(posting({
+        llmVerdict: {
+          status: 'scored',
+          attempts: 1,
+          epoch: epochOf(previousRoute),
+          verdictInputHash: previousHash,
+        },
+      })),
+    })
+    const evaluateFn = vi.fn().mockResolvedValue(okOutcome())
+
+    await runEvaluatePostingsHandler(
+      { data: { postingIds: ['p1'] } },
+      step,
+      { evaluateFn: evaluateFn as never },
+    )
+
+    expect(evaluateFn).toHaveBeenCalledOnce()
+    expect(evaluateFn.mock.calls[0][1]).toMatchObject({ resolvedModel: DEFAULT_ROUTE })
   })
 
   it('verdict writes are freshness-guarded: a mid-flight merge supersedes the result (Codex #515)', async () => {
@@ -741,10 +808,15 @@ describe('runEvaluatePostingsHandler (§4.5 worker)', () => {
 
   it('cycle rows stamp the CMS-RESOLVED epoch, not the code default (Codex #515)', async () => {
     resetAll()
-    vi.mocked(resolveModel).mockResolvedValueOnce({ model: 'gpt-9-zeta' } as never)
+    const resolvedModel = { ...DEFAULT_ROUTE, model: 'gpt-9-zeta', maxTokens: 1600 }
+    vi.mocked(resolveModelWithAuthority).mockResolvedValueOnce({
+      resolved: resolvedModel,
+      source: 'L3-Mongo',
+      authoritative: true,
+    })
     mockPostingFindById.mockReturnValue({ lean: () => Promise.resolve(posting()) })
     await runEvaluatePostingsHandler({ data: { postingIds: ['p1'] } }, step, { evaluateFn: vi.fn().mockResolvedValue(okOutcome()) as never })
-    expect(mockCycleCreate.mock.calls[0][0].llm.epoch).toBe(`gpt-9-zeta:${PROMPT_VERSION}`)
+    expect(mockCycleCreate.mock.calls[0][0].llm.epoch).toBe(epochOf(resolvedModel))
   })
 
   it('writes a kind:llm-verdict cycle row with the llm counter block', async () => {
@@ -821,6 +893,12 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
 
   it('epoch cutover: leftover limit backfills stale-epoch SCORED rows; current-epoch rows untouched (Codex #515)', async () => {
     resetAll()
+    const resolvedModel = { ...DEFAULT_ROUTE, maxTokens: DEFAULT_ROUTE.maxTokens + 800 }
+    vi.mocked(resolveModelWithAuthority).mockResolvedValueOnce({
+      resolved: resolvedModel,
+      source: 'L3-Mongo',
+      authoritative: true,
+    })
     const limitSpies: Array<ReturnType<typeof vi.fn>> = []
     mockPostingFind.mockImplementation(() => {
       const limitSpy = vi.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(limitSpies.length === 1 ? [{ _id: 'pend1' }] : [{ _id: 'stale1' }, { _id: 'stale2' }]) }) })
@@ -831,7 +909,7 @@ describe('runVerdictSweeperHandler (§4.5 sweeper)', () => {
     expect(r).toMatchObject({ enqueued: 3 })
     // second query targets scored rows from a DIFFERENT epoch only
     const staleQuery = mockPostingFind.mock.calls[1][0]
-    expect(staleQuery.$and[1]).toEqual({ 'llmVerdict.status': 'scored', 'llmVerdict.epoch': { $ne: `gpt-5.6-luna:${PROMPT_VERSION}` } })
+    expect(staleQuery.$and[1]).toEqual({ 'llmVerdict.status': 'scored', 'llmVerdict.epoch': { $ne: epochOf(resolvedModel) } })
     // and consumes only the leftover limit (10 - 1 pending = 9)
     expect(limitSpies[1]).toHaveBeenCalledWith(9)
     expect(mockSend.mock.calls[0][0].data.postingIds).toEqual(['pend1', 'stale1', 'stale2'])

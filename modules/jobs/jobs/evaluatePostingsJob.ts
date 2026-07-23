@@ -13,7 +13,11 @@ import {
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
 import { PROMPT_VERSION, epochOf } from '../config/verdictSchema'
-import { evaluatePosting, expectedVerdictModel, resolveExpectedVerdictModel, type EvaluatorDeps } from '../services/postingEvaluator'
+import {
+  evaluatePosting,
+  resolveExpectedVerdictRoute,
+  type EvaluatorDeps,
+} from '../services/postingEvaluator'
 import { verdictInputHash, stripRecruiterPii, sliceBody } from '../config/verdictPrompt'
 import { neutralizePromptLine } from '@shared/services/promptSecurity'
 import { makeLlmBudget } from '../services/llmBudget'
@@ -85,16 +89,16 @@ interface LlmCycleCounters {
   skips: Record<string, number>
 }
 
-function emptyLlmCounters(epochModel = expectedVerdictModel()): LlmCycleCounters {
+function emptyLlmCounters(epoch: string): LlmCycleCounters {
   return {
     requested: 0, scored: 0, cacheHits: 0, errors: 0, timeouts: 0, softClosed: 0,
     verdictDistribution: { genuine: 0, suspicious: 0, fraud: 0 },
     reasonCodeCounts: {}, bySource: {}, skips: {},
     llmFlaggedCleanRow: 0, llmClearedFlaggedRow: 0,
     inputTokens: 0, outputTokens: 0, costUsd: 0,
-    // The RESOLVED model, not the code default — a CMS cutover must not
+    // The RESOLVED route, not the code default — any CMS route cutover must not
     // attribute cycles to the wrong epoch on the dashboard (Codex on #515).
-    epoch: `${epochModel}:${PROMPT_VERSION}`,
+    epoch,
   }
 }
 
@@ -150,10 +154,13 @@ export async function runEvaluatePostingsHandler(
   if (!cfg.collectionEnabled) return { skipped: 'collection-disabled' }
   const evaluate = handlerDeps.evaluateFn ?? evaluatePosting
   const budget = makeLlmBudget(redis, cfg)
-  // CMS-resolved once per run — the epoch must be the model completion()
-  // will actually serve, not the code default (a CMS cutover would
-  // otherwise wedge every verdict as paid model-mismatch).
-  const epochModel = await resolveExpectedVerdictModel()
+  // CMS-resolved once per run, then pinned into every completion. Epoch,
+  // cache, skip, and provider execution therefore share one route identity.
+  const resolvedModel = await step.run(
+    'resolve-verdict-route',
+    resolveExpectedVerdictRoute,
+  )
+  const currentEpoch = epochOf(resolvedModel)
 
   // ToS lever (§4.5): a posting with ANY opted-out contributing source never
   // reaches the model. Loaded once per run.
@@ -162,7 +169,7 @@ export async function runEvaluatePostingsHandler(
   )
 
   const ids = event.data.postingIds ?? []
-  const total = emptyLlmCounters(epochModel)
+  const total = emptyLlmCounters(currentEpoch)
   const startedAt = new Date()
   let evaluated = 0
   let consecutiveFailures = 0
@@ -171,7 +178,7 @@ export async function runEvaluatePostingsHandler(
   for (let i = 0; i < ids.length && !breakerTripped; i += POSTINGS_PER_STEP) {
     const chunk = ids.slice(i, i + POSTINGS_PER_STEP)
     const stepResult = await step.run(`evaluate-${Math.floor(i / POSTINGS_PER_STEP)}`, async () => {
-      const c = emptyLlmCounters(epochModel)
+      const c = emptyLlmCounters(currentEpoch)
       let stepEvaluated = 0
       let fails = consecutiveFailures
       let tripped = false
@@ -233,7 +240,7 @@ export async function runEvaluatePostingsHandler(
             normalizedBody: stripRecruiterPii(sliceBody(body)),
             applyHosts,
             salaryText: doc.salaryText ?? null,
-            epochModel,
+            epoch: currentEpoch,
           })
           if (doc.llmVerdict.verdictInputHash === currentHash) {
             c.skips['hash-match'] = (c.skips['hash-match'] ?? 0) + 1
@@ -264,7 +271,7 @@ export async function runEvaluatePostingsHandler(
             checkBudget: (ck, src) => budget.check(ck, src),
             recordSpend: (ck, src, usd) => budget.record(ck, src, usd),
             pricing: { inputUsdPerMTok: cfg.inputUsdPerMTok, outputUsdPerMTok: cfg.outputUsdPerMTok },
-            expectedModel: epochModel,
+            resolvedModel,
             beforeModelCall: async () => {
               // This is the final authorization point before each external
               // model request (primary and JSON repair). Re-read both the
@@ -429,7 +436,7 @@ export async function runEvaluatePostingsHandler(
                   normalizedBody: stripRecruiterPii(sliceBody(jdBodyOf(latest))),
                   applyHosts: latestApplyHosts,
                   salaryText: latest.salaryText ?? null,
-                  epochModel,
+                  epoch: currentEpoch,
                 })
                 if (latestInputHash === outcome.inputHash) {
                   res = await JobPosting.updateOne(
@@ -571,10 +578,10 @@ export async function runEvaluatePostingsHandler(
  *  the preflight gate exiting silently is exactly the invisible-stall
  *  class this PR eliminates for the worker. Best-effort — telemetry
  *  failure never blocks the return. */
-async function writeSweeperSkipCycle(reason: string): Promise<void> {
+async function writeSweeperSkipCycle(reason: string, epoch: string): Promise<void> {
   try {
     const now = new Date()
-    const counters = emptyLlmCounters()
+    const counters = emptyLlmCounters(epoch)
     counters.skips[`sweeper:${reason}`] = 1
     await JobIngestCycle.create({
       kind: 'llm-verdict',
@@ -595,14 +602,19 @@ export async function runVerdictSweeperHandler(
   await connectDB()
   const cfg = await JobsVerdictConfig.getConfig()
   if (!cfg.collectionEnabled) return { skipped: 'collection-disabled' }
+  const resolvedModel = await step.run(
+    'resolve-verdict-route',
+    resolveExpectedVerdictRoute,
+  )
+  const currentEpoch = epochOf(resolvedModel)
   const budget = makeLlmBudget(redis, cfg)
   if (await budget.isDegraded()) {
-    await writeSweeperSkipCycle('circuit-breaker-degraded')
+    await writeSweeperSkipCycle('circuit-breaker-degraded', currentEpoch)
     return { skipped: 'circuit-breaker-degraded' }
   }
   const gate = await budget.check('__sweeper__', '__sweeper__')
   if (!gate.allowed) {
-    await writeSweeperSkipCycle(gate.reason ?? 'budget')
+    await writeSweeperSkipCycle(gate.reason ?? 'budget', currentEpoch)
     return { skipped: gate.reason ?? 'budget' }
   }
   const limit = Math.max(1, Math.floor((opts.limit ?? SWEEP_LIMIT_DEFAULT) / (gate.softening ? 2 : 1)))
@@ -624,8 +636,6 @@ export async function runVerdictSweeperHandler(
       .filter((source) => source.health !== 'revoked' && !source.llmVerdictOptOut)
       .map((source) => source.sourceId)
   )).sort()
-  const currentEpoch = epochOf(await resolveExpectedVerdictModel())
-
   const ids = await step.run('find-due', async () => {
     const statusScope = {
       $or: [

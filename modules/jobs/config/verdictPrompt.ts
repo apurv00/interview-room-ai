@@ -106,8 +106,8 @@ export interface VerdictHashInput {
    *  (a salary-string edit changes what the model sees, so presence-only
    *  hashing would skip the re-verdict; Codex on #515). */
   salaryText?: string | null
-  /** The slot-configured model — epoch component (`model:promptVersion`). */
-  epochModel: string
+  /** Full provider/model/control/prompt execution epoch. */
+  epoch: string
 }
 
 /**
@@ -130,7 +130,7 @@ export function verdictInputHash(input: VerdictHashInput): string {
     [...input.applyHosts].sort().join(','),
     input.salaryText ? neutralizePromptLine(input.salaryText, 120) : 'no-salary',
     PROMPT_VERSION,
-    `${input.epochModel}:${PROMPT_VERSION}`,
+    input.epoch,
   ].join('|')
   return createHash('sha256').update(composite).digest('hex')
 }

@@ -19,20 +19,22 @@ import '@shared/services/providers/anthropic'
 import '@shared/services/providers/openrouter'
 import '@shared/services/providers/google'
 import '@shared/services/providers/groq'
-import { __awaitBackgroundLoadForTesting } from '@shared/services/modelRouter'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import goldenSet from './goldenSet.json'
-import { evaluatePosting, resolveExpectedVerdictModel, type EvaluatorDeps } from '../services/postingEvaluator'
+import {
+  evaluatePosting,
+  resolveExpectedVerdictRoute,
+  type EvaluatorDeps,
+} from '../services/postingEvaluator'
 import { epochOf } from '../config/verdictSchema'
 import { companyKey, titleKey, locationKey } from '../services/identityResolver'
 import { JOBS_VERDICT_DEFAULTS } from '@shared/db/models/JobsVerdictConfig'
 
 /**
  * Golden-set LIVE eval (§4.5 rollout gate) — NOT a CI test. Skipped unless
- * JOBS_VERDICT_EVAL=1; needs OPENAI_API_KEY (and MONGODB_URI only if a CMS
- * ModelConfig override should be honored — offline it falls back to the
- * code-default slot model).
+ * JOBS_VERDICT_EVAL=1; needs OPENAI_API_KEY and MONGODB_URI so the same
+ * authoritative route contract as production is evaluated.
  *
  * Run:  node scripts/jobs-verdict-eval.mjs
  *
@@ -63,26 +65,6 @@ interface Fixture {
 const LIVE = process.env.JOBS_VERDICT_EVAL === '1'
 const CONCURRENCY = 4
 
-/**
- * The router's cold start serves TASK_SLOT_DEFAULTS synchronously while the
- * CMS ModelConfig load runs in the background (cold-defaults-synthetic
- * path) — a fresh eval process right after a CMS cutover would freeze the
- * OLD default as the epoch and then either benchmark the wrong model or
- * mass-reject the real one as model-mismatch (Codex on #516). Sampling for
- * stability can't fix that (cold Mongo paths run 1-2.5s and outlast any
- * fixed sleep — Codex round-2), so AWAIT the load deterministically: the
- * first resolution kicks the background load, __awaitBackgroundLoadForTesting
- * joins the router's _loadPromise (this harness IS a vitest file — the
- * export exists exactly for deterministic load-joins in test contexts; no-op
- * when the config is already warm or no Mongo is configured), and the second
- * resolution reads the authoritative config.
- */
-async function stableEpochModel(): Promise<string> {
-  await resolveExpectedVerdictModel()
-  await __awaitBackgroundLoadForTesting()
-  return resolveExpectedVerdictModel()
-}
-
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)
   let i = 0
@@ -101,13 +83,14 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
 describe.skipIf(!LIVE)('verdict golden-set live eval (JOBS_VERDICT_EVAL=1)', () => {
   it('fraud-FP < 2% on labeled-genuine; evaluator failure rate < 5%', async () => {
     const fixtures = goldenSet as Fixture[]
-    const epochModel = await stableEpochModel()
+    const resolvedModel = await resolveExpectedVerdictRoute()
+    const epoch = epochOf(resolvedModel)
     let totalCost = 0
     const deps: EvaluatorDeps = {
       checkBudget: async () => ({ allowed: true, softening: false }),
       recordSpend: async (_c, _s, usd) => { totalCost += usd },
       pricing: { inputUsdPerMTok: JOBS_VERDICT_DEFAULTS.inputUsdPerMTok, outputUsdPerMTok: JOBS_VERDICT_DEFAULTS.outputUsdPerMTok },
-      expectedModel: epochModel,
+      resolvedModel,
     }
 
     const results = await pool(fixtures, CONCURRENCY, async (f) => {
@@ -161,7 +144,7 @@ describe.skipIf(!LIVE)('verdict golden-set live eval (JOBS_VERDICT_EVAL=1)', () 
     const errorRate = results.length ? failures.length / results.length : 0
 
     const summary = {
-      epoch: epochOf(epochModel),
+      epoch,
       ranAt: new Date().toISOString(),
       total: results.length,
       fraudFPRate,
@@ -179,7 +162,7 @@ describe.skipIf(!LIVE)('verdict golden-set live eval (JOBS_VERDICT_EVAL=1)', () 
 
     const dir = join(__dirname, 'results')
     mkdirSync(dir, { recursive: true })
-    const file = join(dir, `${epochOf(epochModel).replace(/[^a-z0-9.-]/gi, '_')}-${Date.now()}.json`)
+    const file = join(dir, `${epoch.replace(/[^a-z0-9.-]/gi, '_')}-${Date.now()}.json`)
     writeFileSync(file, JSON.stringify({ summary, results }, null, 2))
     // eslint-disable-next-line no-console
     console.log(`\n── golden-set eval ── epoch ${summary.epoch}\n` +

@@ -69,7 +69,7 @@ describe('verdictInputHash (§4.5 — full field set, never body alone)', () => 
     normalizedBody: 'build things',
     applyHosts: ['a.example.com', 'b.example.com'],
     salaryText: null as string | null,
-    epochModel: 'gpt-5.6-luna',
+    epoch: `openai:gpt-5.6-luna:v2:${'a'.repeat(64)}`,
   }
 
   it('is stable across apply-host ordering', () => {
@@ -84,7 +84,7 @@ describe('verdictInputHash (§4.5 — full field set, never body alone)', () => 
     // salary CONTENT is hashed, not mere presence — a bait-and-switch salary
     // edit changes what the model sees and must re-verdict (Codex #515)
     expect(verdictInputHash({ ...h, salaryText: '\u20b95L' })).not.toBe(verdictInputHash({ ...h, salaryText: '\u20b950L' }))
-    expect(verdictInputHash({ ...h, epochModel: 'other-model' })).not.toBe(baseHash)
+    expect(verdictInputHash({ ...h, epoch: `openai:gpt-5.6-luna:v2:${'b'.repeat(64)}` })).not.toBe(baseHash)
     expect(verdictInputHash({ ...h, companyKey: 'other' })).not.toBe(baseHash)
   })
 })

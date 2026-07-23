@@ -73,7 +73,7 @@ export interface IJobLlmVerdict {
   geo?: { locations: string[]; workMode: 'onsite' | 'hybrid' | 'remote' | 'unspecified' }
   /** Full-field-set hash the verdict binds to (spec name, ruling #16) — input change ⇒ re-verdict. */
   verdictInputHash?: string
-  /** `${actualModelUsed}:${promptVersion}` — immutable within an epoch. */
+  /** Provider/model/prompt/effective-control identity — immutable within an epoch. */
   epoch?: string
   model?: string
   promptVersion?: string
