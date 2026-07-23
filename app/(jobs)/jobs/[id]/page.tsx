@@ -840,9 +840,9 @@ export default function JobDetailPage({ params }: { params: { id: string } }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: 'jobs.prep_started',
+          name: 'jobs.prep_handoff_started',
           jobPostingId: fresh.id,
-          props: { applicationId: fresh.application?.applicationId, evidenceCount: fresh.application?.practiceCount ?? 0 },
+          props: {},
         }),
         keepalive: true,
       }).catch(() => {})

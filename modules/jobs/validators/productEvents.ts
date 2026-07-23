@@ -22,6 +22,7 @@ export const PRODUCT_EVENT_NAMES = [
   'jobs.ghost_confirmed',
   'jobs.ghost_auto',
   'jobs.interview_scheduled',
+  'jobs.prep_handoff_started',
   'jobs.prep_started',
   'jobs.prep_deferred_email',
   'jobs.outcome_reported',
@@ -35,15 +36,31 @@ export const PRODUCT_EVENT_NAMES = [
 
 export type ProductEventName = (typeof PRODUCT_EVENT_NAMES)[number]
 
+/**
+ * Events accepted from browser keepalive capture. Everything else in the
+ * closed vocabulary is server/worker-owned and must be written at its
+ * authoritative mutation point.
+ */
+export const BROWSER_PRODUCT_EVENT_NAMES = [
+  'jobs.feed_viewed',
+  'jobs.resume_attach_started',
+  'jobs.resume_attach_completed',
+  'jobs.target_role_confirmed',
+  'jobs.job_viewed',
+  'jobs.prep_handoff_started',
+] as const satisfies readonly ProductEventName[]
+
 const objectIdString = z.string().regex(/^[0-9a-f]{24}$/i)
 
+/**
+ * Public browser-capture contract. Application/session identifiers and
+ * server-semantic events are intentionally unavailable on this boundary.
+ */
 export const ProductEventInputSchema = z.object({
-  name: z.enum(PRODUCT_EVENT_NAMES),
+  name: z.enum(BROWSER_PRODUCT_EVENT_NAMES),
   jobPostingId: objectIdString.optional(),
-  applicationId: objectIdString.optional(),
-  sessionId: objectIdString.optional(),
   // Bounded free-form props — no PII by convention; server stamps identity.
   props: z.record(z.string().max(60), z.union([z.string().max(200), z.number(), z.boolean()])).optional(),
-})
+}).strict()
 
 export type ProductEventInput = z.infer<typeof ProductEventInputSchema>

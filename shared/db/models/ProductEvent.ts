@@ -6,11 +6,12 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
  *
  * Identity: `userId` when authed; otherwise `anonId` from the SIGNED anon
  * cookie (ruling: signed cookie primary, never IP — Jio/Airtel CGNAT makes
- * IP identity wrong for India). Signup writes an `identity_aliased` event
- * {anonId, userId} and backfills — the anon→user stitch.
+ * IP identity wrong for India). Authenticated browser events retain both
+ * identities as a server-stamped bridge; browsers cannot author identity
+ * alias events or trigger an identity rewrite.
  *
- * Server-side writes wherever a route exists; the client-keepalive
- * `/api/events` endpoint exists only for anon surfaces.
+ * Server-side writes own authoritative lifecycle events. The client-keepalive
+ * `/api/events` endpoint accepts only the closed browser view/intent subset.
  */
 export interface IProductEvent extends Document {
   _id: mongoose.Types.ObjectId
