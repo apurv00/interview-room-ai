@@ -97,8 +97,19 @@ describe('enrichFeedbackJob handler', () => {
         _id: SESSION_ID,
         userId: USER_ID,
         $or: [
-          { enrichmentStatus: 'pending' },
+          {
+            enrichmentStatus: 'pending',
+            enrichmentClaimToken: 'event-1',
+          },
+          {
+            enrichmentStatus: 'pending',
+            enrichmentClaimToken: { $in: [null, ''] },
+          },
           { enrichmentStatus: { $exists: false } },
+          {
+            enrichmentStatus: 'running',
+            enrichmentClaimToken: { $in: [null, ''] },
+          },
           { enrichmentStatus: 'running', enrichmentClaimToken: 'event-1' },
         ],
       },

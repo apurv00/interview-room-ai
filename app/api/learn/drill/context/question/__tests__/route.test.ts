@@ -234,9 +234,11 @@ describe('GET /api/learn/drill/context/question', () => {
       2,
       expect.objectContaining({
         enrichmentStatus: 'pending',
+        enrichmentClaimToken: expect.any(String),
       }),
       expect.objectContaining({
         $set: expect.objectContaining({ enrichmentStatus: 'failed' }),
+        $unset: { enrichmentClaimToken: 1 },
       }),
     )
     expect(enrichmentStatus).toBe('failed')
@@ -287,19 +289,29 @@ describe('GET /api/learn/drill/context/question', () => {
     // the outline for the next visit.
     expect(body.idealAnswer).toBeNull()
     expect(mockInngestSend).toHaveBeenCalledTimes(1)
+    expect(mockUpdateOne).toHaveBeenCalledTimes(1)
+    const [filter, update] = mockUpdateOne.mock.calls[0]
+    const claimToken = (
+      update as { $set: { enrichmentClaimToken: string } }
+    ).$set.enrichmentClaimToken
+    expect(claimToken).toEqual(expect.any(String))
     expect(mockInngestSend.mock.calls[0][0]).toMatchObject({
+      id: claimToken,
       name: 'feedback/enrich.requested',
       data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill', questionIndex: 3 },
     })
-    expect(mockUpdateOne).toHaveBeenCalledTimes(1)
-    const [filter, update] = mockUpdateOne.mock.calls[0]
     expect(filter).toMatchObject({
       _id: new mongoose.Types.ObjectId(SESSION_ID),
       userId: new mongoose.Types.ObjectId(USER_ID),
-      enrichmentStatus: { $nin: ['pending', 'running'] },
+      $or: expect.arrayContaining([
+        { enrichmentStatus: { $nin: ['pending', 'running'] } },
+      ]),
     })
     expect(update).toEqual({
-      $set: { enrichmentStatus: 'pending' },
+      $set: {
+        enrichmentStatus: 'pending',
+        enrichmentClaimToken: claimToken,
+      },
       $unset: { enrichmentError: 1, enrichmentCompletedAt: 1 },
     })
     expect(mockUpdateOne.mock.invocationCallOrder[0]).toBeLessThan(
@@ -342,6 +354,114 @@ describe('GET /api/learn/drill/context/question', () => {
 
     expect(responses.map((response) => response.status)).toEqual([200, 200])
     expect(mockInngestSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-sends a persisted pending claim id after interruption before enqueue', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockFindOne.mockReturnValue(
+      chain({
+        config: { role: 'pm' },
+        enrichmentStatus: 'pending',
+        enrichmentClaimToken: 'persisted-drill-claim',
+        updatedAt: new Date(),
+        evaluations: [{
+          questionIndex: 0,
+          question: 'Weak question',
+          answer: 'thin answer',
+          relevance: 40,
+          structure: 40,
+          specificity: 30,
+          ownership: 40,
+          primaryGap: 'specificity',
+        }],
+        feedback: { ideal_answers: [] },
+      }),
+    )
+
+    const res = await GET(new NextRequest(
+      `http://localhost/api/learn/drill/context/question?sessionId=${SESSION_ID}&questionIndex=0`,
+    ))
+
+    expect(res.status).toBe(200)
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'persisted-drill-claim',
+      name: 'feedback/enrich.requested',
+    }))
+  })
+
+  it('reclaims a stale legacy pending row that has no claim id', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockFindOne.mockReturnValue(
+      chain({
+        config: { role: 'pm' },
+        enrichmentStatus: 'pending',
+        updatedAt: new Date(Date.now() - 10 * 60 * 1000),
+        evaluations: [{
+          questionIndex: 0,
+          question: 'Weak question',
+          answer: 'thin answer',
+          relevance: 40,
+          structure: 40,
+          specificity: 30,
+          ownership: 40,
+          primaryGap: 'specificity',
+        }],
+        feedback: { ideal_answers: [] },
+      }),
+    )
+
+    const res = await GET(new NextRequest(
+      `http://localhost/api/learn/drill/context/question?sessionId=${SESSION_ID}&questionIndex=0`,
+    ))
+
+    expect(res.status).toBe(200)
+    expect(mockUpdateOne).toHaveBeenCalledTimes(1)
+    const [filter, update] = mockUpdateOne.mock.calls[0]
+    const claimToken = (
+      update as { $set: { enrichmentClaimToken: string } }
+    ).$set.enrichmentClaimToken
+    expect(filter).toMatchObject({
+      $or: expect.arrayContaining([
+        expect.objectContaining({
+          enrichmentStatus: 'pending',
+          enrichmentClaimToken: { $in: [null, ''] },
+        }),
+      ]),
+    })
+    expect(mockInngestSend).toHaveBeenCalledWith(expect.objectContaining({
+      id: claimToken,
+    }))
+  })
+
+  it('keeps a fresh tokenless pending claim active', async () => {
+    mockGetServerSession.mockResolvedValue({ user: { id: USER_ID } })
+    mockFindOne.mockReturnValue(
+      chain({
+        config: { role: 'pm' },
+        enrichmentStatus: 'pending',
+        updatedAt: new Date(),
+        evaluations: [{
+          questionIndex: 0,
+          question: 'Weak question',
+          answer: 'thin answer',
+          relevance: 40,
+          structure: 40,
+          specificity: 30,
+          ownership: 40,
+          primaryGap: 'specificity',
+        }],
+        feedback: { ideal_answers: [] },
+      }),
+    )
+
+    const res = await GET(new NextRequest(
+      `http://localhost/api/learn/drill/context/question?sessionId=${SESSION_ID}&questionIndex=0`,
+    ))
+
+    expect(res.status).toBe(200)
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockInngestSend).not.toHaveBeenCalled()
   })
 
   it('does not enqueue when an enrichment job is already pending/running (dedupe)', async () => {
