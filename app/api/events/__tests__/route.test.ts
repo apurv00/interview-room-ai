@@ -61,6 +61,22 @@ describe('POST /api/events account-deletion fence', () => {
     expect(mocks.productEventCreate).not.toHaveBeenCalled()
   })
 
+  it('stitches a signed anonymous journey from server-owned identities', async () => {
+    mocks.anonIdFromCookieHeader.mockReturnValue('anon-1')
+
+    const response = await POST(request())
+
+    expect(response.status).toBe(204)
+    expect(mocks.stitchAnonEventsToUser).toHaveBeenCalledWith(
+      'anon-1',
+      '507f1f77bcf86cd799439010',
+    )
+    expect(mocks.recordJobsUserEvent).toHaveBeenCalledWith(expect.objectContaining({
+      userId: '507f1f77bcf86cd799439010',
+      anonId: 'anon-1',
+    }))
+  })
+
   it('does not fall back to an unfenced insert when a deleting account is refused', async () => {
     mocks.recordJobsUserEvent.mockResolvedValue(false)
 
@@ -82,6 +98,7 @@ describe('POST /api/events account-deletion fence', () => {
       anonId: 'anon-1',
       name: 'jobs.feed_viewed',
     }))
+    expect(mocks.stitchAnonEventsToUser).not.toHaveBeenCalled()
     expect(mocks.recordJobsUserEvent).not.toHaveBeenCalled()
   })
 })

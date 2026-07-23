@@ -645,6 +645,11 @@ describe('Job detail Practice readiness', () => {
     expect(stored.jobsHandoffToken).toBe('server-signed-token')
     expect(stored.targetCompany).toHaveLength(200)
     expect(stored.role).not.toBe(XRAY.inferredDomain)
+    const handoffEvents = mockFetch.mock.calls.filter(([url, init]) => (
+      String(url) === '/api/events'
+      && JSON.parse(String(init?.body)).name === 'jobs.prep_handoff_started'
+    ))
+    expect(handoffEvents).toHaveLength(1)
   })
 
   it('reconciles server readiness when the X-ray response is lost after persistence', async () => {
