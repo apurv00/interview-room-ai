@@ -8,6 +8,9 @@ import type { JobsOperationsPayload, SourceRow, SourceWindowMetrics } from '../t
 vi.mock('../VerdictGovernancePanel', () => ({
   VerdictGovernancePanel: () => <section aria-label="Verdict governance test boundary" />,
 }))
+vi.mock('../EmailOperationsPanel', () => ({
+  EmailOperationsPanel: () => <section aria-label="Email operations test boundary" />,
+}))
 
 const OPERATION_ID = '550e8400-e29b-41d4-a716-446655440000'
 const NEXT_OPERATION_ID = '18f6c3ec-5d75-4e76-9f7a-122d8466f4f4'
@@ -115,6 +118,14 @@ beforeEach(() => {
 })
 
 describe('/cms/jobs-ingest Jobs Operations', () => {
+  it('renders the isolated email-control surface', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(payload())))
+
+    render(<JobsIngestPage />)
+
+    expect(await screen.findByLabelText('Email operations test boundary')).toBeTruthy()
+  })
+
   it('renders an honest paused bootstrap state and initializes through the audited command route', async () => {
     const empty = payload({
       bootstrap: { required: true, catalogSources: 9, configuredSources: 0, allowed: true, blockers: [], repairs: ['seed missing reviewed sources'] },

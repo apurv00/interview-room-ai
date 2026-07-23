@@ -22,7 +22,6 @@ vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(u
 vi.mock('@shared/db/models', () => ({
   JobsEmailConfig: { getConfig: mockGetConfig, updateOne: mockUpdateOne },
   JobsEmailSend: { aggregate: mockAggregate, countDocuments: mockCount },
-  JOBS_EMAIL_STREAMS: ['e0', 'e1', 'e2', 'e3', 'e4'],
 }))
 vi.mock('resend', () => ({
   Resend: class {
@@ -47,7 +46,7 @@ beforeEach(() => {
 describe('JobsEmailConfig defaults', () => {
   it('every stream ships OFF — deploys are inert until a founder flip', () => {
     expect(JOBS_EMAIL_DEFAULTS).toEqual({
-      e0Enabled: false, e1Enabled: false, e2Enabled: false, e3Enabled: false, e4Enabled: false,
+      e0Enabled: false, e1Enabled: false, e2Enabled: false, e4Enabled: false,
       globalWeeklyCap: 3,
     })
   })
@@ -67,7 +66,7 @@ describe('/api/cms/jobs-ingest/email', () => {
     const res = await GET()
     const body = await res.json()
     expect(body.config.e2Enabled).toBe(false)
-    expect(body.sentByStream).toEqual({ e0: 0, e1: 0, e2: 4, e3: 0, e4: 0 })
+    expect(body.sentByStream).toEqual({ e0: 0, e1: 0, e2: 4, e4: 0 })
     expect(body.staleReservations).toBe(1)
     expect(body.unstampedTransactional).toBe(2)
     // Solicitation query carries the 24h cutoff; transactional query has NO
@@ -87,6 +86,9 @@ describe('/api/cms/jobs-ingest/email', () => {
 
     const badType = await PATCH(new Request('http://x', { method: 'PATCH', body: JSON.stringify({ e2Enabled: 'yes' }) }))
     expect(badType.status).toBe(400)
+
+    const retiredStream = await PATCH(new Request('http://x', { method: 'PATCH', body: JSON.stringify({ e3Enabled: true }) }))
+    expect(retiredStream.status).toBe(400)
 
     const badCap = await PATCH(new Request('http://x', { method: 'PATCH', body: JSON.stringify({ globalWeeklyCap: 99 }) }))
     expect(badCap.status).toBe(400)

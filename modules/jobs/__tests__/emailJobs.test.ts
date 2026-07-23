@@ -874,7 +874,7 @@ describe('runEmailSweepHandler — solicitation E1/E4', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
-    mockGetConfig.mockResolvedValue({ e0Enabled: false, e1Enabled: true, e2Enabled: false, e3Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
+    mockGetConfig.mockResolvedValue({ e0Enabled: false, e1Enabled: true, e2Enabled: false, e4Enabled: true, globalWeeklyCap: 3 })
     mockUserFindById.mockReturnValue(selectLean({ email: 'u@x.com', emailPreferences: { jobs: { nudges: true, unsubscribedStreams: [] } } }))
     mockPostingFindById.mockReturnValue(selectLean(posting()))
   })

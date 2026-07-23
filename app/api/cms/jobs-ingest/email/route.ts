@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
-import { JobsEmailConfig, JobsEmailSend, JOBS_EMAIL_STREAMS } from '@shared/db/models'
+import { JobsEmailConfig, JobsEmailSend } from '@shared/db/models'
 
 export const dynamic = 'force-dynamic'
+const ACTIVE_EMAIL_STREAMS = ['e0', 'e1', 'e2', 'e4'] as const
 
 /**
  * /api/cms/jobs-ingest/email — the jobs email wave's admin switch surface
@@ -49,14 +50,17 @@ export async function GET() {
   return NextResponse.json({
     config,
     sentByStream: Object.fromEntries(
-      JOBS_EMAIL_STREAMS.map((s) => [s, (counts as Array<{ _id: string; n: number }>).find((c) => c._id === s)?.n ?? 0])
+      ACTIVE_EMAIL_STREAMS.map((stream) => [
+        stream,
+        (counts as Array<{ _id: string; n: number }>).find((count) => count._id === stream)?.n ?? 0,
+      ])
     ),
     staleReservations: staleSolicitation,
     unstampedTransactional,
   })
 }
 
-const BOOL_KEYS = ['e0Enabled', 'e1Enabled', 'e2Enabled', 'e3Enabled', 'e4Enabled'] as const
+const BOOL_KEYS = ['e0Enabled', 'e1Enabled', 'e2Enabled', 'e4Enabled'] as const
 
 export async function PATCH(req: Request) {
   const denied = await requireAdmin()
