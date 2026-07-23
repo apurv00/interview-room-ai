@@ -9,8 +9,8 @@
  * Invariants locked here:
  *  - a valid domain slug is forwarded to /api/jobs/feed
  *  - the active filter is visible and clearable (honest copy)
- *  - an unknown slug is ignored — no filter forwarded, no chip rendered
- *    (same validation the API applies: JOB_DOMAIN_IDS)
+ *  - supported Interview-role aliases resolve to a canonical Jobs domain
+ *  - an unknown slug never becomes an unfiltered feed
  */
 
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
@@ -112,14 +112,24 @@ describe('/jobs ?domain= param (Codex #527 — press links must land on the filt
     expect(mockRouter.push).toHaveBeenCalledWith('/jobs', { scroll: false })
   })
 
-  it('ignores an unknown domain slug — no filter forwarded, no chip', async () => {
-    mockUseSearchParams.mockReturnValue(new URLSearchParams('domain=underwater-basket-weaving'))
+  it('canonicalizes a supported Interview-role alias before loading', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('domain=product-designer'))
     render(<JobsPage />)
 
     await waitFor(() => expect(feedCallUrls().length).toBeGreaterThan(0))
     const url = new URL(feedCallUrls()[0], 'http://x')
-    expect(url.searchParams.get('domain')).toBeNull()
-    expect(screen.queryByText(/Domain:/)).toBeNull()
+    expect(url.searchParams.get('domain')).toBe('design')
+    expect(await screen.findByRole('button', { name: /Remove Domain: design filter/ })).toBeTruthy()
+  })
+
+  it('shows a clearable unsupported state without loading the unfiltered feed', async () => {
+    mockUseSearchParams.mockReturnValue(new URLSearchParams('domain=underwater-basket-weaving'))
+    render(<JobsPage />)
+
+    expect(await screen.findByText('This job category is not supported in Jobs yet.')).toBeTruthy()
+    expect(feedCallUrls()).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Clear category' }))
+    expect(mockRouter.push).toHaveBeenCalledWith('/jobs', { scroll: false })
   })
 
   it('no domain param behaves as before — unfiltered feed, no chip', async () => {

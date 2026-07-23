@@ -2,15 +2,15 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { JOB_DOMAIN_IDS } from '../config/domains'
+import { resolveJobsDomainCapability } from '../config/domains'
 
 /**
  * The Wave-5 press surface (PRODUCT_FLOW build plan 5.1) — ONE component,
  * three hosts (feedback CTA strip, pathway right column, homepage journey).
  * Honest-copy rules: counts come from the live feed; the domain is named
- * ONLY when the feed was actually filtered by it (unknown slugs fall back
- * to the unfiltered count with generic copy); zero jobs renders NOTHING —
- * no promises about an empty feed. No readiness-ranking claims exist here.
+ * ONLY when the feed was actually filtered by it. Unsupported roles render
+ * no CTA instead of silently linking to all jobs; zero jobs renders NOTHING.
+ * No readiness-ranking claims exist here.
  * NO evidence claims either (Codex #527): practice evidence is recorded
  * only for jobs-attributed sessions (recordPracticeEvidence requires
  * attribution.source='jobs'), and sessions launched from these hosts have
@@ -28,23 +28,33 @@ export default function JobsCountLink({
   variant: 'feedback' | 'pathway' | 'home'
 }) {
   const [state, setState] = useState<{ total: number; filtered: boolean } | null>(null)
+  const capability = resolveJobsDomainCapability(domain)
+  const filteredDomain = capability.kind === 'filtered' ? capability.domain : undefined
+  const supported = capability.kind !== 'unsupported'
 
   useEffect(() => {
-    const valid = !!domain && (JOB_DOMAIN_IDS as readonly string[]).includes(domain)
+    let cancelled = false
+    setState(null)
+    if (!supported) {
+      return () => { cancelled = true }
+    }
     const params = new URLSearchParams({ pageSize: '1' })
-    if (valid && domain) params.set('domain', domain)
+    if (filteredDomain) params.set('domain', filteredDomain)
     fetch(`/api/jobs/feed?${params}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d && typeof d.total === 'number') setState({ total: d.total, filtered: valid })
+        if (!cancelled && d && typeof d.total === 'number') {
+          setState({ total: d.total, filtered: !!filteredDomain })
+        }
       })
       .catch(() => {})
-  }, [domain])
+    return () => { cancelled = true }
+  }, [filteredDomain, supported])
 
-  if (!state || state.total === 0) return null
+  if (!supported || !state || state.total === 0) return null
   const count = state.total.toLocaleString()
-  const href = state.filtered && domain ? `/jobs?domain=${domain}` : '/jobs'
-  const what = state.filtered && domain ? `${domain} jobs` : 'jobs'
+  const href = state.filtered && filteredDomain ? `/jobs?domain=${filteredDomain}` : '/jobs'
+  const what = state.filtered && filteredDomain ? `${filteredDomain} jobs` : 'jobs'
 
   if (variant === 'feedback') {
     return (

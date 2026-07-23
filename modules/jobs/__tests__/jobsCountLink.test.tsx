@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import JobsCountLink from '../components/JobsCountLink'
 
 const mockFetch = vi.fn()
@@ -50,20 +50,59 @@ describe('JobsCountLink honest copy (Codex #527)', () => {
     expect(filtered.container.textContent).not.toContain('matching your prep')
     filtered.unmount()
 
-    const unfiltered = render(<JobsCountLink domain="not-a-real-domain" variant="pathway" />)
-    expect(await unfiltered.findByText('Live jobs on the feed')).toBeTruthy()
-    expect(unfiltered.queryByText('Jobs matching your prep')).toBeNull()
-    expect(unfiltered.container.textContent).not.toContain('not-a-real-domain')
+    const unsupported = render(<JobsCountLink domain="not-a-real-domain" variant="pathway" />)
+    await waitFor(() => expect(unsupported.container.innerHTML).toBe(''))
+    expect(unsupported.queryByText('Jobs matching your prep')).toBeNull()
   })
 
-  it('unknown domain falls back to the unfiltered count with generic copy and a plain /jobs link', async () => {
+  it('unknown domain suppresses the CTA instead of silently linking to all jobs', async () => {
     feedResponds(30)
     const { container } = render(<JobsCountLink domain="underwater-basket-weaving" variant="feedback" />)
-    await waitFor(() => expect(container.textContent).toContain('30'))
+    await waitFor(() => expect(container.innerHTML).toBe(''))
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it.each(['ui-designer', 'product-designer'])(
+    'maps the Interview role %s to the supported design feed',
+    async (domain) => {
+      feedResponds(11)
+      render(<JobsCountLink domain={domain} variant="feedback" />)
+      await waitFor(() => expect(mockFetch).toHaveBeenCalled())
+      expect(String(mockFetch.mock.calls[0][0])).toContain('domain=design')
+      expect(screen.getByRole('link').getAttribute('href')).toBe('/jobs?domain=design')
+    },
+  )
+
+  it('keeps general as an explicit unfiltered capability', async () => {
+    feedResponds(30)
+    render(<JobsCountLink domain="general" variant="feedback" />)
+    await waitFor(() => expect(mockFetch).toHaveBeenCalled())
     expect(String(mockFetch.mock.calls[0][0])).not.toContain('domain=')
-    const link = screen.getByRole('link')
-    expect(link.getAttribute('href')).toBe('/jobs')
-    expect(container.textContent).not.toContain('underwater-basket-weaving')
+    expect(screen.getByRole('link').getAttribute('href')).toBe('/jobs')
+  })
+
+  it('ignores an older count response after the domain changes', async () => {
+    let resolveBackend!: (value: unknown) => void
+    let resolveFrontend!: (value: unknown) => void
+    mockFetch.mockImplementation((url: string) => new Promise((resolve) => {
+      if (url.includes('domain=backend')) resolveBackend = resolve
+      if (url.includes('domain=frontend')) resolveFrontend = resolve
+    }))
+    const view = render(<JobsCountLink domain="backend" variant="feedback" />)
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1))
+
+    view.rerender(<JobsCountLink domain="frontend" variant="feedback" />)
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2))
+    await act(async () => {
+      resolveFrontend({ ok: true, json: () => Promise.resolve({ total: 7 }) })
+    })
+    expect(screen.getByText(/7 live frontend jobs/)).toBeTruthy()
+
+    await act(async () => {
+      resolveBackend({ ok: true, json: () => Promise.resolve({ total: 30 }) })
+    })
+    expect(screen.queryByText(/30 live frontend jobs/)).toBeNull()
+    expect(screen.getByText(/7 live frontend jobs/)).toBeTruthy()
   })
 
   it('valid domain links to /jobs?domain=<id> (the feed page honors it)', async () => {
