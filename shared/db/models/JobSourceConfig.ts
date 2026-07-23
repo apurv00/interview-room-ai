@@ -67,7 +67,6 @@ export interface IJobSourceConfig extends Document {
   requestBudget: IJobSourceRequestBudget
   minIndiaPostings?: number
   emptyStreak: number
-  failStreak: number
   /** Consecutive healthy weekly probes — 2 recover a quarantined board (§4.4). */
   healthyProbeStreak: number
   llmVerdictOptOut: boolean
@@ -120,7 +119,6 @@ const JobSourceConfigSchema = new Schema<IJobSourceConfig>(
     },
     minIndiaPostings: { type: Number },
     emptyStreak: { type: Number, default: 0 },
-    failStreak: { type: Number, default: 0 },
     healthyProbeStreak: { type: Number, default: 0 },
     llmVerdictOptOut: { type: Boolean, default: false },
     lastSyncAt: { type: Date },
