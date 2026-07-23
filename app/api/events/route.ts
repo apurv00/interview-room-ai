@@ -2,7 +2,14 @@ import { NextResponse } from 'next/server'
 import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { connectDB } from '@shared/db/connection'
 import { ProductEvent } from '@shared/db/models'
-import { ProductEventInputSchema, ANON_COOKIE, ANON_COOKIE_MAX_AGE, anonIdFromCookieHeader, mintAnonCookie } from '@jobs'
+import {
+  ProductEventInputSchema,
+  ANON_COOKIE,
+  ANON_COOKIE_MAX_AGE,
+  anonIdFromCookieHeader,
+  mintAnonCookie,
+  stitchAnonEventsToUser,
+} from '@jobs'
 import { logger } from '@shared/logger'
 import { recordJobsUserEvent } from '@jobs/services/userEventService'
 
@@ -40,6 +47,12 @@ export const POST = composeApiRoute({
     }
     try {
       await connectDB()
+      if (authedUserId && anonId) {
+        // The browser supplies neither identity. Both values come from
+        // authenticated/signed server state, and the fenced helper is
+        // idempotent after the first successful stitch.
+        await stitchAnonEventsToUser(anonId, authedUserId)
+      }
       const event = {
         name: body.name,
         anonId: anonId ?? undefined,

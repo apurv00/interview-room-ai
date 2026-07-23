@@ -7,8 +7,8 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
  * Identity: `userId` when authed; otherwise `anonId` from the SIGNED anon
  * cookie (ruling: signed cookie primary, never IP — Jio/Airtel CGNAT makes
  * IP identity wrong for India). Authenticated browser events retain both
- * identities as a server-stamped bridge; browsers cannot author identity
- * alias events or trigger an identity rewrite.
+ * identities as a server-stamped bridge; browsers cannot author an alias
+ * event or choose either side of the fenced identity rewrite.
  *
  * Server-side writes own authoritative lifecycle events. The client-keepalive
  * `/api/events` endpoint accepts only the closed browser view/intent subset.

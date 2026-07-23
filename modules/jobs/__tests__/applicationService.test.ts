@@ -1332,6 +1332,15 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
       name: 'jobs/evidence.attribute',
       data: { sessionId: 's1', applicationId: 'app1', jobPostingId: PRACTICE_JOB_ID },
     })
+    expect(mockRecordJobsUserEvent).toHaveBeenCalledWith({
+      name: 'jobs.prep_started',
+      userId: 'u1',
+      jobPostingId: PRACTICE_JOB_ID,
+      applicationId: 'app1',
+      sessionId: 's1',
+      props: { evidenceCount: 3 },
+      ts: expect.any(Date),
+    })
     expect(mockSessionUpdateOne).not.toHaveBeenCalled() // already canonical
   })
 
@@ -1439,6 +1448,7 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
 
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
     expect(mockInngestSend).not.toHaveBeenCalled()
+    expect(mockRecordJobsUserEvent).not.toHaveBeenCalled()
   })
 
   it('keeps the insertion predicate under real Mongoose timestamp middleware', async () => {
@@ -1789,7 +1799,7 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     expect(mockInngestSend).not.toHaveBeenCalled()
   })
 
-  it('an event-send failure does not roll back durable evidence', async () => {
+  it('an attribution enqueue failure does not roll back durable evidence', async () => {
     reset()
     sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID, applicationId: 'app1' } })
     mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1, upsertedCount: 0 })
@@ -1797,6 +1807,17 @@ describe('recordPracticeEvidence (Wave 4.3 — the evidence ticker source)', () 
     mockInngestSend.mockRejectedValueOnce(new Error('temporary outage'))
 
     expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+  })
+
+  it('a telemetry failure does not suppress durable evidence attribution work', async () => {
+    reset()
+    sessionChain({ _id: 's1', userId: 'u1', attribution: { source: 'jobs', jobId: PRACTICE_JOB_ID, applicationId: 'app1' } })
+    mockAppUpdateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1, upsertedCount: 0 })
+    mockAppFindOne.mockReturnValue(appQuery({ _id: 'app1', jobPostingId: PRACTICE_JOB_ID, verifiedPracticeSessionIds: ['s1'] }))
+    mockRecordJobsUserEvent.mockRejectedValueOnce(new Error('telemetry unavailable'))
+
+    expect(await recordPracticeEvidence('u1', 's1')).toEqual({ recorded: true, evidenceCount: 1 })
+    expect(mockInngestSend).toHaveBeenCalledOnce()
   })
 })
 

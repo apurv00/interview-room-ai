@@ -1136,6 +1136,19 @@ export async function recordPracticeEvidence(
 
   if (ensured.newlyAdded && await isJobsAccountActive(userId)) {
     try {
+      await recordJobsUserEvent({
+        name: 'jobs.prep_started',
+        userId,
+        jobPostingId: ensured.jobPostingId,
+        applicationId: ensured.applicationId,
+        sessionId: ensured.sessionId,
+        props: { evidenceCount: ensured.evidenceCount },
+        ts: now,
+      })
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'jobs.prep_started emit failed')
+    }
+    try {
       await inngest.send({
         id: `jobs-evidence-${ensured.sessionId}`,
         name: 'jobs/evidence.attribute',
