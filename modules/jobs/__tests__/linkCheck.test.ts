@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /**
@@ -9,18 +10,38 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * alive; SSRF guard rejects private targets before any fetch.
  */
 
-const { mockPostingFind, mockPostingExists, mockPostingUpdateOne, mockCycleCreate } = vi.hoisted(() => ({
+const {
+  mockPostingFind,
+  mockPostingExists,
+  mockPostingUpdateOne,
+  mockSourceFind,
+  mockCycleCreate,
+  mockFenceQualityDecisionSources,
+  mockRecordAutomaticQualityDecision,
+  mockWithQualityDecisionTransaction,
+} = vi.hoisted(() => ({
   mockPostingFind: vi.fn(),
   mockPostingExists: vi.fn(),
   mockPostingUpdateOne: vi.fn(),
+  mockSourceFind: vi.fn(),
   mockCycleCreate: vi.fn(),
+  mockFenceQualityDecisionSources: vi.fn(),
+  mockRecordAutomaticQualityDecision: vi.fn(),
+  mockWithQualityDecisionTransaction: vi.fn(),
 }))
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@shared/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
 vi.mock('@shared/services/inngest', () => ({ inngest: { createFunction: vi.fn(() => ({})), send: vi.fn() } }))
 vi.mock('@shared/db/models', () => ({
+  JOB_SOURCE_LINEAGE_UNKNOWN: '__legacy_unknown__',
   JobPosting: { find: mockPostingFind, exists: mockPostingExists, updateOne: mockPostingUpdateOne },
+  JobSourceConfig: { find: mockSourceFind },
   JobIngestCycle: { create: mockCycleCreate },
+}))
+vi.mock('../services/qualityDecisionService', () => ({
+  fenceQualityDecisionSources: mockFenceQualityDecisionSources,
+  recordAutomaticQualityDecision: mockRecordAutomaticQualityDecision,
+  withQualityDecisionTransaction: mockWithQualityDecisionTransaction,
 }))
 
 import { checkApplyLink, LinkCheckAuthorityChangedError, nextApplyCheckState, nextClosedApplyCheckState, isCheckableUrl, MIN_RESTRIKE_MS } from '../services/linkCheckService'
@@ -33,6 +54,7 @@ import {
 } from '../services/linkGovernance'
 
 const NOW = new Date('2026-07-16T12:00:00Z')
+const QUALITY_SESSION = { id: 'link-quality-session' }
 const RECOVERY_LINK = {
   subject: `ls1_${'A'.repeat(43)}`,
   generation: `lg1_${'B'.repeat(43)}`,
@@ -46,6 +68,8 @@ const unverifiableRecovery = (identity = RECOVERY_LINK) => ({
   ...identity,
   outcome: 'unverifiable' as const,
 })
+const decisionHash = (value: unknown) =>
+  createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
 function requestStub(status: number, bodyText = '', location?: string): LinkRequestImpl {
   return vi.fn().mockResolvedValue({ kind: 'response', status, bodyText, location }) as never
@@ -487,7 +511,25 @@ describe('runLinkCheckHandler', () => {
     vi.clearAllMocks()
     mockPostingExists.mockResolvedValue({ _id: 'authorized' })
     mockPostingUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockSourceFind.mockImplementation((filter: { sourceId?: { $in?: string[] } }) => ({
+      select: () => ({
+        lean: () => Promise.resolve((filter.sourceId?.$in ?? []).map((sourceId) => ({
+          sourceId,
+          health: 'active',
+          controlRevision: 2,
+          operationalRevision: 5,
+        }))),
+      }),
+    }))
     mockCycleCreate.mockResolvedValue({})
+    mockFenceQualityDecisionSources.mockResolvedValue(undefined)
+    mockRecordAutomaticQualityDecision.mockResolvedValue({
+      decisionKey: `quality:v1:${'c'.repeat(64)}`,
+      inserted: true,
+    })
+    mockWithQualityDecisionTransaction.mockImplementation(
+      (work: (session: unknown) => Promise<unknown>) => work(QUALITY_SESSION),
+    )
   })
 
   it('caps the crowd-request lane at 50 and reserves the remaining 100 slots for due machine work', async () => {
@@ -530,11 +572,27 @@ describe('runLinkCheckHandler', () => {
   })
 
   it('a dead-everywhere posting on its SECOND ≥20h strike closes with dead-apply-link, status-guarded; telemetry row written', async () => {
+    const priorObservedAt = new Date(NOW.getTime() - 25 * 3600_000)
     const doc = {
       _id: 'p1',
-      provenance: [{ applyUrl: 'https://dead.example/a' }],
-      applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: new Date(NOW.getTime() - 25 * 3600_000), lastDeadAt: new Date(NOW.getTime() - 25 * 3600_000) },
+      provenance: governedProvenance('https://dead.example/a'),
+      applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: priorObservedAt, lastDeadAt: priorObservedAt },
     }
+    const group = groupApplyLinkSubjects(doc.provenance)[0]
+    const machineInputHash = decisionHash({
+      subject: group.subject,
+      generation: group.generation,
+      incidentVersion: group.governance.incidentVersion,
+      outcome: 'dead',
+    })
+    const lifecycleInputHash = decisionHash({
+      incidents: [{
+        generation: group.generation,
+        incidentVersion: group.governance.incidentVersion,
+      }],
+      outcome: 'dead',
+      lifecycle: 'close',
+    })
     mockPostingFind
       .mockReturnValueOnce(chain([doc])) // requested
       .mockReturnValueOnce(chain([])) // restrikes/recovery
@@ -546,6 +604,66 @@ describe('runLinkCheckHandler', () => {
     const [filter, update] = mockPostingUpdateOne.mock.calls[0]
     expect(filter).toMatchObject({ _id: 'p1', status: 'open' }) // guarded
     expect((update as { $set: Record<string, unknown> }).$set).toMatchObject({ status: 'closed', closedReason: 'dead-apply-link' })
+    expect(mockWithQualityDecisionTransaction).toHaveBeenCalledTimes(1)
+    expect(mockSourceFind).toHaveBeenCalledWith(
+      { sourceId: { $in: ['jsearch'] } },
+      null,
+      { session: QUALITY_SESSION },
+    )
+    expect(mockFenceQualityDecisionSources).toHaveBeenCalledWith(
+      [{ sourceId: 'jsearch', controlRevision: 2, operationalRevision: 5 }],
+      QUALITY_SESSION,
+    )
+    expect(mockPostingUpdateOne.mock.calls[0][2]).toEqual({
+      runValidators: true,
+      session: QUALITY_SESSION,
+    })
+    expect(mockRecordAutomaticQualityDecision).toHaveBeenCalledTimes(2)
+    expect(mockRecordAutomaticQualityDecision.mock.calls[0]).toEqual([
+      expect.objectContaining({
+        domain: 'apply-link',
+        action: 'demote',
+        subjectKey: `p1:${group.subject}:${group.generation}:${group.governance.incidentVersion}`,
+        postingId: 'p1',
+        serviceActor: 'jobs-link-check',
+        inputHash: machineInputHash,
+        policyRevision: `jobs-link-check:two-strike:${MIN_RESTRIKE_MS}`,
+        sourceRevisions: [{ sourceId: 'jsearch', controlRevision: 2, operationalRevision: 5 }],
+        occurredAt: expect.any(Date),
+        evidence: expect.objectContaining({
+          kind: 'apply-link',
+          basis: 'machine',
+          outcome: 'dead',
+          generation: group.generation,
+          observedAt: expect.any(Date),
+          checkedOptionCount: 1,
+        }),
+      }),
+      QUALITY_SESSION,
+    ])
+    expect(mockRecordAutomaticQualityDecision.mock.calls[1]).toEqual([
+      expect.objectContaining({
+        domain: 'apply-link',
+        action: 'close',
+        subjectKey: 'p1',
+        postingId: 'p1',
+        serviceActor: 'jobs-link-check',
+        inputHash: lifecycleInputHash,
+        policyRevision: `jobs-link-check:two-strike:${MIN_RESTRIKE_MS}`,
+        sourceRevisions: [{ sourceId: 'jsearch', controlRevision: 2, operationalRevision: 5 }],
+        occurredAt: expect.any(Date),
+        evidence: expect.objectContaining({
+          kind: 'apply-link',
+          basis: 'machine',
+          outcome: 'dead',
+          generation: expect.any(String),
+          observedAt: expect.any(Date),
+          priorObservedAt,
+          checkedOptionCount: 1,
+        }),
+      }),
+      QUALITY_SESSION,
+    ])
     // Close first clears every TTL, then current DB pin state determines
     // whether a second conditional write may stamp a new one.
     expect((update as { $unset: Record<string, unknown> }).$unset).toEqual({
@@ -567,7 +685,43 @@ describe('runLinkCheckHandler', () => {
     })
     expect(mockPostingUpdateOne.mock.calls[2][0]).not.toHaveProperty('provenance')
     expect(mockPostingUpdateOne.mock.calls[2][1].$set.purgeAt).toBeInstanceOf(Date)
+    expect(mockPostingUpdateOne.mock.calls[1][2]).toEqual({ session: QUALITY_SESSION })
+    expect(mockPostingUpdateOne.mock.calls[2][2]).toEqual({ session: QUALITY_SESSION })
     expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'link-check', linkCheck: expect.objectContaining({ checked: 1, dead: 1, closedNow: 1 }) }))
+  })
+
+  it('aborts the lifecycle transaction before TTL and telemetry when decision evidence cannot be written', async () => {
+    const priorObservedAt = new Date(NOW.getTime() - 25 * 3600_000)
+    const doc = {
+      _id: 'p-ledger-failure',
+      provenance: governedProvenance('https://dead.example/a'),
+      applyCheck: {
+        status: 'dead',
+        deadStreak: 1,
+        lastCheckedAt: priorObservedAt,
+        lastDeadAt: priorObservedAt,
+      },
+    }
+    mockPostingFind
+      .mockReturnValueOnce(chain([doc]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+      .mockReturnValueOnce(chain([]))
+    mockRecordAutomaticQualityDecision.mockRejectedValueOnce(new Error('ledger write failed'))
+
+    await expect(runLinkCheckHandler(step, nxdomainStub, NOW, 0))
+      .rejects.toThrow('ledger write failed')
+
+    expect(mockWithQualityDecisionTransaction).toHaveBeenCalledTimes(1)
+    expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
+    expect(mockPostingUpdateOne.mock.calls[0][2]).toEqual({
+      runValidators: true,
+      session: QUALITY_SESSION,
+    })
+    expect(mockRecordAutomaticQualityDecision).toHaveBeenCalledTimes(1)
+    expect(mockRecordAutomaticQualityDecision.mock.calls[0][1]).toBe(QUALITY_SESSION)
+    expect(mockCycleCreate).not.toHaveBeenCalled()
   })
 
   it('Codex #543 P1: the picker has a restrike bucket — dead rows past the 20h window are re-picked (strike 2 is reachable)', async () => {
@@ -600,7 +754,12 @@ describe('runLinkCheckHandler', () => {
   it('Codex #543 r6: a 4-URL all-dead posting is judged in ONE step — extra URLs never make it uncloseable', async () => {
     const doc = {
       _id: 'p4',
-      provenance: [1, 2, 3, 4].map((i) => ({ applyUrl: `https://dead${i}.example/a` })),
+      provenance: [1, 2, 3, 4].map((i) => ({
+        sourceId: 'jsearch',
+        externalId: `ext-${i}`,
+        sourceKey: `jsearch:ext-${i}`,
+        applyUrl: `https://dead${i}.example/a`,
+      })),
       applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: new Date(NOW.getTime() - 25 * 3600_000), lastDeadAt: new Date(NOW.getTime() - 25 * 3600_000) },
     }
     mockPostingFind
@@ -619,7 +778,7 @@ describe('runLinkCheckHandler', () => {
     const prevChecked = new Date(NOW.getTime() - 25 * 3600_000)
     const doc = {
       _id: 'p5',
-      provenance: [{ applyUrl: 'https://dead.example/a' }],
+      provenance: governedProvenance('https://dead.example/a'),
       applyCheck: { status: 'dead', deadStreak: 1, lastCheckedAt: prevChecked, lastDeadAt: prevChecked },
     }
     mockPostingFind
@@ -684,6 +843,12 @@ describe('runLinkCheckHandler', () => {
     const result = await runLinkCheckHandler(step, nxdomainStub, new Date(), 0)
 
     expect(result.closed).toBe(0)
+    expect(mockWithQualityDecisionTransaction).toHaveBeenCalledTimes(1)
+    expect(mockSourceFind).toHaveBeenCalledWith(
+      { sourceId: { $in: ['jsearch'] } },
+      null,
+      { session: QUALITY_SESSION },
+    )
     expect(mockPostingUpdateOne).toHaveBeenCalledTimes(1)
     expect(mockPostingUpdateOne.mock.calls[0][0]).toMatchObject({
       provenance: doc.provenance,
@@ -692,6 +857,11 @@ describe('runLinkCheckHandler', () => {
     expect(mockPostingUpdateOne.mock.calls[0][1]).toMatchObject({
       $unset: { linkCheckRequestedAt: 1 },
     })
+    expect(mockPostingUpdateOne.mock.calls[0][2]).toEqual({
+      runValidators: true,
+      session: QUALITY_SESSION,
+    })
+    expect(mockRecordAutomaticQualityDecision).not.toHaveBeenCalled()
     expect(mockCycleCreate).toHaveBeenCalledWith(expect.objectContaining({
       linkCheck: expect.objectContaining({
         checked: 0,

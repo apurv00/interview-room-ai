@@ -1,4 +1,5 @@
 import { gunzipSync } from 'zlib'
+import type { ClientSession } from 'mongoose'
 import { inngest } from '@shared/services/inngest'
 import { connectDB } from '@shared/db/connection'
 import {
@@ -19,6 +20,17 @@ import { makeLlmBudget } from '../services/llmBudget'
 import { reconcileVerdict } from '../services/verdictReconciler'
 import { hostOf } from '../services/qualityGate'
 import { jobPostingStateOf, NORMAL_ARCHIVE_CLOSED_REASONS } from '../services/postingAccess'
+import { controlRevisionOf, operationalRevisionOf } from '../services/sourceControl'
+import {
+  fenceQualityDecisionSources,
+  hasRestoredQualityDecision,
+  recordAutomaticQualityDecision,
+  withQualityDecisionTransaction,
+} from '../services/qualityDecisionService'
+import {
+  fenceJobsVerdictConfigRevision,
+  getJobsVerdictConfigSnapshot,
+} from '../services/verdictConfigControl'
 
 /**
  * LLM verdict worker + sweeper (INGESTION §4.5 layer 2, ruling #16).
@@ -47,6 +59,7 @@ const IDS_PER_EVENT = 40
 const SWEEP_LIMIT_DEFAULT = 400
 const MAX_ATTEMPTS = 5
 const BREAKER_CONSECUTIVE_FAILURES = 6
+const VERDICT_DECISION_POLICY_REVISION = `jobs-verdict:${PROMPT_VERSION}:reconcile-v1`
 
 interface LlmCycleCounters {
   requested: number
@@ -285,99 +298,192 @@ export async function runEvaluatePostingsHandler(
           const rec = reconcileVerdict(outcome.verdict, {
             anyDemotionFlag: !!(doc.flags?.staffing || doc.flags?.shortJd || doc.flags?.repost || doc.confidentialCompany),
           })
-          const softClose = cfg.enforceEnabled && rec.wouldSoftClose
-          const set: Record<string, unknown> = {
-            llmVerdict: {
-              status: 'scored',
-              verdict: outcome.verdict.verdict,
-              reasonCodes: outcome.verdict.reasonCodes,
-              genuineness: outcome.verdict.genuineness,
-              quality: outcome.verdict.quality,
-              completeness: outcome.verdict.completeness,
-              domain: outcome.verdict.domain,
-              domainConfidence: outcome.verdict.domainConfidence,
-              seniority: outcome.verdict.seniority,
-              fresherFriendly: outcome.verdict.fresherFriendly,
-              // The ONE free-string model output — neutralized before it
-              // touches Mongo (no tags/structure survives; ruling #9).
-              geo: {
-                locations: outcome.verdict.geo.locations.map((l) => neutralizePromptLine(l, 80)).filter(Boolean),
-                workMode: outcome.verdict.geo.workMode,
-              },
-              verdictInputHash: outcome.inputHash,
-              epoch: outcome.epoch,
-              model: outcome.model,
-              promptVersion: PROMPT_VERSION,
-              inputTokens: outcome.inputTokens,
-              outputTokens: outcome.outputTokens,
-              costUsd: outcome.costUsd,
-              ranAt: new Date(),
-              attempts: (doc.llmVerdict?.attempts ?? 0) + 1,
-              disagreesWithRules: rec.disagreesWithRules,
-            },
-          }
-          let unset: Record<string, 1> | undefined
-          if (softClose) {
-            set.status = 'closed'
-            set.closedReason = 'llm-verdict'
-            set.closedAt = new Date()
-            // Verdict tombstones are permanent anti-resurrection identity;
-            // no stale lifecycle TTL may delete them.
-            unset = { purgeAt: 1 }
-          } else if (cfg.enforceEnabled && doc.status === 'closed' && doc.closedReason === 'llm-verdict' && !rec.wouldSoftClose) {
-            // §4.3: a changed body re-verdicts AND MAY REOPEN — the new
-            // verdict cleared the fraud bar, so the tombstone returns to
-            // the open pool.
-            set.status = 'open'
-            unset = { closedReason: 1, closedAt: 1, purgeAt: 1 }
-          }
-          // Freshness guard (Codex on #515): a sync merge landing between
-          // our read and this write resets the verdict to pending — an
-          // unguarded write would stomp that with a verdict for the OLD
-          // inputs, and the sweeper never revisits scored rows. updatedAt
-          // is the save-bumped dirty token; no match = leave the merge's
-          // pending state standing (sweeper re-picks it).
-          const lifecycleFilter = doc.status === 'open'
-            ? { status: 'open' }
-            : { status: 'closed', closedReason: doc.closedReason }
-          let res = await JobPosting.updateOne(
-            { _id: doc._id, updatedAt: doc.updatedAt, ...lifecycleFilter },
-            unset ? { $set: set, $unset: unset } : { $set: set }
-          )
-          // Safety verdicts outrank normal expiry/delisting. If a normal
-          // archive won the race after our read, re-read its exact inputs and
-          // upgrade it only when the model scored the same content. The
-          // second updatedAt CAS prevents a later source merge or
-          // source-revoked close from being overwritten.
-          if ((res?.matchedCount ?? 1) === 0 && softClose) {
-            const latest = await JobPosting.findById(doc._id).lean()
-            if (latest && jobPostingStateOf(latest) === 'archived') {
-              const latestApplyHosts = Array.from(new Set(
-                (latest.provenance ?? []).map((e) => (e.applyUrl ? hostOf(e.applyUrl) : '')).filter(Boolean)
-              )).sort()
-              const latestInputHash = verdictInputHash({
-                companyKey: latest.companyKey,
-                titleKey: latest.titleKey,
-                locationKey: latest.locationKeys?.[0] ?? '',
-                normalizedBody: stripRecruiterPii(sliceBody(jdBodyOf(latest))),
-                applyHosts: latestApplyHosts,
-                salaryText: latest.salaryText ?? null,
-                epochModel,
-              })
-              if (latestInputHash === outcome.inputHash) {
-                res = await JobPosting.updateOne(
-                  {
-                    _id: latest._id,
-                    updatedAt: latest.updatedAt,
-                    status: 'closed',
-                    closedReason: latest.closedReason,
-                  },
-                  unset ? { $set: set, $unset: unset } : { $set: set },
-                )
+          const candidateSoftClose = cfg.enforceEnabled && rec.wouldSoftClose
+          const candidateReopen = cfg.enforceEnabled && doc.status === 'closed' &&
+            doc.closedReason === 'llm-verdict' && !rec.wouldSoftClose
+          const persist = async (session?: ClientSession) => {
+            let softClose = candidateSoftClose
+            let reopen = candidateReopen
+            let decisionConfigRevision = cfg.revision
+            let sourceRevisions: Array<{ sourceId: string; controlRevision: number; operationalRevision: number }> = []
+            if (candidateSoftClose || candidateReopen) {
+              if (!session) throw new Error('verdict lifecycle decisions require a quality-decision transaction')
+              const currentConfig = await getJobsVerdictConfigSnapshot(session)
+              if (!currentConfig.collectionEnabled) {
+                return { matched: false, softClose: false, authorityChanged: false, configChanged: true }
+              }
+              if (currentConfig.enforceEnabled && currentConfig.revision !== cfg.revision) {
+                // The model call, pricing, and budget authorization used cfg.
+                // Do not attribute a serving mutation to a later revision;
+                // leave the posting pending so the next run evaluates under
+                // one reproducible config snapshot end to end.
+                return { matched: false, softClose: false, authorityChanged: false, configChanged: true }
+              }
+              decisionConfigRevision = currentConfig.revision
+              if (!currentConfig.enforceEnabled) {
+                softClose = false
+                reopen = false
+              } else if (!(await fenceJobsVerdictConfigRevision(currentConfig.revision, session))) {
+                // A legacy/non-canonical row or a concurrent CMS transition
+                // cannot authorize serving changes. Keep the paid score only.
+                softClose = false
+                reopen = false
+              }
+              if (softClose || reopen) {
+                const authorityRows = await JobSourceConfig.find(
+                  { sourceId: { $in: sources } },
+                  null,
+                  { session },
+                ).select('sourceId health llmVerdictOptOut controlRevision operationalRevision').lean()
+                const bySource = new Map(authorityRows.map((source) => [source.sourceId, source]))
+                if (!sources.every((sourceId) => {
+                  const source = bySource.get(sourceId)
+                  return !!source && source.health !== 'revoked' && !source.llmVerdictOptOut
+                })) return { matched: false, softClose: false, authorityChanged: true }
+                sourceRevisions = sources.map((sourceId) => {
+                  const source = bySource.get(sourceId)!
+                  return {
+                    sourceId,
+                    controlRevision: controlRevisionOf(source),
+                    operationalRevision: operationalRevisionOf(source),
+                  }
+                })
+                await fenceQualityDecisionSources(sourceRevisions, session, {
+                  requireVerdictEligibility: true,
+                })
+                if (softClose) {
+                  softClose = !(await hasRestoredQualityDecision({
+                    domain: 'llm-verdict',
+                    action: 'close',
+                    subjectKey: String(doc._id),
+                    postingId: doc._id,
+                    inputHash: outcome.inputHash,
+                    policyRevision: VERDICT_DECISION_POLICY_REVISION,
+                    configRevision: decisionConfigRevision,
+                    sourceRevisions,
+                  }, session))
+                }
               }
             }
+
+            const scoredAt = new Date()
+            const set: Record<string, unknown> = {
+              llmVerdict: {
+                status: 'scored',
+                verdict: outcome.verdict.verdict,
+                reasonCodes: outcome.verdict.reasonCodes,
+                genuineness: outcome.verdict.genuineness,
+                quality: outcome.verdict.quality,
+                completeness: outcome.verdict.completeness,
+                domain: outcome.verdict.domain,
+                domainConfidence: outcome.verdict.domainConfidence,
+                seniority: outcome.verdict.seniority,
+                fresherFriendly: outcome.verdict.fresherFriendly,
+                geo: {
+                  locations: outcome.verdict.geo.locations.map((l) => neutralizePromptLine(l, 80)).filter(Boolean),
+                  workMode: outcome.verdict.geo.workMode,
+                },
+                verdictInputHash: outcome.inputHash,
+                epoch: outcome.epoch,
+                model: outcome.model,
+                promptVersion: PROMPT_VERSION,
+                inputTokens: outcome.inputTokens,
+                outputTokens: outcome.outputTokens,
+                costUsd: outcome.costUsd,
+                ranAt: scoredAt,
+                attempts: (doc.llmVerdict?.attempts ?? 0) + 1,
+                disagreesWithRules: rec.disagreesWithRules,
+              },
+            }
+            let unset: Record<string, 1> | undefined
+            if (softClose) {
+              set.status = 'closed'
+              set.closedReason = 'llm-verdict'
+              set.closedAt = scoredAt
+              unset = { purgeAt: 1 }
+            } else if (reopen) {
+              set.status = 'open'
+              unset = { closedReason: 1, closedAt: 1, purgeAt: 1 }
+            }
+            const lifecycleFilter = doc.status === 'open'
+              ? { status: 'open' }
+              : { status: 'closed', closedReason: doc.closedReason }
+            const writeOptions = session ? { session } : undefined
+            let res = await JobPosting.updateOne(
+              { _id: doc._id, updatedAt: doc.updatedAt, ...lifecycleFilter },
+              unset ? { $set: set, $unset: unset } : { $set: set },
+              writeOptions,
+            )
+            if ((res?.matchedCount ?? 1) === 0 && softClose) {
+              let latestQuery = JobPosting.findById(doc._id)
+              if (session) latestQuery = latestQuery.session(session)
+              const latest = await latestQuery.lean()
+              if (latest && jobPostingStateOf(latest) === 'archived') {
+                const latestApplyHosts = Array.from(new Set(
+                  (latest.provenance ?? []).map((e) => (e.applyUrl ? hostOf(e.applyUrl) : '')).filter(Boolean)
+                )).sort()
+                const latestInputHash = verdictInputHash({
+                  companyKey: latest.companyKey,
+                  titleKey: latest.titleKey,
+                  locationKey: latest.locationKeys?.[0] ?? '',
+                  normalizedBody: stripRecruiterPii(sliceBody(jdBodyOf(latest))),
+                  applyHosts: latestApplyHosts,
+                  salaryText: latest.salaryText ?? null,
+                  epochModel,
+                })
+                if (latestInputHash === outcome.inputHash) {
+                  res = await JobPosting.updateOne(
+                    {
+                      _id: latest._id,
+                      updatedAt: latest.updatedAt,
+                      status: 'closed',
+                      closedReason: latest.closedReason,
+                    },
+                    unset ? { $set: set, $unset: unset } : { $set: set },
+                    writeOptions,
+                  )
+                }
+              }
+            }
+            if ((res?.matchedCount ?? 1) === 0) {
+              return { matched: false, softClose, authorityChanged: false }
+            }
+            if (softClose || reopen) {
+              await recordAutomaticQualityDecision({
+                domain: 'llm-verdict',
+                action: softClose ? 'close' : 'reopen',
+                subjectKey: String(doc._id),
+                postingId: doc._id,
+                inputHash: outcome.inputHash,
+                policyRevision: VERDICT_DECISION_POLICY_REVISION,
+                configRevision: decisionConfigRevision,
+                sourceRevisions,
+                occurredAt: scoredAt,
+                evidence: {
+                  kind: 'llm-verdict',
+                  verdict: outcome.verdict.verdict,
+                  reasonCodes: outcome.verdict.reasonCodes,
+                  genuineness: outcome.verdict.genuineness,
+                  model: outcome.model,
+                  promptVersion: PROMPT_VERSION,
+                  epoch: outcome.epoch,
+                },
+              }, session)
+            }
+            return { matched: true, softClose, authorityChanged: false, configChanged: false }
           }
-          if ((res?.matchedCount ?? 1) === 0) {
+          const persisted = candidateSoftClose || candidateReopen
+            ? await withQualityDecisionTransaction((session) => persist(session))
+            : await persist()
+          if (persisted.authorityChanged) {
+            c.skips['authority-changed'] = (c.skips['authority-changed'] ?? 0) + 1
+            continue
+          }
+          if (persisted.configChanged) {
+            c.skips['config-changed'] = (c.skips['config-changed'] ?? 0) + 1
+            continue
+          }
+          if (!persisted.matched) {
             c.skips['superseded'] = (c.skips['superseded'] ?? 0) + 1
             continue // superseded mid-flight — not scored
           }
@@ -389,7 +495,7 @@ export async function runEvaluatePostingsHandler(
           src[outcome.verdict.verdict] = (src[outcome.verdict.verdict] ?? 0) + 1
           if (rec.llmFlaggedCleanRow) c.llmFlaggedCleanRow++
           if (rec.llmClearedFlaggedRow) c.llmClearedFlaggedRow++
-          if (softClose) c.softClosed++
+          if (persisted.softClose) c.softClosed++
           c.inputTokens += outcome.inputTokens
           c.outputTokens += outcome.outputTokens
           c.costUsd += outcome.costUsd
@@ -501,10 +607,23 @@ export async function runVerdictSweeperHandler(
   }
   const limit = Math.max(1, Math.floor((opts.limit ?? SWEEP_LIMIT_DEFAULT) / (gate.softening ? 2 : 1)))
 
-  // Opted-out sources are excluded IN THE QUERY — a pending row the worker
-  // refuses to evaluate would otherwise pin the oldest-first window and
-  // starve every other source (adversarial review of Wave 2.3).
-  const optedOut = (await JobSourceConfig.find({ llmVerdictOptOut: true }).select('sourceId').lean()).map((s) => s.sourceId)
+  // Derive one complete authority allow-set for every sweeper lane. Paused
+  // sources stay eligible; only missing, revoked, or explicit LLM opt-out
+  // lineage is excluded. Checking the entire durable sourceIds set in Mongo
+  // prevents permanently unauthorized rows from pinning a bounded window.
+  const sourceAuthority = await JobSourceConfig.find({})
+    .select('sourceId health llmVerdictOptOut')
+    .lean()
+  const optedOut = Array.from(new Set(
+    sourceAuthority
+      .filter((source) => source.llmVerdictOptOut)
+      .map((source) => source.sourceId)
+  )).sort()
+  const eligibleSourceIds = Array.from(new Set(
+    sourceAuthority
+      .filter((source) => source.health !== 'revoked' && !source.llmVerdictOptOut)
+      .map((source) => source.sourceId)
+  )).sort()
   const currentEpoch = epochOf(await resolveExpectedVerdictModel())
 
   const ids = await step.run('find-due', async () => {
@@ -535,6 +654,14 @@ export async function runVerdictSweeperHandler(
       // explicit opt-out, otherwise skipped legacy rows pin the bounded window.
       { 'sourceIds.0': { $exists: true } },
       { sourceIds: { $nin: [JOB_SOURCE_LINEAGE_UNKNOWN, ...optedOut] } },
+      {
+        $expr: {
+          $setIsSubset: [
+            { $cond: [{ $isArray: '$sourceIds' }, '$sourceIds', []] },
+            eligibleSourceIds,
+          ],
+        },
+      },
       ...(optedOut.length
         ? [
             // Defense in depth for a partially repaired row. The lineage
@@ -561,7 +688,7 @@ export async function runVerdictSweeperHandler(
       .limit(limit)
       .select('_id')
       .lean()
-    const due = rows.map((r) => String(r._id))
+    const due = rows.map((row) => String(row._id))
     // Epoch-cutover backfill (§4.5 'rolling, budget-capped re-classification';
     // Codex on #515): scored rows from a stale epoch re-enter ONLY with the
     // limit left over after live pending work, so cutover rolls through the

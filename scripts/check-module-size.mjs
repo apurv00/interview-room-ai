@@ -126,7 +126,12 @@ const BUDGETS = {
   // shared DNS-pinned, response-capped provider transport. 156 actual +1
   // headroom keeps the tripwire tight.
   // See docs/adr/0021-shared-budget-bump-jobs-operations-audit.md.
-  'shared':            { maxLOC: 25_000, maxFiles: 157 },
+  // Bumped maxFiles 157 → 160 on 2026-07-23 (Jobs audit A09 completion):
+  // adds TWO permanent, separately indexed governance records — versioned
+  // verdict-config history and automatic quality decisions/reviews — plus one
+  // pure client-safe limits contract shared across CMS, services, and models.
+  // Actual is 160 with no file-count headroom. See ADR 0026.
+  'shared':            { maxLOC: 25_000, maxFiles: 160 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   // Bumped maxLOC 14,000 → 16,000 on 2026-07-22 for the bounded A08
@@ -141,7 +146,11 @@ const BUDGETS = {
   // Bumped maxLOC 19,000 → 20,000 and maxFiles 73 → 75 on 2026-07-22
   // for A14's exact evidence-attribution provenance and rollout verification.
   // See docs/adr/0025-jobs-budget-evidence-provenance.md.
-  'modules/jobs':      { maxLOC: 20_000, maxFiles: 75 },
+  // Bumped maxLOC 20,000 → 22,000 and maxFiles 75 → 77 on 2026-07-23 for
+  // A09's revisioned config controller and transaction-bound quality-decision
+  // ledger. Actual is ~21.3k/76 after removing generic policy/replay
+  // plumbing. See docs/adr/0026-jobs-budget-verdict-governance.md.
+  'modules/jobs':      { maxLOC: 22_000, maxFiles: 77 },
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx'])

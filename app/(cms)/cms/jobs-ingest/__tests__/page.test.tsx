@@ -3,6 +3,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import JobsIngestPage from '../page'
 import type { JobsOperationsPayload, SourceRow, SourceWindowMetrics } from '../types'
 
+// This suite owns the source-operations fetch contract. The governance panel
+// has focused tests of its own and must not consume this suite's ordered mocks.
+vi.mock('../VerdictGovernancePanel', () => ({
+  VerdictGovernancePanel: () => <section aria-label="Verdict governance test boundary" />,
+}))
+
 const OPERATION_ID = '550e8400-e29b-41d4-a716-446655440000'
 const NEXT_OPERATION_ID = '18f6c3ec-5d75-4e76-9f7a-122d8466f4f4'
 const EMPTY_METRICS: SourceWindowMetrics = {

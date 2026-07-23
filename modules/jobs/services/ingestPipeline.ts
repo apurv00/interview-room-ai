@@ -2,7 +2,7 @@ import { gzipSync, gunzipSync } from 'zlib'
 import crypto from 'crypto'
 import type { ClientSession } from 'mongoose'
 import { JOB_SOURCE_LINEAGE_UNKNOWN, JobPosting, type IJobPosting } from '@shared/db/models'
-import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, displayJdBody, bodyHashOf, validThroughDate } from './qualityGate'
+import { classifyJob, isBlockedApplyUrl, classifyApplyUrl, normalizeJdBody, displayJdBody, bodyHashOf, hostOf, validThroughDate } from './qualityGate'
 import { companyKey, titleKey, titleTokens, locationKey, fingerprintOf, sourceKeyOf, isConfidentialCompany, titleJaccard, FUZZY_MERGE_JACCARD } from './identityResolver'
 import type { NormalizedJob } from '../adapters/types'
 import {
@@ -10,6 +10,11 @@ import {
   groupApplyLinkSubjects,
   withReplicatedLinkGovernance,
 } from './linkGovernance'
+import {
+  hasRestoredQualityDecision,
+  recordAutomaticQualityDecision,
+  type HardDropQualityDecisionIdentity,
+} from './qualityDecisionService'
 
 /**
  * Ingest pipeline — CLASSIFY → IDENTITY → STORE for one batch of normalized
@@ -38,7 +43,8 @@ export interface IngestCounters {
   refreshed: number
   fuzzyMerged: number
   saltedInserts: number
-  /** Rows that failed at the store layer — isolated, never batch-aborting. */
+  /** Canonical-store validation failures. Hard-drop ledger failures abort the
+   * source transaction so a rejected row can never become unreviewable. */
   storeErrors: number
 }
 
@@ -56,12 +62,61 @@ export interface RepostCounterDeps {
   /** A02 source-authority transaction. When present, every canonical lookup
    *  and write in this batch participates in the config-row write fence. */
   session?: ClientSession
+  /** Exact source-authority epochs captured by the source write fence. They
+   * bind hard-drop evidence and any reviewed override to the authority that
+   * produced the rejected row. */
+  sourceControlRevision?: number
+  sourceOperationalRevision?: number
 }
 
 const PROVENANCE_CAP = 8
+const QUALITY_GATE_POLICY_REVISION = 'jobs-quality-gate:v1'
+
+function hardDropDecisionIdentity(
+  job: NormalizedJob,
+  reasons: string[],
+  sourceId: string,
+  sourceControlRevision: number,
+  sourceOperationalRevision: number,
+): HardDropQualityDecisionIdentity {
+  const applyHosts = Array.from(new Set(
+    job.applyOptions.map((option) => hostOf(option.url)).filter(Boolean),
+  )).sort()
+  const stableSubject = {
+    companyKey: companyKey(job.company),
+    titleKey: titleKey(job.title),
+    locationKey: locationKey(job.city, job.isRemote),
+    applyHosts,
+  }
+  const canonicalInput = {
+    ...stableSubject,
+    reasons: Array.from(new Set(reasons)).sort(),
+    normalizedBody: normalizeJdBody(job.description).toLowerCase(),
+  }
+  const inputHash = crypto.createHash('sha256').update(JSON.stringify(canonicalInput)).digest('hex')
+  const rowSubject = `content:${crypto.createHash('sha256').update(JSON.stringify(stableSubject)).digest('hex')}`
+  return {
+    domain: 'hard-drop',
+    action: 'drop',
+    subjectKey: `${sourceId}:${rowSubject}`,
+    inputHash,
+    policyRevision: QUALITY_GATE_POLICY_REVISION,
+    sourceRevisions: [{
+      sourceId,
+      controlRevision: sourceControlRevision,
+      operationalRevision: sourceOperationalRevision,
+    }],
+  }
+}
 
 function repostLookupKey(bodyHash: string, companyKeyStr: string): string {
   return `${bodyHash}:${companyKeyStr}`
+}
+
+function boundedRepostCompanyCount(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 1_000_000
+    ? value as number
+    : null
 }
 
 /** Resolve repost counts outside Mongo transactions. Results (including
@@ -524,25 +579,64 @@ export async function ingestBatch(
     // Run-level mass-repost (fail-open on Redis absence/errors).
     const effectiveFlags: string[] = [...flags]
     let massRepost = false
+    let massRepostCompanyCount: number | undefined
     const bh = bodyHashOf(job.description)
     if (bh && (deps.repostCounts || deps.registerRepost)) {
       const cKey = companyKey(job.company)
       const lookupKey = repostLookupKey(bh, cKey)
-      const distinctCompanies = deps.repostCounts?.has(lookupKey)
+      const rawDistinctCompanies = deps.repostCounts?.has(lookupKey)
         ? deps.repostCounts.get(lookupKey) ?? null
         : deps.registerRepost
           ? await deps.registerRepost(bh, cKey).catch(() => null)
           : null
+      const distinctCompanies = boundedRepostCompanyCount(rawDistinctCompanies)
       if (distinctCompanies !== null) {
+        massRepostCompanyCount = distinctCompanies
         if (distinctCompanies > 3) massRepost = true
         else if (distinctCompanies >= 2) effectiveFlags.push('repost')
       }
     }
 
     if (drops.length || massRepost) {
-      for (const d of drops) bump(counters.drops, d)
-      if (massRepost) bump(counters.drops, 'mass-repost')
-      continue // hard drops are never stored (§4.5 floor)
+      const reasons = [...drops, ...(massRepost ? ['mass-repost'] : [])]
+      let restored = false
+      if (deps.session) {
+        if (
+          !Number.isSafeInteger(deps.sourceControlRevision) ||
+          (deps.sourceControlRevision as number) < 0 ||
+          !Number.isSafeInteger(deps.sourceOperationalRevision) ||
+          (deps.sourceOperationalRevision as number) < 0
+        ) throw new Error('hard-drop evidence requires exact source authority revisions')
+        const identity = hardDropDecisionIdentity(
+            job,
+            reasons,
+            sourceId,
+          deps.sourceControlRevision as number,
+          deps.sourceOperationalRevision as number,
+        )
+        restored = await hasRestoredQualityDecision(identity, deps.session)
+        if (!restored) {
+          await recordAutomaticQualityDecision({
+            ...identity,
+            occurredAt: now,
+            evidence: {
+              kind: 'hard-drop',
+              reasonCodes: reasons,
+              bodyLength: jdLen,
+              applyHosts: Array.from(new Set(job.applyOptions.map((option) => hostOf(option.url)).filter(Boolean))).sort(),
+              ...(massRepostCompanyCount === undefined ? {} : { massRepostCompanyCount }),
+            },
+            reviewOverlay: job,
+          }, deps.session)
+        }
+      }
+      if (!restored) {
+        for (const d of drops) bump(counters.drops, d)
+        if (massRepost) bump(counters.drops, 'mass-repost')
+        continue
+      }
+      // A reviewed override is exact-input + exact-source-revision only.
+      // Changed content or authority creates a new decision and drops again.
     }
     for (const f of effectiveFlags) bump(counters.flagged, f)
 

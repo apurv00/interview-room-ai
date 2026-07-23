@@ -880,6 +880,113 @@ not fail the gate. Preserve all three outputs with rollout evidence, repeat the
 same sequence in production, and keep readiness surfaces dark regardless—the
 founder-approved calibration and AI-data-disclosure gates remain separate.
 
+## A09 verdict-governance activation
+
+The verdict-config audit and quality-decision collections are permanent. They
+require a Mongo replica set because config changes, lifecycle decisions, and
+human restoration use multi-document transactions. Do not activate this path
+against a standalone `mongod`.
+
+Before deploying a commit that contains A09, pause Jobs ingestion, verdict, and
+link-check dispatch for the target environment. From that same commit and
+against the exact target database, run:
+
+```text
+npm run prepare:jobs-verdict-governance-indexes
+npm run prepare:jobs-verdict-governance-indexes -- --apply
+npm run check:jobs-verdict-governance-indexes
+```
+
+The first command is read-only and prints the intended five-index plan. Apply
+uses only named `createIndex` calls; it never drops or synchronizes indexes.
+Check requires the exact unique decision, review-operation, review-queue,
+review-history, and config-revision index shapes and rejects TTL on either
+permanent collection. Preserve apply/check output as release evidence before
+resuming workers.
+
+Inspect `jobsverdictconfigs` before the first CMS write. Zero rows means safe
+defaults. One legacy row is readable; the first revisioned CMS save atomically
+adopts its complete values into the fixed singleton, records the audit, and
+removes that exact legacy row. This also keeps a code rollback from selecting a
+stale singleton. If more than one legacy row exists, or a fixed singleton and
+any legacy row coexist, activation is blocked: do not delete a row or let an
+operator choose implicitly. Compare the complete rows, record the chosen
+state/reason, and consolidate under a separately reviewed data-migration
+operation before retrying. Once the fixed singleton exists, it must be the
+only row.
+
+In `/cms/jobs-ingest`, verify collection, fraud restriction, and ranking are
+separately visible. Collection is a hard prerequisite for fraud restriction:
+the service rejects an enforce-on, collection-off configuration. Ranking must
+remain Off until the post-GA calibration decision. Turning fraud enforcement
+off prevents new serving mutations; it does not reopen prior closures. Turning
+it back on applies only to newly evaluated or changed inputs; historical
+shadow scores are not automatically replayed into serving mutations. A
+historical reconciliation requires a separately reviewed, bounded migration.
+Config rollback creates a new revision and likewise does not undo spend or
+lifecycle effects.
+
+Before resuming any A09 lifecycle writer, verify that no retained posting has
+more than 128 unique durable source lineages across `sourceIds` and
+`provenance.sourceId`. The decision evidence contract cannot represent a larger
+source-revision snapshot. Run this read-only check against the exact staging
+database and repeat it against production; any returned row blocks activation
+and requires a reviewed lineage repair or an explicit bound change:
+
+```javascript
+db.jobpostings.aggregate([
+  {
+    $project: {
+      lineageShapeValid: {
+        $and: [{ $isArray: '$sourceIds' }, { $isArray: '$provenance' }]
+      },
+      decisionSourceCount: {
+        $size: {
+          $setUnion: [
+            { $cond: [{ $isArray: '$sourceIds' }, '$sourceIds', []] },
+            { $cond: [{ $isArray: '$provenance' }, '$provenance.sourceId', []] }
+          ]
+        }
+      }
+    }
+  },
+  {
+    $match: {
+      $or: [
+        { lineageShapeValid: false },
+        { decisionSourceCount: { $gt: 128 } }
+      ]
+    }
+  },
+  { $limit: 1 }
+])
+```
+
+The governed numeric limits are:
+
+- daily verdicts `0–25,000`, per-company `0–1,000`, and per-source `0–25,000`;
+- daily spend `$0–$100` and monthly spend `$0–$3,100`;
+- input and output token prices `$0.01–$100` per million tokens.
+
+When the daily verdict cap is nonzero, company and source caps must not exceed
+it. When the daily budget is nonzero, it must not exceed the monthly budget.
+Zero call/spend caps deliberately make that limit dormant; token prices can
+never be zero. Values outside this contract require a reviewed code change,
+not a direct database edit.
+
+The CMS request, config service, canonical record, and audit states enforce the
+same contract, including rollback targets. Workers fail safe to the complete
+Off/default snapshot if a manual or legacy row violates it. Governed reads
+instead return `VERDICT_CONFIG_REPAIR_REQUIRED`; repair the persisted row under
+a separately reviewed migration and retain the before/after evidence. Do not
+clamp or silently reinterpret historical values.
+
+Review restoration is domain-specific: an exact LLM closure reopens inside the
+review transaction; an exact hard drop is admitted only if the same input and
+source revisions appear on a later authorized sync; a link decision schedules
+machine verification and never reopens directly from CMS. Revoke or revision
+drift returns a conflict and commits neither the restoration nor its review.
+
 ## Propagation and external-system boundary
 
 Evaluator, X-ray, and ATS paths re-read exact primary authority before every

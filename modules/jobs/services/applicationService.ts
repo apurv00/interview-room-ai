@@ -1,6 +1,14 @@
+import { createHash } from 'crypto'
 import { gunzipSync } from 'zlib'
 import { isValidObjectId, type ClientSession } from 'mongoose'
-import { JobApplication, JobPosting, InterviewSession, User } from '@shared/db/models'
+import {
+  JOB_SOURCE_LINEAGE_UNKNOWN,
+  JobApplication,
+  JobPosting,
+  JobSourceConfig,
+  InterviewSession,
+  User,
+} from '@shared/db/models'
 import { logger } from '@shared/logger'
 import { inngest } from '@shared/services/inngest'
 import { getShortFormMinAnswers } from '@interview'
@@ -25,6 +33,7 @@ import {
 import type { ApplyTier } from '../config/spamRules'
 import {
   APPLY_OPEN_ATTEMPT_TTL_MS,
+  BROKEN_LINK_CROWD_QUORUM,
   BROKEN_LINK_REPORT_WINDOW_MS,
   linkDispositionOf,
   nextCrowdReportGovernance,
@@ -32,6 +41,11 @@ import {
   withReplicatedLinkGovernance,
   type BrokenLinkDisposition,
 } from './linkGovernance'
+import { controlRevisionOf, operationalRevisionOf } from './sourceControl'
+import {
+  fenceQualityDecisionSources,
+  recordAutomaticQualityDecision,
+} from './qualityDecisionService'
 
 /**
  * Application state transitions (PRODUCT_FLOW §2). `apply_clicked` is a
@@ -84,6 +98,7 @@ class ApplyOptionTransactionRaceError extends Error {}
 const MAX_TRACKED_APPLY_OPTIONS = 16
 const MAX_APPLY_OPEN_ATTEMPTS = 16
 const MAX_BROKEN_LINK_REPORTS = 16
+const CROWD_LINK_POLICY_REVISION = `jobs-link-crowd:${BROKEN_LINK_CROWD_QUORUM}:${BROKEN_LINK_REPORT_WINDOW_MS}:v1`
 
 function boundedClickedOptionIds(
   existing: readonly string[] | null | undefined,
@@ -604,7 +619,7 @@ async function reportBrokenLinkAttempt(
 ): Promise<BrokenLinkResult> {
   return runApplicationTransaction(userId, async (session) => {
     const posting = await JobPosting.findById(jobPostingId, undefined, { session })
-      .select('provenance status closedReason linkCheckRequestedAt')
+      .select('sourceIds provenance status closedReason linkCheckRequestedAt')
       .lean()
     // Archived links are historical context, not mutable crowd authority.
     if (!posting || jobPostingStateOf(posting) !== 'live') return { ok: false }
@@ -657,6 +672,36 @@ async function reportBrokenLinkAttempt(
 
     const nextGovernance = nextCrowdReportGovernance(governance, now)
     const disposition = linkDispositionOf(nextGovernance)
+    const crowdDemotedNow = !governance.crowdDemotedAt && !!nextGovernance.crowdDemotedAt
+    let sourceRevisions: Array<{ sourceId: string; controlRevision: number; operationalRevision: number }> = []
+    if (crowdDemotedNow) {
+      const sourceIds = Array.from(new Set([
+        ...(posting.sourceIds ?? []),
+        ...posting.provenance.map((entry) => entry.sourceId),
+      ]))
+      if (sourceIds.length === 0 || sourceIds.includes(JOB_SOURCE_LINEAGE_UNKNOWN)) {
+        throw new ApplyOptionTransactionRaceError('posting source authority is unavailable')
+      }
+      const currentSources = await JobSourceConfig.find(
+        { sourceId: { $in: sourceIds } },
+        null,
+        { session },
+      ).select('sourceId health controlRevision operationalRevision').lean()
+      const sourceById = new Map(currentSources.map((source) => [source.sourceId, source]))
+      if (!sourceIds.every((sourceId) => {
+        const source = sourceById.get(sourceId)
+        return !!source && source.health !== 'revoked'
+      })) throw new ApplyOptionTransactionRaceError('posting source authority changed')
+      sourceRevisions = sourceIds.map((sourceId) => {
+        const source = sourceById.get(sourceId)!
+        return {
+          sourceId,
+          controlRevision: controlRevisionOf(source),
+          operationalRevision: operationalRevisionOf(source),
+        }
+      })
+      await fenceQualityDecisionSources(sourceRevisions, session)
+    }
     const report = {
       optionId,
       url: option.url,
@@ -738,6 +783,31 @@ async function reportBrokenLinkAttempt(
       // The application write must roll back with the posting write. This is
       // the one global crowd-healing edge, so compensation is not sufficient.
       throw new ApplyOptionTransactionRaceError('posting option changed')
+    }
+
+    if (crowdDemotedNow) {
+      await recordAutomaticQualityDecision({
+        domain: 'apply-link',
+        action: 'demote',
+        subjectKey: `${jobPostingId}:${option.subject}:${option.generation}:${option.incidentVersion}`,
+        postingId: jobPostingId,
+        serviceActor: 'jobs-link-quorum',
+        inputHash: createHash('sha256').update(JSON.stringify({
+          subject: option.subject,
+          generation: option.generation,
+          incidentVersion: option.incidentVersion,
+        })).digest('hex'),
+        policyRevision: CROWD_LINK_POLICY_REVISION,
+        sourceRevisions,
+        occurredAt: now,
+        evidence: {
+          kind: 'apply-link',
+          basis: 'crowd',
+          generation: option.generation,
+          reportCount: nextGovernance.reportCount,
+          quorum: BROKEN_LINK_CROWD_QUORUM,
+        },
+      }, session)
     }
 
     return {
