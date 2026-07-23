@@ -9,6 +9,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
 
   return [
     { url: siteConfig.url, lastModified: new Date(), changeFrequency: 'weekly', priority: 1.0 },
+    { url: `${siteConfig.url}/jobs`, changeFrequency: 'hourly', priority: 0.9 },
     { url: `${siteConfig.url}/pricing`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.8 },
     { url: `${siteConfig.url}/learn/guides`, lastModified: new Date(), changeFrequency: 'weekly', priority: 0.8 },
     ...pillarSlugs.map((slug) => ({
