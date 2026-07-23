@@ -9,6 +9,8 @@ const {
   mockGetActiveCatalog,
   mockAppExists,
   mockIsJobsAccountActive,
+  mockRedisSet,
+  mockRedisEval,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockPostingExists: vi.fn(),
@@ -17,17 +19,25 @@ const {
   mockGetActiveCatalog: vi.fn(),
   mockAppExists: vi.fn(),
   mockIsJobsAccountActive: vi.fn(),
+  mockRedisSet: vi.fn(),
+  mockRedisEval: vi.fn(),
 }))
 vi.mock('@shared/db/models', () => ({
   JobPosting: { findById: mockFindById, exists: mockPostingExists, updateOne: mockUpdateOne },
   JobApplication: { exists: mockAppExists },
 }))
-vi.mock('@interview', () => ({ parseJobDescription: mockParse }))
-vi.mock('@interview/services/persona/domainCatalogService', () => ({
+vi.mock('@interview', () => ({
+  parseJobDescription: mockParse,
   getActiveInterviewDomainCatalog: mockGetActiveCatalog,
 }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
   isJobsAccountActive: mockIsJobsAccountActive,
+}))
+vi.mock('@shared/redis', () => ({
+  redis: { set: mockRedisSet, eval: mockRedisEval },
+}))
+vi.mock('@shared/logger', () => ({
+  logger: { warn: vi.fn() },
 }))
 
 import { getOrParseXray, xrayHashOf } from '../services/xrayService'
@@ -58,6 +68,8 @@ function reset() {
     mockGetActiveCatalog,
     mockAppExists,
     mockIsJobsAccountActive,
+    mockRedisSet,
+    mockRedisEval,
   ]) m.mockReset()
   mockPostingExists.mockResolvedValue({ _id: 'j1' })
   mockUpdateOne.mockResolvedValue({ modifiedCount: 1 })
@@ -65,6 +77,8 @@ function reset() {
   mockGetActiveCatalog.mockResolvedValue(ACTIVE_CATALOG)
   mockAppExists.mockResolvedValue(null)
   mockIsJobsAccountActive.mockResolvedValue(true)
+  mockRedisSet.mockResolvedValue('OK')
+  mockRedisEval.mockResolvedValue(1)
 }
 
 describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
@@ -92,6 +106,140 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     expect(update.$set.parsedJD.rawText).toBeUndefined()
     expect(update.$set.parsedJDHash).toBe(xrayHashOf(JD))
     expect(update.$set.parsedJDRoleVersion).toBe(ACTIVE_CATALOG.revision)
+  })
+
+  it('rechecks the cache snapshot after lock acquisition and never parses a winner written in the gap', async () => {
+    reset()
+    const compressed = gzipSync(Buffer.from(JD))
+    mockFindById
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1',
+          status: 'open',
+          jdCompressed: compressed,
+          parsedJD: null,
+          parsedJDHash: xrayHashOf(JD),
+          parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+        }) }),
+      })
+      .mockReturnValueOnce({
+        select: () => ({ lean: () => Promise.resolve({
+          _id: 'j1',
+          status: 'open',
+          jdCompressed: compressed,
+          parsedJD: EXTRACTED,
+          parsedJDHash: xrayHashOf(JD),
+          parsedJDRoleVersion: ACTIVE_CATALOG.revision,
+        }) }),
+      })
+    mockPostingExists
+      .mockResolvedValueOnce({ _id: 'j1' })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ _id: 'j1' })
+
+    expect(await getOrParseXray('j1')).toEqual({ parsed: EXTRACTED, cached: true })
+    expect(mockParse).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('single-flights concurrent cold requests so only one invokes the parser', async () => {
+    reset()
+    vi.useFakeTimers()
+    try {
+      const compressed = gzipSync(Buffer.from(JD))
+      let current = { _id: 'j1', status: 'open', jdCompressed: compressed } as Record<string, unknown>
+      mockFindById.mockImplementation(() => ({
+        select: () => ({ lean: () => Promise.resolve(current) }),
+      }))
+      mockUpdateOne.mockImplementation(async (_filter, update) => {
+        current = { ...current, ...update.$set }
+        return { modifiedCount: 1 }
+      })
+
+      let lockOwner: string | null = null
+      let lockExpiresAt = 0
+      let markContended!: () => void
+      const contended = new Promise<void>((resolve) => { markContended = resolve })
+      mockRedisSet.mockImplementation(async (
+        _key: string,
+        lockValue: string,
+        _px: string,
+        ttlMs: number,
+      ) => {
+        if (lockOwner && lockExpiresAt > Date.now()) {
+          markContended()
+          return null
+        }
+        lockOwner = lockValue
+        lockExpiresAt = Date.now() + ttlMs
+        return 'OK'
+      })
+      mockRedisEval.mockImplementation(async (
+        script: string,
+        _keyCount: number,
+        _lockKey: string,
+        lockValue: string,
+        ttlMs?: number,
+      ) => {
+        if (lockOwner !== lockValue) return 0
+        if (script.includes('pexpire')) {
+          lockExpiresAt = Date.now() + Number(ttlMs)
+          return 1
+        }
+        lockOwner = null
+        lockExpiresAt = 0
+        return 1
+      })
+
+      let markParseStarted!: () => void
+      const parseStarted = new Promise<void>((resolve) => { markParseStarted = resolve })
+      let releaseParse!: (value: typeof PARSED) => void
+      mockParse.mockImplementationOnce(() => {
+        markParseStarted()
+        return new Promise((resolve) => { releaseParse = resolve })
+      })
+
+      const first = getOrParseXray('j1')
+      await parseStarted
+      await vi.advanceTimersByTimeAsync(150_000)
+
+      const second = getOrParseXray('j1')
+      await contended
+      expect(mockParse).toHaveBeenCalledOnce()
+      expect(mockRedisEval.mock.calls.some(([script]) => String(script).includes('pexpire'))).toBe(true)
+
+      releaseParse(PARSED)
+      const firstResult = await first
+      await vi.advanceTimersByTimeAsync(500)
+      const secondResult = await second
+
+      expect(firstResult).toEqual({ parsed: EXTRACTED, cached: false })
+      expect(secondResult).toEqual({ parsed: EXTRACTED, cached: true })
+      expect(mockParse).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('fails closed with a retryable result when Redis cannot enforce single-flight', async () => {
+    reset()
+    chain({ _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) })
+    mockRedisSet.mockRejectedValueOnce(new Error('redis unavailable'))
+
+    expect(await getOrParseXray('j1')).toEqual({
+      parsed: {
+        company: '',
+        role: '',
+        inferredDomain: '',
+        requirements: [],
+        keyThemes: [],
+      },
+      cached: false,
+      retryable: true,
+    })
+    expect(mockParse).not.toHaveBeenCalled()
+    expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockRedisEval).not.toHaveBeenCalled()
   })
 
   it('rechecks the exact live JD after catalog work and blocks parsing after revocation', async () => {
@@ -132,6 +280,22 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     expect(await getOrParseXray('j1')).toBeNull()
     expect(mockParse).toHaveBeenCalledOnce()
     expect(mockUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('releases its own lock before the bounded provider-precondition retry', async () => {
+    reset()
+    chain({ _id: 'j1', status: 'open', jdCompressed: gzipSync(Buffer.from(JD)) })
+    mockParse
+      .mockRejectedValueOnce(Object.assign(
+        new Error('transient provider precondition'),
+        { name: 'ModelProviderPreconditionError' },
+      ))
+      .mockResolvedValueOnce(PARSED)
+
+    expect(await getOrParseXray('j1')).toEqual({ parsed: EXTRACTED, cached: false })
+    expect(mockParse).toHaveBeenCalledTimes(2)
+    expect(mockRedisSet).toHaveBeenCalledTimes(2)
+    expect(mockRedisEval).toHaveBeenCalledTimes(2)
   })
 
   it('checks account authority at the provider preflight and never sends JD text for an inactive user', async () => {
@@ -236,6 +400,11 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
 
     await expect(getOrParseXray('j1')).rejects.toBe(unexpected)
     expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockRedisEval).toHaveBeenCalledOnce()
+
+    mockParse.mockResolvedValueOnce(PARSED)
+    expect(await getOrParseXray('j1')).toEqual({ parsed: EXTRACTED, cached: false })
+    expect(mockParse).toHaveBeenCalledTimes(2)
   })
 
   it('cache hit on matching hash: NO second parse, no write — the parser never runs twice for one JD', async () => {
@@ -499,6 +668,7 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
     mockUpdateOne.mockResolvedValue({ modifiedCount: 0 })
     mockPostingExists
       .mockResolvedValueOnce({ _id: 'j1' }) // parser boundary
+      .mockResolvedValueOnce({ _id: 'j1' }) // exact snapshot after lock acquisition
       .mockResolvedValueOnce(null) // exact snapshot after reconcile catalog
     mockFindById
       .mockReturnValueOnce({
@@ -516,7 +686,7 @@ describe('getOrParseXray (ONE parse per posting, keyed by jdHash)', () => {
       })
 
     expect(await getOrParseXray('j1')).toBeNull()
-    expect(mockPostingExists).toHaveBeenCalledTimes(2)
+    expect(mockPostingExists).toHaveBeenCalledTimes(3)
   })
 
   it('returns null when the posting closes while parsing', async () => {

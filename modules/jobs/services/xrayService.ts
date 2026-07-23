@@ -1,15 +1,14 @@
 import { gunzipSync } from 'zlib'
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import type mongoose from 'mongoose'
 import { JobApplication, JobPosting, type IJobPosting } from '@shared/db/models'
-import { parseJobDescription } from '@interview'
+import { getActiveInterviewDomainCatalog, parseJobDescription } from '@interview'
 import type { IParsedJobDescription } from '@shared/types'
-import {
-  getActiveInterviewDomainCatalog,
-} from '@interview/services/persona/domainCatalogService'
 import { interviewSlugForDomain } from '../config/domains'
 import { jobPostingStateOf } from './postingAccess'
 import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
+import { redis } from '@shared/redis'
+import { logger } from '@shared/logger'
 
 /**
  * Interview X-ray (PRODUCT_FLOW §2 detail route, Wave 3.1b) — ONE persisted
@@ -22,9 +21,8 @@ import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
  * Lazy + cached: the first authed detail view pays the parse; every later
  * view (and the Wave-4 practice hand-off) reads JobPosting.parsedJD. A
  * merge that replaces the JD changes the hash and the next view re-parses.
- * Two concurrent first-viewers may both parse, but a JD-version-bound CAS
- * preserves the first persisted result. The Redis NX lock stays in the
- * deferred backlog with the problem-generation one.
+ * A Redis owner-token lock serializes cache misses across app instances.
+ * The JD-version-bound Mongo CAS remains the persisted first-write fence.
  */
 
 /**
@@ -70,6 +68,138 @@ export interface XrayResult {
   retryable?: boolean
 }
 
+const XRAY_PARSE_LOCK_TTL_MS = 120_000
+const XRAY_PARSE_LOCK_WAIT_MS = 30_000
+const XRAY_PARSE_LOCK_RETRY_MS = 500
+const XRAY_PARSE_LOCK_RENEW_MS = 30_000
+const XRAY_PARSE_LOCK_PREFIX = 'jobs:xray:parse:'
+
+interface XrayParseLock {
+  lockKey: string
+  lockValue: string
+}
+
+type XrayParseLockAcquisition =
+  | { status: 'acquired'; lock: XrayParseLock; contended: boolean }
+  | { status: 'timeout' | 'unavailable' }
+
+function retryableXrayResult(parsed?: XrayParsed): XrayResult {
+  return {
+    parsed: parsed ?? {
+      company: '',
+      role: '',
+      inferredDomain: '',
+      requirements: [],
+      keyThemes: [],
+    },
+    cached: !!parsed,
+    retryable: true,
+  }
+}
+
+async function acquireXrayParseLock(
+  jobPostingId: string,
+  jdHash: string,
+): Promise<XrayParseLockAcquisition> {
+  const lockKey = `${XRAY_PARSE_LOCK_PREFIX}${jobPostingId}:${jdHash}`
+  const lockValue = randomBytes(16).toString('hex')
+  const deadline = Date.now() + XRAY_PARSE_LOCK_WAIT_MS
+  let contended = false
+
+  while (true) {
+    try {
+      const result = await redis.set(
+        lockKey,
+        lockValue,
+        'PX',
+        XRAY_PARSE_LOCK_TTL_MS,
+        'NX',
+      )
+      if (result === 'OK') {
+        return { status: 'acquired', lock: { lockKey, lockValue }, contended }
+      }
+    } catch (err) {
+      logger.warn(
+        { err, jobPostingId },
+        'acquireXrayParseLock: Redis unavailable; declining duplicate-risk parse',
+      )
+      return { status: 'unavailable' }
+    }
+
+    contended = true
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) return { status: 'timeout' }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(XRAY_PARSE_LOCK_RETRY_MS, remainingMs))
+    })
+  }
+}
+
+async function releaseXrayParseLock(lock: XrayParseLock): Promise<void> {
+  const script = `
+    if redis.call("get", KEYS[1]) == ARGV[1] then
+      return redis.call("del", KEYS[1])
+    else
+      return 0
+    end
+  `
+  try {
+    await redis.eval(script, 1, lock.lockKey, lock.lockValue)
+  } catch (err) {
+    logger.warn(
+      { err, lockKey: lock.lockKey },
+      'releaseXrayParseLock: Redis unavailable; lock will expire',
+    )
+  }
+}
+
+function startXrayParseLockHeartbeat(lock: XrayParseLock): () => void {
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const schedule = () => {
+    timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const renewed = await redis.eval(
+            `
+              if redis.call("get", KEYS[1]) == ARGV[1] then
+                return redis.call("pexpire", KEYS[1], ARGV[2])
+              else
+                return 0
+              end
+            `,
+            1,
+            lock.lockKey,
+            lock.lockValue,
+            XRAY_PARSE_LOCK_TTL_MS,
+          )
+          if (renewed !== 1) {
+            stopped = true
+            logger.warn(
+              { lockKey: lock.lockKey },
+              'startXrayParseLockHeartbeat: lock ownership lost while parsing',
+            )
+          }
+        } catch (err) {
+          logger.warn(
+            { err, lockKey: lock.lockKey },
+            'startXrayParseLockHeartbeat: Redis renewal failed',
+          )
+        }
+        if (!stopped) schedule()
+      })()
+    }, XRAY_PARSE_LOCK_RENEW_MS)
+    timer.unref?.()
+  }
+
+  schedule()
+  return () => {
+    stopped = true
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export async function getOrParseXray(
   jobPostingId: string,
   userId?: string | null,
@@ -112,6 +242,7 @@ function exactXraySnapshotFilter(doc: {
   jdCompressed?: unknown
   parsedJDHash?: unknown
   parsedJDRoleVersion?: unknown
+  parsedJD?: unknown
 }): Record<string, unknown> {
   return {
     _id: doc._id,
@@ -121,6 +252,9 @@ function exactXraySnapshotFilter(doc: {
     jdCompressed: doc.jdCompressed,
     parsedJDHash: doc.parsedJDHash ?? null,
     parsedJDRoleVersion: doc.parsedJDRoleVersion ?? null,
+    parsedJD: doc.parsedJD == null
+      ? null
+      : { $exists: true, $ne: null },
   }
 }
 
@@ -208,6 +342,63 @@ async function getOrParseXrayVersion(
       : null
   }
 
+  const retryableFallback = retryableXrayResult(
+    hasCurrentBodyParse ? doc.parsedJD as XrayParsed : undefined,
+  )
+  const acquisition = await acquireXrayParseLock(jobPostingId, hash)
+  if (acquisition.status !== 'acquired') {
+    return reconcileCurrentXray(
+      jobPostingId,
+      hash,
+      allowVersionRetry,
+      userId,
+      retryableFallback,
+    )
+  }
+
+  // A waiter never starts a second provider call for the same cold wave.
+  // Once the holder releases, reconcile its durable winner; if it failed
+  // before persisting, return the existing retryable state for a later view.
+  if (acquisition.contended) {
+    await releaseXrayParseLock(acquisition.lock)
+    return reconcileCurrentXray(
+      jobPostingId,
+      hash,
+      allowVersionRetry,
+      userId,
+      retryableFallback,
+    )
+  }
+
+  let lockReleased = false
+  let stopLockHeartbeat: (() => void) | undefined
+  const releaseAcquiredLock = async () => {
+    if (lockReleased) return
+    lockReleased = true
+    await releaseXrayParseLock(acquisition.lock)
+  }
+  const stopAndReleaseAcquiredLock = async () => {
+    stopLockHeartbeat?.()
+    stopLockHeartbeat = undefined
+    await releaseAcquiredLock()
+  }
+  try {
+    // The cache decision happened before Redis acquisition. A prior holder
+    // may have persisted and released in that gap, so bind the provider call
+    // to the exact snapshot we originally authorized.
+    if (!(await JobPosting.exists(exactXraySnapshotFilter(doc)))) {
+      await stopAndReleaseAcquiredLock()
+      return reconcileCurrentXray(
+        jobPostingId,
+        hash,
+        allowVersionRetry,
+        userId,
+        retryableFallback,
+      )
+    }
+
+    stopLockHeartbeat = startXrayParseLockHeartbeat(acquisition.lock)
+
   let parsedByModel: Awaited<ReturnType<typeof parseJobDescription>>
   try {
     parsedByModel = await parseJobDescription(
@@ -224,6 +415,7 @@ async function getOrParseXrayVersion(
     if (!(err instanceof Error) || err.name !== 'ModelProviderPreconditionError') {
       throw err
     }
+    await stopAndReleaseAcquiredLock()
     return allowVersionRetry
       ? getOrParseXrayVersion(jobPostingId, false, userId)
       : null
@@ -238,6 +430,7 @@ async function getOrParseXrayVersion(
     const stableParsed = doc.parsedJD as XrayParsed
     const refreshed = { ...stableParsed, inferredDomain: extracted.inferredDomain }
     if (!extracted.inferredDomain) {
+      await stopAndReleaseAcquiredLock()
       return reconcileCurrentXray(
         jobPostingId,
         hash,
@@ -264,6 +457,7 @@ async function getOrParseXrayVersion(
       },
     )
     if (write.modifiedCount > 0) return { parsed: refreshed, cached: false }
+    await stopAndReleaseAcquiredLock()
     return reconcileCurrentXray(
       jobPostingId,
       hash,
@@ -319,6 +513,7 @@ async function getOrParseXrayVersion(
       }
     }
   }
+  await stopAndReleaseAcquiredLock()
   return reconcileCurrentXray(
     jobPostingId,
     hash,
@@ -330,6 +525,9 @@ async function getOrParseXrayVersion(
       retryable: true,
     },
   )
+  } finally {
+    await stopAndReleaseAcquiredLock()
+  }
 }
 
 async function reconcileCurrentXray(
