@@ -184,6 +184,7 @@ export interface IInterviewSession extends Document {
   enrichmentStatus?: 'pending' | 'running' | 'succeeded' | 'failed'
   enrichmentError?: string
   enrichmentCompletedAt?: Date
+  enrichmentClaimToken?: string
 
   pathwayGenerationStatus?: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
   pathwayGenerationError?: string
@@ -382,6 +383,7 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     },
     enrichmentError: { type: String, maxlength: 500 },
     enrichmentCompletedAt: { type: Date },
+    enrichmentClaimToken: { type: String, maxlength: 255, select: false },
     pathwayGenerationStatus: {
       type: String,
       enum: ['pending', 'running', 'succeeded', 'failed', 'skipped'],

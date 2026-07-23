@@ -87,7 +87,7 @@ describe('enrichFeedbackJob handler', () => {
     mockRunEnrichment.mockResolvedValue(enrichmentResult())
 
     const out = await runEnrichFeedbackJobHandler(
-      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+      { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
       step,
     )
 
@@ -99,18 +99,26 @@ describe('enrichFeedbackJob handler', () => {
         $or: [
           { enrichmentStatus: 'pending' },
           { enrichmentStatus: { $exists: false } },
+          { enrichmentStatus: 'running', enrichmentClaimToken: 'event-1' },
         ],
       },
       {
-        $set: { enrichmentStatus: 'running' },
+        $set: {
+          enrichmentStatus: 'running',
+          enrichmentClaimToken: 'event-1',
+        },
         $unset: { enrichmentError: 1, enrichmentCompletedAt: 1 },
       },
     )
     // Final write: succeeded + both feedback fields
-    const persist = mockFindByIdAndUpdate.mock.calls.at(-1)![1] as { $set: Record<string, unknown> }
+    const persist = mockFindByIdAndUpdate.mock.calls.at(-1)![1] as {
+      $set: Record<string, unknown>
+      $unset: Record<string, unknown>
+    }
     expect(persist.$set.enrichmentStatus).toBe('succeeded')
     expect(persist.$set['feedback.ideal_answers']).toHaveLength(2)
     expect(persist.$set['feedback.drill_recommendations']).toHaveLength(1)
+    expect(persist.$unset).toEqual({ enrichmentClaimToken: 1 })
     // Usage billed under the long-standing feedback bucket, own record
     expect(mockTrackUsage).toHaveBeenCalledTimes(1)
     expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({
@@ -128,7 +136,7 @@ describe('enrichFeedbackJob handler', () => {
     mockRunEnrichment.mockResolvedValue(enrichmentResult())
 
     await runEnrichFeedbackJobHandler(
-      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+      { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
       step,
     )
 
@@ -140,7 +148,7 @@ describe('enrichFeedbackJob handler', () => {
     mockRunEnrichment.mockResolvedValue(enrichmentResult())
 
     await runEnrichFeedbackJobHandler(
-      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill', questionIndex: 11 } },
+      { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill', questionIndex: 11 } },
       step,
     )
 
@@ -159,11 +167,11 @@ describe('enrichFeedbackJob handler', () => {
 
     const results = await Promise.all([
       runEnrichFeedbackJobHandler(
-        { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+        { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
         step,
       ),
       runEnrichFeedbackJobHandler(
-        { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+        { id: 'event-2', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
         step,
       ),
     ])
@@ -185,12 +193,35 @@ describe('enrichFeedbackJob handler', () => {
     }
 
     const out = await runEnrichFeedbackJobHandler(
-      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+      { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
       resumedStep,
     )
 
     expect(out.status).toBe('completed')
     expect(mockUpdateOne).not.toHaveBeenCalled()
+    expect(mockRunEnrichment).toHaveBeenCalledTimes(1)
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets the owning event retry an uncheckpointed running claim', async () => {
+    mockUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 0 })
+    mockFindOne.mockReturnValue(sessionDoc())
+    mockRunEnrichment.mockResolvedValue(enrichmentResult())
+
+    const out = await runEnrichFeedbackJobHandler(
+      { id: 'event-owner', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+      step,
+    )
+
+    expect(out.status).toBe('completed')
+    expect(mockUpdateOne.mock.calls[0][0]).toMatchObject({
+      $or: expect.arrayContaining([
+        {
+          enrichmentStatus: 'running',
+          enrichmentClaimToken: 'event-owner',
+        },
+      ]),
+    })
     expect(mockRunEnrichment).toHaveBeenCalledTimes(1)
     expect(mockTrackUsage).toHaveBeenCalledTimes(1)
   })
@@ -209,7 +240,7 @@ describe('enrichFeedbackJob handler', () => {
     mockRunEnrichment.mockResolvedValue(enrichmentResult()) // generates indexes 0 and 2
 
     await runEnrichFeedbackJobHandler(
-      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill' } },
+      { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill' } },
       step,
     )
 
@@ -226,7 +257,7 @@ describe('enrichFeedbackJob handler', () => {
     mockRunEnrichment.mockResolvedValue(null)
 
     const out = await runEnrichFeedbackJobHandler(
-      { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill' } },
+      { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'drill-backfill' } },
       step,
     )
 
@@ -241,7 +272,7 @@ describe('enrichFeedbackJob handler', () => {
     mockFindOne.mockReturnValue(sessionDoc({ evaluations: [] }))
     await expect(
       runEnrichFeedbackJobHandler(
-        { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+        { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
         step,
       ),
     ).rejects.toThrow('no evaluations')
@@ -251,7 +282,7 @@ describe('enrichFeedbackJob handler', () => {
     mockFindOne.mockReturnValue(sessionDoc({ userId: 'someone-else' }))
     await expect(
       runEnrichFeedbackJobHandler(
-        { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+        { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
         step,
       ),
     ).rejects.toThrow('user mismatch')
@@ -262,7 +293,7 @@ describe('enrichFeedbackJob handler', () => {
     mockRunEnrichment.mockRejectedValue(new Error('provider 500'))
     await expect(
       runEnrichFeedbackJobHandler(
-        { data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
+        { id: 'event-1', data: { sessionId: SESSION_ID, userId: USER_ID, reason: 'post-feedback' } },
         step,
       ),
     ).rejects.toThrow('provider 500')
