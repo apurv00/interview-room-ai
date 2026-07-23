@@ -29,7 +29,7 @@ export interface IJobsVerdictConfig extends Document {
   monthlyBudgetUsd: number
   perCompanyDailyCap: number
   perSourceDailyCap: number
-  /** USD per 1M tokens — tune in data when provider pricing shifts. */
+  /** Conservative USD-per-1M floors; route-specific safety floors may be higher. */
   inputUsdPerMTok: number
   outputUsdPerMTok: number
   updatedBy?: mongoose.Types.ObjectId

@@ -7,6 +7,7 @@ import { UpdateModelConfigSchema } from '@cms/validators/cms'
 import { replaceModelConfigCache } from '@shared/services/modelRouter'
 import { getAllProviders } from '@shared/services/providers'
 import { logger } from '@shared/logger'
+import { jobsVerdictRoutePriceFloor } from '@jobs/config/verdictSchema'
 
 export const dynamic = 'force-dynamic'
 
@@ -101,6 +102,17 @@ export async function PUT(req: NextRequest) {
       if (parsed.data.routingEnabled && slot.isActive && !primary.configured) {
         return NextResponse.json(
           { error: `Provider "${slot.provider}" is not configured` },
+          { status: 400 },
+        )
+      }
+      if (
+        parsed.data.routingEnabled &&
+        slot.isActive &&
+        slot.taskSlot === 'jobs.evaluate-posting' &&
+        !jobsVerdictRoutePriceFloor(slot.provider, slot.model)
+      ) {
+        return NextResponse.json(
+          { error: `Jobs verdict pricing is unavailable for ${slot.provider}/${slot.model}` },
           { status: 400 },
         )
       }

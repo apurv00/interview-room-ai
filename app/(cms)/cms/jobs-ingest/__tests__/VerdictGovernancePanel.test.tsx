@@ -95,7 +95,7 @@ describe('VerdictGovernancePanel', () => {
 
     const dailyCap = await screen.findByRole('spinbutton', { name: /Daily verdict cap/i })
     const companyCap = screen.getByRole('spinbutton', { name: /Per-company daily cap/i })
-    const inputPrice = screen.getByRole('spinbutton', { name: /Input USD/i })
+    const inputPrice = screen.getByRole('spinbutton', { name: /Minimum input USD/i })
     expect(dailyCap.getAttribute('min')).toBe('0')
     expect(dailyCap.getAttribute('max')).toBe('25000')
     expect(inputPrice.getAttribute('min')).toBe('0.01')

@@ -12,8 +12,13 @@ import {
 } from '@shared/db/models'
 import { redis } from '@shared/redis'
 import { logger } from '@shared/logger'
-import { PROMPT_VERSION, epochOf } from '../config/verdictSchema'
 import {
+  effectiveJobsVerdictPricing,
+  PROMPT_VERSION,
+  epochOf,
+} from '../config/verdictSchema'
+import {
+  defaultVerdictRoute,
   evaluatePosting,
   resolveExpectedVerdictRoute,
   type EvaluatorDeps,
@@ -64,6 +69,32 @@ const SWEEP_LIMIT_DEFAULT = 400
 const MAX_ATTEMPTS = 5
 const BREAKER_CONSECUTIVE_FAILURES = 6
 const VERDICT_DECISION_POLICY_REVISION = `jobs-verdict:${PROMPT_VERSION}:reconcile-v1`
+const DEFAULT_VERDICT_ROUTE = defaultVerdictRoute()
+
+function effectiveVerdictAttemptPricing(
+  resolvedModel: NonNullable<EvaluatorDeps['resolvedModel']>,
+  configuredFloor: Pick<JobsVerdictConfigValues, 'inputUsdPerMTok' | 'outputUsdPerMTok'>,
+): Pick<JobsVerdictConfigValues, 'inputUsdPerMTok' | 'outputUsdPerMTok'> {
+  const possibleRoutes = [
+    { provider: resolvedModel.provider, model: resolvedModel.model },
+    ...(resolvedModel.fallbackModel
+      ? [{
+          provider: resolvedModel.fallbackProvider ?? 'anthropic',
+          model: resolvedModel.fallbackModel,
+        }]
+      : []),
+    { provider: DEFAULT_VERDICT_ROUTE.provider, model: DEFAULT_VERDICT_ROUTE.model },
+  ]
+  let pricing = { ...configuredFloor }
+  for (const route of possibleRoutes) {
+    const next = effectiveJobsVerdictPricing(route.provider, route.model, pricing)
+    if (!next) {
+      throw new Error(`Jobs verdict pricing is unavailable for ${route.provider}/${route.model}`)
+    }
+    pricing = next
+  }
+  return pricing
+}
 
 interface LlmCycleCounters {
   requested: number
@@ -160,6 +191,7 @@ export async function runEvaluatePostingsHandler(
     'resolve-verdict-route',
     resolveExpectedVerdictRoute,
   )
+  const pricing = effectiveVerdictAttemptPricing(resolvedModel, cfg)
   const currentEpoch = epochOf(resolvedModel)
 
   // ToS lever (§4.5): a posting with ANY opted-out contributing source never
@@ -270,7 +302,7 @@ export async function runEvaluatePostingsHandler(
             cache: redis,
             checkBudget: (ck, src) => budget.check(ck, src),
             recordSpend: (ck, src, usd) => budget.record(ck, src, usd),
-            pricing: { inputUsdPerMTok: cfg.inputUsdPerMTok, outputUsdPerMTok: cfg.outputUsdPerMTok },
+            pricing,
             resolvedModel,
             beforeModelCall: async () => {
               // This is the final authorization point before each external
@@ -606,6 +638,7 @@ export async function runVerdictSweeperHandler(
     'resolve-verdict-route',
     resolveExpectedVerdictRoute,
   )
+  effectiveVerdictAttemptPricing(resolvedModel, cfg)
   const currentEpoch = epochOf(resolvedModel)
   const budget = makeLlmBudget(redis, cfg)
   if (await budget.isDegraded()) {

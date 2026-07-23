@@ -113,6 +113,19 @@ describe('PUT /api/cms/model-config provider validation', () => {
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['an unknown model', { model: 'unpriced-model', provider: 'openai' }, 'openai/unpriced-model'],
+    ['a model/provider mismatch', { model: 'gpt-5.6-luna', provider: 'anthropic' }, 'anthropic/gpt-5.6-luna'],
+  ])('rejects %s for the active Jobs verdict route', async (_label, slot, route) => {
+    const response = await PUT(requestWith(slot))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({
+      error: `Jobs verdict pricing is unavailable for ${route}`,
+    })
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled()
+  })
+
   it('rejects an incomplete fallback pair instead of storing an unused field', async () => {
     const response = await PUT(requestWith({
       taskSlot: 'interview.generate-feedback',
@@ -166,7 +179,7 @@ describe('PUT /api/cms/model-config provider validation', () => {
   it('keeps fallback and TOON controls available outside the Jobs capability boundary', async () => {
     const response = await PUT(requestWith({
       taskSlot: 'interview.generate-feedback',
-      model: 'claude-sonnet-4-6',
+      model: 'private-unpriced-model',
       provider: 'anthropic',
       maxTokens: 7000,
       fallbackModel: 'gpt-5.6-luna',

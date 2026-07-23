@@ -252,8 +252,8 @@ export function VerdictGovernancePanel() {
     { key: 'monthlyBudgetUsd', label: 'Monthly budget (USD)' },
     { key: 'perCompanyDailyCap', label: 'Per-company daily cap' },
     { key: 'perSourceDailyCap', label: 'Per-source daily cap' },
-    { key: 'inputUsdPerMTok', label: 'Input USD / 1M tokens' },
-    { key: 'outputUsdPerMTok', label: 'Output USD / 1M tokens' },
+    { key: 'inputUsdPerMTok', label: 'Minimum input USD / 1M tokens' },
+    { key: 'outputUsdPerMTok', label: 'Minimum output USD / 1M tokens' },
   ]
 
   return (
