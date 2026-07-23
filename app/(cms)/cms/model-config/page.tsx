@@ -58,29 +58,31 @@ export default function ModelConfigPage() {
 
         const existingSlots = new Map<string, SlotConfig>()
         for (const s of data.config.slots || []) {
+          const jobsSlot = s.taskSlot.startsWith('jobs.')
           existingSlots.set(s.taskSlot, {
             taskSlot: s.taskSlot,
             model: s.model,
             provider: s.provider || 'anthropic',
-            fallbackModel: s.fallbackModel || '',
-            fallbackProvider: s.fallbackProvider || 'anthropic',
+            fallbackModel: jobsSlot ? '' : s.fallbackModel || '',
+            fallbackProvider: jobsSlot ? 'anthropic' : s.fallbackProvider || 'anthropic',
             maxTokens: s.maxTokens,
             temperature: s.temperature,
             reasoningEffort: s.reasoningEffort,
             isActive: s.isActive,
-            useToonInput: s.useToonInput || false,
+            useToonInput: jobsSlot ? false : s.useToonInput || false,
           })
         }
 
         const fullSlots: SlotConfig[] = data.taskSlots.map((ts: string) => {
           const existing = existingSlots.get(ts)
           const def = data.defaults[ts]
+          const jobsSlot = ts.startsWith('jobs.')
           return existing || {
             taskSlot: ts,
             model: def?.model || '',
             provider: def?.provider || 'anthropic',
-            fallbackModel: def?.fallbackModel || '',
-            fallbackProvider: def?.fallbackProvider || 'anthropic',
+            fallbackModel: jobsSlot ? '' : def?.fallbackModel || '',
+            fallbackProvider: jobsSlot ? 'anthropic' : def?.fallbackProvider || 'anthropic',
             maxTokens: def?.maxTokens || 1000,
             temperature: undefined,
             reasoningEffort: undefined,
@@ -109,20 +111,25 @@ export default function ModelConfigPage() {
     try {
       const payload = {
         routingEnabled,
-        slots: slots.filter(s => s.isActive).map(s => ({
-          taskSlot: s.taskSlot,
-          model: s.model,
-          provider: s.provider,
-          fallbackModel: s.fallbackModel || undefined,
-          fallbackProvider: s.fallbackModel
-            ? s.fallbackProvider || undefined
-            : undefined,
-          maxTokens: s.maxTokens,
-          temperature: s.temperature ?? undefined,
-          reasoningEffort: s.reasoningEffort || undefined,
-          isActive: true,
-          useToonInput: s.useToonInput,
-        })),
+        slots: slots.filter(s => s.isActive).map((s) => {
+          const jobsSlot = s.taskSlot.startsWith('jobs.')
+          return {
+            taskSlot: s.taskSlot,
+            model: s.model,
+            provider: s.provider,
+            ...(!jobsSlot ? {
+              fallbackModel: s.fallbackModel || undefined,
+              fallbackProvider: s.fallbackModel
+                ? s.fallbackProvider || undefined
+                : undefined,
+            } : {}),
+            maxTokens: s.maxTokens,
+            temperature: s.temperature ?? undefined,
+            reasoningEffort: s.reasoningEffort || undefined,
+            isActive: true,
+            ...(!jobsSlot ? { useToonInput: s.useToonInput } : {}),
+          }
+        }),
       }
       const res = await fetch('/api/cms/model-config', {
         method: 'PUT',
@@ -231,6 +238,7 @@ export default function ModelConfigPage() {
               const idx = slots.indexOf(slot)
               const def = defaults[slot.taskSlot]
               const taskLabel = slot.taskSlot.split('.')[1].replace(/-/g, ' ')
+              const jobsSlot = slot.taskSlot.startsWith('jobs.')
               return (
                 <div key={slot.taskSlot} className={`p-5 space-y-3 ${slot.isActive ? '' : 'opacity-60'}`}>
                   <div className="flex items-center justify-between">
@@ -314,45 +322,50 @@ export default function ModelConfigPage() {
                         </div>
                       </div>
 
-                      {/* Fallback config */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                        <div>
-                          <label className="block text-xs text-[#71767b] mb-1">Fallback Provider</label>
-                          <select
-                            value={slot.fallbackProvider}
-                            onChange={e => updateSlot(idx, 'fallbackProvider', e.target.value)}
-                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
-                          >
-                            {providers.map(p => (
-                              <option key={p.name} value={p.name} disabled={!p.configured}>
-                                {p.label}{!p.configured ? ' (no key)' : ''}
-                              </option>
-                            ))}
-                          </select>
+                      {jobsSlot ? (
+                        <p className="text-xs text-[#71767b]">
+                          Jobs tasks use primary-only, attributable output. Configured fallback and TOON controls do not apply.
+                        </p>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                          <div>
+                            <label className="block text-xs text-[#71767b] mb-1">Fallback Provider</label>
+                            <select
+                              value={slot.fallbackProvider}
+                              onChange={e => updateSlot(idx, 'fallbackProvider', e.target.value)}
+                              className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                            >
+                              {providers.map(p => (
+                                <option key={p.name} value={p.name} disabled={!p.configured}>
+                                  {p.label}{!p.configured ? ' (no key)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-[#71767b] mb-1">Fallback Model</label>
+                            <input
+                              type="text"
+                              value={slot.fallbackModel}
+                              onChange={e => updateSlot(idx, 'fallbackModel', e.target.value)}
+                              placeholder="e.g. claude-haiku-4-5-20251001"
+                              className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2 pt-5">
+                            <input
+                              type="checkbox"
+                              id={`toon-${slot.taskSlot}`}
+                              checked={slot.useToonInput}
+                              onChange={e => updateSlot(idx, 'useToonInput', e.target.checked)}
+                              className="w-4 h-4 rounded border-[#cfd9de]"
+                            />
+                            <label htmlFor={`toon-${slot.taskSlot}`} className="text-xs text-[#71767b] cursor-pointer">
+                              TOON input encoding
+                            </label>
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-xs text-[#71767b] mb-1">Fallback Model</label>
-                          <input
-                            type="text"
-                            value={slot.fallbackModel}
-                            onChange={e => updateSlot(idx, 'fallbackModel', e.target.value)}
-                            placeholder="e.g. claude-haiku-4-5-20251001"
-                            className="w-full px-3 py-2 border border-[#cfd9de] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
-                          />
-                        </div>
-                        <div className="flex items-center gap-2 pt-5">
-                          <input
-                            type="checkbox"
-                            id={`toon-${slot.taskSlot}`}
-                            checked={slot.useToonInput}
-                            onChange={e => updateSlot(idx, 'useToonInput', e.target.checked)}
-                            className="w-4 h-4 rounded border-[#cfd9de]"
-                          />
-                          <label htmlFor={`toon-${slot.taskSlot}`} className="text-xs text-[#71767b] cursor-pointer">
-                            TOON input encoding
-                          </label>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   )}
                 </div>

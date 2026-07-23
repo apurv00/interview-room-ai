@@ -26,12 +26,17 @@ vi.mock('@shared/db/models', () => ({
   ModelConfig: {
     findOneAndUpdate: (...args: unknown[]) => mockFindOneAndUpdate(...args),
   },
-  TASK_SLOTS: ['jobs.evaluate-posting'],
+  TASK_SLOTS: ['jobs.evaluate-posting', 'interview.generate-feedback'],
   TASK_SLOT_DEFAULTS: {
     'jobs.evaluate-posting': {
       model: 'gpt-5.6-luna',
       provider: 'openai',
       maxTokens: 800,
+    },
+    'interview.generate-feedback': {
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      maxTokens: 7000,
     },
   },
 }))
@@ -47,22 +52,26 @@ vi.mock('@shared/logger', () => ({
 
 import { PUT } from '../route'
 
-function requestWith(slot: Record<string, unknown>, routingEnabled = true) {
+function requestWithSlots(slots: Array<Record<string, unknown>>, routingEnabled = true) {
   return new NextRequest('http://localhost/api/cms/model-config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       routingEnabled,
-      slots: [{
-        taskSlot: 'jobs.evaluate-posting',
-        model: 'gpt-5.6-luna',
-        provider: 'openai',
-        maxTokens: 800,
-        isActive: true,
-        ...slot,
-      }],
+      slots,
     }),
   })
+}
+
+function requestWith(slot: Record<string, unknown>, routingEnabled = true) {
+  return requestWithSlots([{
+    taskSlot: 'jobs.evaluate-posting',
+    model: 'gpt-5.6-luna',
+    provider: 'openai',
+    maxTokens: 800,
+    isActive: true,
+    ...slot,
+  }], routingEnabled)
 }
 
 beforeEach(() => {
@@ -105,7 +114,13 @@ describe('PUT /api/cms/model-config provider validation', () => {
   })
 
   it('rejects an incomplete fallback pair instead of storing an unused field', async () => {
-    const response = await PUT(requestWith({ fallbackProvider: 'anthropic' }))
+    const response = await PUT(requestWith({
+      taskSlot: 'interview.generate-feedback',
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      maxTokens: 7000,
+      fallbackProvider: 'openai',
+    }))
 
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toEqual({
@@ -114,10 +129,49 @@ describe('PUT /api/cms/model-config provider validation', () => {
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled()
   })
 
-  it('persists and publishes a runnable provider configuration', async () => {
+  it('rejects duplicate task-slot authorities', async () => {
+    const slot = {
+      taskSlot: 'jobs.evaluate-posting',
+      model: 'gpt-5.6-luna',
+      provider: 'openai',
+      maxTokens: 800,
+      isActive: true,
+    }
+    const response = await PUT(requestWithSlots([slot, slot]))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({
+      error: 'Duplicate task slot: jobs.evaluate-posting',
+    })
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      { fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic' },
+      'Jobs task slot jobs.evaluate-posting does not accept a configured fallback',
+    ],
+    [
+      { useToonInput: true },
+      'Jobs task slot jobs.evaluate-posting does not accept TOON input',
+    ],
+  ])('rejects unsupported Jobs controls %#', async (slot, error) => {
+    const response = await PUT(requestWith(slot))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error })
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('keeps fallback and TOON controls available outside the Jobs capability boundary', async () => {
     const response = await PUT(requestWith({
-      fallbackModel: 'claude-sonnet-4-6',
-      fallbackProvider: 'anthropic',
+      taskSlot: 'interview.generate-feedback',
+      model: 'claude-sonnet-4-6',
+      provider: 'anthropic',
+      maxTokens: 7000,
+      fallbackModel: 'gpt-5.6-luna',
+      fallbackProvider: 'openai',
+      useToonInput: true,
     }))
 
     expect(response.status).toBe(200)
@@ -127,8 +181,10 @@ describe('PUT /api/cms/model-config provider validation', () => {
         $set: expect.objectContaining({
           routingEnabled: true,
           slots: [expect.objectContaining({
-            provider: 'openai',
-            fallbackProvider: 'anthropic',
+            taskSlot: 'interview.generate-feedback',
+            provider: 'anthropic',
+            fallbackProvider: 'openai',
+            useToonInput: true,
           })],
         }),
       },

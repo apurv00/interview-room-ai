@@ -56,12 +56,35 @@ export async function PUT(req: NextRequest) {
       )
     }
 
+    const seenTaskSlots = new Set<string>()
     for (const slot of parsed.data.slots) {
       if (!TASK_SLOTS.includes(slot.taskSlot as typeof TASK_SLOTS[number])) {
         return NextResponse.json(
           { error: `Invalid task slot: ${slot.taskSlot}` },
           { status: 400 }
         )
+      }
+      if (seenTaskSlots.has(slot.taskSlot)) {
+        return NextResponse.json(
+          { error: `Duplicate task slot: ${slot.taskSlot}` },
+          { status: 400 },
+        )
+      }
+      seenTaskSlots.add(slot.taskSlot)
+
+      if (slot.taskSlot.startsWith('jobs.')) {
+        if (slot.fallbackModel !== undefined || slot.fallbackProvider !== undefined) {
+          return NextResponse.json(
+            { error: `Jobs task slot ${slot.taskSlot} does not accept a configured fallback` },
+            { status: 400 },
+          )
+        }
+        if (slot.useToonInput) {
+          return NextResponse.json(
+            { error: `Jobs task slot ${slot.taskSlot} does not accept TOON input` },
+            { status: 400 },
+          )
+        }
       }
     }
 
