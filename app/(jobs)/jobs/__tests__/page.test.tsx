@@ -508,11 +508,18 @@ describe('/jobs URL discovery and request lifecycle', () => {
 })
 
 describe('/jobs truthful product copy', () => {
-  it('keeps the feed CTA aligned with the one-question target flow', async () => {
+  it('gives resume upload a direct entry while preserving the role-only chooser', async () => {
     mockUseSearchParams.mockReturnValue(new URLSearchParams(''))
     render(<JobsPage />)
 
-    expect(await screen.findByRole('link', { name: 'Answer one question' })).toHaveAttribute('href', '/jobs/start')
+    expect(await screen.findByRole('link', { name: 'Upload resume' })).toHaveAttribute(
+      'href',
+      '/jobs/start?intent=upload',
+    )
+    expect(screen.getByRole('link', { name: 'Answer one question' })).toHaveAttribute(
+      'href',
+      '/jobs/start',
+    )
     expect(screen.queryByText(/Answer 3 questions/i)).toBeNull()
   })
 

@@ -11,9 +11,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 
-const { mockFetch, mockPush, sessionState } = vi.hoisted(() => ({
+const { mockFetch, mockPush, sessionState, searchParamsState } = vi.hoisted(() => ({
   mockFetch: vi.fn(),
   mockPush: vi.fn(),
+  searchParamsState: { value: new URLSearchParams() },
   sessionState: {
     value: {
       status: 'unauthenticated' as 'loading' | 'authenticated' | 'unauthenticated',
@@ -24,6 +25,7 @@ const { mockFetch, mockPush, sessionState } = vi.hoisted(() => ({
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
+  useSearchParams: () => searchParamsState.value,
 }))
 vi.mock('next-auth/react', () => ({
   useSession: () => sessionState.value,
@@ -38,6 +40,7 @@ beforeEach(() => {
     return Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
   })
   mockPush.mockReset()
+  searchParamsState.value = new URLSearchParams()
   sessionState.value = { status: 'unauthenticated', data: null }
   localStorage.clear()
   sessionStorage.clear()
@@ -50,6 +53,32 @@ function pickFile(file: File) {
 }
 
 describe('/jobs/start doors', () => {
+  it('opens the PDF upload directly for the upload intent', () => {
+    searchParamsState.value = new URLSearchParams('intent=upload')
+    const fileInputClick = vi.spyOn(HTMLInputElement.prototype, 'click')
+
+    render(<JobsStartPage />)
+
+    expect(screen.getByRole('heading', { name: 'Upload your resume' })).toBeTruthy()
+    const choosePdf = screen.getByRole('button', { name: 'Choose PDF' })
+    expect(fileInputClick).not.toHaveBeenCalled()
+    fireEvent.click(choosePdf)
+    expect(fileInputClick).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('No resume yet? Build one')).toBeNull()
+    expect(screen.queryByText('Just tell us your target role')).toBeNull()
+    expect(document.querySelector('input[type="file"]')?.getAttribute('accept')).toBe('.pdf,application/pdf')
+
+    fileInputClick.mockRestore()
+  })
+
+  it('rejects unknown entry intents', () => {
+    searchParamsState.value = new URLSearchParams('intent=unexpected')
+    render(<JobsStartPage />)
+
+    expect(screen.getByRole('heading', { name: 'Personalize Best match' })).toBeTruthy()
+    expect(screen.getByText('Upload your resume (PDF)')).toBeTruthy()
+  })
+
   it('makes account deletion terminal while a resume parse is still in flight', async () => {
     let resolveBaseResume!: (value: unknown) => void
     let resolveResumeParse!: (value: unknown) => void

@@ -1,16 +1,18 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { clearAllInterviewStorage } from '@shared/storageKeys'
 import { JOB_TARGET_QUESTION_SUMMARY } from '@jobs/config/truthfulLabels'
 
 /**
- * /jobs/start — the attach chooser + confirm bar (PRODUCT_FLOW §1 Stage 1,
- * §4a). Doors (founder directive 2026-07-16): saved resume / upload PDF /
- * build one / target-role question. PASTE IS NOT A PRIMARY DOOR — it is the
+ * /jobs/start — the attach entry + chooser + confirm bar (PRODUCT_FLOW §1
+ * Stage 1, §4a). The allowlisted `?intent=upload` entry exposes the existing
+ * PDF door directly; plain or unknown intents retain the full chooser.
+ * Doors (founder directive 2026-07-16): saved resume / upload PDF / build one /
+ * target-role question. PASTE IS NOT A PRIMARY DOOR — it is the
  * inline fallback shown only when the PDF parse fails ("if PDF upload fails
  * then paste the resume text, nothing else"). PDFs go through the stateless
  * /api/jobs/parse-pdf (text extraction only — an anon stranger's resume
@@ -43,6 +45,12 @@ export interface JobsTarget {
   role: string
   skills: string[]
   ownerId: string | null
+}
+
+type StartDoor = 'chooser' | 'upload' | 'paste' | 'questions' | 'confirm'
+
+function requestedStartDoor(intent: string | null): StartDoor {
+  return intent === 'upload' ? 'upload' : 'chooser'
 }
 
 function flatSkills(resume: ParsedResume): string[] {
@@ -105,6 +113,8 @@ async function isAccountUnavailableResponse(response: Response): Promise<boolean
 
 export default function JobsStartPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const initialDoor = requestedStartDoor(searchParams.get('intent'))
   const { data: session, status: authStatus } = useSession()
   const currentUserId = (session?.user as { id?: string } | undefined)?.id ?? null
   const liveIdentityRef = useRef({ status: authStatus, userId: currentUserId })
@@ -116,7 +126,7 @@ export default function JobsStartPage() {
   const terminalRef = useRef(false)
   const requestGenerationRef = useRef(0)
   const submittingRef = useRef(false)
-  const [door, setDoor] = useState<'chooser' | 'paste' | 'questions' | 'confirm'>('chooser')
+  const [door, setDoor] = useState<StartDoor>(initialDoor)
   const [method, setMethod] = useState<JobsTarget['method']>('paste')
   const [pasteText, setPasteText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -536,7 +546,18 @@ export default function JobsStartPage() {
   return (
     <main className="mx-auto max-w-xl px-4 py-10">
       <Link href="/jobs" className="text-sm text-slate-500 hover:underline">← Jobs</Link>
-      <h1 className="mt-3 text-2xl font-semibold">Sort the feed for you</h1>
+      <h1 className="mt-3 text-2xl font-semibold">
+        {door === 'upload'
+          ? 'Upload your resume'
+          : 'Personalize Best match'}
+      </h1>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".pdf,application/pdf"
+        className="hidden"
+        onChange={(e) => onFile(e.target.files?.[0])}
+      />
 
       {door === 'chooser' && (
         <div className="mt-6 space-y-3">
@@ -550,7 +571,6 @@ export default function JobsStartPage() {
             <span className="font-medium">{busy ? 'Reading your PDF…' : 'Upload your resume (PDF)'}</span>
             <span className="mt-0.5 block text-sm text-slate-500">The one you already send to recruiters.</span>
           </button>
-          <input ref={fileRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
           <Link href="/resume/builder?return=/jobs/start" className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white">
             <span className="font-medium">No resume yet? Build one</span>
             <span className="mt-0.5 block text-sm text-slate-500">Create a resume, then return to set your target role.</span>
@@ -558,6 +578,34 @@ export default function JobsStartPage() {
           <button disabled={busy} onClick={() => { setMethod('questions'); setDoor('questions') }} className="block w-full rounded-2xl border border-slate-200 p-4 text-left shadow-sm hover:border-blue-400 bg-white disabled:opacity-60">
             <span className="font-medium">Just tell us your target role</span>
             <span className="mt-0.5 block text-sm text-slate-500">{JOB_TARGET_QUESTION_SUMMARY}</span>
+          </button>
+        </div>
+      )}
+
+      {door === 'upload' && (
+        <div className="mt-6">
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center">
+            <p className="font-medium">Choose your current resume</p>
+            <p id="jobs-resume-upload-help" className="mt-1 text-sm text-slate-500">
+              PDF, up to 10 MB. It is used for matching in this tab and is not saved unless you choose to save it after review.
+            </p>
+            <button
+              type="button"
+              disabled={busy}
+              aria-describedby="jobs-resume-upload-help"
+              onClick={() => fileRef.current?.click()}
+              className="mt-4 min-h-11 rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              <span aria-live="polite">{busy ? 'Reading your resume…' : 'Choose PDF'}</span>
+            </button>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setDoor('chooser')}
+            className="mt-4 text-sm text-blue-600 hover:underline disabled:opacity-60"
+          >
+            Use a saved resume or another option
           </button>
         </div>
       )}
