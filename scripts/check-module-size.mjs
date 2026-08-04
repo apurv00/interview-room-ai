@@ -131,7 +131,10 @@ const BUDGETS = {
   // verdict-config history and automatic quality decisions/reviews — plus one
   // pure client-safe limits contract shared across CMS, services, and models.
   // Actual is 160 with no file-count headroom. See ADR 0026.
-  'shared':            { maxLOC: 25_000, maxFiles: 160 },
+  // Bumped maxFiles 160 → 167 on 2026-08-04 for the guarded Razorpay payment
+  // foundation: six counted cross-domain contracts/persistence files, plus one
+  // headroom slot. Runtime rollout gates remain disabled. See ADR 0027.
+  'shared':            { maxLOC: 25_000, maxFiles: 167 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   // Bumped maxLOC 14,000 → 16,000 on 2026-07-22 for the bounded A08
