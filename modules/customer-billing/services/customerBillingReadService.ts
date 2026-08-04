@@ -839,7 +839,11 @@ export async function readCustomerBillingSummary(
     const config = await BillingConfig.findOne({ key: 'singleton' })
       .session(session)
       .lean()
-    const providerMode = options.environment ?? 'live'
+    const providerMode = options.environment ?? (
+      config?.sellingMode === 'qa' && configuredQaUser(config, userObjectId)
+        ? 'test'
+        : 'live'
+    )
     if (providerMode === 'test' && !configuredQaUser(config, userObjectId)) {
       throw new CustomerBillingUnavailableError('test_mode_unavailable')
     }

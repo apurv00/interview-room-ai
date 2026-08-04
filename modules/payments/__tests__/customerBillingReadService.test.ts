@@ -1357,6 +1357,64 @@ describe('customer billing summary privacy boundary', () => {
     ).rejects.toMatchObject({ code: 'test_mode_unavailable' })
     expect(summarySession.endSession).toHaveBeenCalledTimes(2)
   })
+
+  it('defaults allowlisted QA users to test while preserving explicit live reads', async () => {
+    const userObjectId = new mongoose.Types.ObjectId(userId)
+    mockSummaryReads({
+      user: {
+        plan: 'free',
+        entitlementSource: 'free',
+        usagePeriodKey: 'free:2026-07',
+        interviewLimit: 1,
+        premiumResumeLimit: 0,
+      },
+      subscriptions: [],
+      cycles: [],
+    })
+    modelMocks.billingConfigFindOne.mockReturnValue(
+      queryResult({
+        revision: 1,
+        sellingMode: 'qa',
+        enforcementMode: 'off',
+        couponMode: 'qa',
+        qaUserIds: [userObjectId],
+        newUserRolloutPercent: 0,
+        autoCouponRequired: true,
+        webhookProcessingEnabled: false,
+        reconciliationEnabled: false,
+      }),
+    )
+    gateMocks.evaluatePaymentSaleGate.mockReturnValue({
+      allowed: true,
+      providerMode: 'test',
+      rollout: 'qa',
+    })
+
+    const implicit = await readCustomerBillingSummary(userId, {
+      now: fixedNow,
+    })
+
+    expect(implicit).toMatchObject({
+      environment: 'test',
+      saleAvailability: 'available',
+    })
+    expect(modelMocks.subscriptionFind).toHaveBeenLastCalledWith(
+      expect.objectContaining({ providerMode: 'test' }),
+    )
+
+    const explicitLive = await readCustomerBillingSummary(userId, {
+      now: fixedNow,
+      environment: 'live',
+    })
+
+    expect(explicitLive).toMatchObject({
+      environment: 'live',
+      saleAvailability: 'unavailable',
+    })
+    expect(modelMocks.subscriptionFind).toHaveBeenLastCalledWith(
+      expect.objectContaining({ providerMode: 'live' }),
+    )
+  })
 })
 
 describe('customer financial document ownership and sanitization', () => {

@@ -71,14 +71,15 @@ export async function GET(request: NextRequest) {
   ) {
     return json({ error: 'Invalid billing account request' }, 400)
   }
-  const environment = rawEnvironment ?? 'live'
+  const environment = rawEnvironment ?? undefined
 
   try {
     return json(
       CustomerBillingSummaryResponseSchema.parse(
-        await readCustomerBillingSummary(session.user.id, {
-          environment,
-        }),
+        await readCustomerBillingSummary(
+          session.user.id,
+          environment ? { environment } : {},
+        ),
       ),
       200,
     )
