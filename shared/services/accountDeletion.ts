@@ -24,8 +24,9 @@
  * `deleting` state and preserves Mongo key inventory for an idempotent retry.
  */
 
-import mongoose from 'mongoose'
+import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
+import { AppError } from '@shared/errors'
 import { getClientPromise } from '@shared/db/mongoClient'
 import { logger } from '@shared/logger'
 import { deleteFromR2 } from '@shared/storage/r2'
@@ -51,6 +52,119 @@ import {
   JobApplication,
   ProductEvent,
   LessonEngagement, JobsEmailSend, JobPracticeEvidence } from '@shared/db/models'
+import { SavedResume } from '@shared/db/models/SavedResume'
+
+const PERSONAL_DATA_TX_OPTIONS = {
+  readConcern: { level: 'snapshot' as const },
+  writeConcern: { w: 'majority' as const },
+  readPreference: 'primary' as const,
+}
+
+export const SESSION_PERSONAL_DATA_CAPABILITY_MS = 52 * 60 * 1_000
+
+export class PersonalDataWriteBlockedError extends AppError {
+  constructor() {
+    super(
+      'Account deletion is in progress. New personal data cannot be saved.',
+      423,
+      'ACCOUNT_DELETION_PENDING',
+    )
+    this.name = 'PersonalDataWriteBlockedError'
+  }
+}
+
+export class SessionPersonalDataWriteBlockedError extends AppError {
+  constructor() {
+    super(
+      'Interview session deletion is in progress. New personal data cannot be saved.',
+      410,
+      'SESSION_DELETION_PENDING',
+    )
+    this.name = 'SessionPersonalDataWriteBlockedError'
+  }
+}
+
+export async function withPersonalDataWriteTransaction<T>(
+  userId: string | mongoose.Types.ObjectId,
+  work: (
+    session: ClientSession,
+    userObjectId: mongoose.Types.ObjectId,
+  ) => Promise<T>,
+): Promise<T> {
+  const normalizedUserId = userId.toString()
+  if (!mongoose.Types.ObjectId.isValid(normalizedUserId)) {
+    throw new PersonalDataWriteBlockedError()
+  }
+  await connectDB()
+  const userObjectId = new mongoose.Types.ObjectId(normalizedUserId)
+  const session = await mongoose.startSession()
+  try {
+    let completed = false
+    let result!: T
+    await session.withTransaction(async () => {
+      const claim = await User.updateOne(
+        {
+          _id: userObjectId,
+          accountState: { $ne: 'deleting' },
+          buyerState: { $ne: 'deletion_pending' },
+        },
+        { $inc: { personalDataWriteVersion: 1 } },
+        { session },
+      )
+      if (claim.matchedCount !== 1) {
+        throw new PersonalDataWriteBlockedError()
+      }
+      result = await work(session, userObjectId)
+      completed = true
+    }, PERSONAL_DATA_TX_OPTIONS)
+    if (!completed) {
+      throw new Error('Personal-data transaction returned no result')
+    }
+    return result
+  } finally {
+    await session.endSession()
+  }
+}
+
+export async function withSessionPersonalDataWriteTransaction<T>(
+  userId: string | mongoose.Types.ObjectId,
+  interviewSessionId: string | mongoose.Types.ObjectId,
+  work: (
+    session: ClientSession,
+    userObjectId: mongoose.Types.ObjectId,
+    interviewSessionObjectId: mongoose.Types.ObjectId,
+  ) => Promise<T>,
+): Promise<T> {
+  const normalizedSessionId = interviewSessionId.toString()
+  if (!mongoose.Types.ObjectId.isValid(normalizedSessionId)) {
+    throw new SessionPersonalDataWriteBlockedError()
+  }
+  const interviewSessionObjectId = new mongoose.Types.ObjectId(
+    normalizedSessionId,
+  )
+  return withPersonalDataWriteTransaction(
+    userId,
+    async (session, userObjectId) => {
+      const claim = await InterviewSession.updateOne(
+        {
+          _id: interviewSessionObjectId,
+          userId: userObjectId,
+          deletionPendingAt: { $exists: false },
+        },
+        { $inc: { personalDataWriteVersion: 1 } },
+        { session },
+      )
+      if (claim.matchedCount !== 1) {
+        throw new SessionPersonalDataWriteBlockedError()
+      }
+      return work(
+        session,
+        userObjectId,
+        interviewSessionObjectId,
+      )
+    },
+  )
+}
 
 // ─── Per-session delete ───────────────────────────────────────────────────────
 
@@ -394,6 +508,7 @@ export async function deleteUserAccount(
     ['DrillAttempt', DrillAttempt.deleteMany({ userId: userObjectId })],
     ['UserCompetencyState', UserCompetencyState.deleteMany({ userId: userObjectId })],
     ['ServedProblem', ServedProblem.deleteMany({ userId: userObjectId })],
+    ['SavedResume', SavedResume.deleteMany({ userId: userObjectId })],
     // Pre-existing gap surfaced by the Wave-1b GDPR completeness tripwire:
     // per-user lesson engagement rows survived account deletion.
     ['LessonEngagement', LessonEngagement.deleteMany({ userId: userObjectId })],

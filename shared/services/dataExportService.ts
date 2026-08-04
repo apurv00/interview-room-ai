@@ -6,12 +6,14 @@ import { WeaknessCluster } from '@shared/db/models/WeaknessCluster'
 import { SessionSummary } from '@shared/db/models/SessionSummary'
 import { XpEvent } from '@shared/db/models/XpEvent'
 import { UserBadge } from '@shared/db/models/UserBadge'
+import type { SavedResumeLegacyPayload } from '@shared/db/models/SavedResume'
 import { logger } from '@shared/logger'
 import {
   isAnswerScoringReceipt,
   isModelExecutionProvenance,
   type ModelExecutionProvenance,
 } from '@shared/services/scoringProvenance'
+import { savedResumeRepository } from '@shared/services/savedResumeRepository'
 
 const EXPORT_BATCH_SIZE = 500
 const HEX_64 = /^[a-f0-9]{64}$/
@@ -153,6 +155,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
 
   const [
     user,
+    savedResumeLibrary,
     sessions,
     pathwayPlan,
     competencies,
@@ -163,6 +166,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
     servedProblems,
   ] = await Promise.all([
     User.findById(uid).select('-password -__v').lean(),
+    savedResumeRepository.list(userId),
     allInterviewSessions(uid),
     PathwayPlan.findOne({ userId: uid }).sort({ generatedAt: -1 }).lean(),
     UserCompetencyState.find({ userId: uid }).select('-__v').lean(),
@@ -270,6 +274,9 @@ export async function generateDataExport(userId: string): Promise<Record<string,
 
   if (!user) {
     throw new Error('User not found')
+  }
+  if (!savedResumeLibrary) {
+    throw new Error('Saved resume library not found')
   }
 
   // Jobs email send history (EMAILS.md ledger) — personal data: which
@@ -380,7 +387,7 @@ export async function generateDataExport(userId: string): Promise<Record<string,
       createdAt: user.createdAt,
     },
 
-    resumes: (user.savedResumes || []).map((r: Record<string, unknown>) => ({
+    resumes: savedResumeLibrary.payloads.map((r: SavedResumeLegacyPayload) => ({
       id: r.id,
       name: r.name,
       targetRole: r.targetRole,
