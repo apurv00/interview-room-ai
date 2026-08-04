@@ -561,7 +561,7 @@ export function BillingCheckoutDialog({
       } else {
         setCouponMessage(
           nextQuote.manualCodeResult === 'not_better_than_automatic'
-            ? 'Your automatic offer is already better, so we kept it.'
+            ? 'Your automatic coupon is already better, so we kept it.'
             : nextQuote.manualCodeResult === 'system_unavailable'
               ? 'Coupon validation is temporarily unavailable.'
               : 'This code is not available for this checkout.',
@@ -634,7 +634,7 @@ export function BillingCheckoutDialog({
     if (!quote || !summary || stage === 'preparing') return
     setStage('preparing')
     setError(null)
-    setStatusMessage('Confirming your final price and reserving any offer…')
+    setStatusMessage('Confirming your final price and reserving any coupon…')
 
     try {
       await persistProfileIfNeeded()
@@ -946,11 +946,11 @@ export function BillingCheckoutDialog({
                   </span>
                 </div>
                 <div className="mt-2 flex items-center justify-between text-sm">
-                  <span className="text-[#536471]">Offer</span>
+                  <span className="text-[#536471]">Coupon discount</span>
                   <span className="font-medium text-emerald-700">
                     {displayedQuote.discountPaise > 0
                       ? `−${formatInr(displayedQuote.discountPaise)}`
-                      : 'No discount'}
+                      : 'Not applied'}
                   </span>
                 </div>
                 <div className="mt-3 flex items-end justify-between border-t border-[#e1e8ed] pt-3">
@@ -1020,7 +1020,7 @@ export function BillingCheckoutDialog({
                   Final price changed
                 </h3>
                 <p className="mt-1 text-xs leading-5 text-amber-800">
-                  Catalog or offer availability changed while checkout was
+                  Catalog or coupon availability changed while checkout was
                   prepared. Razorpay will use only the updated amount shown
                   above.
                 </p>
@@ -1082,14 +1082,14 @@ export function BillingCheckoutDialog({
               <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-sm font-semibold text-emerald-900">
-                    {displayedQuote.coupon.displayText}
+                    Coupon: {displayedQuote.coupon.displayText}
                   </h3>
                   <Badge variant="success">
                     {displayedQuote.coupon.mode === 'code'
                       ? `Code ${displayedQuote.coupon.code}`
                       : displayedQuote.coupon.mode === 'targeted'
-                        ? 'Targeted offer'
-                        : 'Auto-applied'}
+                        ? 'Targeted coupon'
+                        : 'Automatic coupon'}
                   </Badge>
                 </div>
                 <p className="mt-1 text-xs leading-5 text-emerald-800">

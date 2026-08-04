@@ -32,7 +32,7 @@ const BILLING_FAQ = [
   {
     title: 'How do coupons work?',
     content:
-      'The best eligible automatic offer is applied for you. If you have a targeted code, use “Have a coupon code?” before secure checkout. Offers never stack.',
+      'Prices stay at list price until you apply an eligible coupon code during checkout. Coupons do not stack.',
   },
   {
     title: 'What happens after the discounted month?',
@@ -92,7 +92,7 @@ export function BillingPricingExperience({
       const quote = await parseBillingResponse(
         response,
         billingResponseSchemas.quote,
-        'Your available offer could not be loaded.',
+        'Your current price could not be loaded.',
       )
       if (quote.planKey !== planKey) {
         throw new Error('Billing quote returned a different plan')

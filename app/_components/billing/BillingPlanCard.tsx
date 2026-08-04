@@ -119,8 +119,8 @@ export function BillingPlanCard({
             </div>
             <p className="mt-1 text-xs text-[#71767b]">
               {quoteLoading
-                ? 'Checking your best available offer…'
-                : 'Your best available offer is checked after sign-in.'}
+                ? 'Checking current price…'
+                : 'Apply an eligible coupon during checkout.'}
             </p>
           </>
         )}

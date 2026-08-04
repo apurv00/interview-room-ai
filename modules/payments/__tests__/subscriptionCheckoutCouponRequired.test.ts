@@ -97,12 +97,14 @@ function quote(withCoupon: boolean): ResolvedCustomerBillingQuote {
 
 function dependencies(
   resolved: ResolvedCustomerBillingQuote,
+  autoCouponRequired = true,
 ): SubscriptionCheckoutDependencies & {
   createIntent: ReturnType<typeof vi.fn>
 } {
   return {
     resolveSaleContext: vi.fn(async () => ({
       providerMode: 'test',
+      autoCouponRequired,
       buyerSnapshot: {
         name: 'Founder',
         email: 'founder@example.invalid',
@@ -121,7 +123,7 @@ function dependencies(
 
 describe('subscription launch coupon requirement', () => {
   it('blocks checkout before persistence when no launch coupon applies', async () => {
-    const deps = dependencies(quote(false))
+    const deps = dependencies(quote(false), true)
 
     await expect(createSubscriptionCheckout({
       userId,
@@ -132,6 +134,38 @@ describe('subscription launch coupon requirement', () => {
     })
 
     expect(deps.createIntent).not.toHaveBeenCalled()
+  })
+
+  it('persists a full-list-price intent when a coupon is not required', async () => {
+    const deps = dependencies(quote(false), false)
+    deps.createIntent.mockResolvedValueOnce({
+      intentId: new mongoose.Types.ObjectId().toString(),
+      receipt: 'receipt_list_price',
+      requestHash: 'd'.repeat(64),
+      status: 'created',
+      reused: false,
+    })
+    deps.loadIntent = vi.fn(async () => null)
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:list-price',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quoteSnapshot: expect.objectContaining({
+          listPricePaise: 59_900,
+          discountPaise: 0,
+          payablePaise: 59_900,
+        }),
+      }),
+    )
+    expect(deps.createIntent.mock.calls[0]?.[0])
+      .not.toHaveProperty('couponReservation')
   })
 
   it('does not retry at list price when coupon capacity is exhausted', async () => {
