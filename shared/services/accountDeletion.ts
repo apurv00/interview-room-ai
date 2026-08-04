@@ -52,6 +52,7 @@ import {
   JobApplication,
   ProductEvent,
   LessonEngagement, JobsEmailSend, JobPracticeEvidence } from '@shared/db/models'
+import { SavedResume } from '@shared/db/models/SavedResume'
 
 const PERSONAL_DATA_TX_OPTIONS = {
   readConcern: { level: 'snapshot' as const },
@@ -507,6 +508,7 @@ export async function deleteUserAccount(
     ['DrillAttempt', DrillAttempt.deleteMany({ userId: userObjectId })],
     ['UserCompetencyState', UserCompetencyState.deleteMany({ userId: userObjectId })],
     ['ServedProblem', ServedProblem.deleteMany({ userId: userObjectId })],
+    ['SavedResume', SavedResume.deleteMany({ userId: userObjectId })],
     // Pre-existing gap surfaced by the Wave-1b GDPR completeness tripwire:
     // per-user lesson engagement rows survived account deletion.
     ['LessonEngagement', LessonEngagement.deleteMany({ userId: userObjectId })],

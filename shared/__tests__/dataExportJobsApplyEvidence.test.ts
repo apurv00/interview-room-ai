@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   productEventFind: vi.fn(),
   jobsEmailSendFind: vi.fn(),
   jobPracticeEvidenceFind: vi.fn(),
+  savedResumeList: vi.fn(),
   competencyFind: vi.fn(),
   weaknessFind: vi.fn(),
   summaryFind: vi.fn(),
@@ -43,6 +44,9 @@ vi.mock('@shared/db/models/XpEvent', () => ({
 }))
 vi.mock('@shared/db/models/UserBadge', () => ({
   UserBadge: { find: mocks.userBadgeFind },
+}))
+vi.mock('@shared/services/savedResumeRepository', () => ({
+  savedResumeRepository: { list: mocks.savedResumeList },
 }))
 
 import { generateDataExport } from '../services/dataExportService'
@@ -105,6 +109,12 @@ beforeEach(() => {
     savedResumes: [],
     starStories: [],
   }))
+  mocks.savedResumeList.mockResolvedValue({
+    mode: 'embedded',
+    libraryVersion: 0,
+    collectionCount: 0,
+    payloads: [],
+  })
 
   for (const find of [
     mocks.interviewSessionFind,
@@ -174,6 +184,45 @@ beforeEach(() => {
 })
 
 describe('GDPR Jobs apply-evidence export', () => {
+  it('exports the canonical saved-resume library selected by the repository', async () => {
+    mocks.userFindById.mockReturnValue(queryResult({
+      _id: { toString: () => USER_ID },
+      name: 'Candidate',
+      email: 'candidate@example.test',
+      savedResumes: [{ id: 'stale-embedded', name: 'Stale copy' }],
+      starStories: [],
+    }))
+    mocks.savedResumeList.mockResolvedValue({
+      mode: 'collection_only',
+      libraryVersion: 3,
+      collectionCount: 1,
+      payloads: [{
+        id: 'resume-canonical',
+        name: 'Canonical resume',
+        targetRole: 'Backend Engineer',
+        experience: [{ company: 'Acme' }],
+        education: [{ school: 'University' }],
+        skills: ['TypeScript'],
+        createdAt: '2026-08-01T10:00:00.000Z',
+        updatedAt: '2026-08-04T10:00:00.000Z',
+      }],
+    })
+
+    const exported = await generateDataExport(USER_ID)
+
+    expect(mocks.savedResumeList).toHaveBeenCalledWith(USER_ID)
+    expect(exported.resumes).toEqual([{
+      id: 'resume-canonical',
+      name: 'Canonical resume',
+      targetRole: 'Backend Engineer',
+      experience: [{ company: 'Acme' }],
+      education: [{ school: 'University' }],
+      skills: ['TypeScript'],
+      createdAt: '2026-08-01T10:00:00.000Z',
+      updatedAt: '2026-08-04T10:00:00.000Z',
+    }])
+  })
+
   it('preserves canonical click/report evidence and explicitly represents legacy gaps', async () => {
     const exported = await generateDataExport(USER_ID)
     const applications = exported.jobApplications as Array<Record<string, unknown>>

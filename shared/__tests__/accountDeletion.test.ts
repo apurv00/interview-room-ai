@@ -37,6 +37,7 @@ const mockJobAppDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockUsageDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockProductEventDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockJobsEmailSendDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
+const mockSavedResumeDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockWeaknessClusterDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockWaitlistDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
 const mockRawCollectionDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
@@ -74,6 +75,12 @@ vi.mock('@shared/db/models/User', () => ({
     findById: (...args: unknown[]) => mockUserFindById(...args),
     exists: (...args: unknown[]) => mockUserExists(...args),
     deleteOne: (...args: unknown[]) => mockUserDeleteOne(...args),
+  },
+}))
+
+vi.mock('@shared/db/models/SavedResume', () => ({
+  SavedResume: {
+    deleteMany: (...args: unknown[]) => mockSavedResumeDeleteMany(...args),
   },
 }))
 
@@ -580,6 +587,7 @@ describe('deleteUserAccount – R2 key coverage', () => {
     mockUsageDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockProductEventDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockJobsEmailSendDeleteMany.mockResolvedValue({ deletedCount: 0 })
+    mockSavedResumeDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockWeaknessClusterDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockWaitlistDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockRawCollectionDeleteMany.mockResolvedValue({ deletedCount: 0 })
@@ -717,6 +725,22 @@ describe('deleteUserAccount – R2 key coverage', () => {
     // path counts 0 here (no live connection in tests), but the KEY existing
     // proves the entry wasn't removed.
     expect(result.collectionsCleared).toHaveProperty('SavedJobDescription (legacy)')
+  })
+
+  it('deletes collection-backed saved resumes before removing the User fence', async () => {
+    const userId = '507f1f77bcf86cd799439011'
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+    mockSavedResumeDeleteMany.mockResolvedValueOnce({ deletedCount: 2 })
+
+    const result = await deleteUserAccount(userId, 'user@example.com')
+
+    const [filter] = mockSavedResumeDeleteMany.mock.calls[0] as [
+      { userId: unknown },
+    ]
+    expect(String(filter.userId)).toBe(userId)
+    expect(result.collectionsCleared.SavedResume).toBe(2)
+    expect(mockSavedResumeDeleteMany).toHaveBeenCalledTimes(1)
+    expect(mockUserDeleteOne).toHaveBeenCalledTimes(1)
   })
 
   it('projection requested by InterviewSession.find includes audio and screen keys', async () => {
