@@ -1,4 +1,28 @@
-import mongoose, { Schema, Document, Model } from 'mongoose'
+import mongoose, {
+  Schema,
+  Document,
+  Model,
+  type SchemaDefinition,
+} from 'mongoose'
+
+export const SAVED_RESUME_STORAGE_MODES = [
+  'embedded',
+  'dual_embedded_primary',
+  'dual_collection_primary',
+  'collection_only',
+] as const
+export type SavedResumeStorageMode =
+  (typeof SAVED_RESUME_STORAGE_MODES)[number]
+
+export const SAVED_RESUME_MIGRATION_ISSUE_CODES = [
+  'collection_fence_mismatch',
+  'missing_collection_row',
+  'unexpected_collection_row',
+  'payload_hash_mismatch',
+  'order_mismatch',
+] as const
+export type SavedResumeMigrationIssueCode =
+  (typeof SAVED_RESUME_MIGRATION_ISSUE_CODES)[number]
 
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId
@@ -406,8 +430,58 @@ const UserSchema = new Schema<IUser>(
   { timestamps: true }
 )
 
+// Billing v2 is intentionally attached as a narrow schema projection instead
+// of widening IUser. IUser is imported across the application, while these
+// fields are owned and typed by the payment services that read/write them.
+const BillingUserProjectionDefinition: SchemaDefinition = {
+  savedResumeStorageMode: {
+    type: String,
+    enum: SAVED_RESUME_STORAGE_MODES,
+    default: 'embedded',
+  },
+  savedResumeLibraryVersion: { type: Number, min: 0, default: 0 },
+  savedResumeCollectionCount: { type: Number, min: 0, default: 0 },
+  savedResumeMigration: {
+    sourceHash: { type: String, match: /^[a-f0-9]{64}$/ },
+    rowCount: { type: Number, min: 0 },
+    storageVersion: { type: Number, min: 0 },
+    verifiedVersion: { type: Number, min: 0 },
+    verifiedAt: { type: Date },
+    collectionActivatedAt: { type: Date },
+    embeddedContractedAt: { type: Date },
+    issueCodes: [{
+      type: String,
+      enum: SAVED_RESUME_MIGRATION_ISSUE_CODES,
+    }],
+  },
+  planVocabularyVersion: { type: Number, enum: [1, 2] },
+  legacyMonthlyInterviewResetAt: { type: Date },
+  entitlementSource: {
+    type: String,
+    enum: ['free', 'subscription', 'admin_grant'],
+  },
+  usagePeriodKey: { type: String },
+  interviewsUsed: { type: Number, min: 0 },
+  interviewLimit: { type: Number, min: 0 },
+  premiumResumesUsed: { type: Number, min: 0 },
+  premiumResumeLimit: { type: Number, min: 0 },
+  freeBasicResumeId: { type: String },
+  entitlementVersion: { type: Number, min: 0 },
+  buyerState: { type: String, trim: true, maxlength: 100 },
+  personalDataWriteVersion: { type: Number, min: 0, default: 0 },
+  externalDataWriteDrainUntil: { type: Date },
+  razorpayCustomerId: { type: String, sparse: true },
+}
+
+UserSchema.add(BillingUserProjectionDefinition)
+const storedPlanPath = UserSchema.path('plan')
+if (storedPlanPath instanceof Schema.Types.String) {
+  storedPlanPath.enum('plus')
+}
+
 UserSchema.index({ organizationId: 1, role: 1 })
 UserSchema.index({ stripeCustomerId: 1 }, { sparse: true })
+UserSchema.index({ razorpayCustomerId: 1 }, { unique: true, sparse: true })
 
 export const User: Model<IUser> =
   mongoose.models.User || mongoose.model<IUser>('User', UserSchema)

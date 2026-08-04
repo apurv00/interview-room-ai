@@ -82,6 +82,8 @@ const nextConfig = {
       ...(process.env.NODE_ENV !== 'production' ? ["'unsafe-eval'"] : []),
       'https://cdn.jsdelivr.net',
       'https://www.googletagmanager.com',
+      'https://checkout.razorpay.com',
+      'https://cdn.razorpay.com',
     ].join(' ')
     const contentSecurityPolicy = [
       "default-src 'self'",
@@ -89,7 +91,8 @@ const nextConfig = {
       "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
       "img-src 'self' data: https:",
       "font-src 'self' data:",
-      "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://api.deepgram.com wss://api.deepgram.com https://*.r2.cloudflarestorage.com https://*.google-analytics.com https://*.analytics.google.com https://us.i.posthog.com",
+      "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://api.deepgram.com wss://api.deepgram.com https://*.r2.cloudflarestorage.com https://*.google-analytics.com https://*.analytics.google.com https://us.i.posthog.com https://api.razorpay.com https://lumberjack.razorpay.com https://lumberjack-cx.razorpay.com https://lumberjack-metrics.razorpay.com",
+      "frame-src https://api.razorpay.com",
       "media-src 'self' blob: https://*.r2.cloudflarestorage.com",
       "worker-src 'self' blob:",
       "frame-ancestors 'none'",

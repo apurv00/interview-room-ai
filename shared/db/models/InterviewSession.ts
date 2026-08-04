@@ -1,4 +1,9 @@
-import mongoose, { Schema, Document, Model } from 'mongoose'
+import mongoose, {
+  Schema,
+  Document,
+  Model,
+  type SchemaDefinition,
+} from 'mongoose'
 import type {
   InterviewConfig,
   TranscriptEntry,
@@ -396,6 +401,16 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
   },
   { timestamps: true }
 )
+
+// Payment-owned session fencing is kept outside IInterviewSession so the
+// launch does not widen the shared document interface across unrelated flows.
+const PaymentSessionProjectionDefinition: SchemaDefinition = {
+  deletionPendingAt: { type: Date },
+  personalDataWriteVersion: { type: Number, min: 0, default: 0 },
+  personalDataWriteCapabilityExpiresAt: { type: Date },
+  externalDataWriteDrainUntil: { type: Date },
+}
+InterviewSessionSchema.add(PaymentSessionProjectionDefinition)
 
 InterviewSessionSchema.index({ userId: 1, createdAt: -1 })
 InterviewSessionSchema.index({ organizationId: 1, createdAt: -1 })

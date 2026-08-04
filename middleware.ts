@@ -100,7 +100,10 @@ export default withAuth(
     response.headers.set('X-Content-Type-Options', 'nosniff')
     response.headers.set('X-Frame-Options', 'DENY')
     response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
-    response.headers.set('Permissions-Policy', 'geolocation=(), payment=(), usb=()')
+    response.headers.set(
+      'Permissions-Policy',
+      'geolocation=(), payment=(self "https://api.razorpay.com"), usb=()',
+    )
 
     // CMS routes require platform_admin role
     if (pathname.startsWith('/cms')) {
@@ -199,6 +202,11 @@ export default withAuth(
           pathname.startsWith('/invite/') ||
           pathname.startsWith('/api/invite/') ||
           pathname.startsWith('/api/qa/automation-login')
+          || pathname === '/api/billing/catalog'
+          || pathname === '/api/billing/analytics/checkout-observation'
+          // Razorpay has no NextAuth session. This exact route authenticates
+          // the raw request body with the mode-specific webhook HMAC secret.
+          || pathname === '/api/billing/webhooks/razorpay'
         ) {
           return true
         }

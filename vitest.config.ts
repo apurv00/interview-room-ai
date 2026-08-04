@@ -8,6 +8,18 @@ export default defineConfig({
     alias: {
       '@shared': path.resolve(__dirname, 'shared'),
       '@modules': path.resolve(__dirname, 'modules'),
+      '@customer-billing': path.resolve(
+        __dirname,
+        'modules/customer-billing',
+      ),
+      '@financial-ledger': path.resolve(
+        __dirname,
+        'modules/financial-ledger',
+      ),
+      '@payment-subscription-dunning': path.resolve(
+        __dirname,
+        'modules/payment-subscription-dunning',
+      ),
       '@interview': path.resolve(__dirname, 'modules/interview'),
       '@learn': path.resolve(__dirname, 'modules/learn'),
       '@b2b': path.resolve(__dirname, 'modules/b2b'),
@@ -15,6 +27,11 @@ export default defineConfig({
       '@resume': path.resolve(__dirname, 'modules/resume'),
       '@feedback': path.resolve(__dirname, 'modules/feedback'),
       '@jobs': path.resolve(__dirname, 'modules/jobs'),
+      '@payments/customer-billing-authority': path.resolve(
+        __dirname,
+        'modules/payments/services/customerBillingReadService.ts',
+      ),
+      '@payments': path.resolve(__dirname, 'modules/payments'),
       '@': path.resolve(__dirname, '.'),
     },
   },
