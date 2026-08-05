@@ -51,6 +51,7 @@ as external services.
 | Staging billing catalog | `GET /api/billing/catalog` returns 503 with `Retry-After: 5`; that header identifies the fail-closed billing rate-limit precheck, before catalog lookup. The local rate-limit HMAC is valid, leaving deployed-variable absence/mismatch or Redis `EVAL` failure | Blocker |
 | Staging environment manifest | The local `.env.staging` contains placeholder Mongo/Redis and six other configuration values, reuses the Vercel Production NextAuth secret, and lacks `HEALTH_CHECK_TOKEN`, `DEPLOYMENT_COMMIT_SHA`, and `INNGEST_APP_ID` | Not deployable as-is |
 | Release artifact | Node 24 production build succeeds; the standalone server returns public liveness 200 and dependency readiness 503 when Mongo/Redis are absent | Application artifact pass; Docker image build still unverified |
+| Combined release candidate | PR #601 head `5286a4beda417e2d2431b232f90b5c841d59b6ee` accepts all Oracle-readiness commits without conflict; 45 focused health/coupon tests and the Node 24 production build pass | Local-only pass; not pushed or deployed |
 
 The full Playwright workflow is not read-only. Its Jobs flow inserts anonymous
 `ProductEvent` rows, consumes Redis rate-limit counters, and rendered pages may
