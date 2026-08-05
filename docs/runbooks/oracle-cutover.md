@@ -47,6 +47,8 @@ as external services.
 | Deployment identity | Main supports authenticated health plus exact commit identity; no completed protected staging gate exists | Blocker |
 | Monitoring/backup | Mongo logical backup was tested; OCI alarms and Coolify control-plane restore are unproven | Blocker |
 | Local environment recovery | Razorpay accepted both locally stored Test and Live key pairs through a read-only plans API request; webhook secrets remain unverified | Partial |
+| Razorpay plans | Test and Live each contain exactly one INR monthly plan at ₹599 and exactly one at ₹999 | Pass |
+| Staging billing catalog | `GET /api/billing/catalog` returns 503 with `Retry-After: 5`; that header identifies the fail-closed billing rate-limit precheck, before catalog lookup. The local rate-limit HMAC is valid, leaving deployed-variable absence/mismatch or Redis `EVAL` failure | Blocker |
 | Staging environment manifest | The local `.env.staging` contains placeholder Mongo/Redis and six other configuration values, reuses the Vercel Production NextAuth secret, and lacks `HEALTH_CHECK_TOKEN`, `DEPLOYMENT_COMMIT_SHA`, and `INNGEST_APP_ID` | Not deployable as-is |
 | Release artifact | Node 24 production build succeeds; the standalone server returns public liveness 200 and dependency readiness 503 when Mongo/Redis are absent | Application artifact pass; Docker image build still unverified |
 
