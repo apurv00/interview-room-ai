@@ -39,6 +39,7 @@ as external services.
 | Oracle health | Public `GET /api/health` returns 200 but intentionally hides dependency state | Insufficient |
 | Public app parity | The 2026-08-05 anonymous Playwright baseline passed 48 checks on Oracle staging; the seven failures reproduced identically on Vercel production and one test was skipped | No Oracle-specific public-page regression found; not a full acceptance gate |
 | Staging hostname parity | `staging` and `cms.staging` have working TLS; `hire.staging`, `learn.staging`, `resume.staging`, and `saas.staging` have no public DNS and return Traefik 503 when forced to the Oracle origin | Blocker |
+| Oracle network boundary | External probes find only SSH, HTTP, and HTTPS reachable; app `3000`, MongoDB `27017`, Redis `6379`, and common admin ports are closed or filtered | Pass from public Internet |
 | Production origin | `www.interviewprep.guru` still returns Vercel headers | Not cut over |
 | Mongo topology | Earlier Oracle worksheet records standalone MongoDB | Blocker |
 | Redis durability | Reachability was previously claimed; AOF/no-eviction/restart continuity is not retained | Blocker |
@@ -47,6 +48,7 @@ as external services.
 | Monitoring/backup | Mongo logical backup was tested; OCI alarms and Coolify control-plane restore are unproven | Blocker |
 | Local environment recovery | Razorpay accepted both locally stored Test and Live key pairs through a read-only plans API request; webhook secrets remain unverified | Partial |
 | Staging environment manifest | The local `.env.staging` contains placeholder Mongo/Redis and six other configuration values, reuses the Vercel Production NextAuth secret, and lacks `HEALTH_CHECK_TOKEN`, `DEPLOYMENT_COMMIT_SHA`, and `INNGEST_APP_ID` | Not deployable as-is |
+| Release artifact | Node 24 production build succeeds; the standalone server returns public liveness 200 and dependency readiness 503 when Mongo/Redis are absent | Application artifact pass; Docker image build still unverified |
 
 The full Playwright workflow is not read-only. Its Jobs flow inserts anonymous
 `ProductEvent` rows, consumes Redis rate-limit counters, and rendered pages may
