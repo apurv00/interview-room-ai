@@ -32,7 +32,7 @@ const BILLING_FAQ = [
   {
     title: 'How do coupons work?',
     content:
-      'Prices stay at list price until you apply an eligible coupon code during checkout. Coupons do not stack.',
+      'The best eligible automatic coupon is applied for you. If you have a targeted code, use “Have a coupon code?” before secure checkout. Coupons never stack.',
   },
   {
     title: 'What happens after the discounted month?',

@@ -97,14 +97,12 @@ function quote(withCoupon: boolean): ResolvedCustomerBillingQuote {
 
 function dependencies(
   resolved: ResolvedCustomerBillingQuote,
-  autoCouponRequired = true,
 ): SubscriptionCheckoutDependencies & {
   createIntent: ReturnType<typeof vi.fn>
 } {
   return {
     resolveSaleContext: vi.fn(async () => ({
       providerMode: 'test',
-      autoCouponRequired,
       buyerSnapshot: {
         name: 'Founder',
         email: 'founder@example.invalid',
@@ -121,23 +119,9 @@ function dependencies(
   }
 }
 
-describe('subscription launch coupon requirement', () => {
-  it('blocks checkout before persistence when no launch coupon applies', async () => {
-    const deps = dependencies(quote(false), true)
-
-    await expect(createSubscriptionCheckout({
-      userId,
-      idempotencyKey: 'launch:no-coupon',
-      request: { planKey: 'plus' },
-    }, deps)).rejects.toMatchObject({
-      code: 'commercial_unavailable',
-    })
-
-    expect(deps.createIntent).not.toHaveBeenCalled()
-  })
-
-  it('persists a full-list-price intent when a coupon is not required', async () => {
-    const deps = dependencies(quote(false), false)
+describe('subscription launch coupon fallback', () => {
+  it('persists the authoritative list price when no coupon applies', async () => {
+    const deps = dependencies(quote(false))
     deps.createIntent.mockResolvedValueOnce({
       intentId: new mongoose.Types.ObjectId().toString(),
       receipt: 'receipt_list_price',
@@ -168,6 +152,43 @@ describe('subscription launch coupon requirement', () => {
       .not.toHaveProperty('couponReservation')
   })
 
+  it('persists the selected automatic coupon and discounted price', async () => {
+    const deps = dependencies(quote(true))
+    deps.createIntent.mockResolvedValueOnce({
+      intentId: new mongoose.Types.ObjectId().toString(),
+      receipt: 'receipt_discounted',
+      requestHash: 'e'.repeat(64),
+      status: 'created',
+      reused: false,
+    })
+    deps.loadIntent = vi.fn(async () => null)
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:automatic-coupon',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quoteSnapshot: expect.objectContaining({
+          listPricePaise: 59_900,
+          discountPaise: 10_000,
+          payablePaise: 49_900,
+        }),
+        couponReservation: expect.objectContaining({
+          campaignId,
+          campaignRevision: 1,
+          campaignModeSnapshot: 'automatic',
+          discountPaise: 10_000,
+          discountedBillingCycles: 1,
+        }),
+      }),
+    )
+  })
+
   it('does not retry at list price when coupon capacity is exhausted', async () => {
     const deps = dependencies(quote(true))
     deps.createIntent.mockRejectedValueOnce(
@@ -183,5 +204,17 @@ describe('subscription launch coupon requirement', () => {
     })
 
     expect(deps.createIntent).toHaveBeenCalledTimes(1)
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quoteSnapshot: expect.objectContaining({
+          discountPaise: 10_000,
+          payablePaise: 49_900,
+        }),
+        couponReservation: expect.objectContaining({
+          campaignId,
+          discountPaise: 10_000,
+        }),
+      }),
+    )
   })
 })

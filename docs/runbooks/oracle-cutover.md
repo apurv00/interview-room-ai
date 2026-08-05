@@ -80,42 +80,66 @@ Change for Oracle:
 
 Copy and verify from the provider/source of truth:
 
-- AI/speech: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`,
-  `GOOGLE_AI_API_KEY`, `DEEPGRAM_API_KEY`, `AZURE_SPEECH_KEY`,
-  `AZURE_SPEECH_REGION`, and `AZURE_SPEECH_VOICE`.
+- Core authentication: `NEXTAUTH_SECRET`. Do not infer it from a masked or
+  write-only deployment value; recover the approved source value or rotate it
+  as a coordinated session-invalidating change.
+- AI/speech: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
+  `GROQ_API_KEY`, `GOOGLE_AI_API_KEY`, `DEEPGRAM_API_KEY`,
+  `DEEPGRAM_TTS_MODEL`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
+  `AZURE_SPEECH_VOICE`.
 - OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`,
   and `GITHUB_CLIENT_SECRET`.
 - Inngest/email/jobs: `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`,
-  `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_TOKEN_SECRET`, and
-  `RAPIDAPI_KEY`.
+  `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_TOKEN_SECRET`, optional
+  `EMAIL_TOKEN_SECRET_PREVIOUS`, and `RAPIDAPI_KEY`.
 - R2: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
   `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, and
   `REPLAY_RECORDING_RETENTION_DAYS`.
-- Analytics/QA and all intentionally enabled feature flags.
+- Analytics/QA build and runtime values: `NEXT_PUBLIC_GA_MEASUREMENT_ID`,
+  `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST`,
+  `QA_AUTOMATION_ENABLED`, `QA_AUTOMATION_SECRET`, and
+  `QA_AUTOMATION_EMAIL`. Keep QA automation disabled in production unless its
+  complete access-control contract is intentionally approved.
+- Public build flags: `NEXT_PUBLIC_FEATURE_MULTIMODAL`,
+  `NEXT_PUBLIC_FEATURE_PRIVACY_MODE`, `NEXT_PUBLIC_FEATURE_VOICE_PICKER`,
+  `NEXT_PUBLIC_FEATURE_ADAPTIVE_GRACE`, and
+  `NEXT_PUBLIC_DEBUG_DEEPGRAM_PACKETS`. These must be present during the
+  Coolify image build, not only at container runtime.
+- Runtime tuning: `LOG_LEVEL`, `SCORING_V2_CLAUDE_WEIGHT`,
+  `SCORING_V2_FORMULA_WEIGHT`, `SCORING_V2_DISAGREEMENT_THRESHOLD`,
+  `SCORING_V2_DISAGREE_CLAUDE_WEIGHT`, and
+  `SCORING_V2_DISAGREE_FORMULA_WEIGHT` when explicitly configured.
+- Preserve every explicitly configured `FEATURE_FLAG_*` value, including
+  deliberate `false` overrides; absence is not assumed equivalent to parity.
 
 Before enabling billing, provision and validate the complete mode-specific
 payment set. Production currently has no Razorpay Live/payment-security
 manifest in Vercel, so Preview/Test values are not a production source:
 
 - `RAZORPAY_TEST_KEY_ID`, `RAZORPAY_TEST_KEY_SECRET`,
-  `RAZORPAY_TEST_WEBHOOK_SECRET`, and optional previous webhook secret;
+  `RAZORPAY_TEST_WEBHOOK_SECRET`, and optional
+  `RAZORPAY_TEST_WEBHOOK_PREVIOUS_SECRET`;
 - `RAZORPAY_LIVE_KEY_ID`, `RAZORPAY_LIVE_KEY_SECRET`,
-  `RAZORPAY_LIVE_WEBHOOK_SECRET`, and optional previous webhook secret;
+  `RAZORPAY_LIVE_WEBHOOK_SECRET`, and optional
+  `RAZORPAY_LIVE_WEBHOOK_PREVIOUS_SECRET`;
 - `BILLING_RATE_LIMIT_HMAC_SECRET_BASE64`,
   `BILLING_ROLLOUT_AUTHORITY_HMAC_V1_SECRET_BASE64`,
   `BILLING_ROLLOUT_CMS_CSRF_HMAC_V1_SECRET_BASE64`, and
   `BILLING_ROLLOUT_SEED_ID`;
 - `PAYMENT_COMMERCIAL_ANALYTICS_HMAC_V1_SECRET_BASE64`,
   `PAYMENT_WEBHOOK_PAYLOAD_KEY_BASE64`,
-  `PAYMENT_WEBHOOK_PAYLOAD_KEY_VERSION`, and any configured previous payload
-  key/version;
-- the customer-communication, tier-operation cursor, financial-document, and
-  interview-authority HMAC/key variables referenced by the deployed revision.
+  `PAYMENT_WEBHOOK_PAYLOAD_KEY_VERSION`, and the rotation pair
+  `PAYMENT_WEBHOOK_PAYLOAD_PREVIOUS_KEY_BASE64` plus
+  `PAYMENT_WEBHOOK_PAYLOAD_PREVIOUS_KEY_VERSION` when configured;
+- `PR8_INTERVIEW_AUTHORITY_HMAC_V1_SECRET_BASE64` and every other exact
+  payment authority name reported by the deployed revision's configuration
+  validator. Do not invent or copy obsolete names from an older deployment.
 
 Do **not** copy `VERCEL`, `VERCEL_URL`, `VERCEL_DEPLOYMENT_ID`,
 `VERCEL_GIT_COMMIT_SHA`, `VERCEL_REGION`, or `VERCEL_OIDC_TOKEN`.
 Oracle must not pretend to be a Vercel request path, particularly for trusted
-client-IP handling.
+client-IP handling. Keep `NEXT_PUBLIC_ENABLE_SPEED_INSIGHTS` unset on Oracle;
+otherwise the application attempts to enable a Vercel-specific client.
 
 ## Gate A — harden the existing Oracle stack
 

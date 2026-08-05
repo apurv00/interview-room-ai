@@ -147,7 +147,6 @@ export interface FutureSubscriptionCheckoutInput {
 
 export interface SubscriptionCheckoutSaleContext {
   providerMode: ProviderMode
-  autoCouponRequired?: boolean
   buyerSnapshot: Readonly<{
     name: string
     email: string
@@ -567,7 +566,6 @@ async function defaultResolveSaleContext(
   const buyerSnapshot = checkoutBuyerSnapshot(buyer, billingProfile)
   return {
     providerMode: finalGate.providerMode,
-    autoCouponRequired: config.autoCouponRequired,
     buyerSnapshot,
   }
 }
@@ -1901,12 +1899,6 @@ export async function createSubscriptionCheckout(
     const useCoupon = Boolean(
       resolved.selectedCandidate && commercial.couponAccepted,
     )
-    if (!useCoupon && sale.autoCouponRequired !== false) {
-      throw failure(
-        'commercial_unavailable',
-        'The launch discount is temporarily unavailable',
-      )
-    }
     const createIntent =
       dependencies.createIntent ?? createOrReuseCheckoutIntent
     let local: CheckoutIntentCreationResult
@@ -2093,12 +2085,6 @@ export async function createFutureSubscriptionCheckout(
     const useCoupon = Boolean(
       resolved.selectedCandidate && commercial.couponAccepted,
     )
-    if (!useCoupon && sale.autoCouponRequired !== false) {
-      throw failure(
-        'commercial_unavailable',
-        'The launch discount is temporarily unavailable',
-      )
-    }
     const createIntent =
       dependencies.createIntent ?? createOrReuseCheckoutIntent
     let local: CheckoutIntentCreationResult
