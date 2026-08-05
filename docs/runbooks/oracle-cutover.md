@@ -44,6 +44,64 @@ as external services.
 | Deployment identity | Main supports authenticated health plus exact commit identity; no completed protected staging gate exists | Blocker |
 | Monitoring/backup | Mongo logical backup was tested; OCI alarms and Coolify control-plane restore are unproven | Blocker |
 
+## Oracle environment manifest
+
+Export values from their original password-manager/provider source. A Vercel
+variable marked Sensitive is write-only and cannot be used to visually confirm
+the original value; overwrite from the known source or rotate it.
+
+Change for Oracle:
+
+- `MONGODB_URI`: Oracle internal replica-set URI with the correct database,
+  auth source, and `replicaSet=rs0`.
+- `REDIS_URL`: Oracle internal durable Redis URI.
+- `NEXTAUTH_URL`, `APP_URL`, `NEXT_PUBLIC_ROOT_DOMAIN`, and
+  `NEXT_PUBLIC_SITE_URL`: canonical production hostnames.
+- `INNGEST_APP_ID`: explicit and distinct for staging and production.
+- `HEALTH_CHECK_TOKEN`: newly generated independently per environment.
+- `DEPLOYMENT_COMMIT_SHA=$SOURCE_COMMIT`,
+  `BILLING_ROLLOUT_COMMIT_SHA=$SOURCE_COMMIT`, and a stable
+  `BILLING_ROLLOUT_DEPLOYMENT_ID`: self-hosted deployment identity.
+
+Copy and verify from the provider/source of truth:
+
+- AI/speech: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`,
+  `GOOGLE_AI_API_KEY`, `DEEPGRAM_API_KEY`, `AZURE_SPEECH_KEY`,
+  `AZURE_SPEECH_REGION`, and `AZURE_SPEECH_VOICE`.
+- OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`,
+  and `GITHUB_CLIENT_SECRET`.
+- Inngest/email/jobs: `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`,
+  `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_TOKEN_SECRET`, and
+  `RAPIDAPI_KEY`.
+- R2: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+  `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, and
+  `REPLAY_RECORDING_RETENTION_DAYS`.
+- Analytics/QA and all intentionally enabled feature flags.
+
+Before enabling billing, provision and validate the complete mode-specific
+payment set. Production currently has no Razorpay Live/payment-security
+manifest in Vercel, so Preview/Test values are not a production source:
+
+- `RAZORPAY_TEST_KEY_ID`, `RAZORPAY_TEST_KEY_SECRET`,
+  `RAZORPAY_TEST_WEBHOOK_SECRET`, and optional previous webhook secret;
+- `RAZORPAY_LIVE_KEY_ID`, `RAZORPAY_LIVE_KEY_SECRET`,
+  `RAZORPAY_LIVE_WEBHOOK_SECRET`, and optional previous webhook secret;
+- `BILLING_RATE_LIMIT_HMAC_SECRET_BASE64`,
+  `BILLING_ROLLOUT_AUTHORITY_HMAC_V1_SECRET_BASE64`,
+  `BILLING_ROLLOUT_CMS_CSRF_HMAC_V1_SECRET_BASE64`, and
+  `BILLING_ROLLOUT_SEED_ID`;
+- `PAYMENT_COMMERCIAL_ANALYTICS_HMAC_V1_SECRET_BASE64`,
+  `PAYMENT_WEBHOOK_PAYLOAD_KEY_BASE64`,
+  `PAYMENT_WEBHOOK_PAYLOAD_KEY_VERSION`, and any configured previous payload
+  key/version;
+- the customer-communication, tier-operation cursor, financial-document, and
+  interview-authority HMAC/key variables referenced by the deployed revision.
+
+Do **not** copy `VERCEL`, `VERCEL_URL`, `VERCEL_DEPLOYMENT_ID`,
+`VERCEL_GIT_COMMIT_SHA`, `VERCEL_REGION`, or `VERCEL_OIDC_TOKEN`.
+Oracle must not pretend to be a Vercel request path, particularly for trusted
+client-IP handling.
+
 ## Gate A — harden the existing Oracle stack
 
 ### A1. Preserve access and recovery
