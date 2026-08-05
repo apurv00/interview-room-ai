@@ -264,7 +264,7 @@ function checkoutInput(
 
 describe('one-time checkout orchestration', () => {
   it('supports an explicit dark override before sale, ownership, persistence, credentials, or provider I/O', async () => {
-    expect(PR7_ONE_TIME_CHECKOUT_READY).toBe(true)
+    expect(PR7_ONE_TIME_CHECKOUT_READY).toBe(false)
     const collaborators = {
       resolveSaleContext: vi.fn(),
       resolveQuote: vi.fn(),

@@ -212,10 +212,8 @@ function immutableCouponTerms() {
   return CouponRevisionTermsSchema.parse({
     discountPaise: 10_000,
     applicablePlanKeys: ['plus'],
-    discountedBillingCycles: 3,
-    razorpayOfferIdByMode: {
-      live: 'offer_Launch100',
-    },
+    discountedBillingCycles: 1,
+    razorpayOfferIdByMode: {},
     startsAt: new Date('2026-06-01T00:00:00.000Z'),
     endsAt: new Date('2026-09-01T00:00:00.000Z'),
     priority: 100,
@@ -234,7 +232,7 @@ function immutableCouponTerms() {
     visibility: ['pricing', 'checkout'],
     bannerText: 'Launch offer: ₹100 off',
     termsText:
-      '₹100 off the first three billing cycles, then renews at ₹599 per month.',
+      '₹100 off the first billing cycle, then renews at ₹599 per month.',
   })
 }
 
@@ -686,7 +684,7 @@ describe('customer billing summary privacy boundary', () => {
           currentPeriodEnd: periodEnd,
           cancelAtPeriodEnd: false,
           couponCampaignId,
-          discountedCyclesRemaining: 2,
+          discountedCyclesRemaining: 0,
           createdAt: new Date('2026-07-01T00:00:00.000Z'),
           updatedAt: fixedNow,
           razorpaySubscriptionId: 'sub_private',
@@ -724,7 +722,7 @@ describe('customer billing summary privacy boundary', () => {
           discountPaise: 10_000,
           payablePaise: 49_900,
           renewalPricePaise: 59_900,
-          discountedBillingCycles: 3,
+          discountedBillingCycles: 1,
           couponCampaignId,
           couponCampaignRevision: 2,
         },
@@ -742,7 +740,7 @@ describe('customer billing summary privacy boundary', () => {
         planKey: 'plus',
         campaignModeSnapshot: 'automatic',
         discountPaise: 10_000,
-        discountedBillingCycles: 3,
+        discountedBillingCycles: 1,
         status: 'converted',
         capacityDisposition: 'converted',
         terminalEvidenceKey: 'private-reservation-evidence',
@@ -761,11 +759,6 @@ describe('customer billing summary privacy boundary', () => {
         },
         approval: {
           contentHash: couponContentHash,
-        },
-        providerVerification: {
-          live: {
-            remoteOfferId: 'offer_private',
-          },
         },
       }),
     )
@@ -834,7 +827,7 @@ describe('customer billing summary privacy boundary', () => {
         billingHealth: 'healthy',
         planKey: 'plus',
         status: 'active',
-        discountedCyclesRemaining: 2,
+        discountedCyclesRemaining: 0,
         currentCoupon: {
           source: 'subscription_checkout',
           campaignId: couponCampaignId.toString(),
@@ -842,10 +835,10 @@ describe('customer billing summary privacy boundary', () => {
           mode: 'automatic',
           displayText: 'Launch offer: ₹100 off',
           termsText:
-            '₹100 off the first three billing cycles, then renews at ₹599 per month.',
+            '₹100 off the first billing cycle, then renews at ₹599 per month.',
         },
         nextCharge: {
-          amountPaise: 49_900,
+          amountPaise: 59_900,
           currency: 'INR',
           scheduledAt: '2026-08-01T00:00:00.000Z',
         },
@@ -869,7 +862,6 @@ describe('customer billing summary privacy boundary', () => {
       'paymentMethod',
       'capturedPaise',
       'private-reservation-evidence',
-      'offer_private',
     ]) {
       expect(serialized).not.toContain(privateValue)
     }
@@ -932,7 +924,7 @@ describe('customer billing summary privacy boundary', () => {
           currentPeriodEnd: periodEnd,
           cancelAtPeriodEnd: false,
           couponCampaignId,
-          discountedCyclesRemaining: 2,
+          discountedCyclesRemaining: 0,
           createdAt: periodStart,
           updatedAt: fixedNow,
         },
@@ -963,7 +955,7 @@ describe('customer billing summary privacy boundary', () => {
           discountPaise: 10_000,
           payablePaise: 49_900,
           renewalPricePaise: 59_900,
-          discountedBillingCycles: 3,
+          discountedBillingCycles: 1,
           couponCampaignId,
           couponCampaignRevision: 2,
         },
@@ -980,7 +972,7 @@ describe('customer billing summary privacy boundary', () => {
         planKey: 'plus',
         campaignModeSnapshot: 'automatic',
         discountPaise: 10_000,
-        discountedBillingCycles: 3,
+        discountedBillingCycles: 1,
         status: 'converted',
         capacityDisposition: 'converted',
       }),

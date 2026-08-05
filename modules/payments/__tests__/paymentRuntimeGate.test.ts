@@ -21,11 +21,11 @@ function config(
 }
 
 describe('payment runtime gates', () => {
-  it('enables Test creation while keeping Live creation dark', () => {
+  it('enables both Test and approved Live creation', () => {
     expect(CURRENT_PAYMENT_CODE_READINESS).toEqual({
       remoteCreationReady: true,
       recoveryReady: true,
-      liveCreationReady: false,
+      liveCreationReady: true,
     })
     expect(evaluatePaymentSaleGate(
       config({ sellingMode: 'qa', qaUserIds: [qaUserId] }),

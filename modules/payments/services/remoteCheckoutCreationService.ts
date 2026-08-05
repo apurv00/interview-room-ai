@@ -102,7 +102,8 @@ export interface TrustedRemoteCheckoutIntent {
 export interface TrustedSubscriptionCheckoutSpec {
   planKey: 'plus' | 'pro'
   razorpayPlanId: string
-  razorpayOfferId?: string
+  upfrontAmountPaise?: number
+  upfrontItemName?: string
   totalCount: number
   purpose: CheckoutIntentPurpose
   planChangeRequestId?: string
@@ -274,10 +275,18 @@ function assertIntentShape(intent: TrustedRemoteCheckoutIntent): void {
       )
     }
     if (intent.purpose === 'acquisition') {
+      const couponUpfrontLifecycle =
+        intent.discountPaise > 0 &&
+        intent.discountedBillingCycles === 1 &&
+        exactEpochSecondDate(intent.requestedStartAt) &&
+        intent.authorizationExpiresAt < intent.requestedStartAt
       if (
         intent.leaseLane !== 'a' ||
         intent.planChangeRequestId !== undefined ||
-        intent.requestedStartAt !== undefined
+        (
+          intent.requestedStartAt !== undefined &&
+          !couponUpfrontLifecycle
+        )
       ) {
         throw failure(
           'intent_shape_invalid',
@@ -327,10 +336,6 @@ function assertSubscriptionSpec(
   if (
     spec.planKey !== intent.planKey ||
     !/^plan_[A-Za-z0-9]+$/.test(spec.razorpayPlanId) ||
-    (
-      spec.razorpayOfferId !== undefined &&
-      !/^offer_[A-Za-z0-9]+$/.test(spec.razorpayOfferId)
-    ) ||
     !Number.isSafeInteger(spec.totalCount) ||
     spec.totalCount <= 0 ||
     spec.purpose !== intent.purpose ||
@@ -350,10 +355,26 @@ function assertSubscriptionSpec(
     )
   }
   const discounted = intent.discountPaise > 0
-  if (discounted !== (spec.razorpayOfferId !== undefined)) {
+  const hasUpfrontAmount = spec.upfrontAmountPaise !== undefined
+  if (
+    discounted !== hasUpfrontAmount ||
+    (
+      discounted &&
+      (
+        intent.purpose !== 'acquisition' ||
+        intent.discountedBillingCycles !== 1 ||
+        spec.startAtEpochSeconds === undefined ||
+        spec.upfrontAmountPaise !== intent.payablePaise ||
+        typeof spec.upfrontItemName !== 'string' ||
+        spec.upfrontItemName.trim().length < 1 ||
+        spec.upfrontItemName.length > 100
+      )
+    ) ||
+    (!discounted && spec.upfrontItemName !== undefined)
+  ) {
     throw failure(
       'subscription_spec_unavailable',
-      'Trusted subscription Offer does not match the checkout quote',
+      'Trusted subscription upfront amount does not match the checkout quote',
     )
   }
   if (
@@ -415,7 +436,7 @@ function assertSubscriptionMatches(
       subscription.id !== expectedRemoteId
     ) ||
     subscription.planId !== spec.razorpayPlanId ||
-    subscription.offerId !== spec.razorpayOfferId ||
+    subscription.offerId !== undefined ||
     subscription.totalCount !== spec.totalCount ||
     subscription.authorizationExpiresAtEpochSeconds !==
       spec.authorizationExpiresAtEpochSeconds ||
@@ -428,6 +449,10 @@ function assertSubscriptionMatches(
     subscription.notes.catalog_version !== intent.catalogVersion ||
     subscription.notes.checkout_purpose !== intent.purpose ||
     subscription.notes.subscription_lease_lane !== intent.leaseLane ||
+    subscription.notes.coupon_upfront_amount_paise !==
+      spec.upfrontAmountPaise ||
+    subscription.notes.coupon_discounted_billing_cycles !==
+      intent.discountedBillingCycles ||
     subscription.notes.plan_change_request_id !==
       intent.planChangeRequestId?.toString()
   ) {
@@ -808,8 +833,14 @@ async function createOrRecoverSubscription(input: {
     created = await adapter.createSubscription({
       planId: spec.razorpayPlanId,
       totalCount: spec.totalCount,
-      ...(spec.razorpayOfferId
-        ? { offerId: spec.razorpayOfferId }
+      ...(spec.upfrontAmountPaise !== undefined
+        ? {
+            upfrontItem: {
+              name: spec.upfrontItemName as string,
+              amountPaise: spec.upfrontAmountPaise,
+              currency: 'INR' as const,
+            },
+          }
         : {}),
       ...(spec.startAtEpochSeconds !== undefined
         ? { startAtEpochSeconds: spec.startAtEpochSeconds }
@@ -823,6 +854,14 @@ async function createOrRecoverSubscription(input: {
         catalog_version: intent.catalogVersion,
         checkout_purpose: spec.purpose,
         subscription_lease_lane: spec.leaseLane,
+        ...(spec.upfrontAmountPaise !== undefined
+          ? {
+              coupon_upfront_amount_paise:
+                spec.upfrontAmountPaise,
+              coupon_discounted_billing_cycles:
+                intent.discountedBillingCycles as number,
+            }
+          : {}),
         ...(spec.planChangeRequestId
           ? {
               plan_change_request_id:

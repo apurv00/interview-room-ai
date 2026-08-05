@@ -4,6 +4,7 @@ import {
 } from './paymentCommercialAnalyticsComposition'
 import {
   fulfillSubscriptionCycleWithCommercialAnalytics,
+  fulfillSubscriptionUpfrontCycleWithCommercialAnalytics,
   recoverChargeFulfillmentWithCommercialAnalytics,
 } from './entitlementCommercialAnalyticsComposition'
 import {
@@ -17,6 +18,7 @@ import {
   type FutureSubscriptionAuthorizationEffectInput,
   type PersistOneTimeWebhookCapture,
   type SubscriptionChargedEffectInput,
+  type SubscriptionUpfrontEffectInput,
   type WebhookDomainDispatchDependencies,
   type WebhookDomainEffectHandlers,
 } from '@payments/services/webhookDomainDispatchService'
@@ -30,6 +32,8 @@ type RecoverChargeFulfillment =
   typeof recoverChargeFulfillmentWithCommercialAnalytics
 type FulfillSubscriptionCycle =
   typeof fulfillSubscriptionCycleWithCommercialAnalytics
+type FulfillSubscriptionUpfrontCycle =
+  typeof fulfillSubscriptionUpfrontCycleWithCommercialAnalytics
 type PersistPaymentState =
   typeof persistPaymentStateWithCommercialAnalytics
 type PersistSubscriptionState = typeof persistSubscriptionState
@@ -41,6 +45,7 @@ export interface PaymentWebhookLaunchCompositionDependencies {
   persistCapturedCheckout?: PersistCapturedCheckout
   recoverChargeFulfillment?: RecoverChargeFulfillment
   fulfillSubscriptionCycle?: FulfillSubscriptionCycle
+  fulfillSubscriptionUpfrontCycle?: FulfillSubscriptionUpfrontCycle
   persistPaymentState?: PersistPaymentState
   persistSubscriptionState?: PersistSubscriptionState
   observeFutureSubscriptionAuthorization?:
@@ -70,6 +75,29 @@ function subscriptionCycleInput(
       ...(input.razorpayOrderId
         ? { razorpayOrderId: input.razorpayOrderId }
         : {}),
+    },
+    payment: input.payment,
+    invoice: input.invoice,
+    subscription: input.subscription,
+  }
+}
+
+function subscriptionUpfrontInput(
+  input: SubscriptionUpfrontEffectInput,
+) {
+  return {
+    providerMode: input.providerMode,
+    references: {
+      inboxEventId: input.inboxEventId,
+      providerMode: input.providerMode,
+      kind: input.eventType === 'payment.captured'
+        ? 'payment' as const
+        : 'subscription' as const,
+      eventType: input.eventType,
+      razorpaySubscriptionId: input.razorpaySubscriptionId,
+      razorpayPaymentId: input.razorpayPaymentId,
+      razorpayInvoiceId: input.razorpayInvoiceId,
+      razorpayOrderId: input.razorpayOrderId,
     },
     payment: input.payment,
     invoice: input.invoice,
@@ -175,6 +203,9 @@ export function createPaymentWebhookLaunchHandler(
   const fulfillSubscriptionCycle =
     dependencies.fulfillSubscriptionCycle ??
     fulfillSubscriptionCycleWithCommercialAnalytics
+  const fulfillSubscriptionUpfrontCycle =
+    dependencies.fulfillSubscriptionUpfrontCycle ??
+    fulfillSubscriptionUpfrontCycleWithCommercialAnalytics
   const persistPaymentState =
     dependencies.persistPaymentState ??
     persistPaymentStateWithCommercialAnalytics
@@ -201,6 +232,17 @@ export function createPaymentWebhookLaunchHandler(
     },
     handleSubscriptionCharged: async (input) => {
       await fulfillSubscriptionCycle(subscriptionCycleInput(input))
+      return {
+        outcome: 'handled',
+        operationKey:
+          `${input.providerMode}:` +
+          `${input.razorpayPaymentId}:entitlement`,
+      }
+    },
+    handleSubscriptionUpfront: async (input) => {
+      await fulfillSubscriptionUpfrontCycle(
+        subscriptionUpfrontInput(input),
+      )
       return {
         outcome: 'handled',
         operationKey:

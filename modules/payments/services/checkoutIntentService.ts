@@ -147,6 +147,25 @@ function isExactEpochSecond(value: unknown): value is Date {
     value.getMilliseconds() === 0
   )
 }
+
+function oneCalendarMonthAfter(value: Date): Date {
+  const targetYear = value.getUTCFullYear()
+  const targetMonth = value.getUTCMonth() + 1
+  const targetDay = value.getUTCDate()
+  const lastTargetDay = new Date(Date.UTC(
+    targetYear,
+    targetMonth + 1,
+    0,
+  )).getUTCDate()
+  return new Date(Date.UTC(
+    targetYear,
+    targetMonth,
+    Math.min(targetDay, lastTargetDay),
+    value.getUTCHours(),
+    value.getUTCMinutes(),
+    value.getUTCSeconds(),
+  ))
+}
 function assertCheckoutTarget(input: TrustedCheckoutIntentInput): void {
   if (input.kind === 'subscription') {
     if (
@@ -203,7 +222,9 @@ function assertCheckoutTarget(input: TrustedCheckoutIntentInput): void {
               reservation.campaignRevision ||
             quote.discountPaise !== reservation.discountPaise ||
             quote.discountedBillingCycles !==
-              reservation.discountedBillingCycles
+              reservation.discountedBillingCycles ||
+            quote.discountedBillingCycles !== 1 ||
+            input.purpose !== 'acquisition'
           )
         : (
             reservation !== undefined ||
@@ -564,6 +585,13 @@ export async function createOrReuseCheckoutIntent(
           acquisitionAuthorizationTtlSeconds * 1_000,
         )
       : input.authorizationExpiresAt
+  const requestedStartAt =
+    input.kind === 'subscription' &&
+    input.purpose === 'acquisition' &&
+    input.quoteSnapshot.discountPaise > 0 &&
+    authorizationExpiresAt
+      ? oneCalendarMonthAfter(authorizationExpiresAt)
+      : input.requestedStartAt
   if (
     input.couponReservation &&
     authorizationExpiresAt &&
@@ -585,7 +613,7 @@ export async function createOrReuseCheckoutIntent(
       ? new mongoose.Types.ObjectId(input.planChangeRequestId)
       : undefined,
     leaseLane: input.leaseLane,
-    requestedStartAt: input.requestedStartAt,
+    requestedStartAt,
     authorizationExpiresAt,
     planKey: input.planKey,
     sku: input.sku,

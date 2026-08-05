@@ -43,7 +43,7 @@ export const unavailablePaymentBindingVerifier: PaymentBindingVerifier = {
       status: 'unavailable',
       fetchedAt: new Date(),
       errors: [
-        'Razorpay Offer verification is unavailable until the PR4 money core is installed',
+        'Coupon and catalog Plan binding verification is unavailable until the PR4 money core is installed',
       ],
     }
   },

@@ -220,6 +220,7 @@ export interface IUser extends Document {
   monthlyInterviewsUsed: number
   monthlyInterviewLimit: number
   usageResetAt?: Date
+  legacyMonthlyInterviewResetAt?: Date
 
   /** A deletion request flips this before any personal-data sweep. Missing
    *  means active for legacy and raw MongoDBAdapter-created rows. */
@@ -420,7 +421,7 @@ const UserSchema = new Schema<IUser>(
     planExpiresAt: { type: Date },
     stripeCustomerId: { type: String, sparse: true },
     monthlyInterviewsUsed: { type: Number, default: 0 },
-    monthlyInterviewLimit: { type: Number, default: 999999 },
+    monthlyInterviewLimit: { type: Number, default: 1 },
     usageResetAt: { type: Date },
 
     accountState: { type: String, enum: ['active', 'deleting'], default: 'active' },

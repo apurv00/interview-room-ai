@@ -224,13 +224,11 @@ function couponBundleHash(input: {
           approval.providerMode !== mode
       })
     ) throw new Error('Coupon rollout evidence is incomplete')
-    const offerId = row.terms?.razorpayOfferIdByMode?.[mode]
-    if (!offerId) throw new Error('Coupon provider offer is missing')
     return {
       campaignId: String(row.campaignId),
       revision: row.revision,
       contentHash: row.contentHash,
-      offerId,
+      executionStrategy: 'cms_upfront_then_list_subscription_v1',
       normalizedTermsHash: verification.normalizedTermsHash,
       requiredPolicyApprovals: [...required].sort(),
     }

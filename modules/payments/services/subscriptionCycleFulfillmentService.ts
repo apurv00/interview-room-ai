@@ -144,6 +144,23 @@ export interface FulfillSubscriptionCycleInput {
   subscription: RazorpaySubscriptionDto
 }
 
+export interface FulfillSubscriptionUpfrontCycleInput {
+  providerMode: ProviderMode
+  references: {
+    inboxEventId: string
+    providerMode: ProviderMode
+    kind: 'payment' | 'subscription'
+    eventType: 'payment.captured' | 'subscription.authenticated'
+    razorpaySubscriptionId: string
+    razorpayPaymentId: string
+    razorpayInvoiceId: string
+    razorpayOrderId: string
+  }
+  payment: RazorpayPaymentDto
+  invoice: RazorpayInvoiceDto
+  subscription: RazorpaySubscriptionDto
+}
+
 export interface OriginalSubscriptionCheckoutIntent {
   id: mongoose.Types.ObjectId
   userId: mongoose.Types.ObjectId
@@ -225,8 +242,7 @@ export type SubscriptionCommercialInvariantFailure =
 
 export interface ValidatedSubscriptionCommercialTerms {
   plan: ResolvedSubscriptionCatalogTerms['plan'] & { razorpayPlanId: string }
-  coupon?: ResolvedSubscriptionCouponTerms &
-    { razorpayOfferId: string }
+  coupon?: ResolvedSubscriptionCouponTerms
 }
 
 export interface SubscriptionCycleCommercialResolver {
@@ -434,7 +450,10 @@ function sameOptionalDate(
 }
 
 function normalizedServerEntities(
-  input: FulfillSubscriptionCycleInput,
+  input: Pick<
+    FulfillSubscriptionCycleInput,
+    'payment' | 'invoice' | 'subscription'
+  >,
 ): {
   payment: RazorpayPaymentDto
   invoice: RazorpayInvoiceDto
@@ -454,6 +473,45 @@ function normalizedServerEntities(
       error,
     )
   }
+}
+
+function requireExactUpfrontProviderReferences(input: {
+  providerMode: ProviderMode
+  references: FulfillSubscriptionUpfrontCycleInput['references']
+  payment: RazorpayPaymentDto
+  invoice: RazorpayInvoiceDto
+  subscription: RazorpaySubscriptionDto
+}): { razorpayOrderId: string } {
+  const { providerMode, references, payment, invoice, subscription } = input
+  if (
+    (references.kind !== 'payment' && references.kind !== 'subscription') ||
+    (
+      references.eventType !== 'payment.captured' &&
+      references.eventType !== 'subscription.authenticated'
+    ) ||
+    references.providerMode !== providerMode ||
+    payment.providerMode !== providerMode ||
+    invoice.providerMode !== providerMode ||
+    subscription.providerMode !== providerMode ||
+    payment.id !== references.razorpayPaymentId ||
+    payment.invoiceId !== references.razorpayInvoiceId ||
+    payment.orderId !== references.razorpayOrderId ||
+    (
+      payment.subscriptionId !== undefined &&
+      payment.subscriptionId !== references.razorpaySubscriptionId
+    ) ||
+    invoice.id !== references.razorpayInvoiceId ||
+    invoice.paymentId !== references.razorpayPaymentId ||
+    invoice.orderId !== references.razorpayOrderId ||
+    invoice.subscriptionId !== references.razorpaySubscriptionId ||
+    subscription.id !== references.razorpaySubscriptionId
+  ) {
+    throw failure(
+      'reference_conflict',
+      'Upfront payment, invoice, subscription, and webhook references conflict',
+    )
+  }
+  return { razorpayOrderId: references.razorpayOrderId }
 }
 
 function requireExactProviderReferences(input: {
@@ -492,7 +550,10 @@ function requireExactProviderReferences(input: {
     payment.id !== references.razorpayPaymentId ||
     payment.invoiceId !== references.razorpayInvoiceId ||
     payment.orderId !== references.razorpayOrderId ||
-    payment.subscriptionId !== references.razorpaySubscriptionId ||
+    (
+      payment.subscriptionId !== undefined &&
+      payment.subscriptionId !== references.razorpaySubscriptionId
+    ) ||
     invoice.id !== references.razorpayInvoiceId ||
     invoice.paymentId !== references.razorpayPaymentId ||
     invoice.orderId !== references.razorpayOrderId ||
@@ -725,11 +786,19 @@ export function assertSubscriptionLifecycleIntent<
     reject('intent')
   }
   if (intent.purpose === 'acquisition') {
+    const couponUpfrontLifecycle =
+      intent.quote.discountPaise > 0 &&
+      intent.quote.discountedBillingCycles === 1 &&
+      exactEpochDate(intent.requestedStartAt) &&
+      intent.authorizationExpiresAt < intent.requestedStartAt
     if (
       intent.leaseLane !== 'a' ||
       intent.planChangeRequestId !== undefined ||
       intent.replacesSubscriptionId !== undefined ||
-      intent.requestedStartAt !== undefined
+      (
+        intent.requestedStartAt !== undefined &&
+        !couponUpfrontLifecycle
+      )
     ) {
       reject('intent')
     }
@@ -837,8 +906,9 @@ export function requireSubscriptionCommercialTerms(input: {
     coupon.discountedBillingCycles !==
       quote.discountedBillingCycles ||
     !coupon.applicablePlanKeys.includes(intent.planKey) ||
-    !coupon.razorpayOfferId ||
-    subscription.offerId !== coupon.razorpayOfferId ||
+    coupon.discountedBillingCycles !== 1 ||
+    intent.purpose !== 'acquisition' ||
+    subscription.offerId !== undefined ||
     (
       coupon.startsAt !== undefined &&
       (
@@ -856,16 +926,12 @@ export function requireSubscriptionCommercialTerms(input: {
   ) {
     reject('coupon')
   }
-  const exactCoupon = coupon as ResolvedSubscriptionCouponTerms
   return {
     plan: {
       ...plan,
       razorpayPlanId: plan.razorpayPlanId as string,
     },
-    coupon: {
-      ...exactCoupon,
-      razorpayOfferId: exactCoupon.razorpayOfferId as string,
-    },
+    coupon,
   }
 }
 
@@ -993,10 +1059,14 @@ function deriveCyclePrice(input: {
 
 function providerSubscriptionStatus(
   subscription: RazorpaySubscriptionDto,
+  allowAuthenticated = false,
 ): SubscriptionStatus {
   if (
     subscription.status === 'created' ||
-    subscription.status === 'authenticated'
+    (
+      subscription.status === 'authenticated' &&
+      !allowAuthenticated
+    )
   ) {
     throw failure(
       'provider_state_invalid',
@@ -1004,6 +1074,58 @@ function providerSubscriptionStatus(
     )
   }
   return subscription.status
+}
+
+function couponUpfrontPeriod(input: {
+  intent: OriginalSubscriptionCheckoutIntent & {
+    purpose: CheckoutIntentPurpose
+    requestedStartAt?: Date
+  }
+  coupon?: ResolvedSubscriptionCouponTerms
+  payment: RazorpayPaymentDto
+  subscription: RazorpaySubscriptionDto
+  completedAt: Date
+}): {
+  periodKey: string
+  periodStart: Date
+  periodEnd: Date
+} {
+  const { intent, coupon, payment, subscription, completedAt } = input
+  const periodStart = new Date(payment.createdAtEpochSeconds * 1_000)
+  const periodEnd = intent.requestedStartAt
+  const expectedStartAt = periodEnd
+    ? Math.floor(periodEnd.getTime() / 1_000)
+    : undefined
+  if (
+    intent.purpose !== 'acquisition' ||
+    intent.quote.discountPaise <= 0 ||
+    intent.quote.discountedBillingCycles !== 1 ||
+    !coupon ||
+    coupon.discountedBillingCycles !== 1 ||
+    payment.amountPaise !== intent.quote.payablePaise ||
+    subscription.offerId !== undefined ||
+    subscription.startAtEpochSeconds !== expectedStartAt ||
+    subscription.status === 'created' ||
+    !validDate(periodStart) ||
+    !validDate(periodEnd) ||
+    periodEnd <= periodStart ||
+    periodStart.getTime() > completedAt.getTime() + PROVIDER_CLOCK_SKEW_MS
+  ) {
+    throw failure(
+      'provider_state_invalid',
+      'Captured payment is not the exact CMS coupon upfront period',
+    )
+  }
+  const paidPeriod = paidBillingPeriod({
+    razorpaySubscriptionId: subscription.id,
+    currentStart: periodStart,
+    currentEnd: periodEnd,
+  })
+  return {
+    periodKey: paidPeriod.key,
+    periodStart: paidPeriod.start,
+    periodEnd: paidPeriod.end,
+  }
 }
 
 async function fulfillValidatedSubscriptionCycle(input: {
@@ -1016,14 +1138,10 @@ async function fulfillValidatedSubscriptionCycle(input: {
   dependencies: SubscriptionCycleFulfillmentDependencies
   validateReferences: () => string
   persistenceMessage: string
+  cycleKind?: 'recurring' | 'coupon_upfront'
 }): Promise<SubscriptionCycleFulfillmentResult> {
   input.validateReferences()
   requireCapturedPaidInvoice(input)
-  const paidPeriod = immutableInvoicePeriod(
-    input.invoice,
-    input.subscription.id,
-  )
-  requirePaidPeriodStarted(paidPeriod.periodStart, input.completedAt)
 
   const store =
     input.dependencies.store ?? mongoSubscriptionCycleFulfillmentStore
@@ -1060,11 +1178,6 @@ async function fulfillValidatedSubscriptionCycle(input: {
 
   const razorpayOrderId = input.validateReferences()
   requireCapturedPaidInvoice(input)
-  const period = immutableInvoicePeriod(
-    input.invoice,
-    input.subscription.id,
-  )
-  requirePaidPeriodStarted(period.periodStart, input.completedAt)
   requireOriginalIntent(loadedIntent, {
     providerMode: input.providerMode,
     razorpaySubscriptionId: input.expectedSubscriptionId,
@@ -1077,6 +1190,19 @@ async function fulfillValidatedSubscriptionCycle(input: {
     subscription: input.subscription,
   })
   const { plan, coupon } = commercial
+  const period = input.cycleKind === 'coupon_upfront'
+    ? couponUpfrontPeriod({
+        intent,
+        coupon,
+        payment: input.payment,
+        subscription: input.subscription,
+        completedAt: input.completedAt,
+      })
+    : immutableInvoicePeriod(
+        input.invoice,
+        input.subscription.id,
+      )
+  requirePaidPeriodStarted(period.periodStart, input.completedAt)
   const discountPaise = deriveCyclePrice({
     listPricePaise: plan.listPricePaise,
     quotedDiscountPaise: intent.quote.discountPaise,
@@ -1102,7 +1228,10 @@ async function fulfillValidatedSubscriptionCycle(input: {
     razorpayPaymentId: input.payment.id,
     razorpayOrderId,
     providerSubscriptionStatus:
-      providerSubscriptionStatus(input.subscription),
+      providerSubscriptionStatus(
+        input.subscription,
+        input.cycleKind === 'coupon_upfront',
+      ),
     ...period,
     listPricePaise: plan.listPricePaise,
     discountPaise,
@@ -1494,8 +1623,6 @@ async function resolveMongoCommercialTerms(
       applicablePlanKeys: coupon.terms.applicablePlanKeys,
       discountedBillingCycles:
         coupon.terms.discountedBillingCycles,
-      razorpayOfferId:
-        coupon.terms.razorpayOfferIdByMode[intent.providerMode],
       startsAt: coupon.terms.startsAt,
       endsAt: coupon.terms.endsAt,
       bannerText: coupon.terms.bannerText,
@@ -2549,6 +2676,15 @@ function cycleProjectionEvidence(
   cycle: SubscriptionCycleDraft,
   subscriptionId: mongoose.Types.ObjectId,
 ) {
+  const couponUpfrontAuthority =
+    cycle.purpose === 'acquisition' &&
+    cycle.providerSubscriptionStatus === 'authenticated' &&
+    cycle.discountPaise > 0 &&
+    cycle.discountedBillingCycles === 1 &&
+    cycle.couponCampaignId !== undefined &&
+    cycle.couponCampaignRevision !== undefined &&
+    validDate(cycle.requestedStartAt) &&
+    cycle.requestedStartAt.getTime() === cycle.periodEnd.getTime()
   return {
     providerMode: cycle.providerMode,
     subscriptionId: subscriptionId.toHexString(),
@@ -2566,6 +2702,9 @@ function cycleProjectionEvidence(
     razorpayPaymentId: cycle.razorpayPaymentId,
     capturedPaise: cycle.capturedPaise,
     currency: cycle.currency,
+    ...(couponUpfrontAuthority
+      ? { projectionAuthority: 'coupon_upfront' as const }
+      : {}),
   } as const
 }
 
@@ -3836,6 +3975,40 @@ export async function fulfillSubscriptionCycle(
     }).razorpayOrderId,
     persistenceMessage:
       'Subscription cycle could not be persisted coherently',
+  })
+}
+
+/**
+ * Applies the captured upfront amount that represents the single CMS coupon
+ * period before Razorpay begins charging the undiscounted monthly Plan.
+ */
+export async function fulfillSubscriptionUpfrontCycle(
+  input: FulfillSubscriptionUpfrontCycleInput,
+  dependencies: SubscriptionCycleFulfillmentDependencies = {},
+): Promise<SubscriptionCycleFulfillmentResult> {
+  const completedAt = dependencies.now?.() ?? new Date()
+  if (!validDate(completedAt)) {
+    throw failure(
+      'invalid_input',
+      'Upfront fulfillment completion time is invalid',
+    )
+  }
+  const entities = normalizedServerEntities(input)
+  return fulfillValidatedSubscriptionCycle({
+    ...entities,
+    providerMode: input.providerMode,
+    expectedSubscriptionId:
+      input.references.razorpaySubscriptionId,
+    completedAt,
+    dependencies,
+    cycleKind: 'coupon_upfront',
+    validateReferences: () => requireExactUpfrontProviderReferences({
+      providerMode: input.providerMode,
+      references: input.references,
+      ...entities,
+    }).razorpayOrderId,
+    persistenceMessage:
+      'Subscription upfront coupon period could not be persisted coherently',
   })
 }
 

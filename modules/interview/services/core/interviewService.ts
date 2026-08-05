@@ -28,6 +28,7 @@ import { getPlannedQuestionCountForFeedback } from '../eval/sessionScoringPolicy
 import type { InterviewLatencyTelemetryInput } from '../../validators/interview'
 import type { Duration } from '@shared/types'
 import { ModelProviderPreconditionError, type CompletionOptions } from '@shared/services/modelRouter'
+import { basicCalendarMonthPeriod } from '@payments/services/periodKeyService'
 
 interface CreateSessionInput {
   userId: string
@@ -186,57 +187,141 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   }
 
   const now = new Date()
-  const currentMonth = now.getMonth()
-  const currentYear = now.getFullYear()
+  const userId = new mongoose.Types.ObjectId(input.userId)
+  const basicPeriod = basicCalendarMonthPeriod(now)
 
-  // Monthly auto-reset: zero the counter if we're in a new month since last reset.
-  // This runs before the atomic increment so the limit check uses fresh data.
+  // Basic and grandfathered accounts reset on the IST calendar month. Paid
+  // subscriptions are reset only by captured Razorpay billing-cycle
+  // fulfillment; a calendar reset must never grant them extra interviews.
   await User.updateOne(
     {
-      _id: new mongoose.Types.ObjectId(input.userId),
+      _id: userId,
       accountState: { $ne: 'deleting' },
+      entitlementSource: { $ne: 'subscription' },
       $or: [
-        { usageResetAt: { $exists: false } },
-        { $expr: { $ne: [{ $month: '$usageResetAt' }, currentMonth + 1] } },
-        { $expr: { $ne: [{ $year: '$usageResetAt' }, currentYear] } },
+        { legacyMonthlyInterviewResetAt: { $exists: false } },
+        { legacyMonthlyInterviewResetAt: { $lt: basicPeriod.start } },
+        { legacyMonthlyInterviewResetAt: { $gte: basicPeriod.end } },
       ],
     },
-    { $set: { monthlyInterviewsUsed: 0, usageResetAt: now } }
+    {
+      $set: {
+        monthlyInterviewsUsed: 0,
+        legacyMonthlyInterviewResetAt: now,
+      },
+    },
   )
 
-  // Development-phase backfill: ensure every user has the unlimited limit set.
-  // Handles users created before the field was added (field missing in MongoDB)
-  // and users with any limit below the uncapped default.
+  // Repair personal Basic rows created before pricing enforcement. Organization,
+  // staff, Enterprise, admin-grant, and grandfathered paid rows remain outside
+  // this migration fence.
   await User.updateOne(
     {
-      _id: new mongoose.Types.ObjectId(input.userId),
+      _id: userId,
       accountState: { $ne: 'deleting' },
+      organizationId: null,
+      role: { $nin: ['recruiter', 'org_admin', 'platform_admin'] },
+      plan: { $nin: ['plus', 'pro', 'enterprise'] },
+      entitlementSource: { $nin: ['subscription', 'admin_grant'] },
       $or: [
         { monthlyInterviewLimit: { $exists: false } },
         { monthlyInterviewLimit: null },
-        { monthlyInterviewLimit: { $lt: 999999 } },
+        { monthlyInterviewLimit: { $ne: 1 } },
       ],
     },
-    { $set: { monthlyInterviewLimit: 999999 } }
+    { $set: { monthlyInterviewLimit: 1 } },
+  )
+
+  // Subscription projections own both the tier and the exact limit. Repair
+  // only coherent, unexpired v2 projections; malformed or expired rows remain
+  // fail-closed in the admission query below.
+  await User.updateOne(
+    {
+      _id: userId,
+      accountState: { $ne: 'deleting' },
+      entitlementSource: 'subscription',
+      planVocabularyVersion: 2,
+      plan: 'plus',
+      planExpiresAt: { $gt: now },
+      interviewLimit: 10,
+      monthlyInterviewLimit: { $ne: 10 },
+    },
+    { $set: { monthlyInterviewLimit: 10 } },
+  )
+  await User.updateOne(
+    {
+      _id: userId,
+      accountState: { $ne: 'deleting' },
+      entitlementSource: 'subscription',
+      planVocabularyVersion: 2,
+      plan: 'pro',
+      planExpiresAt: { $gt: now },
+      interviewLimit: 15,
+      monthlyInterviewLimit: { $ne: 15 },
+    },
+    { $set: { monthlyInterviewLimit: 15 } },
   )
 
   // Also ensure monthlyInterviewsUsed exists (for users created before this field)
   await User.updateOne(
     {
-      _id: new mongoose.Types.ObjectId(input.userId),
+      _id: userId,
       accountState: { $ne: 'deleting' },
       monthlyInterviewsUsed: { $exists: false },
     },
     { $set: { monthlyInterviewsUsed: 0 } }
   )
 
-  // Atomic increment-first: check limit AND increment in a single operation.
-  // Uses $expr to compare field values atomically — no race condition.
+  // Atomic increment-first: exact Basic and subscription projections use their
+  // product limits. Explicit organization/Enterprise/admin/legacy paid rows
+  // retain their stored limit without being coerced into consumer pricing.
   const updatedUser = await User.findOneAndUpdate(
     {
-      _id: new mongoose.Types.ObjectId(input.userId),
+      _id: userId,
       accountState: { $ne: 'deleting' },
-      $expr: { $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'] },
+      $and: [
+        {
+          $expr: {
+            $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'],
+          },
+        },
+        {
+          $or: [
+            {
+              organizationId: null,
+              role: { $nin: ['recruiter', 'org_admin', 'platform_admin'] },
+              plan: { $nin: ['plus', 'pro', 'enterprise'] },
+              entitlementSource: { $nin: ['subscription', 'admin_grant'] },
+              monthlyInterviewLimit: 1,
+            },
+            {
+              entitlementSource: 'subscription',
+              planVocabularyVersion: 2,
+              plan: 'plus',
+              planExpiresAt: { $gt: now },
+              interviewLimit: 10,
+              monthlyInterviewLimit: 10,
+            },
+            {
+              entitlementSource: 'subscription',
+              planVocabularyVersion: 2,
+              plan: 'pro',
+              planExpiresAt: { $gt: now },
+              interviewLimit: 15,
+              monthlyInterviewLimit: 15,
+            },
+            { organizationId: { $ne: null } },
+            { role: { $in: ['recruiter', 'org_admin', 'platform_admin'] } },
+            { plan: 'enterprise' },
+            { entitlementSource: 'admin_grant' },
+            {
+              plan: { $in: ['plus', 'pro'] },
+              entitlementSource: { $ne: 'subscription' },
+              planVocabularyVersion: { $ne: 2 },
+            },
+          ],
+        },
+      ],
     },
     {
       $inc: { monthlyInterviewsUsed: 1, interviewCount: 1 },

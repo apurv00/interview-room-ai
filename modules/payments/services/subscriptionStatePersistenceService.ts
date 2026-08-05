@@ -715,7 +715,7 @@ function rejectStateCommercialInvariant(
       'coupon_conflict',
       conflict === 'coupon_contamination'
         ? 'Non-coupon checkout is contaminated by an Offer or coupon'
-        : 'Immutable coupon revision and Razorpay Offer binding conflict',
+        : 'Immutable coupon revision and provider binding conflict',
     )
   }
   throw failure(
@@ -747,7 +747,6 @@ function commercialBinding(
     razorpayPlanId: plan.razorpayPlanId,
     ...(coupon
       ? {
-          razorpayOfferId: coupon.razorpayOfferId,
           couponCampaignId: coupon.campaignId,
           couponCampaignRevision: coupon.revision,
           discountedBillingCycles: coupon.discountedBillingCycles,

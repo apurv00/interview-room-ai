@@ -164,6 +164,7 @@ describe('authOptions callbacks', () => {
           name: 'New User',
           role: 'candidate',
           plan: 'free',
+          monthlyInterviewLimit: 1,
         }),
       )
     })

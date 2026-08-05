@@ -12,7 +12,7 @@ export const PR4_REMOTE_PAYMENT_CREATION_READY = true
  * their own approved evidence. Remote creation can never bypass this gate.
  */
 export const PR4_PAYMENT_RECOVERY_READY = true
-export const PR11_LIVE_PAYMENT_CREATION_READY = false
+export const PR11_LIVE_PAYMENT_CREATION_READY = true
 
 export const PAYMENT_SALE_BLOCK_REASONS = [
   'remote_creation_not_ready',

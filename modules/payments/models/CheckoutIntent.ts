@@ -399,14 +399,25 @@ CheckoutIntentSchema.pre('validate', function validateCheckoutTarget() {
       return
     }
     if (this.purpose === 'acquisition') {
+      const couponUpfrontLifecycle = Boolean(
+        quote &&
+        quote.discountPaise > 0 &&
+        quote.discountedBillingCycles === 1,
+      )
       if (
         this.leaseLane !== 'a' ||
         this.planChangeRequestId ||
-        this.requestedStartAt
+        (
+          this.requestedStartAt &&
+          (
+            !couponUpfrontLifecycle ||
+            this.authorizationExpiresAt >= this.requestedStartAt
+          )
+        )
       ) {
         this.invalidate(
           'purpose',
-          'Acquisition checkout requires lane a and no replacement lineage',
+          'Acquisition checkout lifecycle is inconsistent',
         )
       }
       return

@@ -188,6 +188,7 @@ export type WebhookPaymentDomainTarget =
       kind: 'subscription'
       context: TrustedWebhookSubscriptionContext
       subscription: RazorpaySubscriptionDto
+      invoice?: RazorpayInvoiceDto
     }
 
 export interface PaymentStateEffectInput {
@@ -223,6 +224,20 @@ export interface SubscriptionChargedEffectInput {
   razorpayPaymentId: string
   razorpayInvoiceId: string
   razorpayOrderId?: string
+  subscription: RazorpaySubscriptionDto
+  payment: RazorpayPaymentDto
+  invoice: RazorpayInvoiceDto
+  localContext: TrustedWebhookSubscriptionContext
+}
+
+export interface SubscriptionUpfrontEffectInput {
+  inboxEventId: string
+  providerMode: ProviderMode
+  eventType: 'payment.captured' | 'subscription.authenticated'
+  razorpaySubscriptionId: string
+  razorpayPaymentId: string
+  razorpayInvoiceId: string
+  razorpayOrderId: string
   subscription: RazorpaySubscriptionDto
   payment: RazorpayPaymentDto
   invoice: RazorpayInvoiceDto
@@ -275,6 +290,9 @@ export interface WebhookDomainEffectHandlers {
   handleSubscriptionCharged?: (
     input: SubscriptionChargedEffectInput,
   ) => Promise<WebhookDomainEffectAcknowledgement>
+  handleSubscriptionUpfront?: (
+    input: SubscriptionUpfrontEffectInput,
+  ) => Promise<WebhookDomainEffectAcknowledgement>
   handleSubscriptionState?: (
     input: SubscriptionStateEffectInput,
   ) => Promise<WebhookDomainEffectAcknowledgement>
@@ -305,6 +323,7 @@ export type WebhookDomainHandledEffect =
   | 'payment_state'
   | 'future_subscription_authorization'
   | 'subscription_charged'
+  | 'subscription_upfront'
   | 'subscription_state'
   | 'refund'
   | 'dispute'
@@ -719,6 +738,7 @@ function assertPaidSubscriptionInvoice(input: {
   razorpaySubscriptionId: string
   payment: RazorpayPaymentDto & { invoiceId: string }
   invoice: RazorpayInvoiceDto
+  requireBillingPeriod?: boolean
 }): void {
   const { providerMode, razorpaySubscriptionId, payment, invoice } = input
   if (
@@ -749,8 +769,13 @@ function assertPaidSubscriptionInvoice(input: {
     invoice.amountDuePaise !== 0 ||
     invoice.amountPaise !== payment.amountPaise ||
     invoice.amountPaidPaise !== payment.amountPaise ||
-    invoice.billingStartEpochSeconds === undefined ||
-    invoice.billingEndEpochSeconds === undefined
+    (
+      input.requireBillingPeriod !== false &&
+      (
+        invoice.billingStartEpochSeconds === undefined ||
+        invoice.billingEndEpochSeconds === undefined
+      )
+    )
   ) {
     throw failure(
       'provider_state_not_ready',
@@ -809,7 +834,14 @@ function checkoutLifecycleIsExact(
       ? (
           checkout.leaseLane !== 'a' ||
           checkout.planChangeRequestId !== undefined ||
-          checkout.requestedStartAt !== undefined
+          (
+            checkout.requestedStartAt !== undefined &&
+            (
+              !validLifecycleDate(checkout.requestedStartAt) ||
+              checkout.authorizationExpiresAt >=
+                checkout.requestedStartAt
+            )
+          )
         )
       : (
           !(checkout.planChangeRequestId instanceof
@@ -1080,25 +1112,60 @@ async function resolvePaymentTarget(input: {
   payment: RazorpayPaymentDto
 }): Promise<WebhookPaymentDomainTarget> {
   const { adapter, store, payment } = input
-  if (payment.subscriptionId) {
+  const invoice = payment.invoiceId
+    ? await fetchProviderEntity(() => (
+        adapter.fetchInvoice(payment.invoiceId as string)
+      ))
+    : undefined
+  if (
+    invoice &&
+    (
+      invoice.providerMode !== payment.providerMode ||
+      invoice.id !== payment.invoiceId ||
+      (
+        invoice.paymentId !== undefined &&
+        invoice.paymentId !== payment.id
+      ) ||
+      (
+        invoice.orderId !== undefined &&
+        payment.orderId !== undefined &&
+        invoice.orderId !== payment.orderId
+      ) ||
+      (
+        invoice.subscriptionId !== undefined &&
+        payment.subscriptionId !== undefined &&
+        invoice.subscriptionId !== payment.subscriptionId
+      )
+    )
+  ) {
+    throw failure(
+      'provider_reference_mismatch',
+      'review',
+      'Fetched payment and invoice references conflict',
+    )
+  }
+  const razorpaySubscriptionId =
+    payment.subscriptionId ?? invoice?.subscriptionId
+  if (razorpaySubscriptionId) {
     const subscription = await fetchProviderEntity(() => (
-      adapter.fetchSubscription(payment.subscriptionId as string)
+      adapter.fetchSubscription(razorpaySubscriptionId)
     ))
     assertSubscriptionIdentity(
       payment.providerMode,
-      payment.subscriptionId,
+      razorpaySubscriptionId,
       subscription,
     )
     const context = await loadAndAssertSubscriptionContext({
       store,
       providerMode: payment.providerMode,
-      razorpaySubscriptionId: payment.subscriptionId,
+      razorpaySubscriptionId,
       remote: subscription,
     })
     return {
       kind: 'subscription',
       context,
       subscription,
+      ...(invoice ? { invoice } : {}),
     }
   }
   if (payment.orderId) {
@@ -1131,6 +1198,82 @@ async function resolvePaymentTarget(input: {
     'retry',
     'Verified payment has no supported local correlation',
   )
+}
+
+async function dispatchSubscriptionUpfrontCapture(input: {
+  inboxEventId: string
+  eventType: 'payment.captured' | 'subscription.authenticated'
+  providerMode: ProviderMode
+  adapter: RazorpayServerAdapter
+  effects: WebhookDomainEffectHandlers
+  payment: RazorpayPaymentDto
+  subscription: RazorpaySubscriptionDto
+  invoice?: RazorpayInvoiceDto
+  localContext: TrustedWebhookSubscriptionContext
+}): Promise<WebhookDomainDispatchResult> {
+  const checkout = input.localContext.checkout
+  if (
+    !checkout ||
+    checkout.purpose !== 'acquisition' ||
+    !validLifecycleDate(checkout.requestedStartAt)
+  ) {
+    throw failure(
+      'local_mapping_mismatch',
+      'review',
+      'Upfront subscription capture has no coupon acquisition context',
+    )
+  }
+  const payment = input.payment
+  if (
+    payment.status !== 'captured' ||
+    payment.captured !== true ||
+    payment.amountRefundedPaise !== 0 ||
+    payment.currency !== 'INR' ||
+    !payment.invoiceId ||
+    !payment.orderId
+  ) {
+    throw failure(
+      'provider_state_not_ready',
+      payment.status === 'created' || payment.status === 'authorized'
+        ? 'retry'
+        : 'review',
+      'Subscription upfront payment is not a complete unreversed capture',
+    )
+  }
+  const invoice = input.invoice ?? await fetchProviderEntity(() => (
+    input.adapter.fetchInvoice(payment.invoiceId as string)
+  ))
+  assertPaidSubscriptionInvoice({
+    providerMode: input.providerMode,
+    razorpaySubscriptionId: input.subscription.id,
+    payment: payment as RazorpayPaymentDto & { invoiceId: string },
+    invoice,
+    requireBillingPeriod: false,
+  })
+  const acknowledgement = await invokeEffect(
+    'subscription_upfront',
+    input.effects.handleSubscriptionUpfront,
+    {
+      inboxEventId: input.inboxEventId,
+      providerMode: input.providerMode,
+      eventType: input.eventType,
+      razorpaySubscriptionId: input.subscription.id,
+      razorpayPaymentId: payment.id,
+      razorpayInvoiceId: payment.invoiceId,
+      razorpayOrderId: payment.orderId,
+      subscription: input.subscription,
+      payment,
+      invoice,
+      localContext: input.localContext,
+    },
+  )
+  return {
+    outcome: 'effect_handled',
+    effect: 'subscription_upfront',
+    eventType: input.eventType,
+    providerMode: input.providerMode,
+    operationKey: acknowledgement.operationKey,
+  }
 }
 
 /**
@@ -1325,6 +1468,22 @@ async function dispatchPaymentEvent(input: {
         capturedCheckoutDependencies: input.capturedCheckoutDependencies,
       })
     }
+    if (
+      checkout?.purpose === 'acquisition' &&
+      validLifecycleDate(checkout.requestedStartAt)
+    ) {
+      return dispatchSubscriptionUpfrontCapture({
+        inboxEventId: references.inboxEventId,
+        eventType: 'payment.captured',
+        providerMode: references.providerMode,
+        adapter,
+        effects,
+        payment,
+        subscription: target.subscription,
+        invoice: target.invoice,
+        localContext: target.context,
+      })
+    }
     return {
       outcome: 'ignored_safe',
       reason: 'subscription_charged_is_authoritative',
@@ -1386,7 +1545,10 @@ async function dispatchSubscriptionCharged(input: {
     references.razorpayPaymentId,
   ))
   assertPaymentReferences(references, payment)
-  if (payment.subscriptionId !== references.razorpaySubscriptionId) {
+  if (
+    payment.subscriptionId !== undefined &&
+    payment.subscriptionId !== references.razorpaySubscriptionId
+  ) {
     throw failure(
       'provider_reference_mismatch',
       'review',
@@ -1508,7 +1670,10 @@ async function dispatchSubscriptionState(input: {
       },
       payment,
     )
-    if (payment.subscriptionId !== references.razorpaySubscriptionId) {
+    if (
+      payment.subscriptionId !== undefined &&
+      payment.subscriptionId !== references.razorpaySubscriptionId
+    ) {
       throw failure(
         'provider_reference_mismatch',
         'review',
@@ -1522,6 +1687,24 @@ async function dispatchSubscriptionState(input: {
     razorpaySubscriptionId: references.razorpaySubscriptionId,
     remote: subscription,
   })
+  if (
+    references.eventType === 'subscription.authenticated' &&
+    payment?.status === 'captured' &&
+    payment.captured === true &&
+    localContext.checkout?.purpose === 'acquisition' &&
+    validLifecycleDate(localContext.checkout.requestedStartAt)
+  ) {
+    return dispatchSubscriptionUpfrontCapture({
+      inboxEventId: references.inboxEventId,
+      eventType: 'subscription.authenticated',
+      providerMode: references.providerMode,
+      adapter,
+      effects,
+      payment,
+      subscription,
+      localContext,
+    })
+  }
   const acknowledgement = await invokeEffect(
     'subscription_state',
     effects.handleSubscriptionState,

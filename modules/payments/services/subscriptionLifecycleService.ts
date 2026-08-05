@@ -41,9 +41,6 @@ import {
   type RazorpayPaymentDto,
   type RazorpaySubscriptionDto,
 } from '../providers/razorpayServerAdapter'
-import type {
-  RazorpayScheduledCancellationDto,
-} from '../providers/razorpaySubscriptionCancellationAdapter'
 import type { ProviderMode } from '../types/catalog'
 import {
   commitCouponReservationAuthorizationInSession,
@@ -102,7 +99,7 @@ const PLAN_ID_PATTERN = /^plan_[A-Za-z0-9]+$/
 const RECOVERY_DELAY_MS = 5 * 60 * 1_000
 export const PR6_FUTURE_SUBSCRIPTION_LIFECYCLE_READY = false as const
 export const PR6_CUSTOMER_SUBSCRIPTION_CANCELLATION_READY =
-  false as const
+  true as const
 export const PR6_CUSTOMER_SCHEDULED_CHANGE_CANCELLATION_READY =
   false as const
 const TRANSACTION_OPTIONS = {
@@ -333,11 +330,21 @@ interface CancellationSubscriptionRow {
   userId: mongoose.Types.ObjectId
   providerMode: ProviderMode
   planKey: 'plus' | 'pro'
+  catalogVersion: string
+  razorpayPlanId: string
   razorpaySubscriptionId: string
+  checkoutIntentId?: mongoose.Types.ObjectId
+  planChangeRequestId?: mongoose.Types.ObjectId
+  replacesSubscriptionId?: mongoose.Types.ObjectId
+  leaseLane?: ConsumerSubscriptionLeaseLane
+  requestedStartAt?: Date
   status: SubscriptionStatus
+  currentPeriodKey: string
   currentPeriodStart: Date
   currentPeriodEnd: Date
   cancelAtPeriodEnd: boolean
+  couponCampaignId?: mongoose.Types.ObjectId
+  discountedCyclesRemaining?: number
 }
 
 export interface PeriodEndCancellationDependencies {
@@ -351,7 +358,7 @@ export interface PeriodEndCancellationDependencies {
   commitCancellationAccepted?: (input: {
     request: CancellationRequestRow
     subscription: CancellationSubscriptionRow
-    provider: RazorpayScheduledCancellationDto
+    provider: RazorpaySubscriptionDto
     observedAt: Date
   }) => Promise<{ reused: boolean }>
   markCancellationUncertain?: (input: {
@@ -390,6 +397,28 @@ interface CurrentLifecycleSubscription {
   currentPeriodStart: Date
   currentPeriodEnd: Date
   cancelAtPeriodEnd: boolean
+}
+
+interface CurrentCancellationSubscription {
+  _id: mongoose.Types.ObjectId
+  userId: mongoose.Types.ObjectId
+  providerMode: ProviderMode
+  planKey: 'plus' | 'pro'
+  catalogVersion: string
+  razorpayPlanId: string
+  razorpaySubscriptionId: string
+  checkoutIntentId?: mongoose.Types.ObjectId
+  planChangeRequestId?: mongoose.Types.ObjectId
+  replacesSubscriptionId?: mongoose.Types.ObjectId
+  leaseLane: ConsumerSubscriptionLeaseLane
+  requestedStartAt?: Date
+  status: 'active' | 'authenticated'
+  currentPeriodKey: string
+  currentPeriodStart: Date
+  currentPeriodEnd: Date
+  cancelAtPeriodEnd: boolean
+  couponCampaignId?: mongoose.Types.ObjectId
+  discountedCyclesRemaining?: number
 }
 
 interface FutureCommercialTarget {
@@ -438,14 +467,15 @@ export interface CustomerFuturePlanChangeDependencies {
 export interface CustomerPeriodEndCancellationDependencies {
   cancellationReady?: boolean
   now?: () => Date
-  loadCurrentSubscription?: CustomerFuturePlanChangeDependencies[
-    'loadCurrentSubscription'
-  ]
+  loadCurrentSubscription?: (input: {
+    userId: string
+    now: Date
+  }) => Promise<CurrentCancellationSubscription | null>
   persistCancellationRequest?: (input: {
     userId: string
     idempotencyKey: string
     selectionHash: string
-    current: CurrentLifecycleSubscription
+    current: CurrentCancellationSubscription
     requestedAt: Date
   }) => Promise<PersistedFuturePlanChange>
   submitCancellation?: typeof submitOldSubscriptionPeriodEndCancellation
@@ -515,6 +545,161 @@ function exactCurrentLifecycleSubscription(
     current.currentPeriodStart <= now &&
     current.currentPeriodEnd > now
   )
+}
+
+function couponUpfrontCancellationLineage(
+  current: {
+    checkoutIntentId?: mongoose.Types.ObjectId
+    planChangeRequestId?: mongoose.Types.ObjectId
+    replacesSubscriptionId?: mongoose.Types.ObjectId
+    leaseLane?: ConsumerSubscriptionLeaseLane
+    requestedStartAt?: Date
+    currentPeriodEnd: Date
+    couponCampaignId?: mongoose.Types.ObjectId
+    discountedCyclesRemaining?: number
+  },
+): boolean {
+  return (
+    current.checkoutIntentId instanceof mongoose.Types.ObjectId &&
+    current.planChangeRequestId === undefined &&
+    current.replacesSubscriptionId === undefined &&
+    current.leaseLane === 'a' &&
+    exactEpochSecond(current.requestedStartAt) &&
+    current.requestedStartAt.getTime() ===
+      current.currentPeriodEnd.getTime() &&
+    current.couponCampaignId instanceof mongoose.Types.ObjectId &&
+    current.discountedCyclesRemaining === 0
+  )
+}
+
+function couponUpfrontCheckoutFilter(
+  current: CurrentCancellationSubscription,
+  userId: mongoose.Types.ObjectId,
+): Record<string, unknown> | null {
+  if (!couponUpfrontCancellationLineage(current)) return null
+  return {
+    _id: current.checkoutIntentId,
+    userId,
+    kind: 'subscription',
+    providerMode: current.providerMode,
+    purpose: 'acquisition',
+    planChangeRequestId: { $exists: false },
+    leaseLane: 'a',
+    requestedStartAt: current.currentPeriodEnd,
+    planKey: current.planKey,
+    catalogVersion: current.catalogVersion,
+    status: 'fulfilled',
+    razorpaySubscriptionId: current.razorpaySubscriptionId,
+    'quoteSnapshot.couponCampaignId': current.couponCampaignId,
+    'quoteSnapshot.discountedBillingCycles': 1,
+    'quoteSnapshot.discountPaise': { $gt: 0 },
+    'quoteSnapshot.payablePaise': { $gt: 0 },
+  }
+}
+
+function exactCurrentCancellationSubscription(
+  current: CurrentCancellationSubscription,
+  userId: mongoose.Types.ObjectId,
+  now: Date,
+): boolean {
+  return (
+    current._id instanceof mongoose.Types.ObjectId &&
+    current.userId.equals(userId) &&
+    (current.providerMode === 'test' || current.providerMode === 'live') &&
+    (current.planKey === 'plus' || current.planKey === 'pro') &&
+    current.catalogVersion.trim().length > 0 &&
+    PLAN_ID_PATTERN.test(current.razorpayPlanId) &&
+    SUBSCRIPTION_ID_PATTERN.test(current.razorpaySubscriptionId) &&
+    (current.leaseLane === 'a' || current.leaseLane === 'b') &&
+    (
+      current.status === 'active' ||
+      (
+        current.status === 'authenticated' &&
+        couponUpfrontCancellationLineage(current)
+      )
+    ) &&
+    typeof current.currentPeriodKey === 'string' &&
+    current.currentPeriodKey.trim().length > 0 &&
+    exactEpochSecond(current.currentPeriodStart) &&
+    exactEpochSecond(current.currentPeriodEnd) &&
+    current.currentPeriodStart < current.currentPeriodEnd &&
+    current.currentPeriodStart <= now &&
+    current.currentPeriodEnd > now &&
+    typeof current.cancelAtPeriodEnd === 'boolean'
+  )
+}
+
+async function defaultLoadCurrentCancellationSubscription(input: {
+  userId: string
+  now: Date
+}): Promise<CurrentCancellationSubscription | null> {
+  await connectDB()
+  const userId = new mongoose.Types.ObjectId(input.userId)
+  const [user, subscriptions] = await Promise.all([
+    User.findById(userId).select([
+      'plan',
+      'planVocabularyVersion',
+      'planExpiresAt',
+      'entitlementSource',
+      'usagePeriodKey',
+    ].join(' ')).lean<{
+      plan: string
+      planVocabularyVersion?: number
+      planExpiresAt?: Date
+      entitlementSource?: string
+      usagePeriodKey?: string
+    }>(),
+    Subscription.find({
+      userId,
+      status: { $in: ['active', 'authenticated'] },
+      currentPeriodStart: { $lte: input.now },
+      currentPeriodEnd: { $gt: input.now },
+    }).select([
+      '_id',
+      'userId',
+      'providerMode',
+      'planKey',
+      'catalogVersion',
+      'razorpayPlanId',
+      'razorpaySubscriptionId',
+      'checkoutIntentId',
+      'planChangeRequestId',
+      'replacesSubscriptionId',
+      'leaseLane',
+      'requestedStartAt',
+      'status',
+      'currentPeriodKey',
+      'currentPeriodStart',
+      'currentPeriodEnd',
+      'cancelAtPeriodEnd',
+      'couponCampaignId',
+      'discountedCyclesRemaining',
+    ].join(' ')).limit(2).lean<CurrentCancellationSubscription[]>(),
+  ])
+  if (subscriptions.length !== 1) return null
+  const current = subscriptions[0]
+  if (
+    !user ||
+    !exactCurrentCancellationSubscription(current, userId, input.now) ||
+    user.plan !== current.planKey ||
+    user.planVocabularyVersion !== CURRENT_PLAN_VOCABULARY_VERSION ||
+    user.entitlementSource !== 'subscription' ||
+    user.usagePeriodKey !== current.currentPeriodKey ||
+    !validDate(user.planExpiresAt) ||
+    user.planExpiresAt.getTime() !== current.currentPeriodEnd.getTime()
+  ) {
+    return null
+  }
+  if (current.status === 'authenticated') {
+    const checkoutFilter = couponUpfrontCheckoutFilter(current, userId)
+    if (
+      !checkoutFilter ||
+      !(await CheckoutIntent.exists(checkoutFilter))
+    ) {
+      return null
+    }
+  }
+  return current
 }
 
 async function defaultLoadCurrentLifecycleSubscription(input: {
@@ -975,7 +1160,7 @@ async function persistCustomerPeriodEndCancellationMongo(input: {
   userId: string
   idempotencyKey: string
   selectionHash: string
-  current: CurrentLifecycleSubscription
+  current: CurrentCancellationSubscription
   requestedAt: Date
 }): Promise<PersistedFuturePlanChange> {
   await connectDB()
@@ -1021,16 +1206,45 @@ async function persistCustomerPeriodEndCancellationMongo(input: {
         providerMode: input.current.providerMode,
         razorpaySubscriptionId:
           input.current.razorpaySubscriptionId,
-        status: 'active',
+        status: input.current.status,
         currentPeriodKey: input.current.currentPeriodKey,
         currentPeriodStart: input.current.currentPeriodStart,
         currentPeriodEnd: input.current.currentPeriodEnd,
+        ...(input.current.status === 'authenticated'
+          ? {
+              checkoutIntentId: input.current.checkoutIntentId,
+              planChangeRequestId: { $exists: false },
+              replacesSubscriptionId: { $exists: false },
+              leaseLane: 'a',
+              requestedStartAt: input.current.requestedStartAt,
+              couponCampaignId: input.current.couponCampaignId,
+              discountedCyclesRemaining: 0,
+            }
+          : {}),
       }).session(session)
       if (!current) {
         throw failure(
           'lifecycle_conflict',
           'Current subscription changed before cancellation',
         )
+      }
+      if (input.current.status === 'authenticated') {
+        const checkoutFilter = couponUpfrontCheckoutFilter(
+          input.current,
+          userId,
+        )
+        const checkout = checkoutFilter
+          ? await CheckoutIntent.findOne(checkoutFilter)
+              .session(session)
+              .select('_id')
+              .lean<{ _id: mongoose.Types.ObjectId }>()
+          : null
+        if (!checkout) {
+          throw failure(
+            'lifecycle_conflict',
+            'Coupon checkout changed before cancellation',
+          )
+        }
       }
       const activeFenceKey =
         `${input.current.providerMode}:${input.userId}`
@@ -1118,14 +1332,14 @@ export async function initiateCustomerPeriodEndCancellation(
   }
   const loadCurrent =
     dependencies.loadCurrentSubscription ??
-    defaultLoadCurrentLifecycleSubscription
+    defaultLoadCurrentCancellationSubscription
   const current = await loadCurrent({
     userId: input.userId,
     now: requestedAt,
   })
   if (
     !current ||
-    !exactCurrentLifecycleSubscription(
+    !exactCurrentCancellationSubscription(
       current,
       new mongoose.Types.ObjectId(input.userId),
       requestedAt,
@@ -1426,9 +1640,6 @@ async function buildAuthorizationExpectation(input: {
     paymentId: input.paymentId,
     subscriptionId: intent.razorpaySubscriptionId,
     planId: validated.plan.razorpayPlanId,
-    ...(validated.coupon
-      ? { offerId: validated.coupon.razorpayOfferId }
-      : {}),
     checkoutIntentId: intent._id.toHexString(),
     checkoutReceipt: intent.receipt,
     catalogVersion: intent.catalogVersion,
@@ -1923,6 +2134,23 @@ function assertCancellationContext(input: {
   const { request, subscription } = input
   const controlLineage =
     classifyPlanChangeControlLineage(request)
+  const couponUpfrontCancellation =
+    request.operation === 'period_end_cancel' &&
+    couponUpfrontCancellationLineage(subscription) &&
+    (
+      subscription.status === 'authenticated' ||
+      subscription.status === 'cancelled' ||
+      subscription.status === 'completed' ||
+      subscription.status === 'expired'
+    )
+  const scheduledReplay =
+    request.status === 'scheduled' &&
+    subscription.cancelAtPeriodEnd &&
+    (
+      subscription.status === 'cancelled' ||
+      subscription.status === 'completed' ||
+      subscription.status === 'expired'
+    )
   if (
     controlLineage !== 'customer' ||
     (
@@ -1945,8 +2173,12 @@ function assertCancellationContext(input: {
       request.status !== 'reconciling' &&
       request.status !== 'scheduled'
     ) ||
-    !['active', 'pending', 'halted', 'paused'].includes(
-      subscription.status,
+    !(
+      ['active', 'pending', 'halted', 'paused'].includes(
+        subscription.status,
+      ) ||
+      couponUpfrontCancellation ||
+      scheduledReplay
     )
   ) {
     throw failure(
@@ -1959,7 +2191,7 @@ function assertCancellationContext(input: {
 async function commitCancellationAcceptedMongo(input: {
   request: CancellationRequestRow
   subscription: CancellationSubscriptionRow
-  provider: RazorpayScheduledCancellationDto
+  provider: RazorpaySubscriptionDto
   observedAt: Date
 }): Promise<{ reused: boolean }> {
   await connectDB()
@@ -1997,16 +2229,39 @@ async function commitCancellationAcceptedMongo(input: {
           'Cancellation records disappeared before commit',
         )
       }
-      const providerBoundary = new Date(
-        input.provider.currentEndEpochSeconds * 1_000,
-      )
+      const couponUpfrontCancellation =
+        input.request.operation === 'period_end_cancel' &&
+        couponUpfrontCancellationLineage(input.subscription)
+      const providerBoundary = couponUpfrontCancellation
+        ? input.subscription.currentPeriodEnd
+        : new Date(
+            (input.provider.currentEndEpochSeconds ?? Number.NaN) * 1_000,
+          )
+      const providerEvidenceExact = couponUpfrontCancellation
+        ? (
+            ['cancelled', 'completed', 'expired'].includes(
+              input.provider.status,
+            ) &&
+            input.provider.startAtEpochSeconds !== undefined &&
+            input.provider.startAtEpochSeconds * 1_000 ===
+              request.requestedEffectiveAt.getTime()
+          )
+        : (
+            input.provider.scheduledChangeAtEpochSeconds ===
+              input.provider.currentEndEpochSeconds
+          )
       if (
         input.provider.id !== subscription.razorpaySubscriptionId ||
         input.provider.providerMode !== subscription.providerMode ||
+        input.provider.planId !== subscription.razorpayPlanId ||
+        (
+          couponUpfrontCancellation &&
+          input.provider.offerId !== undefined
+        ) ||
+        !validDate(providerBoundary) ||
         providerBoundary.getTime() !==
           request.requestedEffectiveAt.getTime() ||
-        input.provider.scheduledChangeAtEpochSeconds !==
-          input.provider.currentEndEpochSeconds
+        !providerEvidenceExact
       ) {
         throw failure(
           'review_required',
@@ -2207,13 +2462,17 @@ export async function submitOldSubscriptionPeriodEndCancellation(
   const factory =
     dependencies.cancellationClientFactory ??
     defaultCancellationClientFactory()
-  let provider: RazorpayScheduledCancellationDto
+  let provider: RazorpaySubscriptionDto
   try {
-    provider = await factory
-      .forMode(context.request.providerMode)
-      .cancelSubscriptionAtCycleEnd(
-        context.subscription.razorpaySubscriptionId,
-      )
+    const client = factory.forMode(context.request.providerMode)
+    provider = context.request.operation === 'period_end_cancel' &&
+      couponUpfrontCancellationLineage(context.subscription)
+      ? await client.cancelSubscriptionImmediately(
+          context.subscription.razorpaySubscriptionId,
+        )
+      : await client.cancelSubscriptionAtCycleEnd(
+          context.subscription.razorpaySubscriptionId,
+        )
   } catch (error) {
     const markUncertain =
       dependencies.markCancellationUncertain ??

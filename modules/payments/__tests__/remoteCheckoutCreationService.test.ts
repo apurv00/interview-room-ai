@@ -54,6 +54,8 @@ function subscriptionIntent(
     status: 'created',
     purpose: 'acquisition',
     leaseLane: 'a',
+    requestedStartAt:
+      new Date('2026-08-24T09:55:00.000Z'),
     authorizationExpiresAt:
       new Date('2026-07-25T09:55:00.000Z'),
     planKey: 'plus',
@@ -94,11 +96,11 @@ function subscriptionDto(
     providerMode: 'test',
     id: 'sub_0001',
     planId: 'plan_PLUS0001',
-    offerId: 'offer_0001',
     status: 'created',
     totalCount: 12,
     paidCount: 0,
     remainingCount: 12,
+    startAtEpochSeconds: 1_787_565_300,
     authorizationExpiresAtEpochSeconds: 1_784_973_300,
     notes: {
       checkout_receipt: 'ipr_t_507f191e810c19729de860ea',
@@ -106,6 +108,8 @@ function subscriptionDto(
       catalog_version: 'consumer-inr-v1',
       checkout_purpose: 'acquisition',
       subscription_lease_lane: 'a',
+      coupon_upfront_amount_paise: 49_900,
+      coupon_discounted_billing_cycles: 1,
     },
     createdAtEpochSeconds: 1_721_779_200,
     ...overrides,
@@ -205,11 +209,11 @@ function requestInput() {
 }
 
 describe('remote checkout creation orchestration', () => {
-  it('keeps Live readiness false and makes zero calls when an explicit gate blocks sale', async () => {
+  it('keeps approved Live readiness and makes zero calls when an explicit gate blocks sale', async () => {
     expect(CURRENT_PAYMENT_CODE_READINESS).toEqual({
       remoteCreationReady: true,
       recoveryReady: true,
-      liveCreationReady: false,
+      liveCreationReady: true,
     })
     const harness = baseDependencies()
     const evaluateSaleGate = vi.fn(async () => ({
@@ -474,16 +478,18 @@ describe('remote checkout creation orchestration', () => {
     expect(markReview).toHaveBeenCalledTimes(1)
   })
 
-  it('uses only the trusted subscription Plan/Offer and keeps customer notifications off', async () => {
+  it('uses the trusted Plan and coupon upfront item without an Offer', async () => {
     const intent = subscriptionIntent()
     const harness = baseDependencies({ intent })
     const resolveSubscriptionSpec = vi.fn(async () => ({
       planKey: 'plus' as const,
       razorpayPlanId: 'plan_PLUS0001',
-      razorpayOfferId: 'offer_0001',
+      upfrontAmountPaise: 49_900,
+      upfrontItemName: 'Plus first billing cycle',
       totalCount: 12,
       purpose: 'acquisition' as const,
       leaseLane: 'a' as const,
+      startAtEpochSeconds: 1_787_565_300,
       authorizationExpiresAtEpochSeconds: 1_784_973_300,
     }))
 
@@ -508,7 +514,12 @@ describe('remote checkout creation orchestration', () => {
     expect(harness.createSubscription).toHaveBeenCalledWith({
       planId: 'plan_PLUS0001',
       totalCount: 12,
-      offerId: 'offer_0001',
+      upfrontItem: {
+        name: 'Plus first billing cycle',
+        amountPaise: 49_900,
+        currency: 'INR',
+      },
+      startAtEpochSeconds: 1_787_565_300,
       authorizationExpiresAtEpochSeconds: 1_784_973_300,
       customerNotify: false,
       receipt: intent.receipt,
@@ -517,8 +528,12 @@ describe('remote checkout creation orchestration', () => {
         catalog_version: 'consumer-inr-v1',
         checkout_purpose: 'acquisition',
         subscription_lease_lane: 'a',
+        coupon_upfront_amount_paise: 49_900,
+        coupon_discounted_billing_cycles: 1,
       },
     })
+    expect(harness.createSubscription.mock.calls[0]?.[0])
+      .not.toHaveProperty('offerId')
     expect(harness.attachRemoteId).toHaveBeenCalledWith({
       intent,
       remoteId: 'sub_0001',
@@ -545,6 +560,7 @@ describe('remote checkout creation orchestration', () => {
         totalCount: 12,
         purpose: 'acquisition',
         leaseLane: 'a',
+        startAtEpochSeconds: 1_787_565_300,
         authorizationExpiresAtEpochSeconds: 1_784_973_300,
       }),
     })).rejects.toMatchObject({
@@ -553,11 +569,11 @@ describe('remote checkout creation orchestration', () => {
     expect(harness.createSubscription).not.toHaveBeenCalled()
   })
 
-  it('rejects a Subscription response with wrong Plan, Offer, or receipt note', async () => {
+  it('reviews an Offer-contaminated recovered acquisition', async () => {
     const intent = subscriptionIntent()
     const adapter = fakeAdapter({
       subscriptionRecovery: subscriptionDto({
-        notes: { checkout_receipt: 'wrong_receipt' },
+        offerId: 'offer_Unexpected123',
       }),
     })
     const harness = baseDependencies({ intent, adapter })
@@ -567,10 +583,12 @@ describe('remote checkout creation orchestration', () => {
       resolveSubscriptionSpec: async () => ({
         planKey: 'plus',
         razorpayPlanId: 'plan_PLUS0001',
-        razorpayOfferId: 'offer_0001',
+        upfrontAmountPaise: 49_900,
+        upfrontItemName: 'Plus first billing cycle',
         totalCount: 12,
         purpose: 'acquisition',
         leaseLane: 'a',
+        startAtEpochSeconds: 1_787_565_300,
         authorizationExpiresAtEpochSeconds: 1_784_973_300,
       }),
     })).rejects.toMatchObject({ code: 'remote_mismatch' })
@@ -606,10 +624,12 @@ describe('remote checkout creation orchestration', () => {
       resolveSubscriptionSpec: async () => ({
         planKey: 'plus',
         razorpayPlanId: 'plan_PLUS0001',
-        razorpayOfferId: 'offer_0001',
+        upfrontAmountPaise: 49_900,
+        upfrontItemName: 'Plus first billing cycle',
         totalCount: 12,
         purpose: 'acquisition',
         leaseLane: 'a',
+        startAtEpochSeconds: 1_787_565_300,
         authorizationExpiresAtEpochSeconds:
           Math.floor(now.getTime() / 1_000),
       }),
@@ -630,6 +650,9 @@ describe('remote checkout creation orchestration', () => {
       requestedStartAt: new Date('2026-07-26T10:00:00.000Z'),
       authorizationExpiresAt:
         new Date('2026-07-25T10:00:00.000Z'),
+      payablePaise: 59_900,
+      discountPaise: 0,
+      discountedBillingCycles: undefined,
     })
     const created = subscriptionDto({
       startAtEpochSeconds: 1_785_060_000,
@@ -648,7 +671,6 @@ describe('remote checkout creation orchestration', () => {
     const spec = {
       planKey: 'plus' as const,
       razorpayPlanId: 'plan_PLUS0001',
-      razorpayOfferId: 'offer_0001',
       totalCount: 12,
       purpose: 'replacement' as const,
       planChangeRequestId: planChangeRequestId.toString(),
@@ -664,7 +686,6 @@ describe('remote checkout creation orchestration', () => {
     expect(harness.createSubscription).toHaveBeenCalledWith({
       planId: 'plan_PLUS0001',
       totalCount: 12,
-      offerId: 'offer_0001',
       startAtEpochSeconds: 1_785_060_000,
       authorizationExpiresAtEpochSeconds: 1_784_973_600,
       customerNotify: false,
@@ -677,6 +698,10 @@ describe('remote checkout creation orchestration', () => {
         plan_change_request_id: planChangeRequestId.toString(),
       },
     })
+    expect(harness.createSubscription.mock.calls[0]?.[0])
+      .not.toHaveProperty('upfrontItem')
+    expect(harness.createSubscription.mock.calls[0]?.[0])
+      .not.toHaveProperty('offerId')
 
     const mismatchedAdapter = fakeAdapter({
       subscriptionRecovery: subscriptionDto({
@@ -711,10 +736,12 @@ describe('remote checkout creation orchestration', () => {
       resolveSubscriptionSpec: async () => ({
         planKey: 'plus',
         razorpayPlanId: 'plan_PLUS0001',
-        razorpayOfferId: 'offer_0001',
+        upfrontAmountPaise: 49_900,
+        upfrontItemName: 'Plus first billing cycle',
         totalCount: 12,
         purpose: 'acquisition',
         leaseLane: 'a',
+        startAtEpochSeconds: 1_787_565_300,
         authorizationExpiresAtEpochSeconds: 1_784_973_300,
       }),
     })).rejects.toMatchObject({ code: 'remote_mismatch' })

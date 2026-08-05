@@ -586,8 +586,7 @@ function resolveCurrentSubscriptionCoupon(input: {
     terms.discountPaise === quote.discountPaise &&
     terms.discountedBillingCycles === quote.discountedBillingCycles &&
     terms.applicablePlanKeys.includes(subscription.planKey) &&
-    typeof terms.razorpayOfferIdByMode[subscription.providerMode] ===
-      'string' &&
+    terms.discountedBillingCycles === 1 &&
     (!terms.startsAt || terms.startsAt <= intent.createdAt) &&
     (!terms.endsAt || terms.endsAt > intent.createdAt)
   if (!exactLineage) return { consistent: false }

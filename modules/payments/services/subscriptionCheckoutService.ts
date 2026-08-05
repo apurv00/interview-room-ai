@@ -810,7 +810,6 @@ function exactSelectedCoupon(
   const quote = resolved.quote
   if (!selected) return quote.discountPaise === 0 && !quote.coupon
   const verification = selected.providerVerification?.[providerMode]
-  const offerId = selected.terms.razorpayOfferIdByMode[providerMode]
   return (
     selected.status === 'active' &&
     selected.availability.providerMode === providerMode &&
@@ -819,8 +818,8 @@ function exactSelectedCoupon(
     quote.discountPaise === selected.terms.discountPaise &&
     quote.discountedBillingCycles ===
       selected.terms.discountedBillingCycles &&
-    typeof offerId === 'string' &&
-    /^offer_[A-Za-z0-9]+$/.test(offerId) &&
+    selected.terms.discountedBillingCycles === 1 &&
+    selected.terms.eligibility.upgradesEligible === false &&
     providerSnapshotMatches(verification, selected.contentHash)
   )
 }
@@ -1275,7 +1274,15 @@ function trustedSubscriptionSpec(
     intent.purpose === 'acquisition' &&
     intent.planChangeRequestId === undefined &&
     intent.leaseLane === 'a' &&
-    intent.requestedStartAt === undefined
+    (
+      quote.discountPaise === 0
+        ? intent.requestedStartAt === undefined
+        : (
+            futureStartAt !== undefined &&
+            futureStartAt > intent.authorizationExpiresAt! &&
+            futureStartAt > intent.createdAt
+          )
+    )
   )
   const futureLifecycle = (
     (
@@ -1294,7 +1301,7 @@ function trustedSubscriptionSpec(
     intent.authorizationExpiresAt
       ? Math.floor(intent.authorizationExpiresAt.getTime() / 1_000)
       : undefined
-  const startAtEpochSeconds = futureLifecycle
+  const startAtEpochSeconds = futureLifecycle || quote.discountPaise > 0
     ? Math.floor(futureStartAt!.getTime() / 1_000)
     : undefined
   if (
@@ -1432,8 +1439,9 @@ function trustedSubscriptionSpec(
     coupon.discountedBillingCycles !==
       quote.discountedBillingCycles ||
     !coupon.applicablePlanKeys.includes(intent.planKey) ||
-    typeof coupon.razorpayOfferId !== 'string' ||
-    !/^offer_[A-Za-z0-9]+$/.test(coupon.razorpayOfferId) ||
+    coupon.discountedBillingCycles !== 1 ||
+    intent.purpose !== 'acquisition' ||
+    startAtEpochSeconds === undefined ||
     (coupon.startsAt && coupon.startsAt > intent.createdAt) ||
     (coupon.endsAt && coupon.endsAt <= intent.createdAt) ||
     typeof coupon.termsText !== 'string' ||
@@ -1447,13 +1455,15 @@ function trustedSubscriptionSpec(
   ) {
     throw failure(
       'commercial_unavailable',
-      'Immutable subscription Offer terms are inconsistent',
+      'Immutable subscription coupon terms are inconsistent',
     )
   }
   return {
     planKey: intent.planKey,
     razorpayPlanId: plan.razorpayPlanId,
-    razorpayOfferId: coupon.razorpayOfferId,
+    upfrontAmountPaise: quote.payablePaise,
+    upfrontItemName:
+      `${intent.planKey === 'plus' ? 'Plus' : 'Pro'} first month`,
     totalCount,
     purpose: intent.purpose!,
     ...(futureLifecycle
@@ -1462,6 +1472,8 @@ function trustedSubscriptionSpec(
             intent.planChangeRequestId!.toHexString(),
           startAtEpochSeconds,
         }
+      : quote.discountPaise > 0
+        ? { startAtEpochSeconds }
       : {}),
     leaseLane: intent.leaseLane!,
     authorizationExpiresAtEpochSeconds,

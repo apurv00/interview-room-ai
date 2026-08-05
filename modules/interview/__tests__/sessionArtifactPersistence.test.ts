@@ -147,6 +147,109 @@ describe('createSession — Jobs JD provider authority', () => {
     )
   })
 
+  it('enforces Basic and exact paid limits without calendar-resetting subscriptions', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'))
+    try {
+      mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+      mockUserFindOneAndUpdate.mockResolvedValue({
+        _id: '507f1f77bcf86cd799439010',
+      })
+      mockDepthFindOne.mockReturnValue({
+        lean: () => Promise.resolve(null),
+      })
+      mockSessionCreate.mockResolvedValue({
+        _id: { toString: () => 'session-quota-1' },
+      })
+
+      await createSession({
+        userId: '507f1f77bcf86cd799439010',
+        config: {
+          role: 'backend',
+          interviewType: 'behavioral',
+          experience: '3-6',
+          duration: 20,
+        },
+      })
+
+      const reset = mockUserUpdateOne.mock.calls[0]
+      expect(reset[0]).toEqual(expect.objectContaining({
+        entitlementSource: { $ne: 'subscription' },
+        $or: expect.arrayContaining([
+          { legacyMonthlyInterviewResetAt: { $exists: false } },
+        ]),
+      }))
+      expect(reset[1]).toEqual({
+        $set: expect.objectContaining({
+          monthlyInterviewsUsed: 0,
+          legacyMonthlyInterviewResetAt: new Date(
+            '2026-08-05T12:00:00.000Z',
+          ),
+        }),
+      })
+      expect(reset[1].$set).not.toHaveProperty('usageResetAt')
+
+      expect(mockUserUpdateOne.mock.calls[1]).toEqual([
+        expect.objectContaining({
+          organizationId: null,
+          plan: { $nin: ['plus', 'pro', 'enterprise'] },
+          entitlementSource: { $nin: ['subscription', 'admin_grant'] },
+        }),
+        { $set: { monthlyInterviewLimit: 1 } },
+      ])
+      expect(mockUserUpdateOne.mock.calls[2]).toEqual([
+        expect.objectContaining({
+          entitlementSource: 'subscription',
+          planVocabularyVersion: 2,
+          plan: 'plus',
+          planExpiresAt: {
+            $gt: new Date('2026-08-05T12:00:00.000Z'),
+          },
+          interviewLimit: 10,
+        }),
+        { $set: { monthlyInterviewLimit: 10 } },
+      ])
+      expect(mockUserUpdateOne.mock.calls[3]).toEqual([
+        expect.objectContaining({
+          entitlementSource: 'subscription',
+          planVocabularyVersion: 2,
+          plan: 'pro',
+          planExpiresAt: {
+            $gt: new Date('2026-08-05T12:00:00.000Z'),
+          },
+          interviewLimit: 15,
+        }),
+        { $set: { monthlyInterviewLimit: 15 } },
+      ])
+
+      const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
+      expect(admission.$and[0]).toEqual({
+        $expr: {
+          $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'],
+        },
+      })
+      expect(admission.$and[1].$or).toEqual(expect.arrayContaining([
+        expect.objectContaining({ monthlyInterviewLimit: 1 }),
+        expect.objectContaining({
+          entitlementSource: 'subscription',
+          plan: 'plus',
+          interviewLimit: 10,
+          monthlyInterviewLimit: 10,
+        }),
+        expect.objectContaining({
+          entitlementSource: 'subscription',
+          plan: 'pro',
+          interviewLimit: 15,
+          monthlyInterviewLimit: 15,
+        }),
+        { plan: 'enterprise' },
+        { entitlementSource: 'admin_grant' },
+      ]))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('rolls back quota and creates no session when the provider gate is revoked', async () => {
     const denied = Object.assign(new Error('model provider precondition failed'), {
       name: 'ModelProviderPreconditionError',

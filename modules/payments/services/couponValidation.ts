@@ -80,6 +80,16 @@ export function validateCouponTerms(
   const errors: string[] = []
   const warnings: string[] = []
 
+  if (
+    terms.discountedBillingCycles !==
+      LAUNCH_COUPON_POLICY.defaultDiscountedBillingCycles
+  ) {
+    errors.push('Launch coupons must discount exactly 1 billing cycle')
+  }
+  if (terms.eligibility.upgradesEligible) {
+    errors.push('Launch coupons cannot apply to subscription upgrades')
+  }
+
   for (const planKey of terms.applicablePlanKeys) {
     const listPricePaise = catalog.plans[planKey].listPricePaise
     const payablePaise = listPricePaise - terms.discountPaise
@@ -112,21 +122,8 @@ export function validateCouponTerms(
   ) {
     errors.push('Urgency copy requires a real coupon end time')
   }
-  if (
-    terms.discountedBillingCycles > 1 &&
-    !/\b(?:cycle|month|renew)\b/i.test(terms.termsText)
-  ) {
-    errors.push(
-      'Multi-cycle terms must disclose the discount duration and renewal',
-    )
-  }
   if (!/\b(?:renew|list price|thereafter)\b/i.test(terms.termsText)) {
     warnings.push('Terms should disclose the undiscounted renewal price')
-  }
-  if (!terms.razorpayOfferIdByMode[providerMode]) {
-    warnings.push(
-      `razorpayOfferIdByMode.${providerMode} is not configured`,
-    )
   }
 
   return {

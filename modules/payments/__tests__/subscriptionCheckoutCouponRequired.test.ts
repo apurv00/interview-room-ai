@@ -74,7 +74,7 @@ function quote(withCoupon: boolean): ResolvedCustomerBillingQuote {
                 userIds: [],
                 segments: ['all' as const],
                 acquisitionSources: [],
-                upgradesEligible: true,
+                upgradesEligible: false,
               },
               maxRedemptionsPerUser: 1,
               minPayablePaiseByPlan: { plus: 39_900 },

@@ -1,13 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Accordion from '@shared/ui/Accordion'
 import Button from '@shared/ui/Button'
 import type { LegacyStoredPlanKey } from '@shared/services/planConfig'
 import {
   billingResponseSchemas,
   parseBillingResponse,
+  type CustomerBillingSummary,
   type CustomerBillingQuote,
   type PaidBillingPlanKey,
 } from './billingClient'
@@ -62,7 +63,47 @@ export function BillingPricingExperience({
   const [quoteLoading, setQuoteLoading] = useState(false)
   const [selectedPlan, setSelectedPlan] =
     useState<PaidBillingPlanKey | null>(null)
+  const [billingSummary, setBillingSummary] =
+    useState<CustomerBillingSummary | null>(null)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [cancellingRenewal, setCancellingRenewal] = useState(false)
+  const [cancellationMessage, setCancellationMessage] =
+    useState<string | null>(null)
   const resumeCheckedRef = useRef(false)
+
+  const loadBillingSummary = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch('/api/billing/me', {
+      headers: { Accept: 'application/json' },
+      signal,
+    })
+    return parseBillingResponse(
+      response,
+      billingResponseSchemas.summary,
+      'Your subscription details could not be loaded.',
+    )
+  }, [])
+
+  useEffect(() => {
+    if (
+      !catalog?.customerBillingUiReady ||
+      authStatus !== 'authenticated'
+    ) {
+      setBillingSummary(null)
+      return
+    }
+    const controller = new AbortController()
+    setSummaryError(null)
+    void loadBillingSummary(controller.signal)
+      .then((summary) => {
+        if (!controller.signal.aborted) setBillingSummary(summary)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setSummaryError('Subscription management is temporarily unavailable.')
+        }
+      })
+    return () => controller.abort()
+  }, [authStatus, catalog?.customerBillingUiReady, loadBillingSummary])
 
   useEffect(() => {
     if (
@@ -171,6 +212,55 @@ export function BillingPricingExperience({
     setSelectedPlan(planKey)
   }
 
+  async function cancelRenewal() {
+    if (cancellingRenewal) return
+    const confirmed = window.confirm(
+      'Cancel automatic renewal? Your paid access will continue through the current paid period.',
+    )
+    if (!confirmed) return
+    setCancellingRenewal(true)
+    setCancellationMessage(null)
+    try {
+      const expectedEffectiveAt =
+        billingSummary?.subscription.currentPeriodEnd
+      if (!expectedEffectiveAt) {
+        throw new Error('Current paid period is unavailable')
+      }
+      const response = await fetch('/api/billing/subscription/cancel', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'Idempotency-Key': `billing-cancel:${expectedEffectiveAt}`,
+        },
+        body: JSON.stringify({ confirmPeriodEnd: true }),
+      })
+      if (!response.ok) {
+        throw new Error('Cancellation request failed')
+      }
+      const result = await response.json() as {
+        status?: unknown
+        effectiveAt?: unknown
+      }
+      if (
+        result.effectiveAt !== expectedEffectiveAt ||
+        (result.status !== 'scheduled' && result.status !== 'reconciling')
+      ) {
+        throw new Error('Cancellation response is inconsistent')
+      }
+      setBillingSummary(await loadBillingSummary())
+      setCancellationMessage(result.status === 'scheduled'
+        ? 'Renewal cancelled. Your paid access remains available through the current paid period.'
+        : 'Razorpay confirmation is pending. Use “Cancel renewal” again to safely recheck the same request.')
+    } catch {
+      setCancellationMessage(
+        'Renewal could not be cancelled right now. Please try again.',
+      )
+    } finally {
+      setCancellingRenewal(false)
+    }
+  }
+
   if (loading) {
     return (
       <main className="min-h-screen px-4 py-16 sm:px-6 lg:px-8">
@@ -256,6 +346,66 @@ export function BillingPricingExperience({
             />
           ))}
         </section>
+
+        {authStatus === 'authenticated' &&
+        billingSummary?.subscription.state === 'current' ? (
+          <section
+            aria-label="Subscription management"
+            className="mt-8 rounded-2xl border border-[#e1e8ed] bg-white px-5 py-5"
+          >
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-[#0f1419]">
+                  {billingSummary.subscription.planKey === 'pro'
+                    ? 'Pro subscription'
+                    : 'Plus subscription'}
+                </h2>
+                <p className="mt-1 text-sm text-[#536471]">
+                  {billingSummary.subscription.cancelAtPeriodEnd
+                    ? 'Renewal is cancelled. Paid access continues through the current period.'
+                    : 'Renews automatically each month until you cancel.'}
+                </p>
+                {billingSummary.subscription.currentPeriodEnd ? (
+                  <p className="mt-1 text-xs text-[#71767b]">
+                    Current paid period ends{' '}
+                    {new Intl.DateTimeFormat('en-IN', {
+                      dateStyle: 'medium',
+                    }).format(new Date(
+                      billingSummary.subscription.currentPeriodEnd,
+                    ))}
+                  </p>
+                ) : null}
+              </div>
+              {!billingSummary.subscription.cancelAtPeriodEnd &&
+              (
+                billingSummary.subscription.status === 'active' ||
+                (
+                  billingSummary.subscription.status === 'authenticated' &&
+                  billingSummary.subscription.currentCoupon !== undefined &&
+                  billingSummary.subscription.discountedCyclesRemaining === 0
+                )
+              ) ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={cancellingRenewal}
+                  onClick={cancelRenewal}
+                >
+                  {cancellingRenewal ? 'Cancelling…' : 'Cancel renewal'}
+                </Button>
+              ) : null}
+            </div>
+            {cancellationMessage ? (
+              <p className="mt-3 text-sm text-[#536471]" role="status">
+                {cancellationMessage}
+              </p>
+            ) : null}
+          </section>
+        ) : summaryError && authStatus === 'authenticated' ? (
+          <p className="mt-5 text-center text-sm text-red-600" role="status">
+            {summaryError}
+          </p>
+        ) : null}
 
         <section className="mt-8 grid gap-4 md:grid-cols-2">
           <article className="rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4">

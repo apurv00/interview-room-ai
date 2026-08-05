@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   FutureSubscriptionAuthorizationEffectInput,
   SubscriptionChargedEffectInput,
+  SubscriptionUpfrontEffectInput,
   WebhookDomainDispatchDependencies,
 } from '@payments/services/webhookDomainDispatchService'
 import type {
@@ -39,6 +40,9 @@ function captureComposition(
   const fulfillSubscriptionCycle = vi.fn().mockResolvedValue({
     projectionDisposition: 'projected',
   })
+  const fulfillSubscriptionUpfrontCycle = vi.fn().mockResolvedValue({
+    projectionDisposition: 'projected',
+  })
   const persistPaymentState = vi.fn().mockResolvedValue({
     outcome: 'handled',
     operationKey: 'payment-state-operation',
@@ -60,6 +64,7 @@ function captureComposition(
     persistCapturedCheckout,
     recoverChargeFulfillment,
     fulfillSubscriptionCycle,
+    fulfillSubscriptionUpfrontCycle,
     persistPaymentState,
     persistSubscriptionState,
     observeFutureSubscriptionAuthorization,
@@ -74,6 +79,7 @@ function captureComposition(
     persistCapturedCheckout,
     recoverChargeFulfillment,
     fulfillSubscriptionCycle,
+    fulfillSubscriptionUpfrontCycle,
     persistPaymentState,
     persistSubscriptionState,
     observeFutureSubscriptionAuthorization,
@@ -159,6 +165,47 @@ describe('launch webhook composition', () => {
         providerMode: 'test',
         kind: 'subscription',
         eventType: 'subscription.charged',
+        razorpaySubscriptionId: effect.razorpaySubscriptionId,
+        razorpayPaymentId: effect.razorpayPaymentId,
+        razorpayInvoiceId: effect.razorpayInvoiceId,
+        razorpayOrderId: effect.razorpayOrderId,
+      },
+      payment: effect.payment,
+      invoice: effect.invoice,
+      subscription: effect.subscription,
+    })
+    expect(acknowledgement).toEqual({
+      outcome: 'handled',
+      operationKey: 'test:pay_TestPayment123:entitlement',
+    })
+  })
+
+  it('maps a captured coupon upfront payment to upfront fulfillment', async () => {
+    const composed = captureComposition()
+    const effect = {
+      inboxEventId: new mongoose.Types.ObjectId().toHexString(),
+      providerMode: 'test',
+      eventType: 'payment.captured',
+      razorpaySubscriptionId: 'sub_TestSubscription123',
+      razorpayPaymentId: 'pay_TestPayment123',
+      razorpayInvoiceId: 'inv_TestInvoice123',
+      razorpayOrderId: 'order_TestOrder123',
+      payment: { id: 'pay_TestPayment123' },
+      invoice: { id: 'inv_TestInvoice123' },
+      subscription: { id: 'sub_TestSubscription123' },
+      localContext: {},
+    } as unknown as SubscriptionUpfrontEffectInput
+
+    const acknowledgement = await composed.domain.effects
+      ?.handleSubscriptionUpfront?.(effect)
+
+    expect(composed.fulfillSubscriptionUpfrontCycle).toHaveBeenCalledWith({
+      providerMode: 'test',
+      references: {
+        inboxEventId: effect.inboxEventId,
+        providerMode: 'test',
+        kind: 'payment',
+        eventType: 'payment.captured',
         razorpaySubscriptionId: effect.razorpaySubscriptionId,
         razorpayPaymentId: effect.razorpayPaymentId,
         razorpayInvoiceId: effect.razorpayInvoiceId,

@@ -8,9 +8,7 @@ import type {
 } from './bindingVerifier'
 import type { RazorpayClientFactory } from './razorpayClientFactory'
 import {
-  RazorpayProviderEntityMismatchError,
   RazorpaySdkCapabilityError,
-  type RazorpayOfferDto,
   type RazorpayPlanDto,
   type RazorpayServerAdapter,
 } from './razorpayServerAdapter'
@@ -115,10 +113,6 @@ function isRazorpayPlanId(value: string): boolean {
   return /^plan_[A-Za-z0-9]+$/.test(value)
 }
 
-function isRazorpayOfferId(value: string): boolean {
-  return /^offer_[A-Za-z0-9]+$/.test(value)
-}
-
 function comparePlan(
   planKey: PaidPlanKey,
   expectedId: string,
@@ -210,125 +204,6 @@ async function fetchAndComparePlan(input: {
 
 function isCanonicalHash(value: string): boolean {
   return /^[a-f0-9]{64}$/.test(value)
-}
-
-function sortedUnique(values: string[]): string[] {
-  return Array.from(new Set(values)).sort()
-}
-
-function sameStringSet(left: string[], right: string[]): boolean {
-  const normalizedLeft = sortedUnique(left)
-  const normalizedRight = sortedUnique(right)
-  return normalizedLeft.length === left.length &&
-    normalizedRight.length === right.length &&
-    normalizedLeft.length === normalizedRight.length &&
-    normalizedLeft.every((value, index) => value === normalizedRight[index])
-}
-
-function epochSeconds(value: Date | undefined): number | undefined {
-  if (value === undefined) return undefined
-  return Math.floor(value.getTime() / 1000)
-}
-
-function compareOffer(
-  input: CouponBindingVerificationInput,
-  expectedId: string,
-  remote: RazorpayOfferDto,
-): string[] {
-  const errors: string[] = []
-  if (remote.id !== expectedId) {
-    errors.push('Offer identifier does not match the coupon binding')
-  }
-  if (!remote.active) {
-    errors.push('Razorpay Offer is not active')
-  }
-  if (
-    !isInrPaise(remote.discountAmountPaise) ||
-    remote.discountAmountPaise !== input.terms.discountPaise
-  ) {
-    errors.push('Offer discount does not match coupon integer paise')
-  }
-  if (
-    !sameStringSet(remote.applicablePlanIds, input.applicablePlanIds)
-  ) {
-    errors.push('Offer applicable Plan IDs do not exactly match the catalog')
-  }
-  if (
-    remote.discountedBillingCycles !== input.terms.discountedBillingCycles
-  ) {
-    errors.push('Offer discounted billing cycles do not match the coupon')
-  }
-  if (
-    remote.startsAtEpochSeconds !== epochSeconds(input.terms.startsAt)
-  ) {
-    errors.push('Offer start time does not match the coupon')
-  }
-  if (
-    remote.endsAtEpochSeconds !== epochSeconds(input.terms.endsAt)
-  ) {
-    errors.push('Offer end time does not match the coupon')
-  }
-  return errors
-}
-
-async function fetchAndCompareOffer(input: {
-  adapter: RazorpayServerAdapter
-  verification: CouponBindingVerificationInput
-  expectedId: string
-}): Promise<
-  | { status: 'matched' | 'failed'; errors: string[] }
-  | { status: 'unavailable'; errors: string[] }
-> {
-  try {
-    const remote = await input.adapter.fetchOffer(input.expectedId)
-    const errors = compareOffer(
-      input.verification,
-      input.expectedId,
-      remote,
-    )
-    return {
-      status: errors.length ? 'failed' : 'matched',
-      errors,
-    }
-  } catch (error) {
-    if (error instanceof RazorpayProviderEntityMismatchError) {
-      return {
-        status: 'failed',
-        errors: ['Offer identifier does not match the coupon binding'],
-      }
-    }
-    if (
-      error instanceof RazorpaySdkCapabilityError ||
-      error instanceof RazorpayConfigurationError
-    ) {
-      return {
-        status: 'unavailable',
-        errors: [
-          RAZORPAY_BINDING_VERIFICATION_ERRORS.offerCapabilityUnavailable,
-        ],
-      }
-    }
-    if (error instanceof ZodError) {
-      return {
-        status: 'failed',
-        errors: [
-          RAZORPAY_BINDING_VERIFICATION_ERRORS.offerResponseInvalid,
-        ],
-      }
-    }
-    if (isMissingProviderEntity(error)) {
-      return {
-        status: 'failed',
-        errors: ['Configured Razorpay Offer could not be fetched'],
-      }
-    }
-    return {
-      status: 'unavailable',
-      errors: [
-        RAZORPAY_BINDING_VERIFICATION_ERRORS.offerProviderUnavailable,
-      ],
-    }
-  }
 }
 
 function validateCouponContext(
@@ -461,44 +336,8 @@ export function createRazorpayPaymentBindingVerifier(
     async verifyCoupon(input: CouponBindingVerificationInput) {
       const fetchedAt = now()
       const contextErrors = validateCouponContext(input)
-      const expectedId = input.terms.razorpayOfferIdByMode[input.mode]
-      if (!expectedId) {
-        contextErrors.push(
-          `Offer binding is missing for ${input.mode} mode`,
-        )
-      } else if (!isRazorpayOfferId(expectedId)) {
-        contextErrors.push(
-          `Offer binding is invalid for ${input.mode} mode`,
-        )
-      }
-      if (contextErrors.length || !expectedId) {
+      if (contextErrors.length) {
         return snapshot('failed', fetchedAt, contextErrors)
-      }
-
-      const resolved = getAdapter(
-        options.clientFactory,
-        input.mode,
-        RAZORPAY_BINDING_VERIFICATION_ERRORS.offerProviderUnavailable,
-      )
-      if ('status' in resolved) {
-        return snapshot('unavailable', fetchedAt, [resolved.error])
-      }
-      if (resolved.adapter.providerMode !== input.mode) {
-        return snapshot('failed', fetchedAt, [
-          RAZORPAY_BINDING_VERIFICATION_ERRORS.clientModeMismatch,
-        ])
-      }
-
-      const result = await fetchAndCompareOffer({
-        adapter: resolved.adapter,
-        verification: input,
-        expectedId,
-      })
-      if (result.status === 'unavailable') {
-        return snapshot('unavailable', fetchedAt, result.errors)
-      }
-      if (result.errors.length) {
-        return snapshot('failed', fetchedAt, result.errors)
       }
       return snapshot('verified', fetchedAt, [], input.contentHash)
     },
