@@ -449,10 +449,10 @@ function assertSubscriptionMatches(
     subscription.notes.catalog_version !== intent.catalogVersion ||
     subscription.notes.checkout_purpose !== intent.purpose ||
     subscription.notes.subscription_lease_lane !== intent.leaseLane ||
-    subscription.notes.coupon_upfront_amount_paise !==
-      spec.upfrontAmountPaise ||
-    subscription.notes.coupon_discounted_billing_cycles !==
-      intent.discountedBillingCycles ||
+    subscription.notes.coupon_upfront_amount_paise?.toString() !==
+      spec.upfrontAmountPaise?.toString() ||
+    subscription.notes.coupon_discounted_billing_cycles?.toString() !==
+      intent.discountedBillingCycles?.toString() ||
     subscription.notes.plan_change_request_id !==
       intent.planChangeRequestId?.toString()
   ) {
