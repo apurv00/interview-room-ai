@@ -111,6 +111,7 @@ function dependencies(
         placeOfSupply: { stateCode: '27', countryCode: 'IN' },
       },
     })),
+    supersedeBlockingCheckout: vi.fn(async () => ({ outcome: 'none' })),
     resolveQuote: vi.fn(async () => resolved),
     preflightQuote: vi.fn(async () => ({
       couponAccepted: Boolean(resolved.selectedCandidate),
@@ -120,6 +121,44 @@ function dependencies(
 }
 
 describe('subscription launch coupon fallback', () => {
+  it('supersedes an older different-plan checkout before resolving a new quote', async () => {
+    const deps = dependencies(quote(false))
+    const callOrder: string[] = []
+    deps.resolveSaleContext = vi.fn(async () => {
+      callOrder.push('sale')
+      return {
+        providerMode: 'test',
+        buyerSnapshot: {
+          name: 'Founder',
+          email: 'founder@example.invalid',
+          billingProfileVersion: 1,
+          billingProfileContentHash: 'c'.repeat(64),
+          placeOfSupply: { stateCode: '27', countryCode: 'IN' },
+        },
+      }
+    })
+    deps.supersedeBlockingCheckout = vi.fn(async () => {
+      callOrder.push('supersede')
+      return { outcome: 'none' }
+    })
+    deps.resolveQuote = vi.fn(async () => {
+      callOrder.push('quote')
+      return quote(false)
+    })
+    deps.createIntent.mockRejectedValueOnce(new Error('stop after ordering'))
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:supersession-order',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(callOrder).toEqual(['sale', 'supersede', 'quote'])
+    expect(deps.supersedeBlockingCheckout).toHaveBeenCalledTimes(1)
+  })
+
   it('persists the authoritative list price when no coupon applies', async () => {
     const deps = dependencies(quote(false))
     deps.createIntent.mockResolvedValueOnce({

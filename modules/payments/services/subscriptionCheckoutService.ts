@@ -89,6 +89,10 @@ import {
   CustomerBillingIdempotencyKeySchema,
 } from '../validators/customerBilling'
 import { CouponCodeSchema } from '../validators/coupon'
+import {
+  supersedeBlockingUnpaidSubscriptionCheckout,
+  UnpaidSubscriptionCheckoutSupersessionError,
+} from './unpaidSubscriptionCheckoutSupersessionService'
 
 export const PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT = 1_200 as const
 
@@ -288,6 +292,8 @@ export interface SubscriptionCheckoutDependencies {
   commercialResolver?: SubscriptionCycleCommercialResolver
   createRemote?: typeof createOrReuseRemoteCheckout
   loadKeyId?: (providerMode: ProviderMode) => string
+  supersedeBlockingCheckout?:
+    typeof supersedeBlockingUnpaidSubscriptionCheckout
 }
 
 export interface FuturePlanChangeCheckoutEvidence {
@@ -1878,10 +1884,33 @@ export async function createSubscriptionCheckout(
   input: SubscriptionCheckoutInput,
   dependencies: SubscriptionCheckoutDependencies = {},
 ): Promise<SubscriptionCheckoutResult> {
+  const requestStartedAt = new Date()
   try {
     const resolveSale =
       dependencies.resolveSaleContext ?? defaultResolveSaleContext
     const sale = await resolveSale(input.userId)
+    const supersedeBlockingCheckout =
+      dependencies.supersedeBlockingCheckout ??
+      supersedeBlockingUnpaidSubscriptionCheckout
+    try {
+      await supersedeBlockingCheckout({
+        userId: input.userId,
+        providerMode: sale.providerMode,
+        replacementPlanKey: input.request.planKey,
+        requestStartedAt,
+      })
+    } catch (error) {
+      if (error instanceof UnpaidSubscriptionCheckoutSupersessionError) {
+        throw failure(
+          error.code,
+          error.code === 'provider_unavailable'
+            ? 'The existing Razorpay checkout could not be verified'
+            : 'The existing subscription checkout requires reconciliation',
+          { cause: error },
+        )
+      }
+      throw error
+    }
     const resolveQuote =
       dependencies.resolveQuote ?? resolveCustomerBillingQuote
     const resolved = await resolveQuote({
