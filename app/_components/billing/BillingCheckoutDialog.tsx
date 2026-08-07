@@ -88,6 +88,7 @@ type CheckoutStage =
   | 'final_review'
   | 'opening'
   | 'verifying'
+  | 'activating'
   | 'pending'
   | 'completed'
   | 'manual_review'
@@ -293,17 +294,22 @@ export function BillingCheckoutDialog({
     clearBillingAuthIntent()
     setStatusMessage(message)
     setStage('completed')
-    await Promise.allSettled([
+    const refreshes = Promise.allSettled([
       refreshSession(),
       onCompleted(),
     ])
-  }, [accountId, onCompleted, refreshSession])
+    onClose()
+    await refreshes
+  }, [accountId, onClose, onCompleted, refreshSession])
 
   const applyTerminalStatus = useCallback(async (
     status: BillingIntentStatus,
   ): Promise<boolean> => {
     setStatusMessage(statusCopy(status.status))
-    if (!status.terminal) return false
+    if (!status.terminal) {
+      if (status.status === 'processing') setStage('activating')
+      return false
+    }
 
     if (status.status === 'completed') {
       await completeCheckout(statusCopy(status.status))
@@ -324,7 +330,6 @@ export function BillingCheckoutDialog({
     controller: AbortController,
   ): Promise<void> => {
     const deadline = Date.now() + RECOVERY_POLL_WINDOW_MS
-    setStage('pending')
     setError(null)
 
     while (!controller.signal.aborted && Date.now() < deadline) {
@@ -353,11 +358,13 @@ export function BillingCheckoutDialog({
           cause,
           'Payment status is temporarily unavailable.',
         ))
+        setStage('pending')
         return
       }
     }
 
     if (!controller.signal.aborted) {
+      setStage('pending')
       setStatusMessage(
         'Your payment is still pending. Do not start another checkout; you can safely return here or reopen the pricing page later.',
       )
@@ -1128,33 +1135,33 @@ export function BillingCheckoutDialog({
               </p>
             )}
 
-            <p className="text-xs leading-5 text-[#71767b]">
-              By continuing, you agree to the{' '}
-              <Link href="/terms" className="text-blue-600 hover:underline">
-                Terms
-              </Link>{' '}and acknowledge the{' '}
-              <Link
-                href="/cancellation-refunds"
-                className="text-blue-600 hover:underline"
-              >
-                cancellation and refund terms
-              </Link>
-              . Review our{' '}
-              <Link href="/privacy" className="text-blue-600 hover:underline">
-                Privacy Policy
-              </Link>
-              . No client callback alone activates a plan.
-            </p>
+            {[
+              'review',
+              'preparing',
+              'final_review',
+              'opening',
+            ].includes(stage) && (
+              <p className="text-xs leading-5 text-[#71767b]">
+                By continuing, you agree to the{' '}
+                <Link href="/terms" className="text-blue-600 hover:underline">
+                  Terms
+                </Link>{' '}and acknowledge the{' '}
+                <Link
+                  href="/cancellation-refunds"
+                  className="text-blue-600 hover:underline"
+                >
+                  cancellation and refund terms
+                </Link>
+                . Review our{' '}
+                <Link href="/privacy" className="text-blue-600 hover:underline">
+                  Privacy Policy
+                </Link>
+                . No client callback alone activates a plan.
+              </p>
+            )}
 
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              {stage === 'completed' ? (
-                <Link
-                  href="/pricing?upgraded=true"
-                  className="flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow-xs hover:bg-primary/90"
-                >
-                  View active plan
-                </Link>
-              ) : stage === 'manual_review' ? (
+              {stage === 'manual_review' ? (
                 <Button type="button" variant="secondary" onClick={onClose}>
                   Close
                 </Button>
@@ -1202,11 +1209,11 @@ export function BillingCheckoutDialog({
                     </Button>
                   )}
                 </>
-              ) : (
+              ) : stage === 'pending' ? (
                 <Button type="button" variant="secondary" onClick={onClose}>
                   Finish later
                 </Button>
-              )}
+              ) : null}
             </div>
           </div>
         )}

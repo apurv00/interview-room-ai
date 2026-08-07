@@ -250,6 +250,7 @@ describe('BillingCheckoutDialog completion and recovery', () => {
     vi.stubGlobal('fetch', vi.fn(standardFetch))
     const refreshSession = vi.fn().mockResolvedValue(undefined)
     const onCompleted = vi.fn().mockResolvedValue(undefined)
+    const onClose = vi.fn()
 
     render(
       <BillingCheckoutDialog
@@ -257,7 +258,7 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         planKey="plus"
         accountId={ACCOUNT_ID}
         refreshSession={refreshSession}
-        onClose={vi.fn()}
+        onClose={onClose}
         onCompleted={onCompleted}
       />,
     )
@@ -272,8 +273,79 @@ describe('BillingCheckoutDialog completion and recovery', () => {
 
     await waitFor(() => expect(refreshSession).toHaveBeenCalledOnce())
     expect(onCompleted).toHaveBeenCalledOnce()
-    expect(await screen.findByText('View active plan')).toBeInTheDocument()
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(screen.queryByText('View active plan')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', {
+      name: 'Finish later',
+    })).not.toBeInTheDocument()
     expect(readBillingCheckoutRecovery(ACCOUNT_ID)).toBeNull()
+  })
+
+  it('does not offer Finish later after payment is received and closes on activation', async () => {
+    let statusReads = 0
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/billing/verify/subscription') {
+        return response({
+          intentId: INTENT_ID,
+          paymentStatus: 'captured',
+          status: 'processing',
+          pollAfterMs: 1_000,
+        })
+      }
+      if (url === `/api/billing/status/${INTENT_ID}`) {
+        statusReads += 1
+        return response(statusReads === 1
+          ? {
+              intentId: INTENT_ID,
+              kind: 'subscription',
+              status: 'processing',
+              terminal: false,
+              updatedAt: NOW,
+              pollAfterMs: 1_000,
+            }
+          : {
+              intentId: INTENT_ID,
+              kind: 'subscription',
+              status: 'completed',
+              terminal: true,
+              updatedAt: NOW,
+            })
+      }
+      return standardFetch(input, init)
+    }))
+    const onClose = vi.fn()
+    const onCompleted = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={onClose}
+        onCompleted={onCompleted}
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review secure checkout',
+    }))
+    fireEvent.click(await screen.findByRole('button', {
+      name: /Pay ₹599 with Razorpay/,
+    }))
+
+    expect(await screen.findByText(
+      'Payment was received and your plan is being activated.',
+    )).toBeInTheDocument()
+    expect(screen.queryByRole('button', {
+      name: 'Finish later',
+    })).not.toBeInTheDocument()
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce(), {
+      timeout: 3_000,
+    })
+    expect(onCompleted).toHaveBeenCalledOnce()
   })
 
   it('refreshes both projections when a recovered checkout is already complete', async () => {
@@ -300,6 +372,7 @@ describe('BillingCheckoutDialog completion and recovery', () => {
     }))
     const refreshSession = vi.fn().mockResolvedValue(undefined)
     const onCompleted = vi.fn().mockResolvedValue(undefined)
+    const onClose = vi.fn()
 
     render(
       <BillingCheckoutDialog
@@ -307,13 +380,14 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         planKey="plus"
         accountId={ACCOUNT_ID}
         refreshSession={refreshSession}
-        onClose={vi.fn()}
+        onClose={onClose}
         onCompleted={onCompleted}
       />,
     )
 
     await waitFor(() => expect(refreshSession).toHaveBeenCalledOnce())
     expect(onCompleted).toHaveBeenCalledOnce()
+    expect(onClose).toHaveBeenCalledOnce()
     expect(readBillingCheckoutRecovery(ACCOUNT_ID)).toBeNull()
   })
 
