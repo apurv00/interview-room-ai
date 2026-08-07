@@ -19,6 +19,8 @@ interface BillingPlanCardProps {
   currentPlan: LegacyStoredPlanKey
   quote?: CustomerBillingQuote
   quoteLoading?: boolean
+  paidPlanChangeAvailable?: boolean
+  paidPlanChangeBlockedLabel?: string
   onSelect: (planKey: 'plus' | 'pro') => void
 }
 
@@ -50,6 +52,8 @@ export function BillingPlanCard({
   currentPlan,
   quote,
   quoteLoading = false,
+  paidPlanChangeAvailable = false,
+  paidPlanChangeBlockedLabel = 'Manage current change below',
   onSelect,
 }: BillingPlanCardProps) {
   const current = currentPlan === plan.key ||
@@ -160,9 +164,18 @@ export function BillingPlanCard({
           >
             Start free
           </Link>
+        ) : existingPaidPlan && paidPlanChangeAvailable && paidPlanKey ? (
+          <Button
+            type="button"
+            variant="secondary"
+            isFullWidth
+            onClick={() => onSelect(paidPlanKey)}
+          >
+            Switch to {plan.displayName}
+          </Button>
         ) : existingPaidPlan ? (
           <Button variant="secondary" isFullWidth disabled>
-            Plan changes coming soon
+            {paidPlanChangeBlockedLabel}
           </Button>
         ) : paidPlanKey ? (
           <Button

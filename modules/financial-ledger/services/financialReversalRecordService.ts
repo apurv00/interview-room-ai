@@ -588,8 +588,8 @@ function disputeDecisions(input: {
     return {
       creditNoteDecision: creditDecision(
         existing?.creditNoteDecision,
-        'required',
-        'provider_dispute_lost',
+        'pending_review',
+        'provider_dispute_lost_requires_manual_accounting_review',
         request.observedAt,
         creditKey,
       ),

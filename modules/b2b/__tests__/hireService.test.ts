@@ -89,8 +89,28 @@ import {
   createTemplate,
   type HireUser,
 } from '@b2b/services/hireService'
+import { InviteSchema, UpdateOrgSchema } from '@b2b/validators/hire'
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
+
+describe('B2B interview duration validation', () => {
+  it('accepts 30 minutes and rejects 31 for invites and org defaults', () => {
+    const invite = {
+      candidateEmail: 'candidate@example.com',
+      role: 'SWE',
+      interviewType: 'screening',
+      experience: '3-6',
+    }
+    expect(InviteSchema.safeParse({ ...invite, duration: 30 }).success).toBe(true)
+    expect(InviteSchema.safeParse({ ...invite, duration: 31 }).success).toBe(false)
+    expect(UpdateOrgSchema.safeParse({
+      settings: { defaultDuration: 30 },
+    }).success).toBe(true)
+    expect(UpdateOrgSchema.safeParse({
+      settings: { defaultDuration: 31 },
+    }).success).toBe(false)
+  })
+})
 
 describe('hireService', () => {
   beforeEach(() => {
@@ -276,6 +296,17 @@ describe('hireService', () => {
       mockOrgExists.mockResolvedValue(false)
       const result = await createInvite('u1', 'org1', inviteData)
       expect(result).toMatchObject({ error: 'Organization not found', status: 404 })
+    })
+
+    it('rejects durations above 30 before consuming organization quota', async () => {
+      const result = await createInvite('u1', 'org1', {
+        ...inviteData,
+        duration: 31,
+      })
+
+      expect(result).toMatchObject({ status: 400 })
+      expect(mockOrgFindOneAndUpdate).not.toHaveBeenCalled()
+      expect(mockSessionCreate).not.toHaveBeenCalled()
     })
 
     it('fails with 429 when monthly limit reached', async () => {

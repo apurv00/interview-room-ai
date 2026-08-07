@@ -20,6 +20,8 @@ import {
 } from './billingIntentStorage'
 import { BillingCheckoutDialog } from './BillingCheckoutDialog'
 import { BillingPlanCard } from './BillingPlanCard'
+import { FutureSubscriptionCheckoutDialog } from './FutureSubscriptionCheckoutDialog'
+import { billingFetch } from './billingRequestTimeout'
 import { usePublicBillingCatalog } from './usePublicBillingCatalog'
 
 const PLAN_ORDER = ['free', 'plus', 'pro'] as const
@@ -50,11 +52,15 @@ const BILLING_FAQ = [
 interface BillingPricingExperienceProps {
   currentPlan: LegacyStoredPlanKey
   authStatus: 'loading' | 'authenticated' | 'unauthenticated'
+  accountId: string | null
+  refreshSession: () => Promise<unknown>
 }
 
 export function BillingPricingExperience({
   currentPlan,
   authStatus,
+  accountId,
+  refreshSession,
 }: BillingPricingExperienceProps) {
   const { catalog, error, loading, reload } = usePublicBillingCatalog()
   const [quotes, setQuotes] = useState<
@@ -63,16 +69,25 @@ export function BillingPricingExperience({
   const [quoteLoading, setQuoteLoading] = useState(false)
   const [selectedPlan, setSelectedPlan] =
     useState<PaidBillingPlanKey | null>(null)
+  const [futureSelection, setFutureSelection] = useState<{
+    operation: 'tier_change' | 'resubscribe'
+    currentPlanKey: PaidBillingPlanKey
+    targetPlanKey: PaidBillingPlanKey
+    effectiveAt: string
+  } | null>(null)
   const [billingSummary, setBillingSummary] =
     useState<CustomerBillingSummary | null>(null)
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [cancellingRenewal, setCancellingRenewal] = useState(false)
   const [cancellationMessage, setCancellationMessage] =
     useState<string | null>(null)
+  const [cancellingScheduledChange, setCancellingScheduledChange] =
+    useState(false)
   const resumeCheckedRef = useRef(false)
+  const sessionRefreshKeyRef = useRef<string | null>(null)
 
   const loadBillingSummary = useCallback(async (signal?: AbortSignal) => {
-    const response = await fetch('/api/billing/me', {
+    const response = await billingFetch('/api/billing/me', {
       headers: { Accept: 'application/json' },
       signal,
     })
@@ -107,6 +122,40 @@ export function BillingPricingExperience({
 
   useEffect(() => {
     if (
+      authStatus !== 'authenticated' ||
+      !accountId ||
+      !billingSummary ||
+      currentPlan === 'enterprise'
+    ) return
+
+    const authoritativePlan = billingSummary.entitlement.planKey
+    if (authoritativePlan === currentPlan) {
+      sessionRefreshKeyRef.current = null
+      return
+    }
+    const refreshKey = [
+      accountId,
+      currentPlan,
+      authoritativePlan,
+      billingSummary.entitlement.version,
+    ].join(':')
+    if (sessionRefreshKeyRef.current === refreshKey) return
+    sessionRefreshKeyRef.current = refreshKey
+    void refreshSession().catch(() => {
+      if (sessionRefreshKeyRef.current === refreshKey) {
+        sessionRefreshKeyRef.current = null
+      }
+    })
+  }, [
+    accountId,
+    authStatus,
+    billingSummary,
+    currentPlan,
+    refreshSession,
+  ])
+
+  useEffect(() => {
+    if (
       !catalog?.customerBillingUiReady ||
       authStatus !== 'authenticated' ||
       currentPlan === 'plus' ||
@@ -121,7 +170,7 @@ export function BillingPricingExperience({
     const loadQuote = async (
       planKey: PaidBillingPlanKey,
     ): Promise<CustomerBillingQuote> => {
-      const response = await fetch('/api/billing/quote', {
+      const response = await billingFetch('/api/billing/quote', {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -163,13 +212,14 @@ export function BillingPricingExperience({
     if (
       !catalog?.customerBillingUiReady ||
       authStatus !== 'authenticated' ||
+      !accountId ||
       resumeCheckedRef.current
     ) {
       return
     }
     resumeCheckedRef.current = true
 
-    const recovery = readBillingCheckoutRecovery()
+    const recovery = readBillingCheckoutRecovery(accountId)
     if (recovery) {
       setSelectedPlan(recovery.planKey)
       return
@@ -197,7 +247,7 @@ export function BillingPricingExperience({
         query ? `/pricing?${query}` : '/pricing',
       )
     }
-  }, [authStatus, catalog, currentPlan])
+  }, [accountId, authStatus, catalog, currentPlan])
 
   function selectPlan(planKey: PaidBillingPlanKey) {
     if (authStatus === 'loading') return
@@ -207,6 +257,28 @@ export function BillingPricingExperience({
       window.location.assign(
         `/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`,
       )
+      return
+    }
+    const subscription = billingSummary?.subscription
+    if (
+      subscription?.state === 'current' &&
+      (subscription.planKey === 'plus' || subscription.planKey === 'pro')
+    ) {
+      if (
+        subscription.planKey === planKey ||
+        subscription.cancelAtPeriodEnd ||
+        (
+          billingSummary?.scheduledPlanChange &&
+          billingSummary.scheduledPlanChange.toPlanKey !== 'free'
+        ) ||
+        !subscription.currentPeriodEnd
+      ) return
+      setFutureSelection({
+        operation: 'tier_change',
+        currentPlanKey: subscription.planKey,
+        targetPlanKey: planKey,
+        effectiveAt: subscription.currentPeriodEnd,
+      })
       return
     }
     setSelectedPlan(planKey)
@@ -226,7 +298,7 @@ export function BillingPricingExperience({
       if (!expectedEffectiveAt) {
         throw new Error('Current paid period is unavailable')
       }
-      const response = await fetch('/api/billing/subscription/cancel', {
+      const response = await billingFetch('/api/billing/subscription/cancel', {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -261,11 +333,109 @@ export function BillingPricingExperience({
     }
   }
 
+  function resubscribe() {
+    const subscription = billingSummary?.subscription
+    if (
+      subscription?.state !== 'current' ||
+      (subscription.planKey !== 'plus' && subscription.planKey !== 'pro') ||
+      !subscription.cancelAtPeriodEnd ||
+      !subscription.currentPeriodEnd ||
+      (
+        billingSummary?.scheduledPlanChange &&
+        billingSummary.scheduledPlanChange.toPlanKey !== 'free'
+      )
+    ) return
+    setFutureSelection({
+      operation: 'resubscribe',
+      currentPlanKey: subscription.planKey,
+      targetPlanKey: subscription.planKey,
+      effectiveAt: subscription.currentPeriodEnd,
+    })
+  }
+
+  async function cancelScheduledChange() {
+    const scheduled = billingSummary?.scheduledPlanChange?.toPlanKey === 'free'
+      ? undefined
+      : billingSummary?.scheduledPlanChange
+    if (!scheduled || cancellingScheduledChange) return
+    const keepsEnding = billingSummary?.subscription.cancelAtPeriodEnd === true
+    const confirmed = window.confirm(
+      keepsEnding
+        ? 'Cancel the scheduled future plan? Your current subscription will still end at the period boundary unless you resume it.'
+        : 'Cancel the pending future plan authorization? Your current subscription will continue unchanged.',
+    )
+    if (!confirmed) return
+    setCancellingScheduledChange(true)
+    setCancellationMessage(null)
+    try {
+      const response = await billingFetch(
+        '/api/billing/subscription/plan-change/cancel',
+        {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'Idempotency-Key':
+              `billing-cancel-change:${scheduled.planChangeRequestId}`,
+          },
+          body: JSON.stringify({
+            planChangeRequestId: scheduled.planChangeRequestId,
+          }),
+        },
+      )
+      const result = await parseBillingResponse(
+        response,
+        billingResponseSchemas.scheduledPlanChangeCancellation,
+        'The scheduled change could not be cancelled.',
+      )
+      if (result.planChangeRequestId !== scheduled.planChangeRequestId) {
+        throw new Error('Scheduled change response is inconsistent')
+      }
+      setBillingSummary(await loadBillingSummary())
+      setCancellationMessage(
+        result.status === 'cancelled'
+          ? keepsEnding
+            ? 'Future plan cancelled. Your current subscription is still set to end; use Resume renewal if you want it to continue.'
+            : 'Pending plan change cancelled. Your current subscription continues unchanged.'
+          : 'Razorpay cancellation is reconciling. Retry the same action safely if it remains pending.',
+      )
+    } catch {
+      setCancellationMessage(
+        'The scheduled plan change could not be cancelled right now. Please try again.',
+      )
+    } finally {
+      setCancellingScheduledChange(false)
+    }
+  }
+
   const refreshCompletedBilling = useCallback(async () => {
     const nextSummary = await loadBillingSummary()
     setBillingSummary(nextSummary)
     setSummaryError(null)
   }, [loadBillingSummary])
+
+  const authoritativeCurrentPlan = currentPlan === 'enterprise'
+    ? currentPlan
+    : billingSummary?.entitlement.planKey ?? currentPlan
+  const currentSubscription = billingSummary?.subscription
+  const scheduledFuturePlanChange =
+    billingSummary?.scheduledPlanChange?.toPlanKey === 'free'
+      ? undefined
+      : billingSummary?.scheduledPlanChange
+  const paidPlanChangeAvailable =
+    currentSubscription?.state === 'current' &&
+    (currentSubscription.planKey === 'plus' ||
+      currentSubscription.planKey === 'pro') &&
+    currentSubscription.cancelAtPeriodEnd === false &&
+    currentSubscription.currentPeriodEnd !== undefined &&
+    scheduledFuturePlanChange === undefined
+  const paidPlanChangeBlockedLabel = scheduledFuturePlanChange
+    ? 'Change already pending'
+    : currentSubscription?.cancelAtPeriodEnd
+      ? 'Resume renewal below'
+      : currentPlan === 'enterprise'
+        ? 'Contact us to change plan'
+        : 'Manage subscription below'
 
   if (loading) {
     return (
@@ -345,9 +515,11 @@ export function BillingPricingExperience({
             <BillingPlanCard
               key={planKey}
               plan={catalog.plans[planKey]}
-              currentPlan={currentPlan}
+              currentPlan={authoritativeCurrentPlan}
               quote={planKey === 'free' ? undefined : quotes[planKey]}
               quoteLoading={planKey !== 'free' && quoteLoading}
+              paidPlanChangeAvailable={paidPlanChangeAvailable}
+              paidPlanChangeBlockedLabel={paidPlanChangeBlockedLabel}
               onSelect={selectPlan}
             />
           ))}
@@ -356,6 +528,7 @@ export function BillingPricingExperience({
         {authStatus === 'authenticated' &&
         billingSummary?.subscription.state === 'current' ? (
           <section
+            id="subscription-management"
             aria-label="Subscription management"
             className="mt-8 rounded-2xl border border-[#e1e8ed] bg-white px-5 py-5"
           >
@@ -381,9 +554,44 @@ export function BillingPricingExperience({
                     ))}
                   </p>
                 ) : null}
+                {scheduledFuturePlanChange ? (
+                  <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                    <strong>
+                      {scheduledFuturePlanChange.fromPlanKey ===
+                      scheduledFuturePlanChange.toPlanKey
+                        ? `${scheduledFuturePlanChange.toPlanKey === 'pro' ? 'Pro' : 'Plus'} renewal mandate pending`
+                        : `${scheduledFuturePlanChange.toPlanKey === 'pro' ? 'Pro' : 'Plus'} change pending`}
+                    </strong>
+                    <p className="mt-1 text-xs leading-5 text-blue-800">
+                      Effective {new Intl.DateTimeFormat('en-IN', {
+                        dateStyle: 'medium',
+                      }).format(new Date(
+                        scheduledFuturePlanChange.effectiveAt,
+                      ))}. Status: {scheduledFuturePlanChange.status.replaceAll('_', ' ')}.
+                    </p>
+                  </div>
+                ) : null}
               </div>
-              {!billingSummary.subscription.cancelAtPeriodEnd &&
-              (
+              {scheduledFuturePlanChange ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={cancellingScheduledChange}
+                  onClick={cancelScheduledChange}
+                >
+                  {cancellingScheduledChange
+                    ? 'Cancelling…'
+                    : 'Cancel scheduled change'}
+                </Button>
+              ) : billingSummary.subscription.cancelAtPeriodEnd ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={resubscribe}
+                >
+                  Resume renewal
+                </Button>
+              ) : (
                 billingSummary.subscription.status === 'active' ||
                 (
                   billingSummary.subscription.status === 'authenticated' &&
@@ -430,12 +638,28 @@ export function BillingPricingExperience({
         </div>
       </div>
 
-      {selectedPlan && (
+      {selectedPlan && accountId && (
         <BillingCheckoutDialog
           key={selectedPlan}
           catalog={catalog}
           planKey={selectedPlan}
+          accountId={accountId}
+          refreshSession={refreshSession}
           onClose={() => setSelectedPlan(null)}
+          onCompleted={refreshCompletedBilling}
+        />
+      )}
+      {futureSelection && (
+        <FutureSubscriptionCheckoutDialog
+          key={`${futureSelection.operation}:${futureSelection.targetPlanKey}`}
+          operation={futureSelection.operation}
+          currentPlanKey={futureSelection.currentPlanKey}
+          targetPlanKey={futureSelection.targetPlanKey}
+          effectiveAt={futureSelection.effectiveAt}
+          onClose={() => {
+            setFutureSelection(null)
+            void refreshCompletedBilling().catch(() => undefined)
+          }}
           onCompleted={refreshCompletedBilling}
         />
       )}

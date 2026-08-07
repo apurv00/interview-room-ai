@@ -14,6 +14,8 @@ const mockUserExistsSession = vi.fn()
 const mockUserFindByIdAndUpdate = vi.fn()
 const mockDepthFindOne = vi.fn()
 const mockParseJobDescription = vi.fn()
+const mockGetBillingConfig = vi.fn()
+const mockConsumePaidInterviewUnlock = vi.fn()
 const {
   mockWithActiveJobsAccountWrite,
   mockDbSession,
@@ -54,6 +56,30 @@ vi.mock('@shared/services/jobsAccountFence', () => ({
   withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
 }))
 
+vi.mock('@payments/services/billingConfigService', () => ({
+  getBillingConfig: (...args: unknown[]) => mockGetBillingConfig(...args),
+}))
+
+vi.mock('@payments/services/paidInterviewLaunchService', () => {
+  class PaidInterviewLaunchError extends Error {
+    constructor(readonly code: string, message: string) {
+      super(message)
+      this.name = 'PaidInterviewLaunchError'
+    }
+  }
+  return {
+    PaidInterviewLaunchError,
+    paidInterviewLaunchProviderMode: (
+      config: { sellingMode: string; qaUserIds: string[] },
+      userId: string,
+    ) => config.sellingMode === 'qa' && config.qaUserIds.includes(userId)
+      ? 'test'
+      : 'live',
+    consumePaidInterviewUnlockForLaunchInSession:
+      (...args: unknown[]) => mockConsumePaidInterviewUnlock(...args),
+  }
+})
+
 vi.mock('@shared/auth/permissions', () => ({
   canEditSession: vi.fn().mockReturnValue(true),
   canViewSession: vi.fn().mockReturnValue(true),
@@ -84,6 +110,7 @@ vi.mock('@interview/services/core/sessionConfigCache', () => ({
 }))
 
 import { createSession, updateSession } from '@interview/services/core/interviewService'
+import { PaidInterviewLaunchError } from '@payments/services/paidInterviewLaunchService'
 
 const JOBS_JD = 'A server-resolved backend role requiring reliable Node.js services.'
 const JOBS_PARSED_JD = {
@@ -110,6 +137,14 @@ describe('createSession — Jobs JD provider authority', () => {
     )
     mockUserExistsSession.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
     mockUserExists.mockReturnValue({ session: mockUserExistsSession })
+    mockGetBillingConfig.mockResolvedValue({
+      sellingMode: 'all',
+      qaUserIds: [],
+    })
+    mockConsumePaidInterviewUnlock.mockResolvedValue({
+      unlockId: '507f1f77bcf86cd799439099',
+      reused: false,
+    })
   })
 
   it('forwards the optional authority callback to structured JD parsing', async () => {
@@ -250,14 +285,23 @@ describe('createSession — Jobs JD provider authority', () => {
     }
   })
 
-  it('rejects a Basic request above 10 minutes before consuming quota', async () => {
+  it('uses one exact paid unlock for a Basic request above 10 minutes', async () => {
     mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
     mockUserFindOneAndUpdate.mockResolvedValue(null)
-    mockUserExists.mockResolvedValue({
+    mockUserExists.mockReturnValue({
+      _id: '507f1f77bcf86cd799439010',
+      session: mockUserExistsSession,
+    })
+    mockUserExistsSession.mockResolvedValue({
       _id: '507f1f77bcf86cd799439010',
     })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockSessionCreate.mockImplementation((payload: unknown) =>
+      Promise.resolve(Array.isArray(payload)
+        ? [{ _id: payload[0]._id }]
+        : { _id: 'session-paid-interview' }))
 
-    await expect(createSession({
+    const created = await createSession({
       userId: '507f1f77bcf86cd799439010',
       config: {
         role: 'backend',
@@ -265,10 +309,6 @@ describe('createSession — Jobs JD provider authority', () => {
         experience: '3-6',
         duration: 20,
       },
-    })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      statusCode: 403,
-      message: 'Basic interviews are limited to 10 minutes.',
     })
 
     const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
@@ -278,6 +318,51 @@ describe('createSession — Jobs JD provider authority', () => {
         monthlyInterviewLimit: 1,
       })],
     })
+    const persisted = mockSessionCreate.mock.calls.at(-1)?.[0][0]
+    expect(mockConsumePaidInterviewUnlock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: '507f1f77bcf86cd799439010',
+        sessionId: persisted._id.toHexString(),
+        providerMode: 'live',
+        durationMinutes: 20,
+      }),
+      mockDbSession,
+    )
+    expect(created._id.toString()).toBe(persisted._id.toString())
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('creates no session when Basic has no captured paid unlock', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue(null)
+    mockUserExists.mockReturnValue({
+      _id: '507f1f77bcf86cd799439010',
+      session: mockUserExistsSession,
+    })
+    mockUserExistsSession.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockConsumePaidInterviewUnlock.mockRejectedValueOnce(
+      new PaidInterviewLaunchError(
+        'unavailable',
+        'No captured paid interview unlock is available',
+      ),
+    )
+
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 30,
+      },
+    })).rejects.toMatchObject({
+      code: 'USAGE_LIMIT',
+      statusCode: 402,
+    })
+
     expect(mockSessionCreate).not.toHaveBeenCalled()
     expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled()
   })

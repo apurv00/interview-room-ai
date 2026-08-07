@@ -37,13 +37,12 @@ export function isBasicPersonalInterviewUser(
 }
 
 export function interviewDurationOptionsForUser(
-  user?: InterviewDurationUserContext | null,
+  _user?: InterviewDurationUserContext | null,
 ): Duration[] {
-  const options = isBasicPersonalInterviewUser(user)
-    ? CONSUMER_CATALOG_V1.plans.free.interview.supportedDurationsMinutes
-    : SUPPORTED_INTERVIEW_DURATIONS_MINUTES
-
-  return [...options]
+  // Basic's included entitlement remains a 10-minute interview. The setup
+  // selector also exposes 20/30 minutes because those configurations can be
+  // authorized by a captured one-time interview unlock in the lobby.
+  return [...SUPPORTED_INTERVIEW_DURATIONS_MINUTES]
 }
 
 export function normalizeInterviewDurationForUser(

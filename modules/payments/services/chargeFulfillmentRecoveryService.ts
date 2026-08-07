@@ -99,7 +99,7 @@ export interface ApprovedFinancialPolicyInput {
   razorpayOrderId?: string
   verifiedAmountPaise: number
   verifiedCurrency: 'INR'
-  expectedStatus: 'entitlement_skipped' | 'entitlement_applied'
+  expectedStatus: 'entitlement_skipped' | 'entitlement_applied' | 'review'
   invoiceOperationKey: string
   invoiceStepStatus: 'pending' | 'running' | 'failed'
   /**
@@ -188,9 +188,9 @@ export type ChargeFulfillmentRecoveryResult =
     })
   | (RecoveryResultBase & {
       outcome: 'financial_policy_handler_completed'
-      currentStatus: 'entitlement_skipped' | 'entitlement_applied'
-      nextStep: 'invoice' | 'notification'
-      terminal: false
+      currentStatus: 'entitlement_skipped' | 'entitlement_applied' | 'review'
+      nextStep: 'invoice' | 'notification' | 'manual_review'
+      terminal: boolean
       financialPolicy: ApprovedFinancialPolicyResult
     })
   | (RecoveryResultBase & {
@@ -806,7 +806,53 @@ export async function recoverChargeFulfillment(
         entitlement,
       }
     }
-    case 'review':
+    case 'review': {
+      const entitlementResolved =
+        fulfillment.steps.entitlement.status === 'complete' ||
+        (
+          fulfillment.kind === 'subscription_cycle' &&
+          fulfillment.steps.entitlement.status === 'skipped'
+        )
+      const invoiceStepStatus = fulfillment.steps.invoice.status
+      const handler = dependencies.approvedFinancialPolicyHandler
+      if (
+        entitlementResolved &&
+        handler &&
+        (
+          invoiceStepStatus === 'pending' ||
+          invoiceStepStatus === 'running' ||
+          invoiceStepStatus === 'failed'
+        )
+      ) {
+        const financialPolicy = await handler({
+          fulfillmentId: fulfillment.id.toString(),
+          providerMode: fulfillment.providerMode,
+          userId: fulfillment.userId.toString(),
+          kind: fulfillment.kind,
+          razorpayPaymentId: fulfillment.razorpayPaymentId,
+          razorpayInvoiceId: fulfillment.razorpayInvoiceId,
+          razorpaySubscriptionId: fulfillment.razorpaySubscriptionId,
+          razorpayOrderId: fulfillment.razorpayOrderId,
+          verifiedAmountPaise: fulfillment.verifiedAmountPaise,
+          verifiedCurrency: 'INR',
+          expectedStatus: 'review',
+          invoiceOperationKey: fulfillment.steps.invoice.operationKey,
+          invoiceStepStatus,
+          invoiceAttemptFence:
+            fulfillment.steps.invoice.lastAttemptAt?.toISOString(),
+        })
+        assertFinancialPolicyResult(financialPolicy)
+        return {
+          ...base,
+          outcome: 'financial_policy_handler_completed',
+          currentStatus: 'review',
+          nextStep: financialPolicy.disposition === 'deferred'
+            ? 'invoice'
+            : 'manual_review',
+          terminal: financialPolicy.disposition !== 'deferred',
+          financialPolicy,
+        }
+      }
       return {
         ...base,
         outcome: 'manual_review',
@@ -817,6 +863,7 @@ export async function recoverChargeFulfillment(
           fulfillment.steps.verification.status === 'complete' &&
           fulfillment.steps.entitlement.status === 'pending',
       }
+    }
     case 'entitlement_skipped':
     case 'entitlement_applied': {
       const financiallyReadyStatus = fulfillment.status

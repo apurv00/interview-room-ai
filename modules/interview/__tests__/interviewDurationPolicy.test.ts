@@ -6,8 +6,8 @@ import {
 } from '@interview/config/interviewDurationPolicy'
 
 describe('interview duration policy', () => {
-  it('defaults anonymous and personal free candidates to the Basic 10-minute option', () => {
-    expect(interviewDurationOptionsForUser()).toEqual([10])
+  it('shows paid 20/30-minute choices without changing the Basic entitlement', () => {
+    expect(interviewDurationOptionsForUser()).toEqual([10, 20, 30])
     expect(isBasicPersonalInterviewUser({
       plan: 'free',
       role: 'candidate',
@@ -15,7 +15,7 @@ describe('interview duration policy', () => {
     expect(normalizeInterviewDurationForUser({
       plan: 'free',
       role: 'candidate',
-    }, 30)).toBe(10)
+    }, 30)).toBe(30)
   })
 
   it.each(['plus', 'pro'])(

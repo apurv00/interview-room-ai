@@ -11,6 +11,11 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { COMPANY_PROFILES } from '@interview/config/companyProfiles'
 import { track } from '@shared/analytics/track'
 import { readLiveCoachingPreference, writeLiveCoachingPreference } from '@interview/config/liveCoachingPreference'
+import { InterviewUnlockCheckoutDialog } from '@/app/_components/billing/InterviewUnlockCheckoutDialog'
+import {
+  shouldOfferPaidInterviewCheckout,
+  type InterviewUsageSummary,
+} from '@/app/_components/billing/interviewUnlockEligibility'
 
 type CheckStatus = 'pending' | 'ok' | 'error'
 
@@ -69,7 +74,7 @@ const itemVariants = {
 function LobbyPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { status: authStatus } = useSession()
+  const { data: authSession, status: authStatus } = useSession()
   const { requireAuth } = useAuthGate()
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -117,6 +122,8 @@ function LobbyPageInner() {
   const jdGeneratedRef = useRef(false)
   const [allOk, setAllOk] = useState(false)
   const [joining, setJoining] = useState(false)
+  const [checkingAccess, setCheckingAccess] = useState(false)
+  const [showInterviewCheckout, setShowInterviewCheckout] = useState(false)
   const [audioLevel, setAudioLevel] = useState(0)
   const [joinCountdown, setJoinCountdown] = useState(0)
 
@@ -399,7 +406,12 @@ function LobbyPageInner() {
     return () => clearInterval(interval)
   }, [joining, router])
 
-  function enterRoom() {
+  function beginJoining() {
+    setJoining(true)
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+  }
+
+  async function enterRoom() {
     // If speech recognition failed, persist a `degraded: true` flag so the
     // interview runtime can skip SR-dependent features and fall back to a
     // text-input interaction model.
@@ -433,13 +445,40 @@ function LobbyPageInner() {
     if (authStatus !== 'authenticated') {
       // Anonymous: gate at the room entry. Config is already in localStorage.
       requireAuth('start_interview', () => {
-        setJoining(true)
-        if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+        beginJoining()
       })
       return
     }
-    setJoining(true)
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+
+    // Invite sessions are already authorized by the recruiter-owned session.
+    // Self-serve Basic users see the one-time ₹69 checkout before entering
+    // when their included interview cannot authorize this configuration.
+    if (
+      !searchParams?.get('sessionId') &&
+      authSession?.user?.id &&
+      config
+    ) {
+      setCheckingAccess(true)
+      try {
+        const response = await fetch('/api/settings/usage', {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+        })
+        if (response.ok) {
+          const usage = await response.json() as InterviewUsageSummary
+          if (shouldOfferPaidInterviewCheckout(config, usage)) {
+            setShowInterviewCheckout(true)
+            return
+          }
+        }
+      } catch {
+        // The interview creation route remains the final entitlement gate.
+      } finally {
+        setCheckingAccess(false)
+      }
+    }
+
+    beginJoining()
   }
 
   const StatusIcon = ({ status }: { status: CheckStatus }) => {
@@ -662,7 +701,7 @@ function LobbyPageInner() {
                 <motion.button
                   key="join-btn"
                   onClick={enterRoom}
-                  disabled={!allOk}
+                  disabled={!allOk || checkingAccess}
                   whileHover={allOk ? { scale: 1.01 } : {}}
                   whileTap={allOk ? { scale: 0.99 } : {}}
                   className={`
@@ -676,7 +715,9 @@ function LobbyPageInner() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
                 >
-                  {allOk
+                  {checkingAccess
+                    ? 'Checking interview access…'
+                    : allOk
                     ? (checks.some(c => c.label === 'Speech recognition' && c.status === 'error')
                         ? 'Join in Text Mode'
                         : 'Join Interview Room')
@@ -798,6 +839,16 @@ function LobbyPageInner() {
           </button>
         </motion.div>
       </motion.div>
+      {showInterviewCheckout && authSession?.user?.id ? (
+        <InterviewUnlockCheckoutDialog
+          accountId={authSession.user.id}
+          onClose={() => setShowInterviewCheckout(false)}
+          onCompleted={() => {
+            setShowInterviewCheckout(false)
+            beginJoining()
+          }}
+        />
+      ) : null}
     </main>
   )
 }

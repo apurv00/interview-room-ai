@@ -1,7 +1,6 @@
 'use client'
 
 import Link from 'next/link'
-import { useSession } from 'next-auth/react'
 import {
   useCallback,
   useEffect,
@@ -34,6 +33,7 @@ import {
   saveBillingCheckoutRecovery,
   type BillingCheckoutRecovery,
 } from './billingIntentStorage'
+import { billingFetch } from './billingRequestTimeout'
 import {
   loadRazorpayCheckout,
   type RazorpaySuccessPayload,
@@ -96,6 +96,8 @@ type CheckoutStage =
 interface BillingCheckoutDialogProps {
   catalog: PublicBillingCatalog
   planKey: PaidBillingPlanKey
+  accountId: string
+  refreshSession: () => Promise<unknown>
   onClose: () => void
   onCompleted: () => Promise<void>
 }
@@ -171,10 +173,11 @@ function assertNewCheckoutAllowed(
 export function BillingCheckoutDialog({
   catalog,
   planKey,
+  accountId,
+  refreshSession,
   onClose,
   onCompleted,
 }: BillingCheckoutDialogProps) {
-  const { update: refreshSession } = useSession()
   const plan = catalog.plans[planKey]
   const [stage, setStage] = useState<CheckoutStage>('loading')
   const [quote, setQuote] = useState<CustomerBillingQuote | null>(null)
@@ -207,7 +210,7 @@ export function BillingCheckoutDialog({
     code?: string,
     signal?: AbortSignal,
   ): Promise<CustomerBillingQuote> => {
-    const response = await fetch('/api/billing/quote', {
+    const response = await billingFetch('/api/billing/quote', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -237,7 +240,7 @@ export function BillingCheckoutDialog({
   const loadProfile = useCallback(async (
     signal?: AbortSignal,
   ): Promise<CustomerBillingProfile> => {
-    const response = await fetch('/api/billing/profile', {
+    const response = await billingFetch('/api/billing/profile', {
       headers: { Accept: 'application/json' },
       signal,
     })
@@ -251,7 +254,7 @@ export function BillingCheckoutDialog({
   const loadSummary = useCallback(async (
     signal?: AbortSignal,
   ): Promise<CustomerBillingSummary> => {
-    const response = await fetch('/api/billing/me', {
+    const response = await billingFetch('/api/billing/me', {
       headers: { Accept: 'application/json' },
       signal,
     })
@@ -273,7 +276,7 @@ export function BillingCheckoutDialog({
     intentId: string,
     signal: AbortSignal,
   ): Promise<BillingIntentStatus> => {
-    const response = await fetch(
+    const response = await billingFetch(
       `/api/billing/status/${encodeURIComponent(intentId)}`,
       {
         headers: { Accept: 'application/json' },
@@ -287,6 +290,19 @@ export function BillingCheckoutDialog({
     )
   }, [])
 
+  const completeCheckout = useCallback(async (
+    message: string,
+  ): Promise<void> => {
+    clearBillingCheckoutRecovery(accountId)
+    clearBillingAuthIntent()
+    setStatusMessage(message)
+    setStage('completed')
+    await Promise.allSettled([
+      refreshSession(),
+      onCompleted(),
+    ])
+  }, [accountId, onCompleted, refreshSession])
+
   const applyTerminalStatus = useCallback(async (
     status: BillingIntentStatus,
   ): Promise<boolean> => {
@@ -294,24 +310,18 @@ export function BillingCheckoutDialog({
     if (!status.terminal) return false
 
     if (status.status === 'completed') {
-      clearBillingCheckoutRecovery()
-      clearBillingAuthIntent()
-      await Promise.allSettled([
-        refreshSession(),
-        onCompleted(),
-      ])
-      setStage('completed')
+      await completeCheckout(statusCopy(status.status))
       return true
     }
     if (status.status === 'manual_review') {
-      clearBillingCheckoutRecovery()
+      clearBillingCheckoutRecovery(accountId)
       setStage('manual_review')
       return true
     }
-    clearBillingCheckoutRecovery()
+    clearBillingCheckoutRecovery(accountId)
     setStage('failed')
     return true
-  }, [onCompleted, refreshSession])
+  }, [accountId, completeCheckout])
 
   const pollIntent = useCallback(async (
     intentId: string,
@@ -362,7 +372,7 @@ export function BillingCheckoutDialog({
     recovery: BillingCheckoutRecovery,
     signal: AbortSignal,
   ): Promise<void> => {
-    const response = await fetch('/api/billing/subscriptions/checkout', {
+    const response = await billingFetch('/api/billing/subscriptions/checkout', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -427,7 +437,7 @@ export function BillingCheckoutDialog({
     } catch (cause) {
       if (controller.signal.aborted) return
       if (cause instanceof BillingClientError && cause.status === 404) {
-        clearBillingCheckoutRecovery()
+        clearBillingCheckoutRecovery(accountId)
         setError(
           'The saved checkout is no longer available for this account.',
         )
@@ -442,6 +452,7 @@ export function BillingCheckoutDialog({
     }
   }, [
     applyTerminalStatus,
+    accountId,
     pollIntent,
     readIntentStatus,
     replayRecoveredCheckout,
@@ -464,7 +475,7 @@ export function BillingCheckoutDialog({
   useEffect(() => {
     const controller = new AbortController()
     recoveryAbortRef.current = controller
-    const recovery = readBillingCheckoutRecovery()
+    const recovery = readBillingCheckoutRecovery(accountId)
 
     if (recovery?.planKey === planKey) {
       setIdempotencyKey(recovery.idempotencyKey)
@@ -513,6 +524,7 @@ export function BillingCheckoutDialog({
 
     return () => controller.abort()
   }, [
+    accountId,
     loadProfile,
     loadSummary,
     planKey,
@@ -605,7 +617,7 @@ export function BillingCheckoutDialog({
       return profile
     }
 
-    const response = await fetch('/api/billing/profile', {
+    const response = await billingFetch('/api/billing/profile', {
       method: 'PUT',
       headers: {
         Accept: 'application/json',
@@ -649,7 +661,7 @@ export function BillingCheckoutDialog({
       const latestSummary = await loadSummary()
       assertNewCheckoutAllowed(latestSummary)
       setSummary(latestSummary)
-      const response = await fetch('/api/billing/subscriptions/checkout', {
+      const response = await billingFetch('/api/billing/subscriptions/checkout', {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -679,6 +691,7 @@ export function BillingCheckoutDialog({
       setPriceChanged(changed)
       setPriceChangeAccepted(false)
       saveBillingCheckoutRecovery({
+        accountId,
         intentId: prepared.intentId,
         planKey,
         catalogVersion: prepared.quote.catalogVersion,
@@ -707,7 +720,7 @@ export function BillingCheckoutDialog({
     payload: RazorpaySuccessPayload,
     signal: AbortSignal,
   ) {
-    const response = await fetch('/api/billing/verify/subscription', {
+    const response = await billingFetch('/api/billing/verify/subscription', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -744,14 +757,11 @@ export function BillingCheckoutDialog({
           controller.signal,
         )
         if (verification.status === 'completed') {
-          clearBillingCheckoutRecovery()
-          clearBillingAuthIntent()
-          setStatusMessage('Payment verified. Your plan is active.')
-          setStage('completed')
+          await completeCheckout('Payment verified. Your plan is active.')
           return
         }
         if (verification.status === 'manual_review') {
-          clearBillingCheckoutRecovery()
+          clearBillingCheckoutRecovery(accountId)
           setStatusMessage(
             'Payment was captured and needs manual review. Do not pay again.',
           )
@@ -1264,7 +1274,7 @@ export function BillingCheckoutDialog({
                   <Button type="button" variant="secondary" onClick={onClose}>
                     Close
                   </Button>
-                  {!readBillingCheckoutRecovery() && (
+                  {!readBillingCheckoutRecovery(accountId) && (
                     <Button
                       type="button"
                       onClick={() => {

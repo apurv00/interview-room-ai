@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import { useSession } from 'next-auth/react'
 import Accordion from '@shared/ui/Accordion'
@@ -246,7 +246,10 @@ export interface PricingPageClientProps {
 export default function PricingPageClient({
   paidRolloutCopyEnabled = false,
 }: PricingPageClientProps) {
-  const { data: session, status } = useSession()
+  const { data: session, status, update } = useSession()
+  const refreshBillingSession = useCallback(async () => {
+    await update()
+  }, [update])
   const currentPlan = (session?.user?.plan || 'free') as
     | 'free'
     | 'plus'
@@ -261,6 +264,8 @@ export default function PricingPageClient({
       <BillingPricingExperience
         currentPlan={currentPlan}
         authStatus={status}
+        accountId={session?.user?.id ?? null}
+        refreshSession={refreshBillingSession}
       />
     )
   }

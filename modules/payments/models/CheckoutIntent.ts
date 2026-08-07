@@ -81,6 +81,9 @@ export interface ICheckoutIntent extends Document {
   razorpayOrderId?: string
   receipt: string
   nextRecoveryAt?: Date
+  remoteCreationLeaseToken?: string
+  remoteCreationLeaseExpiresAt?: Date
+  remoteCreationStartedAt?: Date
   createdAt: Date
   updatedAt: Date
 }
@@ -331,6 +334,14 @@ const CheckoutIntentSchema = new Schema<ICheckoutIntent>(
       immutable: true,
     },
     nextRecoveryAt: { type: Date },
+    remoteCreationLeaseToken: {
+      type: String,
+      trim: true,
+      minlength: 16,
+      maxlength: 200,
+    },
+    remoteCreationLeaseExpiresAt: { type: Date },
+    remoteCreationStartedAt: { type: Date },
   },
   { timestamps: true },
 )

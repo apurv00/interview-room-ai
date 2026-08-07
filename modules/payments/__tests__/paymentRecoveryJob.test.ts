@@ -47,9 +47,13 @@ describe('payment recovery Inngest handler', () => {
   it('runs one bounded step when Live is explicitly authorized', async () => {
     const store = {
       listWebhookCandidates: vi.fn().mockResolvedValue([]),
+      listCouponCandidates: vi.fn().mockResolvedValue([]),
+      loadCouponCheckout: vi.fn().mockResolvedValue(null),
+      cancelUnstartedCouponCheckout: vi.fn().mockResolvedValue(false),
       listSubscriptionCandidates: vi.fn().mockResolvedValue([]),
       markSubscriptionAttempted: vi.fn().mockResolvedValue(undefined),
       listChargeCandidates: vi.fn().mockResolvedValue([]),
+      listCreditNoteCandidates: vi.fn().mockResolvedValue([]),
       deferChargeCandidate: vi.fn().mockResolvedValue(undefined),
     }
     const step = {
@@ -74,6 +78,12 @@ describe('payment recovery Inngest handler', () => {
         deferred: 0,
         failed: 0,
       },
+      coupon: {
+        candidates: 0,
+        completed: 0,
+        deferred: 0,
+        failed: 0,
+      },
       subscription: {
         candidates: 0,
         completed: 0,
@@ -87,14 +97,26 @@ describe('payment recovery Inngest handler', () => {
         deferred: 0,
         failed: 0,
       },
+      creditNote: {
+        candidates: 0,
+        completed: 0,
+        deferred: 0,
+        failed: 0,
+      },
     })
     expect(store.listWebhookCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ providerMode: 'live', limit: 25 }),
+    )
+    expect(store.listCouponCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ providerMode: 'live', limit: 10 }),
     )
     expect(store.listSubscriptionCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ providerMode: 'live', limit: 5 }),
     )
     expect(store.listChargeCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ providerMode: 'live', limit: 25 }),
+    )
+    expect(store.listCreditNoteCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ providerMode: 'live', limit: 25 }),
     )
   })

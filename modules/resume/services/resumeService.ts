@@ -4,18 +4,88 @@ import { getStaticPlanDefinition } from '@shared/services/planConfig'
 import type { ResumeData } from '../validators/resume'
 import { hasStructuredResumeContent } from '../lib/structuredContent'
 
-const MAX_RESUMES =
+const BASIC_SAVED_RESUME_LIMIT =
   getStaticPlanDefinition('free').resume.basicSavedResumeLimit
+const MAX_PREMIUM_SAVED_RESUME_LIMIT =
+  getStaticPlanDefinition('pro').resume.premiumSavedResumeLimitPerPeriod
+
+interface ResumeLibraryProjection {
+  savedResumes?: Array<Record<string, unknown>>
+  targetRole?: string
+  currentTitle?: string
+  premiumResumesUsed?: number
+  premiumResumeLimit?: number
+  freeBasicResumeId?: string
+}
+
+function savedResumeId(resume: Record<string, unknown>): string | null {
+  if (typeof resume.id === 'string' && resume.id.length > 0) return resume.id
+  const objectId = resume._id as { toString?: () => string } | undefined
+  const fallback = objectId?.toString?.()
+  return fallback && fallback.length > 0 ? fallback : null
+}
+
+function premiumResumeLimit(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) <= 0) return 0
+  return Math.min(Number(value), MAX_PREMIUM_SAVED_RESUME_LIMIT)
+}
+
+function premiumResumesUsed(value: unknown, limit: number): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) return 0
+  return Math.min(Number(value), limit)
+}
+
+function basicResumeId(
+  projection: ResumeLibraryProjection,
+  savedIds: string[],
+): string | null {
+  if (
+    typeof projection.freeBasicResumeId === 'string' &&
+    savedIds.includes(projection.freeBasicResumeId)
+  ) {
+    return projection.freeBasicResumeId
+  }
+  // Legacy embedded rows pre-date freeBasicResumeId. Bind their first saved
+  // identity as Basic so a purchased unlock for that same identity cannot
+  // accidentally turn into a generic extra library slot.
+  // The same fallback is deliberately fail-closed for a stale stored ID; this
+  // CRUD service must not mutate the payment-owned entitlement projection.
+  return savedIds[0] ?? null
+}
+
+function atomicPremiumCycleSlotAvailable() {
+  return {
+    $lt: [
+      { $max: [0, { $floor: { $ifNull: ['$premiumResumesUsed', 0] } }] },
+      {
+        $min: [
+          MAX_PREMIUM_SAVED_RESUME_LIMIT,
+          { $max: [0, { $floor: { $ifNull: ['$premiumResumeLimit', 0] } }] },
+        ],
+      },
+    ],
+  }
+}
 
 // ─── Resume CRUD ────────────────────────────────────────────────────────────
 
 export async function listResumes(userId: string) {
   await connectDB()
-  const user = await User.findById(userId).select('savedResumes targetRole currentTitle').lean()
+  const user = await User.findById(userId)
+    .select(
+      'savedResumes targetRole currentTitle premiumResumesUsed premiumResumeLimit freeBasicResumeId',
+    )
+    .lean<ResumeLibraryProjection>()
   if (!user) return null
 
-  const resumes = (user.savedResumes || []).map((r: Record<string, unknown>) => ({
-    id: r.id || (r._id as { toString(): string })?.toString(),
+  const savedIds = (user.savedResumes || [])
+    .map(savedResumeId)
+    .filter((id): id is string => id !== null)
+  const freeBasicResumeId = basicResumeId(user, savedIds)
+  const premiumLimit = premiumResumeLimit(user.premiumResumeLimit)
+  const premiumUsed = premiumResumesUsed(user.premiumResumesUsed, premiumLimit)
+  const resumes = (user.savedResumes || []).map((r) => ({
+    id: savedResumeId(r),
     name: r.name || 'Untitled Resume',
     template: r.template || 'professional',
     targetRole: r.targetRole || '',
@@ -30,7 +100,13 @@ export async function listResumes(userId: string) {
   return {
     resumes,
     count: resumes.length,
-    limit: MAX_RESUMES,
+    // Prior-cycle and exact one-time-purchased identities remain in the
+    // library. The visible cap is therefore the current count plus only the
+    // Basic identity (when absent) and unused slots in the current paid cycle.
+    limit:
+      resumes.length +
+      (freeBasicResumeId ? 0 : BASIC_SAVED_RESUME_LIMIT) +
+      Math.max(0, premiumLimit - premiumUsed),
     hasProfile: !!(user.targetRole || user.currentTitle),
   }
 }
@@ -110,18 +186,33 @@ export async function saveResume(
     return { id }
   }
 
-  // Check resume limit before creating new
+  // Resolve the Basic identity and current paid-cycle counter. The final
+  // capacity predicate also runs inside updateOne so concurrent requests
+  // cannot both consume the last available slot.
   const user = await User.findOne({ _id: userId, accountState: { $ne: 'deleting' } })
-    .select('savedResumes')
-    .lean()
+    .select(
+      'savedResumes premiumResumesUsed premiumResumeLimit freeBasicResumeId',
+    )
+    .lean<ResumeLibraryProjection>()
   if (!user) {
     return {
       error: 'Your account is unavailable. Sign in again before saving.',
       code: 'ACCOUNT_UNAVAILABLE' as const,
     }
   }
-  const currentCount = (user?.savedResumes || []).length
-  if (currentCount >= MAX_RESUMES) {
+  const savedIds = (user.savedResumes || [])
+    .map(savedResumeId)
+    .filter((resumeId): resumeId is string => resumeId !== null)
+  const currentBasicResumeId = basicResumeId(user, savedIds)
+  const currentPremiumLimit = premiumResumeLimit(user.premiumResumeLimit)
+  const currentPremiumUsed = premiumResumesUsed(
+    user.premiumResumesUsed,
+    currentPremiumLimit,
+  )
+  if (
+    currentBasicResumeId &&
+    currentPremiumUsed >= currentPremiumLimit
+  ) {
     return {
       error: 'Resume limit reached. Delete an existing resume to create a new one.',
       code: 'RESUME_LIMIT' as const,
@@ -154,10 +245,41 @@ export async function saveResume(
   }
 
   const created = await User.updateOne(
-    { _id: userId, accountState: { $ne: 'deleting' } },
-    { $push: { savedResumes: resumeDoc } }
+    currentBasicResumeId
+      ? {
+          _id: userId,
+          accountState: { $ne: 'deleting' },
+          'savedResumes.id': currentBasicResumeId,
+          $expr: atomicPremiumCycleSlotAvailable(),
+        }
+      : {
+          _id: userId,
+          accountState: { $ne: 'deleting' },
+          $expr: {
+            $eq: [{ $size: { $ifNull: ['$savedResumes', []] } }, 0],
+          },
+        },
+    currentBasicResumeId
+      ? {
+          $push: { savedResumes: resumeDoc },
+          $inc: { premiumResumesUsed: 1 },
+        }
+      : {
+          $push: { savedResumes: resumeDoc },
+          $set: { freeBasicResumeId: newId },
+        },
   )
   if (created.matchedCount === 0) {
+    const activeUser = await User.findOne({
+      _id: userId,
+      accountState: { $ne: 'deleting' },
+    }).select('_id').lean()
+    if (activeUser) {
+      return {
+        error: 'Resume limit reached. Delete an existing resume to create a new one.',
+        code: 'RESUME_LIMIT' as const,
+      }
+    }
     return {
       error: 'Your account is unavailable. Sign in again before saving.',
       code: 'ACCOUNT_UNAVAILABLE' as const,

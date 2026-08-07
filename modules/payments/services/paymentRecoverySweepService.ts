@@ -1,15 +1,28 @@
 import mongoose from 'mongoose'
+import { RefundRecord } from '@financial-ledger'
 import { connectDB } from '@shared/db/connection'
 import { logger } from '@shared/logger'
 import { ChargeFulfillment } from '../models/ChargeFulfillment'
 import { CheckoutIntent } from '../models/CheckoutIntent'
 import { PaymentWebhookEvent } from '../models/PaymentWebhookEvent'
+import { PlanCatalogVersion } from '../models/PlanCatalogVersion'
 import { Subscription } from '../models/Subscription'
 import {
   createRazorpayClientFactory,
   type RazorpayClientFactory,
 } from '../providers/razorpayClientFactory'
-import type { ProviderMode } from '../types/catalog'
+import type { CatalogContent, ProviderMode } from '../types/catalog'
+import {
+  expireCouponReservation,
+  listCouponReservationsDueForRecovery,
+  markCouponReservationReview,
+  releaseCouponReservation,
+  type CouponReservationRecoveryRow,
+} from './couponReservationService'
+import {
+  issueApprovedGstCreditNote,
+  type ApprovedGstCreditNoteRecoveryResult,
+} from './approvedGstCreditNoteRecoveryService'
 import {
   recoverChargeFulfillment,
   type ChargeFulfillmentRecoveryResult,
@@ -38,6 +51,7 @@ const OBJECT_ID_PATTERN = /^[a-fA-F0-9]{24}$/
 const SUBSCRIPTION_ID_PATTERN = /^sub_[A-Za-z0-9]+$/
 const PAYMENT_ID_PATTERN = /^pay_[A-Za-z0-9]+$/
 const DEFAULT_WEBHOOK_LIMIT = 25
+const DEFAULT_COUPON_LIMIT = 10
 const DEFAULT_SUBSCRIPTION_LIMIT = 5
 const DEFAULT_CHARGE_LIMIT = 25
 const MAX_SWEEP_LIMIT = 100
@@ -48,6 +62,7 @@ const STEADY_SUBSCRIPTION_AGE_MS = 6 * 60 * 60 * 1000
 const CHARGE_RECOVERY_AGE_MS = 60 * 1000
 const CHARGE_RECOVERY_BACKOFF_MS = 5 * 60 * 1000
 const MAX_MISSING_CYCLES_PER_SUBSCRIPTION = 5
+const COUPON_REMOTE_LOOKUP_WINDOW_SECONDS = 72 * 60 * 60
 const RECOVERABLE_CHECKOUT_STATUSES = [
   'remote_created',
   'checkout_opened',
@@ -92,6 +107,25 @@ export interface ChargeRecoveryCandidate {
   providerMode: ProviderMode
 }
 
+export interface CreditNoteRecoveryCandidate {
+  refundRecordId: string
+  providerMode: ProviderMode
+}
+
+export interface CouponRecoveryCheckout {
+  id: string
+  providerMode: ProviderMode
+  userId: string
+  campaignId: string
+  status: string
+  receipt: string
+  razorpayPlanId: string
+  razorpaySubscriptionId?: string
+  remoteCreationLeaseExpiresAt?: Date
+  remoteCreationStartedAt?: Date
+  createdAt: Date
+}
+
 export interface PaymentRecoveryCandidateStore {
   listWebhookCandidates(input: {
     providerMode: ProviderMode
@@ -103,6 +137,18 @@ export interface PaymentRecoveryCandidateStore {
     now: Date
     limit: number
   }): Promise<SubscriptionRecoveryCandidate[]>
+  listCouponCandidates(input: {
+    providerMode: ProviderMode
+    now: Date
+    limit: number
+  }): Promise<CouponReservationRecoveryRow[]>
+  loadCouponCheckout(
+    candidate: CouponReservationRecoveryRow,
+  ): Promise<CouponRecoveryCheckout | null>
+  cancelUnstartedCouponCheckout(input: {
+    checkout: CouponRecoveryCheckout
+    now: Date
+  }): Promise<boolean>
   markSubscriptionAttempted(input: {
     providerMode: ProviderMode
     razorpaySubscriptionId: string
@@ -114,6 +160,11 @@ export interface PaymentRecoveryCandidateStore {
     now: Date
     limit: number
   }): Promise<ChargeRecoveryCandidate[]>
+  listCreditNoteCandidates(input: {
+    providerMode: ProviderMode
+    now: Date
+    limit: number
+  }): Promise<CreditNoteRecoveryCandidate[]>
   deferChargeCandidate(input: {
     providerMode: ProviderMode
     fulfillmentId: string
@@ -143,12 +194,20 @@ export interface PaymentRecoverySweepDependencies {
     fulfillmentId: string
     providerMode: ProviderMode
   }) => Promise<ChargeFulfillmentRecoveryResult>
+  recoverCreditNote?: (input: {
+    refundRecordId: string
+    providerMode: ProviderMode
+  }) => Promise<ApprovedGstCreditNoteRecoveryResult>
+  expireCoupon?: typeof expireCouponReservation
+  releaseCoupon?: typeof releaseCouponReservation
+  reviewCoupon?: typeof markCouponReservationReview
 }
 
 export interface PaymentRecoverySweepInput {
   providerModes: readonly ProviderMode[]
   now?: Date
   webhookLimit?: number
+  couponLimit?: number
   subscriptionLimit?: number
   chargeLimit?: number
 }
@@ -163,10 +222,12 @@ export interface PaymentRecoveryStageResult {
 export interface PaymentRecoverySweepResult {
   providerModes: readonly ProviderMode[]
   webhook: PaymentRecoveryStageResult
+  coupon: PaymentRecoveryStageResult
   subscription: PaymentRecoveryStageResult & {
     cyclesRecovered: number
   }
   charge: PaymentRecoveryStageResult
+  creditNote: PaymentRecoveryStageResult
 }
 
 interface LeanWebhookCandidate {
@@ -193,6 +254,25 @@ interface LeanFulfillmentPayment {
 interface LeanChargeCandidate {
   _id: mongoose.Types.ObjectId
   providerMode: ProviderMode
+}
+
+interface LeanCreditNoteCandidate {
+  _id: mongoose.Types.ObjectId
+  providerMode: ProviderMode
+}
+
+interface LeanCouponCheckout {
+  _id: mongoose.Types.ObjectId
+  providerMode: ProviderMode
+  userId: mongoose.Types.ObjectId
+  status: string
+  planKey?: 'plus' | 'pro'
+  catalogVersion: string
+  receipt: string
+  razorpaySubscriptionId?: string
+  remoteCreationLeaseExpiresAt?: Date
+  remoteCreationStartedAt?: Date
+  createdAt: Date
 }
 
 function validDate(value: unknown): value is Date {
@@ -370,6 +450,101 @@ PaymentRecoveryCandidateStore = {
     }))
   },
 
+  async listCouponCandidates({ providerMode, now, limit }) {
+    return listCouponReservationsDueForRecovery({
+      providerMode,
+      asOf: now,
+      limit,
+    })
+  },
+
+  async loadCouponCheckout(candidate) {
+    if (
+      !OBJECT_ID_PATTERN.test(candidate.id) ||
+      !OBJECT_ID_PATTERN.test(candidate.campaignId) ||
+      !OBJECT_ID_PATTERN.test(candidate.userId) ||
+      !OBJECT_ID_PATTERN.test(candidate.checkoutIntentId)
+    ) {
+      throw new PaymentRecoveryConfigurationError(
+        'Stored coupon recovery identity is invalid',
+      )
+    }
+    await connectDB()
+    const checkout = await CheckoutIntent.findOne({
+      _id: new mongoose.Types.ObjectId(candidate.checkoutIntentId),
+      userId: new mongoose.Types.ObjectId(candidate.userId),
+      providerMode: candidate.providerMode,
+      kind: 'subscription',
+      'quoteSnapshot.couponCampaignId':
+        new mongoose.Types.ObjectId(candidate.campaignId),
+    })
+      .select(
+        '_id providerMode userId status planKey catalogVersion receipt ' +
+        'razorpaySubscriptionId remoteCreationLeaseExpiresAt ' +
+        'remoteCreationStartedAt createdAt',
+      )
+      .lean<LeanCouponCheckout>()
+    if (!checkout?.planKey) return null
+    const catalog = await PlanCatalogVersion.findOne({
+      version: checkout.catalogVersion,
+      status: { $in: ['published', 'archived'] },
+    }).select('content').lean<{ content: CatalogContent }>()
+    const razorpayPlanId =
+      catalog?.content.plans[checkout.planKey]
+        .razorpayPlanIdByMode?.[candidate.providerMode]
+    if (!razorpayPlanId) return null
+    return {
+      id: checkout._id.toHexString(),
+      providerMode: checkout.providerMode,
+      userId: checkout.userId.toHexString(),
+      campaignId: candidate.campaignId,
+      status: checkout.status,
+      receipt: checkout.receipt,
+      razorpayPlanId,
+      ...(checkout.razorpaySubscriptionId
+        ? { razorpaySubscriptionId: checkout.razorpaySubscriptionId }
+        : {}),
+      ...(checkout.remoteCreationLeaseExpiresAt
+        ? {
+            remoteCreationLeaseExpiresAt:
+              checkout.remoteCreationLeaseExpiresAt,
+          }
+        : {}),
+      ...(checkout.remoteCreationStartedAt
+        ? { remoteCreationStartedAt: checkout.remoteCreationStartedAt }
+        : {}),
+      createdAt: checkout.createdAt,
+    }
+  },
+
+  async cancelUnstartedCouponCheckout({ checkout, now }) {
+    await connectDB()
+    const update = await CheckoutIntent.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(checkout.id),
+        userId: new mongoose.Types.ObjectId(checkout.userId),
+        providerMode: checkout.providerMode,
+        kind: 'subscription',
+        status: 'created',
+        razorpaySubscriptionId: { $exists: false },
+        remoteCreationStartedAt: { $exists: false },
+        $or: [
+          { remoteCreationLeaseToken: { $exists: false } },
+          { remoteCreationLeaseExpiresAt: { $lte: now } },
+        ],
+      },
+      {
+        $set: { status: 'cancelled', updatedAt: now },
+        $unset: {
+          remoteCreationLeaseToken: 1,
+          remoteCreationLeaseExpiresAt: 1,
+        },
+      },
+      { runValidators: true, timestamps: false },
+    )
+    return update.matchedCount === 1
+  },
+
   async listSubscriptionCandidates({ providerMode, now, limit }) {
     await connectDB()
     const checkoutBefore = new Date(
@@ -512,15 +687,53 @@ PaymentRecoveryCandidateStore = {
     const dueBefore = new Date(now.getTime() - CHARGE_RECOVERY_AGE_MS)
     const rows = await ChargeFulfillment.find({
       providerMode,
-      kind: { $in: ['single_interview', 'premium_resume'] },
-      status: 'verified',
       'steps.verification.status': 'complete',
-      'steps.entitlement.status': 'pending',
       updatedAt: { $lte: dueBefore },
-      $or: [
-        { nextAttemptAt: { $exists: false } },
-        { nextAttemptAt: null },
-        { nextAttemptAt: { $lte: now } },
+      $and: [
+        {
+          $or: [
+            {
+              kind: { $in: ['single_interview', 'premium_resume'] },
+              status: 'verified',
+              'steps.entitlement.status': 'pending',
+            },
+            {
+              kind: {
+                $in: [
+                  'subscription_cycle',
+                  'single_interview',
+                  'premium_resume',
+                ],
+              },
+              status: {
+                $in: ['entitlement_skipped', 'entitlement_applied'],
+              },
+              'steps.invoice.status': {
+                $in: ['pending', 'running', 'failed'],
+              },
+            },
+            {
+              status: 'review',
+              'steps.invoice.status': {
+                $in: ['pending', 'running', 'failed'],
+              },
+              $or: [
+                { 'steps.entitlement.status': 'complete' },
+                {
+                  kind: 'subscription_cycle',
+                  'steps.entitlement.status': 'skipped',
+                },
+              ],
+            },
+          ],
+        },
+        {
+          $or: [
+            { nextAttemptAt: { $exists: false } },
+            { nextAttemptAt: null },
+            { nextAttemptAt: { $lte: now } },
+          ],
+        },
       ],
     })
       .sort({ updatedAt: 1, _id: 1 })
@@ -529,6 +742,43 @@ PaymentRecoveryCandidateStore = {
       .lean<LeanChargeCandidate[]>()
     return rows.map((row) => ({
       fulfillmentId: row._id.toHexString(),
+      providerMode: row.providerMode,
+    }))
+  },
+
+  async listCreditNoteCandidates({ providerMode, now, limit }) {
+    await connectDB()
+    const rows = await RefundRecord.find({
+      providerMode,
+      status: { $in: ['verified', 'review_required', 'resolving', 'resolved'] },
+      'creditNoteDecision.status': { $in: ['required', 'failed'] },
+      $and: [
+        {
+          $or: [
+            { nextAttemptAt: { $exists: false } },
+            { nextAttemptAt: null },
+            { nextAttemptAt: { $lte: now } },
+          ],
+        },
+        {
+          $or: [
+            { 'creditNoteDecision.attemptedAt': { $exists: false } },
+            { 'creditNoteDecision.attemptedAt': null },
+            {
+              'creditNoteDecision.attemptedAt': {
+                $lte: new Date(now.getTime() - 15 * 60_000),
+              },
+            },
+          ],
+        },
+      ],
+    })
+      .sort({ updatedAt: 1, _id: 1 })
+      .limit(limit)
+      .select('_id providerMode')
+      .lean<LeanCreditNoteCandidate[]>()
+    return rows.map((row) => ({
+      refundRecordId: row._id.toHexString(),
       providerMode: row.providerMode,
     }))
   },
@@ -544,10 +794,42 @@ PaymentRecoveryCandidateStore = {
       {
         _id: new mongoose.Types.ObjectId(fulfillmentId),
         providerMode,
-        kind: { $in: ['single_interview', 'premium_resume'] },
-        status: 'verified',
         'steps.verification.status': 'complete',
-        'steps.entitlement.status': 'pending',
+        $or: [
+          {
+            kind: { $in: ['single_interview', 'premium_resume'] },
+            status: 'verified',
+            'steps.entitlement.status': 'pending',
+          },
+          {
+            kind: {
+              $in: [
+                'subscription_cycle',
+                'single_interview',
+                'premium_resume',
+              ],
+            },
+            status: {
+              $in: ['entitlement_skipped', 'entitlement_applied'],
+            },
+            'steps.invoice.status': {
+              $in: ['pending', 'running', 'failed'],
+            },
+          },
+          {
+            status: 'review',
+            'steps.invoice.status': {
+              $in: ['pending', 'running', 'failed'],
+            },
+            $or: [
+              { 'steps.entitlement.status': 'complete' },
+              {
+                kind: 'subscription_cycle',
+                'steps.entitlement.status': 'skipped',
+              },
+            ],
+          },
+        ],
       },
       { $set: { nextAttemptAt, updatedAt: attemptedAt } },
       { timestamps: false },
@@ -596,6 +878,232 @@ async function retryWebhookInbox(input: {
         providerMode: input.providerMode,
         errorName: error instanceof Error ? error.name : 'UnknownError',
       }, 'Payment webhook recovery candidate failed')
+    }
+  }
+  return result
+}
+
+function couponEvidenceKey(
+  candidate: CouponReservationRecoveryRow,
+  suffix: string,
+): string {
+  return `coupon-recovery:${candidate.id}:${suffix}`.slice(0, 255)
+}
+
+async function recoverCouponReservations(input: {
+  providerMode: ProviderMode
+  now: Date
+  limit: number
+  store: PaymentRecoveryCandidateStore
+  clientFactory: RazorpayClientFactory
+  expireCoupon: typeof expireCouponReservation
+  releaseCoupon: typeof releaseCouponReservation
+  reviewCoupon: typeof markCouponReservationReview
+}): Promise<PaymentRecoveryStageResult> {
+  const candidates = await input.store.listCouponCandidates(input)
+  assertCandidatesExact(candidates, input.providerMode, input.limit)
+  const result = emptyStage()
+  result.candidates = candidates.length
+  const client = candidates.length > 0
+    ? input.clientFactory.forMode(input.providerMode)
+    : undefined
+
+  for (const candidate of candidates) {
+    try {
+      if (
+        !OBJECT_ID_PATTERN.test(candidate.id) ||
+        !OBJECT_ID_PATTERN.test(candidate.campaignId) ||
+        !OBJECT_ID_PATTERN.test(candidate.userId) ||
+        !OBJECT_ID_PATTERN.test(candidate.checkoutIntentId) ||
+        !validDate(candidate.validUntil) ||
+        candidate.validUntil > input.now
+      ) {
+        throw new PaymentRecoveryConfigurationError(
+          'Stored coupon recovery candidate is invalid',
+        )
+      }
+      const checkout = await input.store.loadCouponCheckout(candidate)
+      if (!checkout || !validDate(checkout.createdAt)) {
+        await input.reviewCoupon({
+          providerMode: candidate.providerMode,
+          campaignId: candidate.campaignId,
+          userId: candidate.userId,
+          checkoutIntentId: candidate.checkoutIntentId,
+          reason: 'ambiguous_remote_state',
+          evidenceKey: couponEvidenceKey(candidate, 'checkout-missing'),
+        })
+        result.completed += 1
+        continue
+      }
+      if (
+        checkout.id !== candidate.checkoutIntentId ||
+        checkout.providerMode !== candidate.providerMode ||
+        checkout.userId !== candidate.userId ||
+        checkout.campaignId !== candidate.campaignId
+      ) {
+        throw new PaymentRecoveryConfigurationError(
+          'Coupon checkout recovery identity crossed its boundary',
+        )
+      }
+
+      const fromEpochSeconds = Math.floor(
+        checkout.createdAt.getTime() / 1_000,
+      )
+      const remote = checkout.razorpaySubscriptionId
+        ? await client!.fetchSubscription(
+            checkout.razorpaySubscriptionId,
+          )
+        : await client!.findSubscriptionByCheckoutReceipt({
+            checkoutReceipt: checkout.receipt,
+            expectedPlanId: checkout.razorpayPlanId,
+            fromEpochSeconds,
+            toEpochSeconds:
+              fromEpochSeconds + COUPON_REMOTE_LOOKUP_WINDOW_SECONDS,
+          })
+
+      if (!remote) {
+        if (
+          checkout.remoteCreationLeaseExpiresAt &&
+          checkout.remoteCreationLeaseExpiresAt > input.now
+        ) {
+          result.deferred += 1
+          continue
+        }
+        if (
+          checkout.status === 'created' &&
+          !await input.store.cancelUnstartedCouponCheckout({
+            checkout,
+            now: input.now,
+          })
+        ) {
+          result.deferred += 1
+          continue
+        }
+        if (
+          checkout.status !== 'created' &&
+          !['abandoned', 'failed', 'cancelled'].includes(checkout.status)
+        ) {
+          await input.reviewCoupon({
+            providerMode: candidate.providerMode,
+            campaignId: candidate.campaignId,
+            userId: candidate.userId,
+            checkoutIntentId: candidate.checkoutIntentId,
+            reason: 'ambiguous_remote_state',
+            evidenceKey: couponEvidenceKey(
+              candidate,
+              `local-${checkout.status}`,
+            ),
+          })
+          result.completed += 1
+          continue
+        }
+        await input.expireCoupon({
+          providerMode: candidate.providerMode,
+          campaignId: candidate.campaignId,
+          userId: candidate.userId,
+          checkoutIntentId: candidate.checkoutIntentId,
+          evidence: {
+            reason: 'local_intent_expired_without_remote_object',
+            source: 'reconciliation',
+            evidenceKey: couponEvidenceKey(candidate, 'remote-absent'),
+            observedAt: input.now,
+          },
+          terminalAt: input.now,
+        })
+        result.completed += 1
+        continue
+      }
+
+      if (
+        remote.providerMode !== candidate.providerMode ||
+        remote.planId !== checkout.razorpayPlanId ||
+        remote.notes.checkout_receipt !== checkout.receipt ||
+        (
+          checkout.razorpaySubscriptionId !== undefined &&
+          remote.id !== checkout.razorpaySubscriptionId
+        )
+      ) {
+        await input.reviewCoupon({
+          providerMode: candidate.providerMode,
+          campaignId: candidate.campaignId,
+          userId: candidate.userId,
+          checkoutIntentId: candidate.checkoutIntentId,
+          reason: 'ambiguous_remote_state',
+          evidenceKey: couponEvidenceKey(candidate, 'remote-mismatch'),
+        })
+        result.completed += 1
+        continue
+      }
+
+      const terminalReason = remote.status === 'cancelled'
+        ? 'provider_subscription_cancelled_unpaid' as const
+        : remote.status === 'completed'
+          ? 'provider_subscription_completed_unpaid' as const
+          : remote.status === 'expired'
+            ? 'provider_subscription_expired_unpaid' as const
+            : undefined
+      if (!terminalReason) {
+        if (!checkout.razorpaySubscriptionId) {
+          await input.reviewCoupon({
+            providerMode: candidate.providerMode,
+            campaignId: candidate.campaignId,
+            userId: candidate.userId,
+            checkoutIntentId: candidate.checkoutIntentId,
+            reason: 'ambiguous_remote_state',
+            evidenceKey: couponEvidenceKey(
+              candidate,
+              'remote-correlation-missing',
+            ),
+          })
+          result.completed += 1
+        } else {
+          result.deferred += 1
+        }
+        continue
+      }
+
+      const invoices = await client!.fetchSubscriptionInvoices(remote.id)
+      const hasPaidEvidence = remote.paidCount > 0 || invoices.some(
+        (invoice) =>
+          invoice.subscriptionId === remote.id &&
+          invoice.status === 'paid' &&
+          invoice.amountPaidPaise > 0,
+      )
+      if (hasPaidEvidence) {
+        await input.reviewCoupon({
+          providerMode: candidate.providerMode,
+          campaignId: candidate.campaignId,
+          userId: candidate.userId,
+          checkoutIntentId: candidate.checkoutIntentId,
+          reason: 'ambiguous_remote_state',
+          evidenceKey: couponEvidenceKey(candidate, 'paid-evidence'),
+        })
+        result.completed += 1
+        continue
+      }
+      await input.releaseCoupon({
+        providerMode: candidate.providerMode,
+        campaignId: candidate.campaignId,
+        userId: candidate.userId,
+        checkoutIntentId: candidate.checkoutIntentId,
+        evidence: {
+          reason: terminalReason,
+          source: 'provider_fetch',
+          evidenceKey: couponEvidenceKey(
+            candidate,
+            `${remote.id}:${remote.status}`,
+          ),
+          observedAt: input.now,
+        },
+        terminalAt: input.now,
+      })
+      result.completed += 1
+    } catch (error) {
+      result.failed += 1
+      recoveryLogger.error({
+        providerMode: input.providerMode,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      }, 'Coupon reservation recovery candidate failed')
     }
   }
   return result
@@ -773,12 +1281,18 @@ async function recoverCharges(input: {
         fulfillmentId: candidate.fulfillmentId,
         providerMode: input.providerMode,
       })
-      if (recovered.outcome === 'one_time_entitlement_processed') {
+      if (
+        recovered.outcome === 'one_time_entitlement_processed' ||
+        (
+          recovered.outcome === 'financial_policy_handler_completed' &&
+          recovered.financialPolicy.disposition !== 'deferred'
+        ) ||
+        recovered.outcome === 'done'
+      ) {
         candidateOutcome = 'completed'
       } else {
-        // A concurrent worker may have advanced the row past entitlement.
-        // Invoice, notification, and terminal states are intentionally not
-        // processed by this launch worker.
+        // A concurrent worker may have advanced the row, or an approved
+        // invoice policy may have deferred for configuration/provider state.
         candidateOutcome = 'deferred'
       }
     } catch (error) {
@@ -811,7 +1325,44 @@ async function recoverCharges(input: {
         errorName: candidateError instanceof Error
           ? candidateError.name
           : 'UnknownError',
-      }, 'One-time charge entitlement recovery candidate failed')
+      }, 'Charge fulfillment recovery candidate failed')
+    }
+  }
+  return result
+}
+
+async function recoverCreditNotes(input: {
+  providerMode: ProviderMode
+  now: Date
+  limit: number
+  store: PaymentRecoveryCandidateStore
+  recoverCreditNote: NonNullable<
+    PaymentRecoverySweepDependencies['recoverCreditNote']
+  >
+}): Promise<PaymentRecoveryStageResult> {
+  const candidates = await input.store.listCreditNoteCandidates(input)
+  assertCandidatesExact(candidates, input.providerMode, input.limit)
+  const result = emptyStage()
+  result.candidates = candidates.length
+  for (const candidate of candidates) {
+    if (!OBJECT_ID_PATTERN.test(candidate.refundRecordId)) {
+      throw new PaymentRecoveryConfigurationError(
+        'Credit-note recovery candidate identifier is invalid',
+      )
+    }
+    try {
+      const recovered = await input.recoverCreditNote({
+        refundRecordId: candidate.refundRecordId,
+        providerMode: input.providerMode,
+      })
+      if (recovered.disposition === 'deferred') result.deferred += 1
+      else result.completed += 1
+    } catch (error) {
+      result.failed += 1
+      recoveryLogger.error({
+        providerMode: input.providerMode,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      }, 'GST credit-note recovery candidate failed')
     }
   }
   return result
@@ -828,8 +1379,9 @@ function addStage(
 }
 
 /**
- * Runs bounded, mode-isolated recovery. It never creates provider objects,
- * invoices, notifications, refunds, or cancellations.
+ * Runs bounded, mode-isolated recovery. It never creates provider checkout
+ * objects, notifications, refunds, or provider cancellations. Approved local
+ * GST invoices are recovered through the injected charge policy handler.
  */
 export async function runPaymentRecoverySweep(
   input: PaymentRecoverySweepInput,
@@ -843,6 +1395,7 @@ export async function runPaymentRecoverySweep(
     )
   }
   const webhookLimit = exactLimit(input.webhookLimit, DEFAULT_WEBHOOK_LIMIT)
+  const couponLimit = exactLimit(input.couponLimit, DEFAULT_COUPON_LIMIT)
   const subscriptionLimit = exactLimit(
     input.subscriptionLimit,
     DEFAULT_SUBSCRIPTION_LIMIT,
@@ -864,11 +1417,18 @@ export async function runPaymentRecoverySweep(
     fulfillSubscriptionCycleProviderObservation
   const recoverCharge = dependencies.recoverCharge ??
     recoverChargeFulfillment
+  const recoverCreditNote = dependencies.recoverCreditNote ??
+    issueApprovedGstCreditNote
+  const expireCoupon = dependencies.expireCoupon ?? expireCouponReservation
+  const releaseCoupon = dependencies.releaseCoupon ?? releaseCouponReservation
+  const reviewCoupon = dependencies.reviewCoupon ?? markCouponReservationReview
   const result: PaymentRecoverySweepResult = {
     providerModes,
     webhook: emptyStage(),
+    coupon: emptyStage(),
     subscription: { ...emptyStage(), cyclesRecovered: 0 },
     charge: emptyStage(),
+    creditNote: emptyStage(),
   }
 
   for (const providerMode of providerModes) {
@@ -881,6 +1441,18 @@ export async function runPaymentRecoverySweep(
       webhookHandler: dependencies.webhookHandler,
     })
     addStage(result.webhook, webhook)
+
+    const coupon = await recoverCouponReservations({
+      providerMode,
+      now,
+      limit: couponLimit,
+      store,
+      clientFactory,
+      expireCoupon,
+      releaseCoupon,
+      reviewCoupon,
+    })
+    addStage(result.coupon, coupon)
 
     const subscription = await reconcileSubscriptions({
       providerMode,
@@ -903,6 +1475,15 @@ export async function runPaymentRecoverySweep(
       recoverCharge,
     })
     addStage(result.charge, charge)
+
+    const creditNote = await recoverCreditNotes({
+      providerMode,
+      now,
+      limit: chargeLimit,
+      store,
+      recoverCreditNote,
+    })
+    addStage(result.creditNote, creditNote)
   }
   return result
 }

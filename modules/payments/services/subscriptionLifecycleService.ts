@@ -97,11 +97,11 @@ const PAYMENT_ID_PATTERN = /^pay_[A-Za-z0-9]+$/
 const SUBSCRIPTION_ID_PATTERN = /^sub_[A-Za-z0-9]+$/
 const PLAN_ID_PATTERN = /^plan_[A-Za-z0-9]+$/
 const RECOVERY_DELAY_MS = 5 * 60 * 1_000
-export const PR6_FUTURE_SUBSCRIPTION_LIFECYCLE_READY = false as const
+export const PR6_FUTURE_SUBSCRIPTION_LIFECYCLE_READY = true as const
 export const PR6_CUSTOMER_SUBSCRIPTION_CANCELLATION_READY =
   true as const
 export const PR6_CUSTOMER_SCHEDULED_CHANGE_CANCELLATION_READY =
-  false as const
+  true as const
 const TRANSACTION_OPTIONS = {
   readConcern: { level: 'snapshot' as const },
   writeConcern: { w: 'majority' as const },

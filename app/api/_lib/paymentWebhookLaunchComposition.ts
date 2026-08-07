@@ -11,6 +11,10 @@ import {
   observeFutureSubscriptionAuthorization,
 } from '@payments/services/subscriptionLifecycleService'
 import {
+  persistDisputeWebhookEffect,
+  persistRefundWebhookEffect,
+} from '@payments/services/financialReversalPersistenceService'
+import {
   persistSubscriptionState,
 } from '@payments/services/subscriptionStatePersistenceService'
 import {
@@ -39,6 +43,8 @@ type PersistPaymentState =
 type PersistSubscriptionState = typeof persistSubscriptionState
 type ObserveFutureSubscriptionAuthorization =
   typeof observeFutureSubscriptionAuthorization
+type PersistRefundWebhookEffect = typeof persistRefundWebhookEffect
+type PersistDisputeWebhookEffect = typeof persistDisputeWebhookEffect
 
 export interface PaymentWebhookLaunchCompositionDependencies {
   createDomainHandler?: typeof createRazorpayWebhookDomainHandler
@@ -50,6 +56,8 @@ export interface PaymentWebhookLaunchCompositionDependencies {
   persistSubscriptionState?: PersistSubscriptionState
   observeFutureSubscriptionAuthorization?:
     ObserveFutureSubscriptionAuthorization
+  persistRefundWebhookEffect?: PersistRefundWebhookEffect
+  persistDisputeWebhookEffect?: PersistDisputeWebhookEffect
 }
 
 export class PaymentWebhookLaunchCompositionError extends Error {
@@ -215,6 +223,12 @@ export function createPaymentWebhookLaunchHandler(
   const observeFutureAuthorizationEffect =
     dependencies.observeFutureSubscriptionAuthorization ??
     observeFutureSubscriptionAuthorization
+  const persistRefundEffect =
+    dependencies.persistRefundWebhookEffect ??
+    persistRefundWebhookEffect
+  const persistDisputeEffect =
+    dependencies.persistDisputeWebhookEffect ??
+    persistDisputeWebhookEffect
 
   const effects: WebhookDomainEffectHandlers = {
     handlePaymentState: (input) => persistPaymentState(input),
@@ -253,6 +267,8 @@ export function createPaymentWebhookLaunchHandler(
     handleSubscriptionState: (input) => (
       persistSubscriptionLifecycle(input)
     ),
+    handleRefund: (input) => persistRefundEffect(input),
+    handleDispute: (input) => persistDisputeEffect(input),
   }
 
   const domainDependencies: WebhookDomainDispatchDependencies = {

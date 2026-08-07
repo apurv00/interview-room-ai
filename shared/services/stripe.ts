@@ -28,6 +28,20 @@ export const PLANS: Record<string, PlanConfig> = {
       'Community support',
     ],
   },
+  plus: {
+    name: 'plus',
+    label: 'Plus',
+    monthlyInterviewLimit: 10,
+    monthlyAnalysisLimit: 10,
+    rateLimitPerMin: 30,
+    priceMonthly: 599,
+    features: [
+      '10 interviews per billing month',
+      'Detailed per-question feedback',
+      'Recording playback',
+      'Score trends & analytics',
+    ],
+  },
   pro: {
     name: 'pro',
     label: 'Pro',

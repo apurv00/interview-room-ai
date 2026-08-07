@@ -64,6 +64,7 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { genericRetakeConfig, isObjectId } from '@interview/utils/retakeNavigation'
 import {
   interviewDurationOptionsForUser,
+  isBasicPersonalInterviewUser,
   normalizeInterviewDurationForUser,
 } from '@interview/config/interviewDurationPolicy'
 
@@ -120,6 +121,10 @@ export default function InterviewSetupForm() {
   )
   const durationOptions = useMemo(
     () => interviewDurationOptionsForUser(durationUserContext),
+    [durationUserContext],
+  )
+  const paidDurationCheckoutApplies = useMemo(
+    () => isBasicPersonalInterviewUser(durationUserContext),
     [durationUserContext],
   )
   // UAT-014: read onboarding through the shared hook so this consumer
@@ -679,6 +684,7 @@ export default function InterviewSetupForm() {
     duration={duration}
     setDuration={setDuration}
     durationOptions={durationOptions}
+    paidDurationCheckoutApplies={paidDurationCheckoutApplies}
     uploadError={uploadError}
     // Pathway P2 Wave 1
     recommendedFocus={pathwayContext?.focus}
@@ -750,6 +756,7 @@ interface ViewProps {
   duration: Duration | null
   setDuration: (v: Duration) => void
   durationOptions: Duration[]
+  paidDurationCheckoutApplies: boolean
   uploadError: string
   // Pathway P2 Wave 1 — surfaced at top of Step 0 only.
   // `recommendedFocus` comes from URL params (?focus=…) when the user
@@ -1119,14 +1126,20 @@ function InterviewSetupFormView(p: ViewProps) {
                   renderItem={(d, selected) => (
                     <div className={`py-3 px-2 text-center ${selected ? 'text-blue-600' : ''}`}>
                       <span className="text-sm font-semibold">{getDurationLabel(d)}</span>
+                      {p.paidDurationCheckoutApplies && d > 10 ? (
+                        <span className="mt-0.5 block text-[10px] font-medium">
+                          ₹69 one-time
+                        </span>
+                      ) : null}
                     </div>
                   )}
                 />
-                {p.durationOptions.length === 1 && (
+                {p.paidDurationCheckoutApplies ? (
                   <p className="mt-2 text-xs text-slate-500">
-                    Basic interviews are 10 minutes. Paid plans support up to 30 minutes.
+                    Basic includes one 10-minute interview monthly. Additional
+                    interviews and 20/30-minute sessions are ₹69 one-time.
                   </p>
-                )}
+                ) : null}
               </section>
 
               {/* Compact recap, folded in from the old review step (step 4) */}

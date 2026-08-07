@@ -284,6 +284,107 @@ export const SubscriptionCheckoutResponseSchema = z.object({
   }
 })
 
+const FutureCheckoutQuoteSchema = z.object({
+  ...CheckoutQuoteSchema.shape,
+  mandateAuthorization: z.object({
+    amountPaise: z.literal(500),
+    currency: z.literal('INR'),
+    captured: z.literal(false),
+    entitlementEffect: z.literal('none'),
+    disposition: z.literal('razorpay_auto_refund'),
+  }).strict(),
+  firstPaidCycle: z.object({
+    amountPaise: SafePaiseSchema,
+    scheduledAt: IsoDateTimeSchema,
+  }).strict(),
+  renewalSchedule: z.object({
+    cadence: z.literal('monthly'),
+    status: z.literal('pending_authorization'),
+    scheduledAt: IsoDateTimeSchema,
+  }).strict(),
+}).strip().superRefine((quote, context) => {
+  const commonQuote = CheckoutQuoteSchema.safeParse({
+    ...quote,
+    renewalSchedule: {
+      cadence: quote.renewalSchedule.cadence,
+      status: quote.renewalSchedule.status,
+      scheduledAt: null,
+    },
+  })
+  if (!commonQuote.success) {
+    for (const issue of commonQuote.error.issues) {
+      context.addIssue({ ...issue })
+    }
+  }
+  if (
+    quote.firstPaidCycle.amountPaise !== quote.payablePaise ||
+    quote.firstPaidCycle.scheduledAt !== quote.renewalSchedule.scheduledAt
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['firstPaidCycle'],
+      message: 'Future subscription schedule is inconsistent',
+    })
+  }
+  if (
+    quote.discountPaise !== 0 ||
+    quote.coupon !== undefined ||
+    quote.discountedBillingCycles !== undefined
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['coupon'],
+      message: 'Future subscription changes cannot include a coupon',
+    })
+  }
+})
+
+export const FutureSubscriptionCheckoutResponseSchema =
+  z.object({
+    ...SubscriptionCheckoutResponseSchema.shape,
+    quote: FutureCheckoutQuoteSchema,
+  }).strip().superRefine((checkout, context) => {
+    if (!razorpayKeyMatchesMode(
+      checkout.providerMode,
+      checkout.checkout.keyId,
+    )) {
+      context.addIssue({
+        code: 'custom',
+        path: ['checkout', 'keyId'],
+        message: 'Razorpay key mode is inconsistent',
+      })
+    }
+  })
+
+export const FuturePlanChangeSubmissionResponseSchema = z.object({
+  planChangeRequestId: ObjectIdSchema,
+  effectiveAt: IsoDateTimeSchema,
+  checkout: FutureSubscriptionCheckoutResponseSchema,
+  reused: z.boolean(),
+}).strip()
+
+export const ScheduledPlanChangeCancellationResponseSchema = z.object({
+  planChangeRequestId: ObjectIdSchema,
+  status: z.enum(['cancelled', 'reconciling', 'review']),
+  effectiveAt: IsoDateTimeSchema,
+  reused: z.boolean(),
+  pollAfterMs: z.number().int().min(1_000).max(600_000).optional(),
+}).strip()
+
+export const FutureSubscriptionAuthorizationResponseSchema = z.object({
+  intentId: ObjectIdSchema,
+  planChangeRequestId: ObjectIdSchema,
+  status: z.enum([
+    'authorization_pending',
+    'authorized',
+    'scheduled',
+    'reconciling',
+    'manual_review',
+  ]),
+  pollAfterMs: z.number().int().min(1_000).max(600_000).optional(),
+  reused: z.boolean(),
+}).strip()
+
 export const BillingIntentStatusResponseSchema = z.object({
   intentId: ObjectIdSchema,
   kind: z.enum(['subscription', 'single_interview', 'premium_resume']),
@@ -338,6 +439,18 @@ export type CustomerBillingQuote = z.infer<
 export type SubscriptionCheckout = z.infer<
   typeof SubscriptionCheckoutResponseSchema
 >
+export type FutureSubscriptionCheckout = z.infer<
+  typeof FutureSubscriptionCheckoutResponseSchema
+>
+export type FuturePlanChangeSubmission = z.infer<
+  typeof FuturePlanChangeSubmissionResponseSchema
+>
+export type ScheduledPlanChangeCancellation = z.infer<
+  typeof ScheduledPlanChangeCancellationResponseSchema
+>
+export type FutureSubscriptionAuthorization = z.infer<
+  typeof FutureSubscriptionAuthorizationResponseSchema
+>
 export type CheckoutObservationAuthority = z.infer<
   typeof CheckoutObservationAuthoritySchema
 >
@@ -362,6 +475,11 @@ export const billingResponseSchemas = {
   catalog: PublicBillingCatalogResponseSchema,
   quote: CustomerBillingQuoteResponseSchema,
   checkout: SubscriptionCheckoutResponseSchema,
+  futureCheckout: FutureSubscriptionCheckoutResponseSchema,
+  futurePlanChange: FuturePlanChangeSubmissionResponseSchema,
+  scheduledPlanChangeCancellation:
+    ScheduledPlanChangeCancellationResponseSchema,
+  futureAuthorization: FutureSubscriptionAuthorizationResponseSchema,
   profile: CustomerBillingProfileResponseSchema,
   summary: CustomerBillingSummaryResponseSchema,
   documents: CustomerFinancialDocumentPageResponseSchema,

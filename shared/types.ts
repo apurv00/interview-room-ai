@@ -4,7 +4,7 @@
 export type Role = string
 export type InterviewType = string  // slug from InterviewDepth
 export type ExperienceLevel = '0-2' | '3-6' | '7+'
-/** Interview duration in minutes (valid range: 5–60) */
+/** Interview duration in minutes (valid request range: 5–30) */
 export type Duration = number
 
 // Legacy role type for backward compatibility checks

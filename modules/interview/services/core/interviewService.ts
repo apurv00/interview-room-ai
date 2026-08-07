@@ -33,6 +33,13 @@ import {
   BASIC_MAX_INTERVIEW_DURATION_MINUTES,
   MAX_INTERVIEW_DURATION_MINUTES,
 } from '../../config/interviewDurationPolicy'
+import { getBillingConfig } from '@payments/services/billingConfigService'
+import {
+  consumePaidInterviewUnlockForLaunchInSession,
+  paidInterviewLaunchProviderMode,
+  PaidInterviewLaunchError,
+} from '@payments/services/paidInterviewLaunchService'
+import type { ProviderMode } from '@payments/types/catalog'
 
 interface CreateSessionInput {
   userId: string
@@ -297,6 +304,9 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     monthlyInterviewLimit: 1,
   }
 
+  let paidInterviewFallback = false
+  let paidInterviewProviderMode: ProviderMode | undefined
+
   // Atomic increment-first: exact Basic and subscription projections use their
   // product limits. Explicit organization/Enterprise/admin/legacy paid rows
   // retain their stored limit without being coerced into consumer pricing. A
@@ -356,21 +366,22 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   )
 
   if (!updatedUser) {
-    // Either user doesn't exist or usage limit reached
+    // Either the user does not exist, the included allowance is exhausted,
+    // or a Basic user selected a duration that requires a paid unlock.
     const exists = await User.exists(activeJobsAccountFilter(input.userId))
     if (!exists) throw new NotFoundError('User')
-    if (input.config.duration > BASIC_MAX_INTERVIEW_DURATION_MINUTES) {
-      const isPersonalBasic = await User.exists({
-        ...activeJobsAccountFilter(input.userId),
-        ...personalBasicAuthority,
-      })
-      if (isPersonalBasic) {
-        throw new ForbiddenError(
-          `Basic interviews are limited to ${BASIC_MAX_INTERVIEW_DURATION_MINUTES} minutes.`,
-        )
-      }
+    const isPersonalBasic = await User.exists({
+      ...activeJobsAccountFilter(input.userId),
+      ...personalBasicAuthority,
+    })
+    if (!isPersonalBasic) {
+      throw new UsageLimitError()
     }
-    throw new UsageLimitError()
+    paidInterviewFallback = true
+    paidInterviewProviderMode = paidInterviewLaunchProviderMode(
+      await getBillingConfig(),
+      input.userId,
+    )
   }
 
   // Look up scoring dimensions for this interview type
@@ -490,14 +501,17 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
         throw new ModelProviderPreconditionError(err)
       }
     } catch (err) {
-      await User.findByIdAndUpdate(input.userId, {
-        $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
-      })
+      if (updatedUser) {
+        await User.findByIdAndUpdate(input.userId, {
+          $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
+        })
+      }
       throw err
     }
   }
 
   const sessionPayload = {
+    _id: new mongoose.Types.ObjectId(),
     userId: new mongoose.Types.ObjectId(input.userId),
     organizationId: input.organizationId
       ? new mongoose.Types.ObjectId(input.organizationId)
@@ -524,24 +538,73 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   }
   let session: IInterviewSession
   try {
-    if (input.verifiedJobsAttribution) {
+    if (input.verifiedJobsAttribution || paidInterviewFallback) {
       session = await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
-        // Preserve Mongo's TransientTransactionError labels unchanged so
-        // withTransaction can retry the whole User → posting → application →
-        // session unit against the winning commit.
-        const jobsAuthorityCurrent = Boolean(
-          await input.beforeVerifiedJobsSessionWrite?.(dbSession),
-        )
-        if (!jobsAuthorityCurrent) throw new ModelProviderPreconditionError()
-        // The route/provider checks can finish before the final write. Bind
-        // the server-canonical experience to the same User-document write
-        // fence and Mongo transaction that creates the session so a profile
-        // edit cannot win in the last gap and persist a stale calibration.
-        const profileStillCurrent = await User.exists({
-          _id: new mongoose.Types.ObjectId(input.userId),
-          experienceLevel: input.config.experience,
-        }).session(dbSession)
-        if (!profileStillCurrent) throw new ModelProviderPreconditionError()
+        if (input.verifiedJobsAttribution) {
+          // Preserve Mongo's TransientTransactionError labels unchanged so
+          // withTransaction can retry the whole User → posting → application →
+          // session unit against the winning commit.
+          const jobsAuthorityCurrent = Boolean(
+            await input.beforeVerifiedJobsSessionWrite?.(dbSession),
+          )
+          if (!jobsAuthorityCurrent) throw new ModelProviderPreconditionError()
+          // The route/provider checks can finish before the final write. Bind
+          // the server-canonical experience to the same User-document write
+          // fence and Mongo transaction that creates the session so a profile
+          // edit cannot win in the last gap and persist a stale calibration.
+          const profileStillCurrent = await User.exists({
+            _id: new mongoose.Types.ObjectId(input.userId),
+            experienceLevel: input.config.experience,
+          }).session(dbSession)
+          if (!profileStillCurrent) throw new ModelProviderPreconditionError()
+        }
+
+        if (paidInterviewFallback) {
+          const paidOwnerStillBasic = await User.exists({
+            _id: userId,
+            accountState: { $ne: 'deleting' },
+            ...personalBasicAuthority,
+          }).session(dbSession)
+          if (!paidOwnerStillBasic || !paidInterviewProviderMode) {
+            throw new UsageLimitError()
+          }
+          try {
+            await consumePaidInterviewUnlockForLaunchInSession(
+              {
+                userId: input.userId,
+                sessionId: sessionPayload._id.toHexString(),
+                providerMode: paidInterviewProviderMode,
+                durationMinutes: input.config.duration,
+                now,
+              },
+              dbSession,
+            )
+          } catch (error) {
+            if (
+              error instanceof PaidInterviewLaunchError &&
+              error.code === 'unavailable'
+            ) {
+              throw new UsageLimitError()
+            }
+            throw error
+          }
+          const counted = await User.updateOne(
+            {
+              _id: userId,
+              accountState: { $ne: 'deleting' },
+              ...personalBasicAuthority,
+            },
+            {
+              $inc: { interviewCount: 1 },
+              $set: { lastInterviewAt: now },
+            },
+            { session: dbSession },
+          )
+          if ((counted.matchedCount ?? 0) !== 1) {
+            throw new UsageLimitError()
+          }
+        }
+
         const [created] = await InterviewSession.create([sessionPayload], { session: dbSession })
         return created
       })
@@ -550,9 +613,11 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     }
   } catch (err) {
     // Rollback the usage increment if session creation fails
-    await User.findByIdAndUpdate(input.userId, {
-      $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
-    })
+    if (updatedUser) {
+      await User.findByIdAndUpdate(input.userId, {
+        $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
+      })
+    }
     if (err instanceof JobsAccountInactiveError) throw new NotFoundError('User')
     throw err
   }

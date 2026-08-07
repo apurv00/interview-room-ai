@@ -14,6 +14,21 @@ const BASE_CONFIG = {
 }
 
 describe('InterviewConfigSchema shared producer limits', () => {
+  it('accepts 30 minutes and rejects requests above the product maximum', () => {
+    expect(InterviewConfigSchema.safeParse({
+      ...BASE_CONFIG,
+      duration: 30,
+    }).success).toBe(true)
+    expect(InterviewConfigSchema.safeParse({
+      ...BASE_CONFIG,
+      duration: 31,
+    }).success).toBe(false)
+    expect(InterviewConfigSchema.safeParse({
+      ...BASE_CONFIG,
+      duration: 60,
+    }).success).toBe(false)
+  })
+
   it('accepts the exact JD/company boundaries', () => {
     expect(InterviewConfigSchema.safeParse({
       ...BASE_CONFIG,

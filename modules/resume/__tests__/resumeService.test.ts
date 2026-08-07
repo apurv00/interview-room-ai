@@ -8,6 +8,7 @@ vi.mock('@shared/db/connection', () => ({
 
 const mockFindById = vi.fn()
 const mockUpdateOne = vi.fn()
+const mockResumeEntitlementFind = vi.fn()
 
 vi.mock('@shared/db/models/User', () => ({
   User: {
@@ -18,6 +19,14 @@ vi.mock('@shared/db/models/User', () => ({
       select: () => ({ lean: () => mockFindById(...args) }),
     }),
     updateOne: (...args: unknown[]) => mockUpdateOne(...args),
+  },
+}))
+
+vi.mock('@payments/models/ResumeEntitlement', () => ({
+  ResumeEntitlement: {
+    find: (...args: unknown[]) => ({
+      select: () => ({ lean: () => mockResumeEntitlementFind(...args) }),
+    }),
   },
 }))
 
@@ -35,6 +44,7 @@ import {
 describe('resumeService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockResumeEntitlementFind.mockResolvedValue([])
     // matchedCount: 1 — saveResume treats matchedCount 0 as "resume deleted
     // elsewhere" and returns NOT_FOUND instead of a phantom success.
     mockUpdateOne.mockResolvedValue({ acknowledged: true, matchedCount: 1 })
@@ -80,6 +90,84 @@ describe('resumeService', () => {
         template: 'professional',
         atsScore: null,
       })
+    })
+
+    it('reports Basic, Plus, and Pro library limits from the entitlement projection', async () => {
+      mockFindById.mockResolvedValueOnce({
+        savedResumes: [],
+        premiumResumesUsed: 0,
+        premiumResumeLimit: 0,
+      })
+      expect((await listResumes('basic-user'))!.limit).toBe(1)
+
+      mockFindById.mockResolvedValueOnce({
+        savedResumes: [],
+        premiumResumesUsed: 0,
+        premiumResumeLimit: 5,
+      })
+      expect((await listResumes('plus-user'))!.limit).toBe(6)
+
+      mockFindById.mockResolvedValueOnce({
+        savedResumes: [],
+        premiumResumesUsed: 0,
+        premiumResumeLimit: 15,
+      })
+      expect((await listResumes('pro-user'))!.limit).toBe(16)
+    })
+
+    it('retains exact purchased identities without adding a transferable slot', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: [{ id: 'basic' }, { id: 'purchased' }],
+        premiumResumeLimit: 0,
+        freeBasicResumeId: 'basic',
+      })
+      mockResumeEntitlementFind.mockResolvedValue([
+        { resumeId: 'purchased' },
+      ])
+
+      const result = await listResumes('user-1')
+
+      expect(result!.limit).toBe(2)
+    })
+
+    it('does not double-count a purchased unlock for the Basic identity', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: [{ id: 'basic' }],
+        premiumResumeLimit: 0,
+        freeBasicResumeId: 'basic',
+      })
+      mockResumeEntitlementFind.mockResolvedValue([{ resumeId: 'basic' }])
+
+      expect((await listResumes('user-1'))!.limit).toBe(1)
+    })
+
+    it('fails closed to the first saved identity when the Basic projection is stale', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: [{ id: 'remaining' }],
+        premiumResumeLimit: 0,
+        freeBasicResumeId: 'deleted',
+      })
+      mockResumeEntitlementFind.mockResolvedValue([{ resumeId: 'remaining' }])
+
+      expect((await listResumes('user-1'))!.limit).toBe(1)
+    })
+
+    it('shows fresh cycle capacity without hiding retained prior-cycle resumes', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: [
+          { id: 'basic' },
+          ...Array.from({ length: 5 }, (_, index) => ({
+            id: `prior-cycle-${index + 1}`,
+          })),
+        ],
+        premiumResumeLimit: 5,
+        premiumResumesUsed: 0,
+        freeBasicResumeId: 'basic',
+      })
+
+      const result = await listResumes('plus-user')
+
+      expect(result).toMatchObject({ count: 6, limit: 11 })
     })
   })
 
@@ -295,9 +383,17 @@ describe('resumeService', () => {
       expect((result as { id: string }).id).toBeTruthy()
       expect(mockUpdateOne).toHaveBeenCalledTimes(1)
       const [filter, update] = mockUpdateOne.mock.calls[0]
-      expect(filter).toEqual({ _id: 'user-1', accountState: { $ne: 'deleting' } })
+      expect(filter).toMatchObject({
+        _id: 'user-1',
+        accountState: { $ne: 'deleting' },
+      })
+      expect(filter.$expr).toBeDefined()
       expect(update.$push.savedResumes.name).toBe('Fresh')
       expect(update.$push.savedResumes.template).toBe('professional')
+      expect(update.$set.freeBasicResumeId).toBe(
+        (result as { id: string }).id,
+      )
+      expect(update.$inc).toBeUndefined()
     })
 
     it('returns RESUME_LIMIT error when the Basic resume already exists', async () => {
@@ -307,6 +403,159 @@ describe('resumeService', () => {
       const result = await saveResume('user-1', { name: 'Second' })
       expect(result).toMatchObject({ code: 'RESUME_LIMIT' })
       expect(mockUpdateOne).not.toHaveBeenCalled()
+    })
+
+    it('allows Plus to keep one Basic identity plus five cycle identities', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: Array.from({ length: 5 }, (_, index) => ({
+          id: `r${index + 1}`,
+        })),
+        premiumResumeLimit: 5,
+        premiumResumesUsed: 4,
+        freeBasicResumeId: 'r1',
+      })
+
+      const result = await saveResume('plus-user', { name: 'Sixth' })
+
+      expect(result).toMatchObject({ created: true })
+      expect(mockUpdateOne).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects a seventh cycle identity for Plus', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: Array.from({ length: 6 }, (_, index) => ({
+          id: `r${index + 1}`,
+        })),
+        premiumResumeLimit: 5,
+        premiumResumesUsed: 5,
+        freeBasicResumeId: 'r1',
+      })
+
+      const result = await saveResume('plus-user', { name: 'Seventh' })
+
+      expect(result).toMatchObject({ code: 'RESUME_LIMIT' })
+      expect(mockUpdateOne).not.toHaveBeenCalled()
+    })
+
+    it('allows Pro one Basic identity plus fifteen cycle identities', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: Array.from({ length: 15 }, (_, index) => ({
+          id: `r${index + 1}`,
+        })),
+        premiumResumeLimit: 15,
+        premiumResumesUsed: 14,
+        freeBasicResumeId: 'r1',
+      })
+
+      const result = await saveResume('pro-user', { name: 'Sixteenth' })
+
+      expect(result).toMatchObject({ created: true })
+      expect(mockUpdateOne).toHaveBeenCalledTimes(1)
+    })
+
+    it('protects a purchased identity without turning it into a generic Basic slot', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: [{ id: 'basic' }, { id: 'purchased' }],
+        premiumResumeLimit: 0,
+        premiumResumesUsed: 0,
+        freeBasicResumeId: 'basic',
+      })
+      mockResumeEntitlementFind.mockResolvedValue([
+        { resumeId: 'purchased' },
+      ])
+
+      const result = await saveResume('basic-user', { name: 'Unrelated' })
+
+      expect(result).toMatchObject({ code: 'RESUME_LIMIT' })
+      expect(mockUpdateOne).not.toHaveBeenCalled()
+    })
+
+    it('does not charge an exact purchased identity to the Plus cycle allowance', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: [
+          { id: 'basic' },
+          { id: 'purchased' },
+          { id: 'cycle-1' },
+          { id: 'cycle-2' },
+          { id: 'cycle-3' },
+          { id: 'cycle-4' },
+        ],
+        premiumResumeLimit: 5,
+        premiumResumesUsed: 4,
+        freeBasicResumeId: 'basic',
+      })
+      mockResumeEntitlementFind.mockResolvedValue([
+        { resumeId: 'purchased' },
+      ])
+
+      const result = await saveResume('plus-user', { name: 'Final cycle slot' })
+
+      expect(result).toMatchObject({ created: true })
+      const [filter, update] = mockUpdateOne.mock.calls[0]
+      expect(JSON.stringify(filter.$expr)).toContain('premiumResumesUsed')
+      expect(update.$inc.premiumResumesUsed).toBe(1)
+    })
+
+    it('grants fresh Plus creation capacity after renewal while retaining prior-cycle identities', async () => {
+      mockFindById.mockResolvedValue({
+        savedResumes: [
+          { id: 'basic' },
+          ...Array.from({ length: 5 }, (_, index) => ({
+            id: `prior-cycle-${index + 1}`,
+          })),
+        ],
+        premiumResumeLimit: 5,
+        premiumResumesUsed: 0,
+        freeBasicResumeId: 'basic',
+      })
+
+      const result = await saveResume('plus-user', { name: 'New cycle resume' })
+
+      expect(result).toMatchObject({ created: true })
+      const [filter, update] = mockUpdateOne.mock.calls[0]
+      expect(filter).toMatchObject({ 'savedResumes.id': 'basic' })
+      expect(JSON.stringify(filter.$expr)).toContain('premiumResumesUsed')
+      expect(update.$inc).toEqual({ premiumResumesUsed: 1 })
+      expect(update.$push.savedResumes.name).toBe('New cycle resume')
+    })
+
+    it('returns RESUME_LIMIT when a concurrent request wins the final slot', async () => {
+      mockFindById
+        .mockResolvedValueOnce({
+          savedResumes: Array.from({ length: 5 }, (_, index) => ({
+            id: `r${index + 1}`,
+          })),
+          premiumResumeLimit: 5,
+          premiumResumesUsed: 4,
+          freeBasicResumeId: 'r1',
+        })
+        .mockResolvedValueOnce({ _id: 'plus-user' })
+      mockUpdateOne.mockResolvedValueOnce({
+        acknowledged: true,
+        matchedCount: 0,
+      })
+
+      const result = await saveResume('plus-user', { name: 'Racing sixth' })
+
+      expect(result).toMatchObject({ code: 'RESUME_LIMIT' })
+      expect(mockUpdateOne).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns ACCOUNT_UNAVAILABLE when deletion wins the atomic create race', async () => {
+      mockFindById
+        .mockResolvedValueOnce({
+          savedResumes: [],
+          premiumResumeLimit: 0,
+        })
+        .mockResolvedValueOnce(null)
+      mockUpdateOne.mockResolvedValueOnce({
+        acknowledged: true,
+        matchedCount: 0,
+      })
+
+      const result = await saveResume('user-1', { name: 'Must not reappear' })
+
+      expect(result).toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
     })
 
     it('returns ACCOUNT_UNAVAILABLE and never inserts when deletion has removed write authority', async () => {

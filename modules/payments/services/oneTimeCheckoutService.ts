@@ -49,7 +49,7 @@ import {
   type SubscriptionCheckoutSaleContext,
 } from './subscriptionCheckoutService'
 
-export const PR7_ONE_TIME_CHECKOUT_READY = false as const
+export const PR7_ONE_TIME_CHECKOUT_READY = true as const
 
 export type OneTimeCheckoutSku =
   | 'single_interview'

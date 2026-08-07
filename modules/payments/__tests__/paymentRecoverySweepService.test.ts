@@ -16,15 +16,49 @@ const subscriptionId = 'sub_launchrecovery1'
 const paymentId = 'pay_launchrecovery1'
 const invoiceId = 'inv_launchrecovery1'
 const orderId = 'order_launchrecovery1'
+const couponReservationId = '507f1f77bcf86cd799439013'
+const couponCampaignId = '507f1f77bcf86cd799439014'
+const couponUserId = '507f1f77bcf86cd799439015'
+const couponCheckoutId = '507f1f77bcf86cd799439016'
+const couponReceipt = 'checkout_coupon_recovery_1'
+
+function couponCandidate() {
+  return {
+    id: couponReservationId,
+    providerMode: 'live' as const,
+    campaignId: couponCampaignId,
+    userId: couponUserId,
+    checkoutIntentId: couponCheckoutId,
+    validUntil: new Date('2026-08-07T05:00:00.000Z'),
+  }
+}
+
+function couponCheckout(overrides: Record<string, unknown> = {}) {
+  return {
+    id: couponCheckoutId,
+    providerMode: 'live' as const,
+    userId: couponUserId,
+    campaignId: couponCampaignId,
+    status: 'created',
+    receipt: couponReceipt,
+    razorpayPlanId: 'plan_launchrecovery1',
+    createdAt: new Date('2026-08-06T06:00:00.000Z'),
+    ...overrides,
+  }
+}
 
 function emptyStore(
   overrides: Partial<PaymentRecoveryCandidateStore> = {},
 ): PaymentRecoveryCandidateStore {
   return {
     listWebhookCandidates: vi.fn().mockResolvedValue([]),
+    listCouponCandidates: vi.fn().mockResolvedValue([]),
+    loadCouponCheckout: vi.fn().mockResolvedValue(null),
+    cancelUnstartedCouponCheckout: vi.fn().mockResolvedValue(false),
     listSubscriptionCandidates: vi.fn().mockResolvedValue([]),
     markSubscriptionAttempted: vi.fn().mockResolvedValue(undefined),
     listChargeCandidates: vi.fn().mockResolvedValue([]),
+    listCreditNoteCandidates: vi.fn().mockResolvedValue([]),
     deferChargeCandidate: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
@@ -44,6 +78,7 @@ function liveClient(overrides: Partial<RazorpayServerAdapter> = {}) {
       notes: {},
       createdAtEpochSeconds: 1_700_000_000,
     }),
+    findSubscriptionByCheckoutReceipt: vi.fn().mockResolvedValue(null),
     fetchSubscriptionInvoices: vi.fn().mockResolvedValue([{
       providerMode: 'live',
       id: invoiceId,
@@ -193,6 +228,12 @@ describe('bounded payment recovery sweep', () => {
         deferred: 0,
         failed: 0,
       },
+      coupon: {
+        candidates: 0,
+        completed: 0,
+        deferred: 0,
+        failed: 0,
+      },
       subscription: {
         candidates: 1,
         completed: 1,
@@ -203,6 +244,12 @@ describe('bounded payment recovery sweep', () => {
       charge: {
         candidates: 1,
         completed: 1,
+        deferred: 0,
+        failed: 0,
+      },
+      creditNote: {
+        candidates: 0,
+        completed: 0,
         deferred: 0,
         failed: 0,
       },
@@ -237,6 +284,191 @@ describe('bounded payment recovery sweep', () => {
       fulfillmentId,
       providerMode: 'live',
     })
+  })
+
+  it('expires an overdue coupon only after remote absence and a checkout CAS', async () => {
+    const now = new Date('2026-08-07T06:00:00.000Z')
+    const store = emptyStore({
+      listCouponCandidates: vi.fn().mockResolvedValue([
+        couponCandidate(),
+      ]),
+      loadCouponCheckout: vi.fn().mockResolvedValue(couponCheckout()),
+      cancelUnstartedCouponCheckout:
+        vi.fn().mockResolvedValue(true),
+    })
+    const { adapter, factory } = liveClient()
+    const expireCoupon = vi.fn().mockResolvedValue({ outcome: 'expired' })
+    const releaseCoupon = vi.fn()
+    const reviewCoupon = vi.fn()
+
+    const result = await runPaymentRecoverySweep({
+      providerModes: ['live'],
+      now,
+    }, {
+      store,
+      webhookHandler: vi.fn(),
+      clientFactory: factory,
+      expireCoupon: expireCoupon as never,
+      releaseCoupon: releaseCoupon as never,
+      reviewCoupon: reviewCoupon as never,
+    })
+
+    expect(result.coupon).toEqual({
+      candidates: 1,
+      completed: 1,
+      deferred: 0,
+      failed: 0,
+    })
+    expect(adapter.findSubscriptionByCheckoutReceipt)
+      .toHaveBeenCalledWith(expect.objectContaining({
+        checkoutReceipt: couponReceipt,
+        expectedPlanId: 'plan_launchrecovery1',
+      }))
+    expect(store.cancelUnstartedCouponCheckout).toHaveBeenCalledWith({
+      checkout: couponCheckout(),
+      now,
+    })
+    expect(expireCoupon).toHaveBeenCalledWith(expect.objectContaining({
+      checkoutIntentId: couponCheckoutId,
+      evidence: expect.objectContaining({
+        reason: 'local_intent_expired_without_remote_object',
+        source: 'reconciliation',
+      }),
+    }))
+    expect(releaseCoupon).not.toHaveBeenCalled()
+    expect(reviewCoupon).not.toHaveBeenCalled()
+  })
+
+  it('releases coupon capacity for an exactly matched terminal unpaid subscription', async () => {
+    const now = new Date('2026-08-07T06:00:00.000Z')
+    const store = emptyStore({
+      listCouponCandidates: vi.fn().mockResolvedValue([
+        couponCandidate(),
+      ]),
+      loadCouponCheckout: vi.fn().mockResolvedValue(couponCheckout({
+        status: 'remote_created',
+        razorpaySubscriptionId: subscriptionId,
+      })),
+    })
+    const { factory } = liveClient({
+      fetchSubscription: vi.fn().mockResolvedValue({
+        providerMode: 'live',
+        id: subscriptionId,
+        planId: 'plan_launchrecovery1',
+        status: 'cancelled',
+        totalCount: 12,
+        paidCount: 0,
+        remainingCount: 12,
+        notes: { checkout_receipt: couponReceipt },
+        createdAtEpochSeconds: 1_700_000_000,
+      }),
+      fetchSubscriptionInvoices: vi.fn().mockResolvedValue([]),
+    })
+    const releaseCoupon = vi.fn().mockResolvedValue({
+      outcome: 'released',
+    })
+
+    const result = await runPaymentRecoverySweep({
+      providerModes: ['live'],
+      now,
+    }, {
+      store,
+      webhookHandler: vi.fn(),
+      clientFactory: factory,
+      expireCoupon: vi.fn() as never,
+      releaseCoupon: releaseCoupon as never,
+      reviewCoupon: vi.fn() as never,
+    })
+
+    expect(result.coupon.completed).toBe(1)
+    expect(releaseCoupon).toHaveBeenCalledWith(expect.objectContaining({
+      evidence: expect.objectContaining({
+        reason: 'provider_subscription_cancelled_unpaid',
+        source: 'provider_fetch',
+      }),
+    }))
+  })
+
+  it('does not free coupon capacity when terminal provider state has payment evidence', async () => {
+    const store = emptyStore({
+      listCouponCandidates: vi.fn().mockResolvedValue([
+        couponCandidate(),
+      ]),
+      loadCouponCheckout: vi.fn().mockResolvedValue(couponCheckout({
+        status: 'remote_created',
+        razorpaySubscriptionId: subscriptionId,
+      })),
+    })
+    const { factory } = liveClient({
+      fetchSubscription: vi.fn().mockResolvedValue({
+        providerMode: 'live',
+        id: subscriptionId,
+        planId: 'plan_launchrecovery1',
+        status: 'cancelled',
+        totalCount: 12,
+        paidCount: 1,
+        remainingCount: 11,
+        notes: { checkout_receipt: couponReceipt },
+        createdAtEpochSeconds: 1_700_000_000,
+      }),
+      fetchSubscriptionInvoices: vi.fn().mockResolvedValue([]),
+    })
+    const releaseCoupon = vi.fn()
+    const reviewCoupon = vi.fn().mockResolvedValue({})
+
+    const result = await runPaymentRecoverySweep({
+      providerModes: ['live'],
+      now: new Date('2026-08-07T06:00:00.000Z'),
+    }, {
+      store,
+      webhookHandler: vi.fn(),
+      clientFactory: factory,
+      expireCoupon: vi.fn() as never,
+      releaseCoupon: releaseCoupon as never,
+      reviewCoupon: reviewCoupon as never,
+    })
+
+    expect(result.coupon.completed).toBe(1)
+    expect(releaseCoupon).not.toHaveBeenCalled()
+    expect(reviewCoupon).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'ambiguous_remote_state',
+    }))
+  })
+
+  it('defers an overdue coupon while a remote-creation lease is active', async () => {
+    const now = new Date('2026-08-07T06:00:00.000Z')
+    const store = emptyStore({
+      listCouponCandidates: vi.fn().mockResolvedValue([
+        couponCandidate(),
+      ]),
+      loadCouponCheckout: vi.fn().mockResolvedValue(couponCheckout({
+        remoteCreationLeaseExpiresAt:
+          new Date('2026-08-07T06:01:00.000Z'),
+      })),
+    })
+    const { factory } = liveClient()
+    const expireCoupon = vi.fn()
+
+    const result = await runPaymentRecoverySweep({
+      providerModes: ['live'],
+      now,
+    }, {
+      store,
+      webhookHandler: vi.fn(),
+      clientFactory: factory,
+      expireCoupon: expireCoupon as never,
+      releaseCoupon: vi.fn() as never,
+      reviewCoupon: vi.fn() as never,
+    })
+
+    expect(result.coupon).toEqual({
+      candidates: 1,
+      completed: 0,
+      deferred: 1,
+      failed: 0,
+    })
+    expect(store.cancelUnstartedCouponCheckout).not.toHaveBeenCalled()
+    expect(expireCoupon).not.toHaveBeenCalled()
   })
 
   it('does not enumerate invoices when provider reports no paid renewal and checkout is complete', async () => {
@@ -420,7 +652,7 @@ describe('bounded payment recovery sweep', () => {
     expect(result.subscription.deferred).toBe(1)
   })
 
-  it('does not run disabled invoice-policy states through charge recovery', async () => {
+  it('backs off a charge while the approved invoice policy is unavailable', async () => {
     const store = emptyStore({
       listChargeCandidates: vi.fn().mockResolvedValue([{
         fulfillmentId,
@@ -451,6 +683,71 @@ describe('bounded payment recovery sweep', () => {
       providerMode: 'test',
       attemptedAt: expect.any(Date),
       nextAttemptAt: expect.any(Date),
+    })
+  })
+
+  it('counts an approved invoice recovery as completed without deferring it', async () => {
+    const store = emptyStore({
+      listChargeCandidates: vi.fn().mockResolvedValue([{
+        fulfillmentId,
+        providerMode: 'live',
+      }]),
+    })
+    const recoverCharge = vi.fn().mockResolvedValue({
+      outcome: 'financial_policy_handler_completed',
+      financialPolicy: {
+        disposition: 'invoiced',
+        invoiceReferenceId: '507f1f77bcf86cd799439011',
+      },
+    })
+
+    const result = await runPaymentRecoverySweep({
+      providerModes: ['live'],
+    }, {
+      store,
+      webhookHandler: vi.fn(),
+      recoverCharge: recoverCharge as never,
+    })
+
+    expect(result.charge).toEqual({
+      candidates: 1,
+      completed: 1,
+      deferred: 0,
+      failed: 0,
+    })
+    expect(store.deferChargeCandidate).not.toHaveBeenCalled()
+  })
+
+  it('runs bounded processed-refund credit-note recovery after charge recovery', async () => {
+    const refundRecordId = '507f1f77bcf86cd799439017'
+    const store = emptyStore({
+      listCreditNoteCandidates: vi.fn().mockResolvedValue([{
+        refundRecordId,
+        providerMode: 'live',
+      }]),
+    })
+    const recoverCreditNote = vi.fn().mockResolvedValue({
+      disposition: 'issued',
+      creditNoteReferenceId: '507f1f77bcf86cd799439018',
+    })
+
+    const result = await runPaymentRecoverySweep({
+      providerModes: ['live'],
+    }, {
+      store,
+      webhookHandler: vi.fn(),
+      recoverCreditNote: recoverCreditNote as never,
+    })
+
+    expect(result.creditNote).toEqual({
+      candidates: 1,
+      completed: 1,
+      deferred: 0,
+      failed: 0,
+    })
+    expect(recoverCreditNote).toHaveBeenCalledWith({
+      refundRecordId,
+      providerMode: 'live',
     })
   })
 

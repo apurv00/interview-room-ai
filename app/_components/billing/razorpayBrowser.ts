@@ -66,6 +66,7 @@ declare global {
 
 const RAZORPAY_CHECKOUT_SRC =
   'https://checkout.razorpay.com/v1/checkout.js'
+export const RAZORPAY_SCRIPT_TIMEOUT_MS = 12_000
 let checkoutLoader: Promise<RazorpayConstructor> | null = null
 
 export function loadRazorpayCheckout(): Promise<RazorpayConstructor> {
@@ -80,10 +81,12 @@ export function loadRazorpayCheckout(): Promise<RazorpayConstructor> {
       `script[src="${RAZORPAY_CHECKOUT_SRC}"]`,
     )
     const script = existing ?? document.createElement('script')
+    let timeoutId: number | undefined
 
     const cleanup = () => {
       script.removeEventListener('load', handleLoad)
       script.removeEventListener('error', handleError)
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId)
     }
     const handleLoad = () => {
       cleanup()
@@ -92,6 +95,7 @@ export function loadRazorpayCheckout(): Promise<RazorpayConstructor> {
         return
       }
       checkoutLoader = null
+      script.remove()
       reject(new Error('Razorpay Checkout did not initialize'))
     }
     const handleError = () => {
@@ -102,9 +106,19 @@ export function loadRazorpayCheckout(): Promise<RazorpayConstructor> {
       }
       reject(new Error('Razorpay Checkout could not be loaded'))
     }
+    const handleTimeout = () => {
+      cleanup()
+      checkoutLoader = null
+      script.remove()
+      reject(new Error('Razorpay Checkout loading timed out'))
+    }
 
     script.addEventListener('load', handleLoad)
     script.addEventListener('error', handleError)
+    timeoutId = window.setTimeout(
+      handleTimeout,
+      RAZORPAY_SCRIPT_TIMEOUT_MS,
+    )
     if (!existing) {
       script.src = RAZORPAY_CHECKOUT_SRC
       script.async = true
