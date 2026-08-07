@@ -15,6 +15,7 @@ import { jobsEvidenceAttributionJob, jobsEvidenceReconcileJob } from '@jobs/jobs
 import { jobsLinkCheckJob } from '@jobs/jobs/linkCheckJobs'
 import { jobsRetentionSweepJob } from '@jobs/jobs/retentionSweepJob'
 import { jobsTrackerStatusSweepJob } from '@jobs/jobs/trackerStatusSweepJob'
+import { paymentRecoveryJob } from '@payments/jobs/paymentRecoveryJob'
 
 /**
  * Inngest handler route — entry point for all background jobs.
@@ -39,5 +40,5 @@ export const dynamic = 'force-dynamic'
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [analysisJob, enrichFeedbackJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsSourceValidateJob, jobsBoardProbeJob, jobsRetentionSweepJob, jobsTrackerStatusSweepJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob, jobsAtsCheckJob, jobsEmailE0Job, jobsEmailSweepJob, jobsEvidenceAttributionJob, jobsEvidenceReconcileJob, jobsLinkCheckJob],
+  functions: [analysisJob, enrichFeedbackJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsSourceValidateJob, jobsBoardProbeJob, jobsRetentionSweepJob, jobsTrackerStatusSweepJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob, jobsAtsCheckJob, jobsEmailE0Job, jobsEmailSweepJob, jobsEvidenceAttributionJob, jobsEvidenceReconcileJob, jobsLinkCheckJob, paymentRecoveryJob],
 })

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const { mockServe, retentionJob, sourceValidateJob, trackerStatusSweepJob } = vi.hoisted(() => ({
+const { mockServe, paymentRecoveryJob, retentionJob, sourceValidateJob, trackerStatusSweepJob } = vi.hoisted(() => ({
   mockServe: vi.fn(() => ({ GET: vi.fn(), POST: vi.fn(), PUT: vi.fn() })),
+  paymentRecoveryJob: { id: 'payment-recovery-sentinel' },
   retentionJob: { id: 'retention-sentinel' },
   sourceValidateJob: { id: 'source-validate-sentinel' },
   trackerStatusSweepJob: { id: 'tracker-status-sweep-sentinel' },
@@ -38,6 +39,7 @@ vi.mock('@jobs/jobs/evidenceAttributionJob', () => ({
 vi.mock('@jobs/jobs/linkCheckJobs', () => ({ jobsLinkCheckJob: { id: 'link-check' } }))
 vi.mock('@jobs/jobs/retentionSweepJob', () => ({ jobsRetentionSweepJob: retentionJob }))
 vi.mock('@jobs/jobs/trackerStatusSweepJob', () => ({ jobsTrackerStatusSweepJob: trackerStatusSweepJob }))
+vi.mock('@payments/jobs/paymentRecoveryJob', () => ({ paymentRecoveryJob }))
 
 import '../route'
 
@@ -58,5 +60,11 @@ describe('Inngest route registration', () => {
     expect(mockServe).toHaveBeenCalledOnce()
     const options = mockServe.mock.calls[0][0] as { functions: unknown[] }
     expect(options.functions.filter((fn) => fn === sourceValidateJob)).toHaveLength(1)
+  })
+
+  it('serves the payment recovery worker exactly once', () => {
+    expect(mockServe).toHaveBeenCalledOnce()
+    const options = mockServe.mock.calls[0][0] as { functions: unknown[] }
+    expect(options.functions.filter((fn) => fn === paymentRecoveryJob)).toHaveLength(1)
   })
 })
