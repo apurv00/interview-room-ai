@@ -94,10 +94,10 @@ import {
   UnpaidSubscriptionCheckoutSupersessionError,
 } from './unpaidSubscriptionCheckoutSupersessionService'
 
-// A 30-year monthly horizon keeps Razorpay-generated UPI mandate end dates
+// A 25-year monthly horizon keeps Razorpay-generated UPI mandate end dates
 // within the provider's QR validation window while remaining effectively
 // open-ended for a customer-cancelled subscription.
-export const PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT = 360 as const
+export const PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT = 300 as const
 
 export const SUBSCRIPTION_CHECKOUT_ERROR_CODES = [
   'invalid_request',

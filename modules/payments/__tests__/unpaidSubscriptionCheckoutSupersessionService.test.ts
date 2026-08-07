@@ -50,7 +50,7 @@ function blockingCheckout(
       discountedBillingCycles: 1,
       couponCampaignId: CAMPAIGN_ID,
       couponCampaignRevision: 1,
-      subscriptionTotalCount: 360,
+      subscriptionTotalCount: 300,
     },
   }
   return {
@@ -76,9 +76,9 @@ function providerSubscription(
     id: REMOTE_ID,
     planId: PLAN_ID,
     status,
-    totalCount: 360,
+    totalCount: 300,
     paidCount: 0,
-    remainingCount: 360,
+    remainingCount: 300,
     startAtEpochSeconds: START_AT.getTime() / 1_000,
     authorizationExpiresAtEpochSeconds:
       AUTHORIZATION_EXPIRES_AT.getTime() / 1_000,
@@ -215,7 +215,7 @@ async function supersede(
     userId: USER_ID.toHexString(),
     providerMode: 'test',
     replacementPlanKey: 'pro',
-    expectedSubscriptionTotalCount: 360,
+    expectedSubscriptionTotalCount: 300,
     requestStartedAt: REQUEST_STARTED_AT,
   }, deps)
 }
@@ -265,7 +265,7 @@ describe('unpaid subscription checkout supersession', () => {
       userId: USER_ID.toHexString(),
       providerMode: 'test',
       replacementPlanKey: 'plus',
-      expectedSubscriptionTotalCount: 360,
+      expectedSubscriptionTotalCount: 300,
       requestStartedAt: new Date('2026-08-07T10:05:00.000Z'),
     }, deps)).resolves.toEqual({
       outcome: 'reusable',
@@ -296,7 +296,7 @@ describe('unpaid subscription checkout supersession', () => {
       userId: USER_ID.toHexString(),
       providerMode: 'test',
       replacementPlanKey: 'plus',
-      expectedSubscriptionTotalCount: 360,
+      expectedSubscriptionTotalCount: 300,
       requestStartedAt: REQUEST_STARTED_AT,
     }, deps)).resolves.toMatchObject({
       outcome: 'superseded',
@@ -317,7 +317,7 @@ describe('unpaid subscription checkout supersession', () => {
       userId: USER_ID.toHexString(),
       providerMode: 'test',
       replacementPlanKey: 'plus',
-      expectedSubscriptionTotalCount: 360,
+      expectedSubscriptionTotalCount: 300,
       requestStartedAt: REQUEST_STARTED_AT,
     }, deps)).resolves.toMatchObject({
       outcome: 'superseded',

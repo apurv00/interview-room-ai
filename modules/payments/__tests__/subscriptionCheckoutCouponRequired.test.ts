@@ -280,9 +280,9 @@ describe('subscription launch coupon fallback', () => {
     expect(deps.createIntent).toHaveBeenCalledWith(
       expect.objectContaining({
         idempotencyKey:
-          `billing-subscription:superseded:${supersededIntentId}:360`,
+          `billing-subscription:superseded:${supersededIntentId}:300`,
         quoteSnapshot: expect.objectContaining({
-          subscriptionTotalCount: 360,
+          subscriptionTotalCount: 300,
         }),
       }),
     )
@@ -313,7 +313,7 @@ describe('subscription launch coupon fallback', () => {
           listPricePaise: 59_900,
           discountPaise: 0,
           payablePaise: 59_900,
-          subscriptionTotalCount: 360,
+          subscriptionTotalCount: 300,
         }),
       }),
     )
