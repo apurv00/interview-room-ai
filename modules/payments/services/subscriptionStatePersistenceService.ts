@@ -327,6 +327,11 @@ export interface SubscriptionStatePersistenceTransaction {
     lane: ConsumerSubscriptionLeaseLane
     ownerCheckoutIntentId: mongoose.Types.ObjectId
   }): Promise<SubscriptionStateLease | null>
+  loadCurrentLaneLease(input: {
+    userId: mongoose.Types.ObjectId
+    providerMode: ProviderMode
+    lane: ConsumerSubscriptionLeaseLane
+  }): Promise<SubscriptionStateLease | null>
   createSubscription(
     input: CreateSubscriptionStateInput,
   ): Promise<mongoose.Types.ObjectId>
@@ -1025,6 +1030,33 @@ function assertLease(
   }
 }
 
+function isTerminalReplayAfterLeaseReassignment(input: {
+  lease: SubscriptionStateLease | null
+  currentLaneLease: SubscriptionStateLease | null
+  intent: SubscriptionStateCheckoutIntent
+  subscription: SubscriptionStateLocalSubscription | null
+  draft: SubscriptionStateDraft
+  targetIntent: CheckoutIntentStatus
+  targetSubscription: SubscriptionStatus
+  terminal: boolean
+}): boolean {
+  const current = input.currentLaneLease
+  return Boolean(
+    !input.lease &&
+    input.terminal &&
+    input.subscription &&
+    input.subscription.status === input.targetSubscription &&
+    input.intent.status === input.targetIntent &&
+    current &&
+    current.userId.equals(input.draft.userId) &&
+    current.providerMode === input.draft.providerMode &&
+    current.lane === input.draft.leaseLane &&
+    !current.ownerCheckoutIntentId.equals(input.draft.checkoutIntentId) &&
+    current.razorpaySubscriptionId !==
+      input.draft.razorpaySubscriptionId,
+  )
+}
+
 function assertSafeSubscriptionTransition(
   current: SubscriptionStatus,
   target: SubscriptionStatus,
@@ -1133,7 +1165,28 @@ async function persistTransactionState(
     lane: draft.leaseLane,
     ownerCheckoutIntentId: draft.checkoutIntentId,
   })
-  assertLease(lease, draft, terminal)
+  const currentLaneLease = lease ??
+    await transaction.loadCurrentLaneLease({
+      userId: draft.userId,
+      providerMode: draft.providerMode,
+      lane: draft.leaseLane,
+    })
+  const terminalReplayAfterLeaseReassignment =
+    isTerminalReplayAfterLeaseReassignment({
+      lease,
+      currentLaneLease,
+      intent,
+      subscription,
+      draft,
+      targetIntent,
+      targetSubscription,
+      terminal,
+    })
+  if (lease) {
+    assertLease(lease, draft, terminal)
+  } else if (!terminalReplayAfterLeaseReassignment) {
+    assertLease(lease, draft, terminal)
+  }
 
   const previousSubscriptionStatus = subscription?.status ?? null
   let subscriptionCreated = false
@@ -1200,9 +1253,11 @@ async function persistTransactionState(
     stateChanged = true
   }
 
-  let leaseStatus = lease.status
+  let leaseStatus: ConsumerSubscriptionLeaseStatus =
+    lease?.status ?? 'released'
   if (
     terminal &&
+    lease &&
     (
       lease.status !== 'released' ||
       !validDate(lease.remoteTerminalVerifiedAt)
@@ -1684,6 +1739,15 @@ function mongoTransaction(
         providerMode: input.providerMode,
         lane: input.lane,
         ownerCheckoutIntentId: input.ownerCheckoutIntentId,
+      }).session(session).lean<LeanLease>()
+      return lease ? toLease(lease) : null
+    },
+
+    async loadCurrentLaneLease(input) {
+      const lease = await ConsumerSubscriptionLease.findOne({
+        userId: input.userId,
+        providerMode: input.providerMode,
+        lane: input.lane,
       }).session(session).lean<LeanLease>()
       return lease ? toLease(lease) : null
     },
