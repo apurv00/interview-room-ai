@@ -161,6 +161,63 @@ describe('Razorpay upfront subscription item', () => {
   })
 })
 
+describe('Razorpay subscription boundary normalization', () => {
+  it('accepts zero-length boundaries returned for an immediately cancelled subscription', async () => {
+    const boundary = 1_786_121_600
+    const sdk = {
+      subscriptions: {
+        create: vi.fn(),
+        all: vi.fn(),
+        fetch: vi.fn().mockResolvedValue({
+          ...rawSubscription(),
+          status: 'cancelled',
+          current_start: boundary,
+          current_end: boundary,
+          start_at: boundary,
+          end_at: boundary,
+          ended_at: boundary - 1,
+        }),
+      },
+    } as unknown as RazorpaySdkPort
+    const adapter = createRazorpayServerAdapter({
+      providerMode: 'test',
+      sdk,
+    })
+
+    await expect(adapter.fetchSubscription('sub_Coupon123')).resolves
+      .toMatchObject({
+        status: 'cancelled',
+        currentStartEpochSeconds: boundary,
+        currentEndEpochSeconds: boundary,
+        startAtEpochSeconds: boundary,
+        endAtEpochSeconds: boundary,
+      })
+  })
+
+  it('still rejects a subscription boundary that moves backwards', async () => {
+    const boundary = 1_786_121_600
+    const sdk = {
+      subscriptions: {
+        create: vi.fn(),
+        all: vi.fn(),
+        fetch: vi.fn().mockResolvedValue({
+          ...rawSubscription(),
+          status: 'cancelled',
+          start_at: boundary,
+          end_at: boundary - 1,
+        }),
+      },
+    } as unknown as RazorpaySdkPort
+    const adapter = createRazorpayServerAdapter({
+      providerMode: 'test',
+      sdk,
+    })
+
+    await expect(adapter.fetchSubscription('sub_Coupon123')).rejects
+      .toThrow('Subscription end must not precede its start')
+  })
+})
+
 describe('CMS coupon binding verification', () => {
   it('verifies canonical terms and complete Plan IDs without provider reads', async () => {
     const forMode = vi.fn(() => {

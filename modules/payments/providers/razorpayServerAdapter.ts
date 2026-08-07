@@ -449,20 +449,20 @@ export const RazorpaySubscriptionDtoSchema = z.object({
       start: subscription.currentStartEpochSeconds,
       end: subscription.currentEndEpochSeconds,
       path: 'currentEndEpochSeconds',
-      message: 'Current cycle end must be after its start',
+      message: 'Current cycle end must not precede its start',
     },
     {
       start: subscription.startAtEpochSeconds,
       end: subscription.endAtEpochSeconds,
       path: 'endAtEpochSeconds',
-      message: 'Subscription end must be after its start',
+      message: 'Subscription end must not precede its start',
     },
   ] as const
   for (const boundary of orderedBoundaries) {
     if (
       boundary.start !== undefined &&
       boundary.end !== undefined &&
-      boundary.end <= boundary.start
+      boundary.end < boundary.start
     ) {
       context.addIssue({
         code: 'custom',
