@@ -93,6 +93,10 @@ import {
   supersedeBlockingUnpaidSubscriptionCheckout,
   UnpaidSubscriptionCheckoutSupersessionError,
 } from './unpaidSubscriptionCheckoutSupersessionService'
+import {
+  canAcceptInitialSubscriptionAcquisition,
+  type SubscriptionAcquisitionUserAuthority,
+} from './subscriptionAcquisitionAuthority'
 
 // A 25-year monthly horizon keeps Razorpay-generated UPI mandate end dates
 // within the provider's QR validation window while remaining effectively
@@ -297,6 +301,13 @@ export interface SubscriptionCheckoutDependencies {
   loadKeyId?: (providerMode: ProviderMode) => string
   supersedeBlockingCheckout?:
     typeof supersedeBlockingUnpaidSubscriptionCheckout
+}
+
+export interface InitialSubscriptionCheckoutDependencies
+  extends SubscriptionCheckoutDependencies {
+  loadAcquisitionAuthority?: (
+    userId: string,
+  ) => Promise<SubscriptionAcquisitionUserAuthority | null>
 }
 
 export interface FuturePlanChangeCheckoutEvidence {
@@ -1967,7 +1978,7 @@ async function reopenBlockingSubscriptionCheckout(input: {
  */
 export async function createSubscriptionCheckout(
   input: SubscriptionCheckoutInput,
-  dependencies: SubscriptionCheckoutDependencies = {},
+  dependencies: InitialSubscriptionCheckoutDependencies = {},
 ): Promise<SubscriptionCheckoutResult> {
   const requestStartedAt = new Date()
   let effectiveIdempotencyKey = input.idempotencyKey
@@ -1975,6 +1986,40 @@ export async function createSubscriptionCheckout(
     const resolveSale =
       dependencies.resolveSaleContext ?? defaultResolveSaleContext
     const sale = await resolveSale(input.userId)
+    const loadAcquisitionAuthority =
+      dependencies.loadAcquisitionAuthority ?? (async (userId: string) => {
+        if (!mongoose.isValidObjectId(userId)) return null
+        await connectDB()
+        return User.findById(new mongoose.Types.ObjectId(userId))
+          .select([
+            'plan',
+            'planVocabularyVersion',
+            'planExpiresAt',
+            'entitlementSource',
+            'usagePeriodKey',
+            'interviewsUsed',
+            'interviewLimit',
+            'premiumResumesUsed',
+            'premiumResumeLimit',
+            'entitlementVersion',
+            'buyerState',
+            'accountState',
+            'role',
+            'organizationId',
+          ].join(' '))
+          .lean<SubscriptionAcquisitionUserAuthority>()
+      })
+    const acquisitionAuthority =
+      await loadAcquisitionAuthority(input.userId)
+    if (!acquisitionAuthority) {
+      throw failure('buyer_unavailable', 'Billing buyer was not found')
+    }
+    if (!canAcceptInitialSubscriptionAcquisition(acquisitionAuthority)) {
+      throw failure(
+        'review_required',
+        'Account billing state requires review before subscription checkout',
+      )
+    }
     const supersedeBlockingCheckout =
       dependencies.supersedeBlockingCheckout ??
       supersedeBlockingUnpaidSubscriptionCheckout

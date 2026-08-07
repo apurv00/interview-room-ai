@@ -1112,6 +1112,8 @@ async function resolvePaymentTarget(input: {
   payment: RazorpayPaymentDto
 }): Promise<WebhookPaymentDomainTarget> {
   const { adapter, store, payment } = input
+  const historicalFailedPayment =
+    payment.status === 'failed' && payment.captured === false
   const invoice = payment.invoiceId
     ? await fetchProviderEntity(() => (
         adapter.fetchInvoice(payment.invoiceId as string)
@@ -1124,7 +1126,8 @@ async function resolvePaymentTarget(input: {
       invoice.id !== payment.invoiceId ||
       (
         invoice.paymentId !== undefined &&
-        invoice.paymentId !== payment.id
+        invoice.paymentId !== payment.id &&
+        !historicalFailedPayment
       ) ||
       (
         invoice.orderId !== undefined &&

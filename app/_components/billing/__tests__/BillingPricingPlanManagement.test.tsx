@@ -110,6 +110,51 @@ afterEach(() => {
 })
 
 describe('paid plan management on Pricing', () => {
+  it('locks paid actions and explains a subscription under review', async () => {
+    const review = {
+      ...paidSummary(false),
+      entitlement: {
+        ...paidSummary(false).entitlement,
+        planKey: 'free',
+        source: 'free',
+        usagePeriodKey: 'basic:2026-08',
+        interviewLimit: 1,
+        interviewsRemaining: 1,
+        premiumResumeLimit: 0,
+        premiumResumesRemaining: 0,
+      },
+      subscription: {
+        state: 'review',
+        billingHealth: 'review',
+        planKey: 'plus',
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify(review),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )))
+    render(
+      <BillingPricingExperience
+        currentPlan="free"
+        authStatus="authenticated"
+        accountId={ACCOUNT_ID}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    await screen.findByRole('heading', {
+      name: 'Subscription review in progress',
+    })
+    const lockedActions = screen.getAllByRole('button', {
+      name: 'Billing review in progress',
+    })
+    expect(lockedActions).toHaveLength(2)
+    expect(lockedActions.every((button) => button.hasAttribute('disabled')))
+      .toBe(true)
+    expect(screen.queryByRole('button', { name: 'Choose Plus' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Choose Pro' })).toBeNull()
+  })
+
   it('opens a future tier-change flow for the alternate paid plan', async () => {
     renderPricing(false)
 

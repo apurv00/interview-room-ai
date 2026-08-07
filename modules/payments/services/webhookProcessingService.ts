@@ -356,10 +356,38 @@ export async function processPaymentWebhookEvent(input: {
         }
       : { outcome: 'claim_lost', attempts: claimed.attempts }
   } catch (error) {
+    const domainCode = (
+      error instanceof Error &&
+      error.name === 'WebhookDomainDispatchError' &&
+      'code' in error &&
+      typeof error.code === 'string' &&
+      [
+        'references_invalid',
+        'provider_unavailable',
+        'provider_mode_mismatch',
+        'provider_reference_mismatch',
+        'provider_state_not_ready',
+        'local_store_unavailable',
+        'local_mapping_missing',
+        'local_mapping_mismatch',
+        'financial_entity_reader_missing',
+        'effect_handler_missing',
+        'effect_failed',
+        'effect_not_acknowledged',
+        'capture_persistence_failed',
+      ].includes(error.code)
+    ) ? error.code : undefined
+    const domainDisposition = (
+      domainCode !== undefined &&
+      error instanceof Error &&
+      'disposition' in error &&
+      (error.disposition === 'retry' || error.disposition === 'review')
+    ) ? error.disposition : undefined
     const errorCode = error instanceof PaymentWebhookProcessingInputError
       ? error.code
-      : 'handler_failed'
-    const terminal = claimed.attempts >= maxAttempts
+      : domainCode ?? 'handler_failed'
+    const terminal =
+      domainDisposition === 'review' || claimed.attempts >= maxAttempts
     const updated = await store.markFailed({
       eventId: claimed.id,
       claimAttempt: claimed.attempts,

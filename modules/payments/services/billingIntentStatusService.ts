@@ -9,7 +9,10 @@ import {
   type ChargeFulfillmentStatus,
   ChargeFulfillment,
 } from '../models/ChargeFulfillment'
-import { PaymentAttempt } from '../models/PaymentAttempt'
+import {
+  PaymentAttempt,
+  type PaymentAttemptStatus,
+} from '../models/PaymentAttempt'
 import type { ProviderMode } from '../types/catalog'
 
 export const PUBLIC_BILLING_INTENT_STATUSES = [
@@ -139,6 +142,7 @@ interface LeanIntent {
 
 interface LeanAttempt {
   razorpayPaymentId: string
+  status: PaymentAttemptStatus
   updatedAt: Date
 }
 
@@ -157,19 +161,34 @@ export const mongoBillingIntentStatusStore: BillingIntentStatusStore = {
       .select('_id kind providerMode status updatedAt')
       .lean<LeanIntent>()
     if (!intent) return null
+    if (intent.status === 'fulfilled') {
+      return {
+        intentId: intent._id.toString(),
+        kind: intent.kind,
+        intentStatus: intent.status,
+        updatedAt: intent.updatedAt,
+      }
+    }
 
-    const attempt = await PaymentAttempt.findOne({
+    const attempts = await PaymentAttempt.find({
       checkoutIntentId: intentId,
       userId,
       providerMode: intent.providerMode,
-      status: 'captured',
+      status: {
+        $in: ['captured', 'review', 'refunded', 'disputed'],
+      },
     })
       .sort({ createdAt: -1, _id: -1 })
-      .select('razorpayPaymentId updatedAt')
-      .lean<LeanAttempt>()
+      .limit(2)
+      .select('razorpayPaymentId status updatedAt')
+      .lean<LeanAttempt[]>()
 
     let fulfillment: LeanFulfillment | null = null
-    if (attempt) {
+    const attempt = attempts[0]
+    const attemptRequiresReview =
+      attempts.length > 1 ||
+      (attempt !== undefined && attempt.status !== 'captured')
+    if (attempt && !attemptRequiresReview) {
       fulfillment = await ChargeFulfillment.findOne({
         providerMode: intent.providerMode,
         razorpayPaymentId: attempt.razorpayPaymentId,
@@ -183,10 +202,12 @@ export const mongoBillingIntentStatusStore: BillingIntentStatusStore = {
       intentId: intent._id.toString(),
       kind: intent.kind,
       intentStatus: intent.status,
-      fulfillmentStatus: fulfillment?.status,
+      fulfillmentStatus: attemptRequiresReview
+        ? 'review'
+        : fulfillment?.status,
       updatedAt: latestDate(
         intent.updatedAt,
-        attempt?.updatedAt,
+        ...attempts.map((candidate) => candidate.updatedAt),
         fulfillment?.updatedAt,
       ),
     }

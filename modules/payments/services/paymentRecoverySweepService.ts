@@ -1193,15 +1193,6 @@ async function reconcileSubscriptions(input: {
           .slice(0, MAX_MISSING_CYCLES_PER_SUBSCRIPTION)
 
         for (const invoice of recoverableInvoices) {
-          if (
-            invoice.billingStartEpochSeconds === undefined ||
-            invoice.billingEndEpochSeconds === undefined
-          ) {
-            // Coupon-upfront recovery remains on the existing signed webhook
-            // inbox path for this launch; no webhook provenance is fabricated.
-            result.deferred += 1
-            continue
-          }
           const payment = await client.fetchPayment(invoice.paymentId!)
           await input.fulfillSubscriptionCycle({
             providerMode: input.providerMode,

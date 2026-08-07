@@ -4073,7 +4073,10 @@ function requireExactSubscriptionCycleProviderObservation(input: {
     payment.id !== observation.razorpayPaymentId ||
     payment.invoiceId !== observation.razorpayInvoiceId ||
     payment.orderId !== observation.razorpayOrderId ||
-    payment.subscriptionId !== observation.razorpaySubscriptionId ||
+    (
+      payment.subscriptionId !== undefined &&
+      payment.subscriptionId !== observation.razorpaySubscriptionId
+    ) ||
     invoice.id !== observation.razorpayInvoiceId ||
     invoice.paymentId !== observation.razorpayPaymentId ||
     invoice.orderId !== observation.razorpayOrderId ||
@@ -4104,12 +4107,18 @@ export async function fulfillSubscriptionCycleProviderObservation(
   }
   const entities =
     normalizedSubscriptionCycleProviderObservation(input)
+  const couponUpfrontObservation =
+    entities.invoice.billingStartEpochSeconds === undefined &&
+    entities.invoice.billingEndEpochSeconds === undefined
   return fulfillValidatedSubscriptionCycle({
     ...entities,
     providerMode: input.providerMode,
     expectedSubscriptionId: input.razorpaySubscriptionId,
     completedAt,
     dependencies,
+    ...(couponUpfrontObservation
+      ? { cycleKind: 'coupon_upfront' as const }
+      : {}),
     validateReferences: () => {
       requireExactSubscriptionCycleProviderObservation({
         observation: input,

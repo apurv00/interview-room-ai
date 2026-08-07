@@ -597,7 +597,7 @@ describe('bounded payment recovery sweep', () => {
     expect(result.subscription.cyclesRecovered).toBe(1)
   })
 
-  it('defers coupon upfront invoices to the existing signed-webhook recovery path', async () => {
+  it('recovers a coupon upfront invoice without fabricating webhook provenance', async () => {
     const store = emptyStore({
       listSubscriptionCandidates: vi.fn().mockResolvedValue([{
         providerMode: 'live',
@@ -632,8 +632,23 @@ describe('bounded payment recovery sweep', () => {
         partialPayment: false,
         createdAtEpochSeconds: 1_700_000_000,
       }]),
+      fetchPayment: vi.fn().mockResolvedValue({
+        providerMode: 'live',
+        id: paymentId,
+        subscriptionId,
+        invoiceId,
+        orderId,
+        amountPaise: 49_900,
+        amountRefundedPaise: 0,
+        currency: 'INR',
+        status: 'captured',
+        captured: true,
+        method: 'upi',
+        notes: {},
+        createdAtEpochSeconds: 1_700_000_000,
+      }),
     })
-    const fulfillSubscriptionCycle = vi.fn()
+    const fulfillSubscriptionCycle = vi.fn().mockResolvedValue({})
 
     const result = await runPaymentRecoverySweep({
       providerModes: ['live'],
@@ -647,9 +662,21 @@ describe('bounded payment recovery sweep', () => {
     })
 
     expect(adapter.fetchSubscriptionInvoices).toHaveBeenCalledOnce()
-    expect(fulfillSubscriptionCycle).not.toHaveBeenCalled()
-    expect(result.subscription.cyclesRecovered).toBe(0)
-    expect(result.subscription.deferred).toBe(1)
+    expect(adapter.fetchPayment).toHaveBeenCalledWith(paymentId)
+    expect(fulfillSubscriptionCycle).toHaveBeenCalledOnce()
+    const [observation] = fulfillSubscriptionCycle.mock.calls[0]
+    expect(observation).toMatchObject({
+      providerMode: 'live',
+      razorpaySubscriptionId: subscriptionId,
+      razorpayPaymentId: paymentId,
+      razorpayInvoiceId: invoiceId,
+      razorpayOrderId: orderId,
+    })
+    expect(observation).not.toHaveProperty('inboxEventId')
+    expect(observation).not.toHaveProperty('eventType')
+    expect(observation).not.toHaveProperty('references')
+    expect(result.subscription.cyclesRecovered).toBe(1)
+    expect(result.subscription.deferred).toBe(0)
   })
 
   it('backs off a charge while the approved invoice policy is unavailable', async () => {

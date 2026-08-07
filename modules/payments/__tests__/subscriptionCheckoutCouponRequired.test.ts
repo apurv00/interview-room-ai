@@ -9,7 +9,7 @@ import {
 import {
   createSubscriptionCheckout,
   PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
-  type SubscriptionCheckoutDependencies,
+  type InitialSubscriptionCheckoutDependencies,
   type StoredSubscriptionCheckoutIntent,
 } from '../services/subscriptionCheckoutService'
 
@@ -99,7 +99,7 @@ function quote(withCoupon: boolean): ResolvedCustomerBillingQuote {
 
 function dependencies(
   resolved: ResolvedCustomerBillingQuote,
-): SubscriptionCheckoutDependencies & {
+): InitialSubscriptionCheckoutDependencies & {
   createIntent: ReturnType<typeof vi.fn>
 } {
   return {
@@ -113,6 +113,13 @@ function dependencies(
         placeOfSupply: { stateCode: '27', countryCode: 'IN' },
       },
     })),
+    loadAcquisitionAuthority: vi.fn(async () => ({
+      plan: 'free',
+      planVocabularyVersion: 2,
+      entitlementSource: 'free',
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+    })),
     supersedeBlockingCheckout: vi.fn(async () => ({ outcome: 'none' })),
     resolveQuote: vi.fn(async () => resolved),
     preflightQuote: vi.fn(async () => ({
@@ -123,6 +130,57 @@ function dependencies(
 }
 
 describe('subscription launch coupon fallback', () => {
+  it.each([
+    ['organization account', {
+      plan: 'free' as const,
+      planVocabularyVersion: 2 as const,
+      entitlementSource: 'free' as const,
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+      role: 'org_admin' as const,
+      organizationId: new mongoose.Types.ObjectId(),
+    }],
+    ['recruiter account', {
+      plan: 'free' as const,
+      planVocabularyVersion: 2 as const,
+      entitlementSource: 'free' as const,
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+      role: 'recruiter' as const,
+    }],
+    ['partial entitlement projection', {
+      plan: 'free' as const,
+      entitlementSource: 'free' as const,
+    }],
+    ['administrator entitlement projection', {
+      plan: 'free' as const,
+      planVocabularyVersion: 2 as const,
+      entitlementSource: 'admin_grant' as const,
+      usagePeriodKey: 'admin-grant',
+      entitlementVersion: 4,
+    }],
+  ])('blocks %s before replacing or creating checkout state', async (
+    _label,
+    authority,
+  ) => {
+    const deps = dependencies(quote(false))
+    deps.loadAcquisitionAuthority = vi.fn(async () => authority)
+    deps.createRemote = vi.fn()
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:blocked-authority',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'review_required',
+    })
+
+    expect(deps.supersedeBlockingCheckout).not.toHaveBeenCalled()
+    expect(deps.resolveQuote).not.toHaveBeenCalled()
+    expect(deps.createIntent).not.toHaveBeenCalled()
+    expect(deps.createRemote).not.toHaveBeenCalled()
+  })
+
   it('reopens the exact pending same-plan checkout without creating another intent', async () => {
     const deps = dependencies(quote(false))
     const intentId = new mongoose.Types.ObjectId()

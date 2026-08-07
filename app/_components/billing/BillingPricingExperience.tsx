@@ -259,6 +259,7 @@ export function BillingPricingExperience({
       )
       return
     }
+    if (billingSummary?.subscription.state === 'review') return
     const subscription = billingSummary?.subscription
     if (
       subscription?.state === 'current' &&
@@ -418,6 +419,7 @@ export function BillingPricingExperience({
     ? currentPlan
     : billingSummary?.entitlement.planKey ?? currentPlan
   const currentSubscription = billingSummary?.subscription
+  const subscriptionReviewLocked = currentSubscription?.state === 'review'
   const scheduledFuturePlanChange =
     billingSummary?.scheduledPlanChange?.toPlanKey === 'free'
       ? undefined
@@ -507,6 +509,23 @@ export function BillingPricingExperience({
           </p>
         </header>
 
+        {subscriptionReviewLocked ? (
+          <section
+            aria-label="Billing review"
+            className="mb-8 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-950"
+            role="status"
+          >
+            <h2 className="text-sm font-semibold">
+              Subscription review in progress
+            </h2>
+            <p className="mt-1 text-sm leading-6">
+              We are reconciling this account&apos;s billing state. Paid plan
+              checkout and plan changes are temporarily locked, so no
+              additional payment will be started.
+            </p>
+          </section>
+        ) : null}
+
         <section
           aria-label="Interview preparation plans"
           className="grid gap-component md:grid-cols-3"
@@ -520,6 +539,9 @@ export function BillingPricingExperience({
               quoteLoading={planKey !== 'free' && quoteLoading}
               paidPlanChangeAvailable={paidPlanChangeAvailable}
               paidPlanChangeBlockedLabel={paidPlanChangeBlockedLabel}
+              paidSelectionBlockedLabel={subscriptionReviewLocked
+                ? 'Billing review in progress'
+                : undefined}
               onSelect={selectPlan}
             />
           ))}

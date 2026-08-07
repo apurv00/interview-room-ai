@@ -41,6 +41,23 @@ describe('initial subscription acquisition authority', () => {
     })).toBe(false)
     expect(canAcceptInitialSubscriptionAcquisition({
       plan: 'free',
+      planVocabularyVersion: 2,
+      entitlementSource: 'free',
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+      role: 'org_admin',
+      organizationId: 'organization',
+    })).toBe(false)
+    expect(canAcceptInitialSubscriptionAcquisition({
+      plan: 'free',
+      planVocabularyVersion: 2,
+      entitlementSource: 'free',
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+      role: 'recruiter',
+    })).toBe(false)
+    expect(canAcceptInitialSubscriptionAcquisition({
+      plan: 'free',
       buyerState: 'deletion_pending',
     })).toBe(false)
     expect(canAcceptInitialSubscriptionAcquisition({

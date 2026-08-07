@@ -484,6 +484,7 @@ function subscriptionBinding(input: {
       error,
     )
   }
+  const resolvedSubscriptionId = remote.id
 
   const checkout = target.context.checkout
   if (!checkout) {
@@ -527,9 +528,21 @@ function subscriptionBinding(input: {
 
   if (
     intent.providerMode !== input.effect.providerMode ||
-    input.payment.subscriptionId !== intent.razorpaySubscriptionId ||
+    (
+      input.payment.subscriptionId !== undefined &&
+      input.payment.subscriptionId !== resolvedSubscriptionId
+    ) ||
+    (
+      input.payment.subscriptionId === undefined &&
+      (
+        input.payment.invoiceId === undefined ||
+        target.invoice?.providerMode !== input.effect.providerMode ||
+        target.invoice.id !== input.payment.invoiceId ||
+        target.invoice.subscriptionId !== resolvedSubscriptionId
+      )
+    ) ||
     remote.providerMode !== input.effect.providerMode ||
-    remote.id !== intent.razorpaySubscriptionId ||
+    resolvedSubscriptionId !== intent.razorpaySubscriptionId ||
     remote.notes.checkout_receipt !== intent.receipt ||
     remote.paidCount > remote.totalCount ||
     remote.remainingCount > remote.totalCount ||
@@ -629,9 +642,10 @@ function validateEffect(
     throw failure('invalid_input', 'Payment observation time is invalid')
   }
   const payment = assertEffectEnvelope(input)
-  const binding = payment.subscriptionId
+  const binding = input.target.kind === 'subscription'
     ? subscriptionBinding({ effect: input, payment })
     : oneTimeBinding({ effect: input, payment })
+  const resolvedSubscriptionId = binding.remoteSubscription?.id
   return {
     binding,
     failureReason: analyticsFailureReason(payment),
@@ -642,8 +656,8 @@ function validateEffect(
       ...(payment.orderId
         ? { razorpayOrderId: payment.orderId }
         : {}),
-      ...(payment.subscriptionId
-        ? { razorpaySubscriptionId: payment.subscriptionId }
+      ...(resolvedSubscriptionId
+        ? { razorpaySubscriptionId: resolvedSubscriptionId }
         : {}),
       ...(payment.invoiceId
         ? { razorpayInvoiceId: payment.invoiceId }

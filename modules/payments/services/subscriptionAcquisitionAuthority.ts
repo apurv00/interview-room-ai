@@ -19,8 +19,6 @@ function canonicalFreeAuthority(
   user: SubscriptionAcquisitionUserAuthority,
 ): boolean {
   return (
-    user.buyerState !== 'deletion_pending' &&
-    user.accountState !== 'deleting' &&
     user.plan === 'free' &&
     user.planVocabularyVersion === 2 &&
     user.planExpiresAt === undefined &&
@@ -43,17 +41,19 @@ function canonicalFreeAuthority(
 export function canAcceptInitialSubscriptionAcquisition(
   user: SubscriptionAcquisitionUserAuthority,
 ): boolean {
-  if (canonicalFreeAuthority(user)) return true
-
   const personalRole =
     user.role === undefined ||
     user.role === 'candidate' ||
     user.role === 'platform_admin'
-  return (
+  const personalAccountAuthority =
     user.buyerState !== 'deletion_pending' &&
     user.accountState !== 'deleting' &&
     personalRole &&
-    (user.organizationId === undefined || user.organizationId === null) &&
+    (user.organizationId === undefined || user.organizationId === null)
+  if (!personalAccountAuthority) return false
+  if (canonicalFreeAuthority(user)) return true
+
+  return (
     (user.plan === undefined || user.plan === 'free') &&
     user.planVocabularyVersion === undefined &&
     user.planExpiresAt === undefined &&
