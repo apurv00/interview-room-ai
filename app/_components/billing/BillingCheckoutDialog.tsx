@@ -194,20 +194,13 @@ export function BillingCheckoutDialog({
   const [couponApplying, setCouponApplying] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
-  const [priceChanged, setPriceChanged] = useState(false)
-  const [priceChangeAccepted, setPriceChangeAccepted] = useState(false)
   const [idempotencyKey, setIdempotencyKey] = useState(
     createBillingIdempotencyKey,
   )
-  const quoteRef = useRef<CustomerBillingQuote | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
   const recoveryAbortRef = useRef<AbortController | null>(null)
-
-  useEffect(() => {
-    quoteRef.current = quote
-  }, [quote])
 
   const requestQuote = useCallback(async (
     code?: string,
@@ -407,11 +400,6 @@ export function BillingCheckoutDialog({
     setIdempotencyKey(recovery.idempotencyKey)
     setManualCode(recovery.manualCouponCode ?? '')
     setCheckout(recovered)
-    setPriceChanged(Boolean(
-      quoteRef.current &&
-        quoteChangedAtCheckout(quoteRef.current, recovered),
-    ))
-    setPriceChangeAccepted(false)
     setStatusMessage(
       'Your existing secure checkout was recovered. Review the final amount before reopening Razorpay.',
     )
@@ -573,8 +561,6 @@ export function BillingCheckoutDialog({
       const nextQuote = await requestQuote(code)
       setQuote(nextQuote)
       setCheckout(null)
-      setPriceChanged(false)
-      setPriceChangeAccepted(false)
       setIdempotencyKey(createBillingIdempotencyKey())
       if (
         nextQuote.manualCodeResult === 'applied' &&
@@ -691,8 +677,6 @@ export function BillingCheckoutDialog({
       }
       const changed = quoteChangedAtCheckout(quote, prepared)
       setCheckout(prepared)
-      setPriceChanged(changed)
-      setPriceChangeAccepted(false)
       saveBillingCheckoutRecovery({
         accountId,
         intentId: prepared.intentId,
@@ -705,7 +689,7 @@ export function BillingCheckoutDialog({
       })
       setStatusMessage(
         changed
-          ? 'The final checkout price changed. Review and explicitly accept the updated amount.'
+          ? 'The final checkout price changed. Review the updated amount before opening Razorpay.'
           : 'Your final checkout is ready. Review it before opening Razorpay.',
       )
       setStage('final_review')
@@ -824,10 +808,6 @@ export function BillingCheckoutDialog({
 
   async function openRazorpay() {
     if (!checkout || stage === 'opening') return
-    if (priceChanged && !priceChangeAccepted) {
-      setError('Accept the updated final price before continuing.')
-      return
-    }
     setStage('opening')
     setError(null)
     setStatusMessage('Opening Razorpay secure checkout…')
@@ -1032,73 +1012,6 @@ export function BillingCheckoutDialog({
               </section>
             )}
 
-            {priceChanged && checkout && (
-              <section
-                className="rounded-xl border border-amber-300 bg-amber-50 p-4"
-                role="alert"
-              >
-                <h3 className="text-sm font-semibold text-amber-900">
-                  Final price changed
-                </h3>
-                <p className="mt-1 text-xs leading-5 text-amber-800">
-                  Catalog or coupon availability changed while checkout was
-                  prepared. Razorpay will use only the updated amount shown
-                  above.
-                </p>
-                <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm text-amber-950">
-                  <input
-                    type="checkbox"
-                    checked={priceChangeAccepted}
-                    onChange={(event) =>
-                      setPriceChangeAccepted(event.target.checked)}
-                    className="mt-0.5 h-4 w-4"
-                  />
-                  I reviewed and accept the updated final price and renewal.
-                </label>
-              </section>
-            )}
-
-            {finalEntitlement && (
-              <section
-                className="rounded-xl border border-blue-200 bg-blue-50/60 p-4"
-                aria-labelledby="billing-checkout-entitlements"
-              >
-                <h3
-                  id="billing-checkout-entitlements"
-                  className="text-sm font-semibold text-[#0f1419]"
-                >
-                  Included with {finalEntitlement.displayName}
-                </h3>
-                <ul className="mt-2 space-y-1.5 text-sm leading-5 text-[#536471]">
-                  <li>
-                    <strong className="text-[#0f1419]">
-                      {finalEntitlement.interview.includedPerPeriod}
-                    </strong>{' '}
-                    interviews per billing cycle, up to{' '}
-                    <strong className="text-[#0f1419]">
-                      {finalEntitlement.interview.maxDurationMinutes} minutes
-                    </strong>{' '}
-                    each
-                  </li>
-                  <li>
-                    <strong className="text-[#0f1419]">
-                      {finalEntitlement.resume.basicSavedResumeLimit}
-                    </strong>{' '}
-                    Basic resume saved
-                  </li>
-                  <li>
-                    <strong className="text-[#0f1419]">
-                      {
-                        finalEntitlement.resume
-                          .premiumSavedResumeLimitPerPeriod
-                      }
-                    </strong>{' '}
-                    premium resume versions per billing cycle
-                  </li>
-                </ul>
-              </section>
-            )}
-
             {displayedQuote?.coupon && (
               <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                 <div className="flex items-center justify-between gap-3">
@@ -1266,7 +1179,6 @@ export function BillingCheckoutDialog({
                   <Button
                     type="button"
                     onClick={openRazorpay}
-                    disabled={priceChanged && !priceChangeAccepted}
                   >
                     Pay {checkout ? formatInr(checkout.quote.payablePaise) : ''}
                     {' '}with Razorpay
