@@ -9,6 +9,9 @@ vi.mock('@shared/db/connection', () => ({
 const mockFindById = vi.fn()
 const mockUpdateOne = vi.fn()
 const mockResumeEntitlementFind = vi.fn()
+const mockResumeEntitlementFindOne = vi.fn()
+const mockSavedResumeRemove = vi.fn()
+const mockTransactionSession = { id: 'resume-delete-session' }
 
 vi.mock('@shared/db/models/User', () => ({
   User: {
@@ -27,6 +30,19 @@ vi.mock('@payments/models/ResumeEntitlement', () => ({
     find: (...args: unknown[]) => ({
       select: () => ({ lean: () => mockResumeEntitlementFind(...args) }),
     }),
+    findOne: (...args: unknown[]) => ({
+      session: (session: unknown) => ({
+        select: () => ({
+          lean: () => mockResumeEntitlementFindOne(...args, session),
+        }),
+      }),
+    }),
+  },
+}))
+
+vi.mock('@shared/services/savedResumeRepository', () => ({
+  savedResumeRepository: {
+    remove: (...args: unknown[]) => mockSavedResumeRemove(...args),
   },
 }))
 
@@ -45,6 +61,32 @@ describe('resumeService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockResumeEntitlementFind.mockResolvedValue([])
+    mockResumeEntitlementFindOne.mockResolvedValue(null)
+    mockSavedResumeRemove.mockImplementation(
+      async (
+        userId: string,
+        resumeId: string,
+        options?: {
+          beforeMutation?: (
+            session: unknown,
+            context: {
+              userId: string
+              resumeId: string
+              mode: 'embedded'
+              libraryVersion: number
+            },
+          ) => Promise<void>
+        },
+      ) => {
+        await options?.beforeMutation?.(mockTransactionSession, {
+          userId,
+          resumeId,
+          mode: 'embedded',
+          libraryVersion: 0,
+        })
+        return { outcome: 'deleted' }
+      },
+    )
     // matchedCount: 1 — saveResume treats matchedCount 0 as "resume deleted
     // elsewhere" and returns NOT_FOUND instead of a phantom success.
     mockUpdateOne.mockResolvedValue({ acknowledged: true, matchedCount: 1 })
@@ -128,6 +170,16 @@ describe('resumeService', () => {
       const result = await listResumes('user-1')
 
       expect(result!.limit).toBe(2)
+      expect(result!.resumes).toEqual([
+        expect.objectContaining({ id: 'basic', protectedByPurchase: false }),
+        expect.objectContaining({ id: 'purchased', protectedByPurchase: true }),
+      ])
+      expect(mockResumeEntitlementFind).toHaveBeenCalledWith({
+        userId: 'user-1',
+        resumeId: { $in: ['basic', 'purchased'] },
+        source: 'premium_resume',
+        status: 'active',
+      })
     })
 
     it('does not double-count a purchased unlock for the Basic identity', async () => {
@@ -138,7 +190,13 @@ describe('resumeService', () => {
       })
       mockResumeEntitlementFind.mockResolvedValue([{ resumeId: 'basic' }])
 
-      expect((await listResumes('user-1'))!.limit).toBe(1)
+      const result = await listResumes('user-1')
+
+      expect(result!.limit).toBe(1)
+      expect(result!.resumes[0]).toMatchObject({
+        id: 'basic',
+        protectedByPurchase: true,
+      })
     })
 
     it('fails closed to the first saved identity when the Basic projection is stale', async () => {
@@ -569,12 +627,52 @@ describe('resumeService', () => {
   })
 
   describe('deleteResume', () => {
-    it('calls $pull on savedResumes by id', async () => {
+    it('deletes an unpurchased identity through the transactional repository guard', async () => {
       const result = await deleteResume('user-1', 'r2')
+
       expect(result).toEqual({ success: true })
-      const [filter, update] = mockUpdateOne.mock.calls[0]
-      expect(filter).toEqual({ _id: 'user-1' })
-      expect(update.$pull.savedResumes).toEqual({ id: 'r2' })
+      expect(mockSavedResumeRemove).toHaveBeenCalledWith(
+        'user-1',
+        'r2',
+        expect.objectContaining({ beforeMutation: expect.any(Function) }),
+      )
+      expect(mockResumeEntitlementFindOne).toHaveBeenCalledWith(
+        {
+          userId: 'user-1',
+          resumeId: 'r2',
+          source: 'premium_resume',
+          status: 'active',
+        },
+        mockTransactionSession,
+      )
+      expect(mockUpdateOne).not.toHaveBeenCalled()
+    })
+
+    it('fails closed before mutation for an active purchased identity', async () => {
+      mockResumeEntitlementFindOne.mockResolvedValueOnce({
+        _id: 'premium-entitlement',
+      })
+
+      const result = await deleteResume('user-1', 'purchased')
+
+      expect(result).toEqual({
+        error:
+          'This resume has an active premium purchase and cannot be deleted.',
+        code: 'PREMIUM_RESUME_PURCHASE_ACTIVE',
+      })
+    })
+
+    it('maps missing and unavailable repository outcomes', async () => {
+      mockSavedResumeRemove
+        .mockResolvedValueOnce({ outcome: 'not_found' })
+        .mockResolvedValueOnce({ outcome: 'user_not_found' })
+
+      await expect(deleteResume('user-1', 'missing')).resolves.toMatchObject({
+        code: 'NOT_FOUND',
+      })
+      await expect(deleteResume('user-1', 'r2')).resolves.toMatchObject({
+        code: 'ACCOUNT_UNAVAILABLE',
+      })
     })
   })
 

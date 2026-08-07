@@ -14,6 +14,7 @@ interface ResumeListData {
     targetCompany: string
     atsScore: number | null
     atsScoreFromCheck?: boolean
+    protectedByPurchase?: boolean
     updatedAt: string
   }>
   count: number
@@ -26,6 +27,7 @@ export default function ResumeDashboardPage() {
   const [data, setData] = useState<ResumeListData | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     // UAT-012: don't kill the spinner while NextAuth is still resolving;
@@ -50,11 +52,26 @@ export default function ResumeDashboardPage() {
   async function handleDelete(id: string) {
     if (!confirm('Delete this resume? This cannot be undone.')) return
     setDeleting(id)
+    setDeleteError(null)
     try {
-      await fetch(`/api/resume/save?id=${id}`, { method: 'DELETE' })
+      const response = await fetch(`/api/resume/save?id=${id}`, {
+        method: 'DELETE',
+      })
+      const result = await response.json().catch(() => null) as {
+        error?: string
+      } | null
+      if (!response.ok) {
+        setDeleteError(
+          result?.error || 'The resume could not be deleted right now.',
+        )
+        return
+      }
       fetchResumes()
-    } catch { /* ignore */ }
-    setDeleting(null)
+    } catch {
+      setDeleteError('The resume could not be deleted right now.')
+    } finally {
+      setDeleting(null)
+    }
   }
 
   // Unauthenticated landing page
@@ -157,6 +174,15 @@ export default function ResumeDashboardPage() {
         )}
       </div>
 
+      {deleteError ? (
+        <p
+          role="alert"
+          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
+          {deleteError}
+        </p>
+      ) : null}
+
       {/* Quick actions */}
       <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
@@ -209,12 +235,25 @@ export default function ResumeDashboardPage() {
                 <span className="text-[10px] text-slate-400">
                   {new Date(r.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </span>
+                {r.protectedByPurchase ? (
+                  <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700">
+                    Premium purchase
+                  </span>
+                ) : null}
                 <button
                   onClick={() => handleDelete(r.id)}
-                  disabled={deleting === r.id}
+                  disabled={deleting === r.id || r.protectedByPurchase}
                   className="text-slate-400 hover:text-red-400 transition-colors disabled:opacity-50"
-                  title="Delete resume"
-                  aria-label={`Delete ${r.name}`}
+                  title={
+                    r.protectedByPurchase
+                      ? 'Purchased premium resumes cannot be deleted'
+                      : 'Delete resume'
+                  }
+                  aria-label={
+                    r.protectedByPurchase
+                      ? `${r.name} is protected by a premium purchase`
+                      : `Delete ${r.name}`
+                  }
                 >
                   <Trash2 className="w-4 h-4" strokeWidth={2} aria-hidden="true" />
                 </button>

@@ -1,6 +1,9 @@
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
+import { PersonalDataWriteBlockedError } from '@shared/services/accountDeletion'
 import { getStaticPlanDefinition } from '@shared/services/planConfig'
+import { savedResumeRepository } from '@shared/services/savedResumeRepository'
+import { ResumeEntitlement } from '@payments/models/ResumeEntitlement'
 import type { ResumeData } from '../validators/resume'
 import { hasStructuredResumeContent } from '../lib/structuredContent'
 
@@ -16,6 +19,17 @@ interface ResumeLibraryProjection {
   premiumResumesUsed?: number
   premiumResumeLimit?: number
   freeBasicResumeId?: string
+}
+
+interface PurchasedResumeEntitlementProjection {
+  resumeId: string
+}
+
+class ActivePremiumResumePurchaseError extends Error {
+  constructor() {
+    super('A purchased premium resume cannot be deleted.')
+    this.name = 'ActivePremiumResumePurchaseError'
+  }
 }
 
 function savedResumeId(resume: Record<string, unknown>): string | null {
@@ -67,6 +81,22 @@ function atomicPremiumCycleSlotAvailable() {
   }
 }
 
+async function activePurchasedResumeIds(
+  userId: string,
+  resumeIds: readonly string[],
+): Promise<Set<string>> {
+  if (resumeIds.length === 0) return new Set()
+  const rows = await ResumeEntitlement.find({
+    userId,
+    resumeId: { $in: resumeIds },
+    source: 'premium_resume',
+    status: 'active',
+  })
+    .select('resumeId')
+    .lean<PurchasedResumeEntitlementProjection[]>()
+  return new Set(rows.map((row) => row.resumeId))
+}
+
 // ─── Resume CRUD ────────────────────────────────────────────────────────────
 
 export async function listResumes(userId: string) {
@@ -81,21 +111,26 @@ export async function listResumes(userId: string) {
   const savedIds = (user.savedResumes || [])
     .map(savedResumeId)
     .filter((id): id is string => id !== null)
+  const purchasedResumeIds = await activePurchasedResumeIds(userId, savedIds)
   const freeBasicResumeId = basicResumeId(user, savedIds)
   const premiumLimit = premiumResumeLimit(user.premiumResumeLimit)
   const premiumUsed = premiumResumesUsed(user.premiumResumesUsed, premiumLimit)
-  const resumes = (user.savedResumes || []).map((r) => ({
-    id: savedResumeId(r),
-    name: r.name || 'Untitled Resume',
-    template: r.template || 'professional',
-    targetRole: r.targetRole || '',
-    targetCompany: r.targetCompany || '',
-    atsScore: r.atsScore ?? null,
-    // Legacy rows lack this flag → false → the dashboard hides the ATS badge
-    // for scores that were never a real ATS check (old tailor match-scores).
-    atsScoreFromCheck: r.atsScoreFromCheck === true,
-    updatedAt: r.updatedAt || new Date().toISOString(),
-  }))
+  const resumes = (user.savedResumes || []).map((r) => {
+    const id = savedResumeId(r)
+    return {
+      id,
+      name: r.name || 'Untitled Resume',
+      template: r.template || 'professional',
+      targetRole: r.targetRole || '',
+      targetCompany: r.targetCompany || '',
+      atsScore: r.atsScore ?? null,
+      // Legacy rows lack this flag → false → the dashboard hides the ATS badge
+      // for scores that were never a real ATS check (old tailor match-scores).
+      atsScoreFromCheck: r.atsScoreFromCheck === true,
+      protectedByPurchase: id !== null && purchasedResumeIds.has(id),
+      updatedAt: r.updatedAt || new Date().toISOString(),
+    }
+  })
 
   return {
     resumes,
@@ -289,12 +324,51 @@ export async function saveResume(
 }
 
 export async function deleteResume(userId: string, resumeId: string) {
-  await connectDB()
-  await User.updateOne(
-    { _id: userId },
-    { $pull: { savedResumes: { id: resumeId } } }
-  )
-  return { success: true }
+  try {
+    const result = await savedResumeRepository.remove(userId, resumeId, {
+      beforeMutation: async (session, context) => {
+        const purchased = await ResumeEntitlement.findOne({
+          userId: context.userId,
+          resumeId: context.resumeId,
+          source: 'premium_resume',
+          status: 'active',
+        })
+          .session(session)
+          .select('_id')
+          .lean<{ _id: unknown }>()
+        if (purchased) throw new ActivePremiumResumePurchaseError()
+      },
+    })
+    if (result.outcome === 'deleted') return { success: true as const }
+    if (result.outcome === 'not_found') {
+      return {
+        error: 'This resume no longer exists.',
+        code: 'NOT_FOUND' as const,
+      }
+    }
+    if (result.outcome === 'user_not_found') {
+      return {
+        error: 'Your account is unavailable. Sign in again before deleting.',
+        code: 'ACCOUNT_UNAVAILABLE' as const,
+      }
+    }
+    throw new Error(`Unexpected saved resume deletion outcome: ${result.outcome}`)
+  } catch (error) {
+    if (error instanceof ActivePremiumResumePurchaseError) {
+      return {
+        error:
+          'This resume has an active premium purchase and cannot be deleted.',
+        code: 'PREMIUM_RESUME_PURCHASE_ACTIVE' as const,
+      }
+    }
+    if (error instanceof PersonalDataWriteBlockedError) {
+      return {
+        error: 'Your account is unavailable. Sign in again before deleting.',
+        code: 'ACCOUNT_UNAVAILABLE' as const,
+      }
+    }
+    throw error
+  }
 }
 
 // ─── User Profile Context ───────────────────────────────────────────────────
