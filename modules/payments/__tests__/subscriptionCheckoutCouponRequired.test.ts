@@ -9,6 +9,7 @@ import {
 import {
   createSubscriptionCheckout,
   type SubscriptionCheckoutDependencies,
+  type StoredSubscriptionCheckoutIntent,
 } from '../services/subscriptionCheckoutService'
 
 const userId = new mongoose.Types.ObjectId().toString()
@@ -121,6 +122,103 @@ function dependencies(
 }
 
 describe('subscription launch coupon fallback', () => {
+  it('reopens the exact pending same-plan checkout without creating another intent', async () => {
+    const deps = dependencies(quote(false))
+    const intentId = new mongoose.Types.ObjectId()
+    const remoteId = 'sub_existingPlus123'
+    const stored: StoredSubscriptionCheckoutIntent = {
+      id: intentId,
+      userId: new mongoose.Types.ObjectId(userId),
+      kind: 'subscription',
+      providerMode: 'test',
+      status: 'remote_created',
+      purpose: 'acquisition',
+      leaseLane: 'a',
+      authorizationExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
+      planKey: 'plus',
+      catalogVersion: 'consumer-inr-v1',
+      idempotencyKey: 'launch:original-checkout',
+      requestHash: 'f'.repeat(64),
+      receipt: 'receipt_existing_plus',
+      quote: {
+        currency: 'INR',
+        listPricePaise: 59_900,
+        discountPaise: 0,
+        payablePaise: 59_900,
+        renewalPricePaise: 59_900,
+        subscriptionTotalCount: 1_200,
+        gst: {
+          inclusive: true,
+          rateBps: 1_800,
+          componentAllocation: 'unallocated',
+        },
+        entitlementSnapshot: {},
+      },
+      buyerSnapshot: {},
+      razorpaySubscriptionId: remoteId,
+      createdAt: new Date('2026-08-07T10:00:00.000Z'),
+    }
+    deps.supersedeBlockingCheckout = vi.fn(async () => ({
+      outcome: 'reusable' as const,
+      intentId: intentId.toHexString(),
+      planKey: 'plus' as const,
+    }))
+    deps.loadIntent = vi.fn(async () => stored)
+    deps.commercialResolver = {
+      resolve: vi.fn(async () => ({
+        catalog: {
+          version: 'consumer-inr-v1',
+          contentHash: 'a'.repeat(64),
+          status: 'published' as const,
+          effectiveAt: new Date('2026-08-01T00:00:00.000Z'),
+          publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+          integrityVerified: true,
+          plan: {
+            key: 'plus' as const,
+            listPricePaise: 59_900,
+            billingPeriod: 'monthly' as const,
+            interviewLimit: 10,
+            interviewPeriodOwner: 'razorpay_billing_cycle' as const,
+            maxInterviewDurationMinutes: 30,
+            basicSavedResumeLimit: 1,
+            premiumResumeLimit: 5,
+            razorpayPlanId: 'plan_plus',
+          },
+        },
+      })),
+    }
+    deps.createRemote = vi.fn(async () => ({
+      intentId: intentId.toHexString(),
+      providerMode: 'test' as const,
+      kind: 'subscription' as const,
+      remoteId,
+      source: 'existing' as const,
+      reused: true,
+    }))
+    deps.loadKeyId = vi.fn(() => 'rzp_test_checkoutkey')
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:new-browser-key',
+      request: { planKey: 'plus' },
+    }, deps)).resolves.toMatchObject({
+      intentId: intentId.toHexString(),
+      reused: true,
+      checkout: {
+        keyId: 'rzp_test_checkoutkey',
+        subscriptionId: remoteId,
+      },
+      quote: {
+        planKey: 'plus',
+        payablePaise: 59_900,
+      },
+    })
+
+    expect(deps.resolveQuote).not.toHaveBeenCalled()
+    expect(deps.createIntent).not.toHaveBeenCalled()
+    expect(deps.createRemote).toHaveBeenCalledOnce()
+  })
+
   it('supersedes an older different-plan checkout before resolving a new quote', async () => {
     const deps = dependencies(quote(false))
     const callOrder: string[] = []

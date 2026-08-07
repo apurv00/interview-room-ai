@@ -451,6 +451,11 @@ export interface UnpaidSubscriptionCheckoutSupersessionDependencies {
 export type UnpaidSubscriptionCheckoutSupersessionResult =
   | { outcome: 'none' }
   | {
+      outcome: 'reusable'
+      intentId: string
+      planKey: 'plus' | 'pro'
+    }
+  | {
       outcome: 'superseded'
       intentId: string
       previousPlanKey: 'plus' | 'pro'
@@ -474,9 +479,8 @@ Promise<UnpaidSubscriptionCheckoutSupersessionResult> {
     userId: input.userId,
     providerMode: input.providerMode,
   })
-  if (!blocking || blocking.intent.planKey === input.replacementPlanKey) {
-    return { outcome: 'none' }
-  }
+  if (!blocking) return { outcome: 'none' }
+  const samePlan = blocking.intent.planKey === input.replacementPlanKey
   if (
     !Number.isFinite(input.requestStartedAt.getTime()) ||
     !blocking.intent.userId.equals(blocking.lease.userId) ||
@@ -570,6 +574,19 @@ Promise<UnpaidSubscriptionCheckoutSupersessionResult> {
     razorpaySubscriptionId: intent.razorpaySubscriptionId,
     clientFactory,
   })
+
+  if (
+    samePlan &&
+    intent.status === 'remote_created' &&
+    subscription.status === 'created' &&
+    intent.authorizationExpiresAt > input.requestStartedAt
+  ) {
+    return {
+      outcome: 'reusable',
+      intentId: intent.id.toHexString(),
+      planKey: intent.planKey,
+    }
+  }
 
   if (!terminalUnpaidSubscription(subscription)) {
     if (subscription.status !== 'created') {

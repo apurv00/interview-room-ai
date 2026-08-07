@@ -1872,6 +1872,86 @@ function mapKnownFailure(error: unknown): never {
   )
 }
 
+async function reopenBlockingSubscriptionCheckout(input: {
+  userId: string
+  planKey: 'plus' | 'pro'
+  intentId: string
+  requestStartedAt: Date
+  sale: SubscriptionCheckoutSaleContext
+  dependencies: SubscriptionCheckoutDependencies
+}): Promise<SubscriptionCheckoutResult> {
+  const loadIntent = input.dependencies.loadIntent ?? defaultLoadIntent
+  const stored = await loadIntent({
+    intentId: input.intentId,
+    userId: input.userId,
+  })
+  if (
+    !stored ||
+    stored.id.toHexString() !== input.intentId ||
+    stored.userId.toHexString() !== input.userId ||
+    stored.providerMode !== input.sale.providerMode ||
+    stored.status !== 'remote_created' ||
+    stored.purpose !== 'acquisition' ||
+    stored.leaseLane !== 'a' ||
+    stored.planKey !== input.planKey ||
+    !validDate(stored.authorizationExpiresAt) ||
+    stored.authorizationExpiresAt <= input.requestStartedAt ||
+    !stored.razorpaySubscriptionId
+  ) {
+    throw failure(
+      'review_required',
+      'The existing subscription checkout cannot be reopened safely',
+    )
+  }
+
+  const resolver = input.dependencies.commercialResolver ??
+    mongoSubscriptionCycleCommercialResolver
+  const terms = await resolver.resolve(stored)
+  if (!terms) {
+    throw failure(
+      'commercial_unavailable',
+      'Immutable subscription terms were not found',
+    )
+  }
+  const spec = trustedSubscriptionSpec(stored, terms)
+  const checkoutQuote = publicQuote(stored, terms)
+  const createRemote = input.dependencies.createRemote ??
+    createOrReuseRemoteCheckout
+  const remote = await createRemote(
+    { userId: input.userId, intentId: input.intentId },
+    {
+      resolveSubscriptionSpec: async (remoteIntent) => {
+        assertRemoteIntentMatches(remoteIntent, stored)
+        return spec
+      },
+    },
+  )
+  if (
+    remote.kind !== 'subscription' ||
+    remote.providerMode !== input.sale.providerMode ||
+    remote.intentId !== input.intentId ||
+    remote.remoteId !== stored.razorpaySubscriptionId
+  ) {
+    throw failure(
+      'persistence_conflict',
+      'Recovered subscription checkout has the wrong durable lineage',
+    )
+  }
+  const loadKeyId = input.dependencies.loadKeyId ??
+    ((mode: ProviderMode) => loadRazorpayApiCredentials(mode).keyId)
+  return {
+    intentId: input.intentId,
+    providerMode: input.sale.providerMode,
+    intentStatus: 'remote_created',
+    reused: true,
+    checkout: {
+      keyId: loadKeyId(input.sale.providerMode),
+      subscriptionId: remote.remoteId,
+    },
+    quote: checkoutQuote,
+  }
+}
+
 /**
  * Authenticated subscription checkout orchestration. The browser supplies
  * only plan/manual-code/idempotency selection; all prices, entitlements,
@@ -1893,12 +1973,22 @@ export async function createSubscriptionCheckout(
       dependencies.supersedeBlockingCheckout ??
       supersedeBlockingUnpaidSubscriptionCheckout
     try {
-      await supersedeBlockingCheckout({
+      const blockingCheckout = await supersedeBlockingCheckout({
         userId: input.userId,
         providerMode: sale.providerMode,
         replacementPlanKey: input.request.planKey,
         requestStartedAt,
       })
+      if (blockingCheckout.outcome === 'reusable') {
+        return await reopenBlockingSubscriptionCheckout({
+          userId: input.userId,
+          planKey: input.request.planKey,
+          intentId: blockingCheckout.intentId,
+          requestStartedAt,
+          sale,
+          dependencies,
+        })
+      }
     } catch (error) {
       if (error instanceof UnpaidSubscriptionCheckoutSupersessionError) {
         throw failure(

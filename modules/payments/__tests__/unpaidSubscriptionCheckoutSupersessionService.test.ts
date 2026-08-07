@@ -255,18 +255,44 @@ describe('unpaid subscription checkout supersession', () => {
     expect(deps.persistObservation).toHaveBeenCalledTimes(1)
   })
 
-  it('does not supersede a same-plan retry', async () => {
+  it('returns an exact unexpired same-plan checkout for server-side reuse', async () => {
     const deps = dependencies()
 
     await expect(supersedeBlockingUnpaidSubscriptionCheckout({
       userId: USER_ID.toHexString(),
       providerMode: 'test',
       replacementPlanKey: 'plus',
-      requestStartedAt: REQUEST_STARTED_AT,
-    }, deps)).resolves.toEqual({ outcome: 'none' })
+      requestStartedAt: new Date('2026-08-07T10:05:00.000Z'),
+    }, deps)).resolves.toEqual({
+      outcome: 'reusable',
+      intentId: INTENT_ID.toHexString(),
+      planKey: 'plus',
+    })
 
-    expect(deps.fetchSubscription).not.toHaveBeenCalled()
+    expect(deps.fetchSubscription).toHaveBeenCalledWith(REMOTE_ID)
+    expect(deps.fetchSubscriptionInvoices).toHaveBeenCalledOnce()
+    expect(deps.cancelSubscriptionImmediately).not.toHaveBeenCalled()
     expect(deps.persistObservation).not.toHaveBeenCalled()
+  })
+
+  it('releases an expired same-plan checkout instead of reopening it', async () => {
+    const deps = dependencies({
+      remote: providerSubscription('expired'),
+    })
+
+    await expect(supersedeBlockingUnpaidSubscriptionCheckout({
+      userId: USER_ID.toHexString(),
+      providerMode: 'test',
+      replacementPlanKey: 'plus',
+      requestStartedAt: REQUEST_STARTED_AT,
+    }, deps)).resolves.toMatchObject({
+      outcome: 'superseded',
+      previousPlanKey: 'plus',
+      providerStatus: 'expired',
+    })
+
+    expect(deps.cancelSubscriptionImmediately).not.toHaveBeenCalled()
+    expect(deps.persistObservation).toHaveBeenCalledOnce()
   })
 
   it('fails closed when Razorpay reports payment evidence', async () => {

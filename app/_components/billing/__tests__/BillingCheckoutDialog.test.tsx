@@ -195,6 +195,57 @@ afterEach(() => {
 })
 
 describe('BillingCheckoutDialog completion and recovery', () => {
+  it('allows a server-side retry when another device has the pending checkout', async () => {
+    const pendingSummary = {
+      ...summary,
+      subscription: {
+        state: 'activation_pending',
+        billingHealth: 'pending',
+        planKey: 'plus',
+        status: 'created',
+        cancelAtPeriodEnd: false,
+      },
+    }
+    const recoveredCheckout = { ...checkout, reused: true }
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/billing/me') return response(pendingSummary)
+      if (url === '/api/billing/subscriptions/checkout') {
+        return response(recoveredCheckout)
+      }
+      return standardFetch(input, init)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Review secure checkout',
+    }))
+
+    expect(await screen.findByRole('button', {
+      name: /Pay ₹599 with Razorpay/,
+    })).toBeEnabled()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/billing/subscriptions/checkout',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(readBillingCheckoutRecovery(ACCOUNT_ID)).toMatchObject({
+      accountId: ACCOUNT_ID,
+      intentId: INTENT_ID,
+      planKey: 'plus',
+    })
+  })
+
   it('refreshes both NextAuth and billing summary after immediate verification', async () => {
     vi.stubGlobal('fetch', vi.fn(standardFetch))
     const refreshSession = vi.fn().mockResolvedValue(undefined)

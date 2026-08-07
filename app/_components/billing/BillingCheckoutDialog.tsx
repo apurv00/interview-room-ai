@@ -156,7 +156,10 @@ function assertNewCheckoutAllowed(
         : 'Purchases are temporarily unavailable.',
     )
   }
-  if (summary.subscription.state !== 'none') {
+  if (
+    summary.subscription.state !== 'none' &&
+    summary.subscription.state !== 'activation_pending'
+  ) {
     throw new BillingClientError(
       409,
       'An existing subscription is already linked to this account.',
