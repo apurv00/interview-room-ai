@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   RazorpayInvoiceDto,
+  RazorpayPaymentDto,
   RazorpaySubscriptionDto,
 } from '../providers/razorpayServerAdapter'
 import {
@@ -49,6 +50,7 @@ function blockingCheckout(
       discountedBillingCycles: 1,
       couponCampaignId: CAMPAIGN_ID,
       couponCampaignRevision: 1,
+      subscriptionTotalCount: 360,
     },
   }
   return {
@@ -74,9 +76,9 @@ function providerSubscription(
     id: REMOTE_ID,
     planId: PLAN_ID,
     status,
-    totalCount: 1_200,
+    totalCount: 360,
     paidCount: 0,
-    remainingCount: 1_200,
+    remainingCount: 360,
     startAtEpochSeconds: START_AT.getTime() / 1_000,
     authorizationExpiresAtEpochSeconds:
       AUTHORIZATION_EXPIRES_AT.getTime() / 1_000,
@@ -213,6 +215,7 @@ async function supersede(
     userId: USER_ID.toHexString(),
     providerMode: 'test',
     replacementPlanKey: 'pro',
+    expectedSubscriptionTotalCount: 360,
     requestStartedAt: REQUEST_STARTED_AT,
   }, deps)
 }
@@ -262,6 +265,7 @@ describe('unpaid subscription checkout supersession', () => {
       userId: USER_ID.toHexString(),
       providerMode: 'test',
       replacementPlanKey: 'plus',
+      expectedSubscriptionTotalCount: 360,
       requestStartedAt: new Date('2026-08-07T10:05:00.000Z'),
     }, deps)).resolves.toEqual({
       outcome: 'reusable',
@@ -275,6 +279,35 @@ describe('unpaid subscription checkout supersession', () => {
     expect(deps.persistObservation).not.toHaveBeenCalled()
   })
 
+  it('replaces an unexpired same-plan checkout with an obsolete mandate horizon', async () => {
+    const deps = dependencies()
+    const staleCheckout = blockingCheckout()
+    staleCheckout.intent.quote.subscriptionTotalCount = 1_200
+    deps.store = {
+      loadBlockingCheckout: vi.fn().mockResolvedValue(staleCheckout),
+    }
+    deps.fetchSubscription.mockResolvedValueOnce({
+      ...providerSubscription('created'),
+      totalCount: 1_200,
+      remainingCount: 1_200,
+    })
+
+    await expect(supersedeBlockingUnpaidSubscriptionCheckout({
+      userId: USER_ID.toHexString(),
+      providerMode: 'test',
+      replacementPlanKey: 'plus',
+      expectedSubscriptionTotalCount: 360,
+      requestStartedAt: REQUEST_STARTED_AT,
+    }, deps)).resolves.toMatchObject({
+      outcome: 'superseded',
+      previousPlanKey: 'plus',
+      providerStatus: 'cancelled',
+    })
+
+    expect(deps.cancelSubscriptionImmediately).toHaveBeenCalledWith(REMOTE_ID)
+    expect(deps.persistObservation).toHaveBeenCalledOnce()
+  })
+
   it('releases an expired same-plan checkout instead of reopening it', async () => {
     const deps = dependencies({
       remote: providerSubscription('expired'),
@@ -284,6 +317,7 @@ describe('unpaid subscription checkout supersession', () => {
       userId: USER_ID.toHexString(),
       providerMode: 'test',
       replacementPlanKey: 'plus',
+      expectedSubscriptionTotalCount: 360,
       requestStartedAt: REQUEST_STARTED_AT,
     }, deps)).resolves.toMatchObject({
       outcome: 'superseded',
@@ -293,6 +327,50 @@ describe('unpaid subscription checkout supersession', () => {
 
     expect(deps.cancelSubscriptionImmediately).not.toHaveBeenCalled()
     expect(deps.persistObservation).toHaveBeenCalledOnce()
+  })
+
+  it('accepts a failed invoice payment whose payment omits subscription_id', async () => {
+    const paymentId = 'pay_FailedCardAttempt123'
+    const invoiceId = 'inv_FailedCardAttempt123'
+    const deps = dependencies({
+      invoices: [{
+        providerMode: 'test',
+        id: invoiceId,
+        subscriptionId: REMOTE_ID,
+        paymentId,
+        orderId: 'order_FailedCardAttempt123',
+        status: 'issued',
+        amountPaise: 49_900,
+        amountPaidPaise: 0,
+        amountDuePaise: 49_900,
+        currency: 'INR',
+        partialPayment: false,
+        createdAtEpochSeconds: CREATED_AT.getTime() / 1_000,
+      }],
+    })
+    const failedPayment: RazorpayPaymentDto = {
+      providerMode: 'test',
+      id: paymentId,
+      orderId: 'order_FailedCardAttempt123',
+      invoiceId,
+      amountPaise: 49_900,
+      amountRefundedPaise: 0,
+      currency: 'INR',
+      status: 'failed',
+      captured: false,
+      method: 'card',
+      notes: {},
+      createdAtEpochSeconds: CREATED_AT.getTime() / 1_000,
+    }
+    deps.fetchPayment.mockResolvedValue(failedPayment)
+
+    await expect(supersede(deps)).resolves.toMatchObject({
+      outcome: 'superseded',
+      providerStatus: 'cancelled',
+    })
+
+    expect(deps.fetchPayment).toHaveBeenCalledWith(paymentId)
+    expect(deps.cancelSubscriptionImmediately).toHaveBeenCalledWith(REMOTE_ID)
   })
 
   it('fails closed when Razorpay reports payment evidence', async () => {

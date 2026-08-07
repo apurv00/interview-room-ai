@@ -55,7 +55,6 @@ import {
 } from './planChangeTransitionKernel'
 import {
   createFutureSubscriptionCheckout,
-  PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
   resolveSubscriptionCheckoutSaleContext,
   type FutureSubscriptionCheckoutResult,
   type SubscriptionCheckoutSaleContext,
@@ -206,6 +205,7 @@ interface FutureAuthorizationCheckoutRow {
     discountPaise: number
     payablePaise: number
     renewalPricePaise: number
+    subscriptionTotalCount: number
     discountedBillingCycles?: number
     couponCampaignId?: mongoose.Types.ObjectId
     couponCampaignRevision?: number
@@ -1650,7 +1650,7 @@ async function buildAuthorizationExpectation(input: {
       Math.floor(intent.requestedStartAt.getTime() / 1_000),
     authorizationExpiresAtEpochSeconds:
       Math.floor(intent.authorizationExpiresAt.getTime() / 1_000),
-    totalCount: PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
+    totalCount: intent.quoteSnapshot.subscriptionTotalCount,
   }
 }
 

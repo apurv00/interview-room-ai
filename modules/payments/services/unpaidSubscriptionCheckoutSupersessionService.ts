@@ -78,6 +78,9 @@ export interface BlockingSubscriptionCheckout {
   intent: OriginalSubscriptionCheckoutIntent & {
     kind: 'subscription'
     planKey: 'plus' | 'pro'
+    quote: OriginalSubscriptionCheckoutIntent['quote'] & {
+      subscriptionTotalCount?: number
+    }
     purpose: 'acquisition'
     leaseLane: 'a'
     authorizationExpiresAt: Date
@@ -285,7 +288,10 @@ async function assertNoProviderPaymentEvidence(input: {
     }
     if (
       payment.providerMode !== input.providerMode ||
-      payment.subscriptionId !== input.razorpaySubscriptionId ||
+      (
+        payment.subscriptionId !== undefined &&
+        payment.subscriptionId !== input.razorpaySubscriptionId
+      ) ||
       payment.invoiceId !== invoice.id ||
       payment.currency !== 'INR'
     ) {
@@ -470,6 +476,7 @@ export async function supersedeBlockingUnpaidSubscriptionCheckout(input: {
   userId: string
   providerMode: ProviderMode
   replacementPlanKey: 'plus' | 'pro'
+  expectedSubscriptionTotalCount: number
   requestStartedAt: Date
 }, dependencies: UnpaidSubscriptionCheckoutSupersessionDependencies = {}):
 Promise<UnpaidSubscriptionCheckoutSupersessionResult> {
@@ -483,6 +490,8 @@ Promise<UnpaidSubscriptionCheckoutSupersessionResult> {
   const samePlan = blocking.intent.planKey === input.replacementPlanKey
   if (
     !Number.isFinite(input.requestStartedAt.getTime()) ||
+    !Number.isSafeInteger(input.expectedSubscriptionTotalCount) ||
+    input.expectedSubscriptionTotalCount <= 0 ||
     !blocking.intent.userId.equals(blocking.lease.userId) ||
     blocking.intent.userId.toHexString() !== input.userId ||
     blocking.intent.providerMode !== input.providerMode ||
@@ -579,6 +588,9 @@ Promise<UnpaidSubscriptionCheckoutSupersessionResult> {
     samePlan &&
     intent.status === 'remote_created' &&
     subscription.status === 'created' &&
+    intent.quote.subscriptionTotalCount ===
+      input.expectedSubscriptionTotalCount &&
+    subscription.totalCount === input.expectedSubscriptionTotalCount &&
     intent.authorizationExpiresAt > input.requestStartedAt
   ) {
     return {

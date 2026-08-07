@@ -8,6 +8,7 @@ import {
 } from '../services/checkoutIntentService'
 import {
   createSubscriptionCheckout,
+  PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
   type SubscriptionCheckoutDependencies,
   type StoredSubscriptionCheckoutIntent,
 } from '../services/subscriptionCheckoutService'
@@ -146,7 +147,7 @@ describe('subscription launch coupon fallback', () => {
         discountPaise: 0,
         payablePaise: 59_900,
         renewalPricePaise: 59_900,
-        subscriptionTotalCount: 1_200,
+        subscriptionTotalCount: PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
         gst: {
           inclusive: true,
           rateBps: 1_800,
@@ -257,6 +258,36 @@ describe('subscription launch coupon fallback', () => {
     expect(deps.supersedeBlockingCheckout).toHaveBeenCalledTimes(1)
   })
 
+  it('rotates the idempotency key after superseding an obsolete checkout', async () => {
+    const deps = dependencies(quote(false))
+    const supersededIntentId = new mongoose.Types.ObjectId().toString()
+    deps.supersedeBlockingCheckout = vi.fn(async () => ({
+      outcome: 'superseded' as const,
+      intentId: supersededIntentId,
+      previousPlanKey: 'plus' as const,
+      providerStatus: 'cancelled' as const,
+    }))
+    deps.createIntent.mockRejectedValueOnce(new Error('stop after intent input'))
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'billing-subscription:stale-browser-key',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey:
+          `billing-subscription:superseded:${supersededIntentId}:360`,
+        quoteSnapshot: expect.objectContaining({
+          subscriptionTotalCount: 360,
+        }),
+      }),
+    )
+  })
+
   it('persists the authoritative list price when no coupon applies', async () => {
     const deps = dependencies(quote(false))
     deps.createIntent.mockResolvedValueOnce({
@@ -282,6 +313,7 @@ describe('subscription launch coupon fallback', () => {
           listPricePaise: 59_900,
           discountPaise: 0,
           payablePaise: 59_900,
+          subscriptionTotalCount: 360,
         }),
       }),
     )

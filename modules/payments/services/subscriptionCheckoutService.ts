@@ -94,7 +94,10 @@ import {
   UnpaidSubscriptionCheckoutSupersessionError,
 } from './unpaidSubscriptionCheckoutSupersessionService'
 
-export const PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT = 1_200 as const
+// A 30-year monthly horizon keeps Razorpay-generated UPI mandate end dates
+// within the provider's QR validation window while remaining effectively
+// open-ended for a customer-cancelled subscription.
+export const PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT = 360 as const
 
 export const SUBSCRIPTION_CHECKOUT_ERROR_CODES = [
   'invalid_request',
@@ -1894,6 +1897,8 @@ async function reopenBlockingSubscriptionCheckout(input: {
     stored.purpose !== 'acquisition' ||
     stored.leaseLane !== 'a' ||
     stored.planKey !== input.planKey ||
+    stored.quote.subscriptionTotalCount !==
+      PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT ||
     !validDate(stored.authorizationExpiresAt) ||
     stored.authorizationExpiresAt <= input.requestStartedAt ||
     !stored.razorpaySubscriptionId
@@ -1965,6 +1970,7 @@ export async function createSubscriptionCheckout(
   dependencies: SubscriptionCheckoutDependencies = {},
 ): Promise<SubscriptionCheckoutResult> {
   const requestStartedAt = new Date()
+  let effectiveIdempotencyKey = input.idempotencyKey
   try {
     const resolveSale =
       dependencies.resolveSaleContext ?? defaultResolveSaleContext
@@ -1977,6 +1983,8 @@ export async function createSubscriptionCheckout(
         userId: input.userId,
         providerMode: sale.providerMode,
         replacementPlanKey: input.request.planKey,
+        expectedSubscriptionTotalCount:
+          PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
         requestStartedAt,
       })
       if (blockingCheckout.outcome === 'reusable') {
@@ -1988,6 +1996,14 @@ export async function createSubscriptionCheckout(
           sale,
           dependencies,
         })
+      }
+      if (blockingCheckout.outcome === 'superseded') {
+        effectiveIdempotencyKey = [
+          'billing-subscription',
+          'superseded',
+          blockingCheckout.intentId,
+          PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
+        ].join(':')
       }
     } catch (error) {
       if (error instanceof UnpaidSubscriptionCheckoutSupersessionError) {
@@ -2035,7 +2051,10 @@ export async function createSubscriptionCheckout(
     let local: CheckoutIntentCreationResult
     try {
       local = await createTrustedIntent({
-        checkout: input,
+        checkout: {
+          ...input,
+          idempotencyKey: effectiveIdempotencyKey,
+        },
         sale,
         resolved,
         useCoupon,
