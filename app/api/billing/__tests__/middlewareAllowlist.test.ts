@@ -3,6 +3,26 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('customer billing middleware allowlist', () => {
+  it('keeps launch policy pages public through exact paths', () => {
+    const source = readFileSync(
+      join(process.cwd(), 'middleware.ts'),
+      'utf8',
+    )
+
+    for (const publicPath of [
+      '/cancellation-refunds',
+      '/fulfilment',
+      '/contact',
+    ]) {
+      expect(source.match(
+        new RegExp(`pathname === '${publicPath}'`, 'g'),
+      )).toHaveLength(1)
+      expect(source).not.toContain(
+        `pathname.startsWith('${publicPath}')`,
+      )
+    }
+  })
+
   it('uses exact public and handler-gated billing passthrough paths', () => {
     const source = readFileSync(
       join(process.cwd(), 'middleware.ts'),
