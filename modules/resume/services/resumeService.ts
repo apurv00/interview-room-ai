@@ -1,9 +1,11 @@
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
+import { getStaticPlanDefinition } from '@shared/services/planConfig'
 import type { ResumeData } from '../validators/resume'
 import { hasStructuredResumeContent } from '../lib/structuredContent'
 
-const MAX_RESUMES = 3
+const MAX_RESUMES =
+  getStaticPlanDefinition('free').resume.basicSavedResumeLimit
 
 // ─── Resume CRUD ────────────────────────────────────────────────────────────
 

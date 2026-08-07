@@ -53,7 +53,7 @@ describe('resumeService', () => {
       expect(result).not.toBeNull()
       expect(result!.resumes).toEqual([])
       expect(result!.count).toBe(0)
-      expect(result!.limit).toBe(3)
+      expect(result!.limit).toBe(1)
       expect(result!.hasProfile).toBe(false)
     })
 
@@ -289,7 +289,7 @@ describe('resumeService', () => {
     })
 
     it('creates a new resume when no id and under limit', async () => {
-      mockFindById.mockResolvedValue({ savedResumes: [{ id: 'r1' }] })
+      mockFindById.mockResolvedValue({ savedResumes: [] })
       const result = await saveResume('user-1', { name: 'Fresh' })
       expect(result).toMatchObject({ created: true })
       expect((result as { id: string }).id).toBeTruthy()
@@ -300,11 +300,11 @@ describe('resumeService', () => {
       expect(update.$push.savedResumes.template).toBe('professional')
     })
 
-    it('returns RESUME_LIMIT error when user already has 3 resumes', async () => {
+    it('returns RESUME_LIMIT error when the Basic resume already exists', async () => {
       mockFindById.mockResolvedValue({
-        savedResumes: [{ id: 'r1' }, { id: 'r2' }, { id: 'r3' }],
+        savedResumes: [{ id: 'r1' }],
       })
-      const result = await saveResume('user-1', { name: 'Fourth' })
+      const result = await saveResume('user-1', { name: 'Second' })
       expect(result).toMatchObject({ code: 'RESUME_LIMIT' })
       expect(mockUpdateOne).not.toHaveBeenCalled()
     })

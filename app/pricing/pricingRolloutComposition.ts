@@ -158,8 +158,13 @@ Promise<boolean> {
         import('@payments/services/paymentRuntimeGate'),
       ])
     const config = await getBillingConfig()
-    const userId = sessionUserId?.toLowerCase() ?? '0'.repeat(24)
-    if (!OBJECT_ID.test(userId)) return false
+    const userId = sessionUserId?.toLowerCase() ??
+      (
+        config.sellingMode === 'qa'
+          ? config.qaUserIds.find((candidate) => OBJECT_ID.test(candidate))
+          : '0'.repeat(24)
+      )
+    if (!userId || !OBJECT_ID.test(userId)) return false
     const sale = paymentGate.evaluatePaymentSaleGate(
       config,
       userId,
