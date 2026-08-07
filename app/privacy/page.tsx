@@ -4,7 +4,7 @@ export default function PrivacyPage() {
   return (
     <main className="min-h-screen bg-white px-4 py-16 max-w-3xl mx-auto">
       <h1 className="text-3xl font-bold text-[#0f1419] mb-8">Privacy Policy</h1>
-      <p className="text-sm text-[#8b98a5] mb-10">Last updated: April 2026</p>
+      <p className="text-sm text-[#8b98a5] mb-10">Last updated: 7 August 2026</p>
 
       <div className="space-y-8 text-sm text-[#536471] leading-relaxed">
         <section>
@@ -13,6 +13,7 @@ export default function PrivacyPage() {
             <li><strong className="text-[#0f1419]">Account information:</strong> Name, email address, and profile photo when you sign in with Google, GitHub, or email.</li>
             <li><strong className="text-[#0f1419]">Interview data:</strong> Audio/video recordings, transcripts, and feedback generated during mock interview sessions.</li>
             <li><strong className="text-[#0f1419]">Uploaded documents:</strong> Job descriptions and resumes you upload to personalize your sessions.</li>
+            <li><strong className="text-[#0f1419]">Billing data:</strong> Billing state, selected plan, coupon details, transaction and subscription references, invoices, refunds, and payment status. We do not store your full card, bank-account, UPI PIN, CVV, or OTP credentials.</li>
             <li><strong className="text-[#0f1419]">Usage data:</strong> Pages visited, session counts, and feature usage to improve the service.</li>
           </ul>
         </section>
@@ -41,14 +42,14 @@ export default function PrivacyPage() {
             <li><strong className="text-[#0f1419]">MediaPipe (Google):</strong> Face-landmark and expression detection. The MediaPipe model file and WebAssembly runtime are delivered from Google&rsquo;s CDN (<code className="text-xs">storage.googleapis.com</code>, <code className="text-xs">cdn.jsdelivr.net</code>), but <strong className="text-[#0f1419]">all inference runs inside your browser</strong>. Your camera feed and facial landmarks are never transmitted to Google. Google&rsquo;s CDN sees only the request for the model file itself.</li>
             <li><strong className="text-[#0f1419]">Cloudflare R2:</strong> Storage for any interview video or audio you choose to record, plus the compact JSON of facial-landmark summaries used for post-interview analysis.</li>
             <li><strong className="text-[#0f1419]">MongoDB Atlas &amp; Redis:</strong> Primary database and session/rate-limit store for interview metadata, transcripts, feedback, and usage tracking.</li>
-            <li><strong className="text-[#0f1419]">Payment processing:</strong> Stripe for subscription billing (Pro plan).</li>
+            <li><strong className="text-[#0f1419]">Razorpay:</strong> Processes Plus and Pro subscription payments and recurring mandates. Razorpay receives the payment and billing information required to complete the transaction. Interview Prep Guru retains transaction references and financial records needed to provide access, support billing, process approved refunds, and meet legal obligations.</li>
           </ul>
         </section>
 
         <section>
           <h2 className="text-lg font-semibold text-[#0f1419] mb-3">4. Data Retention</h2>
           <p className="text-[#536471]">
-            Interview recordings, landmark JSON, transcripts, and feedback are stored indefinitely while your account is active. You can delete individual interview records from your <Link href="/history" className="text-[#2563eb] hover:text-blue-700">history page</Link>, which removes the corresponding recordings from Cloudflare R2 as well. If you delete your account from <Link href="/settings" className="text-[#2563eb] hover:text-blue-700">account settings</Link>, all associated data will be permanently removed within 30 days.
+            Interview recordings, landmark JSON, transcripts, and feedback are stored while your account is active. You can delete individual interview records from your <Link href="/history" className="text-[#2563eb] hover:text-blue-700">history page</Link>, which removes the corresponding recordings from Cloudflare R2 as well. If you delete your account from <Link href="/settings" className="text-[#2563eb] hover:text-blue-700">account settings</Link>, account content is scheduled for permanent removal within 30 days. Invoices, payment, refund, tax, fraud-prevention, and audit records may be retained for the period required by applicable law, then deleted or anonymized where permitted.
           </p>
         </section>
 

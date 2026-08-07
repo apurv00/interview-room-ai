@@ -127,10 +127,12 @@ export default function Footer() {
           <div className="text-[12px] text-slate-400">
             &copy; {new Date().getFullYear()} InterviewPrep.guru
           </div>
-          <nav aria-label="Legal" className="flex items-center gap-6 text-[12px] text-slate-400">
+          <nav aria-label="Legal" className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[12px] text-slate-400">
             <Link href="/privacy" className="hover:text-slate-700 transition-colors">Privacy</Link>
             <Link href="/terms" className="hover:text-slate-700 transition-colors">Terms</Link>
-            <a href="mailto:contact@interviewprep.guru" className="hover:text-slate-700 transition-colors">Contact</a>
+            <Link href="/cancellation-refunds" className="hover:text-slate-700 transition-colors">Cancellation &amp; Refunds</Link>
+            <Link href="/fulfilment" className="hover:text-slate-700 transition-colors">Fulfilment</Link>
+            <Link href="/contact" className="hover:text-slate-700 transition-colors">Contact</Link>
             <button
               type="button"
               onClick={() => openAuthGate('generic')}

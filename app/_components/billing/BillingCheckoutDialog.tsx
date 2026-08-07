@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useSession } from 'next-auth/react'
 import {
   useCallback,
   useEffect,
@@ -96,6 +97,7 @@ interface BillingCheckoutDialogProps {
   catalog: PublicBillingCatalog
   planKey: PaidBillingPlanKey
   onClose: () => void
+  onCompleted: () => Promise<void>
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -155,13 +157,13 @@ function assertNewCheckoutAllowed(
   if (summary.subscription.state !== 'none') {
     throw new BillingClientError(
       409,
-      'An existing subscription requires attention in Billing settings.',
+      'An existing subscription is already linked to this account.',
     )
   }
   if (summary.entitlement.planKey !== 'free') {
     throw new BillingClientError(
       409,
-      'Your current paid entitlement must be managed in Billing settings.',
+      'Your current paid entitlement is managed on the pricing page.',
     )
   }
 }
@@ -170,7 +172,9 @@ export function BillingCheckoutDialog({
   catalog,
   planKey,
   onClose,
+  onCompleted,
 }: BillingCheckoutDialogProps) {
+  const { update: refreshSession } = useSession()
   const plan = catalog.plans[planKey]
   const [stage, setStage] = useState<CheckoutStage>('loading')
   const [quote, setQuote] = useState<CustomerBillingQuote | null>(null)
@@ -283,15 +287,19 @@ export function BillingCheckoutDialog({
     )
   }, [])
 
-  const applyTerminalStatus = useCallback((
+  const applyTerminalStatus = useCallback(async (
     status: BillingIntentStatus,
-  ): boolean => {
+  ): Promise<boolean> => {
     setStatusMessage(statusCopy(status.status))
     if (!status.terminal) return false
 
     if (status.status === 'completed') {
       clearBillingCheckoutRecovery()
       clearBillingAuthIntent()
+      await Promise.allSettled([
+        refreshSession(),
+        onCompleted(),
+      ])
       setStage('completed')
       return true
     }
@@ -303,7 +311,7 @@ export function BillingCheckoutDialog({
     clearBillingCheckoutRecovery()
     setStage('failed')
     return true
-  }, [])
+  }, [onCompleted, refreshSession])
 
   const pollIntent = useCallback(async (
     intentId: string,
@@ -317,7 +325,7 @@ export function BillingCheckoutDialog({
       try {
         const status = await readIntentStatus(intentId, controller.signal)
         setStatusMessage(statusCopy(status.status))
-        if (applyTerminalStatus(status)) return
+        if (await applyTerminalStatus(status)) return
         await delay(
           Math.max(1_000, Math.min(status.pollAfterMs ?? 2_000, 30_000)),
           controller.signal,
@@ -345,7 +353,7 @@ export function BillingCheckoutDialog({
 
     if (!controller.signal.aborted) {
       setStatusMessage(
-        'Your payment is still pending. Do not start another checkout; you can safely return here or open Billing settings later.',
+        'Your payment is still pending. Do not start another checkout; you can safely return here or reopen the pricing page later.',
       )
     }
   }, [applyTerminalStatus, readIntentStatus])
@@ -407,7 +415,7 @@ export function BillingCheckoutDialog({
         controller.signal,
       )
       setStatusMessage(statusCopy(status.status))
-      if (applyTerminalStatus(status)) return
+      if (await applyTerminalStatus(status)) return
       if (
         status.status === 'preparing' ||
         status.status === 'awaiting_payment'
@@ -1198,8 +1206,14 @@ export function BillingCheckoutDialog({
               By continuing, you agree to the{' '}
               <Link href="/terms" className="text-blue-600 hover:underline">
                 Terms
-              </Link>{' '}
-              and acknowledge the cancellation and refund terms. Review our{' '}
+              </Link>{' '}and acknowledge the{' '}
+              <Link
+                href="/cancellation-refunds"
+                className="text-blue-600 hover:underline"
+              >
+                cancellation and refund terms
+              </Link>
+              . Review our{' '}
               <Link href="/privacy" className="text-blue-600 hover:underline">
                 Privacy Policy
               </Link>
@@ -1209,7 +1223,7 @@ export function BillingCheckoutDialog({
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               {stage === 'completed' ? (
                 <Link
-                  href="/settings?upgraded=true#billing"
+                  href="/pricing?upgraded=true"
                   className="flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow-xs hover:bg-primary/90"
                 >
                   View active plan

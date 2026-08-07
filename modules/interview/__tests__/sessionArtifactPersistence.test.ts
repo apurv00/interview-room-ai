@@ -250,6 +250,114 @@ describe('createSession — Jobs JD provider authority', () => {
     }
   })
 
+  it('rejects a Basic request above 10 minutes before consuming quota', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue(null)
+    mockUserExists.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 20,
+      },
+    })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      statusCode: 403,
+      message: 'Basic interviews are limited to 10 minutes.',
+    })
+
+    const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
+    expect(admission.$and[2]).toEqual({
+      $nor: [expect.objectContaining({
+        organizationId: null,
+        monthlyInterviewLimit: 1,
+      })],
+    })
+    expect(mockSessionCreate).not.toHaveBeenCalled()
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('admits a 10-minute Basic request and persists the authoritative duration', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockSessionCreate.mockResolvedValue({
+      _id: { toString: () => 'session-basic-duration' },
+    })
+
+    await createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 10,
+      },
+    })
+
+    const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
+    expect(admission.$and).toHaveLength(2)
+    expect(mockSessionCreate).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({ duration: 10 }),
+    }))
+  })
+
+  it('admits 30 minutes only through a non-Basic authority branch', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockSessionCreate.mockResolvedValue({
+      _id: { toString: () => 'session-paid-duration' },
+    })
+
+    await createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 30,
+      },
+    })
+
+    const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
+    expect(admission.$and[2]).toEqual({
+      $nor: [expect.objectContaining({ monthlyInterviewLimit: 1 })],
+    })
+    expect(mockSessionCreate).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({ duration: 30 }),
+    }))
+  })
+
+  it('rejects every account above the 30-minute product maximum before writes', async () => {
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 31,
+      },
+    })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      statusCode: 403,
+      message: 'Interview duration must be between 5 and 30 minutes.',
+    })
+
+    expect(mockUserUpdateOne).not.toHaveBeenCalled()
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockSessionCreate).not.toHaveBeenCalled()
+  })
+
   it('rolls back quota and creates no session when the provider gate is revoked', async () => {
     const denied = Object.assign(new Error('model provider precondition failed'), {
       name: 'ModelProviderPreconditionError',

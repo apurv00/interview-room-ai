@@ -4,7 +4,7 @@ export default function TermsPage() {
   return (
     <main className="min-h-screen bg-white px-4 py-16 max-w-3xl mx-auto">
       <h1 className="text-3xl font-bold text-[#0f1419] mb-8">Terms of Service</h1>
-      <p className="text-sm text-[#8b98a5] mb-10">Last updated: March 2026</p>
+      <p className="text-sm text-[#8b98a5] mb-10">Last updated: 7 August 2026</p>
 
       <div className="space-y-8 text-sm text-[#536471] leading-relaxed">
         <section>
@@ -56,37 +56,53 @@ export default function TermsPage() {
 
         <section>
           <h2 className="text-lg font-semibold text-[#0f1419] mb-3">7. Subscriptions &amp; Billing</h2>
+          <div className="space-y-3 text-[#536471]">
+            <p>
+              Basic is a limited ₹0 plan. Plus costs ₹599 per month and Pro costs ₹999 per month. Paid-plan prices include GST and are charged through Razorpay. Plus and Pro renew automatically each month until cancelled.
+            </p>
+            <p>
+              Interview Prep Guru may issue its own coupon codes. Coupon eligibility, the discounted amount, and the number of discounted billing cycles are shown in our checkout before payment. Unless the checkout says otherwise, a subscription renews at its undiscounted list price after the coupon period. These coupons are administered by Interview Prep Guru and do not depend on a Razorpay promotional offer.
+            </p>
+            <p>
+              Paid access is activated only after the payment is captured and confirmed by our server. Opening or authorising a Razorpay checkout, or returning to our website without a captured payment, does not activate a paid plan.
+            </p>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">8. Cancellation &amp; Refunds</h2>
           <p className="text-[#536471]">
-            Interview Prep Guru is currently in beta. Free accounts include unlimited interviews subject to fair-use limits that protect the service from abuse. Paid plans, when available, will be billed monthly and renew automatically. You may cancel at any time; cancellation takes effect at the end of the current billing period. Refunds are not provided for partial months.
+            A subscription cancellation takes effect at the end of the current paid billing period, so access continues until that date. Cancellation does not automatically create a refund. Refund requests are reviewed manually under our{' '}
+            <Link href="/cancellation-refunds" className="text-[#2563eb] hover:text-blue-700">Cancellation and Refund Policy</Link>.
           </p>
         </section>
 
         <section>
-          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">8. Limitation of Liability</h2>
+          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">9. Limitation of Liability</h2>
           <p className="text-[#536471]">
             The Service is provided &quot;as is&quot; without warranties of any kind. Interview Prep Guru is not liable for any indirect, incidental, or consequential damages arising from your use of the Service. AI-generated feedback is for practice purposes only and does not guarantee interview success.
           </p>
         </section>
 
         <section>
-          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">9. Termination</h2>
+          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">10. Termination</h2>
           <p className="text-[#536471]">
             We reserve the right to suspend or terminate your account if you violate these Terms. You may delete your account at any time from your <Link href="/settings" className="text-[#2563eb] hover:text-blue-700">account settings</Link>.
           </p>
         </section>
 
         <section>
-          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">10. Changes to Terms</h2>
+          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">11. Changes to Terms</h2>
           <p className="text-[#536471]">
             We may update these Terms from time to time. Continued use of the Service after changes constitutes acceptance of the updated Terms.
           </p>
         </section>
 
         <section>
-          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">11. Contact</h2>
+          <h2 className="text-lg font-semibold text-[#0f1419] mb-3">12. Contact</h2>
           <p className="text-[#536471]">
             For questions about these Terms, contact us at{' '}
-            <a href="mailto:legal@interviewprep.guru" className="text-[#2563eb] hover:text-blue-700">legal@interviewprep.guru</a>.
+            <a href="mailto:contact@interviewprep.guru" className="text-[#2563eb] hover:text-blue-700">contact@interviewprep.guru</a>.
           </p>
         </section>
       </div>

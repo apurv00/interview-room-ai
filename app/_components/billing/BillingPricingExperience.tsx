@@ -33,7 +33,7 @@ const BILLING_FAQ = [
   {
     title: 'How do coupons work?',
     content:
-      'The best eligible automatic coupon is applied for you. If you have a targeted code, use “Have a coupon code?” before secure checkout. Coupons never stack.',
+      'Enter an eligible coupon code before secure checkout. Coupons are managed by InterviewPrepGuru, never stack, and do not depend on a Razorpay Offer.',
   },
   {
     title: 'What happens after the discounted month?',
@@ -43,7 +43,7 @@ const BILLING_FAQ = [
   {
     title: 'How long can an interview be?',
     content:
-      'Basic includes one 10-minute interview each month. Plus, Pro, and ₹69 additional interviews support durations up to 30 minutes.',
+      'Basic includes one 10-minute interview each month. Plus and Pro interviews support durations up to 30 minutes.',
   },
 ]
 
@@ -261,6 +261,12 @@ export function BillingPricingExperience({
     }
   }
 
+  const refreshCompletedBilling = useCallback(async () => {
+    const nextSummary = await loadBillingSummary()
+    setBillingSummary(nextSummary)
+    setSummaryError(null)
+  }, [loadBillingSummary])
+
   if (loading) {
     return (
       <main className="min-h-screen px-4 py-16 sm:px-6 lg:px-8">
@@ -325,9 +331,9 @@ export function BillingPricingExperience({
             Practice free. Upgrade when the extra reps matter.
           </h1>
           <p className="mx-auto max-w-2xl text-body text-[#71767b]">
-            One Basic interview and one clean editable resume are free. Every
-            interview is capped at 30 minutes; paid plans add more interviews,
-            deeper analysis, and resume tools.
+            Basic includes one 10-minute interview each month. Paid plans add
+            more interviews and deeper analysis, with every interview capped
+            at 30 minutes.
           </p>
         </header>
 
@@ -407,44 +413,6 @@ export function BillingPricingExperience({
           </p>
         ) : null}
 
-        <section className="mt-8 grid gap-4 md:grid-cols-2">
-          <article className="rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4">
-            <h2 className="text-sm font-semibold text-blue-950">
-              Need just one more interview?
-            </h2>
-            <p className="mt-1 text-sm text-blue-900">
-              An additional interview costs{' '}
-              <strong>
-                ₹{catalog.oneTimeProducts.single_interview.listPricePaise / 100}
-              </strong>
-              , supports up to 30 minutes, and does not use coupons.
-            </p>
-            <span className="mt-3 inline-flex text-xs font-medium text-blue-700">
-              Purchase from the interview paywall after setup
-            </span>
-          </article>
-
-          <article className="rounded-2xl border border-violet-200 bg-violet-50 px-5 py-4">
-            <h2 className="text-sm font-semibold text-violet-950">
-              Need one premium resume identity?
-            </h2>
-            <p className="mt-1 text-sm text-violet-900">
-              A premium resume unlock costs{' '}
-              <strong>
-                ₹{catalog.oneTimeProducts.premium_resume.listPricePaise / 100}
-              </strong>
-              , starts its seven-day revision window after the first
-              successful render, and does not use coupons.
-            </p>
-            <Link
-              href="/resume"
-              className="mt-3 inline-flex text-xs font-medium text-violet-700 hover:text-violet-800"
-            >
-              Choose a saved resume to unlock
-            </Link>
-          </article>
-        </section>
-
         <section className="mx-auto mt-20 max-w-2xl">
           <h2 className="mb-8 text-center text-display text-[#0f1419]">
             Frequently asked questions
@@ -468,6 +436,7 @@ export function BillingPricingExperience({
           catalog={catalog}
           planKey={selectedPlan}
           onClose={() => setSelectedPlan(null)}
+          onCompleted={refreshCompletedBilling}
         />
       )}
     </main>

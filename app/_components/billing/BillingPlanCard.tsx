@@ -26,31 +26,21 @@ function planFeatures(plan: BillingPlan): string[] {
   const interviewLabel = plan.interview.includedPerPeriod === 1
     ? `1 ${plan.interview.maxDurationMinutes}-minute interview per month`
     : `${plan.interview.includedPerPeriod} interviews per billing month, up to ${plan.interview.maxDurationMinutes} minutes`
-  const resumeLabel = plan.key === 'free'
-    ? '1 editable clean basic resume'
-    : `${plan.resume.premiumSavedResumeLimitPerPeriod} premium resume versions per billing month`
-
   if (plan.key === 'free') {
     return [
       interviewLabel,
-      resumeLabel,
       'Core feedback and learning drills',
-      'Additional 30-minute interviews available for ₹69 each',
     ]
   }
   if (plan.key === 'plus') {
     return [
       interviewLabel,
       'Full analysis, replay, and JD/resume personalization',
-      resumeLabel,
-      '1 editable clean basic resume',
     ]
   }
   return [
     interviewLabel,
     'Advanced progress and interview comparison',
-    'Full resume toolkit',
-    resumeLabel,
     'Priority processing',
   ]
 }
@@ -119,8 +109,8 @@ export function BillingPlanCard({
             </div>
             <p className="mt-1 text-xs text-[#71767b]">
               {quoteLoading
-                ? 'Checking your best eligible coupon…'
-                : 'Your best eligible coupon is checked after sign-in.'}
+                ? 'Checking eligible coupon pricing…'
+                : 'Enter an eligible coupon code during checkout.'}
             </p>
           </>
         )}
@@ -171,12 +161,9 @@ export function BillingPlanCard({
             Start free
           </Link>
         ) : existingPaidPlan ? (
-          <Link
-            href="/settings#billing"
-            className="flex h-9 w-full items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            Manage plan change
-          </Link>
+          <Button variant="secondary" isFullWidth disabled>
+            Plan changes coming soon
+          </Button>
         ) : paidPlanKey ? (
           <Button
             type="button"

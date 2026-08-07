@@ -29,6 +29,10 @@ import type { InterviewLatencyTelemetryInput } from '../../validators/interview'
 import type { Duration } from '@shared/types'
 import { ModelProviderPreconditionError, type CompletionOptions } from '@shared/services/modelRouter'
 import { basicCalendarMonthPeriod } from '@payments/services/periodKeyService'
+import {
+  BASIC_MAX_INTERVIEW_DURATION_MINUTES,
+  MAX_INTERVIEW_DURATION_MINUTES,
+} from '../../config/interviewDurationPolicy'
 
 interface CreateSessionInput {
   userId: string
@@ -164,6 +168,19 @@ export function isDepthAllowedForExperience(depthSlug: string, experience: strin
 export async function createSession(input: CreateSessionInput): Promise<IInterviewSession> {
   await connectDB()
 
+  // The session service is the final duration authority. The setup UI exposes
+  // only product-supported presets, but direct callers and stale localStorage
+  // must not be able to create an interview beyond the 30-minute product cap.
+  if (
+    !Number.isSafeInteger(input.config.duration) ||
+    input.config.duration < 5 ||
+    input.config.duration > MAX_INTERVIEW_DURATION_MINUTES
+  ) {
+    throw new ForbiddenError(
+      `Interview duration must be between 5 and ${MAX_INTERVIEW_DURATION_MINUTES} minutes.`,
+    )
+  }
+
   if (
     input.verifiedJobsAttribution && (
       !input.verifiedJobsParsedJobDescription ||
@@ -272,9 +289,20 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     { $set: { monthlyInterviewsUsed: 0 } }
   )
 
+  const personalBasicAuthority = {
+    organizationId: null,
+    role: { $nin: ['recruiter', 'org_admin', 'platform_admin'] },
+    plan: { $nin: ['plus', 'pro', 'enterprise'] },
+    entitlementSource: { $nin: ['subscription', 'admin_grant'] },
+    monthlyInterviewLimit: 1,
+  }
+
   // Atomic increment-first: exact Basic and subscription projections use their
   // product limits. Explicit organization/Enterprise/admin/legacy paid rows
-  // retain their stored limit without being coerced into consumer pricing.
+  // retain their stored limit without being coerced into consumer pricing. A
+  // duration above 10 minutes atomically excludes the Basic authority branch,
+  // so a direct API request cannot consume a Basic credit or persist a longer
+  // session even if the browser setup was bypassed.
   const updatedUser = await User.findOneAndUpdate(
     {
       _id: userId,
@@ -287,13 +315,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
         },
         {
           $or: [
-            {
-              organizationId: null,
-              role: { $nin: ['recruiter', 'org_admin', 'platform_admin'] },
-              plan: { $nin: ['plus', 'pro', 'enterprise'] },
-              entitlementSource: { $nin: ['subscription', 'admin_grant'] },
-              monthlyInterviewLimit: 1,
-            },
+            personalBasicAuthority,
             {
               entitlementSource: 'subscription',
               planVocabularyVersion: 2,
@@ -321,6 +343,9 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
             },
           ],
         },
+        ...(input.config.duration > BASIC_MAX_INTERVIEW_DURATION_MINUTES
+          ? [{ $nor: [personalBasicAuthority] }]
+          : []),
       ],
     },
     {
@@ -334,6 +359,17 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     // Either user doesn't exist or usage limit reached
     const exists = await User.exists(activeJobsAccountFilter(input.userId))
     if (!exists) throw new NotFoundError('User')
+    if (input.config.duration > BASIC_MAX_INTERVIEW_DURATION_MINUTES) {
+      const isPersonalBasic = await User.exists({
+        ...activeJobsAccountFilter(input.userId),
+        ...personalBasicAuthority,
+      })
+      if (isPersonalBasic) {
+        throw new ForbiddenError(
+          `Basic interviews are limited to ${BASIC_MAX_INTERVIEW_DURATION_MINUTES} minutes.`,
+        )
+      }
+    }
     throw new UsageLimitError()
   }
 
