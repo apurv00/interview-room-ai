@@ -108,6 +108,7 @@ export const USER_ENTITLEMENT_PROJECTION_PATHS = [
 
 export type UserEntitlementProjectionMutationKind =
   | 'subscription_cycle'
+  | 'subscription_initial_acquisition'
   | 'subscription_basic_fallback'
   | 'basic_period_transition'
   | 'admin_authority'
@@ -177,6 +178,66 @@ function exactEntitlementVersionPredicate(
     : null
 }
 
+function exactMissingPredicate(value: unknown): boolean {
+  const condition = record(value)
+  return (
+    Object.keys(condition).length === 1 &&
+    condition.$exists === false
+  )
+}
+
+function assertInitialSubscriptionAcquisition(
+  filter: Record<string, unknown>,
+  update: Record<string, unknown>,
+  expectedVersion: number | 'missing',
+): void {
+  const legacyPlan =
+    filter.plan === 'free' || exactMissingPredicate(filter.plan)
+  const missingAuthority = [
+    'planVocabularyVersion',
+    'planExpiresAt',
+    'entitlementSource',
+    'usagePeriodKey',
+    'interviewsUsed',
+    'interviewLimit',
+    'premiumResumesUsed',
+    'premiumResumeLimit',
+  ].every((path) => exactMissingPredicate(filter[path]))
+  const set = record(update.$set)
+  const paidPlan = set.plan === 'plus' || set.plan === 'pro'
+  const paidCounters =
+    set.interviewsUsed === 0 &&
+    Number.isSafeInteger(set.interviewLimit) &&
+    Number(set.interviewLimit) > 0 &&
+    set.premiumResumesUsed === 0 &&
+    Number.isSafeInteger(set.premiumResumeLimit) &&
+    Number(set.premiumResumeLimit) >= 0
+  const planExpiresAt = set.planExpiresAt
+  const usageResetAt = set.usageResetAt
+  const exactPaidPeriod =
+    planExpiresAt instanceof Date &&
+    Number.isFinite(planExpiresAt.getTime()) &&
+    usageResetAt instanceof Date &&
+    usageResetAt.getTime() === planExpiresAt.getTime() &&
+    typeof set.usagePeriodKey === 'string' &&
+    set.usagePeriodKey.trim().length > 0
+
+  if (
+    expectedVersion !== 'missing' ||
+    !legacyPlan ||
+    !missingAuthority ||
+    !paidPlan ||
+    set.planVocabularyVersion !== 2 ||
+    set.entitlementSource !== 'subscription' ||
+    !paidCounters ||
+    !exactPaidPeriod
+  ) {
+    throw new EntitlementProjectionWriteBoundaryError(
+      'Initial subscription acquisition requires an exact legacy-to-paid projection',
+    )
+  }
+}
+
 function assertProjectionMutation(
   kind: UserEntitlementProjectionMutationKind,
   filterValue: UserUpdateFilter,
@@ -199,7 +260,8 @@ function assertProjectionMutation(
   }
   const expectedVersion = exactEntitlementVersionPredicate(
     filter.entitlementVersion,
-    kind === 'account_deletion_reset',
+    kind === 'account_deletion_reset' ||
+      kind === 'subscription_initial_acquisition',
   )
   if (expectedVersion === null) {
     throw new EntitlementProjectionWriteBoundaryError(
@@ -221,6 +283,13 @@ function assertProjectionMutation(
   } else if (record(update.$inc).entitlementVersion !== 1) {
     throw new EntitlementProjectionWriteBoundaryError(
       'Entitlement projection writes must increment the version by one',
+    )
+  }
+  if (kind === 'subscription_initial_acquisition') {
+    assertInitialSubscriptionAcquisition(
+      filter,
+      update,
+      expectedVersion,
     )
   }
   if (

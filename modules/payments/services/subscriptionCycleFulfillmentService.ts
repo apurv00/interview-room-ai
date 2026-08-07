@@ -74,6 +74,9 @@ import {
   type SubscriptionProjectionDecision,
   type UserSubscriptionProjectionEvidence,
 } from './subscriptionProjectionArbiter'
+import {
+  canAcceptInitialSubscriptionAcquisition,
+} from './subscriptionAcquisitionAuthority'
 import { transitionPlanChangeStatus } from './planChangeTransitionKernel'
 
 const EXPECTED_INTERVIEW_LIMIT = {
@@ -1725,7 +1728,7 @@ interface LeanProjectionPlanChange {
 
 interface LeanUserEntitlementProjection {
   _id: mongoose.Types.ObjectId
-  plan: 'free' | 'plus' | 'pro' | 'enterprise'
+  plan?: 'free' | 'plus' | 'pro' | 'enterprise'
   planVocabularyVersion?: 1 | 2
   planExpiresAt?: Date
   monthlyInterviewsUsed: number
@@ -1739,6 +1742,9 @@ interface LeanUserEntitlementProjection {
   premiumResumeLimit?: number
   entitlementVersion?: number
   buyerState?: string
+  accountState?: 'active' | 'deleting'
+  role?: 'candidate' | 'recruiter' | 'org_admin' | 'platform_admin'
+  organizationId?: mongoose.Types.ObjectId | null
 }
 
 interface LeanFulfillment {
@@ -2555,23 +2561,6 @@ function projectionAuthorityReview(
   }
 }
 
-function freeAcquisitionAuthority(
-  user: LeanUserEntitlementProjection,
-): boolean {
-  return (
-    user.buyerState !== 'deletion_pending' &&
-    user.plan === 'free' &&
-    user.planVocabularyVersion ===
-      CURRENT_PLAN_VOCABULARY_VERSION &&
-    user.planExpiresAt === undefined &&
-    user.entitlementSource === 'free' &&
-    typeof user.usagePeriodKey === 'string' &&
-    user.usagePeriodKey.trim().length > 0 &&
-    Number.isSafeInteger(user.entitlementVersion) &&
-    (user.entitlementVersion ?? -1) >= 0
-  )
-}
-
 async function userCanAcceptProjection(input: {
   decision: SubscriptionProjectionDecision
   user: LeanUserEntitlementProjection
@@ -2590,6 +2579,20 @@ async function userCanAcceptProjection(input: {
   } = input
   if (
     user.buyerState === 'deletion_pending' ||
+    user.accountState === 'deleting'
+  ) {
+    return false
+  }
+  if (decision.decision !== 'project') return true
+  if (
+    decision.reason === 'acquisition_cycle_projects' &&
+    subscription.currentPeriodKey === undefined &&
+    subscription.currentPeriodStart === undefined &&
+    subscription.currentPeriodEnd === undefined
+  ) {
+    return canAcceptInitialSubscriptionAcquisition(user)
+  }
+  if (
     user.planVocabularyVersion !==
       CURRENT_PLAN_VOCABULARY_VERSION ||
     !Number.isSafeInteger(user.entitlementVersion) ||
@@ -2597,7 +2600,6 @@ async function userCanAcceptProjection(input: {
   ) {
     return false
   }
-  if (decision.decision !== 'project') return true
   if (decision.reason === 'plan_change_target_activates') {
     if (
       !planChange?.fromSubscriptionId ||
@@ -2661,13 +2663,6 @@ async function userCanAcceptProjection(input: {
         planChange.requestedEffectiveAt.getTime() &&
       userMatchesStoredSubscriptionPeriod(user, source),
     )
-  }
-  if (
-    subscription.currentPeriodKey === undefined &&
-    subscription.currentPeriodStart === undefined &&
-    subscription.currentPeriodEnd === undefined
-  ) {
-    return freeAcquisitionAuthority(user)
   }
   return userMatchesStoredSubscriptionPeriod(user, subscription)
 }
@@ -2763,39 +2758,44 @@ async function applyCurrentProjection(
 
   const userUpdate =
     await commitUserEntitlementProjectionUpdateInSession(
-    'subscription_cycle',
-    {
-      _id: draft.userId,
-      plan: user.plan,
-      planVocabularyVersion:
-        exactMongoValue(user.planVocabularyVersion),
-      planExpiresAt: exactMongoValue(user.planExpiresAt),
-      entitlementSource:
-        exactMongoValue(user.entitlementSource),
-      usagePeriodKey: exactMongoValue(user.usagePeriodKey),
-      entitlementVersion:
-        exactMongoValue(user.entitlementVersion),
-      buyerState: exactMongoValue(user.buyerState),
-    },
-    {
-      $set: {
-        plan: draft.planKey,
-        planVocabularyVersion: CURRENT_PLAN_VOCABULARY_VERSION,
-        planExpiresAt: draft.periodEnd,
-        monthlyInterviewsUsed: 0,
-        monthlyInterviewLimit: draft.interviewLimit,
-        usageResetAt: draft.periodEnd,
-        entitlementSource: 'subscription',
-        usagePeriodKey: draft.periodKey,
-        interviewsUsed: 0,
-        interviewLimit: draft.interviewLimit,
-        premiumResumesUsed: 0,
-        premiumResumeLimit: draft.premiumResumeLimit,
+      user.entitlementVersion === undefined
+        ? 'subscription_initial_acquisition'
+        : 'subscription_cycle',
+      {
+        _id: draft.userId,
+        plan: exactMongoValue(user.plan),
+        planVocabularyVersion:
+          exactMongoValue(user.planVocabularyVersion),
+        planExpiresAt: exactMongoValue(user.planExpiresAt),
+        entitlementSource:
+          exactMongoValue(user.entitlementSource),
+        usagePeriodKey: exactMongoValue(user.usagePeriodKey),
+        entitlementVersion:
+          exactMongoValue(user.entitlementVersion),
+        buyerState: exactMongoValue(user.buyerState),
+        accountState: exactMongoValue(user.accountState),
+        role: exactMongoValue(user.role),
+        organizationId: exactMongoValue(user.organizationId),
       },
-      $inc: { entitlementVersion: 1 },
-    },
-    session,
-  )
+      {
+        $set: {
+          plan: draft.planKey,
+          planVocabularyVersion: CURRENT_PLAN_VOCABULARY_VERSION,
+          planExpiresAt: draft.periodEnd,
+          monthlyInterviewsUsed: 0,
+          monthlyInterviewLimit: draft.interviewLimit,
+          usageResetAt: draft.periodEnd,
+          entitlementSource: 'subscription',
+          usagePeriodKey: draft.periodKey,
+          interviewsUsed: 0,
+          interviewLimit: draft.interviewLimit,
+          premiumResumesUsed: 0,
+          premiumResumeLimit: draft.premiumResumeLimit,
+        },
+        $inc: { entitlementVersion: 1 },
+      },
+      session,
+    )
   if (userUpdate.matchedCount !== 1) {
     throw failure(
       'persistence_conflict',
@@ -3655,6 +3655,9 @@ async function persistMongoCycleOnce(
           'premiumResumeLimit',
           'entitlementVersion',
           'buyerState',
+          'accountState',
+          'role',
+          'organizationId',
         ].join(' '))
         .session(session)
         .lean<LeanUserEntitlementProjection>()
