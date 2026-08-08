@@ -12,6 +12,7 @@ import Badge from '@shared/ui/Badge'
 import Button from '@shared/ui/Button'
 import Input from '@shared/ui/Input'
 import StateView from '@shared/ui/StateView'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 
 interface JobRow {
   id: string
@@ -133,7 +134,9 @@ export default function JobsPage() {
             placeholder="Senior Backend Engineer"
             required
             minLength={2}
-            maxLength={200}
+            // Must match CreateJobSchema (the engine role contract, 100) —
+            // the browser must not present a title the API will reject.
+            maxLength={INTERVIEW_ROLE_SLUG_MAX_CHARS}
           />
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-[#0f1419] block">

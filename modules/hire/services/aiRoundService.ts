@@ -229,11 +229,16 @@ export async function sendAiRound(
     )
   }
 
+  // The audit log must never claim a delivery that didn't happen — after a
+  // reload, this event is the only record of whether the candidate was
+  // actually contacted.
   await appendApplicationEvent(ctx.workspace._id, application._id, {
     type: 'ai_round_sent',
     actorUserId: ctx.membership.userId,
     actorName: ctx.membership.name || ctx.membership.email,
-    note: `AI interview invite sent to ${candidate.email}`,
+    note: sent.ok
+      ? `AI interview invite sent to ${candidate.email}`
+      : `AI interview invite created for ${candidate.email} — EMAIL DELIVERY FAILED; share the link manually`,
   })
 
   return { round, inviteUrl, emailSent: sent.ok }

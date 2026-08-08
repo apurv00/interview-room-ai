@@ -103,6 +103,27 @@ describe('getWorkspaceForUser', () => {
     expect(await getWorkspaceForUser(ACTOR)).toBeNull()
   })
 
+  it('re-reads by userId after a LOST lazy-link race — no transient 403 for a legitimate member', async () => {
+    const linked = { workspaceId: 'ws1' }
+    let userIdLookups = 0
+    mockMember.findOne.mockImplementation((filter: Record<string, unknown>) => {
+      if ('userId' in filter && !('email' in filter)) {
+        userIdLookups += 1
+        // First lookup misses; by the re-read, the concurrent winner's link
+        // is visible.
+        return Promise.resolve(userIdLookups === 1 ? null : linked)
+      }
+      return Promise.resolve(null)
+    })
+    // The loser's conditional link matches nothing — null, not E11000.
+    mockMember.findOneAndUpdate.mockResolvedValue(null)
+    mockWorkspace.findById.mockResolvedValue({ _id: 'ws1', name: 'Acme' })
+
+    const ctx = await getWorkspaceForUser(ACTOR)
+    expect(ctx?.workspace.name).toBe('Acme')
+    expect(userIdLookups).toBe(2)
+  })
+
   it('self-heals a membership whose linked User was erased (account deletion) — same email re-links', async () => {
     const staleRow = { _id: 'm9', userId: 'erased-user', workspaceId: 'ws1' }
     mockMember.findOne.mockImplementation((filter: Record<string, unknown>) =>

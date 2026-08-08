@@ -164,6 +164,16 @@ describe('sendAiRound', () => {
     )
   })
 
+  it('the audit log never claims delivery when the email failed', async () => {
+    armHappyPath()
+    mockSendEmail.mockResolvedValue({ ok: false })
+    const result = await sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
+    expect(result.emailSent).toBe(false)
+    const note = mockAppendEvent.mock.calls[0][2].note
+    expect(note).toContain('EMAIL DELIVERY FAILED')
+    expect(note).not.toContain('invite sent')
+  })
+
   it('snapshots an otp workspace onto the round and into the invite copy', async () => {
     armHappyPath()
     const otpCtx = {

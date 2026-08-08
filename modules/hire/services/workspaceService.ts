@@ -67,6 +67,16 @@ export async function getWorkspaceForUser(
       }
     }
   }
+  // Lost-race re-read: two first requests for a lazily-provisioned member
+  // can both miss the userId lookup; one wins the link above and the other's
+  // findOneAndUpdate returns null (row no longer matches the unlinked
+  // predicate, no E11000). Without this re-read the loser 403s a legitimate
+  // member — e.g. the Team page's two parallel fetches on first sign-in.
+  if (!membership) {
+    membership = await HireWorkspaceMember.findOne({ userId: actor.userId }, null, {
+      sort: { createdAt: 1 },
+    })
+  }
   // Self-heal a DANGLING link: if this email's membership points at a User
   // the account-deletion cascade has since erased, re-link it to the caller.
   // Without this, the sole admin deleting their account orphans the whole
