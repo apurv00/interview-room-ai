@@ -164,6 +164,27 @@ afterEach(() => {
 })
 
 describe('direct acquisition checkout on Pricing', () => {
+  it('does not show coupon or payment-explanation copy before sign-in', () => {
+    installFetch()
+    render(
+      <BillingPricingExperience
+        currentPlan="free"
+        authStatus="unauthenticated"
+        accountId={null}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    expect(screen.queryByText(/Sign in from a paid plan below/))
+      .not.toBeInTheDocument()
+    expect(screen.queryByText(/By selecting Pay/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', {
+      name: 'Coupon code (optional)',
+    })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign in to buy Plus' }))
+      .toBeEnabled()
+  })
+
   it('turns the plan card into the only pre-Razorpay payment click', async () => {
     installFetch()
     render(

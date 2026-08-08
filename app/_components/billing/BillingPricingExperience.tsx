@@ -840,60 +840,32 @@ export function BillingPricingExperience({
           </p>
         ) : null}
 
-        {acquisitionControlsVisible ? (
-          <section
-            aria-label="Paid plan coupon and terms"
-            className="mb-8 rounded-2xl border border-[#e1e8ed] bg-white p-5"
-          >
-            {authStatus === 'authenticated' && accountId ? (
-              <div className="max-w-md">
-                <Input
-                  id="pricing-coupon-code"
-                  label="Coupon code (optional)"
-                  autoComplete="off"
-                  maxLength={40}
-                  value={couponCode}
-                  onChange={(event) => {
-                    setCouponCode(event.target.value.toUpperCase())
-                    setResumedAfterSignIn(null)
-                  }}
-                  disabled={checkoutSelection !== null}
-                  hint="Checked automatically as you type. No Razorpay Offer is required."
-                />
-                {couponStatusMessage ? (
-                  <p
-                    className="mt-2 text-xs leading-5 text-[#536471]"
-                    role="status"
-                    aria-live="polite"
-                  >
-                    {couponStatusMessage}
-                  </p>
-                ) : null}
-              </div>
-            ) : (
-              <p className="text-sm text-[#536471]">
-                Sign in from a paid plan below to check a coupon for your
-                account.
-              </p>
-            )}
-            <p className="mt-4 text-xs leading-5 text-[#71767b]">
-              By selecting Pay, you agree to the{' '}
-              <Link href="/terms" className="text-blue-600 hover:underline">
-                Terms
-              </Link>{' '}and acknowledge the{' '}
-              <Link
-                href="/cancellation-refunds"
-                className="text-blue-600 hover:underline"
+        {acquisitionControlsVisible &&
+        authStatus === 'authenticated' &&
+        accountId ? (
+          <div className="mb-8 max-w-md">
+            <Input
+              id="pricing-coupon-code"
+              label="Coupon code (optional)"
+              autoComplete="off"
+              maxLength={40}
+              value={couponCode}
+              onChange={(event) => {
+                setCouponCode(event.target.value.toUpperCase())
+                setResumedAfterSignIn(null)
+              }}
+              disabled={checkoutSelection !== null}
+            />
+            {couponStatusMessage ? (
+              <p
+                className="mt-2 text-xs leading-5 text-[#536471]"
+                role="status"
+                aria-live="polite"
               >
-                cancellation and refund terms
-              </Link>
-              . Review our{' '}
-              <Link href="/privacy" className="text-blue-600 hover:underline">
-                Privacy Policy
-              </Link>
-              . Your plan activates only after server-confirmed payment.
-            </p>
-          </section>
+                {couponStatusMessage}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         <section
