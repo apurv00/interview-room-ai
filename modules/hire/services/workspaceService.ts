@@ -38,7 +38,12 @@ export async function getWorkspaceForUser(
 ): Promise<MembershipContext | null> {
   await connectDB()
 
-  let membership = await HireWorkspaceMember.findOne({ userId: actor.userId })
+  // Earliest-membership-wins on both lookups: one workspace per user is the
+  // Phase 1 rule, and resolution must be deterministic even if data ever
+  // holds more than one row (Codex P1 on #603).
+  let membership = await HireWorkspaceMember.findOne({ userId: actor.userId }, null, {
+    sort: { createdAt: 1 },
+  })
   if (!membership && actor.email) {
     membership = await HireWorkspaceMember.findOneAndUpdate(
       {
@@ -46,7 +51,7 @@ export async function getWorkspaceForUser(
         $or: [{ userId: { $exists: false } }, { userId: null }],
       },
       { $set: { userId: actor.userId } },
-      { new: true }
+      { new: true, sort: { createdAt: 1 } }
     )
   }
   if (!membership) return null
@@ -112,12 +117,24 @@ export async function addMember(
   const email = input.email.toLowerCase()
   const linked = await User.findOne({ email }).select('_id').lean()
 
+  // Link the User only if they aren't already a linked member of ANY
+  // workspace — one workspace per user (Phase 1 rule). Eagerly linking a
+  // second workspace would make getWorkspaceForUser's resolution ambiguous;
+  // instead the row stays email-only and visibly "not signed in yet".
+  let linkableUserId = linked?._id
+  if (linkableUserId) {
+    const alreadyLinked = await HireWorkspaceMember.findOne({ userId: linkableUserId })
+      .select('_id')
+      .lean()
+    if (alreadyLinked) linkableUserId = undefined
+  }
+
   try {
     return await HireWorkspaceMember.create({
       workspaceId: ctx.workspace._id,
       email,
       name: input.name,
-      userId: linked?._id,
+      userId: linkableUserId,
       role: 'member',
       addedBy: ctx.membership.userId,
     })

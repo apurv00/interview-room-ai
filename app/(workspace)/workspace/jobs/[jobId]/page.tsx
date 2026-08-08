@@ -13,6 +13,7 @@ import Badge from '@shared/ui/Badge'
 import Button from '@shared/ui/Button'
 import Input from '@shared/ui/Input'
 import StateView from '@shared/ui/StateView'
+import { scoreBand } from '@shared/ui/ScoreBar'
 
 const STAGES = ['new', 'screened', 'interviewing', 'shortlist', 'offer', 'hired', 'rejected'] as const
 type Stage = (typeof STAGES)[number]
@@ -64,7 +65,15 @@ interface PoolCandidate {
 function roundChip(round: Entry['latestRound']): { label: string; variant: 'default' | 'primary' | 'success' | 'caution' | 'danger' } | null {
   if (!round) return null
   if (round.revokedAt) return { label: 'AI revoked', variant: 'default' }
-  if (round.overallScore !== null) return { label: `AI ${round.overallScore}`, variant: round.overallScore >= 70 ? 'success' : round.overallScore >= 50 ? 'caution' : 'danger' }
+  if (round.overallScore !== null) {
+    // Canonical 75/55 bands (shared/ui/ScoreBar.scoreBand) — keep chips
+    // consistent with every other score surface.
+    const band = scoreBand(round.overallScore)
+    return {
+      label: `AI ${round.overallScore}`,
+      variant: band === 'strong' ? 'success' : band === 'ok' ? 'caution' : 'danger',
+    }
+  }
   if (round.status === 'completed') return { label: 'AI done — report pending', variant: 'primary' }
   if (round.status === 'prepared' || round.status === 'auth_verified') return { label: 'AI in progress', variant: 'primary' }
   if (new Date(round.inviteExpiresAt) < new Date()) return { label: 'AI link expired', variant: 'caution' }

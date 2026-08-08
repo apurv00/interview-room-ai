@@ -67,13 +67,15 @@ beforeEach(() => {
 })
 
 describe('getWorkspaceForUser', () => {
-  it('resolves membership by linked userId first', async () => {
+  it('resolves membership by linked userId first, earliest membership wins', async () => {
     const membership = { workspaceId: 'ws1' }
     mockMember.findOne.mockResolvedValue(membership)
     mockWorkspace.findById.mockResolvedValue({ _id: 'ws1', name: 'Acme' })
 
     const ctx = await getWorkspaceForUser(ACTOR)
-    expect(mockMember.findOne).toHaveBeenCalledWith({ userId: ACTOR.userId })
+    expect(mockMember.findOne).toHaveBeenCalledWith({ userId: ACTOR.userId }, null, {
+      sort: { createdAt: 1 },
+    })
     expect(ctx?.workspace.name).toBe('Acme')
   })
 
@@ -145,6 +147,10 @@ describe('addMember', () => {
     mockUserFindOne.mockReturnValue({
       select: () => ({ lean: () => Promise.resolve({ _id: 'existing-user' }) }),
     })
+    // No linked membership anywhere yet → eager link is safe.
+    mockMember.findOne.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve(null) }),
+    })
     mockMember.create.mockResolvedValue({ _id: 'm2' })
 
     await addMember(ctxWith('admin'), { email: 'New@Acme.com', name: 'New Person' })
@@ -153,6 +159,23 @@ describe('addMember', () => {
     expect(doc.userId).toBe('existing-user')
     expect(doc.role).toBe('member')
     expect(doc.workspaceId).toBe('ws1')
+  })
+
+  it('does NOT link a user who is already a linked member of another workspace', async () => {
+    mockUserFindOne.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve({ _id: 'existing-user' }) }),
+    })
+    mockMember.findOne.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve({ _id: 'their-other-membership' }) }),
+    })
+    mockMember.create.mockResolvedValue({ _id: 'm3' })
+
+    await addMember(ctxWith('admin'), { email: 'busy@other.com' })
+    const doc = mockMember.create.mock.calls[0][0]
+    // Row stays email-only ("not signed in yet") — one workspace per user;
+    // a second eager link would make workspace resolution ambiguous.
+    expect(doc.userId).toBeUndefined()
+    expect(doc.email).toBe('busy@other.com')
   })
 
   it('maps the duplicate-key error to 409 MEMBER_EXISTS', async () => {

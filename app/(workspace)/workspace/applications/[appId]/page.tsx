@@ -14,8 +14,15 @@ import Link from 'next/link'
 import Badge from '@shared/ui/Badge'
 import Button from '@shared/ui/Button'
 import Accordion from '@shared/ui/Accordion'
-import { ScoreBar } from '@shared/ui/ScoreBar'
+import { ScoreBar, scoreBand } from '@shared/ui/ScoreBar'
 import StateView from '@shared/ui/StateView'
+
+// Canonical 75/55 bands (shared/ui/ScoreBar) — a 72 must never be green here
+// while amber in the adjacent ScoreBar (Codex on #603, same class as #498).
+function scoreBadgeVariant(score: number): 'success' | 'caution' | 'danger' {
+  const band = scoreBand(score)
+  return band === 'strong' ? 'success' : band === 'ok' ? 'caution' : 'danger'
+}
 
 interface PerQuestion {
   questionIndex: number
@@ -215,16 +222,7 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <Badge variant="primary">{application.stage}</Badge>
               {results?.overallScore != null && (
-                <Badge
-                  variant={
-                    results.overallScore >= 70
-                      ? 'success'
-                      : results.overallScore >= 50
-                        ? 'caution'
-                        : 'danger'
-                  }
-                  dot
-                >
+                <Badge variant={scoreBadgeVariant(results.overallScore)} dot>
                   AI {results.overallScore}
                 </Badge>
               )}
@@ -378,7 +376,11 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
           {round.results && (
             <>
               <div className="grid md:grid-cols-3 gap-4">
-                <ScoreBar label="Overall" score={round.results.overallScore ?? 0} />
+                {/* Never paint a missing score as a red 0 — while the report
+                    is pending the "report pending" note above is the truth. */}
+                {round.results.overallScore != null && (
+                  <ScoreBar label="Overall" score={round.results.overallScore} />
+                )}
                 {round.results.answerQualityScore != null && (
                   <ScoreBar label="Answer quality" score={round.results.answerQualityScore} />
                 )}
