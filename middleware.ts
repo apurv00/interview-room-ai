@@ -57,7 +57,9 @@ export default withAuth(
     const shouldRewriteToHire =
       isHire &&
       !pathname.startsWith('/workspace') &&
-      !pathname.startsWith('/candidate') &&
+      // Guest surface only — segment-exact so the PLURAL /candidates (the
+      // workspace clean URL) still rewrites (Codex P2 on #605).
+      !(pathname === '/candidate' || pathname.startsWith('/candidate/')) &&
       !pathname.startsWith('/hire') &&
       !subdomainExcludedPaths.some((p) => pathname.startsWith(p))
 
