@@ -1,0 +1,268 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import crypto from 'crypto'
+
+vi.mock('@shared/db/connection', () => ({
+  connectDB: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@shared/logger', () => ({
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+}))
+const mockAppendEvent = vi.fn().mockResolvedValue(undefined)
+vi.mock('../services/pipelineService', () => ({
+  appendApplicationEvent: (...a: unknown[]) => mockAppendEvent(...a),
+}))
+
+const mockSessionFind = vi.fn()
+const mockSessionFindById = vi.fn()
+vi.mock('@shared/db/models', () => ({
+  InterviewSession: {
+    find: (...a: unknown[]) => mockSessionFind(...a),
+    findById: (...a: unknown[]) => mockSessionFindById(...a),
+  },
+  User: {},
+}))
+
+const mockRound = { find: vi.fn(), findOneAndUpdate: vi.fn(), updateOne: vi.fn() }
+vi.mock('../models', () => ({
+  HireRound: {
+    find: (...a: unknown[]) => mockRound.find(...a),
+    findOneAndUpdate: (...a: unknown[]) => mockRound.findOneAndUpdate(...a),
+    updateOne: (...a: unknown[]) => mockRound.updateOne(...a),
+  },
+}))
+
+import { buildResultsSnapshot, reconcileApplicationRounds } from '../services/roundLinkService'
+
+const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex')
+
+function chainTo(value: unknown) {
+  return {
+    sort: () => ({ select: () => ({ lean: () => Promise.resolve(value) }) }),
+    select: () => ({ lean: () => Promise.resolve(value) }),
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('buildResultsSnapshot', () => {
+  it('maps feedback + per-question evaluations, null-safe (no silent zeros)', () => {
+    const snap = buildResultsSnapshot({
+      _id: { toString: () => 's1' },
+      status: 'completed',
+      createdAt: new Date(),
+      feedback: {
+        overall_score: 82,
+        pass_probability: 'High',
+        confidence_level: 'Medium',
+        dimensions: { answer_quality: { score: 78 }, communication: { score: 71 } },
+        jd_match_score: 66,
+        red_flags: ['Vague ownership on project X'],
+        top_3_improvements: ['Quantify outcomes'],
+      },
+      evaluations: [
+        {
+          questionIndex: 0,
+          question: 'Tell me about a conflict.',
+          answer: 'Full answer text',
+          relevance: 80,
+          structure: 60,
+          specificity: null,
+          ownership: 70,
+          jdAlignment: 55,
+          flags: ['rambling'],
+        },
+      ],
+      answeredCount: 5,
+      plannedQuestionCount: 6,
+      endReason: 'time_up',
+      completedAt: new Date(),
+    })
+
+    expect(snap.overallScore).toBe(82)
+    expect(snap.passProbability).toBe('High')
+    expect(snap.jdMatchScore).toBe(66)
+    expect(snap.pending).toBe(false)
+    const q = snap.perQuestion![0]
+    // Mean over AVAILABLE dims only: (80+60+70)/3 = 70 — a null dim is
+    // excluded, never coerced to 0 (the G-series silent-zero lesson).
+    expect(q.score).toBe(70)
+    expect(q.specificity).toBeNull()
+    expect(q.jdAlignment).toBe(55)
+  })
+
+  it('marks the snapshot pending when session-level feedback is absent', () => {
+    const snap = buildResultsSnapshot({
+      _id: { toString: () => 's1' },
+      status: 'completed',
+      createdAt: new Date(),
+      feedback: null,
+      evaluations: [{ questionIndex: 0, question: 'Q', relevance: 50 }],
+    })
+    expect(snap.pending).toBe(true)
+    expect(snap.overallScore).toBeNull()
+    expect(snap.perQuestion![0].score).toBe(50)
+  })
+})
+
+describe('reconcileApplicationRounds', () => {
+  const PREPARED_AT = new Date(Date.now() - 3600_000)
+  const round = (over: Record<string, unknown> = {}) => ({
+    _id: { toString: () => 'r1' },
+    status: 'prepared',
+    kind: 'ai',
+    guestUserId: 'guest-1',
+    preparedAt: PREPARED_AT,
+    jdHash: sha256('The JD'),
+    config: { role: 'Backend Engineer', interviewType: 'behavioral', experience: '3-6', duration: 15 },
+    sessionId: undefined,
+    results: undefined,
+    ...over,
+  })
+  const session = (over: Record<string, unknown> = {}) => ({
+    _id: { toString: () => 's1' },
+    status: 'completed',
+    createdAt: new Date(),
+    config: { role: 'Backend Engineer' },
+    jobDescription: 'The JD',
+    feedback: { overall_score: 75 },
+    evaluations: [],
+    ...over,
+  })
+
+  it('links the matching completed session with an atomic unclaimed-only update', async () => {
+    mockRound.find.mockResolvedValue([round()])
+    mockSessionFind.mockReturnValue(chainTo([session()]))
+    mockRound.findOneAndUpdate.mockResolvedValue({ _id: 'r1' })
+
+    await reconcileApplicationRounds('ws-A', 'a1')
+
+    const [sessionFilter] = mockSessionFind.mock.calls[0]
+    expect(sessionFilter.userId).toBe('guest-1')
+    expect(sessionFilter.createdAt.$gte).toBe(PREPARED_AT)
+
+    const [claimFilter, claimUpdate] = mockRound.findOneAndUpdate.mock.calls[0]
+    expect(claimFilter).toMatchObject({ workspaceId: 'ws-A', sessionId: { $exists: false } })
+    expect(claimUpdate.$set.status).toBe('completed')
+    expect(claimUpdate.$set.results.overallScore).toBe(75)
+    expect(claimUpdate.$unset).toEqual({ live: 1 })
+    expect(mockAppendEvent).toHaveBeenCalledWith(
+      'ws-A',
+      'a1',
+      expect.objectContaining({ type: 'ai_result_linked', actorName: 'System' })
+    )
+  })
+
+  it('ignores sessions whose role or JD hash does not match the round', async () => {
+    mockRound.find.mockResolvedValue([round()])
+    mockSessionFind.mockReturnValue(
+      chainTo([
+        session({ config: { role: 'Other Role' } }),
+        session({ jobDescription: 'Different JD' }),
+      ])
+    )
+    await reconcileApplicationRounds('ws-A', 'a1')
+    expect(mockRound.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('reports in-progress matches as transient activity without claiming', async () => {
+    mockRound.find.mockResolvedValue([round()])
+    mockSessionFind.mockReturnValue(chainTo([session({ status: 'in_progress' })]))
+    const activity = await reconcileApplicationRounds('ws-A', 'a1')
+    expect(activity).toEqual([{ roundId: 'r1', inProgress: true }])
+    expect(mockRound.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('persists attemptCount so retries are visible on the card, never silently absorbed', async () => {
+    mockRound.find.mockResolvedValue([round()])
+    mockSessionFind.mockReturnValue(
+      chainTo([
+        session({ status: 'in_progress' }),
+        session({ _id: { toString: () => 's2' } }),
+      ])
+    )
+    mockRound.findOneAndUpdate.mockResolvedValue({ _id: 'r1' })
+    await reconcileApplicationRounds('ws-A', 'a1')
+    const attemptUpdate = mockRound.updateOne.mock.calls.find(
+      ([, update]) => update.$set?.attemptCount !== undefined
+    )
+    expect(attemptUpdate).toBeDefined()
+    expect(attemptUpdate![1].$set.attemptCount).toBe(2)
+  })
+
+  it('on a duplicate-claim race (E11000) it tries the next candidate session', async () => {
+    mockRound.find.mockResolvedValue([round()])
+    mockSessionFind.mockReturnValue(
+      chainTo([session(), session({ _id: { toString: () => 's2' } })])
+    )
+    mockRound.findOneAndUpdate.mockRejectedValueOnce(
+      Object.assign(new Error('dup'), { code: 11000 })
+    )
+    mockRound.findOneAndUpdate.mockResolvedValueOnce({ _id: 'r1' })
+
+    await reconcileApplicationRounds('ws-A', 'a1')
+    expect(mockRound.findOneAndUpdate).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshes a pending snapshot once feedback lands', async () => {
+    mockRound.find.mockResolvedValue([
+      round({ sessionId: '.session-1', results: { overallScore: null, pending: true } }),
+    ])
+    mockSessionFindById.mockReturnValue({
+      select: () => ({
+        lean: () => Promise.resolve(session({ feedback: { overall_score: 81 } })),
+      }),
+    })
+    await reconcileApplicationRounds('ws-A', 'a1')
+    const [filter, update] = mockRound.updateOne.mock.calls[0]
+    expect(filter).toMatchObject({ workspaceId: 'ws-A' })
+    expect(update.$set.results.overallScore).toBe(81)
+    expect(update.$set.results.pending).toBe(false)
+  })
+
+  it('skips rounds that never reached prepare', async () => {
+    mockRound.find.mockResolvedValue([
+      round({ preparedAt: undefined }),
+      round({ guestUserId: undefined }),
+    ])
+    await reconcileApplicationRounds('ws-A', 'a1')
+    expect(mockSessionFind).not.toHaveBeenCalled()
+  })
+
+  it('attaches a revoked round\'s completed session FLAGGED — never silently untracked', async () => {
+    mockRound.find.mockResolvedValue([round({ status: 'revoked', revokedAt: new Date() })])
+    mockSessionFind.mockReturnValue(chainTo([session()]))
+    mockRound.findOneAndUpdate.mockResolvedValue({ _id: 'r1' })
+
+    await reconcileApplicationRounds('ws-A', 'a1')
+    const [, update] = mockRound.findOneAndUpdate.mock.calls[0]
+    expect(update.$set.results.completedAfterRevoke).toBe(true)
+    // The round stays administratively revoked — results attached, status kept.
+    expect(update.$set.status).toBeUndefined()
+    expect(mockAppendEvent).toHaveBeenCalledWith(
+      'ws-A',
+      'a1',
+      expect.objectContaining({
+        type: 'ai_result_linked',
+        note: expect.stringContaining('AFTER the link was revoked'),
+      })
+    )
+  })
+
+  it('keeps counting attempts for already-linked rounds (second-device retakes stay visible)', async () => {
+    mockRound.find.mockResolvedValue([
+      round({ sessionId: '.session-1', results: { overallScore: 80, pending: false }, attemptCount: 1 }),
+    ])
+    mockSessionFind.mockReturnValue(
+      chainTo([session(), session({ _id: { toString: () => 's2' }, status: 'in_progress' })])
+    )
+    await reconcileApplicationRounds('ws-A', 'a1')
+    const attemptUpdate = mockRound.updateOne.mock.calls.find(
+      ([, update]) => update.$set?.attemptCount !== undefined
+    )
+    expect(attemptUpdate![1].$set.attemptCount).toBe(2)
+    // Linked round: no re-claim attempted.
+    expect(mockRound.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+})
