@@ -16,9 +16,6 @@ import {
   type ResolvedCustomerBillingQuote,
 } from '@payments'
 import {
-  CustomerBillingProfile,
-} from '@payments/models/CustomerBillingProfile'
-import {
   CURRENT_PAYMENT_CODE_READINESS,
 } from '@payments/services/paymentRuntimeGate'
 import {
@@ -107,11 +104,6 @@ interface BillingRolloutSubject {
 interface BillingRolloutCheckoutBuyer extends BillingRolloutSubject {
   readonly name: string
   readonly email: string
-  readonly billingProfile: {
-    readonly version: number
-    readonly contentHash: string
-    readonly placeOfSupply: unknown
-  } | null
 }
 
 interface PersistedCheckoutAuthority {
@@ -203,24 +195,16 @@ async function loadMongoCheckoutBuyer(
 ): Promise<BillingRolloutCheckoutBuyer | null> {
   if (!validObjectId(userId)) return null
   await connectDB()
-  const userObjectId = new mongoose.Types.ObjectId(userId)
-  const [buyer, billingProfile] = await Promise.all([
-    User.findById(userObjectId)
-      .select('name email buyerState createdAt')
-      .lean<{
-        name?: string
-        email?: string
-        buyerState?: string
-        createdAt?: Date
-      }>(),
-    CustomerBillingProfile.findOne({ userId: userObjectId })
-      .select('version contentHash placeOfSupply')
-      .lean<{
-        version: number
-        contentHash: string
-        placeOfSupply: unknown
-      }>(),
-  ])
+  const buyer = await User.findById(
+    new mongoose.Types.ObjectId(userId),
+  )
+    .select('name email buyerState createdAt')
+    .lean<{
+      name?: string
+      email?: string
+      buyerState?: string
+      createdAt?: Date
+    }>()
   if (
     !buyer ||
     typeof buyer.name !== 'string' ||
@@ -233,7 +217,6 @@ async function loadMongoCheckoutBuyer(
     createdAt: validDate(buyer.createdAt)
       ? buyer.createdAt
       : undefined,
-    billingProfile: billingProfile ?? null,
   }
 }
 
@@ -824,10 +807,10 @@ async function authorizedCheckoutContext(input: {
     }
     throw error
   }
-  const baseBuyerSnapshot = checkoutBuyerSnapshot(
-    { name: buyer.name, email: buyer.email },
-    buyer.billingProfile,
-  )
+  const baseBuyerSnapshot = checkoutBuyerSnapshot({
+    name: buyer.name,
+    email: buyer.email,
+  })
   return {
     authority,
     now,

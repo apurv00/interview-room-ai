@@ -616,7 +616,9 @@ describe('mongo reversal transaction fence', () => {
         expect.objectContaining({
           razorpayRefundId: refundId,
           creditNoteDecision: expect.objectContaining({
-            status: 'required',
+            status: 'not_required',
+            reason:
+              'individual_purchase_financial_document_not_issued',
           }),
           accessReversalDecision: expect.objectContaining({
             status: 'not_required',
@@ -1146,7 +1148,7 @@ describe('mongo dispute terminal-state persistence', () => {
     },
   )
 
-  it('keeps a lost dispute credit note in explicit manual accounting review', async () => {
+  it('does not require a credit note when no financial document was issued', async () => {
     const adverseRequest = disputePersistenceRequest({
       status: 'open',
       eventType: 'payment.dispute.created',
@@ -1170,9 +1172,9 @@ describe('mongo dispute terminal-state persistence', () => {
         $set: expect.objectContaining({
           status: 'lost',
           creditNoteDecision: expect.objectContaining({
-            status: 'pending_review',
+            status: 'not_required',
             reason:
-              'provider_dispute_lost_requires_manual_accounting_review',
+              'individual_purchase_financial_document_not_issued',
           }),
         }),
       }),

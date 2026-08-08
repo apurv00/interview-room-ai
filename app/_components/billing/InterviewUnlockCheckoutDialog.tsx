@@ -9,7 +9,6 @@ import {
   formatInr,
   parseBillingResponse,
 } from './billingClient'
-import { createBillingIdempotencyKey } from './billingIntentStorage'
 import { billingFetch } from './billingRequestTimeout'
 import {
   loadRazorpayCheckout,
@@ -18,22 +17,6 @@ import {
 
 const POLL_WINDOW_MS = 60_000
 const VERIFY_RETRY_MS = 7_000
-
-const INDIA_BILLING_STATES = [
-  ['01', 'Jammu and Kashmir'], ['02', 'Himachal Pradesh'],
-  ['03', 'Punjab'], ['04', 'Chandigarh'], ['05', 'Uttarakhand'],
-  ['06', 'Haryana'], ['07', 'Delhi'], ['08', 'Rajasthan'],
-  ['09', 'Uttar Pradesh'], ['10', 'Bihar'], ['11', 'Sikkim'],
-  ['12', 'Arunachal Pradesh'], ['13', 'Nagaland'], ['14', 'Manipur'],
-  ['15', 'Mizoram'], ['16', 'Tripura'], ['17', 'Meghalaya'],
-  ['18', 'Assam'], ['19', 'West Bengal'], ['20', 'Jharkhand'],
-  ['21', 'Odisha'], ['22', 'Chhattisgarh'], ['23', 'Madhya Pradesh'],
-  ['24', 'Gujarat'], ['26', 'Dadra and Nagar Haveli and Daman and Diu'],
-  ['27', 'Maharashtra'], ['29', 'Karnataka'], ['30', 'Goa'],
-  ['31', 'Lakshadweep'], ['32', 'Kerala'], ['33', 'Tamil Nadu'],
-  ['34', 'Puducherry'], ['35', 'Andaman and Nicobar Islands'],
-  ['36', 'Telangana'], ['37', 'Andhra Pradesh'], ['38', 'Ladakh'],
-] as const
 
 const OneTimeInterviewCheckoutSchema = z.object({
   intentId: z.string().regex(/^[a-f\d]{24}$/i),
@@ -127,9 +110,6 @@ export function InterviewUnlockCheckoutDialog({
 }: InterviewUnlockCheckoutDialogProps) {
   const [stage, setStage] = useState<Stage>('loading')
   const [listPricePaise, setListPricePaise] = useState(6_900)
-  const [stateCode, setStateCode] = useState('')
-  const [profileConfigured, setProfileConfigured] = useState(false)
-  const [profileVersion, setProfileVersion] = useState(0)
   const [checkout, setCheckout] =
     useState<OneTimeInterviewCheckout | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -144,25 +124,15 @@ export function InterviewUnlockCheckoutDialog({
     abortRef.current = controller
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    void Promise.all([
-      billingFetch('/api/billing/catalog', {
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      }).then((response) => parseBillingResponse(
-        response,
-        billingResponseSchemas.catalog,
-        'Interview pricing could not be loaded.',
-      )),
-      billingFetch('/api/billing/profile', {
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      }).then((response) => parseBillingResponse(
-        response,
-        billingResponseSchemas.profile,
-        'Your billing state could not be loaded.',
-      )),
-    ])
-      .then(([catalog, profile]) => {
+    void billingFetch('/api/billing/catalog', {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    }).then((response) => parseBillingResponse(
+      response,
+      billingResponseSchemas.catalog,
+      'Interview pricing could not be loaded.',
+    ))
+      .then((catalog) => {
         if (controller.signal.aborted) return
         const product = catalog.oneTimeProducts.single_interview
         if (
@@ -177,11 +147,6 @@ export function InterviewUnlockCheckoutDialog({
           )
         }
         setListPricePaise(product.listPricePaise)
-        setProfileConfigured(profile.configured)
-        setProfileVersion(profile.configured ? profile.version : 0)
-        setStateCode(
-          profile.configured ? profile.placeOfSupply.stateCode : '',
-        )
         setStage('review')
       })
       .catch((cause: unknown) => {
@@ -198,54 +163,12 @@ export function InterviewUnlockCheckoutDialog({
     }
   }, [])
 
-  async function persistProfile() {
-    if (!stateCode) {
-      throw new BillingClientError(
-        400,
-        'Select your billing state or Union Territory.',
-      )
-    }
-    if (profileConfigured) return
-    const response = await billingFetch('/api/billing/profile', {
-      method: 'PUT',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        expectedVersion: profileVersion,
-        mutationId: createBillingIdempotencyKey().replace(
-          'billing-subscription',
-          'billing-profile',
-        ),
-        placeOfSupply: {
-          stateCode,
-          countryCode: 'IN',
-        },
-      }),
-    })
-    const profile = await parseBillingResponse(
-      response,
-      billingResponseSchemas.profile,
-      'Your billing state could not be saved.',
-    )
-    if (!profile.configured || profile.placeOfSupply.stateCode !== stateCode) {
-      throw new BillingClientError(
-        409,
-        'Your saved billing state did not match the selection.',
-      )
-    }
-    setProfileConfigured(true)
-    setProfileVersion(profile.version)
-  }
-
   async function prepareCheckout() {
     if (stage === 'preparing') return
     setStage('preparing')
     setError(null)
     setStatusMessage('Preparing your secure one-time checkout…')
     try {
-      await persistProfile()
       const response = await billingFetch('/api/billing/orders/interview', {
         method: 'POST',
         headers: {
@@ -488,25 +411,9 @@ export function InterviewUnlockCheckoutDialog({
             </strong>
           </div>
           <p className="mt-2 text-xs text-[#71767b]">
-            GST included · Any interview type · Up to 30 minutes · Valid for 30 days
+            Any interview type · Up to 30 minutes · Valid for 30 days
           </p>
         </div>
-
-        {stage !== 'loading' && !profileConfigured ? (
-          <label className="mt-5 block text-sm font-medium text-[#0f1419]">
-            Billing state / Union Territory
-            <select
-              value={stateCode}
-              onChange={(event) => setStateCode(event.target.value)}
-              className="mt-2 w-full rounded-xl border border-[#cfd9de] bg-white px-3 py-2.5 text-sm"
-            >
-              <option value="">Select state</option>
-              {INDIA_BILLING_STATES.map(([code, name]) => (
-                <option key={code} value={code}>{code} — {name}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
 
         {statusMessage ? (
           <p className="mt-4 text-sm text-[#536471]" role="status">
@@ -534,7 +441,6 @@ export function InterviewUnlockCheckoutDialog({
           {stage === 'review' || stage === 'failed' ? (
             <Button
               type="button"
-              disabled={!stateCode}
               onClick={prepareCheckout}
             >
               Pay {formatInr(listPricePaise)}

@@ -74,13 +74,6 @@ const quote = {
   entitlementSummary,
 }
 
-const profile = {
-  configured: true,
-  version: 1,
-  placeOfSupply: { stateCode: '20', countryCode: 'IN' },
-  updatedAt: NOW,
-}
-
 const summary = {
   schemaVersion: 1,
   environment: 'test',
@@ -148,9 +141,6 @@ function response(body: unknown, status = 200) {
 function standardFetch(input: RequestInfo | URL, init?: RequestInit) {
   const url = String(input)
   if (url === '/api/billing/quote') return response(quote)
-  if (url === '/api/billing/profile' && init?.method !== 'PUT') {
-    return response(profile)
-  }
   if (url === '/api/billing/me') return response(summary)
   if (url === '/api/billing/subscriptions/checkout') return response(checkout, 201)
   if (url === '/api/billing/verify/subscription') {
@@ -195,6 +185,43 @@ afterEach(() => {
 })
 
 describe('BillingCheckoutDialog completion and recovery', () => {
+  it('prepares checkout without billing-profile UI or requests', async () => {
+    const fetchMock = vi.fn(standardFetch)
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    const review = await screen.findByRole('button', {
+      name: 'Review secure checkout',
+    })
+    expect(review).toBeEnabled()
+    expect(screen.queryByRole('combobox', {
+      name: 'Billing state / Union Territory',
+    })).not.toBeInTheDocument()
+    expect(screen.queryByText(/GST included/i)).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(
+      ([input]) => String(input) === '/api/billing/profile',
+    )).toBe(false)
+
+    fireEvent.click(review)
+
+    expect(await screen.findByRole('button', {
+      name: /Pay ₹599 with Razorpay/,
+    })).toBeEnabled()
+    expect(fetchMock.mock.calls.some(
+      ([input]) => String(input) === '/api/billing/profile',
+    )).toBe(false)
+  })
+
   it('allows a server-side retry when another device has the pending checkout', async () => {
     const pendingSummary = {
       ...summary,

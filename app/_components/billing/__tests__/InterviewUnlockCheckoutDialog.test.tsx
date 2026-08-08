@@ -36,13 +36,6 @@ const catalog = {
   checkoutRequiresAuthentication: true,
 }
 
-const profile = {
-  configured: true,
-  version: 1,
-  placeOfSupply: { stateCode: '20', countryCode: 'IN' },
-  updatedAt: '2026-08-07T10:00:00.000Z',
-}
-
 const checkout = {
   intentId: INTENT_ID,
   providerMode: 'test',
@@ -105,22 +98,10 @@ afterEach(() => {
 })
 
 describe('InterviewUnlockCheckoutDialog', () => {
-  it('saves a first-time billing profile with the versioned mutation contract', async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+  it('prepares checkout without billing-profile UI or requests', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
       if (url === '/api/billing/catalog') return response(catalog)
-      if (url === '/api/billing/profile' && init?.method !== 'PUT') {
-        return response({ configured: false, version: 0 })
-      }
-      if (url === '/api/billing/profile' && init?.method === 'PUT') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        expect(body).toMatchObject({
-          expectedVersion: 0,
-          placeOfSupply: { stateCode: '20', countryCode: 'IN' },
-        })
-        expect(body.mutationId).toMatch(/^billing-profile:/)
-        return response(profile)
-      }
       if (url === '/api/billing/orders/interview') {
         return response(checkout, 201)
       }
@@ -136,27 +117,30 @@ describe('InterviewUnlockCheckoutDialog', () => {
       />,
     )
 
-    fireEvent.change(await screen.findByRole('combobox', {
+    const pay = await screen.findByRole('button', { name: 'Pay ₹69' })
+    expect(pay).toBeEnabled()
+    expect(screen.queryByRole('combobox', {
       name: 'Billing state / Union Territory',
-    }), { target: { value: '20' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Pay ₹69' }))
+    })).not.toBeInTheDocument()
+    expect(screen.queryByText(/GST included/i)).not.toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(
+      ([input]) => String(input) === '/api/billing/profile',
+    )).toBe(false)
+
+    fireEvent.click(pay)
 
     await screen.findByRole('button', {
       name: 'Pay securely with Razorpay',
     })
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/billing/profile',
-      expect.objectContaining({ method: 'PUT' }),
-    )
+    expect(fetchMock.mock.calls.some(
+      ([input]) => String(input) === '/api/billing/profile',
+    )).toBe(false)
   })
 
   it('creates an order checkout without a Razorpay Offer and unlocks only after verification', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === '/api/billing/catalog') return response(catalog)
-      if (url === '/api/billing/profile' && init?.method !== 'PUT') {
-        return response(profile)
-      }
       if (url === '/api/billing/orders/interview') {
         expect(init?.body).toBe('{}')
         expect(new Headers(init?.headers).get('Idempotency-Key'))

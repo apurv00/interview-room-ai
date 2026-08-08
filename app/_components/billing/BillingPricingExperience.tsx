@@ -45,7 +45,7 @@ const BILLING_FAQ = [
   {
     title: 'How long can an interview be?',
     content:
-      'Basic includes one 10-minute interview each month. Plus and Pro interviews support durations up to 30 minutes.',
+      'Interview allowances and maximum durations are listed in each plan above.',
   },
 ]
 
@@ -495,18 +495,10 @@ export function BillingPricingExperience({
   return (
     <main className="min-h-screen px-4 py-16 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-5xl">
-        <header className="mb-14 space-y-3 text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">
-            GST-inclusive pricing
-          </p>
+        <header className="mb-14 text-center">
           <h1 className="text-display text-[#0f1419]">
             Practice free. Upgrade when the extra reps matter.
           </h1>
-          <p className="mx-auto max-w-2xl text-body text-[#71767b]">
-            Basic includes one 10-minute interview each month. Paid plans add
-            more interviews and deeper analysis, with every interview capped
-            at 30 minutes.
-          </p>
         </header>
 
         {subscriptionReviewLocked ? (

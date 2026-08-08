@@ -203,6 +203,7 @@ interface ExactReversalContext {
   attempt: LeanPaymentAttempt
   fulfillment: LeanChargeFulfillment
   entitlementApplied: boolean
+  financialDocumentIssued: boolean
 }
 
 function failure(
@@ -641,7 +642,10 @@ function exactLocalReferences(
 function exactFulfillmentFence(
   input: CommonReversalEvidence,
   fulfillment: LeanChargeFulfillment,
-): { entitlementApplied: boolean } {
+): {
+  entitlementApplied: boolean
+  financialDocumentIssued: boolean
+} {
   const expectedVerification =
     `${input.providerMode}:${input.razorpayPaymentId}:verification`
   const verification = fulfillment.steps.verification
@@ -707,7 +711,14 @@ function exactFulfillmentFence(
       'Charge fulfillment status conflicts with its entitlement step',
     )
   }
-  return { entitlementApplied }
+  const invoiceReference = fulfillment.steps.invoice.referenceId
+  return {
+    entitlementApplied,
+    financialDocumentIssued:
+      fulfillment.steps.invoice.status === 'complete' &&
+      typeof invoiceReference === 'string' &&
+      /^[a-f0-9]{24}$/i.test(invoiceReference),
+  }
 }
 
 async function loadExactReversalContext(
@@ -1386,6 +1397,7 @@ export async function persistPaymentRefundOperationEffectInSession(
     {
       entitlementApplied: context.entitlementApplied,
       fulfillmentStatus: context.fulfillment.status,
+      financialDocumentIssued: context.financialDocumentIssued,
     },
     session,
     financialReversalRecordDependencies,
@@ -1544,6 +1556,7 @@ async function persistRefundOnce(
         {
           entitlementApplied: context.entitlementApplied,
           fulfillmentStatus: context.fulfillment.status,
+          financialDocumentIssued: context.financialDocumentIssued,
         },
         session,
         financialReversalRecordDependencies,
@@ -1586,6 +1599,7 @@ async function persistDisputeOnce(
         {
           entitlementApplied: context.entitlementApplied,
           fulfillmentStatus: context.fulfillment.status,
+          financialDocumentIssued: context.financialDocumentIssued,
         },
         session,
         financialReversalRecordDependencies,

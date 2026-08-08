@@ -1,7 +1,6 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
-import { sha256CanonicalJson } from '../lib/canonicalJson'
 import { inrPaise } from '../lib/money'
 import {
   CheckoutIntent,
@@ -12,10 +11,6 @@ import {
 import type {
   ConsumerSubscriptionLeaseLane,
 } from '../models/ConsumerSubscriptionLease'
-import {
-  CustomerBillingProfile,
-  type ICustomerPlaceOfSupply,
-} from '../models/CustomerBillingProfile'
 import {
   CouponReservation,
   type CouponCapacityDisposition,
@@ -82,9 +77,6 @@ import {
   type ResolvedSubscriptionCommercialTerms,
   type SubscriptionCycleCommercialResolver,
 } from './subscriptionCycleFulfillmentService'
-import {
-  CustomerPlaceOfSupplyInputSchema,
-} from '../validators/customerBillingProfile'
 import {
   CustomerBillingIdempotencyKeySchema,
 } from '../validators/customerBilling'
@@ -161,9 +153,11 @@ export interface SubscriptionCheckoutSaleContext {
   buyerSnapshot: Readonly<{
     name: string
     email: string
-    billingProfileVersion: number
-    billingProfileContentHash: string
-    placeOfSupply: Readonly<ICustomerPlaceOfSupply>
+    purchaseProfile: Readonly<{
+      accountKind: 'individual'
+      financialDocumentPolicy: 'not_required'
+      version: 1
+    }>
   }>
 }
 
@@ -438,12 +432,6 @@ interface CheckoutBuyerRow {
   email?: unknown
 }
 
-interface CheckoutBillingProfileRow {
-  version?: unknown
-  placeOfSupply?: unknown
-  contentHash?: unknown
-}
-
 function failure(
   code: SubscriptionCheckoutErrorCode,
   message: string,
@@ -472,7 +460,6 @@ function providerSnapshotMatches(
 
 export function checkoutBuyerSnapshot(
   buyer: CheckoutBuyerRow,
-  profile: CheckoutBillingProfileRow | null,
 ): SubscriptionCheckoutSaleContext['buyerSnapshot'] {
   if (
     typeof buyer.name !== 'string' ||
@@ -482,40 +469,14 @@ export function checkoutBuyerSnapshot(
   ) {
     throw failure('buyer_unavailable', 'Billing buyer details are unavailable')
   }
-  if (!profile) {
-    throw failure(
-      'billing_profile_required',
-      'A billing place of supply is required before checkout',
-    )
-  }
-
-  const placeOfSupply = CustomerPlaceOfSupplyInputSchema.safeParse(
-    profile.placeOfSupply,
-  )
-  const validVersion =
-    typeof profile.version === 'number' &&
-    Number.isSafeInteger(profile.version) &&
-    profile.version >= 1
-  const validHash =
-    typeof profile.contentHash === 'string' &&
-    /^[a-f0-9]{64}$/.test(profile.contentHash) &&
-    placeOfSupply.success &&
-    sha256CanonicalJson({
-      placeOfSupply: placeOfSupply.data,
-    }) === profile.contentHash
-  if (!validVersion || !validHash || !placeOfSupply.success) {
-    throw failure(
-      'persistence_conflict',
-      'Billing profile integrity verification failed',
-    )
-  }
-
   return {
     name: buyer.name,
     email: buyer.email,
-    billingProfileVersion: profile.version as number,
-    billingProfileContentHash: profile.contentHash as string,
-    placeOfSupply: structuredClone(placeOfSupply.data),
+    purchaseProfile: {
+      accountKind: 'individual',
+      financialDocumentPolicy: 'not_required',
+      version: 1,
+    },
   }
 }
 
@@ -549,18 +510,13 @@ async function defaultResolveSaleContext(
 
   await connectDB()
   const userObjectId = new mongoose.Types.ObjectId(userId)
-  const [buyer, billingProfile] = await Promise.all([
-    User.findById(userObjectId)
-      .select('name email buyerState')
-      .lean<{
-        name: string
-        email: string
-        buyerState?: string
-      }>(),
-    CustomerBillingProfile.findOne({ userId: userObjectId })
-      .select('version placeOfSupply contentHash')
-      .lean<CheckoutBillingProfileRow>(),
-  ])
+  const buyer = await User.findById(userObjectId)
+    .select('name email buyerState')
+    .lean<{
+      name: string
+      email: string
+      buyerState?: string
+    }>()
   if (!buyer) {
     throw failure('buyer_unavailable', 'Billing buyer was not found')
   }
@@ -583,7 +539,7 @@ async function defaultResolveSaleContext(
       'Subscription checkout provider mode changed during evaluation',
     )
   }
-  const buyerSnapshot = checkoutBuyerSnapshot(buyer, billingProfile)
+  const buyerSnapshot = checkoutBuyerSnapshot(buyer)
   return {
     providerMode: finalGate.providerMode,
     buyerSnapshot,

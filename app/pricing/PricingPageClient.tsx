@@ -49,11 +49,18 @@ function CheckIcon() {
 
 function planFeatures(planKey: PersonalPlanKey): readonly string[] {
   const plan = CONSUMER_CATALOG_V1.plans[planKey]
+  const resumeLabel = plan.resume.premiumSavedResumeLimitPerPeriod === 0
+    ? `${plan.resume.basicSavedResumeLimit} Basic resume saved`
+    : `${plan.resume.basicSavedResumeLimit} Basic resume + ${plan.resume.premiumSavedResumeLimitPerPeriod} premium resume versions per billing cycle`
+  const jobsLabel =
+    'Jobs discovery, resume matching, and application tracking'
   if (planKey === 'free') {
     return [
       '1 interview per calendar month',
       '10-minute interview duration',
       'Complete report and available replay',
+      resumeLabel,
+      jobsLabel,
     ]
   }
 
@@ -61,6 +68,8 @@ function planFeatures(planKey: PersonalPlanKey): readonly string[] {
     `${plan.interview.includedPerPeriod} interviews per billing month`,
     'Any supported interview type, up to 30 minutes each',
     'Complete reports, analysis, and available replay',
+    resumeLabel,
+    jobsLabel,
   ]
 }
 
@@ -114,7 +123,7 @@ function PlanCard({
             </p>
             <p className="mt-1 text-xs leading-5 text-[#71767b]">
               Then {formatInr(plan.listPricePaise)}/month. Auto-renews until
-              cancelled. GST included.
+              cancelled.
             </p>
           </>
         ) : (
@@ -278,18 +287,10 @@ export default function PricingPageClient({
   return (
     <main className="min-h-screen px-4 py-16 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-5xl">
-        <header className="mb-12 space-y-3 text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">
-            INR · GST-inclusive pricing
-          </p>
+        <header className="mb-12 text-center">
           <h1 className="text-display text-[#0f1419]">
             Practice free. Add more reps when they matter.
           </h1>
-          <p className="mx-auto max-w-2xl text-body text-[#71767b]">
-            Basic includes one 10-minute interview each month. Plus and Pro
-            add more interviews and deeper analysis; no interview exceeds 30
-            minutes.
-          </p>
         </header>
 
         <section

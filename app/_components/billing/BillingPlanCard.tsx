@@ -29,21 +29,32 @@ function planFeatures(plan: BillingPlan): string[] {
   const interviewLabel = plan.interview.includedPerPeriod === 1
     ? `1 ${plan.interview.maxDurationMinutes}-minute interview per month`
     : `${plan.interview.includedPerPeriod} interviews per billing month, up to ${plan.interview.maxDurationMinutes} minutes`
+  const resumeLabel = plan.resume.premiumSavedResumeLimitPerPeriod === 0
+    ? `${plan.resume.basicSavedResumeLimit} Basic resume saved`
+    : `${plan.resume.basicSavedResumeLimit} Basic resume + ${plan.resume.premiumSavedResumeLimitPerPeriod} premium resume versions per billing cycle`
+  const jobsLabel =
+    'Jobs discovery, resume matching, and application tracking'
   if (plan.key === 'free') {
     return [
       interviewLabel,
       'Core feedback and learning drills',
+      resumeLabel,
+      jobsLabel,
     ]
   }
   if (plan.key === 'plus') {
     return [
       interviewLabel,
       'Full analysis, replay, and JD/resume personalization',
+      resumeLabel,
+      jobsLabel,
     ]
   }
   return [
     interviewLabel,
     'Advanced progress and interview comparison',
+    resumeLabel,
+    jobsLabel,
     'Priority processing',
   ]
 }
@@ -125,7 +136,6 @@ export function BillingPlanCard({
       {plan.key !== 'free' && (
         <p className="mt-2 text-xs leading-5 text-[#536471]">
           Renews at {formatInr(plan.listPricePaise)}/month. Cancel anytime.
-          GST included.
         </p>
       )}
 

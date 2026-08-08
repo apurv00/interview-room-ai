@@ -6,8 +6,8 @@ import {
   recoverChargeFulfillment,
 } from '@payments/services/chargeFulfillmentRecoveryService'
 import {
-  approvedGstInvoicePolicyHandler,
-} from '@payments/services/approvedGstInvoicePolicyService'
+  individualFinancialDocumentPolicyHandler,
+} from '@payments/services/individualFinancialDocumentPolicyService'
 import {
   fulfillOneTimeEntitlement,
 } from '@payments/services/oneTimeEntitlementFulfillmentService'
@@ -56,7 +56,7 @@ export function recoverChargeFulfillmentWithCommercialAnalytics(
     oneTimeFulfillment:
       fulfillOneTimeEntitlementWithCommercialAnalytics,
     approvedFinancialPolicyHandler:
-      approvedGstInvoicePolicyHandler,
+      individualFinancialDocumentPolicyHandler,
   })
 }
 

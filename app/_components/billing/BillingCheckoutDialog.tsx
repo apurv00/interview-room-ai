@@ -18,7 +18,6 @@ import {
   quoteChangedAtCheckout,
   recordCheckoutObservation,
   type BillingIntentStatus,
-  type CustomerBillingProfile,
   type CustomerBillingQuote,
   type CustomerBillingSummary,
   type PaidBillingPlanKey,
@@ -41,45 +40,6 @@ import {
 
 const VERIFY_RETRY_FLOOR_MS = 7_000
 const RECOVERY_POLL_WINDOW_MS = 60_000
-
-const INDIA_BILLING_STATES = [
-  ['01', 'Jammu and Kashmir'],
-  ['02', 'Himachal Pradesh'],
-  ['03', 'Punjab'],
-  ['04', 'Chandigarh'],
-  ['05', 'Uttarakhand'],
-  ['06', 'Haryana'],
-  ['07', 'Delhi'],
-  ['08', 'Rajasthan'],
-  ['09', 'Uttar Pradesh'],
-  ['10', 'Bihar'],
-  ['11', 'Sikkim'],
-  ['12', 'Arunachal Pradesh'],
-  ['13', 'Nagaland'],
-  ['14', 'Manipur'],
-  ['15', 'Mizoram'],
-  ['16', 'Tripura'],
-  ['17', 'Meghalaya'],
-  ['18', 'Assam'],
-  ['19', 'West Bengal'],
-  ['20', 'Jharkhand'],
-  ['21', 'Odisha'],
-  ['22', 'Chhattisgarh'],
-  ['23', 'Madhya Pradesh'],
-  ['24', 'Gujarat'],
-  ['26', 'Dadra and Nagar Haveli and Daman and Diu'],
-  ['27', 'Maharashtra'],
-  ['29', 'Karnataka'],
-  ['30', 'Goa'],
-  ['31', 'Lakshadweep'],
-  ['32', 'Kerala'],
-  ['33', 'Tamil Nadu'],
-  ['34', 'Puducherry'],
-  ['35', 'Andaman and Nicobar Islands'],
-  ['36', 'Telangana'],
-  ['37', 'Andhra Pradesh'],
-  ['38', 'Ladakh'],
-] as const
 
 type CheckoutStage =
   | 'loading'
@@ -186,9 +146,7 @@ export function BillingCheckoutDialog({
   const [stage, setStage] = useState<CheckoutStage>('loading')
   const [quote, setQuote] = useState<CustomerBillingQuote | null>(null)
   const [checkout, setCheckout] = useState<SubscriptionCheckout | null>(null)
-  const [profile, setProfile] = useState<CustomerBillingProfile | null>(null)
   const [summary, setSummary] = useState<CustomerBillingSummary | null>(null)
-  const [stateCode, setStateCode] = useState('')
   const [manualCode, setManualCode] = useState('')
   const [couponOpen, setCouponOpen] = useState(false)
   const [couponMessage, setCouponMessage] = useState<string | null>(null)
@@ -233,20 +191,6 @@ export function BillingCheckoutDialog({
     }
     return nextQuote
   }, [planKey])
-
-  const loadProfile = useCallback(async (
-    signal?: AbortSignal,
-  ): Promise<CustomerBillingProfile> => {
-    const response = await billingFetch('/api/billing/profile', {
-      headers: { Accept: 'application/json' },
-      signal,
-    })
-    return parseBillingResponse(
-      response,
-      billingResponseSchemas.profile,
-      'Your billing state could not be loaded.',
-    )
-  }, [])
 
   const loadSummary = useCallback(async (
     signal?: AbortSignal,
@@ -495,19 +439,12 @@ export function BillingCheckoutDialog({
 
     void Promise.all([
       requestQuote(undefined, controller.signal),
-      loadProfile(controller.signal),
       loadSummary(controller.signal),
     ])
-      .then(([nextQuote, nextProfile, nextSummary]) => {
+      .then(([nextQuote, nextSummary]) => {
         if (controller.signal.aborted) return
         setQuote(nextQuote)
-        setProfile(nextProfile)
         setSummary(nextSummary)
-        setStateCode(
-          nextProfile.configured
-            ? nextProfile.placeOfSupply.stateCode
-            : '',
-        )
         assertNewCheckoutAllowed(nextSummary)
         setStage('review')
       })
@@ -523,7 +460,6 @@ export function BillingCheckoutDialog({
     return () => controller.abort()
   }, [
     accountId,
-    loadProfile,
     loadSummary,
     planKey,
     requestQuote,
@@ -593,59 +529,6 @@ export function BillingCheckoutDialog({
     }
   }
 
-  async function persistProfileIfNeeded(): Promise<CustomerBillingProfile> {
-    if (!profile) {
-      throw new BillingClientError(
-        409,
-        'Your billing state has not loaded yet.',
-      )
-    }
-    if (!stateCode) {
-      throw new BillingClientError(
-        400,
-        'Select your billing state or Union Territory.',
-      )
-    }
-    if (
-      profile.configured &&
-      profile.placeOfSupply.stateCode === stateCode
-    ) {
-      return profile
-    }
-
-    const response = await billingFetch('/api/billing/profile', {
-      method: 'PUT',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        expectedVersion: profile.configured ? profile.version : 0,
-        mutationId: createBillingIdempotencyKey().replace(
-          'billing-subscription',
-          'billing-profile',
-        ),
-        placeOfSupply: {
-          stateCode,
-          countryCode: 'IN',
-        },
-      }),
-    })
-    const updated = await parseBillingResponse(
-      response,
-      billingResponseSchemas.profile,
-      'Your billing state could not be saved.',
-    )
-    if (!updated.configured) {
-      throw new BillingClientError(
-        502,
-        'Your billing state was not saved. Please try again.',
-      )
-    }
-    setProfile(updated)
-    return updated
-  }
-
   async function prepareCheckout() {
     if (!quote || !summary || stage === 'preparing') return
     setStage('preparing')
@@ -653,7 +536,6 @@ export function BillingCheckoutDialog({
     setStatusMessage('Confirming your final price and reserving any coupon…')
 
     try {
-      await persistProfileIfNeeded()
       const latestSummary = await loadSummary()
       assertNewCheckoutAllowed(latestSummary)
       setSummary(latestSummary)
@@ -971,8 +853,6 @@ export function BillingCheckoutDialog({
                     </p>
                   </div>
                   <p className="text-right text-xs leading-5 text-[#536471]">
-                    GST included
-                    <br />
                     {displayedQuote.discountedBillingCycles
                       ? `${displayedQuote.discountedBillingCycles} discounted billing ${displayedQuote.discountedBillingCycles === 1 ? 'cycle' : 'cycles'}`
                       : 'Standard monthly price'}
@@ -1044,32 +924,6 @@ export function BillingCheckoutDialog({
 
             {stage === 'review' && (
               <>
-                <section>
-                  <label
-                    htmlFor="billing-state-code"
-                    className="text-sm font-medium text-[#0f1419]"
-                  >
-                    Billing state / Union Territory
-                  </label>
-                  <p className="mt-1 text-xs text-[#71767b]">
-                    Required as the place of supply on your consumer GST
-                    invoice.
-                  </p>
-                  <select
-                    id="billing-state-code"
-                    value={stateCode}
-                    onChange={(event) => setStateCode(event.target.value)}
-                    className="mt-2 h-10 w-full rounded-lg border border-[#e1e8ed] bg-white px-3 text-sm text-[#0f1419] focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  >
-                    <option value="">Select state or Union Territory</option>
-                    {INDIA_BILLING_STATES.map(([code, name]) => (
-                      <option key={code} value={code}>
-                        {code} — {name}
-                      </option>
-                    ))}
-                  </select>
-                </section>
-
                 <section>
                   <button
                     type="button"
@@ -1173,7 +1027,7 @@ export function BillingCheckoutDialog({
                   <Button
                     type="button"
                     onClick={prepareCheckout}
-                    disabled={!quote || !profile || !summary || !stateCode}
+                    disabled={!quote || !summary}
                   >
                     Review secure checkout
                   </Button>
