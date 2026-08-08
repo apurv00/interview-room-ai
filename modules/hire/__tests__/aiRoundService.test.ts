@@ -244,19 +244,20 @@ describe('verifyRoundToken', () => {
     })
     expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('expired')
 
+    // The RAW link dies at expiry regardless of round status — a leaked
+    // link must never outlive its advertised deadline. Mid-flow resume
+    // happens through the authenticated /prepare path, not the raw token.
     mockRound.findOne.mockResolvedValue({
       status: 'prepared',
       inviteTokenExpiry: new Date(Date.now() - 1000),
     })
-    // Post-auth statuses survive token expiry (the candidate is mid-flow)…
-    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('ok')
+    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('expired')
 
-    // …but only within the grace ceiling — links are not immortal.
     mockRound.findOne.mockResolvedValue({
       status: 'prepared',
-      inviteTokenExpiry: new Date(Date.now() - 15 * 24 * 3600 * 1000),
+      inviteTokenExpiry: new Date(Date.now() + 3600_000),
     })
-    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('expired')
+    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('ok')
   })
 })
 

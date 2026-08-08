@@ -36,6 +36,7 @@ interface PerQuestion {
   ownership?: number | null
   jdAlignment?: number | null
   flags?: string[]
+  evaluationFailed?: boolean
 }
 
 interface RoundResults {
@@ -427,6 +428,12 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
                           <blockquote className="border-l-2 border-[#e1e8ed] pl-3 text-[#536471] whitespace-pre-wrap">
                             {q.answer}
                           </blockquote>
+                        )}
+                        {q.evaluationFailed && (
+                          <p className="text-xs text-amber-600">
+                            The AI evaluation of this answer failed — no scores are shown
+                            for it. Read the answer above and judge it directly.
+                          </p>
                         )}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                           {q.relevance != null && <ScoreBar label="Relevance" score={q.relevance} />}

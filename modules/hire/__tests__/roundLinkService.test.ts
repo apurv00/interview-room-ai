@@ -104,6 +104,39 @@ describe('buildResultsSnapshot', () => {
     expect(snap.overallScore).toBeNull()
     expect(snap.perQuestion![0].score).toBe(50)
   })
+
+  it('suppresses the fabricated numbers of FAILED evaluations (keeps the Q&A visible)', () => {
+    const snap = buildResultsSnapshot({
+      _id: { toString: () => 's1' },
+      status: 'completed',
+      createdAt: new Date(),
+      feedback: { overall_score: 70 },
+      evaluations: [
+        {
+          questionIndex: 0,
+          question: 'Q1',
+          answer: 'The answer text',
+          // The engine persists fallback placeholders on failure — its own
+          // aggregates exclude these rows (G.4); hiring evidence must too.
+          status: 'failed',
+          relevance: 60,
+          structure: 55,
+          specificity: 55,
+          ownership: 60,
+        },
+        { questionIndex: 1, question: 'Q2', relevance: 80, structure: 70, specificity: 75, ownership: 85 },
+      ],
+    })
+    const failed = snap.perQuestion![0]
+    expect(failed.evaluationFailed).toBe(true)
+    expect(failed.score).toBeNull()
+    expect(failed.relevance).toBeNull()
+    expect(failed.ownership).toBeNull()
+    expect(failed.answer).toBe('The answer text')
+    const ok = snap.perQuestion![1]
+    expect(ok.evaluationFailed).toBeUndefined()
+    expect(ok.score).toBe(78)
+  })
 })
 
 describe('reconcileApplicationRounds', () => {

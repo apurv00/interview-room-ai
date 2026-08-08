@@ -258,18 +258,12 @@ export async function verifyRoundToken(
   if (!round) return null
   if (round.revokedAt) return { round, state: 'revoked' }
   if (round.status === 'completed') return { round, state: 'completed' }
-  const preAuth = (PRE_AUTH_STATUSES as readonly string[]).includes(round.status)
-  if (preAuth && round.inviteTokenExpiry <= new Date()) {
-    return { round, state: 'expired' }
-  }
-  // Post-auth (mid-flow) rounds survive token expiry so "resume my
-  // interview" works, but not forever — after the grace ceiling the link
-  // dies like any other.
-  if (
-    !preAuth &&
-    round.inviteTokenExpiry.getTime() + POST_AUTH_GRACE_DAYS * 24 * 60 * 60 * 1000 <=
-      Date.now()
-  ) {
+  // The RAW emailed credential dies at inviteTokenExpiry, full stop —
+  // regardless of round status. A copied or leaked link must not outlive
+  // its advertised deadline (Codex P1 on #604). Mid-flow candidates resume
+  // via their authenticated session on /prepare, which has its own
+  // POST_AUTH_GRACE_DAYS ceiling and never takes the raw token.
+  if (round.inviteTokenExpiry <= new Date()) {
     return { round, state: 'expired' }
   }
   return { round, state: 'ok' }

@@ -37,6 +37,10 @@ export interface HireRoundPerQuestion {
   ownership?: number | null
   jdAlignment?: number | null
   flags?: string[]
+  /** True when the engine's evaluation of this answer failed — its persisted
+   * dimensions are fabricated fallbacks and are suppressed here; the card
+   * shows the Q&A with an "evaluation failed" note instead of scores. */
+  evaluationFailed?: boolean
 }
 
 export interface HireRoundResults {

@@ -65,24 +65,33 @@ export function buildResultsSnapshot(session: EngineSessionLean): HireRoundResul
   } | null
 
   const perQuestion: HireRoundPerQuestion[] = (session.evaluations ?? []).map((e) => {
-    const dims = [
-      numberOrNull(e.relevance),
-      numberOrNull(e.structure),
-      numberOrNull(e.specificity),
-      numberOrNull(e.ownership),
-    ].filter((n): n is number => n !== null)
+    // A failed evaluation carries FABRICATED fallback dimensions (the engine
+    // persists placeholders like 60/55/55/60 and its own aggregates exclude
+    // status:'failed' rows — G.4). Publishing them as hiring evidence would
+    // mislead a decision: keep the row for visibility (question + answer),
+    // but suppress every number (Codex P1 on #604).
+    const failed = e.status === 'failed'
+    const dims = failed
+      ? []
+      : [
+          numberOrNull(e.relevance),
+          numberOrNull(e.structure),
+          numberOrNull(e.specificity),
+          numberOrNull(e.ownership),
+        ].filter((n): n is number => n !== null)
     return {
       questionIndex: numberOrNull(e.questionIndex) ?? 0,
       question: typeof e.question === 'string' ? e.question : '',
       answer: typeof e.answer === 'string' ? e.answer : undefined,
       answerSummary: typeof e.answerSummary === 'string' ? e.answerSummary : undefined,
       score: dims.length ? Math.round(dims.reduce((a, b) => a + b, 0) / dims.length) : null,
-      relevance: numberOrNull(e.relevance),
-      structure: numberOrNull(e.structure),
-      specificity: numberOrNull(e.specificity),
-      ownership: numberOrNull(e.ownership),
-      jdAlignment: numberOrNull(e.jdAlignment),
+      relevance: failed ? null : numberOrNull(e.relevance),
+      structure: failed ? null : numberOrNull(e.structure),
+      specificity: failed ? null : numberOrNull(e.specificity),
+      ownership: failed ? null : numberOrNull(e.ownership),
+      jdAlignment: failed ? null : numberOrNull(e.jdAlignment),
       flags: Array.isArray(e.flags) ? (e.flags as string[]) : undefined,
+      ...(failed ? { evaluationFailed: true } : {}),
     }
   })
 
