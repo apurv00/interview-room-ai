@@ -1,8 +1,11 @@
 import mongoose from 'mongoose'
 import { describe, expect, it, vi } from 'vitest'
 import type {
+  DisputeEffectInput,
   FutureSubscriptionAuthorizationEffectInput,
+  RefundEffectInput,
   SubscriptionChargedEffectInput,
+  SubscriptionUpfrontEffectInput,
   WebhookDomainDispatchDependencies,
 } from '@payments/services/webhookDomainDispatchService'
 import type {
@@ -39,6 +42,9 @@ function captureComposition(
   const fulfillSubscriptionCycle = vi.fn().mockResolvedValue({
     projectionDisposition: 'projected',
   })
+  const fulfillSubscriptionUpfrontCycle = vi.fn().mockResolvedValue({
+    projectionDisposition: 'projected',
+  })
   const persistPaymentState = vi.fn().mockResolvedValue({
     outcome: 'handled',
     operationKey: 'payment-state-operation',
@@ -54,15 +60,26 @@ function captureComposition(
       status: 'scheduled',
       reused: false,
     })
+  const persistRefundWebhookEffect = vi.fn().mockResolvedValue({
+    outcome: 'handled',
+    operationKey: 'test:refund:rfnd_TestRefund123:event_test',
+  })
+  const persistDisputeWebhookEffect = vi.fn().mockResolvedValue({
+    outcome: 'handled',
+    operationKey: 'test:dispute:disp_TestDispute123:event_test',
+  })
 
   const created = createPaymentWebhookLaunchHandler({
     createDomainHandler,
     persistCapturedCheckout,
     recoverChargeFulfillment,
     fulfillSubscriptionCycle,
+    fulfillSubscriptionUpfrontCycle,
     persistPaymentState,
     persistSubscriptionState,
     observeFutureSubscriptionAuthorization,
+    persistRefundWebhookEffect,
+    persistDisputeWebhookEffect,
     ...overrides,
   })
   const domain = createDomainHandler.mock.calls[0]?.[0] as
@@ -74,9 +91,12 @@ function captureComposition(
     persistCapturedCheckout,
     recoverChargeFulfillment,
     fulfillSubscriptionCycle,
+    fulfillSubscriptionUpfrontCycle,
     persistPaymentState,
     persistSubscriptionState,
     observeFutureSubscriptionAuthorization,
+    persistRefundWebhookEffect,
+    persistDisputeWebhookEffect,
   }
 }
 
@@ -172,6 +192,76 @@ describe('launch webhook composition', () => {
       outcome: 'handled',
       operationKey: 'test:pay_TestPayment123:entitlement',
     })
+  })
+
+  it('maps a captured coupon upfront payment to upfront fulfillment', async () => {
+    const composed = captureComposition()
+    const effect = {
+      inboxEventId: new mongoose.Types.ObjectId().toHexString(),
+      providerMode: 'test',
+      eventType: 'payment.captured',
+      razorpaySubscriptionId: 'sub_TestSubscription123',
+      razorpayPaymentId: 'pay_TestPayment123',
+      razorpayInvoiceId: 'inv_TestInvoice123',
+      razorpayOrderId: 'order_TestOrder123',
+      payment: { id: 'pay_TestPayment123' },
+      invoice: { id: 'inv_TestInvoice123' },
+      subscription: { id: 'sub_TestSubscription123' },
+      localContext: {},
+    } as unknown as SubscriptionUpfrontEffectInput
+
+    const acknowledgement = await composed.domain.effects
+      ?.handleSubscriptionUpfront?.(effect)
+
+    expect(composed.fulfillSubscriptionUpfrontCycle).toHaveBeenCalledWith({
+      providerMode: 'test',
+      references: {
+        inboxEventId: effect.inboxEventId,
+        providerMode: 'test',
+        kind: 'payment',
+        eventType: 'payment.captured',
+        razorpaySubscriptionId: effect.razorpaySubscriptionId,
+        razorpayPaymentId: effect.razorpayPaymentId,
+        razorpayInvoiceId: effect.razorpayInvoiceId,
+        razorpayOrderId: effect.razorpayOrderId,
+      },
+      payment: effect.payment,
+      invoice: effect.invoice,
+      subscription: effect.subscription,
+    })
+    expect(acknowledgement).toEqual({
+      outcome: 'handled',
+      operationKey: 'test:pay_TestPayment123:entitlement',
+    })
+  })
+
+  it('registers durable refund and dispute effects', async () => {
+    const composed = captureComposition()
+    const refund = {
+      providerMode: 'test',
+      eventType: 'refund.processed',
+      razorpayRefundId: 'rfnd_TestRefund123',
+    } as unknown as RefundEffectInput
+    const dispute = {
+      providerMode: 'test',
+      eventType: 'payment.dispute.created',
+      razorpayDisputeId: 'disp_TestDispute123',
+    } as unknown as DisputeEffectInput
+
+    await expect(
+      composed.domain.effects?.handleRefund?.(refund),
+    ).resolves.toEqual({
+      outcome: 'handled',
+      operationKey: 'test:refund:rfnd_TestRefund123:event_test',
+    })
+    await expect(
+      composed.domain.effects?.handleDispute?.(dispute),
+    ).resolves.toEqual({
+      outcome: 'handled',
+      operationKey: 'test:dispute:disp_TestDispute123:event_test',
+    })
+    expect(composed.persistRefundWebhookEffect).toHaveBeenCalledWith(refund)
+    expect(composed.persistDisputeWebhookEffect).toHaveBeenCalledWith(dispute)
   })
 
   it('delegates payment and subscription state to durable stores', async () => {

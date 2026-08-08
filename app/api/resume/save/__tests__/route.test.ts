@@ -21,7 +21,7 @@ vi.mock('@resume/services/resumeService', () => ({
   deleteResume: mocks.deleteResume,
 }))
 
-import { GET, POST } from '../route'
+import { DELETE, GET, POST } from '../route'
 
 const USER_A_ID = '507f1f77bcf86cd799439010'
 const USER_B_ID = '507f1f77bcf86cd799439011'
@@ -48,12 +48,19 @@ function getRequest(id?: string, originUserId?: string) {
   })
 }
 
+function deleteRequest(id?: string) {
+  const url = new URL('http://localhost/api/resume/save')
+  if (id) url.searchParams.set('id', id)
+  return new Request(url, { method: 'DELETE' })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.getServerSession.mockResolvedValue({ user: { id: USER_B_ID } })
   mocks.listResumes.mockResolvedValue({ resumes: [{ id: 'resume-1', name: 'Resume B' }] })
   mocks.getResume.mockResolvedValue({ id: 'resume-1', name: 'Resume B', fullText: 'USER B PRIVATE RESUME' })
   mocks.saveResume.mockResolvedValue({ id: 'resume-1', created: true })
+  mocks.deleteResume.mockResolvedValue({ success: true })
   mocks.connectDB.mockResolvedValue(undefined)
   mocks.isJobsAccountActive.mockResolvedValue(true)
 })
@@ -182,5 +189,43 @@ describe('POST /api/resume/save session provenance', () => {
       error: 'Your account is unavailable. Sign in again before saving.',
       code: 'ACCOUNT_UNAVAILABLE',
     })
+  })
+})
+
+describe('DELETE /api/resume/save purchase authority', () => {
+  it('deletes an unprotected resume', async () => {
+    const response = await DELETE(deleteRequest('resume-1'))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ success: true })
+    expect(mocks.deleteResume).toHaveBeenCalledWith(USER_B_ID, 'resume-1')
+  })
+
+  it.each([
+    [
+      'PREMIUM_RESUME_PURCHASE_ACTIVE',
+      'This resume has an active premium purchase and cannot be deleted.',
+      409,
+    ],
+    ['NOT_FOUND', 'This resume no longer exists.', 404],
+    [
+      'ACCOUNT_UNAVAILABLE',
+      'Your account is unavailable. Sign in again before deleting.',
+      401,
+    ],
+  ] as const)('maps %s to its HTTP status', async (code, error, expectedStatus) => {
+    mocks.deleteResume.mockResolvedValueOnce({ error, code })
+
+    const response = await DELETE(deleteRequest('resume-1'))
+
+    expect(response.status).toBe(expectedStatus)
+    await expect(response.json()).resolves.toEqual({ error, code })
+  })
+
+  it('requires an exact resume id', async () => {
+    const response = await DELETE(deleteRequest())
+
+    expect(response.status).toBe(400)
+    expect(mocks.deleteResume).not.toHaveBeenCalled()
   })
 })

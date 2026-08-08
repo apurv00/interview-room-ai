@@ -4,7 +4,10 @@ import { User, Organization, InterviewSession, InterviewTemplate } from '@shared
 import { sendEmail } from '@shared/services/emailService'
 import { escapeHtml } from '@shared/services/emailTemplates/htmlEscape'
 import type { Duration } from '@shared/types'
-import { isDepthAllowedForExperience } from '@interview'
+import {
+  isDepthAllowedForExperience,
+  MAX_INTERVIEW_DURATION_MINUTES,
+} from '@interview'
 import crypto from 'crypto'
 
 type OrgId = mongoose.Types.ObjectId | string
@@ -217,6 +220,17 @@ export async function createInvite(
     jobDescription?: string
   }
 ) {
+  if (
+    !Number.isSafeInteger(data.duration) ||
+    data.duration < 5 ||
+    data.duration > MAX_INTERVIEW_DURATION_MINUTES
+  ) {
+    return {
+      error: `Interview duration must be between 5 and ${MAX_INTERVIEW_DURATION_MINUTES} minutes.`,
+      status: 400,
+    }
+  }
+
   // Server-side experience gate (mirrors createSession): block an experience-restricted
   // depth (academics → 0-2) on the wrong band before consuming org quota — a recruiter
   // could otherwise invite academics at 3-6/7+ via a tampered request body, and the

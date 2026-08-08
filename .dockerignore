@@ -2,8 +2,8 @@ node_modules
 .next
 .git
 .gitignore
-.env.local
-.env.docker
+.vercel
+.env*
 *.md
 __tests__
 .claude

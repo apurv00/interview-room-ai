@@ -4,11 +4,16 @@ import {
 } from './paymentCommercialAnalyticsComposition'
 import {
   fulfillSubscriptionCycleWithCommercialAnalytics,
+  fulfillSubscriptionUpfrontCycleWithCommercialAnalytics,
   recoverChargeFulfillmentWithCommercialAnalytics,
 } from './entitlementCommercialAnalyticsComposition'
 import {
   observeFutureSubscriptionAuthorization,
 } from '@payments/services/subscriptionLifecycleService'
+import {
+  persistDisputeWebhookEffect,
+  persistRefundWebhookEffect,
+} from '@payments/services/financialReversalPersistenceService'
 import {
   persistSubscriptionState,
 } from '@payments/services/subscriptionStatePersistenceService'
@@ -17,6 +22,7 @@ import {
   type FutureSubscriptionAuthorizationEffectInput,
   type PersistOneTimeWebhookCapture,
   type SubscriptionChargedEffectInput,
+  type SubscriptionUpfrontEffectInput,
   type WebhookDomainDispatchDependencies,
   type WebhookDomainEffectHandlers,
 } from '@payments/services/webhookDomainDispatchService'
@@ -30,21 +36,28 @@ type RecoverChargeFulfillment =
   typeof recoverChargeFulfillmentWithCommercialAnalytics
 type FulfillSubscriptionCycle =
   typeof fulfillSubscriptionCycleWithCommercialAnalytics
+type FulfillSubscriptionUpfrontCycle =
+  typeof fulfillSubscriptionUpfrontCycleWithCommercialAnalytics
 type PersistPaymentState =
   typeof persistPaymentStateWithCommercialAnalytics
 type PersistSubscriptionState = typeof persistSubscriptionState
 type ObserveFutureSubscriptionAuthorization =
   typeof observeFutureSubscriptionAuthorization
+type PersistRefundWebhookEffect = typeof persistRefundWebhookEffect
+type PersistDisputeWebhookEffect = typeof persistDisputeWebhookEffect
 
 export interface PaymentWebhookLaunchCompositionDependencies {
   createDomainHandler?: typeof createRazorpayWebhookDomainHandler
   persistCapturedCheckout?: PersistCapturedCheckout
   recoverChargeFulfillment?: RecoverChargeFulfillment
   fulfillSubscriptionCycle?: FulfillSubscriptionCycle
+  fulfillSubscriptionUpfrontCycle?: FulfillSubscriptionUpfrontCycle
   persistPaymentState?: PersistPaymentState
   persistSubscriptionState?: PersistSubscriptionState
   observeFutureSubscriptionAuthorization?:
     ObserveFutureSubscriptionAuthorization
+  persistRefundWebhookEffect?: PersistRefundWebhookEffect
+  persistDisputeWebhookEffect?: PersistDisputeWebhookEffect
 }
 
 export class PaymentWebhookLaunchCompositionError extends Error {
@@ -70,6 +83,29 @@ function subscriptionCycleInput(
       ...(input.razorpayOrderId
         ? { razorpayOrderId: input.razorpayOrderId }
         : {}),
+    },
+    payment: input.payment,
+    invoice: input.invoice,
+    subscription: input.subscription,
+  }
+}
+
+function subscriptionUpfrontInput(
+  input: SubscriptionUpfrontEffectInput,
+) {
+  return {
+    providerMode: input.providerMode,
+    references: {
+      inboxEventId: input.inboxEventId,
+      providerMode: input.providerMode,
+      kind: input.eventType === 'payment.captured'
+        ? 'payment' as const
+        : 'subscription' as const,
+      eventType: input.eventType,
+      razorpaySubscriptionId: input.razorpaySubscriptionId,
+      razorpayPaymentId: input.razorpayPaymentId,
+      razorpayInvoiceId: input.razorpayInvoiceId,
+      razorpayOrderId: input.razorpayOrderId,
     },
     payment: input.payment,
     invoice: input.invoice,
@@ -175,6 +211,9 @@ export function createPaymentWebhookLaunchHandler(
   const fulfillSubscriptionCycle =
     dependencies.fulfillSubscriptionCycle ??
     fulfillSubscriptionCycleWithCommercialAnalytics
+  const fulfillSubscriptionUpfrontCycle =
+    dependencies.fulfillSubscriptionUpfrontCycle ??
+    fulfillSubscriptionUpfrontCycleWithCommercialAnalytics
   const persistPaymentState =
     dependencies.persistPaymentState ??
     persistPaymentStateWithCommercialAnalytics
@@ -184,6 +223,12 @@ export function createPaymentWebhookLaunchHandler(
   const observeFutureAuthorizationEffect =
     dependencies.observeFutureSubscriptionAuthorization ??
     observeFutureSubscriptionAuthorization
+  const persistRefundEffect =
+    dependencies.persistRefundWebhookEffect ??
+    persistRefundWebhookEffect
+  const persistDisputeEffect =
+    dependencies.persistDisputeWebhookEffect ??
+    persistDisputeWebhookEffect
 
   const effects: WebhookDomainEffectHandlers = {
     handlePaymentState: (input) => persistPaymentState(input),
@@ -208,9 +253,22 @@ export function createPaymentWebhookLaunchHandler(
           `${input.razorpayPaymentId}:entitlement`,
       }
     },
+    handleSubscriptionUpfront: async (input) => {
+      await fulfillSubscriptionUpfrontCycle(
+        subscriptionUpfrontInput(input),
+      )
+      return {
+        outcome: 'handled',
+        operationKey:
+          `${input.providerMode}:` +
+          `${input.razorpayPaymentId}:entitlement`,
+      }
+    },
     handleSubscriptionState: (input) => (
       persistSubscriptionLifecycle(input)
     ),
+    handleRefund: (input) => persistRefundEffect(input),
+    handleDispute: (input) => persistDisputeEffect(input),
   }
 
   const domainDependencies: WebhookDomainDispatchDependencies = {

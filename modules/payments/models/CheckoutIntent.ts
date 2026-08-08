@@ -81,6 +81,9 @@ export interface ICheckoutIntent extends Document {
   razorpayOrderId?: string
   receipt: string
   nextRecoveryAt?: Date
+  remoteCreationLeaseToken?: string
+  remoteCreationLeaseExpiresAt?: Date
+  remoteCreationStartedAt?: Date
   createdAt: Date
   updatedAt: Date
 }
@@ -331,6 +334,14 @@ const CheckoutIntentSchema = new Schema<ICheckoutIntent>(
       immutable: true,
     },
     nextRecoveryAt: { type: Date },
+    remoteCreationLeaseToken: {
+      type: String,
+      trim: true,
+      minlength: 16,
+      maxlength: 200,
+    },
+    remoteCreationLeaseExpiresAt: { type: Date },
+    remoteCreationStartedAt: { type: Date },
   },
   { timestamps: true },
 )
@@ -399,14 +410,25 @@ CheckoutIntentSchema.pre('validate', function validateCheckoutTarget() {
       return
     }
     if (this.purpose === 'acquisition') {
+      const couponUpfrontLifecycle = Boolean(
+        quote &&
+        quote.discountPaise > 0 &&
+        quote.discountedBillingCycles === 1,
+      )
       if (
         this.leaseLane !== 'a' ||
         this.planChangeRequestId ||
-        this.requestedStartAt
+        (
+          this.requestedStartAt &&
+          (
+            !couponUpfrontLifecycle ||
+            this.authorizationExpiresAt >= this.requestedStartAt
+          )
+        )
       ) {
         this.invalidate(
           'purpose',
-          'Acquisition checkout requires lane a and no replacement lineage',
+          'Acquisition checkout lifecycle is inconsistent',
         )
       }
       return

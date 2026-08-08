@@ -149,6 +149,11 @@ export const CreateRazorpaySubscriptionInputSchema = z.object({
   totalCount: PositiveSafeIntegerSchema,
   quantity: PositiveSafeIntegerSchema.optional(),
   offerId: OfferIdSchema.optional(),
+  upfrontItem: z.object({
+    name: z.string().trim().min(1).max(100),
+    amountPaise: PositiveInrPaiseSchema,
+    currency: z.literal('INR'),
+  }).strict().optional(),
   startAtEpochSeconds: PositiveSafeIntegerSchema.optional(),
   authorizationExpiresAtEpochSeconds:
     PositiveSafeIntegerSchema.optional(),
@@ -158,6 +163,16 @@ export const CreateRazorpaySubscriptionInputSchema = z.object({
   receipt: ReceiptSchema,
   notes: RazorpayNotesSchema.default({}),
 }).strict().superRefine((subscription, context) => {
+  if (
+    subscription.upfrontItem !== undefined &&
+    subscription.offerId !== undefined
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['offerId'],
+      message: 'Upfront subscription items cannot be combined with an Offer',
+    })
+  }
   if (
     subscription.startAtEpochSeconds !== undefined &&
     subscription.authorizationExpiresAtEpochSeconds === undefined
@@ -434,20 +449,20 @@ export const RazorpaySubscriptionDtoSchema = z.object({
       start: subscription.currentStartEpochSeconds,
       end: subscription.currentEndEpochSeconds,
       path: 'currentEndEpochSeconds',
-      message: 'Current cycle end must be after its start',
+      message: 'Current cycle end must not precede its start',
     },
     {
       start: subscription.startAtEpochSeconds,
       end: subscription.endAtEpochSeconds,
       path: 'endAtEpochSeconds',
-      message: 'Subscription end must be after its start',
+      message: 'Subscription end must not precede its start',
     },
   ] as const
   for (const boundary of orderedBoundaries) {
     if (
       boundary.start !== undefined &&
       boundary.end !== undefined &&
-      boundary.end <= boundary.start
+      boundary.end < boundary.start
     ) {
       context.addIssue({
         code: 'custom',
@@ -767,6 +782,13 @@ export interface RazorpaySubscriptionCreatePayload {
   customer_notify: boolean
   quantity?: number
   offer_id?: string
+  addons?: Array<{
+    item: {
+      name: string
+      amount: number
+      currency: 'INR'
+    }
+  }>
   start_at?: number
   expire_by?: number
   notes: RazorpayNotes
@@ -1442,6 +1464,15 @@ export function createRazorpayServerAdapter(input: {
       }
       if (parsed.offerId !== undefined) {
         payload.offer_id = parsed.offerId
+      }
+      if (parsed.upfrontItem !== undefined) {
+        payload.addons = [{
+          item: {
+            name: parsed.upfrontItem.name,
+            amount: parsed.upfrontItem.amountPaise,
+            currency: parsed.upfrontItem.currency,
+          },
+        }]
       }
       if (parsed.startAtEpochSeconds !== undefined) {
         payload.start_at = parsed.startAtEpochSeconds

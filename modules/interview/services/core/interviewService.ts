@@ -28,6 +28,18 @@ import { getPlannedQuestionCountForFeedback } from '../eval/sessionScoringPolicy
 import type { InterviewLatencyTelemetryInput } from '../../validators/interview'
 import type { Duration } from '@shared/types'
 import { ModelProviderPreconditionError, type CompletionOptions } from '@shared/services/modelRouter'
+import { basicCalendarMonthPeriod } from '@payments/services/periodKeyService'
+import {
+  BASIC_MAX_INTERVIEW_DURATION_MINUTES,
+  MAX_INTERVIEW_DURATION_MINUTES,
+} from '../../config/interviewDurationPolicy'
+import { getBillingConfig } from '@payments/services/billingConfigService'
+import {
+  consumePaidInterviewUnlockForLaunchInSession,
+  paidInterviewLaunchProviderMode,
+  PaidInterviewLaunchError,
+} from '@payments/services/paidInterviewLaunchService'
+import type { ProviderMode } from '@payments/types/catalog'
 
 interface CreateSessionInput {
   userId: string
@@ -163,6 +175,19 @@ export function isDepthAllowedForExperience(depthSlug: string, experience: strin
 export async function createSession(input: CreateSessionInput): Promise<IInterviewSession> {
   await connectDB()
 
+  // The session service is the final duration authority. The setup UI exposes
+  // only product-supported presets, but direct callers and stale localStorage
+  // must not be able to create an interview beyond the 30-minute product cap.
+  if (
+    !Number.isSafeInteger(input.config.duration) ||
+    input.config.duration < 5 ||
+    input.config.duration > MAX_INTERVIEW_DURATION_MINUTES
+  ) {
+    throw new ForbiddenError(
+      `Interview duration must be between 5 and ${MAX_INTERVIEW_DURATION_MINUTES} minutes.`,
+    )
+  }
+
   if (
     input.verifiedJobsAttribution && (
       !input.verifiedJobsParsedJobDescription ||
@@ -186,57 +211,152 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   }
 
   const now = new Date()
-  const currentMonth = now.getMonth()
-  const currentYear = now.getFullYear()
+  const userId = new mongoose.Types.ObjectId(input.userId)
+  const basicPeriod = basicCalendarMonthPeriod(now)
 
-  // Monthly auto-reset: zero the counter if we're in a new month since last reset.
-  // This runs before the atomic increment so the limit check uses fresh data.
+  // Basic and grandfathered accounts reset on the IST calendar month. Paid
+  // subscriptions are reset only by captured Razorpay billing-cycle
+  // fulfillment; a calendar reset must never grant them extra interviews.
   await User.updateOne(
     {
-      _id: new mongoose.Types.ObjectId(input.userId),
+      _id: userId,
       accountState: { $ne: 'deleting' },
+      entitlementSource: { $ne: 'subscription' },
       $or: [
-        { usageResetAt: { $exists: false } },
-        { $expr: { $ne: [{ $month: '$usageResetAt' }, currentMonth + 1] } },
-        { $expr: { $ne: [{ $year: '$usageResetAt' }, currentYear] } },
+        { legacyMonthlyInterviewResetAt: { $exists: false } },
+        { legacyMonthlyInterviewResetAt: { $lt: basicPeriod.start } },
+        { legacyMonthlyInterviewResetAt: { $gte: basicPeriod.end } },
       ],
     },
-    { $set: { monthlyInterviewsUsed: 0, usageResetAt: now } }
+    {
+      $set: {
+        monthlyInterviewsUsed: 0,
+        legacyMonthlyInterviewResetAt: now,
+      },
+    },
   )
 
-  // Development-phase backfill: ensure every user has the unlimited limit set.
-  // Handles users created before the field was added (field missing in MongoDB)
-  // and users with any limit below the uncapped default.
+  // Repair personal Basic rows created before pricing enforcement. Organization,
+  // staff, Enterprise, admin-grant, and grandfathered paid rows remain outside
+  // this migration fence.
   await User.updateOne(
     {
-      _id: new mongoose.Types.ObjectId(input.userId),
+      _id: userId,
       accountState: { $ne: 'deleting' },
+      organizationId: null,
+      role: { $nin: ['recruiter', 'org_admin', 'platform_admin'] },
+      plan: { $nin: ['plus', 'pro', 'enterprise'] },
+      entitlementSource: { $nin: ['subscription', 'admin_grant'] },
       $or: [
         { monthlyInterviewLimit: { $exists: false } },
         { monthlyInterviewLimit: null },
-        { monthlyInterviewLimit: { $lt: 999999 } },
+        { monthlyInterviewLimit: { $ne: 1 } },
       ],
     },
-    { $set: { monthlyInterviewLimit: 999999 } }
+    { $set: { monthlyInterviewLimit: 1 } },
+  )
+
+  // Subscription projections own both the tier and the exact limit. Repair
+  // only coherent, unexpired v2 projections; malformed or expired rows remain
+  // fail-closed in the admission query below.
+  await User.updateOne(
+    {
+      _id: userId,
+      accountState: { $ne: 'deleting' },
+      entitlementSource: 'subscription',
+      planVocabularyVersion: 2,
+      plan: 'plus',
+      planExpiresAt: { $gt: now },
+      interviewLimit: 10,
+      monthlyInterviewLimit: { $ne: 10 },
+    },
+    { $set: { monthlyInterviewLimit: 10 } },
+  )
+  await User.updateOne(
+    {
+      _id: userId,
+      accountState: { $ne: 'deleting' },
+      entitlementSource: 'subscription',
+      planVocabularyVersion: 2,
+      plan: 'pro',
+      planExpiresAt: { $gt: now },
+      interviewLimit: 15,
+      monthlyInterviewLimit: { $ne: 15 },
+    },
+    { $set: { monthlyInterviewLimit: 15 } },
   )
 
   // Also ensure monthlyInterviewsUsed exists (for users created before this field)
   await User.updateOne(
     {
-      _id: new mongoose.Types.ObjectId(input.userId),
+      _id: userId,
       accountState: { $ne: 'deleting' },
       monthlyInterviewsUsed: { $exists: false },
     },
     { $set: { monthlyInterviewsUsed: 0 } }
   )
 
-  // Atomic increment-first: check limit AND increment in a single operation.
-  // Uses $expr to compare field values atomically — no race condition.
+  const personalBasicAuthority = {
+    organizationId: null,
+    role: { $nin: ['recruiter', 'org_admin', 'platform_admin'] },
+    plan: { $nin: ['plus', 'pro', 'enterprise'] },
+    entitlementSource: { $nin: ['subscription', 'admin_grant'] },
+    monthlyInterviewLimit: 1,
+  }
+
+  let paidInterviewFallback = false
+  let paidInterviewProviderMode: ProviderMode | undefined
+
+  // Atomic increment-first: exact Basic and subscription projections use their
+  // product limits. Explicit organization/Enterprise/admin/legacy paid rows
+  // retain their stored limit without being coerced into consumer pricing. A
+  // duration above 10 minutes atomically excludes the Basic authority branch,
+  // so a direct API request cannot consume a Basic credit or persist a longer
+  // session even if the browser setup was bypassed.
   const updatedUser = await User.findOneAndUpdate(
     {
-      _id: new mongoose.Types.ObjectId(input.userId),
+      _id: userId,
       accountState: { $ne: 'deleting' },
-      $expr: { $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'] },
+      $and: [
+        {
+          $expr: {
+            $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'],
+          },
+        },
+        {
+          $or: [
+            personalBasicAuthority,
+            {
+              entitlementSource: 'subscription',
+              planVocabularyVersion: 2,
+              plan: 'plus',
+              planExpiresAt: { $gt: now },
+              interviewLimit: 10,
+              monthlyInterviewLimit: 10,
+            },
+            {
+              entitlementSource: 'subscription',
+              planVocabularyVersion: 2,
+              plan: 'pro',
+              planExpiresAt: { $gt: now },
+              interviewLimit: 15,
+              monthlyInterviewLimit: 15,
+            },
+            { organizationId: { $ne: null } },
+            { role: { $in: ['recruiter', 'org_admin', 'platform_admin'] } },
+            { plan: 'enterprise' },
+            { entitlementSource: 'admin_grant' },
+            {
+              plan: { $in: ['plus', 'pro'] },
+              entitlementSource: { $ne: 'subscription' },
+              planVocabularyVersion: { $ne: 2 },
+            },
+          ],
+        },
+        ...(input.config.duration > BASIC_MAX_INTERVIEW_DURATION_MINUTES
+          ? [{ $nor: [personalBasicAuthority] }]
+          : []),
+      ],
     },
     {
       $inc: { monthlyInterviewsUsed: 1, interviewCount: 1 },
@@ -246,10 +366,22 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   )
 
   if (!updatedUser) {
-    // Either user doesn't exist or usage limit reached
+    // Either the user does not exist, the included allowance is exhausted,
+    // or a Basic user selected a duration that requires a paid unlock.
     const exists = await User.exists(activeJobsAccountFilter(input.userId))
     if (!exists) throw new NotFoundError('User')
-    throw new UsageLimitError()
+    const isPersonalBasic = await User.exists({
+      ...activeJobsAccountFilter(input.userId),
+      ...personalBasicAuthority,
+    })
+    if (!isPersonalBasic) {
+      throw new UsageLimitError()
+    }
+    paidInterviewFallback = true
+    paidInterviewProviderMode = paidInterviewLaunchProviderMode(
+      await getBillingConfig(),
+      input.userId,
+    )
   }
 
   // Look up scoring dimensions for this interview type
@@ -369,14 +501,17 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
         throw new ModelProviderPreconditionError(err)
       }
     } catch (err) {
-      await User.findByIdAndUpdate(input.userId, {
-        $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
-      })
+      if (updatedUser) {
+        await User.findByIdAndUpdate(input.userId, {
+          $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
+        })
+      }
       throw err
     }
   }
 
   const sessionPayload = {
+    _id: new mongoose.Types.ObjectId(),
     userId: new mongoose.Types.ObjectId(input.userId),
     organizationId: input.organizationId
       ? new mongoose.Types.ObjectId(input.organizationId)
@@ -403,24 +538,73 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   }
   let session: IInterviewSession
   try {
-    if (input.verifiedJobsAttribution) {
+    if (input.verifiedJobsAttribution || paidInterviewFallback) {
       session = await withActiveJobsAccountWrite(input.userId, async (dbSession) => {
-        // Preserve Mongo's TransientTransactionError labels unchanged so
-        // withTransaction can retry the whole User → posting → application →
-        // session unit against the winning commit.
-        const jobsAuthorityCurrent = Boolean(
-          await input.beforeVerifiedJobsSessionWrite?.(dbSession),
-        )
-        if (!jobsAuthorityCurrent) throw new ModelProviderPreconditionError()
-        // The route/provider checks can finish before the final write. Bind
-        // the server-canonical experience to the same User-document write
-        // fence and Mongo transaction that creates the session so a profile
-        // edit cannot win in the last gap and persist a stale calibration.
-        const profileStillCurrent = await User.exists({
-          _id: new mongoose.Types.ObjectId(input.userId),
-          experienceLevel: input.config.experience,
-        }).session(dbSession)
-        if (!profileStillCurrent) throw new ModelProviderPreconditionError()
+        if (input.verifiedJobsAttribution) {
+          // Preserve Mongo's TransientTransactionError labels unchanged so
+          // withTransaction can retry the whole User → posting → application →
+          // session unit against the winning commit.
+          const jobsAuthorityCurrent = Boolean(
+            await input.beforeVerifiedJobsSessionWrite?.(dbSession),
+          )
+          if (!jobsAuthorityCurrent) throw new ModelProviderPreconditionError()
+          // The route/provider checks can finish before the final write. Bind
+          // the server-canonical experience to the same User-document write
+          // fence and Mongo transaction that creates the session so a profile
+          // edit cannot win in the last gap and persist a stale calibration.
+          const profileStillCurrent = await User.exists({
+            _id: new mongoose.Types.ObjectId(input.userId),
+            experienceLevel: input.config.experience,
+          }).session(dbSession)
+          if (!profileStillCurrent) throw new ModelProviderPreconditionError()
+        }
+
+        if (paidInterviewFallback) {
+          const paidOwnerStillBasic = await User.exists({
+            _id: userId,
+            accountState: { $ne: 'deleting' },
+            ...personalBasicAuthority,
+          }).session(dbSession)
+          if (!paidOwnerStillBasic || !paidInterviewProviderMode) {
+            throw new UsageLimitError()
+          }
+          try {
+            await consumePaidInterviewUnlockForLaunchInSession(
+              {
+                userId: input.userId,
+                sessionId: sessionPayload._id.toHexString(),
+                providerMode: paidInterviewProviderMode,
+                durationMinutes: input.config.duration,
+                now,
+              },
+              dbSession,
+            )
+          } catch (error) {
+            if (
+              error instanceof PaidInterviewLaunchError &&
+              error.code === 'unavailable'
+            ) {
+              throw new UsageLimitError()
+            }
+            throw error
+          }
+          const counted = await User.updateOne(
+            {
+              _id: userId,
+              accountState: { $ne: 'deleting' },
+              ...personalBasicAuthority,
+            },
+            {
+              $inc: { interviewCount: 1 },
+              $set: { lastInterviewAt: now },
+            },
+            { session: dbSession },
+          )
+          if ((counted.matchedCount ?? 0) !== 1) {
+            throw new UsageLimitError()
+          }
+        }
+
         const [created] = await InterviewSession.create([sessionPayload], { session: dbSession })
         return created
       })
@@ -429,9 +613,11 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     }
   } catch (err) {
     // Rollback the usage increment if session creation fails
-    await User.findByIdAndUpdate(input.userId, {
-      $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
-    })
+    if (updatedUser) {
+      await User.findByIdAndUpdate(input.userId, {
+        $inc: { monthlyInterviewsUsed: -1, interviewCount: -1 },
+      })
+    }
     if (err instanceof JobsAccountInactiveError) throw new NotFoundError('User')
     throw err
   }

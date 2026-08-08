@@ -8,7 +8,9 @@ import {
 } from '../services/checkoutIntentService'
 import {
   createSubscriptionCheckout,
-  type SubscriptionCheckoutDependencies,
+  PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
+  type InitialSubscriptionCheckoutDependencies,
+  type StoredSubscriptionCheckoutIntent,
 } from '../services/subscriptionCheckoutService'
 
 const userId = new mongoose.Types.ObjectId().toString()
@@ -74,7 +76,7 @@ function quote(withCoupon: boolean): ResolvedCustomerBillingQuote {
                 userIds: [],
                 segments: ['all' as const],
                 acquisitionSources: [],
-                upgradesEligible: true,
+                upgradesEligible: false,
               },
               maxRedemptionsPerUser: 1,
               minPayablePaiseByPlan: { plus: 39_900 },
@@ -95,9 +97,107 @@ function quote(withCoupon: boolean): ResolvedCustomerBillingQuote {
   } as unknown as ResolvedCustomerBillingQuote
 }
 
+function manualCodeQuote(
+  result: 'applied' | 'invalid' | 'ineligible' | 'system_unavailable',
+): ResolvedCustomerBillingQuote {
+  if (result !== 'applied') {
+    const resolved = quote(false)
+    return {
+      ...resolved,
+      quote: {
+        ...resolved.quote,
+        manualCodeResult: result,
+      },
+    }
+  }
+
+  const resolved = quote(true)
+  const selected = resolved.selectedCandidate!
+  return {
+    ...resolved,
+    quote: {
+      ...resolved.quote,
+      manualCodeResult: 'applied',
+      discountedBillingCycles: 1,
+      coupon: {
+        campaignId,
+        revision: 1,
+        mode: 'code',
+        code: 'GURU100',
+        displayText: 'Save ₹100',
+        whyApplied: 'Coupon code GURU100 applied.',
+        termsText: 'Save ₹100 for the first billing cycle.',
+      },
+    },
+    selectedCandidate: {
+      ...selected,
+      mode: 'code',
+      code: 'GURU100',
+    },
+  }
+}
+
+function reusableCouponIntent(
+  intentId: mongoose.Types.ObjectId,
+  remoteId: string,
+): StoredSubscriptionCheckoutIntent {
+  return {
+    id: intentId,
+    userId: new mongoose.Types.ObjectId(userId),
+    kind: 'subscription',
+    providerMode: 'test',
+    status: 'remote_created',
+    purpose: 'acquisition',
+    leaseLane: 'a',
+    requestedStartAt: new Date('2099-02-01T00:00:00.000Z'),
+    authorizationExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
+    planKey: 'plus',
+    catalogVersion: 'consumer-inr-v1',
+    idempotencyKey: 'launch:original-coupon-checkout',
+    requestHash: 'f'.repeat(64),
+    receipt: 'receipt_existing_coupon',
+    quote: {
+      currency: 'INR',
+      listPricePaise: 59_900,
+      discountPaise: 10_000,
+      payablePaise: 49_900,
+      renewalPricePaise: 59_900,
+      discountedBillingCycles: 1,
+      couponCampaignId: new mongoose.Types.ObjectId(campaignId),
+      couponCampaignRevision: 1,
+      subscriptionTotalCount: PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
+      gst: {
+        inclusive: true,
+        rateBps: 1_800,
+        componentAllocation: 'unallocated',
+      },
+      entitlementSnapshot: {},
+    },
+    buyerSnapshot: {},
+    couponReservation: {
+      providerMode: 'test',
+      campaignId: new mongoose.Types.ObjectId(campaignId),
+      campaignRevision: 1,
+      userId: new mongoose.Types.ObjectId(userId),
+      checkoutIntentId: intentId,
+      catalogVersion: 'consumer-inr-v1',
+      planKey: 'plus',
+      campaignModeSnapshot: 'code',
+      codeSnapshot: 'GURU100',
+      discountPaise: 10_000,
+      discountedBillingCycles: 1,
+      status: 'reserved',
+      capacityDisposition: 'held',
+      validUntil: new Date('2099-01-01T00:00:00.000Z'),
+    },
+    razorpaySubscriptionId: remoteId,
+    createdAt: new Date('2026-08-07T10:00:00.000Z'),
+  }
+}
+
 function dependencies(
   resolved: ResolvedCustomerBillingQuote,
-): SubscriptionCheckoutDependencies & {
+): InitialSubscriptionCheckoutDependencies & {
   createIntent: ReturnType<typeof vi.fn>
 } {
   return {
@@ -111,6 +211,14 @@ function dependencies(
         placeOfSupply: { stateCode: '27', countryCode: 'IN' },
       },
     })),
+    loadAcquisitionAuthority: vi.fn(async () => ({
+      plan: 'free',
+      planVocabularyVersion: 2,
+      entitlementSource: 'free',
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+    })),
+    supersedeBlockingCheckout: vi.fn(async () => ({ outcome: 'none' })),
     resolveQuote: vi.fn(async () => resolved),
     preflightQuote: vi.fn(async () => ({
       couponAccepted: Boolean(resolved.selectedCandidate),
@@ -119,19 +227,571 @@ function dependencies(
   }
 }
 
-describe('subscription launch coupon requirement', () => {
-  it('blocks checkout before persistence when no launch coupon applies', async () => {
+describe('subscription launch coupon fallback', () => {
+  it.each([
+    ['organization account', {
+      plan: 'free' as const,
+      planVocabularyVersion: 2 as const,
+      entitlementSource: 'free' as const,
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+      role: 'org_admin' as const,
+      organizationId: new mongoose.Types.ObjectId(),
+    }],
+    ['recruiter account', {
+      plan: 'free' as const,
+      planVocabularyVersion: 2 as const,
+      entitlementSource: 'free' as const,
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+      role: 'recruiter' as const,
+    }],
+    ['partial entitlement projection', {
+      plan: 'free' as const,
+      entitlementSource: 'free' as const,
+    }],
+    ['administrator entitlement projection', {
+      plan: 'free' as const,
+      planVocabularyVersion: 2 as const,
+      entitlementSource: 'admin_grant' as const,
+      usagePeriodKey: 'admin-grant',
+      entitlementVersion: 4,
+    }],
+  ])('blocks %s before replacing or creating checkout state', async (
+    _label,
+    authority,
+  ) => {
     const deps = dependencies(quote(false))
+    deps.loadAcquisitionAuthority = vi.fn(async () => authority)
+    deps.createRemote = vi.fn()
 
     await expect(createSubscriptionCheckout({
       userId,
-      idempotencyKey: 'launch:no-coupon',
+      idempotencyKey: 'launch:blocked-authority',
       request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'review_required',
+    })
+
+    expect(deps.supersedeBlockingCheckout).not.toHaveBeenCalled()
+    expect(deps.resolveQuote).not.toHaveBeenCalled()
+    expect(deps.createIntent).not.toHaveBeenCalled()
+    expect(deps.createRemote).not.toHaveBeenCalled()
+  })
+
+  it('reopens the exact pending same-plan checkout without creating another intent', async () => {
+    const deps = dependencies(quote(false))
+    const intentId = new mongoose.Types.ObjectId()
+    const remoteId = 'sub_existingPlus123'
+    const stored: StoredSubscriptionCheckoutIntent = {
+      id: intentId,
+      userId: new mongoose.Types.ObjectId(userId),
+      kind: 'subscription',
+      providerMode: 'test',
+      status: 'remote_created',
+      purpose: 'acquisition',
+      leaseLane: 'a',
+      authorizationExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
+      planKey: 'plus',
+      catalogVersion: 'consumer-inr-v1',
+      idempotencyKey: 'launch:original-checkout',
+      requestHash: 'f'.repeat(64),
+      receipt: 'receipt_existing_plus',
+      quote: {
+        currency: 'INR',
+        listPricePaise: 59_900,
+        discountPaise: 0,
+        payablePaise: 59_900,
+        renewalPricePaise: 59_900,
+        subscriptionTotalCount: PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
+        gst: {
+          inclusive: true,
+          rateBps: 1_800,
+          componentAllocation: 'unallocated',
+        },
+        entitlementSnapshot: {},
+      },
+      buyerSnapshot: {},
+      razorpaySubscriptionId: remoteId,
+      createdAt: new Date('2026-08-07T10:00:00.000Z'),
+    }
+    deps.supersedeBlockingCheckout = vi.fn(async () => ({
+      outcome: 'reusable' as const,
+      intentId: intentId.toHexString(),
+      planKey: 'plus' as const,
+    }))
+    deps.loadIntent = vi.fn(async () => stored)
+    deps.commercialResolver = {
+      resolve: vi.fn(async () => ({
+        catalog: {
+          version: 'consumer-inr-v1',
+          contentHash: 'a'.repeat(64),
+          status: 'published' as const,
+          effectiveAt: new Date('2026-08-01T00:00:00.000Z'),
+          publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+          integrityVerified: true,
+          plan: {
+            key: 'plus' as const,
+            listPricePaise: 59_900,
+            billingPeriod: 'monthly' as const,
+            interviewLimit: 10,
+            interviewPeriodOwner: 'razorpay_billing_cycle' as const,
+            maxInterviewDurationMinutes: 30,
+            basicSavedResumeLimit: 1,
+            premiumResumeLimit: 5,
+            razorpayPlanId: 'plan_plus',
+          },
+        },
+      })),
+    }
+    deps.createRemote = vi.fn(async () => ({
+      intentId: intentId.toHexString(),
+      providerMode: 'test' as const,
+      kind: 'subscription' as const,
+      remoteId,
+      source: 'existing' as const,
+      reused: true,
+    }))
+    deps.loadKeyId = vi.fn(() => 'rzp_test_checkoutkey')
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:new-browser-key',
+      request: { planKey: 'plus' },
+    }, deps)).resolves.toMatchObject({
+      intentId: intentId.toHexString(),
+      reused: true,
+      checkout: {
+        keyId: 'rzp_test_checkoutkey',
+        subscriptionId: remoteId,
+      },
+      quote: {
+        planKey: 'plus',
+        payablePaise: 59_900,
+      },
+    })
+
+    expect(deps.resolveQuote).not.toHaveBeenCalled()
+    expect(deps.createIntent).not.toHaveBeenCalled()
+    expect(deps.createRemote).toHaveBeenCalledOnce()
+  })
+
+  it('replaces an unpaid same-plan list-price checkout before applying an asserted coupon', async () => {
+    const deps = dependencies(manualCodeQuote('applied'))
+    const supersededIntentId = new mongoose.Types.ObjectId().toHexString()
+    deps.supersedeBlockingCheckout = vi.fn(async () => ({
+      outcome: 'superseded' as const,
+      intentId: supersededIntentId,
+      previousPlanKey: 'plus' as const,
+      providerStatus: 'cancelled' as const,
+    }))
+    deps.createIntent.mockRejectedValueOnce(
+      new Error('stop after replacement intent input'),
+    )
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:replace-list-price-with-coupon',
+      request: {
+        planKey: 'plus',
+        manualCouponCode: 'GURU100',
+      },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(deps.supersedeBlockingCheckout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replacementPlanKey: 'plus',
+        manualCouponCode: 'GURU100',
+      }),
+    )
+    expect(deps.resolveQuote).toHaveBeenCalledOnce()
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        manualCouponCode: 'GURU100',
+        couponReservation: expect.objectContaining({
+          campaignModeSnapshot: 'code',
+          codeSnapshot: 'GURU100',
+        }),
+      }),
+    )
+  })
+
+  it('reopens a coupon checkout when the retry omits a new coupon assertion', async () => {
+    const deps = dependencies(quote(false))
+    const intentId = new mongoose.Types.ObjectId()
+    const remoteId = 'sub_omittedCouponRetry123'
+    const stored = reusableCouponIntent(intentId, remoteId)
+    deps.supersedeBlockingCheckout = vi.fn(async () => ({
+      outcome: 'reusable' as const,
+      intentId: intentId.toHexString(),
+      planKey: 'plus' as const,
+    }))
+    deps.loadIntent = vi.fn(async () => stored)
+    deps.commercialResolver = {
+      resolve: vi.fn(async () => ({
+        catalog: {
+          version: 'consumer-inr-v1',
+          contentHash: 'a'.repeat(64),
+          status: 'published' as const,
+          effectiveAt: new Date('2026-08-01T00:00:00.000Z'),
+          publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+          integrityVerified: true,
+          plan: {
+            key: 'plus' as const,
+            listPricePaise: 59_900,
+            billingPeriod: 'monthly' as const,
+            interviewLimit: 10,
+            interviewPeriodOwner: 'razorpay_billing_cycle' as const,
+            maxInterviewDurationMinutes: 30,
+            basicSavedResumeLimit: 1,
+            premiumResumeLimit: 5,
+            razorpayPlanId: 'plan_plus',
+          },
+        },
+        coupon: {
+          campaignId: new mongoose.Types.ObjectId(campaignId),
+          revision: 1,
+          status: 'active' as const,
+          contentHash: 'b'.repeat(64),
+          integrityVerified: true,
+          discountPaise: 10_000,
+          applicablePlanKeys: ['plus' as const],
+          discountedBillingCycles: 1,
+          bannerText: 'Save ₹100',
+          termsText: 'Save ₹100 for the first billing cycle.',
+        },
+      })),
+    }
+    deps.createRemote = vi.fn(async () => ({
+      intentId: intentId.toHexString(),
+      providerMode: 'test' as const,
+      kind: 'subscription' as const,
+      remoteId,
+      source: 'existing' as const,
+      reused: true,
+    }))
+    deps.loadKeyId = vi.fn(() => 'rzp_test_checkoutkey')
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:omitted-coupon-retry',
+      request: { planKey: 'plus' },
+    }, deps)).resolves.toMatchObject({
+      intentId: intentId.toHexString(),
+      reused: true,
+      checkout: {
+        subscriptionId: remoteId,
+      },
+      quote: {
+        payablePaise: 49_900,
+        coupon: {
+          mode: 'code',
+          code: 'GURU100',
+        },
+      },
+    })
+
+    expect(deps.resolveQuote).not.toHaveBeenCalled()
+    expect(deps.createIntent).not.toHaveBeenCalled()
+    expect(deps.createRemote).toHaveBeenCalledOnce()
+  })
+
+  it('reopens a same-plan checkout when the manual coupon assertion matches exactly', async () => {
+    const deps = dependencies(quote(false))
+    const intentId = new mongoose.Types.ObjectId()
+    const remoteId = 'sub_matchingCoupon123'
+    const stored = reusableCouponIntent(intentId, remoteId)
+    deps.supersedeBlockingCheckout = vi.fn(async () => ({
+      outcome: 'reusable' as const,
+      intentId: intentId.toHexString(),
+      planKey: 'plus' as const,
+    }))
+    deps.loadIntent = vi.fn(async () => stored)
+    deps.commercialResolver = {
+      resolve: vi.fn(async () => ({
+        catalog: {
+          version: 'consumer-inr-v1',
+          contentHash: 'a'.repeat(64),
+          status: 'published' as const,
+          effectiveAt: new Date('2026-08-01T00:00:00.000Z'),
+          publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+          integrityVerified: true,
+          plan: {
+            key: 'plus' as const,
+            listPricePaise: 59_900,
+            billingPeriod: 'monthly' as const,
+            interviewLimit: 10,
+            interviewPeriodOwner: 'razorpay_billing_cycle' as const,
+            maxInterviewDurationMinutes: 30,
+            basicSavedResumeLimit: 1,
+            premiumResumeLimit: 5,
+            razorpayPlanId: 'plan_plus',
+          },
+        },
+        coupon: {
+          campaignId: new mongoose.Types.ObjectId(campaignId),
+          revision: 1,
+          status: 'active' as const,
+          contentHash: 'b'.repeat(64),
+          integrityVerified: true,
+          discountPaise: 10_000,
+          applicablePlanKeys: ['plus' as const],
+          discountedBillingCycles: 1,
+          bannerText: 'Save ₹100',
+          termsText: 'Save ₹100 for the first billing cycle.',
+        },
+      })),
+    }
+    deps.createRemote = vi.fn(async () => ({
+      intentId: intentId.toHexString(),
+      providerMode: 'test' as const,
+      kind: 'subscription' as const,
+      remoteId,
+      source: 'existing' as const,
+      reused: true,
+    }))
+    deps.loadKeyId = vi.fn(() => 'rzp_test_checkoutkey')
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:matching-coupon-retry',
+      request: {
+        planKey: 'plus',
+        manualCouponCode: 'guru100',
+      },
+    }, deps)).resolves.toMatchObject({
+      intentId: intentId.toHexString(),
+      reused: true,
+      checkout: {
+        subscriptionId: remoteId,
+      },
+      quote: {
+        payablePaise: 49_900,
+        coupon: {
+          mode: 'code',
+          code: 'GURU100',
+        },
+      },
+    })
+
+    expect(deps.resolveQuote).not.toHaveBeenCalled()
+    expect(deps.createIntent).not.toHaveBeenCalled()
+    expect(deps.createRemote).toHaveBeenCalledOnce()
+  })
+
+  it('supersedes an older different-plan checkout before resolving a new quote', async () => {
+    const deps = dependencies(quote(false))
+    const callOrder: string[] = []
+    deps.resolveSaleContext = vi.fn(async () => {
+      callOrder.push('sale')
+      return {
+        providerMode: 'test',
+        buyerSnapshot: {
+          name: 'Founder',
+          email: 'founder@example.invalid',
+          billingProfileVersion: 1,
+          billingProfileContentHash: 'c'.repeat(64),
+          placeOfSupply: { stateCode: '27', countryCode: 'IN' },
+        },
+      }
+    })
+    deps.supersedeBlockingCheckout = vi.fn(async () => {
+      callOrder.push('supersede')
+      return { outcome: 'none' }
+    })
+    deps.resolveQuote = vi.fn(async () => {
+      callOrder.push('quote')
+      return quote(false)
+    })
+    deps.createIntent.mockRejectedValueOnce(new Error('stop after ordering'))
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:supersession-order',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(callOrder).toEqual(['sale', 'supersede', 'quote'])
+    expect(deps.supersedeBlockingCheckout).toHaveBeenCalledTimes(1)
+  })
+
+  it('rotates the idempotency key after superseding an obsolete checkout', async () => {
+    const deps = dependencies(quote(false))
+    const supersededIntentId = new mongoose.Types.ObjectId().toString()
+    deps.supersedeBlockingCheckout = vi.fn(async () => ({
+      outcome: 'superseded' as const,
+      intentId: supersededIntentId,
+      previousPlanKey: 'plus' as const,
+      providerStatus: 'cancelled' as const,
+    }))
+    deps.createIntent.mockRejectedValueOnce(new Error('stop after intent input'))
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'billing-subscription:stale-browser-key',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey:
+          `billing-subscription:superseded:${supersededIntentId}:300`,
+        quoteSnapshot: expect.objectContaining({
+          subscriptionTotalCount: 300,
+        }),
+      }),
+    )
+  })
+
+  it('persists the authoritative list price when no coupon applies', async () => {
+    const deps = dependencies(quote(false))
+    deps.createIntent.mockResolvedValueOnce({
+      intentId: new mongoose.Types.ObjectId().toString(),
+      receipt: 'receipt_list_price',
+      requestHash: 'd'.repeat(64),
+      status: 'created',
+      reused: false,
+    })
+    deps.loadIntent = vi.fn(async () => null)
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:list-price',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quoteSnapshot: expect.objectContaining({
+          listPricePaise: 59_900,
+          discountPaise: 0,
+          payablePaise: 59_900,
+          subscriptionTotalCount: 300,
+        }),
+      }),
+    )
+    expect(deps.createIntent.mock.calls[0]?.[0])
+      .not.toHaveProperty('couponReservation')
+  })
+
+  it.each([
+    'invalid',
+    'ineligible',
+    'system_unavailable',
+  ] as const)(
+    'rejects a %s asserted manual coupon before creating checkout state',
+    async (manualCodeResult) => {
+      const deps = dependencies(manualCodeQuote(manualCodeResult))
+      deps.createRemote = vi.fn()
+
+      await expect(createSubscriptionCheckout({
+        userId,
+        idempotencyKey: `launch:manual-${manualCodeResult}`,
+        request: {
+          planKey: 'plus',
+          manualCouponCode: 'GURU100',
+        },
+      }, deps)).rejects.toMatchObject({
+        code: 'commercial_unavailable',
+      })
+
+      expect(deps.createIntent).not.toHaveBeenCalled()
+      expect(deps.createRemote).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects an unavailable manual coupon after prior-plan supersession without creating replacement state', async () => {
+    const deps = dependencies(manualCodeQuote('ineligible'))
+    const supersededIntentId = new mongoose.Types.ObjectId().toString()
+    deps.supersedeBlockingCheckout = vi.fn(async () => ({
+      outcome: 'superseded' as const,
+      intentId: supersededIntentId,
+      previousPlanKey: 'plus' as const,
+      providerStatus: 'cancelled' as const,
+    }))
+    deps.createRemote = vi.fn()
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:post-supersession-ineligible',
+      request: {
+        planKey: 'plus',
+        manualCouponCode: 'GURU100',
+      },
+    }, deps)).rejects.toMatchObject({
+      code: 'commercial_unavailable',
+    })
+
+    expect(deps.supersedeBlockingCheckout).toHaveBeenCalledOnce()
+    expect(deps.resolveQuote).toHaveBeenCalledOnce()
+    expect(deps.preflightQuote).toHaveBeenCalledOnce()
+    expect(deps.createIntent).not.toHaveBeenCalled()
+    expect(deps.createRemote).not.toHaveBeenCalled()
+  })
+
+  it('rejects an asserted manual coupon when final preflight no longer accepts it', async () => {
+    const deps = dependencies(manualCodeQuote('applied'))
+    deps.preflightQuote = vi.fn(async () => ({ couponAccepted: false }))
+    deps.createRemote = vi.fn()
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:manual-preflight-rejected',
+      request: {
+        planKey: 'plus',
+        manualCouponCode: 'GURU100',
+      },
     }, deps)).rejects.toMatchObject({
       code: 'commercial_unavailable',
     })
 
     expect(deps.createIntent).not.toHaveBeenCalled()
+    expect(deps.createRemote).not.toHaveBeenCalled()
+  })
+
+  it('persists the selected automatic coupon and discounted price', async () => {
+    const deps = dependencies(quote(true))
+    deps.createIntent.mockResolvedValueOnce({
+      intentId: new mongoose.Types.ObjectId().toString(),
+      receipt: 'receipt_discounted',
+      requestHash: 'e'.repeat(64),
+      status: 'created',
+      reused: false,
+    })
+    deps.loadIntent = vi.fn(async () => null)
+
+    await expect(createSubscriptionCheckout({
+      userId,
+      idempotencyKey: 'launch:automatic-coupon',
+      request: { planKey: 'plus' },
+    }, deps)).rejects.toMatchObject({
+      code: 'persistence_conflict',
+    })
+
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quoteSnapshot: expect.objectContaining({
+          listPricePaise: 59_900,
+          discountPaise: 10_000,
+          payablePaise: 49_900,
+        }),
+        couponReservation: expect.objectContaining({
+          campaignId,
+          campaignRevision: 1,
+          campaignModeSnapshot: 'automatic',
+          discountPaise: 10_000,
+          discountedBillingCycles: 1,
+        }),
+      }),
+    )
   })
 
   it('does not retry at list price when coupon capacity is exhausted', async () => {
@@ -149,5 +809,17 @@ describe('subscription launch coupon requirement', () => {
     })
 
     expect(deps.createIntent).toHaveBeenCalledTimes(1)
+    expect(deps.createIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quoteSnapshot: expect.objectContaining({
+          discountPaise: 10_000,
+          payablePaise: 49_900,
+        }),
+        couponReservation: expect.objectContaining({
+          campaignId,
+          discountPaise: 10_000,
+        }),
+      }),
+    )
   })
 })

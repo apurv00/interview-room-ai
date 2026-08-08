@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
@@ -102,7 +103,8 @@ export interface TrustedRemoteCheckoutIntent {
 export interface TrustedSubscriptionCheckoutSpec {
   planKey: 'plus' | 'pro'
   razorpayPlanId: string
-  razorpayOfferId?: string
+  upfrontAmountPaise?: number
+  upfrontItemName?: string
   totalCount: number
   purpose: CheckoutIntentPurpose
   planChangeRequestId?: string
@@ -114,6 +116,7 @@ export interface TrustedSubscriptionCheckoutSpec {
 export interface RemoteCheckoutAttachInput {
   intent: TrustedRemoteCheckoutIntent
   remoteId: string
+  claimToken: string
 }
 
 export type RemoteCheckoutAttachResult =
@@ -125,6 +128,16 @@ export type RemoteCheckoutAttachResult =
       outcome: 'conflict'
     }
 
+export type RemoteCheckoutCreationClaimResult =
+  | {
+      outcome: 'claimed'
+      intent: TrustedRemoteCheckoutIntent
+      recoveryOnly: boolean
+    }
+  | {
+      outcome: 'busy' | 'conflict'
+    }
+
 export interface RemoteCheckoutCreationStore {
   /**
    * Production stores must load the intent and claim its active consumer
@@ -134,12 +147,29 @@ export interface RemoteCheckoutCreationStore {
     intentId: mongoose.Types.ObjectId
     userId: mongoose.Types.ObjectId
   }): Promise<TrustedRemoteCheckoutIntent | null>
+  claimRemoteCreation(input: {
+    intent: TrustedRemoteCheckoutIntent
+    claimToken: string
+    claimedAt: Date
+    leaseExpiresAt: Date
+  }): Promise<RemoteCheckoutCreationClaimResult>
+  markRemoteCreationStarted(input: {
+    intent: TrustedRemoteCheckoutIntent
+    claimToken: string
+    startedAt: Date
+    leaseExpiresAt: Date
+  }): Promise<boolean>
+  releaseRemoteCreationClaim(input: {
+    intent: TrustedRemoteCheckoutIntent
+    claimToken: string
+  }): Promise<void>
   attachRemoteId(
     input: RemoteCheckoutAttachInput,
   ): Promise<RemoteCheckoutAttachResult>
   markReview(input: {
     intent: TrustedRemoteCheckoutIntent
-  }): Promise<void>
+    claimToken: string
+  }): Promise<boolean>
 }
 
 export interface RemoteCheckoutCreationDependencies {
@@ -179,7 +209,14 @@ readonly CheckoutIntentStatus[] = [
 ]
 const RECOVERY_WINDOW_SECONDS = 72 * 60 * 60
 const RECOVERY_CLOCK_SKEW_SECONDS = 5 * 60
+const REMOTE_CREATION_LEASE_MS = 2 * 60 * 1_000
 const defaultClientFactory = createRazorpayClientFactory()
+
+interface AcquiredRemoteCreationLease {
+  claimToken: string
+  recoveryOnly: boolean
+  providerCreationAttempted: boolean
+}
 
 function failure(
   code: RemoteCheckoutCreationErrorCode,
@@ -274,10 +311,18 @@ function assertIntentShape(intent: TrustedRemoteCheckoutIntent): void {
       )
     }
     if (intent.purpose === 'acquisition') {
+      const couponUpfrontLifecycle =
+        intent.discountPaise > 0 &&
+        intent.discountedBillingCycles === 1 &&
+        exactEpochSecondDate(intent.requestedStartAt) &&
+        intent.authorizationExpiresAt < intent.requestedStartAt
       if (
         intent.leaseLane !== 'a' ||
         intent.planChangeRequestId !== undefined ||
-        intent.requestedStartAt !== undefined
+        (
+          intent.requestedStartAt !== undefined &&
+          !couponUpfrontLifecycle
+        )
       ) {
         throw failure(
           'intent_shape_invalid',
@@ -327,10 +372,6 @@ function assertSubscriptionSpec(
   if (
     spec.planKey !== intent.planKey ||
     !/^plan_[A-Za-z0-9]+$/.test(spec.razorpayPlanId) ||
-    (
-      spec.razorpayOfferId !== undefined &&
-      !/^offer_[A-Za-z0-9]+$/.test(spec.razorpayOfferId)
-    ) ||
     !Number.isSafeInteger(spec.totalCount) ||
     spec.totalCount <= 0 ||
     spec.purpose !== intent.purpose ||
@@ -350,10 +391,26 @@ function assertSubscriptionSpec(
     )
   }
   const discounted = intent.discountPaise > 0
-  if (discounted !== (spec.razorpayOfferId !== undefined)) {
+  const hasUpfrontAmount = spec.upfrontAmountPaise !== undefined
+  if (
+    discounted !== hasUpfrontAmount ||
+    (
+      discounted &&
+      (
+        intent.purpose !== 'acquisition' ||
+        intent.discountedBillingCycles !== 1 ||
+        spec.startAtEpochSeconds === undefined ||
+        spec.upfrontAmountPaise !== intent.payablePaise ||
+        typeof spec.upfrontItemName !== 'string' ||
+        spec.upfrontItemName.trim().length < 1 ||
+        spec.upfrontItemName.length > 100
+      )
+    ) ||
+    (!discounted && spec.upfrontItemName !== undefined)
+  ) {
     throw failure(
       'subscription_spec_unavailable',
-      'Trusted subscription Offer does not match the checkout quote',
+      'Trusted subscription upfront amount does not match the checkout quote',
     )
   }
   if (
@@ -415,7 +472,7 @@ function assertSubscriptionMatches(
       subscription.id !== expectedRemoteId
     ) ||
     subscription.planId !== spec.razorpayPlanId ||
-    subscription.offerId !== spec.razorpayOfferId ||
+    subscription.offerId !== undefined ||
     subscription.totalCount !== spec.totalCount ||
     subscription.authorizationExpiresAtEpochSeconds !==
       spec.authorizationExpiresAtEpochSeconds ||
@@ -428,6 +485,10 @@ function assertSubscriptionMatches(
     subscription.notes.catalog_version !== intent.catalogVersion ||
     subscription.notes.checkout_purpose !== intent.purpose ||
     subscription.notes.subscription_lease_lane !== intent.leaseLane ||
+    subscription.notes.coupon_upfront_amount_paise?.toString() !==
+      spec.upfrontAmountPaise?.toString() ||
+    subscription.notes.coupon_discounted_billing_cycles?.toString() !==
+      intent.discountedBillingCycles?.toString() ||
     subscription.notes.plan_change_request_id !==
       intent.planChangeRequestId?.toString()
   ) {
@@ -461,10 +522,17 @@ function subscriptionRecoveryWindow(
 async function reviewAndThrow(
   store: RemoteCheckoutCreationStore,
   intent: TrustedRemoteCheckoutIntent,
+  lease: AcquiredRemoteCreationLease,
   error: RemoteCheckoutCreationError,
 ): Promise<never> {
   try {
-    await store.markReview({ intent })
+    const persisted = await store.markReview({
+      intent,
+      claimToken: lease.claimToken,
+    })
+    if (!persisted) {
+      throw new Error('Remote creation claim no longer owns the intent')
+    }
   } catch (reviewError) {
     throw failure(
       'persistence_conflict',
@@ -530,9 +598,52 @@ async function recoverSubscription(
   })
 }
 
+async function markProviderCreationStarted(input: {
+  store: RemoteCheckoutCreationStore
+  intent: TrustedRemoteCheckoutIntent
+  lease: AcquiredRemoteCreationLease
+  now: () => Date
+}): Promise<void> {
+  if (input.lease.recoveryOnly) {
+    throw failure(
+      'persistence_conflict',
+      'A recovered remote creation claim cannot create another provider object',
+    )
+  }
+  const startedAt = input.now()
+  if (Number.isNaN(startedAt.getTime())) {
+    throw failure('invalid_request', 'Current time is invalid')
+  }
+  let started: boolean
+  try {
+    started = await input.store.markRemoteCreationStarted({
+      intent: input.intent,
+      claimToken: input.lease.claimToken,
+      startedAt,
+      leaseExpiresAt: new Date(
+        startedAt.getTime() + REMOTE_CREATION_LEASE_MS,
+      ),
+    })
+  } catch (error) {
+    throw failure(
+      'persistence_conflict',
+      'Remote creation start could not be persisted',
+      error,
+    )
+  }
+  if (!started) {
+    throw failure(
+      'persistence_conflict',
+      'Remote creation claim expired before provider creation',
+    )
+  }
+  input.lease.providerCreationAttempted = true
+}
+
 async function attachResult(input: {
   store: RemoteCheckoutCreationStore
   intent: TrustedRemoteCheckoutIntent
+  lease: AcquiredRemoteCreationLease
   remoteId: string
   source: RemoteCheckoutCreationSource
 }): Promise<RemoteCheckoutCreationResult> {
@@ -541,6 +652,7 @@ async function attachResult(input: {
     attached = await input.store.attachRemoteId({
       intent: input.intent,
       remoteId: input.remoteId,
+      claimToken: input.lease.claimToken,
     })
   } catch (error) {
     if (error instanceof RemoteCheckoutCreationError) throw error
@@ -554,6 +666,7 @@ async function attachResult(input: {
     return reviewAndThrow(
       input.store,
       input.intent,
+      input.lease,
       failure(
         'persistence_conflict',
         'A different remote checkout identifier won the attach race',
@@ -564,6 +677,7 @@ async function attachResult(input: {
     return reviewAndThrow(
       input.store,
       input.intent,
+      input.lease,
       failure(
         'persistence_conflict',
         'Persisted remote checkout identifier is inconsistent',
@@ -586,8 +700,10 @@ async function createOrRecoverOrder(input: {
   adapter: RazorpayServerAdapter
   store: RemoteCheckoutCreationStore
   intent: TrustedRemoteCheckoutIntent
+  lease: AcquiredRemoteCreationLease
+  now: () => Date
 }): Promise<RemoteCheckoutCreationResult> {
-  const { adapter, store, intent } = input
+  const { adapter, store, intent, lease, now } = input
   if (intent.razorpayOrderId) {
     let existing: RazorpayOrderDto
     try {
@@ -602,11 +718,17 @@ async function createOrRecoverOrder(input: {
     try {
       assertOrderMatches(intent, existing, intent.razorpayOrderId)
     } catch (error) {
-      return reviewAndThrow(store, intent, error as RemoteCheckoutCreationError)
+      return reviewAndThrow(
+        store,
+        intent,
+        lease,
+        error as RemoteCheckoutCreationError,
+      )
     }
     return attachResult({
       store,
       intent,
+      lease,
       remoteId: existing.id,
       source: 'existing',
     })
@@ -620,6 +742,7 @@ async function createOrRecoverOrder(input: {
       return reviewAndThrow(
         store,
         intent,
+        lease,
         failure(
           'reconciliation_conflict',
           'Razorpay Order recovery is ambiguous',
@@ -637,15 +760,35 @@ async function createOrRecoverOrder(input: {
     try {
       assertOrderMatches(intent, recovered)
     } catch (error) {
-      return reviewAndThrow(store, intent, error as RemoteCheckoutCreationError)
+      return reviewAndThrow(
+        store,
+        intent,
+        lease,
+        error as RemoteCheckoutCreationError,
+      )
     }
     return attachResult({
       store,
       intent,
+      lease,
       remoteId: recovered.id,
       source: 'pre_create_recovery',
     })
   }
+
+  if (lease.recoveryOnly) {
+    return reviewAndThrow(
+      store,
+      intent,
+      lease,
+      failure(
+        'reconciliation_conflict',
+        'Previous Razorpay Order creation could not be reconciled',
+      ),
+    )
+  }
+
+  await markProviderCreationStarted({ store, intent, lease, now })
 
   let created: RazorpayOrderDto
   try {
@@ -665,6 +808,7 @@ async function createOrRecoverOrder(input: {
       return reviewAndThrow(
         store,
         intent,
+        lease,
         failure(
           recoveryConflict(recoveryError)
             ? 'reconciliation_conflict'
@@ -678,6 +822,7 @@ async function createOrRecoverOrder(input: {
       return reviewAndThrow(
         store,
         intent,
+        lease,
         failure(
           'provider_unavailable',
           'Razorpay Order creation could not be confirmed',
@@ -688,11 +833,17 @@ async function createOrRecoverOrder(input: {
     try {
       assertOrderMatches(intent, recovered)
     } catch (error) {
-      return reviewAndThrow(store, intent, error as RemoteCheckoutCreationError)
+      return reviewAndThrow(
+        store,
+        intent,
+        lease,
+        error as RemoteCheckoutCreationError,
+      )
     }
     return attachResult({
       store,
       intent,
+      lease,
       remoteId: recovered.id,
       source: 'post_failure_recovery',
     })
@@ -701,11 +852,17 @@ async function createOrRecoverOrder(input: {
   try {
     assertOrderMatches(intent, created)
   } catch (error) {
-    return reviewAndThrow(store, intent, error as RemoteCheckoutCreationError)
+    return reviewAndThrow(
+      store,
+      intent,
+      lease,
+      error as RemoteCheckoutCreationError,
+    )
   }
   return attachResult({
     store,
     intent,
+    lease,
     remoteId: created.id,
     source: 'created',
   })
@@ -715,10 +872,12 @@ async function createOrRecoverSubscription(input: {
   adapter: RazorpayServerAdapter
   store: RemoteCheckoutCreationStore
   intent: TrustedRemoteCheckoutIntent
+  lease: AcquiredRemoteCreationLease
   spec: TrustedSubscriptionCheckoutSpec
+  recoveryNow: Date
   now: () => Date
 }): Promise<RemoteCheckoutCreationResult> {
-  const { adapter, store, intent, spec, now } = input
+  const { adapter, store, intent, lease, spec, recoveryNow, now } = input
   if (intent.razorpaySubscriptionId) {
     let existing: RazorpaySubscriptionDto
     try {
@@ -740,11 +899,17 @@ async function createOrRecoverSubscription(input: {
         intent.razorpaySubscriptionId,
       )
     } catch (error) {
-      return reviewAndThrow(store, intent, error as RemoteCheckoutCreationError)
+      return reviewAndThrow(
+        store,
+        intent,
+        lease,
+        error as RemoteCheckoutCreationError,
+      )
     }
     return attachResult({
       store,
       intent,
+      lease,
       remoteId: existing.id,
       source: 'existing',
     })
@@ -756,13 +921,14 @@ async function createOrRecoverSubscription(input: {
       adapter,
       intent,
       spec,
-      now(),
+      recoveryNow,
     )
   } catch (error) {
     if (recoveryConflict(error)) {
       return reviewAndThrow(
         store,
         intent,
+        lease,
         failure(
           'reconciliation_conflict',
           'Razorpay Subscription recovery is ambiguous',
@@ -780,14 +946,31 @@ async function createOrRecoverSubscription(input: {
     try {
       assertSubscriptionMatches(intent, spec, recovered)
     } catch (error) {
-      return reviewAndThrow(store, intent, error as RemoteCheckoutCreationError)
+      return reviewAndThrow(
+        store,
+        intent,
+        lease,
+        error as RemoteCheckoutCreationError,
+      )
     }
     return attachResult({
       store,
       intent,
+      lease,
       remoteId: recovered.id,
       source: 'pre_create_recovery',
     })
+  }
+  if (lease.recoveryOnly) {
+    return reviewAndThrow(
+      store,
+      intent,
+      lease,
+      failure(
+        'reconciliation_conflict',
+        'Previous Razorpay Subscription creation could not be reconciled',
+      ),
+    )
   }
   const createAt = now()
   if (Number.isNaN(createAt.getTime())) {
@@ -803,13 +986,21 @@ async function createOrRecoverSubscription(input: {
     )
   }
 
+  await markProviderCreationStarted({ store, intent, lease, now })
+
   let created: RazorpaySubscriptionDto
   try {
     created = await adapter.createSubscription({
       planId: spec.razorpayPlanId,
       totalCount: spec.totalCount,
-      ...(spec.razorpayOfferId
-        ? { offerId: spec.razorpayOfferId }
+      ...(spec.upfrontAmountPaise !== undefined
+        ? {
+            upfrontItem: {
+              name: spec.upfrontItemName as string,
+              amountPaise: spec.upfrontAmountPaise,
+              currency: 'INR' as const,
+            },
+          }
         : {}),
       ...(spec.startAtEpochSeconds !== undefined
         ? { startAtEpochSeconds: spec.startAtEpochSeconds }
@@ -823,6 +1014,14 @@ async function createOrRecoverSubscription(input: {
         catalog_version: intent.catalogVersion,
         checkout_purpose: spec.purpose,
         subscription_lease_lane: spec.leaseLane,
+        ...(spec.upfrontAmountPaise !== undefined
+          ? {
+              coupon_upfront_amount_paise:
+                spec.upfrontAmountPaise,
+              coupon_discounted_billing_cycles:
+                intent.discountedBillingCycles as number,
+            }
+          : {}),
         ...(spec.planChangeRequestId
           ? {
               plan_change_request_id:
@@ -843,6 +1042,7 @@ async function createOrRecoverSubscription(input: {
       return reviewAndThrow(
         store,
         intent,
+        lease,
         failure(
           recoveryConflict(recoveryError)
             ? 'reconciliation_conflict'
@@ -856,6 +1056,7 @@ async function createOrRecoverSubscription(input: {
       return reviewAndThrow(
         store,
         intent,
+        lease,
         failure(
           'provider_unavailable',
           'Razorpay Subscription creation could not be confirmed',
@@ -866,11 +1067,17 @@ async function createOrRecoverSubscription(input: {
     try {
       assertSubscriptionMatches(intent, spec, recovered)
     } catch (error) {
-      return reviewAndThrow(store, intent, error as RemoteCheckoutCreationError)
+      return reviewAndThrow(
+        store,
+        intent,
+        lease,
+        error as RemoteCheckoutCreationError,
+      )
     }
     return attachResult({
       store,
       intent,
+      lease,
       remoteId: recovered.id,
       source: 'post_failure_recovery',
     })
@@ -879,11 +1086,17 @@ async function createOrRecoverSubscription(input: {
   try {
     assertSubscriptionMatches(intent, spec, created)
   } catch (error) {
-    return reviewAndThrow(store, intent, error as RemoteCheckoutCreationError)
+    return reviewAndThrow(
+      store,
+      intent,
+      lease,
+      error as RemoteCheckoutCreationError,
+    )
   }
   return attachResult({
     store,
     intent,
+    lease,
     remoteId: created.id,
     source: 'created',
   })
@@ -911,6 +1124,7 @@ interface LeanRemoteCheckoutIntent {
   }
   razorpayOrderId?: string
   razorpaySubscriptionId?: string
+  remoteCreationStartedAt?: Date
   createdAt: Date
 }
 
@@ -1014,18 +1228,25 @@ function sameCommercialIntent(
 
 async function markReviewInSession(
   intent: TrustedRemoteCheckoutIntent,
+  claimToken: string,
   session: ClientSession,
-): Promise<void> {
+): Promise<boolean> {
   const intentReview = await CheckoutIntent.updateOne(
     {
       _id: intent._id,
       userId: intent.userId,
       providerMode: intent.providerMode,
       status: { $in: REMOTE_CREATABLE_INTENT_STATUSES },
+      remoteCreationLeaseToken: claimToken,
     },
     {
       $set: { status: 'review' },
-      $unset: { nextRecoveryAt: 1 },
+      $unset: {
+        nextRecoveryAt: 1,
+        remoteCreationLeaseToken: 1,
+        remoteCreationLeaseExpiresAt: 1,
+        remoteCreationStartedAt: 1,
+      },
     },
     { session, runValidators: true },
   )
@@ -1046,20 +1267,35 @@ async function markReviewInSession(
       { session, runValidators: true },
     )
   }
+  if (intentReview.matchedCount === 1) return true
+
+  const alreadyReviewed = await CheckoutIntent.exists({
+    _id: intent._id,
+    userId: intent.userId,
+    providerMode: intent.providerMode,
+    status: 'review',
+  }).session(session)
+  return alreadyReviewed !== null
 }
 
 async function markMongoIntentReview(
   intent: TrustedRemoteCheckoutIntent,
-): Promise<void> {
+  claimToken: string,
+): Promise<boolean> {
   await connectDB()
   const session = await mongoose.startSession()
+  let marked = false
   try {
     await session.withTransaction(async () => {
-      await markReviewInSession(intent, session)
+      marked = await markReviewInSession(intent, claimToken, session)
+    }, {
+      writeConcern: { w: 'majority' },
+      readPreference: 'primary',
     })
   } finally {
     await session.endSession()
   }
+  return marked
 }
 
 function isMongoDuplicateKeyError(error: unknown): boolean {
@@ -1138,6 +1374,116 @@ RemoteCheckoutCreationStore = {
     throw new ConsumerBillingFenceConflictError()
   },
 
+  async claimRemoteCreation(input) {
+    await connectDB()
+    const current = await CheckoutIntent.findOneAndUpdate(
+      {
+        _id: input.intent._id,
+        userId: input.intent.userId,
+        providerMode: input.intent.providerMode,
+        status: { $in: REMOTE_CREATABLE_INTENT_STATUSES },
+        $or: [
+          { remoteCreationLeaseToken: { $exists: false } },
+          {
+            remoteCreationLeaseExpiresAt: {
+              $lte: input.claimedAt,
+            },
+          },
+        ],
+      },
+      {
+        $set: {
+          remoteCreationLeaseToken: input.claimToken,
+          remoteCreationLeaseExpiresAt: input.leaseExpiresAt,
+        },
+      },
+      {
+        new: false,
+        runValidators: true,
+        writeConcern: { w: 'majority' },
+      },
+    ).lean<LeanRemoteCheckoutIntent>()
+
+    if (!current) {
+      const leaseState = await CheckoutIntent.findOne({
+        _id: input.intent._id,
+        userId: input.intent.userId,
+        providerMode: input.intent.providerMode,
+      }).select({
+        status: 1,
+        remoteCreationLeaseToken: 1,
+        remoteCreationLeaseExpiresAt: 1,
+      }).lean<{
+        status: CheckoutIntentStatus
+        remoteCreationLeaseToken?: string
+        remoteCreationLeaseExpiresAt?: Date
+      }>()
+      const activeLease =
+        leaseState !== null &&
+        REMOTE_CREATABLE_INTENT_STATUSES.includes(leaseState.status) &&
+        typeof leaseState.remoteCreationLeaseToken === 'string' &&
+        (
+          leaseState.remoteCreationLeaseExpiresAt === undefined ||
+          leaseState.remoteCreationLeaseExpiresAt > input.claimedAt
+        )
+      return { outcome: activeLease ? 'busy' : 'conflict' }
+    }
+
+    const claimedIntent = toTrustedIntent(current)
+    if (!sameCommercialIntent(claimedIntent, input.intent)) {
+      await markMongoIntentReview(claimedIntent, input.claimToken)
+      return { outcome: 'conflict' }
+    }
+    return {
+      outcome: 'claimed',
+      intent: claimedIntent,
+      recoveryOnly: current.remoteCreationStartedAt !== undefined,
+    }
+  },
+
+  async markRemoteCreationStarted(input) {
+    await connectDB()
+    const update = await CheckoutIntent.updateOne(
+      {
+        _id: input.intent._id,
+        userId: input.intent.userId,
+        providerMode: input.intent.providerMode,
+        status: { $in: REMOTE_CREATABLE_INTENT_STATUSES },
+        remoteCreationLeaseToken: input.claimToken,
+        remoteCreationLeaseExpiresAt: { $gt: input.startedAt },
+        remoteCreationStartedAt: { $exists: false },
+      },
+      {
+        $set: {
+          remoteCreationStartedAt: input.startedAt,
+          remoteCreationLeaseExpiresAt: input.leaseExpiresAt,
+        },
+      },
+      { runValidators: true, writeConcern: { w: 'majority' } },
+    )
+    return update.matchedCount === 1
+  },
+
+  async releaseRemoteCreationClaim(input) {
+    await connectDB()
+    await CheckoutIntent.updateOne(
+      {
+        _id: input.intent._id,
+        userId: input.intent.userId,
+        providerMode: input.intent.providerMode,
+        status: { $in: REMOTE_CREATABLE_INTENT_STATUSES },
+        remoteCreationLeaseToken: input.claimToken,
+      },
+      {
+        $unset: {
+          remoteCreationLeaseToken: 1,
+          remoteCreationLeaseExpiresAt: 1,
+        },
+      },
+      { runValidators: true, writeConcern: { w: 'majority' } },
+    )
+  },
+
   async attachRemoteId(input) {
     await connectDB()
     const session = await mongoose.startSession()
@@ -1149,12 +1495,26 @@ RemoteCheckoutCreationStore = {
           input.intent.userId,
           session,
         )
+        const ownsClaim = await CheckoutIntent.exists({
+          _id: input.intent._id,
+          userId: input.intent.userId,
+          providerMode: input.intent.providerMode,
+          status: { $in: REMOTE_CREATABLE_INTENT_STATUSES },
+          remoteCreationLeaseToken: input.claimToken,
+        }).session(session)
         if (
           !current ||
+          !ownsClaim ||
           !sameCommercialIntent(current, input.intent) ||
           !REMOTE_CREATABLE_INTENT_STATUSES.includes(current.status)
         ) {
-          if (current) await markReviewInSession(current, session)
+          if (current && ownsClaim) {
+            await markReviewInSession(
+              current,
+              input.claimToken,
+              session,
+            )
+          }
           result = { outcome: 'conflict' }
           return
         }
@@ -1163,7 +1523,11 @@ RemoteCheckoutCreationStore = {
           ? current.razorpaySubscriptionId
           : current.razorpayOrderId
         if (localRemoteId && localRemoteId !== input.remoteId) {
-          await markReviewInSession(current, session)
+          await markReviewInSession(
+            current,
+            input.claimToken,
+            session,
+          )
           result = { outcome: 'conflict' }
           return
         }
@@ -1184,7 +1548,11 @@ RemoteCheckoutCreationStore = {
               lease.razorpaySubscriptionId !== input.remoteId
             )
           ) {
-            await markReviewInSession(current, session)
+            await markReviewInSession(
+              current,
+              input.claimToken,
+              session,
+            )
             result = { outcome: 'conflict' }
             return
           }
@@ -1205,7 +1573,11 @@ RemoteCheckoutCreationStore = {
             { session, runValidators: true },
           )
           if (leaseUpdate.matchedCount !== 1) {
-            await markReviewInSession(current, session)
+            await markReviewInSession(
+              current,
+              input.claimToken,
+              session,
+            )
             result = { outcome: 'conflict' }
             return
           }
@@ -1220,6 +1592,7 @@ RemoteCheckoutCreationStore = {
             userId: current.userId,
             providerMode: current.providerMode,
             status: current.status,
+            remoteCreationLeaseToken: input.claimToken,
             $or: [
               { [remoteField]: { $exists: false } },
               { [remoteField]: input.remoteId },
@@ -1230,12 +1603,21 @@ RemoteCheckoutCreationStore = {
               [remoteField]: input.remoteId,
               status: 'remote_created',
             },
-            $unset: { nextRecoveryAt: 1 },
+            $unset: {
+              nextRecoveryAt: 1,
+              remoteCreationLeaseToken: 1,
+              remoteCreationLeaseExpiresAt: 1,
+              remoteCreationStartedAt: 1,
+            },
           },
           { session, runValidators: true },
         )
         if (intentUpdate.matchedCount !== 1) {
-          await markReviewInSession(current, session)
+          await markReviewInSession(
+            current,
+            input.claimToken,
+            session,
+          )
           result = { outcome: 'conflict' }
           return
         }
@@ -1243,10 +1625,13 @@ RemoteCheckoutCreationStore = {
           outcome: localRemoteId ? 'reused' : 'attached',
           remoteId: input.remoteId,
         }
+      }, {
+        writeConcern: { w: 'majority' },
+        readPreference: 'primary',
       })
     } catch (error) {
       if (!isMongoDuplicateKeyError(error)) throw error
-      await markMongoIntentReview(input.intent)
+      await markMongoIntentReview(input.intent, input.claimToken)
       return { outcome: 'conflict' }
     } finally {
       await session.endSession()
@@ -1261,7 +1646,7 @@ RemoteCheckoutCreationStore = {
   },
 
   async markReview(input) {
-    await markMongoIntentReview(input.intent)
+    return markMongoIntentReview(input.intent, input.claimToken)
   },
 }
 
@@ -1348,14 +1733,94 @@ export async function createOrReuseRemoteCheckout(
   }
   assertAdapterMode(adapter, intent.providerMode)
 
-  if (intent.kind === 'subscription' && spec) {
-    return createOrRecoverSubscription({
+  const now = dependencies.now ?? (() => new Date())
+  const claimedAt = now()
+  if (Number.isNaN(claimedAt.getTime())) {
+    throw failure('invalid_request', 'Current time is invalid')
+  }
+  const claimToken = randomUUID()
+  let claim: RemoteCheckoutCreationClaimResult
+  try {
+    claim = await store.claimRemoteCreation({
+      intent,
+      claimToken,
+      claimedAt,
+      leaseExpiresAt: new Date(
+        claimedAt.getTime() + REMOTE_CREATION_LEASE_MS,
+      ),
+    })
+  } catch (error) {
+    throw failure(
+      'persistence_conflict',
+      'Remote creation claim could not be persisted',
+      error,
+    )
+  }
+  if (claim.outcome !== 'claimed') {
+    if (claim.outcome === 'busy') {
+      throw failure(
+        'provider_unavailable',
+        'Remote checkout creation is already in progress',
+      )
+    }
+    throw failure(
+      'persistence_conflict',
+      'Checkout intent changed before remote creation could be claimed',
+    )
+  }
+
+  const claimedIntent = claim.intent
+  const lease: AcquiredRemoteCreationLease = {
+    claimToken,
+    recoveryOnly: claim.recoveryOnly,
+    providerCreationAttempted: false,
+  }
+  try {
+    assertIntentShape(claimedIntent)
+    if (!sameCommercialIntent(claimedIntent, intent)) {
+      return reviewAndThrow(
+        store,
+        claimedIntent,
+        lease,
+        failure(
+          'persistence_conflict',
+          'Claimed checkout intent no longer matches its commercial snapshot',
+        ),
+      )
+    }
+    if (claimedIntent.kind === 'subscription' && spec) {
+      return await createOrRecoverSubscription({
+        adapter,
+        store,
+        intent: claimedIntent,
+        lease,
+        spec,
+        recoveryNow: claimedAt,
+        now,
+      })
+    }
+    return await createOrRecoverOrder({
       adapter,
       store,
-      intent,
-      spec,
-      now: dependencies.now ?? (() => new Date()),
+      intent: claimedIntent,
+      lease,
+      now,
     })
+  } catch (error) {
+    if (!lease.providerCreationAttempted) {
+      try {
+        await store.releaseRemoteCreationClaim({
+          intent: claimedIntent,
+          claimToken,
+        })
+      } catch (releaseError) {
+        throw failure(
+          'persistence_conflict',
+          'Remote creation claim could not be released safely',
+          releaseError,
+        )
+      }
+    }
+    throw error
   }
-  return createOrRecoverOrder({ adapter, store, intent })
 }

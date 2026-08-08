@@ -62,9 +62,13 @@ import { useOnboardingProfile } from '@shared/hooks/useOnboardingProfile'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { genericRetakeConfig, isObjectId } from '@interview/utils/retakeNavigation'
+import {
+  interviewDurationOptionsForUser,
+  isBasicPersonalInterviewUser,
+  normalizeInterviewDurationForUser,
+} from '@interview/config/interviewDurationPolicy'
 
 const EXPERIENCES: ExperienceLevel[] = ['0-2', '3-6', '7+']
-const DURATIONS: Duration[] = [10, 20, 30]
 const TOTAL_STEPS = 3
 
 interface SavedResumeMeta {
@@ -96,6 +100,33 @@ export default function InterviewSetupForm() {
   )
   const { data: authSession, status } = useSession()
   const { requireAuth } = useAuthGate()
+  const durationUserId = authSession?.user?.id
+  const durationUserPlan = authSession?.user?.plan
+  const durationUserRole = authSession?.user?.role
+  const durationUserOrganizationId = authSession?.user?.organizationId
+  const durationUserContext = useMemo(
+    () => durationUserId
+      ? {
+          plan: durationUserPlan,
+          role: durationUserRole,
+          organizationId: durationUserOrganizationId,
+        }
+      : null,
+    [
+      durationUserId,
+      durationUserPlan,
+      durationUserRole,
+      durationUserOrganizationId,
+    ],
+  )
+  const durationOptions = useMemo(
+    () => interviewDurationOptionsForUser(durationUserContext),
+    [durationUserContext],
+  )
+  const paidDurationCheckoutApplies = useMemo(
+    () => isBasicPersonalInterviewUser(durationUserContext),
+    [durationUserContext],
+  )
   // UAT-014: read onboarding through the shared hook so this consumer
   // shares the same TTL value cache as <ResourceLinks/> on the same
   // page. Earlier, the form used deduplicatedFetch and ResourceLinks
@@ -110,7 +141,7 @@ export default function InterviewSetupForm() {
   const [role, setRole] = useState<Role | null>(null)
   const [interviewType, setInterviewType] = useState<InterviewType | null>(null)
   const [experience, setExperience] = useState<ExperienceLevel | null>(null)
-  const [duration, setDuration] = useState<Duration | null>(20)
+  const [duration, setDuration] = useState<Duration | null>(10)
   const [lastConfig, setLastConfig] = useState<InterviewConfig | null>(null)
 
   // Resume state
@@ -158,22 +189,29 @@ export default function InterviewSetupForm() {
 
     const hydrate = (c: InterviewConfig) => {
       if (cancelled) return
-      setLastConfig(c)
-      setRole(pathwayContext?.domain || c.role)
+      const safeConfig = {
+        ...c,
+        duration: normalizeInterviewDurationForUser(
+          durationUserContext,
+          c.duration,
+        ),
+      }
+      setLastConfig(safeConfig)
+      setRole(pathwayContext?.domain || safeConfig.role)
       if (pathwayContext?.interviewType) setInterviewType(pathwayContext.interviewType)
-      else if (c.interviewType) setInterviewType(c.interviewType)
-      setExperience(c.experience)
-      setDuration(c.duration)
-      if (c.resumeText) {
-        setResumeText(c.resumeText)
-        setResumeFileName(c.resumeFileName || 'Resume')
+      else if (safeConfig.interviewType) setInterviewType(safeConfig.interviewType)
+      setExperience(safeConfig.experience)
+      setDuration(safeConfig.duration)
+      if (safeConfig.resumeText) {
+        setResumeText(safeConfig.resumeText)
+        setResumeFileName(safeConfig.resumeFileName || 'Resume')
       }
-      if (c.jobDescription) {
-        setJdText(c.jobDescription)
-        setJdFileName(c.jdFileName || 'Saved JD')
+      if (safeConfig.jobDescription) {
+        setJdText(safeConfig.jobDescription)
+        setJdFileName(safeConfig.jdFileName || 'Saved JD')
       }
-      if (c.targetCompany) setTargetCompany(c.targetCompany)
-      if (c.targetIndustry) setTargetIndustry(c.targetIndustry)
+      if (safeConfig.targetCompany) setTargetCompany(safeConfig.targetCompany)
+      if (safeConfig.targetIndustry) setTargetIndustry(safeConfig.targetIndustry)
     }
 
     const isCompleteConfig = (c: InterviewConfig): boolean => {
@@ -248,6 +286,14 @@ export default function InterviewSetupForm() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, authSession?.user?.id, retakeParentId, jobsFallback, pathwayContext])
+
+  // Downgrades and stale saved configs can change while this page is open.
+  // Keep the selected duration inside the current session's visible options.
+  useEffect(() => {
+    setDuration((current) => current === null
+      ? current
+      : normalizeInterviewDurationForUser(durationUserContext, current))
+  }, [durationUserContext])
 
   // ─── Pathway action hand-off ───────────────────────────────────────────
   useEffect(() => {
@@ -483,7 +529,10 @@ export default function InterviewSetupForm() {
       role: role!,
       ...(interviewType && { interviewType }),
       experience: experience!,
-      duration: duration!,
+      duration: normalizeInterviewDurationForUser(
+        durationUserContext,
+        duration,
+      ),
       ...(jdText && { jobDescription: jdText, jdFileName }),
       ...(resumeText && { resumeText, resumeFileName }),
       ...(effectiveCompany && { targetCompany: effectiveCompany }),
@@ -543,6 +592,7 @@ export default function InterviewSetupForm() {
     targetIndustry,
     pathwayContext,
     retakeParentId,
+    durationUserContext,
     authSession?.user?.id,
     router,
     requireAuth,
@@ -564,7 +614,7 @@ export default function InterviewSetupForm() {
     setRole(null)
     setInterviewType(null)
     setExperience(null)
-    setDuration(20)
+    setDuration(10)
     setResumeText('')
     setResumeFileName('')
     setQuickProfileDone(false)
@@ -633,6 +683,8 @@ export default function InterviewSetupForm() {
     setInterviewType={setInterviewType}
     duration={duration}
     setDuration={setDuration}
+    durationOptions={durationOptions}
+    paidDurationCheckoutApplies={paidDurationCheckoutApplies}
     uploadError={uploadError}
     // Pathway P2 Wave 1
     recommendedFocus={pathwayContext?.focus}
@@ -703,6 +755,8 @@ interface ViewProps {
   setInterviewType: (v: InterviewType) => void
   duration: Duration | null
   setDuration: (v: Duration) => void
+  durationOptions: Duration[]
+  paidDurationCheckoutApplies: boolean
   uploadError: string
   // Pathway P2 Wave 1 — surfaced at top of Step 0 only.
   // `recommendedFocus` comes from URL params (?focus=…) when the user
@@ -1064,7 +1118,7 @@ function InterviewSetupFormView(p: ViewProps) {
                   Duration <span className="text-red-500">*</span>
                 </h3>
                 <SelectionGroup<Duration>
-                  items={DURATIONS}
+                  items={p.durationOptions}
                   value={p.duration !== null ? String(p.duration) : null}
                   onChange={(v) => p.setDuration(Number(v) as Duration)}
                   getKey={(d) => String(d)}
@@ -1072,9 +1126,20 @@ function InterviewSetupFormView(p: ViewProps) {
                   renderItem={(d, selected) => (
                     <div className={`py-3 px-2 text-center ${selected ? 'text-blue-600' : ''}`}>
                       <span className="text-sm font-semibold">{getDurationLabel(d)}</span>
+                      {p.paidDurationCheckoutApplies && d > 10 ? (
+                        <span className="mt-0.5 block text-[10px] font-medium">
+                          ₹69 one-time
+                        </span>
+                      ) : null}
                     </div>
                   )}
                 />
+                {p.paidDurationCheckoutApplies ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Basic includes one 10-minute interview monthly. Additional
+                    interviews and 20/30-minute sessions are ₹69 one-time.
+                  </p>
+                ) : null}
               </section>
 
               {/* Compact recap, folded in from the old review step (step 4) */}

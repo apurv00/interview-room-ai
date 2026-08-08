@@ -54,6 +54,8 @@ function subscriptionIntent(
     status: 'created',
     purpose: 'acquisition',
     leaseLane: 'a',
+    requestedStartAt:
+      new Date('2026-08-24T09:55:00.000Z'),
     authorizationExpiresAt:
       new Date('2026-07-25T09:55:00.000Z'),
     planKey: 'plus',
@@ -94,11 +96,11 @@ function subscriptionDto(
     providerMode: 'test',
     id: 'sub_0001',
     planId: 'plan_PLUS0001',
-    offerId: 'offer_0001',
     status: 'created',
     totalCount: 12,
     paidCount: 0,
     remainingCount: 12,
+    startAtEpochSeconds: 1_787_565_300,
     authorizationExpiresAtEpochSeconds: 1_784_973_300,
     notes: {
       checkout_receipt: 'ipr_t_507f191e810c19729de860ea',
@@ -106,25 +108,130 @@ function subscriptionDto(
       catalog_version: 'consumer-inr-v1',
       checkout_purpose: 'acquisition',
       subscription_lease_lane: 'a',
+      coupon_upfront_amount_paise: '49900',
+      coupon_discounted_billing_cycles: '1',
     },
     createdAtEpochSeconds: 1_721_779_200,
     ...overrides,
   }
 }
 
-function recordingStore(intent: TrustedRemoteCheckoutIntent | null) {
-  const loadIntentForUser = vi.fn(async () => intent)
-  const attachRemoteId = vi.fn(async ({ remoteId }) => ({
-    outcome: 'attached' as const,
-    remoteId,
-  }))
-  const markReview = vi.fn(async () => undefined)
+function recordingStore(
+  intent: TrustedRemoteCheckoutIntent | null,
+  initialLease: {
+    claimToken?: string
+    leaseExpiresAt?: Date
+    creationStartedAt?: Date
+  } = {},
+) {
+  let currentIntent = intent
+  let claimToken = initialLease.claimToken
+  let leaseExpiresAt = initialLease.leaseExpiresAt
+  let creationStartedAt = initialLease.creationStartedAt
+  const loadIntentForUser = vi.fn(async () => currentIntent)
+  const claimRemoteCreation = vi.fn(async (
+    input: Parameters<
+      RemoteCheckoutCreationStore['claimRemoteCreation']
+    >[0],
+  ) => {
+    if (!currentIntent) return { outcome: 'conflict' as const }
+    if (
+      claimToken &&
+      (
+        leaseExpiresAt === undefined ||
+        leaseExpiresAt.getTime() > input.claimedAt.getTime()
+      )
+    ) {
+      return { outcome: 'busy' as const }
+    }
+    claimToken = input.claimToken
+    leaseExpiresAt = input.leaseExpiresAt
+    return {
+      outcome: 'claimed' as const,
+      intent: currentIntent,
+      recoveryOnly: creationStartedAt !== undefined,
+    }
+  })
+  const markRemoteCreationStarted = vi.fn(async (
+    input: Parameters<
+      RemoteCheckoutCreationStore['markRemoteCreationStarted']
+    >[0],
+  ) => {
+    if (
+      claimToken !== input.claimToken ||
+      leaseExpiresAt === undefined ||
+      leaseExpiresAt.getTime() <= input.startedAt.getTime() ||
+      creationStartedAt !== undefined
+    ) {
+      return false
+    }
+    creationStartedAt = input.startedAt
+    leaseExpiresAt = input.leaseExpiresAt
+    return true
+  })
+  const releaseRemoteCreationClaim = vi.fn(async (
+    input: Parameters<
+      RemoteCheckoutCreationStore['releaseRemoteCreationClaim']
+    >[0],
+  ) => {
+    if (claimToken !== input.claimToken) return
+    claimToken = undefined
+    leaseExpiresAt = undefined
+  })
+  const attachRemoteId = vi.fn(async (
+    input: Parameters<RemoteCheckoutCreationStore['attachRemoteId']>[0],
+  ) => {
+    if (!currentIntent || claimToken !== input.claimToken) {
+      return { outcome: 'conflict' as const }
+    }
+    currentIntent = {
+      ...currentIntent,
+      status: 'remote_created',
+      ...(currentIntent.kind === 'subscription'
+        ? { razorpaySubscriptionId: input.remoteId }
+        : { razorpayOrderId: input.remoteId }),
+    }
+    claimToken = undefined
+    leaseExpiresAt = undefined
+    creationStartedAt = undefined
+    return {
+      outcome: 'attached' as const,
+      remoteId: input.remoteId,
+    }
+  })
+  const markReview = vi.fn(async (
+    input: Parameters<RemoteCheckoutCreationStore['markReview']>[0],
+  ) => {
+    if (currentIntent?.status === 'review') return true
+    if (!currentIntent || claimToken !== input.claimToken) return false
+    currentIntent = { ...currentIntent, status: 'review' }
+    claimToken = undefined
+    leaseExpiresAt = undefined
+    creationStartedAt = undefined
+    return true
+  })
   const store: RemoteCheckoutCreationStore = {
     loadIntentForUser,
+    claimRemoteCreation,
+    markRemoteCreationStarted,
+    releaseRemoteCreationClaim,
     attachRemoteId,
     markReview,
   }
-  return { store, loadIntentForUser, attachRemoteId, markReview }
+  return {
+    store,
+    loadIntentForUser,
+    claimRemoteCreation,
+    markRemoteCreationStarted,
+    releaseRemoteCreationClaim,
+    attachRemoteId,
+    markReview,
+    getLeaseState: () => ({
+      claimToken,
+      leaseExpiresAt,
+      creationStartedAt,
+    }),
+  }
 }
 
 function fakeAdapter(input: {
@@ -177,6 +284,20 @@ function allowedGate() {
   }
 }
 
+function trustedSubscriptionSpec() {
+  return {
+    planKey: 'plus' as const,
+    razorpayPlanId: 'plan_PLUS0001',
+    upfrontAmountPaise: 49_900,
+    upfrontItemName: 'Plus first billing cycle',
+    totalCount: 12,
+    purpose: 'acquisition' as const,
+    leaseLane: 'a' as const,
+    startAtEpochSeconds: 1_787_565_300,
+    authorizationExpiresAtEpochSeconds: 1_784_973_300,
+  }
+}
+
 function baseDependencies(input: {
   intent?: TrustedRemoteCheckoutIntent | null
   adapter?: ReturnType<typeof fakeAdapter>
@@ -205,11 +326,11 @@ function requestInput() {
 }
 
 describe('remote checkout creation orchestration', () => {
-  it('keeps Live readiness false and makes zero calls when an explicit gate blocks sale', async () => {
+  it('keeps approved Live readiness and makes zero calls when an explicit gate blocks sale', async () => {
     expect(CURRENT_PAYMENT_CODE_READINESS).toEqual({
       remoteCreationReady: true,
       recoveryReady: true,
-      liveCreationReady: false,
+      liveCreationReady: true,
     })
     const harness = baseDependencies()
     const evaluateSaleGate = vi.fn(async () => ({
@@ -294,6 +415,7 @@ describe('remote checkout creation orchestration', () => {
     expect(harness.attachRemoteId).toHaveBeenCalledWith({
       intent: orderIntent(),
       remoteId: 'order_0001',
+      claimToken: expect.any(String),
     })
   })
 
@@ -428,62 +550,155 @@ describe('remote checkout creation orchestration', () => {
     expect(harness.markReview).toHaveBeenCalledTimes(1)
   })
 
-  it('allows only one of two different concurrent remote ids to win the attach CAS', async () => {
-    const intent = orderIntent()
-    let attachedRemoteId: string | undefined
-    const markReview = vi.fn(async () => undefined)
-    const store: RemoteCheckoutCreationStore = {
-      async loadIntentForUser() {
-        return intent
-      },
-      async attachRemoteId({ remoteId }) {
-        await Promise.resolve()
-        if (attachedRemoteId === undefined) {
-          attachedRemoteId = remoteId
-          return { outcome: 'attached', remoteId }
-        }
-        if (attachedRemoteId === remoteId) {
-          return { outcome: 'reused', remoteId }
-        }
-        return { outcome: 'conflict' }
-      },
-      markReview,
-    }
+  it.each(['order', 'subscription'] as const)(
+    'allows exactly one concurrent Razorpay %s create for one intent',
+    async (kind) => {
+      const intent = kind === 'order'
+        ? orderIntent()
+        : subscriptionIntent()
+      const store = recordingStore(intent)
+      const adapter = fakeAdapter()
+      let releaseProviderCreate: (() => void) | undefined
+      const providerCreateBlocked = new Promise<void>((resolve) => {
+        releaseProviderCreate = resolve
+      })
+      if (kind === 'order') {
+        adapter.createOrder.mockImplementationOnce(async () => {
+          await providerCreateBlocked
+          return orderDto()
+        })
+      } else {
+        adapter.createSubscription.mockImplementationOnce(async () => {
+          await providerCreateBlocked
+          return subscriptionDto()
+        })
+      }
+      const sharedDependencies = {
+        store: store.store,
+        clientFactory: adapter.clientFactory,
+        evaluateSaleGate: async () => allowedGate(),
+        ...(kind === 'subscription'
+          ? {
+              resolveSubscriptionSpec: async () =>
+                trustedSubscriptionSpec(),
+            }
+          : {}),
+        now: () => new Date(now),
+      }
+
+      const settled = Promise.allSettled([
+        createOrReuseRemoteCheckout(requestInput(), sharedDependencies),
+        createOrReuseRemoteCheckout(requestInput(), sharedDependencies),
+      ])
+      await vi.waitFor(() => {
+        expect(store.claimRemoteCreation).toHaveBeenCalledTimes(2)
+      })
+      releaseProviderCreate?.()
+      const results = await settled
+      expect(results.filter((result) => result.status === 'fulfilled'))
+        .toHaveLength(1)
+      const rejected = results.find(
+        (result) => result.status === 'rejected',
+      )
+      expect(rejected).toMatchObject({
+        status: 'rejected',
+        reason: expect.objectContaining({ code: 'provider_unavailable' }),
+      })
+      const providerCreate = kind === 'order'
+        ? adapter.createOrder
+        : adapter.createSubscription
+      expect(providerCreate).toHaveBeenCalledTimes(1)
+      expect(store.markReview).not.toHaveBeenCalled()
+      await expect(createOrReuseRemoteCheckout(
+        requestInput(),
+        sharedDependencies,
+      )).resolves.toMatchObject({ source: 'existing', reused: true })
+      expect(providerCreate).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it('reclaims an expired lease that stopped before provider creation', async () => {
+    const store = recordingStore(orderIntent(), {
+      claimToken: 'expired-pre-create-claim',
+      leaseExpiresAt: new Date(now.getTime() - 1),
+    })
     const adapter = fakeAdapter()
-    adapter.createOrder
-      .mockResolvedValueOnce(orderDto({ id: 'order_0001' }))
-      .mockResolvedValueOnce(orderDto({ id: 'order_0002' }))
-    const sharedDependencies = {
-      store,
+
+    await expect(createOrReuseRemoteCheckout(requestInput(), {
+      store: store.store,
       clientFactory: adapter.clientFactory,
       evaluateSaleGate: async () => allowedGate(),
       now: () => new Date(now),
-    }
-
-    const results = await Promise.allSettled([
-      createOrReuseRemoteCheckout(requestInput(), sharedDependencies),
-      createOrReuseRemoteCheckout(requestInput(), sharedDependencies),
-    ])
-    expect(results.filter((result) => result.status === 'fulfilled'))
-      .toHaveLength(1)
-    const rejected = results.find((result) => result.status === 'rejected')
-    expect(rejected).toMatchObject({
-      status: 'rejected',
-      reason: expect.objectContaining({ code: 'persistence_conflict' }),
+    })).resolves.toMatchObject({
+      source: 'created',
+      remoteId: 'order_0001',
     })
-    expect(markReview).toHaveBeenCalledTimes(1)
+    expect(store.markRemoteCreationStarted).toHaveBeenCalledTimes(1)
+    expect(adapter.createOrder).toHaveBeenCalledTimes(1)
   })
 
-  it('uses only the trusted subscription Plan/Offer and keeps customer notifications off', async () => {
+  it('recovers an expired post-start lease without creating another subscription', async () => {
+    const intent = subscriptionIntent()
+    const store = recordingStore(intent, {
+      claimToken: 'expired-post-create-claim',
+      leaseExpiresAt: new Date(now.getTime() - 1),
+      creationStartedAt: new Date(now.getTime() - 60_000),
+    })
+    const adapter = fakeAdapter({
+      subscriptionRecovery: subscriptionDto(),
+    })
+
+    await expect(createOrReuseRemoteCheckout(requestInput(), {
+      store: store.store,
+      clientFactory: adapter.clientFactory,
+      evaluateSaleGate: async () => allowedGate(),
+      resolveSubscriptionSpec: async () => trustedSubscriptionSpec(),
+      now: () => new Date(now),
+    })).resolves.toMatchObject({
+      source: 'pre_create_recovery',
+      remoteId: 'sub_0001',
+      reused: true,
+    })
+    expect(store.markRemoteCreationStarted).not.toHaveBeenCalled()
+    expect(adapter.createSubscription).not.toHaveBeenCalled()
+  })
+
+  it('reviews an unresolved expired post-start lease without creating again', async () => {
+    const store = recordingStore(orderIntent(), {
+      claimToken: 'expired-post-create-claim',
+      leaseExpiresAt: new Date(now.getTime() - 1),
+      creationStartedAt: new Date(now.getTime() - 60_000),
+    })
+    const adapter = fakeAdapter()
+
+    await expect(createOrReuseRemoteCheckout(requestInput(), {
+      store: store.store,
+      clientFactory: adapter.clientFactory,
+      evaluateSaleGate: async () => allowedGate(),
+      now: () => new Date(now),
+    })).rejects.toMatchObject({ code: 'reconciliation_conflict' })
+    expect(store.markRemoteCreationStarted).not.toHaveBeenCalled()
+    expect(adapter.createOrder).not.toHaveBeenCalled()
+    expect(store.markReview).toHaveBeenCalledTimes(1)
+    expect(store.getLeaseState()).toEqual({
+      claimToken: undefined,
+      leaseExpiresAt: undefined,
+      creationStartedAt: undefined,
+    })
+  })
+
+  it('uses the trusted Plan and coupon upfront item without an Offer', async () => {
     const intent = subscriptionIntent()
     const harness = baseDependencies({ intent })
     const resolveSubscriptionSpec = vi.fn(async () => ({
       planKey: 'plus' as const,
       razorpayPlanId: 'plan_PLUS0001',
-      razorpayOfferId: 'offer_0001',
+      upfrontAmountPaise: 49_900,
+      upfrontItemName: 'Plus first billing cycle',
       totalCount: 12,
       purpose: 'acquisition' as const,
       leaseLane: 'a' as const,
+      startAtEpochSeconds: 1_787_565_300,
       authorizationExpiresAtEpochSeconds: 1_784_973_300,
     }))
 
@@ -508,7 +723,12 @@ describe('remote checkout creation orchestration', () => {
     expect(harness.createSubscription).toHaveBeenCalledWith({
       planId: 'plan_PLUS0001',
       totalCount: 12,
-      offerId: 'offer_0001',
+      upfrontItem: {
+        name: 'Plus first billing cycle',
+        amountPaise: 49_900,
+        currency: 'INR',
+      },
+      startAtEpochSeconds: 1_787_565_300,
       authorizationExpiresAtEpochSeconds: 1_784_973_300,
       customerNotify: false,
       receipt: intent.receipt,
@@ -517,11 +737,16 @@ describe('remote checkout creation orchestration', () => {
         catalog_version: 'consumer-inr-v1',
         checkout_purpose: 'acquisition',
         subscription_lease_lane: 'a',
+        coupon_upfront_amount_paise: 49_900,
+        coupon_discounted_billing_cycles: 1,
       },
     })
+    expect(harness.createSubscription.mock.calls[0]?.[0])
+      .not.toHaveProperty('offerId')
     expect(harness.attachRemoteId).toHaveBeenCalledWith({
       intent,
       remoteId: 'sub_0001',
+      claimToken: expect.any(String),
     })
   })
 
@@ -545,6 +770,7 @@ describe('remote checkout creation orchestration', () => {
         totalCount: 12,
         purpose: 'acquisition',
         leaseLane: 'a',
+        startAtEpochSeconds: 1_787_565_300,
         authorizationExpiresAtEpochSeconds: 1_784_973_300,
       }),
     })).rejects.toMatchObject({
@@ -553,11 +779,11 @@ describe('remote checkout creation orchestration', () => {
     expect(harness.createSubscription).not.toHaveBeenCalled()
   })
 
-  it('rejects a Subscription response with wrong Plan, Offer, or receipt note', async () => {
+  it('reviews an Offer-contaminated recovered acquisition', async () => {
     const intent = subscriptionIntent()
     const adapter = fakeAdapter({
       subscriptionRecovery: subscriptionDto({
-        notes: { checkout_receipt: 'wrong_receipt' },
+        offerId: 'offer_Unexpected123',
       }),
     })
     const harness = baseDependencies({ intent, adapter })
@@ -567,10 +793,12 @@ describe('remote checkout creation orchestration', () => {
       resolveSubscriptionSpec: async () => ({
         planKey: 'plus',
         razorpayPlanId: 'plan_PLUS0001',
-        razorpayOfferId: 'offer_0001',
+        upfrontAmountPaise: 49_900,
+        upfrontItemName: 'Plus first billing cycle',
         totalCount: 12,
         purpose: 'acquisition',
         leaseLane: 'a',
+        startAtEpochSeconds: 1_787_565_300,
         authorizationExpiresAtEpochSeconds: 1_784_973_300,
       }),
     })).rejects.toMatchObject({ code: 'remote_mismatch' })
@@ -606,10 +834,12 @@ describe('remote checkout creation orchestration', () => {
       resolveSubscriptionSpec: async () => ({
         planKey: 'plus',
         razorpayPlanId: 'plan_PLUS0001',
-        razorpayOfferId: 'offer_0001',
+        upfrontAmountPaise: 49_900,
+        upfrontItemName: 'Plus first billing cycle',
         totalCount: 12,
         purpose: 'acquisition',
         leaseLane: 'a',
+        startAtEpochSeconds: 1_787_565_300,
         authorizationExpiresAtEpochSeconds:
           Math.floor(now.getTime() / 1_000),
       }),
@@ -630,6 +860,9 @@ describe('remote checkout creation orchestration', () => {
       requestedStartAt: new Date('2026-07-26T10:00:00.000Z'),
       authorizationExpiresAt:
         new Date('2026-07-25T10:00:00.000Z'),
+      payablePaise: 59_900,
+      discountPaise: 0,
+      discountedBillingCycles: undefined,
     })
     const created = subscriptionDto({
       startAtEpochSeconds: 1_785_060_000,
@@ -648,7 +881,6 @@ describe('remote checkout creation orchestration', () => {
     const spec = {
       planKey: 'plus' as const,
       razorpayPlanId: 'plan_PLUS0001',
-      razorpayOfferId: 'offer_0001',
       totalCount: 12,
       purpose: 'replacement' as const,
       planChangeRequestId: planChangeRequestId.toString(),
@@ -664,7 +896,6 @@ describe('remote checkout creation orchestration', () => {
     expect(harness.createSubscription).toHaveBeenCalledWith({
       planId: 'plan_PLUS0001',
       totalCount: 12,
-      offerId: 'offer_0001',
       startAtEpochSeconds: 1_785_060_000,
       authorizationExpiresAtEpochSeconds: 1_784_973_600,
       customerNotify: false,
@@ -677,6 +908,10 @@ describe('remote checkout creation orchestration', () => {
         plan_change_request_id: planChangeRequestId.toString(),
       },
     })
+    expect(harness.createSubscription.mock.calls[0]?.[0])
+      .not.toHaveProperty('upfrontItem')
+    expect(harness.createSubscription.mock.calls[0]?.[0])
+      .not.toHaveProperty('offerId')
 
     const mismatchedAdapter = fakeAdapter({
       subscriptionRecovery: subscriptionDto({
@@ -711,10 +946,12 @@ describe('remote checkout creation orchestration', () => {
       resolveSubscriptionSpec: async () => ({
         planKey: 'plus',
         razorpayPlanId: 'plan_PLUS0001',
-        razorpayOfferId: 'offer_0001',
+        upfrontAmountPaise: 49_900,
+        upfrontItemName: 'Plus first billing cycle',
         totalCount: 12,
         purpose: 'acquisition',
         leaseLane: 'a',
+        startAtEpochSeconds: 1_787_565_300,
         authorizationExpiresAtEpochSeconds: 1_784_973_300,
       }),
     })).rejects.toMatchObject({ code: 'remote_mismatch' })

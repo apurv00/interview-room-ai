@@ -168,6 +168,9 @@ export default withAuth(
           pathname.startsWith('/pricing') ||
           pathname.startsWith('/privacy') ||
           pathname.startsWith('/terms') ||
+          pathname === '/cancellation-refunds' ||
+          pathname === '/fulfilment' ||
+          pathname === '/contact' ||
           // ── Deferred-auth public surface (browseable anonymously;
           // auth gated client-side at value-capture actions only) ──
           pathname === '/resume' ||

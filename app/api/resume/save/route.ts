@@ -132,6 +132,24 @@ export async function DELETE(req: Request) {
 
   try {
     const result = await deleteResume(session.user.id, id)
+    if ('error' in result && result.code === 'PREMIUM_RESUME_PURCHASE_ACTIVE') {
+      return NextResponse.json(
+        { error: result.error, code: result.code },
+        { status: 409 },
+      )
+    }
+    if ('error' in result && result.code === 'NOT_FOUND') {
+      return NextResponse.json(
+        { error: result.error, code: result.code },
+        { status: 404 },
+      )
+    }
+    if ('error' in result && result.code === 'ACCOUNT_UNAVAILABLE') {
+      return NextResponse.json(
+        { error: result.error, code: result.code },
+        { status: 401 },
+      )
+    }
     return NextResponse.json(result)
   } catch {
     return NextResponse.json({ error: 'Failed to delete resume' }, { status: 500 })

@@ -9,6 +9,7 @@ import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 const PLAN_BADGE: Record<string, { label: string; className: string }> = {
   free: { label: 'Free', className: 'bg-slate-100 text-slate-600' },
+  plus: { label: 'Plus', className: 'bg-blue-50 text-blue-700' },
   pro: { label: 'Pro', className: 'bg-blue-50 text-blue-700' },
   enterprise: { label: 'Enterprise', className: 'bg-violet-50 text-violet-700' },
 }

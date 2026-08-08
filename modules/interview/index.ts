@@ -32,6 +32,7 @@ export { QUESTION_COUNT, PRESSURE_QUESTION_INDEX, getDomainLabel, AVATAR_NAME, A
 export { deriveCoachingTip } from './config/coachingTips'
 export { deriveNudge } from './config/coachingNudges'
 export type { CoachingNudge } from './config/coachingNudges'
+export { MAX_INTERVIEW_DURATION_MINUTES } from './config/interviewDurationPolicy'
 export { analyzeSpeech, aggregateMetrics, communicationScore } from './config/speechMetrics'
 export { PROBABILITY_COLORS, CONFIDENCE_TREND_LABELS } from './config/feedbackConfig'
 

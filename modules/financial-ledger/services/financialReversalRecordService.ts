@@ -72,6 +72,7 @@ extends CommonFinancialReversalRecordRequest {
 export interface FinancialReversalGrantContext {
   entitlementApplied: boolean
   fulfillmentStatus: string
+  financialDocumentIssued: boolean
 }
 
 export interface FinancialReversalRecordDependencies {
@@ -350,8 +351,10 @@ function refundDecisions(input: {
     return {
       creditNoteDecision: creditDecision(
         existing?.creditNoteDecision,
-        'required',
-        'provider_refund_processed',
+        context.financialDocumentIssued ? 'required' : 'not_required',
+        context.financialDocumentIssued
+          ? 'provider_refund_processed'
+          : 'individual_purchase_financial_document_not_issued',
         request.observedAt,
         creditKey,
       ),
@@ -588,8 +591,12 @@ function disputeDecisions(input: {
     return {
       creditNoteDecision: creditDecision(
         existing?.creditNoteDecision,
-        'required',
-        'provider_dispute_lost',
+        context.financialDocumentIssued
+          ? 'pending_review'
+          : 'not_required',
+        context.financialDocumentIssued
+          ? 'provider_dispute_lost_requires_manual_accounting_review'
+          : 'individual_purchase_financial_document_not_issued',
         request.observedAt,
         creditKey,
       ),

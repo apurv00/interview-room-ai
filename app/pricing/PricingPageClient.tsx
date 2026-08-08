@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import { useSession } from 'next-auth/react'
 import Accordion from '@shared/ui/Accordion'
@@ -49,21 +49,27 @@ function CheckIcon() {
 
 function planFeatures(planKey: PersonalPlanKey): readonly string[] {
   const plan = CONSUMER_CATALOG_V1.plans[planKey]
+  const resumeLabel = plan.resume.premiumSavedResumeLimitPerPeriod === 0
+    ? `${plan.resume.basicSavedResumeLimit} Basic resume saved`
+    : `${plan.resume.basicSavedResumeLimit} Basic resume + ${plan.resume.premiumSavedResumeLimitPerPeriod} premium resume versions per billing cycle`
+  const jobsLabel =
+    'Jobs discovery, resume matching, and application tracking'
   if (planKey === 'free') {
     return [
       '1 interview per calendar month',
       '10-minute interview duration',
-      '1 editable clean basic resume',
       'Complete report and available replay',
+      resumeLabel,
+      jobsLabel,
     ]
   }
 
   return [
     `${plan.interview.includedPerPeriod} interviews per billing month`,
     'Any supported interview type, up to 30 minutes each',
-    `${plan.resume.premiumSavedResumeLimitPerPeriod} premium saved-resume identities per billing month`,
     'Complete reports, analysis, and available replay',
-    '1 editable clean basic resume',
+    resumeLabel,
+    jobsLabel,
   ]
 }
 
@@ -117,7 +123,7 @@ function PlanCard({
             </p>
             <p className="mt-1 text-xs leading-5 text-[#71767b]">
               Then {formatInr(plan.listPricePaise)}/month. Auto-renews until
-              cancelled. GST included.
+              cancelled.
             </p>
           </>
         ) : (
@@ -249,12 +255,18 @@ export interface PricingPageClientProps {
 export default function PricingPageClient({
   paidRolloutCopyEnabled = false,
 }: PricingPageClientProps) {
-  const { data: session, status } = useSession()
+  const { data: session, status, update } = useSession()
+  const refreshBillingSession = useCallback(async () => {
+    await update()
+  }, [update])
   const currentPlan = (session?.user?.plan || 'free') as
     | 'free'
     | 'plus'
     | 'pro'
     | 'enterprise'
+  const billingExperienceIdentity = status === 'authenticated'
+    ? `account:${session?.user?.id ?? 'missing'}`
+    : `session:${status}`
 
   if (
     PR6_CUSTOMER_BILLING_UI_READY &&
@@ -262,8 +274,12 @@ export default function PricingPageClient({
   ) {
     return (
       <BillingPricingExperience
+        key={billingExperienceIdentity}
         currentPlan={currentPlan}
         authStatus={status}
+        accountId={session?.user?.id ?? null}
+        customerEmail={session?.user?.email?.trim() || null}
+        refreshSession={refreshBillingSession}
       />
     )
   }
@@ -276,18 +292,10 @@ export default function PricingPageClient({
   return (
     <main className="min-h-screen px-4 py-16 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-5xl">
-        <header className="mb-12 space-y-3 text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">
-            INR · GST-inclusive pricing
-          </p>
+        <header className="mb-12 text-center">
           <h1 className="text-display text-[#0f1419]">
             Practice free. Add more reps when they matter.
           </h1>
-          <p className="mx-auto max-w-2xl text-body text-[#71767b]">
-            Basic includes one 10-minute interview each month and one editable
-            clean resume. Plus and Pro add more interviews and premium resume
-            identities; no interview exceeds 30 minutes.
-          </p>
         </header>
 
         <section
@@ -311,29 +319,6 @@ export default function PricingPageClient({
               isCurrent={currentPlan === planKey}
             />
           ))}
-        </section>
-
-        <section className="mt-8 grid gap-4 md:grid-cols-2">
-          <article className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
-            <h2 className="font-semibold text-blue-950">
-              Additional interview · ₹69
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-blue-900">
-              One interview of any supported type, up to 30 minutes, with the
-              complete report and available replay. Start it within 30 days of
-              purchase. Coupons do not apply.
-            </p>
-          </article>
-          <article className="rounded-2xl border border-violet-200 bg-violet-50 p-5">
-            <h2 className="font-semibold text-violet-950">
-              Premium resume unlock · ₹29
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-violet-900">
-              Unlock one premium saved-resume identity. Its seven-day edit and
-              re-render window begins after the first successful render.
-              Coupons do not apply.
-            </p>
-          </article>
         </section>
 
         <section className="mt-14 rounded-2xl border border-[#e1e8ed] bg-white p-7 text-center">

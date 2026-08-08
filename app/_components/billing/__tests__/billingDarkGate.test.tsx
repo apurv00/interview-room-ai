@@ -56,6 +56,8 @@ describe('PR6 customer billing dark gate', () => {
       <BillingPricingExperience
         currentPlan="free"
         authStatus="authenticated"
+        accountId="64b64c0f2f4e8b6a8c7d9e10"
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
       />,
     )
 

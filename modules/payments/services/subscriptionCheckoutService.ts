@@ -1,7 +1,6 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
-import { sha256CanonicalJson } from '../lib/canonicalJson'
 import { inrPaise } from '../lib/money'
 import {
   CheckoutIntent,
@@ -12,10 +11,6 @@ import {
 import type {
   ConsumerSubscriptionLeaseLane,
 } from '../models/ConsumerSubscriptionLease'
-import {
-  CustomerBillingProfile,
-  type ICustomerPlaceOfSupply,
-} from '../models/CustomerBillingProfile'
 import {
   CouponReservation,
   type CouponCapacityDisposition,
@@ -83,14 +78,22 @@ import {
   type SubscriptionCycleCommercialResolver,
 } from './subscriptionCycleFulfillmentService'
 import {
-  CustomerPlaceOfSupplyInputSchema,
-} from '../validators/customerBillingProfile'
-import {
   CustomerBillingIdempotencyKeySchema,
 } from '../validators/customerBilling'
 import { CouponCodeSchema } from '../validators/coupon'
+import {
+  supersedeBlockingUnpaidSubscriptionCheckout,
+  UnpaidSubscriptionCheckoutSupersessionError,
+} from './unpaidSubscriptionCheckoutSupersessionService'
+import {
+  canAcceptInitialSubscriptionAcquisition,
+  type SubscriptionAcquisitionUserAuthority,
+} from './subscriptionAcquisitionAuthority'
 
-export const PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT = 1_200 as const
+// A 25-year monthly horizon keeps Razorpay-generated UPI mandate end dates
+// within the provider's QR validation window while remaining effectively
+// open-ended for a customer-cancelled subscription.
+export const PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT = 300 as const
 
 export const SUBSCRIPTION_CHECKOUT_ERROR_CODES = [
   'invalid_request',
@@ -150,9 +153,11 @@ export interface SubscriptionCheckoutSaleContext {
   buyerSnapshot: Readonly<{
     name: string
     email: string
-    billingProfileVersion: number
-    billingProfileContentHash: string
-    placeOfSupply: Readonly<ICustomerPlaceOfSupply>
+    purchaseProfile: Readonly<{
+      accountKind: 'individual'
+      financialDocumentPolicy: 'not_required'
+      version: 1
+    }>
   }>
 }
 
@@ -288,6 +293,15 @@ export interface SubscriptionCheckoutDependencies {
   commercialResolver?: SubscriptionCycleCommercialResolver
   createRemote?: typeof createOrReuseRemoteCheckout
   loadKeyId?: (providerMode: ProviderMode) => string
+  supersedeBlockingCheckout?:
+    typeof supersedeBlockingUnpaidSubscriptionCheckout
+}
+
+export interface InitialSubscriptionCheckoutDependencies
+  extends SubscriptionCheckoutDependencies {
+  loadAcquisitionAuthority?: (
+    userId: string,
+  ) => Promise<SubscriptionAcquisitionUserAuthority | null>
 }
 
 export interface FuturePlanChangeCheckoutEvidence {
@@ -418,12 +432,6 @@ interface CheckoutBuyerRow {
   email?: unknown
 }
 
-interface CheckoutBillingProfileRow {
-  version?: unknown
-  placeOfSupply?: unknown
-  contentHash?: unknown
-}
-
 function failure(
   code: SubscriptionCheckoutErrorCode,
   message: string,
@@ -452,7 +460,6 @@ function providerSnapshotMatches(
 
 export function checkoutBuyerSnapshot(
   buyer: CheckoutBuyerRow,
-  profile: CheckoutBillingProfileRow | null,
 ): SubscriptionCheckoutSaleContext['buyerSnapshot'] {
   if (
     typeof buyer.name !== 'string' ||
@@ -462,40 +469,14 @@ export function checkoutBuyerSnapshot(
   ) {
     throw failure('buyer_unavailable', 'Billing buyer details are unavailable')
   }
-  if (!profile) {
-    throw failure(
-      'billing_profile_required',
-      'A billing place of supply is required before checkout',
-    )
-  }
-
-  const placeOfSupply = CustomerPlaceOfSupplyInputSchema.safeParse(
-    profile.placeOfSupply,
-  )
-  const validVersion =
-    typeof profile.version === 'number' &&
-    Number.isSafeInteger(profile.version) &&
-    profile.version >= 1
-  const validHash =
-    typeof profile.contentHash === 'string' &&
-    /^[a-f0-9]{64}$/.test(profile.contentHash) &&
-    placeOfSupply.success &&
-    sha256CanonicalJson({
-      placeOfSupply: placeOfSupply.data,
-    }) === profile.contentHash
-  if (!validVersion || !validHash || !placeOfSupply.success) {
-    throw failure(
-      'persistence_conflict',
-      'Billing profile integrity verification failed',
-    )
-  }
-
   return {
     name: buyer.name,
     email: buyer.email,
-    billingProfileVersion: profile.version as number,
-    billingProfileContentHash: profile.contentHash as string,
-    placeOfSupply: structuredClone(placeOfSupply.data),
+    purchaseProfile: {
+      accountKind: 'individual',
+      financialDocumentPolicy: 'not_required',
+      version: 1,
+    },
   }
 }
 
@@ -529,18 +510,13 @@ async function defaultResolveSaleContext(
 
   await connectDB()
   const userObjectId = new mongoose.Types.ObjectId(userId)
-  const [buyer, billingProfile] = await Promise.all([
-    User.findById(userObjectId)
-      .select('name email buyerState')
-      .lean<{
-        name: string
-        email: string
-        buyerState?: string
-      }>(),
-    CustomerBillingProfile.findOne({ userId: userObjectId })
-      .select('version placeOfSupply contentHash')
-      .lean<CheckoutBillingProfileRow>(),
-  ])
+  const buyer = await User.findById(userObjectId)
+    .select('name email buyerState')
+    .lean<{
+      name: string
+      email: string
+      buyerState?: string
+    }>()
   if (!buyer) {
     throw failure('buyer_unavailable', 'Billing buyer was not found')
   }
@@ -563,7 +539,7 @@ async function defaultResolveSaleContext(
       'Subscription checkout provider mode changed during evaluation',
     )
   }
-  const buyerSnapshot = checkoutBuyerSnapshot(buyer, billingProfile)
+  const buyerSnapshot = checkoutBuyerSnapshot(buyer)
   return {
     providerMode: finalGate.providerMode,
     buyerSnapshot,
@@ -810,7 +786,6 @@ function exactSelectedCoupon(
   const quote = resolved.quote
   if (!selected) return quote.discountPaise === 0 && !quote.coupon
   const verification = selected.providerVerification?.[providerMode]
-  const offerId = selected.terms.razorpayOfferIdByMode[providerMode]
   return (
     selected.status === 'active' &&
     selected.availability.providerMode === providerMode &&
@@ -819,9 +794,53 @@ function exactSelectedCoupon(
     quote.discountPaise === selected.terms.discountPaise &&
     quote.discountedBillingCycles ===
       selected.terms.discountedBillingCycles &&
-    typeof offerId === 'string' &&
-    /^offer_[A-Za-z0-9]+$/.test(offerId) &&
+    selected.terms.discountedBillingCycles === 1 &&
+    selected.terms.eligibility.upgradesEligible === false &&
     providerSnapshotMatches(verification, selected.contentHash)
+  )
+}
+
+function normalizedManualCouponCode(
+  value: string | undefined,
+): string | undefined {
+  const normalized = value?.trim().toUpperCase()
+  return normalized || undefined
+}
+
+function storedManualCouponAssertionMatches(
+  stored: StoredSubscriptionCheckoutIntent,
+  requestedCode: string | undefined,
+): boolean {
+  const requested = normalizedManualCouponCode(requestedCode)
+  if (requested === undefined) return true
+
+  const reservation = stored.couponReservation
+  if (!reservation) return false
+  if (reservation.campaignModeSnapshot === 'code') {
+    const storedCode = normalizedManualCouponCode(
+      reservation.codeSnapshot,
+    )
+    return storedCode === requested
+  }
+  return false
+}
+
+function resolvedManualCouponAssertionMatches(
+  resolved: ResolvedCustomerBillingQuote,
+  commercial: SubscriptionCommercialPreflight,
+  requestedCode: string | undefined,
+): boolean {
+  const requested = normalizedManualCouponCode(requestedCode)
+  if (!requested) return true
+  const candidate = resolved.selectedCandidate
+  const quoteCoupon = resolved.quote.coupon
+  return (
+    resolved.quote.manualCodeResult === 'applied' &&
+    commercial.couponAccepted &&
+    candidate?.mode === 'code' &&
+    normalizedManualCouponCode(candidate.code) === requested &&
+    quoteCoupon?.mode === 'code' &&
+    normalizedManualCouponCode(quoteCoupon.code) === requested
   )
 }
 
@@ -1275,7 +1294,15 @@ function trustedSubscriptionSpec(
     intent.purpose === 'acquisition' &&
     intent.planChangeRequestId === undefined &&
     intent.leaseLane === 'a' &&
-    intent.requestedStartAt === undefined
+    (
+      quote.discountPaise === 0
+        ? intent.requestedStartAt === undefined
+        : (
+            futureStartAt !== undefined &&
+            futureStartAt > intent.authorizationExpiresAt! &&
+            futureStartAt > intent.createdAt
+          )
+    )
   )
   const futureLifecycle = (
     (
@@ -1294,7 +1321,7 @@ function trustedSubscriptionSpec(
     intent.authorizationExpiresAt
       ? Math.floor(intent.authorizationExpiresAt.getTime() / 1_000)
       : undefined
-  const startAtEpochSeconds = futureLifecycle
+  const startAtEpochSeconds = futureLifecycle || quote.discountPaise > 0
     ? Math.floor(futureStartAt!.getTime() / 1_000)
     : undefined
   if (
@@ -1432,8 +1459,9 @@ function trustedSubscriptionSpec(
     coupon.discountedBillingCycles !==
       quote.discountedBillingCycles ||
     !coupon.applicablePlanKeys.includes(intent.planKey) ||
-    typeof coupon.razorpayOfferId !== 'string' ||
-    !/^offer_[A-Za-z0-9]+$/.test(coupon.razorpayOfferId) ||
+    coupon.discountedBillingCycles !== 1 ||
+    intent.purpose !== 'acquisition' ||
+    startAtEpochSeconds === undefined ||
     (coupon.startsAt && coupon.startsAt > intent.createdAt) ||
     (coupon.endsAt && coupon.endsAt <= intent.createdAt) ||
     typeof coupon.termsText !== 'string' ||
@@ -1447,13 +1475,15 @@ function trustedSubscriptionSpec(
   ) {
     throw failure(
       'commercial_unavailable',
-      'Immutable subscription Offer terms are inconsistent',
+      'Immutable subscription coupon terms are inconsistent',
     )
   }
   return {
     planKey: intent.planKey,
     razorpayPlanId: plan.razorpayPlanId,
-    razorpayOfferId: coupon.razorpayOfferId,
+    upfrontAmountPaise: quote.payablePaise,
+    upfrontItemName:
+      `${intent.planKey === 'plus' ? 'Plus' : 'Pro'} first month`,
     totalCount,
     purpose: intent.purpose!,
     ...(futureLifecycle
@@ -1462,6 +1492,8 @@ function trustedSubscriptionSpec(
             intent.planChangeRequestId!.toHexString(),
           startAtEpochSeconds,
         }
+      : quote.discountPaise > 0
+        ? { startAtEpochSeconds }
       : {}),
     leaseLane: intent.leaseLane!,
     authorizationExpiresAtEpochSeconds,
@@ -1854,6 +1886,88 @@ function mapKnownFailure(error: unknown): never {
   )
 }
 
+async function reopenBlockingSubscriptionCheckout(input: {
+  userId: string
+  planKey: 'plus' | 'pro'
+  intentId: string
+  requestStartedAt: Date
+  sale: SubscriptionCheckoutSaleContext
+  dependencies: SubscriptionCheckoutDependencies
+}): Promise<SubscriptionCheckoutResult> {
+  const loadIntent = input.dependencies.loadIntent ?? defaultLoadIntent
+  const stored = await loadIntent({
+    intentId: input.intentId,
+    userId: input.userId,
+  })
+  if (
+    !stored ||
+    stored.id.toHexString() !== input.intentId ||
+    stored.userId.toHexString() !== input.userId ||
+    stored.providerMode !== input.sale.providerMode ||
+    stored.status !== 'remote_created' ||
+    stored.purpose !== 'acquisition' ||
+    stored.leaseLane !== 'a' ||
+    stored.planKey !== input.planKey ||
+    stored.quote.subscriptionTotalCount !==
+      PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT ||
+    !validDate(stored.authorizationExpiresAt) ||
+    stored.authorizationExpiresAt <= input.requestStartedAt ||
+    !stored.razorpaySubscriptionId
+  ) {
+    throw failure(
+      'review_required',
+      'The existing subscription checkout cannot be reopened safely',
+    )
+  }
+
+  const resolver = input.dependencies.commercialResolver ??
+    mongoSubscriptionCycleCommercialResolver
+  const terms = await resolver.resolve(stored)
+  if (!terms) {
+    throw failure(
+      'commercial_unavailable',
+      'Immutable subscription terms were not found',
+    )
+  }
+  const spec = trustedSubscriptionSpec(stored, terms)
+  const checkoutQuote = publicQuote(stored, terms)
+  const createRemote = input.dependencies.createRemote ??
+    createOrReuseRemoteCheckout
+  const remote = await createRemote(
+    { userId: input.userId, intentId: input.intentId },
+    {
+      resolveSubscriptionSpec: async (remoteIntent) => {
+        assertRemoteIntentMatches(remoteIntent, stored)
+        return spec
+      },
+    },
+  )
+  if (
+    remote.kind !== 'subscription' ||
+    remote.providerMode !== input.sale.providerMode ||
+    remote.intentId !== input.intentId ||
+    remote.remoteId !== stored.razorpaySubscriptionId
+  ) {
+    throw failure(
+      'persistence_conflict',
+      'Recovered subscription checkout has the wrong durable lineage',
+    )
+  }
+  const loadKeyId = input.dependencies.loadKeyId ??
+    ((mode: ProviderMode) => loadRazorpayApiCredentials(mode).keyId)
+  return {
+    intentId: input.intentId,
+    providerMode: input.sale.providerMode,
+    intentStatus: 'remote_created',
+    reused: true,
+    checkout: {
+      keyId: loadKeyId(input.sale.providerMode),
+      subscriptionId: remote.remoteId,
+    },
+    quote: checkoutQuote,
+  }
+}
+
 /**
  * Authenticated subscription checkout orchestration. The browser supplies
  * only plan/manual-code/idempotency selection; all prices, entitlements,
@@ -1864,12 +1978,111 @@ function mapKnownFailure(error: unknown): never {
  */
 export async function createSubscriptionCheckout(
   input: SubscriptionCheckoutInput,
-  dependencies: SubscriptionCheckoutDependencies = {},
+  dependencies: InitialSubscriptionCheckoutDependencies = {},
 ): Promise<SubscriptionCheckoutResult> {
+  const requestStartedAt = new Date()
+  let effectiveIdempotencyKey = input.idempotencyKey
   try {
     const resolveSale =
       dependencies.resolveSaleContext ?? defaultResolveSaleContext
     const sale = await resolveSale(input.userId)
+    const loadAcquisitionAuthority =
+      dependencies.loadAcquisitionAuthority ?? (async (userId: string) => {
+        if (!mongoose.isValidObjectId(userId)) return null
+        await connectDB()
+        return User.findById(new mongoose.Types.ObjectId(userId))
+          .select([
+            'plan',
+            'planVocabularyVersion',
+            'planExpiresAt',
+            'entitlementSource',
+            'usagePeriodKey',
+            'interviewsUsed',
+            'interviewLimit',
+            'premiumResumesUsed',
+            'premiumResumeLimit',
+            'entitlementVersion',
+            'buyerState',
+            'accountState',
+            'role',
+            'organizationId',
+          ].join(' '))
+          .lean<SubscriptionAcquisitionUserAuthority>()
+      })
+    const acquisitionAuthority =
+      await loadAcquisitionAuthority(input.userId)
+    if (!acquisitionAuthority) {
+      throw failure('buyer_unavailable', 'Billing buyer was not found')
+    }
+    if (!canAcceptInitialSubscriptionAcquisition(acquisitionAuthority)) {
+      throw failure(
+        'review_required',
+        'Account billing state requires review before subscription checkout',
+      )
+    }
+    const supersedeBlockingCheckout =
+      dependencies.supersedeBlockingCheckout ??
+      supersedeBlockingUnpaidSubscriptionCheckout
+    try {
+      const blockingCheckout = await supersedeBlockingCheckout({
+        userId: input.userId,
+        providerMode: sale.providerMode,
+        replacementPlanKey: input.request.planKey,
+        manualCouponCode: input.request.manualCouponCode,
+        expectedSubscriptionTotalCount:
+          PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
+        requestStartedAt,
+      })
+      if (blockingCheckout.outcome === 'reusable') {
+        const loadIntent = dependencies.loadIntent ?? defaultLoadIntent
+        const stored = await loadIntent({
+          intentId: blockingCheckout.intentId,
+          userId: input.userId,
+        })
+        if (!stored) {
+          throw failure(
+            'review_required',
+            'The existing subscription checkout cannot be reopened safely',
+          )
+        }
+        if (!storedManualCouponAssertionMatches(
+          stored,
+          input.request.manualCouponCode,
+        )) {
+          throw failure(
+            'subscription_conflict',
+            'The existing checkout uses a different coupon selection',
+          )
+        }
+        return await reopenBlockingSubscriptionCheckout({
+          userId: input.userId,
+          planKey: input.request.planKey,
+          intentId: blockingCheckout.intentId,
+          requestStartedAt,
+          sale,
+          dependencies,
+        })
+      }
+      if (blockingCheckout.outcome === 'superseded') {
+        effectiveIdempotencyKey = [
+          'billing-subscription',
+          'superseded',
+          blockingCheckout.intentId,
+          PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
+        ].join(':')
+      }
+    } catch (error) {
+      if (error instanceof UnpaidSubscriptionCheckoutSupersessionError) {
+        throw failure(
+          error.code,
+          error.code === 'provider_unavailable'
+            ? 'The existing Razorpay checkout could not be verified'
+            : 'The existing subscription checkout requires reconciliation',
+          { cause: error },
+        )
+      }
+      throw error
+    }
     const resolveQuote =
       dependencies.resolveQuote ?? resolveCustomerBillingQuote
     const resolved = await resolveQuote({
@@ -1896,21 +2109,28 @@ export async function createSubscriptionCheckout(
       resolved,
       sale.providerMode,
     )
+    if (!resolvedManualCouponAssertionMatches(
+      resolved,
+      commercial,
+      input.request.manualCouponCode,
+    )) {
+      throw failure(
+        'commercial_unavailable',
+        'The requested coupon is unavailable for this checkout',
+      )
+    }
     const useCoupon = Boolean(
       resolved.selectedCandidate && commercial.couponAccepted,
     )
-    if (!useCoupon) {
-      throw failure(
-        'commercial_unavailable',
-        'The launch discount is temporarily unavailable',
-      )
-    }
     const createIntent =
       dependencies.createIntent ?? createOrReuseCheckoutIntent
     let local: CheckoutIntentCreationResult
     try {
       local = await createTrustedIntent({
-        checkout: input,
+        checkout: {
+          ...input,
+          idempotencyKey: effectiveIdempotencyKey,
+        },
         sale,
         resolved,
         useCoupon,
@@ -2091,12 +2311,6 @@ export async function createFutureSubscriptionCheckout(
     const useCoupon = Boolean(
       resolved.selectedCandidate && commercial.couponAccepted,
     )
-    if (!useCoupon) {
-      throw failure(
-        'commercial_unavailable',
-        'The launch discount is temporarily unavailable',
-      )
-    }
     const createIntent =
       dependencies.createIntent ?? createOrReuseCheckoutIntent
     let local: CheckoutIntentCreationResult

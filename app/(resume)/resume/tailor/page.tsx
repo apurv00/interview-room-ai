@@ -1152,7 +1152,7 @@ export default function TailorPage() {
           (jobId && OBJECT_ID_PATTERN.test(jobId) ? `&jobId=${encodeURIComponent(jobId)}` : ''),
         )
       } else if (data.code === 'RESUME_LIMIT') {
-        setError('Resume limit reached (max 3). Delete an existing resume from the Resume Builder page, then try saving again.')
+        setError('Resume limit reached for your current plan. Delete an existing resume from the Resume Builder page, then try saving again.')
       } else {
         setError(data.error || 'Failed to save')
       }

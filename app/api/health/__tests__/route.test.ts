@@ -12,7 +12,7 @@ vi.mock('mongoose', () => ({ default: { connection: { readyState: 1 } } }))
 vi.mock('@shared/redis', () => ({ redis: { ping: mocks.ping } }))
 
 import { deploymentCommitOf } from '../deploymentIdentity'
-import { GET } from '../route'
+import { GET, HEAD } from '../route'
 
 const originalHealthToken = process.env.HEALTH_CHECK_TOKEN
 const originalDeploymentCommit = process.env.DEPLOYMENT_COMMIT_SHA
@@ -67,5 +67,32 @@ describe('GET deployment identity', () => {
       deploymentCommit: 'e'.repeat(40),
     })
     expect(gateResponse.headers.get('cache-control')).toBe('private, no-store')
+  })
+})
+
+describe('HEAD dependency readiness', () => {
+  it('returns 200 only when MongoDB and Redis are reachable', async () => {
+    const response = await HEAD()
+
+    expect(response.status).toBe(200)
+    expect(mocks.connectDB).toHaveBeenCalledOnce()
+    expect(mocks.ping).toHaveBeenCalledOnce()
+  })
+
+  it('returns 503 when Redis is unavailable', async () => {
+    mocks.ping.mockRejectedValueOnce(new Error('redis unavailable'))
+
+    const response = await HEAD()
+
+    expect(response.status).toBe(503)
+  })
+
+  it('returns 503 without probing Redis when MongoDB is unavailable', async () => {
+    mocks.connectDB.mockRejectedValueOnce(new Error('mongo unavailable'))
+
+    const response = await HEAD()
+
+    expect(response.status).toBe(503)
+    expect(mocks.ping).not.toHaveBeenCalled()
   })
 })

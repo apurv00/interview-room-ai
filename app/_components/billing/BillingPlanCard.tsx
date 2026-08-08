@@ -19,6 +19,12 @@ interface BillingPlanCardProps {
   currentPlan: LegacyStoredPlanKey
   quote?: CustomerBillingQuote
   quoteLoading?: boolean
+  acquisitionCtaLabel?: string
+  acquisitionCtaDisabled?: boolean
+  acquisitionCtaBusy?: boolean
+  paidPlanChangeAvailable?: boolean
+  paidPlanChangeBlockedLabel?: string
+  paidSelectionBlockedLabel?: string
   onSelect: (planKey: 'plus' | 'pro') => void
 }
 
@@ -26,16 +32,17 @@ function planFeatures(plan: BillingPlan): string[] {
   const interviewLabel = plan.interview.includedPerPeriod === 1
     ? `1 ${plan.interview.maxDurationMinutes}-minute interview per month`
     : `${plan.interview.includedPerPeriod} interviews per billing month, up to ${plan.interview.maxDurationMinutes} minutes`
-  const resumeLabel = plan.key === 'free'
-    ? '1 editable clean basic resume'
-    : `${plan.resume.premiumSavedResumeLimitPerPeriod} premium resume versions per billing month`
-
+  const resumeLabel = plan.resume.premiumSavedResumeLimitPerPeriod === 0
+    ? `${plan.resume.basicSavedResumeLimit} Basic resume saved`
+    : `${plan.resume.basicSavedResumeLimit} Basic resume + ${plan.resume.premiumSavedResumeLimitPerPeriod} premium resume versions per billing cycle`
+  const jobsLabel =
+    'Jobs discovery, resume matching, and application tracking'
   if (plan.key === 'free') {
     return [
       interviewLabel,
-      resumeLabel,
       'Core feedback and learning drills',
-      'Additional 30-minute interviews available for ₹69 each',
+      resumeLabel,
+      jobsLabel,
     ]
   }
   if (plan.key === 'plus') {
@@ -43,14 +50,14 @@ function planFeatures(plan: BillingPlan): string[] {
       interviewLabel,
       'Full analysis, replay, and JD/resume personalization',
       resumeLabel,
-      '1 editable clean basic resume',
+      jobsLabel,
     ]
   }
   return [
     interviewLabel,
     'Advanced progress and interview comparison',
-    'Full resume toolkit',
     resumeLabel,
+    jobsLabel,
     'Priority processing',
   ]
 }
@@ -60,6 +67,12 @@ export function BillingPlanCard({
   currentPlan,
   quote,
   quoteLoading = false,
+  acquisitionCtaLabel,
+  acquisitionCtaDisabled = false,
+  acquisitionCtaBusy = false,
+  paidPlanChangeAvailable = false,
+  paidPlanChangeBlockedLabel = 'Manage current change below',
+  paidSelectionBlockedLabel,
   onSelect,
 }: BillingPlanCardProps) {
   const current = currentPlan === plan.key ||
@@ -119,8 +132,8 @@ export function BillingPlanCard({
             </div>
             <p className="mt-1 text-xs text-[#71767b]">
               {quoteLoading
-                ? 'Checking your best available offer…'
-                : 'Your best available offer is checked after sign-in.'}
+                ? 'Checking eligible coupon pricing…'
+                : 'Enter an eligible coupon code above before paying.'}
             </p>
           </>
         )}
@@ -129,7 +142,6 @@ export function BillingPlanCard({
       {plan.key !== 'free' && (
         <p className="mt-2 text-xs leading-5 text-[#536471]">
           Renews at {formatInr(plan.listPricePaise)}/month. Cancel anytime.
-          GST included.
         </p>
       )}
 
@@ -170,20 +182,33 @@ export function BillingPlanCard({
           >
             Start free
           </Link>
-        ) : existingPaidPlan ? (
-          <Link
-            href="/settings#billing"
-            className="flex h-9 w-full items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+        ) : paidPlanKey && paidSelectionBlockedLabel ? (
+          <Button variant="secondary" isFullWidth disabled>
+            {paidSelectionBlockedLabel}
+          </Button>
+        ) : existingPaidPlan && paidPlanChangeAvailable && paidPlanKey ? (
+          <Button
+            type="button"
+            variant="secondary"
+            isFullWidth
+            onClick={() => onSelect(paidPlanKey)}
           >
-            Manage plan change
-          </Link>
+            Switch to {plan.displayName}
+          </Button>
+        ) : existingPaidPlan ? (
+          <Button variant="secondary" isFullWidth disabled>
+            {paidPlanChangeBlockedLabel}
+          </Button>
         ) : paidPlanKey ? (
           <Button
             type="button"
             isFullWidth
+            disabled={acquisitionCtaDisabled || acquisitionCtaBusy}
+            isLoading={acquisitionCtaBusy}
+            aria-busy={acquisitionCtaBusy || undefined}
             onClick={() => onSelect(paidPlanKey)}
           >
-            Choose {plan.displayName}
+            {acquisitionCtaLabel ?? `Choose ${plan.displayName}`}
           </Button>
         ) : null}
       </div>

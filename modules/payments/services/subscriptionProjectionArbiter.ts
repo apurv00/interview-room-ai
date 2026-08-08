@@ -220,6 +220,7 @@ export interface ProjectionCycleEvidence {
   razorpayPaymentId: string
   capturedPaise: number
   currency: 'INR'
+  projectionAuthority?: 'coupon_upfront'
 }
 
 export type RecordedProjectionDisposition =
@@ -405,7 +406,11 @@ function validCycle(
     RAZORPAY_ID_PATTERNS.invoice.test(cycle.razorpayInvoiceId) &&
     RAZORPAY_ID_PATTERNS.payment.test(cycle.razorpayPaymentId) &&
     positiveSafeInteger(cycle.capturedPaise) &&
-    cycle.currency === 'INR'
+    cycle.currency === 'INR' &&
+    (
+      cycle.projectionAuthority === undefined ||
+      cycle.projectionAuthority === 'coupon_upfront'
+    )
   )
 }
 
@@ -712,11 +717,11 @@ function exactAcquisitionLineage(
     checkout.purpose === 'acquisition' &&
     checkout.planChangeRequestId === undefined &&
     checkout.leaseLane === 'a' &&
-    checkout.requestedStartAtEpochSeconds === undefined &&
     subscription.planChangeRequestId === undefined &&
     subscription.replacesSubscriptionId === undefined &&
     subscription.leaseLane === 'a' &&
-    subscription.requestedStartAtEpochSeconds === undefined &&
+    subscription.requestedStartAtEpochSeconds ===
+      checkout.requestedStartAtEpochSeconds &&
     subscription.checkoutIntentId === checkout.id &&
     subscription.userId === checkout.userId &&
     subscription.providerMode === checkout.providerMode &&
@@ -929,7 +934,20 @@ function classifyCurrentSubscription(input: {
     }
   }
 
-  if (subscription.status !== 'active') {
+  const authenticatedCouponUpfront =
+    lineage === 'acquisition' &&
+    cycle.projectionAuthority === 'coupon_upfront' &&
+    subscription.status === 'authenticated' &&
+    subscription.requestedStartAtEpochSeconds !== undefined &&
+    cycle.periodEndEpochSeconds ===
+      subscription.requestedStartAtEpochSeconds &&
+    subscription.currentPeriodKey === undefined &&
+    subscription.currentPeriodStartEpochSeconds === undefined &&
+    subscription.currentPeriodEndEpochSeconds === undefined
+  if (
+    subscription.status !== 'active' &&
+    !authenticatedCouponUpfront
+  ) {
     return review(lineage, 'subscription_status_not_projectable')
   }
   if (relation === 'same') {

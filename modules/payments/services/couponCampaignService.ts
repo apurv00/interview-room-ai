@@ -474,7 +474,9 @@ function requireVerifiedProviderBinding(
       normalizedTermsHash: verification?.normalizedTermsHash,
       errors: verification?.errors.length
         ? verification.errors
-        : ['The selected provider mode needs a fresh verified Offer binding'],
+        : [
+            'The selected provider mode needs a fresh verified coupon and catalog Plan binding',
+          ],
     })
   }
   return verification
@@ -1185,7 +1187,9 @@ export async function verifyCouponProviderBinding(input: {
         verification.status === 'verified' ? 'failed' : verification.status,
       errors: verification.errors.length
         ? verification.errors
-        : ['Razorpay Offer verification did not bind the current coupon hash'],
+        : [
+            'Coupon verification did not bind the current coupon hash and catalog Plans',
+          ],
     })
   }
 

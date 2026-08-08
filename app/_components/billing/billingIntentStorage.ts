@@ -1,11 +1,13 @@
 import { z } from 'zod'
 
 const AUTH_INTENT_KEY = 'ipg_billing_auth_intent_v1'
-const CHECKOUT_RECOVERY_KEY = 'ipg_billing_checkout_v1'
+const LEGACY_CHECKOUT_RECOVERY_KEY = 'ipg_billing_checkout_v1'
+const CHECKOUT_RECOVERY_KEY_PREFIX = 'ipg_billing_checkout_v2:'
 const AUTH_INTENT_TTL_MS = 24 * 60 * 60 * 1_000
 const CHECKOUT_RECOVERY_TTL_MS = 24 * 60 * 60 * 1_000
 
 const PaidPlanKeySchema = z.enum(['plus', 'pro'])
+const AccountIdSchema = z.string().regex(/^[a-f\d]{24}$/i)
 const TimestampSchema = z.number().int().nonnegative().safe()
 
 const BillingAuthIntentSchema = z.object({
@@ -17,7 +19,8 @@ const BillingAuthIntentSchema = z.object({
 }).strict()
 
 const BillingCheckoutRecoverySchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
+  accountId: AccountIdSchema,
   intentId: z.string().regex(/^[a-f\d]{24}$/i),
   planKey: PaidPlanKeySchema,
   catalogVersion: z.string().min(1).max(100),
@@ -117,15 +120,19 @@ export function clearBillingAuthIntent(): void {
 }
 
 export function saveBillingCheckoutRecovery(input: {
+  accountId: string
   intentId: string
   planKey: 'plus' | 'pro'
   catalogVersion: string
   idempotencyKey: string
   manualCouponCode?: string
-}): BillingCheckoutRecovery {
+}): BillingCheckoutRecovery | null {
+  const accountId = AccountIdSchema.safeParse(input.accountId)
+  if (!accountId.success) return null
   const now = Date.now()
   const recovery: BillingCheckoutRecovery = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    accountId: accountId.data.toLowerCase(),
     intentId: input.intentId,
     planKey: input.planKey,
     catalogVersion: input.catalogVersion,
@@ -136,20 +143,38 @@ export function saveBillingCheckoutRecovery(input: {
     createdAtMs: now,
     expiresAtMs: now + CHECKOUT_RECOVERY_TTL_MS,
   }
-  writeStored(CHECKOUT_RECOVERY_KEY, recovery)
+  removeStored(LEGACY_CHECKOUT_RECOVERY_KEY)
+  writeStored(
+    `${CHECKOUT_RECOVERY_KEY_PREFIX}${recovery.accountId}`,
+    recovery,
+  )
   return recovery
 }
 
-export function readBillingCheckoutRecovery():
+export function readBillingCheckoutRecovery(accountId: string):
   BillingCheckoutRecovery | null {
-  return readStored(
-    CHECKOUT_RECOVERY_KEY,
+  removeStored(LEGACY_CHECKOUT_RECOVERY_KEY)
+  const parsedAccountId = AccountIdSchema.safeParse(accountId)
+  if (!parsedAccountId.success) return null
+  const normalizedAccountId = parsedAccountId.data.toLowerCase()
+  const recovery = readStored(
+    `${CHECKOUT_RECOVERY_KEY_PREFIX}${normalizedAccountId}`,
     BillingCheckoutRecoverySchema,
   )
+  if (recovery?.accountId !== normalizedAccountId) {
+    removeStored(`${CHECKOUT_RECOVERY_KEY_PREFIX}${normalizedAccountId}`)
+    return null
+  }
+  return recovery
 }
 
-export function clearBillingCheckoutRecovery(): void {
-  removeStored(CHECKOUT_RECOVERY_KEY)
+export function clearBillingCheckoutRecovery(accountId: string): void {
+  removeStored(LEGACY_CHECKOUT_RECOVERY_KEY)
+  const parsedAccountId = AccountIdSchema.safeParse(accountId)
+  if (!parsedAccountId.success) return
+  removeStored(
+    `${CHECKOUT_RECOVERY_KEY_PREFIX}${parsedAccountId.data.toLowerCase()}`,
+  )
 }
 
 export function createBillingIdempotencyKey(): string {

@@ -586,8 +586,7 @@ function resolveCurrentSubscriptionCoupon(input: {
     terms.discountPaise === quote.discountPaise &&
     terms.discountedBillingCycles === quote.discountedBillingCycles &&
     terms.applicablePlanKeys.includes(subscription.planKey) &&
-    typeof terms.razorpayOfferIdByMode[subscription.providerMode] ===
-      'string' &&
+    terms.discountedBillingCycles === 1 &&
     (!terms.startsAt || terms.startsAt <= intent.createdAt) &&
     (!terms.endsAt || terms.endsAt > intent.createdAt)
   if (!exactLineage) return { consistent: false }
@@ -839,7 +838,11 @@ export async function readCustomerBillingSummary(
     const config = await BillingConfig.findOne({ key: 'singleton' })
       .session(session)
       .lean()
-    const providerMode = options.environment ?? 'live'
+    const providerMode = options.environment ?? (
+      config?.sellingMode === 'qa' && configuredQaUser(config, userObjectId)
+        ? 'test'
+        : 'live'
+    )
     if (providerMode === 'test' && !configuredQaUser(config, userObjectId)) {
       throw new CustomerBillingUnavailableError('test_mode_unavailable')
     }

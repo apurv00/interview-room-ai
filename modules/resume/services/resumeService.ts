@@ -1,34 +1,147 @@
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
+import { PersonalDataWriteBlockedError } from '@shared/services/accountDeletion'
+import { getStaticPlanDefinition } from '@shared/services/planConfig'
+import { savedResumeRepository } from '@shared/services/savedResumeRepository'
+import { ResumeEntitlement } from '@payments/models/ResumeEntitlement'
 import type { ResumeData } from '../validators/resume'
 import { hasStructuredResumeContent } from '../lib/structuredContent'
 
-const MAX_RESUMES = 3
+const BASIC_SAVED_RESUME_LIMIT =
+  getStaticPlanDefinition('free').resume.basicSavedResumeLimit
+const MAX_PREMIUM_SAVED_RESUME_LIMIT =
+  getStaticPlanDefinition('pro').resume.premiumSavedResumeLimitPerPeriod
+
+interface ResumeLibraryProjection {
+  savedResumes?: Array<Record<string, unknown>>
+  targetRole?: string
+  currentTitle?: string
+  premiumResumesUsed?: number
+  premiumResumeLimit?: number
+  freeBasicResumeId?: string
+}
+
+interface PurchasedResumeEntitlementProjection {
+  resumeId: string
+}
+
+class ActivePremiumResumePurchaseError extends Error {
+  constructor() {
+    super('A purchased premium resume cannot be deleted.')
+    this.name = 'ActivePremiumResumePurchaseError'
+  }
+}
+
+function savedResumeId(resume: Record<string, unknown>): string | null {
+  if (typeof resume.id === 'string' && resume.id.length > 0) return resume.id
+  const objectId = resume._id as { toString?: () => string } | undefined
+  const fallback = objectId?.toString?.()
+  return fallback && fallback.length > 0 ? fallback : null
+}
+
+function premiumResumeLimit(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) <= 0) return 0
+  return Math.min(Number(value), MAX_PREMIUM_SAVED_RESUME_LIMIT)
+}
+
+function premiumResumesUsed(value: unknown, limit: number): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) return 0
+  return Math.min(Number(value), limit)
+}
+
+function basicResumeId(
+  projection: ResumeLibraryProjection,
+  savedIds: string[],
+): string | null {
+  if (
+    typeof projection.freeBasicResumeId === 'string' &&
+    savedIds.includes(projection.freeBasicResumeId)
+  ) {
+    return projection.freeBasicResumeId
+  }
+  // Legacy embedded rows pre-date freeBasicResumeId. Bind their first saved
+  // identity as Basic so a purchased unlock for that same identity cannot
+  // accidentally turn into a generic extra library slot.
+  // The same fallback is deliberately fail-closed for a stale stored ID; this
+  // CRUD service must not mutate the payment-owned entitlement projection.
+  return savedIds[0] ?? null
+}
+
+function atomicPremiumCycleSlotAvailable() {
+  return {
+    $lt: [
+      { $max: [0, { $floor: { $ifNull: ['$premiumResumesUsed', 0] } }] },
+      {
+        $min: [
+          MAX_PREMIUM_SAVED_RESUME_LIMIT,
+          { $max: [0, { $floor: { $ifNull: ['$premiumResumeLimit', 0] } }] },
+        ],
+      },
+    ],
+  }
+}
+
+async function activePurchasedResumeIds(
+  userId: string,
+  resumeIds: readonly string[],
+): Promise<Set<string>> {
+  if (resumeIds.length === 0) return new Set()
+  const rows = await ResumeEntitlement.find({
+    userId,
+    resumeId: { $in: resumeIds },
+    source: 'premium_resume',
+    status: 'active',
+  })
+    .select('resumeId')
+    .lean<PurchasedResumeEntitlementProjection[]>()
+  return new Set(rows.map((row) => row.resumeId))
+}
 
 // ─── Resume CRUD ────────────────────────────────────────────────────────────
 
 export async function listResumes(userId: string) {
   await connectDB()
-  const user = await User.findById(userId).select('savedResumes targetRole currentTitle').lean()
+  const user = await User.findById(userId)
+    .select(
+      'savedResumes targetRole currentTitle premiumResumesUsed premiumResumeLimit freeBasicResumeId',
+    )
+    .lean<ResumeLibraryProjection>()
   if (!user) return null
 
-  const resumes = (user.savedResumes || []).map((r: Record<string, unknown>) => ({
-    id: r.id || (r._id as { toString(): string })?.toString(),
-    name: r.name || 'Untitled Resume',
-    template: r.template || 'professional',
-    targetRole: r.targetRole || '',
-    targetCompany: r.targetCompany || '',
-    atsScore: r.atsScore ?? null,
-    // Legacy rows lack this flag → false → the dashboard hides the ATS badge
-    // for scores that were never a real ATS check (old tailor match-scores).
-    atsScoreFromCheck: r.atsScoreFromCheck === true,
-    updatedAt: r.updatedAt || new Date().toISOString(),
-  }))
+  const savedIds = (user.savedResumes || [])
+    .map(savedResumeId)
+    .filter((id): id is string => id !== null)
+  const purchasedResumeIds = await activePurchasedResumeIds(userId, savedIds)
+  const freeBasicResumeId = basicResumeId(user, savedIds)
+  const premiumLimit = premiumResumeLimit(user.premiumResumeLimit)
+  const premiumUsed = premiumResumesUsed(user.premiumResumesUsed, premiumLimit)
+  const resumes = (user.savedResumes || []).map((r) => {
+    const id = savedResumeId(r)
+    return {
+      id,
+      name: r.name || 'Untitled Resume',
+      template: r.template || 'professional',
+      targetRole: r.targetRole || '',
+      targetCompany: r.targetCompany || '',
+      atsScore: r.atsScore ?? null,
+      // Legacy rows lack this flag → false → the dashboard hides the ATS badge
+      // for scores that were never a real ATS check (old tailor match-scores).
+      atsScoreFromCheck: r.atsScoreFromCheck === true,
+      protectedByPurchase: id !== null && purchasedResumeIds.has(id),
+      updatedAt: r.updatedAt || new Date().toISOString(),
+    }
+  })
 
   return {
     resumes,
     count: resumes.length,
-    limit: MAX_RESUMES,
+    // Prior-cycle and exact one-time-purchased identities remain in the
+    // library. The visible cap is therefore the current count plus only the
+    // Basic identity (when absent) and unused slots in the current paid cycle.
+    limit:
+      resumes.length +
+      (freeBasicResumeId ? 0 : BASIC_SAVED_RESUME_LIMIT) +
+      Math.max(0, premiumLimit - premiumUsed),
     hasProfile: !!(user.targetRole || user.currentTitle),
   }
 }
@@ -108,18 +221,33 @@ export async function saveResume(
     return { id }
   }
 
-  // Check resume limit before creating new
+  // Resolve the Basic identity and current paid-cycle counter. The final
+  // capacity predicate also runs inside updateOne so concurrent requests
+  // cannot both consume the last available slot.
   const user = await User.findOne({ _id: userId, accountState: { $ne: 'deleting' } })
-    .select('savedResumes')
-    .lean()
+    .select(
+      'savedResumes premiumResumesUsed premiumResumeLimit freeBasicResumeId',
+    )
+    .lean<ResumeLibraryProjection>()
   if (!user) {
     return {
       error: 'Your account is unavailable. Sign in again before saving.',
       code: 'ACCOUNT_UNAVAILABLE' as const,
     }
   }
-  const currentCount = (user?.savedResumes || []).length
-  if (currentCount >= MAX_RESUMES) {
+  const savedIds = (user.savedResumes || [])
+    .map(savedResumeId)
+    .filter((resumeId): resumeId is string => resumeId !== null)
+  const currentBasicResumeId = basicResumeId(user, savedIds)
+  const currentPremiumLimit = premiumResumeLimit(user.premiumResumeLimit)
+  const currentPremiumUsed = premiumResumesUsed(
+    user.premiumResumesUsed,
+    currentPremiumLimit,
+  )
+  if (
+    currentBasicResumeId &&
+    currentPremiumUsed >= currentPremiumLimit
+  ) {
     return {
       error: 'Resume limit reached. Delete an existing resume to create a new one.',
       code: 'RESUME_LIMIT' as const,
@@ -152,10 +280,41 @@ export async function saveResume(
   }
 
   const created = await User.updateOne(
-    { _id: userId, accountState: { $ne: 'deleting' } },
-    { $push: { savedResumes: resumeDoc } }
+    currentBasicResumeId
+      ? {
+          _id: userId,
+          accountState: { $ne: 'deleting' },
+          'savedResumes.id': currentBasicResumeId,
+          $expr: atomicPremiumCycleSlotAvailable(),
+        }
+      : {
+          _id: userId,
+          accountState: { $ne: 'deleting' },
+          $expr: {
+            $eq: [{ $size: { $ifNull: ['$savedResumes', []] } }, 0],
+          },
+        },
+    currentBasicResumeId
+      ? {
+          $push: { savedResumes: resumeDoc },
+          $inc: { premiumResumesUsed: 1 },
+        }
+      : {
+          $push: { savedResumes: resumeDoc },
+          $set: { freeBasicResumeId: newId },
+        },
   )
   if (created.matchedCount === 0) {
+    const activeUser = await User.findOne({
+      _id: userId,
+      accountState: { $ne: 'deleting' },
+    }).select('_id').lean()
+    if (activeUser) {
+      return {
+        error: 'Resume limit reached. Delete an existing resume to create a new one.',
+        code: 'RESUME_LIMIT' as const,
+      }
+    }
     return {
       error: 'Your account is unavailable. Sign in again before saving.',
       code: 'ACCOUNT_UNAVAILABLE' as const,
@@ -165,12 +324,51 @@ export async function saveResume(
 }
 
 export async function deleteResume(userId: string, resumeId: string) {
-  await connectDB()
-  await User.updateOne(
-    { _id: userId },
-    { $pull: { savedResumes: { id: resumeId } } }
-  )
-  return { success: true }
+  try {
+    const result = await savedResumeRepository.remove(userId, resumeId, {
+      beforeMutation: async (session, context) => {
+        const purchased = await ResumeEntitlement.findOne({
+          userId: context.userId,
+          resumeId: context.resumeId,
+          source: 'premium_resume',
+          status: 'active',
+        })
+          .session(session)
+          .select('_id')
+          .lean<{ _id: unknown }>()
+        if (purchased) throw new ActivePremiumResumePurchaseError()
+      },
+    })
+    if (result.outcome === 'deleted') return { success: true as const }
+    if (result.outcome === 'not_found') {
+      return {
+        error: 'This resume no longer exists.',
+        code: 'NOT_FOUND' as const,
+      }
+    }
+    if (result.outcome === 'user_not_found') {
+      return {
+        error: 'Your account is unavailable. Sign in again before deleting.',
+        code: 'ACCOUNT_UNAVAILABLE' as const,
+      }
+    }
+    throw new Error(`Unexpected saved resume deletion outcome: ${result.outcome}`)
+  } catch (error) {
+    if (error instanceof ActivePremiumResumePurchaseError) {
+      return {
+        error:
+          'This resume has an active premium purchase and cannot be deleted.',
+        code: 'PREMIUM_RESUME_PURCHASE_ACTIVE' as const,
+      }
+    }
+    if (error instanceof PersonalDataWriteBlockedError) {
+      return {
+        error: 'Your account is unavailable. Sign in again before deleting.',
+        code: 'ACCOUNT_UNAVAILABLE' as const,
+      }
+    }
+    throw error
+  }
 }
 
 // ─── User Profile Context ───────────────────────────────────────────────────

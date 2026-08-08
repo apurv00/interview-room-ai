@@ -12,20 +12,22 @@ export const dynamic = 'force-dynamic'
 // this file cheap means the route is always reachable.
 
 /**
- * HEAD — lightweight MongoDB readiness probe (used by lobby warm-up and
- * external monitors). Returns 200 only when Mongoose reports an established
- * connection; 503 otherwise. This replaces the old dummy implementation
- * that returned 200 unconditionally and gave infrastructure monitoring no
- * signal about real DB health.
+ * HEAD — dependency-aware readiness probe used by Docker/Coolify, lobby
+ * warm-up, and external monitors. MongoDB and Redis are both required runtime
+ * dependencies, so a failure in either must keep a new container out of
+ * service.
  */
 export async function HEAD() {
   try {
     const { connectDB } = await import('@shared/db/connection')
     const mongoose = (await import('mongoose')).default
     await connectDB()
-    return new NextResponse(null, {
-      status: mongoose.connection.readyState === 1 ? 200 : 503,
-    })
+    if (mongoose.connection.readyState !== 1) {
+      return new NextResponse(null, { status: 503 })
+    }
+    const { redis } = await import('@shared/redis')
+    await redis.ping()
+    return new NextResponse(null, { status: 200 })
   } catch {
     return new NextResponse(null, { status: 503 })
   }

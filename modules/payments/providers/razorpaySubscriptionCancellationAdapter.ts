@@ -208,11 +208,24 @@ export function createRazorpaySubscriptionCancellationAdapter(input: {
           'Razorpay SDK does not expose subscription cancellation',
         )
       }
-      const acknowledged = normalizeSubscription(
-        providerMode,
-        exactId,
-        await cancel(exactId, false),
-      )
+      let acknowledged: RazorpaySubscriptionDto
+      try {
+        acknowledged = normalizeSubscription(
+          providerMode,
+          exactId,
+          await cancel(exactId, false),
+        )
+      } catch (error) {
+        const fetched = normalizeSubscription(
+          providerMode,
+          exactId,
+          await input.sdk.subscriptions.fetch(exactId),
+        )
+        if (isTerminalCancellationEvidence(fetched)) {
+          return fetched
+        }
+        throw error
+      }
       if (isTerminalCancellationEvidence(acknowledged)) {
         return acknowledged
       }

@@ -21,7 +21,7 @@ export function isNormalizedPaise(
 }
 
 export const FINANCIAL_LEDGER_OPERATION_MUTATIONS_READY = false as const
-export const FINANCIAL_LEDGER_CREDIT_NOTE_RECOVERY_READY = false as const
+export const FINANCIAL_LEDGER_CREDIT_NOTE_RECOVERY_READY = true as const
 
 export const FINANCIAL_OPERATION_KINDS = [
   'generate_invoice',

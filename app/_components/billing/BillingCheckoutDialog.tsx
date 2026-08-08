@@ -13,12 +13,11 @@ import Badge from '@shared/ui/Badge'
 import {
   billingResponseSchemas,
   BillingClientError,
+  checkoutChangeRequiresConfirmation,
   formatInr,
   parseBillingResponse,
-  quoteChangedAtCheckout,
   recordCheckoutObservation,
   type BillingIntentStatus,
-  type CustomerBillingProfile,
   type CustomerBillingQuote,
   type CustomerBillingSummary,
   type PaidBillingPlanKey,
@@ -33,6 +32,7 @@ import {
   saveBillingCheckoutRecovery,
   type BillingCheckoutRecovery,
 } from './billingIntentStorage'
+import { billingFetch } from './billingRequestTimeout'
 import {
   loadRazorpayCheckout,
   type RazorpaySuccessPayload,
@@ -41,45 +41,6 @@ import {
 const VERIFY_RETRY_FLOOR_MS = 7_000
 const RECOVERY_POLL_WINDOW_MS = 60_000
 
-const INDIA_BILLING_STATES = [
-  ['01', 'Jammu and Kashmir'],
-  ['02', 'Himachal Pradesh'],
-  ['03', 'Punjab'],
-  ['04', 'Chandigarh'],
-  ['05', 'Uttarakhand'],
-  ['06', 'Haryana'],
-  ['07', 'Delhi'],
-  ['08', 'Rajasthan'],
-  ['09', 'Uttar Pradesh'],
-  ['10', 'Bihar'],
-  ['11', 'Sikkim'],
-  ['12', 'Arunachal Pradesh'],
-  ['13', 'Nagaland'],
-  ['14', 'Manipur'],
-  ['15', 'Mizoram'],
-  ['16', 'Tripura'],
-  ['17', 'Meghalaya'],
-  ['18', 'Assam'],
-  ['19', 'West Bengal'],
-  ['20', 'Jharkhand'],
-  ['21', 'Odisha'],
-  ['22', 'Chhattisgarh'],
-  ['23', 'Madhya Pradesh'],
-  ['24', 'Gujarat'],
-  ['26', 'Dadra and Nagar Haveli and Daman and Diu'],
-  ['27', 'Maharashtra'],
-  ['29', 'Karnataka'],
-  ['30', 'Goa'],
-  ['31', 'Lakshadweep'],
-  ['32', 'Kerala'],
-  ['33', 'Tamil Nadu'],
-  ['34', 'Puducherry'],
-  ['35', 'Andaman and Nicobar Islands'],
-  ['36', 'Telangana'],
-  ['37', 'Andhra Pradesh'],
-  ['38', 'Ladakh'],
-] as const
-
 type CheckoutStage =
   | 'loading'
   | 'review'
@@ -87,15 +48,29 @@ type CheckoutStage =
   | 'final_review'
   | 'opening'
   | 'verifying'
+  | 'activating'
   | 'pending'
   | 'completed'
   | 'manual_review'
   | 'failed'
 
+type ManualCouponValidation = {
+  code: string
+  result: 'applied' | 'not_better_than_automatic' | 'recheck_at_checkout'
+}
+
 interface BillingCheckoutDialogProps {
   catalog: PublicBillingCatalog
   planKey: PaidBillingPlanKey
+  accountId: string
+  customerEmail?: string | null
+  initialQuote: CustomerBillingQuote | undefined
+  initialSummary: CustomerBillingSummary | undefined
+  initialManualCouponCode?: string
+  autoStart?: boolean
+  refreshSession: () => Promise<unknown>
   onClose: () => void
+  onCompleted: () => Promise<void>
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -152,16 +127,19 @@ function assertNewCheckoutAllowed(
         : 'Purchases are temporarily unavailable.',
     )
   }
-  if (summary.subscription.state !== 'none') {
+  if (
+    summary.subscription.state !== 'none' &&
+    summary.subscription.state !== 'activation_pending'
+  ) {
     throw new BillingClientError(
       409,
-      'An existing subscription requires attention in Billing settings.',
+      'An existing subscription is already linked to this account.',
     )
   }
   if (summary.entitlement.planKey !== 'free') {
     throw new BillingClientError(
       409,
-      'Your current paid entitlement must be managed in Billing settings.',
+      'Your current paid entitlement is managed on the pricing page.',
     )
   }
 }
@@ -169,41 +147,101 @@ function assertNewCheckoutAllowed(
 export function BillingCheckoutDialog({
   catalog,
   planKey,
+  accountId,
+  customerEmail,
+  initialQuote,
+  initialSummary,
+  initialManualCouponCode,
+  autoStart = false,
+  refreshSession,
   onClose,
+  onCompleted,
 }: BillingCheckoutDialogProps) {
   const plan = catalog.plans[planKey]
-  const [stage, setStage] = useState<CheckoutStage>('loading')
-  const [quote, setQuote] = useState<CustomerBillingQuote | null>(null)
+  const [initialPlanQuote] = useState<CustomerBillingQuote | null>(
+    () => initialQuote?.planKey === planKey ? initialQuote : null,
+  )
+  const [initialCheckoutSummary] = useState<CustomerBillingSummary | null>(
+    () => initialSummary ?? null,
+  )
+  const [initialRecovery] = useState(() => {
+    const recovery = readBillingCheckoutRecovery(accountId)
+    const requestedCode = initialManualCouponCode?.trim().toUpperCase()
+    const recoveredCode = recovery?.manualCouponCode?.trim().toUpperCase()
+    if (
+      recovery?.planKey === planKey &&
+      requestedCode &&
+      requestedCode !== recoveredCode
+    ) {
+      return null
+    }
+    return recovery
+  })
+  const [stage, setStage] = useState<CheckoutStage>(
+    initialPlanQuote && initialCheckoutSummary && !initialRecovery
+      ? 'review'
+      : 'loading',
+  )
+  const [quote, setQuote] = useState<CustomerBillingQuote | null>(
+    initialPlanQuote,
+  )
   const [checkout, setCheckout] = useState<SubscriptionCheckout | null>(null)
-  const [profile, setProfile] = useState<CustomerBillingProfile | null>(null)
-  const [summary, setSummary] = useState<CustomerBillingSummary | null>(null)
-  const [stateCode, setStateCode] = useState('')
-  const [manualCode, setManualCode] = useState('')
-  const [couponOpen, setCouponOpen] = useState(false)
+  const [summary, setSummary] = useState<CustomerBillingSummary | null>(
+    initialCheckoutSummary,
+  )
+  const [manualCode, setManualCode] = useState(
+    () => initialManualCouponCode?.trim().toUpperCase() ?? '',
+  )
+  const [couponOpen, setCouponOpen] = useState(
+    () => Boolean(initialManualCouponCode),
+  )
   const [couponMessage, setCouponMessage] = useState<string | null>(null)
   const [couponApplying, setCouponApplying] = useState(false)
+  const [manualCouponValidation, setManualCouponValidation] =
+    useState<ManualCouponValidation | null>(() => {
+      const code = initialManualCouponCode?.trim().toUpperCase()
+      if (!code) return null
+      const applied =
+        initialPlanQuote?.manualCodeResult === 'applied' &&
+        initialPlanQuote.coupon?.mode === 'code' &&
+        initialPlanQuote.coupon.code?.trim().toUpperCase() === code
+      return {
+        code,
+        result: applied ? 'applied' : 'recheck_at_checkout',
+      }
+    })
   const [error, setError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
-  const [priceChanged, setPriceChanged] = useState(false)
-  const [priceChangeAccepted, setPriceChangeAccepted] = useState(false)
   const [idempotencyKey, setIdempotencyKey] = useState(
     createBillingIdempotencyKey,
   )
-  const quoteRef = useRef<CustomerBillingQuote | null>(null)
+  const normalizedManualCode = manualCode.trim().toUpperCase()
+  const manualCodeNeedsValidation =
+    normalizedManualCode.length > 0 &&
+    manualCouponValidation?.code !== normalizedManualCode
+  const checkoutManualCouponCode =
+    manualCouponValidation?.code === normalizedManualCode &&
+    manualCouponValidation.result !== 'not_better_than_automatic'
+      ? normalizedManualCode
+      : undefined
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
   const recoveryAbortRef = useRef<AbortController | null>(null)
-
-  useEffect(() => {
-    quoteRef.current = quote
-  }, [quote])
+  const mountedRef = useRef(true)
+  const autoStartAttemptedRef = useRef(false)
+  const prepareCheckoutRef = useRef<() => Promise<void>>(async () => {})
+  const openRazorpayRef = useRef<(
+    preparedCheckout?: SubscriptionCheckout,
+  ) => Promise<void>>(async () => {})
+  const quoteRef = useRef<CustomerBillingQuote | null>(initialPlanQuote)
+  quoteRef.current = quote
 
   const requestQuote = useCallback(async (
     code?: string,
     signal?: AbortSignal,
   ): Promise<CustomerBillingQuote> => {
-    const response = await fetch('/api/billing/quote', {
+    const response = await billingFetch('/api/billing/quote', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -230,24 +268,10 @@ export function BillingCheckoutDialog({
     return nextQuote
   }, [planKey])
 
-  const loadProfile = useCallback(async (
-    signal?: AbortSignal,
-  ): Promise<CustomerBillingProfile> => {
-    const response = await fetch('/api/billing/profile', {
-      headers: { Accept: 'application/json' },
-      signal,
-    })
-    return parseBillingResponse(
-      response,
-      billingResponseSchemas.profile,
-      'Your billing state could not be loaded.',
-    )
-  }, [])
-
   const loadSummary = useCallback(async (
     signal?: AbortSignal,
   ): Promise<CustomerBillingSummary> => {
-    const response = await fetch('/api/billing/me', {
+    const response = await billingFetch('/api/billing/me', {
       headers: { Accept: 'application/json' },
       signal,
     })
@@ -269,7 +293,7 @@ export function BillingCheckoutDialog({
     intentId: string,
     signal: AbortSignal,
   ): Promise<BillingIntentStatus> => {
-    const response = await fetch(
+    const response = await billingFetch(
       `/api/billing/status/${encodeURIComponent(intentId)}`,
       {
         headers: { Accept: 'application/json' },
@@ -283,41 +307,56 @@ export function BillingCheckoutDialog({
     )
   }, [])
 
-  const applyTerminalStatus = useCallback((
+  const completeCheckout = useCallback(async (
+    message: string,
+  ): Promise<void> => {
+    clearBillingCheckoutRecovery(accountId)
+    clearBillingAuthIntent()
+    setStatusMessage(message)
+    setStage('completed')
+    const refreshes = Promise.allSettled([
+      refreshSession(),
+      onCompleted(),
+    ])
+    onClose()
+    await refreshes
+  }, [accountId, onClose, onCompleted, refreshSession])
+
+  const applyTerminalStatus = useCallback(async (
     status: BillingIntentStatus,
-  ): boolean => {
+  ): Promise<boolean> => {
     setStatusMessage(statusCopy(status.status))
-    if (!status.terminal) return false
+    if (!status.terminal) {
+      if (status.status === 'processing') setStage('activating')
+      return false
+    }
 
     if (status.status === 'completed') {
-      clearBillingCheckoutRecovery()
-      clearBillingAuthIntent()
-      setStage('completed')
+      await completeCheckout(statusCopy(status.status))
       return true
     }
     if (status.status === 'manual_review') {
-      clearBillingCheckoutRecovery()
+      clearBillingCheckoutRecovery(accountId)
       setStage('manual_review')
       return true
     }
-    clearBillingCheckoutRecovery()
+    clearBillingCheckoutRecovery(accountId)
     setStage('failed')
     return true
-  }, [])
+  }, [accountId, completeCheckout])
 
   const pollIntent = useCallback(async (
     intentId: string,
     controller: AbortController,
   ): Promise<void> => {
     const deadline = Date.now() + RECOVERY_POLL_WINDOW_MS
-    setStage('pending')
     setError(null)
 
     while (!controller.signal.aborted && Date.now() < deadline) {
       try {
         const status = await readIntentStatus(intentId, controller.signal)
         setStatusMessage(statusCopy(status.status))
-        if (applyTerminalStatus(status)) return
+        if (await applyTerminalStatus(status)) return
         await delay(
           Math.max(1_000, Math.min(status.pollAfterMs ?? 2_000, 30_000)),
           controller.signal,
@@ -339,13 +378,15 @@ export function BillingCheckoutDialog({
           cause,
           'Payment status is temporarily unavailable.',
         ))
+        setStage('pending')
         return
       }
     }
 
     if (!controller.signal.aborted) {
+      setStage('pending')
       setStatusMessage(
-        'Your payment is still pending. Do not start another checkout; you can safely return here or open Billing settings later.',
+        'Your payment is still pending. Do not start another checkout; you can safely return here or reopen the pricing page later.',
       )
     }
   }, [applyTerminalStatus, readIntentStatus])
@@ -354,7 +395,7 @@ export function BillingCheckoutDialog({
     recovery: BillingCheckoutRecovery,
     signal: AbortSignal,
   ): Promise<void> => {
-    const response = await fetch('/api/billing/subscriptions/checkout', {
+    const response = await billingFetch('/api/billing/subscriptions/checkout', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -386,16 +427,22 @@ export function BillingCheckoutDialog({
     setIdempotencyKey(recovery.idempotencyKey)
     setManualCode(recovery.manualCouponCode ?? '')
     setCheckout(recovered)
-    setPriceChanged(Boolean(
-      quoteRef.current &&
-        quoteChangedAtCheckout(quoteRef.current, recovered),
-    ))
-    setPriceChangeAccepted(false)
+    const previewQuote = quoteRef.current
+    const requiresConfirmation = !previewQuote || checkoutChangeRequiresConfirmation(
+      previewQuote,
+      recovered,
+      recovery.manualCouponCode,
+    )
+    if (autoStart && !requiresConfirmation) {
+      setStatusMessage(null)
+      await openRazorpayRef.current(recovered)
+      return
+    }
     setStatusMessage(
       'Your existing secure checkout was recovered. Review the final amount before reopening Razorpay.',
     )
     setStage('final_review')
-  }, [planKey])
+  }, [autoStart, planKey])
 
   const resumeRecovery = useCallback(async (
     recovery: BillingCheckoutRecovery,
@@ -407,7 +454,7 @@ export function BillingCheckoutDialog({
         controller.signal,
       )
       setStatusMessage(statusCopy(status.status))
-      if (applyTerminalStatus(status)) return
+      if (await applyTerminalStatus(status)) return
       if (
         status.status === 'preparing' ||
         status.status === 'awaiting_payment'
@@ -419,7 +466,7 @@ export function BillingCheckoutDialog({
     } catch (cause) {
       if (controller.signal.aborted) return
       if (cause instanceof BillingClientError && cause.status === 404) {
-        clearBillingCheckoutRecovery()
+        clearBillingCheckoutRecovery(accountId)
         setError(
           'The saved checkout is no longer available for this account.',
         )
@@ -434,12 +481,14 @@ export function BillingCheckoutDialog({
     }
   }, [
     applyTerminalStatus,
+    accountId,
     pollIntent,
     readIntentStatus,
     replayRecoveredCheckout,
   ])
 
   useEffect(() => {
+    mountedRef.current = true
     restoreFocusRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null
@@ -447,6 +496,7 @@ export function BillingCheckoutDialog({
     document.body.style.overflow = 'hidden'
     window.setTimeout(() => closeRef.current?.focus(), 0)
     return () => {
+      mountedRef.current = false
       document.body.style.overflow = previousOverflow
       recoveryAbortRef.current?.abort()
       restoreFocusRef.current?.focus()
@@ -454,43 +504,43 @@ export function BillingCheckoutDialog({
   }, [])
 
   useEffect(() => {
+    if (stage !== 'review' && stage !== 'final_review') return
+    void loadRazorpayCheckout().catch(() => undefined)
+  }, [stage])
+
+  useEffect(() => {
     const controller = new AbortController()
     recoveryAbortRef.current = controller
-    const recovery = readBillingCheckoutRecovery()
+    const recovery = initialRecovery
 
     if (recovery?.planKey === planKey) {
       setIdempotencyKey(recovery.idempotencyKey)
       setManualCode(recovery.manualCouponCode ?? '')
-      void requestQuote(
-        recovery.manualCouponCode,
-        controller.signal,
-      )
-        .then((nextQuote) => {
-          if (!controller.signal.aborted) setQuote(nextQuote)
-        })
-        .catch(() => {
-          // Recovery status and the immutable checkout quote remain usable
-          // even when a fresh informational quote is unavailable.
-        })
+      if (!initialPlanQuote) {
+        void requestQuote(
+          recovery.manualCouponCode,
+          controller.signal,
+        )
+          .then((nextQuote) => {
+            if (!controller.signal.aborted) setQuote(nextQuote)
+          })
+          .catch(() => {
+            // Recovery status and the immutable checkout quote remain usable
+            // even when a fresh informational quote is unavailable.
+          })
+      }
       void resumeRecovery(recovery, controller)
       return () => controller.abort()
     }
 
     void Promise.all([
-      requestQuote(undefined, controller.signal),
-      loadProfile(controller.signal),
-      loadSummary(controller.signal),
+      initialPlanQuote ?? requestQuote(undefined, controller.signal),
+      initialCheckoutSummary ?? loadSummary(controller.signal),
     ])
-      .then(([nextQuote, nextProfile, nextSummary]) => {
+      .then(([nextQuote, nextSummary]) => {
         if (controller.signal.aborted) return
         setQuote(nextQuote)
-        setProfile(nextProfile)
         setSummary(nextSummary)
-        setStateCode(
-          nextProfile.configured
-            ? nextProfile.placeOfSupply.stateCode
-            : '',
-        )
         assertNewCheckoutAllowed(nextSummary)
         setStage('review')
       })
@@ -505,7 +555,10 @@ export function BillingCheckoutDialog({
 
     return () => controller.abort()
   }, [
-    loadProfile,
+    accountId,
+    initialPlanQuote,
+    initialRecovery,
+    initialCheckoutSummary,
     loadSummary,
     planKey,
     requestQuote,
@@ -545,103 +598,84 @@ export function BillingCheckoutDialog({
     }
     setCouponApplying(true)
     setCouponMessage(null)
+    setManualCouponValidation(null)
     setError(null)
     try {
       const nextQuote = await requestQuote(code)
       setQuote(nextQuote)
       setCheckout(null)
-      setPriceChanged(false)
-      setPriceChangeAccepted(false)
       setIdempotencyKey(createBillingIdempotencyKey())
       if (
         nextQuote.manualCodeResult === 'applied' &&
-        nextQuote.coupon
+        nextQuote.coupon?.mode === 'code' &&
+        nextQuote.coupon.code?.trim().toUpperCase() === code
       ) {
+        setManualCouponValidation({ code, result: 'applied' })
         setCouponMessage(`${nextQuote.coupon.displayText} applied.`)
+      } else if (
+        nextQuote.manualCodeResult === 'not_better_than_automatic'
+      ) {
+        setManualCouponValidation({
+          code,
+          result: 'not_better_than_automatic',
+        })
+        setCouponMessage(
+          'Your automatic coupon is already better, so we kept it.',
+        )
+      } else if (
+        nextQuote.manualCodeResult === 'system_unavailable' ||
+        (
+          nextQuote.manualCodeResult === 'ineligible' &&
+          (
+            (initialRecovery && initialRecovery.planKey !== planKey) ||
+            (
+              summary?.subscription.state === 'activation_pending' &&
+              summary.subscription.planKey !== planKey
+            )
+          )
+        )
+      ) {
+        setManualCouponValidation({
+          code,
+          result: 'recheck_at_checkout',
+        })
+        setCouponMessage(
+          nextQuote.manualCodeResult === 'ineligible'
+            ? 'Your previous checkout may be holding this coupon. We will recheck it when you pay.'
+            : 'Coupon validation is temporarily unavailable. We will recheck it when you pay.',
+        )
       } else {
         setCouponMessage(
-          nextQuote.manualCodeResult === 'not_better_than_automatic'
-            ? 'Your automatic offer is already better, so we kept it.'
-            : nextQuote.manualCodeResult === 'system_unavailable'
-              ? 'Coupon validation is temporarily unavailable.'
-              : 'This code is not available for this checkout.',
+          'This code is not available for this checkout.',
         )
       }
-    } catch (cause) {
-      setCouponMessage(userFacingError(
-        cause,
-        'Coupon validation is temporarily unavailable.',
-      ))
+    } catch {
+      setManualCouponValidation({
+        code,
+        result: 'recheck_at_checkout',
+      })
+      setCouponMessage(
+        'Coupon validation is temporarily unavailable. We will recheck it when you pay.',
+      )
     } finally {
       setCouponApplying(false)
     }
   }
 
-  async function persistProfileIfNeeded(): Promise<CustomerBillingProfile> {
-    if (!profile) {
-      throw new BillingClientError(
-        409,
-        'Your billing state has not loaded yet.',
-      )
-    }
-    if (!stateCode) {
-      throw new BillingClientError(
-        400,
-        'Select your billing state or Union Territory.',
-      )
-    }
-    if (
-      profile.configured &&
-      profile.placeOfSupply.stateCode === stateCode
-    ) {
-      return profile
-    }
-
-    const response = await fetch('/api/billing/profile', {
-      method: 'PUT',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        expectedVersion: profile.configured ? profile.version : 0,
-        mutationId: createBillingIdempotencyKey().replace(
-          'billing-subscription',
-          'billing-profile',
-        ),
-        placeOfSupply: {
-          stateCode,
-          countryCode: 'IN',
-        },
-      }),
-    })
-    const updated = await parseBillingResponse(
-      response,
-      billingResponseSchemas.profile,
-      'Your billing state could not be saved.',
-    )
-    if (!updated.configured) {
-      throw new BillingClientError(
-        502,
-        'Your billing state was not saved. Please try again.',
-      )
-    }
-    setProfile(updated)
-    return updated
-  }
-
   async function prepareCheckout() {
-    if (!quote || !summary || stage === 'preparing') return
+    if (
+      !quote ||
+      !summary ||
+      couponApplying ||
+      manualCodeNeedsValidation ||
+      stage === 'preparing'
+    ) return
     setStage('preparing')
     setError(null)
-    setStatusMessage('Confirming your final price and reserving any offer…')
+    setStatusMessage('Preparing your secure payment…')
 
     try {
-      await persistProfileIfNeeded()
-      const latestSummary = await loadSummary()
-      assertNewCheckoutAllowed(latestSummary)
-      setSummary(latestSummary)
-      const response = await fetch('/api/billing/subscriptions/checkout', {
+      const response = await billingFetch('/api/billing/subscriptions/checkout', {
         method: 'POST',
         headers: {
           Accept: 'application/json',
@@ -650,8 +684,8 @@ export function BillingCheckoutDialog({
         },
         body: JSON.stringify({
           planKey,
-          ...(manualCode.trim()
-            ? { manualCouponCode: manualCode.trim() }
+          ...(checkoutManualCouponCode
+            ? { manualCouponCode: checkoutManualCouponCode }
             : {}),
         }),
       })
@@ -666,26 +700,35 @@ export function BillingCheckoutDialog({
           'Billing returned a different plan. Please try again.',
         )
       }
-      const changed = quoteChangedAtCheckout(quote, prepared)
-      setCheckout(prepared)
-      setPriceChanged(changed)
-      setPriceChangeAccepted(false)
+      const requiresConfirmation = checkoutChangeRequiresConfirmation(
+        quote,
+        prepared,
+        checkoutManualCouponCode,
+      )
       saveBillingCheckoutRecovery({
+        accountId,
         intentId: prepared.intentId,
         planKey,
         catalogVersion: prepared.quote.catalogVersion,
         idempotencyKey,
-        ...(manualCode.trim()
-          ? { manualCouponCode: manualCode.trim() }
+        ...(checkoutManualCouponCode
+          ? { manualCouponCode: checkoutManualCouponCode }
           : {}),
       })
+      if (!mountedRef.current) return
+      setCheckout(prepared)
       setStatusMessage(
-        changed
-          ? 'The final checkout price changed. Review and explicitly accept the updated amount.'
-          : 'Your final checkout is ready. Review it before opening Razorpay.',
+        requiresConfirmation
+          ? 'Your price or coupon terms changed. Review the updated amount before paying.'
+          : null,
       )
-      setStage('final_review')
+      if (requiresConfirmation) {
+        setStage('final_review')
+        return
+      }
+      await openRazorpay(prepared)
     } catch (cause) {
+      if (!mountedRef.current) return
       setError(userFacingError(
         cause,
         'Secure checkout could not be prepared.',
@@ -695,18 +738,42 @@ export function BillingCheckoutDialog({
     }
   }
 
+  prepareCheckoutRef.current = prepareCheckout
+
+  useEffect(() => {
+    if (
+      !autoStart ||
+      autoStartAttemptedRef.current ||
+      stage !== 'review' ||
+      !quote ||
+      !summary ||
+      couponApplying ||
+      manualCodeNeedsValidation
+    ) return
+    autoStartAttemptedRef.current = true
+    void prepareCheckoutRef.current()
+  }, [
+    autoStart,
+    couponApplying,
+    manualCodeNeedsValidation,
+    quote,
+    stage,
+    summary,
+  ])
+
   async function verifyPaymentOnce(
     payload: RazorpaySuccessPayload,
     signal: AbortSignal,
+    activeCheckout: SubscriptionCheckout,
   ) {
-    const response = await fetch('/api/billing/verify/subscription', {
+    const response = await billingFetch('/api/billing/verify/subscription', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        intentId: checkout!.intentId,
+        intentId: activeCheckout.intentId,
         razorpayPaymentId: payload.razorpay_payment_id,
         razorpaySignature: payload.razorpay_signature,
       }),
@@ -719,8 +786,10 @@ export function BillingCheckoutDialog({
     )
   }
 
-  async function verifyPayment(payload: RazorpaySuccessPayload) {
-    if (!checkout) return
+  async function verifyPayment(
+    payload: RazorpaySuccessPayload,
+    activeCheckout: SubscriptionCheckout,
+  ) {
     recoveryAbortRef.current?.abort()
     const controller = new AbortController()
     recoveryAbortRef.current = controller
@@ -734,16 +803,14 @@ export function BillingCheckoutDialog({
         const verification = await verifyPaymentOnce(
           payload,
           controller.signal,
+          activeCheckout,
         )
         if (verification.status === 'completed') {
-          clearBillingCheckoutRecovery()
-          clearBillingAuthIntent()
-          setStatusMessage('Payment verified. Your plan is active.')
-          setStage('completed')
+          await completeCheckout('Payment verified. Your plan is active.')
           return
         }
         if (verification.status === 'manual_review') {
-          clearBillingCheckoutRecovery()
+          clearBillingCheckoutRecovery(accountId)
           setStatusMessage(
             'Payment was captured and needs manual review. Do not pay again.',
           )
@@ -754,7 +821,7 @@ export function BillingCheckoutDialog({
           setStatusMessage(
             'Payment was captured. Your plan is being activated.',
           )
-          await pollIntent(checkout.intentId, controller)
+          await pollIntent(activeCheckout.intentId, controller)
           return
         }
         setStatusMessage(
@@ -788,7 +855,7 @@ export function BillingCheckoutDialog({
           'Payment verification is temporarily unavailable. Do not pay again.',
         ))
         setStage('pending')
-        await pollIntent(checkout.intentId, controller)
+        await pollIntent(activeCheckout.intentId, controller)
         return
       }
     }
@@ -801,32 +868,35 @@ export function BillingCheckoutDialog({
     }
   }
 
-  async function openRazorpay() {
-    if (!checkout || stage === 'opening') return
-    if (priceChanged && !priceChangeAccepted) {
-      setError('Accept the updated final price before continuing.')
-      return
-    }
+  async function openRazorpay(preparedCheckout?: SubscriptionCheckout) {
+    const activeCheckout = preparedCheckout ?? checkout
+    if (!activeCheckout || !mountedRef.current || stage === 'opening') return
+    recoveryAbortRef.current?.abort()
+    recoveryAbortRef.current = null
     setStage('opening')
     setError(null)
     setStatusMessage('Opening Razorpay secure checkout…')
 
     try {
       const Razorpay = await loadRazorpayCheckout()
+      if (!mountedRef.current) return
       const instance = new Razorpay({
-        key: checkout.checkout.keyId,
-        subscription_id: checkout.checkout.subscriptionId,
+        key: activeCheckout.checkout.keyId,
+        subscription_id: activeCheckout.checkout.subscriptionId,
         name: 'interviewprep.guru',
         description:
-          `${checkout.quote.entitlementSummary.displayName} monthly plan`,
-        handler: verifyPayment,
+          `${activeCheckout.quote.entitlementSummary.displayName} monthly plan`,
+        ...(customerEmail
+          ? { prefill: { email: customerEmail } }
+          : {}),
+        handler: (payload) => verifyPayment(payload, activeCheckout),
         modal: {
           escape: true,
           confirm_close: true,
           ondismiss: () => {
-            if (checkout.analyticsObservation) {
+            if (activeCheckout.analyticsObservation) {
               void recordCheckoutObservation({
-                authority: checkout.analyticsObservation,
+                authority: activeCheckout.analyticsObservation,
                 eventName: 'checkout_dismissed',
               })
             }
@@ -836,7 +906,7 @@ export function BillingCheckoutDialog({
             setStatusMessage(
               'Checkout closed. Checking whether a payment completed in the background…',
             )
-            void pollIntent(checkout.intentId, controller)
+            void pollIntent(activeCheckout.intentId, controller)
           },
         },
         theme: { color: '#2563eb' },
@@ -849,12 +919,12 @@ export function BillingCheckoutDialog({
         setStatusMessage(
           'Razorpay reported a payment problem. Checking the server before another attempt…',
         )
-        void pollIntent(checkout.intentId, controller)
+        void pollIntent(activeCheckout.intentId, controller)
       })
       instance.open()
-      if (checkout.analyticsObservation) {
+      if (activeCheckout.analyticsObservation) {
         void recordCheckoutObservation({
-          authority: checkout.analyticsObservation,
+          authority: activeCheckout.analyticsObservation,
           eventName: 'checkout_opened',
         })
       }
@@ -863,6 +933,7 @@ export function BillingCheckoutDialog({
         'Complete the Razorpay mandate. You can return safely after a UPI app switch.',
       )
     } catch {
+      if (!mountedRef.current) return
       setError(
         'Razorpay Checkout could not be opened. Your saved checkout is safe; try reopening it without creating another payment.',
       )
@@ -871,9 +942,17 @@ export function BillingCheckoutDialog({
     }
   }
 
+  openRazorpayRef.current = openRazorpay
+
   const displayedQuote = checkout?.quote ?? quote
   const finalEntitlement = checkout?.quote.entitlementSummary
   const busy = ['preparing', 'opening', 'verifying'].includes(stage)
+  const hideDirectPreparation =
+    autoStart &&
+    !error &&
+    ['loading', 'review', 'preparing', 'opening'].includes(stage)
+
+  if (hideDirectPreparation) return null
 
   return (
     <div
@@ -884,6 +963,7 @@ export function BillingCheckoutDialog({
         type="button"
         aria-label="Close checkout"
         onClick={() => !busy && onClose()}
+        disabled={busy}
         className="absolute inset-0 bg-black/55 backdrop-blur-sm"
       />
       <div
@@ -922,8 +1002,7 @@ export function BillingCheckoutDialog({
             id="billing-checkout-description"
             className="mt-1 text-sm text-[#536471]"
           >
-            Review the server-confirmed price and monthly renewal before
-            authorizing a Razorpay mandate.
+            Review your price and monthly renewal before paying.
           </p>
         </div>
 
@@ -946,11 +1025,11 @@ export function BillingCheckoutDialog({
                   </span>
                 </div>
                 <div className="mt-2 flex items-center justify-between text-sm">
-                  <span className="text-[#536471]">Offer</span>
+                  <span className="text-[#536471]">Coupon discount</span>
                   <span className="font-medium text-emerald-700">
                     {displayedQuote.discountPaise > 0
                       ? `−${formatInr(displayedQuote.discountPaise)}`
-                      : 'No discount'}
+                      : 'Not applied'}
                   </span>
                 </div>
                 <div className="mt-3 flex items-end justify-between border-t border-[#e1e8ed] pt-3">
@@ -963,8 +1042,6 @@ export function BillingCheckoutDialog({
                     </p>
                   </div>
                   <p className="text-right text-xs leading-5 text-[#536471]">
-                    GST included
-                    <br />
                     {displayedQuote.discountedBillingCycles
                       ? `${displayedQuote.discountedBillingCycles} discounted billing ${displayedQuote.discountedBillingCycles === 1 ? 'cycle' : 'cycles'}`
                       : 'Standard monthly price'}
@@ -1011,85 +1088,18 @@ export function BillingCheckoutDialog({
               </section>
             )}
 
-            {priceChanged && checkout && (
-              <section
-                className="rounded-xl border border-amber-300 bg-amber-50 p-4"
-                role="alert"
-              >
-                <h3 className="text-sm font-semibold text-amber-900">
-                  Final price changed
-                </h3>
-                <p className="mt-1 text-xs leading-5 text-amber-800">
-                  Catalog or offer availability changed while checkout was
-                  prepared. Razorpay will use only the updated amount shown
-                  above.
-                </p>
-                <label className="mt-3 flex cursor-pointer items-start gap-2 text-sm text-amber-950">
-                  <input
-                    type="checkbox"
-                    checked={priceChangeAccepted}
-                    onChange={(event) =>
-                      setPriceChangeAccepted(event.target.checked)}
-                    className="mt-0.5 h-4 w-4"
-                  />
-                  I reviewed and accept the updated final price and renewal.
-                </label>
-              </section>
-            )}
-
-            {finalEntitlement && (
-              <section
-                className="rounded-xl border border-blue-200 bg-blue-50/60 p-4"
-                aria-labelledby="billing-checkout-entitlements"
-              >
-                <h3
-                  id="billing-checkout-entitlements"
-                  className="text-sm font-semibold text-[#0f1419]"
-                >
-                  Included with {finalEntitlement.displayName}
-                </h3>
-                <ul className="mt-2 space-y-1.5 text-sm leading-5 text-[#536471]">
-                  <li>
-                    <strong className="text-[#0f1419]">
-                      {finalEntitlement.interview.includedPerPeriod}
-                    </strong>{' '}
-                    interviews per billing cycle, up to{' '}
-                    <strong className="text-[#0f1419]">
-                      {finalEntitlement.interview.maxDurationMinutes} minutes
-                    </strong>{' '}
-                    each
-                  </li>
-                  <li>
-                    <strong className="text-[#0f1419]">
-                      {finalEntitlement.resume.basicSavedResumeLimit}
-                    </strong>{' '}
-                    Basic resume saved
-                  </li>
-                  <li>
-                    <strong className="text-[#0f1419]">
-                      {
-                        finalEntitlement.resume
-                          .premiumSavedResumeLimitPerPeriod
-                      }
-                    </strong>{' '}
-                    premium resume versions per billing cycle
-                  </li>
-                </ul>
-              </section>
-            )}
-
             {displayedQuote?.coupon && (
               <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-sm font-semibold text-emerald-900">
-                    {displayedQuote.coupon.displayText}
+                    Coupon: {displayedQuote.coupon.displayText}
                   </h3>
                   <Badge variant="success">
                     {displayedQuote.coupon.mode === 'code'
                       ? `Code ${displayedQuote.coupon.code}`
                       : displayedQuote.coupon.mode === 'targeted'
-                        ? 'Targeted offer'
-                        : 'Auto-applied'}
+                        ? 'Targeted coupon'
+                        : 'Automatic coupon'}
                   </Badge>
                 </div>
                 <p className="mt-1 text-xs leading-5 text-emerald-800">
@@ -1103,32 +1113,6 @@ export function BillingCheckoutDialog({
 
             {stage === 'review' && (
               <>
-                <section>
-                  <label
-                    htmlFor="billing-state-code"
-                    className="text-sm font-medium text-[#0f1419]"
-                  >
-                    Billing state / Union Territory
-                  </label>
-                  <p className="mt-1 text-xs text-[#71767b]">
-                    Required as the place of supply on your consumer GST
-                    invoice.
-                  </p>
-                  <select
-                    id="billing-state-code"
-                    value={stateCode}
-                    onChange={(event) => setStateCode(event.target.value)}
-                    className="mt-2 h-10 w-full rounded-lg border border-[#e1e8ed] bg-white px-3 text-sm text-[#0f1419] focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  >
-                    <option value="">Select state or Union Territory</option>
-                    {INDIA_BILLING_STATES.map(([code, name]) => (
-                      <option key={code} value={code}>
-                        {code} — {name}
-                      </option>
-                    ))}
-                  </select>
-                </section>
-
                 <section>
                   <button
                     type="button"
@@ -1150,6 +1134,7 @@ export function BillingCheckoutDialog({
                           onChange={(event) => {
                             setManualCode(event.target.value.toUpperCase())
                             setCouponMessage(null)
+                            setManualCouponValidation(null)
                           }}
                           disabled={couponApplying}
                         />
@@ -1170,6 +1155,11 @@ export function BillingCheckoutDialog({
                       role="status"
                     >
                       {couponMessage}
+                    </p>
+                  )}
+                  {manualCodeNeedsValidation && !couponApplying && (
+                    <p className="mt-2 text-xs text-[#536471]" role="status">
+                      Apply or clear the coupon code before paying.
                     </p>
                   )}
                 </section>
@@ -1194,80 +1184,94 @@ export function BillingCheckoutDialog({
               </p>
             )}
 
-            <p className="text-xs leading-5 text-[#71767b]">
-              By continuing, you agree to the{' '}
-              <Link href="/terms" className="text-blue-600 hover:underline">
-                Terms
-              </Link>{' '}
-              and acknowledge the cancellation and refund terms. Review our{' '}
-              <Link href="/privacy" className="text-blue-600 hover:underline">
-                Privacy Policy
-              </Link>
-              . No client callback alone activates a plan.
-            </p>
+            {[
+              'review',
+              'preparing',
+              'final_review',
+              'opening',
+            ].includes(stage) && (
+              <p className="text-xs leading-5 text-[#71767b]">
+                By continuing, you agree to the{' '}
+                <Link href="/terms" className="text-blue-600 hover:underline">
+                  Terms
+                </Link>{' '}and acknowledge the{' '}
+                <Link
+                  href="/cancellation-refunds"
+                  className="text-blue-600 hover:underline"
+                >
+                  cancellation and refund terms
+                </Link>
+                . Review our{' '}
+                <Link href="/privacy" className="text-blue-600 hover:underline">
+                  Privacy Policy
+                </Link>
+                . No client callback alone activates a plan.
+              </p>
+            )}
 
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              {stage === 'completed' ? (
-                <Link
-                  href="/settings?upgraded=true#billing"
-                  className="flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow-xs hover:bg-primary/90"
-                >
-                  View active plan
-                </Link>
-              ) : stage === 'manual_review' ? (
+              {stage === 'manual_review' ? (
                 <Button type="button" variant="secondary" onClick={onClose}>
                   Close
                 </Button>
-              ) : stage === 'review' ? (
+              ) : stage === 'review' || stage === 'preparing' ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={onClose}
+                    disabled={stage === 'preparing'}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={prepareCheckout}
+                    disabled={
+                      !quote ||
+                      !summary ||
+                      couponApplying ||
+                      manualCodeNeedsValidation ||
+                      stage === 'preparing'
+                    }
+                    aria-busy={stage === 'preparing'}
+                  >
+                    Pay {displayedQuote
+                      ? formatInr(displayedQuote.payablePaise)
+                      : ''} Now
+                  </Button>
+                </>
+              ) : stage === 'final_review' ? (
                 <>
                   <Button type="button" variant="secondary" onClick={onClose}>
                     Cancel
                   </Button>
                   <Button
                     type="button"
-                    onClick={prepareCheckout}
-                    disabled={!quote || !profile || !summary || !stateCode}
+                    onClick={() => void openRazorpay()}
                   >
-                    Review secure checkout
-                  </Button>
-                </>
-              ) : stage === 'final_review' ? (
-                <>
-                  <Button type="button" variant="secondary" onClick={onClose}>
-                    Finish later
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={openRazorpay}
-                    disabled={priceChanged && !priceChangeAccepted}
-                  >
-                    Pay {checkout ? formatInr(checkout.quote.payablePaise) : ''}
-                    {' '}with Razorpay
+                    Pay {checkout ? formatInr(checkout.quote.payablePaise) : ''} Now
                   </Button>
                 </>
               ) : stage === 'failed' ? (
+                <Button type="button" variant="secondary" onClick={onClose}>
+                  Close
+                </Button>
+              ) : stage === 'pending' ? (
                 <>
                   <Button type="button" variant="secondary" onClick={onClose}>
                     Close
                   </Button>
-                  {!readBillingCheckoutRecovery() && (
+                  {checkout ? (
                     <Button
                       type="button"
-                      onClick={() => {
-                        setError(null)
-                        setStatusMessage(null)
-                        setStage('review')
-                      }}
+                      onClick={() => void openRazorpay()}
                     >
-                      Return to review
+                      Reopen payment
                     </Button>
-                  )}
+                  ) : null}
                 </>
-              ) : (
-                <Button type="button" variant="secondary" onClick={onClose}>
-                  Finish later
-                </Button>
-              )}
+              ) : null}
             </div>
           </div>
         )}

@@ -29,6 +29,7 @@ const JOBS_ACCOUNT_STORAGE_PREFIXES = ['JOBS_', 'jobs:'] as const
 const ACCOUNT_BOUND_LOCAL_STORAGE_PREFIXES = [
   ...JOBS_ACCOUNT_STORAGE_PREFIXES,
   'wizardDraft:',
+  'ipg_billing_checkout_',
 ] as const
 const LEGACY_WIZARD_DRAFT_KEY = 'wizardDraft'
 const RESUME_DRAFT_PREFIX = 'resume:draft:'

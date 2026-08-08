@@ -14,6 +14,8 @@ const mockUserExistsSession = vi.fn()
 const mockUserFindByIdAndUpdate = vi.fn()
 const mockDepthFindOne = vi.fn()
 const mockParseJobDescription = vi.fn()
+const mockGetBillingConfig = vi.fn()
+const mockConsumePaidInterviewUnlock = vi.fn()
 const {
   mockWithActiveJobsAccountWrite,
   mockDbSession,
@@ -54,6 +56,30 @@ vi.mock('@shared/services/jobsAccountFence', () => ({
   withActiveJobsAccountWrite: mockWithActiveJobsAccountWrite,
 }))
 
+vi.mock('@payments/services/billingConfigService', () => ({
+  getBillingConfig: (...args: unknown[]) => mockGetBillingConfig(...args),
+}))
+
+vi.mock('@payments/services/paidInterviewLaunchService', () => {
+  class PaidInterviewLaunchError extends Error {
+    constructor(readonly code: string, message: string) {
+      super(message)
+      this.name = 'PaidInterviewLaunchError'
+    }
+  }
+  return {
+    PaidInterviewLaunchError,
+    paidInterviewLaunchProviderMode: (
+      config: { sellingMode: string; qaUserIds: string[] },
+      userId: string,
+    ) => config.sellingMode === 'qa' && config.qaUserIds.includes(userId)
+      ? 'test'
+      : 'live',
+    consumePaidInterviewUnlockForLaunchInSession:
+      (...args: unknown[]) => mockConsumePaidInterviewUnlock(...args),
+  }
+})
+
 vi.mock('@shared/auth/permissions', () => ({
   canEditSession: vi.fn().mockReturnValue(true),
   canViewSession: vi.fn().mockReturnValue(true),
@@ -84,6 +110,7 @@ vi.mock('@interview/services/core/sessionConfigCache', () => ({
 }))
 
 import { createSession, updateSession } from '@interview/services/core/interviewService'
+import { PaidInterviewLaunchError } from '@payments/services/paidInterviewLaunchService'
 
 const JOBS_JD = 'A server-resolved backend role requiring reliable Node.js services.'
 const JOBS_PARSED_JD = {
@@ -110,6 +137,14 @@ describe('createSession — Jobs JD provider authority', () => {
     )
     mockUserExistsSession.mockResolvedValue({ _id: '507f1f77bcf86cd799439010' })
     mockUserExists.mockReturnValue({ session: mockUserExistsSession })
+    mockGetBillingConfig.mockResolvedValue({
+      sellingMode: 'all',
+      qaUserIds: [],
+    })
+    mockConsumePaidInterviewUnlock.mockResolvedValue({
+      unlockId: '507f1f77bcf86cd799439099',
+      reused: false,
+    })
   })
 
   it('forwards the optional authority callback to structured JD parsing', async () => {
@@ -145,6 +180,267 @@ describe('createSession — Jobs JD provider authority', () => {
       undefined,
       beforeProviderCall
     )
+  })
+
+  it('enforces Basic and exact paid limits without calendar-resetting subscriptions', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'))
+    try {
+      mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+      mockUserFindOneAndUpdate.mockResolvedValue({
+        _id: '507f1f77bcf86cd799439010',
+      })
+      mockDepthFindOne.mockReturnValue({
+        lean: () => Promise.resolve(null),
+      })
+      mockSessionCreate.mockResolvedValue({
+        _id: { toString: () => 'session-quota-1' },
+      })
+
+      await createSession({
+        userId: '507f1f77bcf86cd799439010',
+        config: {
+          role: 'backend',
+          interviewType: 'behavioral',
+          experience: '3-6',
+          duration: 20,
+        },
+      })
+
+      const reset = mockUserUpdateOne.mock.calls[0]
+      expect(reset[0]).toEqual(expect.objectContaining({
+        entitlementSource: { $ne: 'subscription' },
+        $or: expect.arrayContaining([
+          { legacyMonthlyInterviewResetAt: { $exists: false } },
+        ]),
+      }))
+      expect(reset[1]).toEqual({
+        $set: expect.objectContaining({
+          monthlyInterviewsUsed: 0,
+          legacyMonthlyInterviewResetAt: new Date(
+            '2026-08-05T12:00:00.000Z',
+          ),
+        }),
+      })
+      expect(reset[1].$set).not.toHaveProperty('usageResetAt')
+
+      expect(mockUserUpdateOne.mock.calls[1]).toEqual([
+        expect.objectContaining({
+          organizationId: null,
+          plan: { $nin: ['plus', 'pro', 'enterprise'] },
+          entitlementSource: { $nin: ['subscription', 'admin_grant'] },
+        }),
+        { $set: { monthlyInterviewLimit: 1 } },
+      ])
+      expect(mockUserUpdateOne.mock.calls[2]).toEqual([
+        expect.objectContaining({
+          entitlementSource: 'subscription',
+          planVocabularyVersion: 2,
+          plan: 'plus',
+          planExpiresAt: {
+            $gt: new Date('2026-08-05T12:00:00.000Z'),
+          },
+          interviewLimit: 10,
+        }),
+        { $set: { monthlyInterviewLimit: 10 } },
+      ])
+      expect(mockUserUpdateOne.mock.calls[3]).toEqual([
+        expect.objectContaining({
+          entitlementSource: 'subscription',
+          planVocabularyVersion: 2,
+          plan: 'pro',
+          planExpiresAt: {
+            $gt: new Date('2026-08-05T12:00:00.000Z'),
+          },
+          interviewLimit: 15,
+        }),
+        { $set: { monthlyInterviewLimit: 15 } },
+      ])
+
+      const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
+      expect(admission.$and[0]).toEqual({
+        $expr: {
+          $lt: ['$monthlyInterviewsUsed', '$monthlyInterviewLimit'],
+        },
+      })
+      expect(admission.$and[1].$or).toEqual(expect.arrayContaining([
+        expect.objectContaining({ monthlyInterviewLimit: 1 }),
+        expect.objectContaining({
+          entitlementSource: 'subscription',
+          plan: 'plus',
+          interviewLimit: 10,
+          monthlyInterviewLimit: 10,
+        }),
+        expect.objectContaining({
+          entitlementSource: 'subscription',
+          plan: 'pro',
+          interviewLimit: 15,
+          monthlyInterviewLimit: 15,
+        }),
+        { plan: 'enterprise' },
+        { entitlementSource: 'admin_grant' },
+      ]))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('uses one exact paid unlock for a Basic request above 10 minutes', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue(null)
+    mockUserExists.mockReturnValue({
+      _id: '507f1f77bcf86cd799439010',
+      session: mockUserExistsSession,
+    })
+    mockUserExistsSession.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockSessionCreate.mockImplementation((payload: unknown) =>
+      Promise.resolve(Array.isArray(payload)
+        ? [{ _id: payload[0]._id }]
+        : { _id: 'session-paid-interview' }))
+
+    const created = await createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 20,
+      },
+    })
+
+    const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
+    expect(admission.$and[2]).toEqual({
+      $nor: [expect.objectContaining({
+        organizationId: null,
+        monthlyInterviewLimit: 1,
+      })],
+    })
+    const persisted = mockSessionCreate.mock.calls.at(-1)?.[0][0]
+    expect(mockConsumePaidInterviewUnlock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: '507f1f77bcf86cd799439010',
+        sessionId: persisted._id.toHexString(),
+        providerMode: 'live',
+        durationMinutes: 20,
+      }),
+      mockDbSession,
+    )
+    expect(created._id.toString()).toBe(persisted._id.toString())
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('creates no session when Basic has no captured paid unlock', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue(null)
+    mockUserExists.mockReturnValue({
+      _id: '507f1f77bcf86cd799439010',
+      session: mockUserExistsSession,
+    })
+    mockUserExistsSession.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockConsumePaidInterviewUnlock.mockRejectedValueOnce(
+      new PaidInterviewLaunchError(
+        'unavailable',
+        'No captured paid interview unlock is available',
+      ),
+    )
+
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 30,
+      },
+    })).rejects.toMatchObject({
+      code: 'USAGE_LIMIT',
+      statusCode: 402,
+    })
+
+    expect(mockSessionCreate).not.toHaveBeenCalled()
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('admits a 10-minute Basic request and persists the authoritative duration', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockSessionCreate.mockResolvedValue({
+      _id: { toString: () => 'session-basic-duration' },
+    })
+
+    await createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 10,
+      },
+    })
+
+    const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
+    expect(admission.$and).toHaveLength(2)
+    expect(mockSessionCreate).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({ duration: 10 }),
+    }))
+  })
+
+  it('admits 30 minutes only through a non-Basic authority branch', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockSessionCreate.mockResolvedValue({
+      _id: { toString: () => 'session-paid-duration' },
+    })
+
+    await createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 30,
+      },
+    })
+
+    const admission = mockUserFindOneAndUpdate.mock.calls[0][0]
+    expect(admission.$and[2]).toEqual({
+      $nor: [expect.objectContaining({ monthlyInterviewLimit: 1 })],
+    })
+    expect(mockSessionCreate).toHaveBeenCalledWith(expect.objectContaining({
+      config: expect.objectContaining({ duration: 30 }),
+    }))
+  })
+
+  it('rejects every account above the 30-minute product maximum before writes', async () => {
+    await expect(createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 31,
+      },
+    })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      statusCode: 403,
+      message: 'Interview duration must be between 5 and 30 minutes.',
+    })
+
+    expect(mockUserUpdateOne).not.toHaveBeenCalled()
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockSessionCreate).not.toHaveBeenCalled()
   })
 
   it('rolls back quota and creates no session when the provider gate is revoked', async () => {
