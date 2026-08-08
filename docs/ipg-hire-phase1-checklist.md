@@ -34,6 +34,20 @@ Status legend: `[x]` implemented + covered by automated verification · `[ ]` op
 2. **Member UI lives at `/workspace/*`, not the `hire.` subdomain yet** — the `hire.*` rewrite currently serves the v1 org-based product and gates on recruiter-role JWTs, which v2's flat model doesn't use. Switching the subdomain rewrite target to `/workspace` is a 2-line middleware change staged for when v2 reaches parity (Phase 2/3); v1 remains untouched and working meanwhile.
 3. **Fixed AI-round shape** — depth `behavioral` (the catalog has no dedicated 'screening' depth), duration 15 min, experience band chosen at send time. Matches "fixed over configurable".
 
+## Adversarial review outcome (17-agent pass over the PR diff)
+
+13 findings survived adversarial verification; the material ones are fixed on the branch:
+
+- **Fixed (was P1) — cross-tenant session claim:** the reconciliation match key is now unique **per round**: the provisioned JD embeds a `[Interview reference: HR-<roundId>]` line and the round stores the full immutable `jdSnapshot` (also killing the "JD edited after send breaks matching" edge — prepare serves the snapshot, never live `jdText`).
+- **Fixed (was P1/P2) — title/engine contract break:** job titles are capped at the engine's 100-char role limit at authoring time and defensively clamped at send; boundary pinned in the contract suite.
+- **Fixed (was P2) — invisible retakes:** every engine session a round's config produced is counted (`attemptCount`) at reconcile; the card shows "started N times — scores are from the first completed run" (claims are oldest-completed-first, the anti-gaming order).
+- **Fixed (was P2/P3) — duplicate-live-round race:** a partial unique index (`{workspaceId, applicationId, live:true}`) enforces one live AI round per application at the database, not just in app code.
+- **Fixed (P3s):** invite links now hard-expire 14 days after token expiry even mid-flow; the expired-link auto-supersede writes an `ai_round_revoked` audit event; a failed ticket sign-in returns the guest to the OTP form with a retry message instead of stranding them on the B2C sign-in page.
+
+**Known limitations (documented, deliberate for Phase 1):**
+- `createWorkspace` / membership linking are check-then-create; a user double-submitting can in theory create two workspaces (recoverable, no data risk). One-membership-per-user is the Phase 1 rule; a person added to two workspaces by email links to the earliest row.
+- A guest exercising account deletion (GDPR) removes their engine sessions; an unreconciled round then stays "awaiting results" — correct privacy behavior, surfaced not silent.
+
 ## Flagged: first-class engine seam (guardrail: not touched)
 
 A deterministic, event-driven seam needs three **additive engine-file changes** (the exact pattern the Jobs feature used): a hire-handoff branch in `app/api/interviews/route.ts` + `CreateSessionSchema` (stamp verified hire attribution at create), and a completion hook (or Inngest event) in the `PATCH /api/interviews/[id]` path. Per the goal guardrail these were **not** made. The read-time reconciliation implemented instead is encapsulated in ONE file (`modules/hire/services/roundLinkService.ts`) so swapping to the first-class seam later is a one-file replacement. Residual risk of the reconciliation approach: linkage requires the member to open the card (no push), and a candidate with two live rounds carrying byte-identical JD+title could claim in arrival order (surfaced, never silent).

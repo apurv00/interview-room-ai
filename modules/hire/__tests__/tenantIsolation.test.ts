@@ -74,6 +74,14 @@ describe('uniqueness constraints', () => {
     expect(idx?.[1].unique).toBe(true)
     expect(idx?.[1].sparse).toBe(true)
   })
+
+  it('one LIVE round per application — enforced by a partial unique index, not just app code', () => {
+    const idx = indexes(HireRound as unknown as Model<never>).find(
+      ([spec]) => spec.workspaceId === 1 && spec.applicationId === 1 && spec.live === 1
+    )
+    expect(idx?.[1].unique).toBe(true)
+    expect(idx?.[1].partialFilterExpression).toEqual({ live: true })
+  })
 })
 
 describe('token storage', () => {

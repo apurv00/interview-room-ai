@@ -156,11 +156,24 @@ export async function reconcileApplicationRounds(
       .select(SESSION_SELECT)
       .lean()) as unknown as EngineSessionLean[]
 
+    // jdHash embeds the per-round reference line (buildJdSnapshot), so a
+    // session can only match the ONE round that provisioned it — identical
+    // JDs across rounds or workspaces can never cross-claim.
     const matches = sessions.filter(
       (s) =>
         s.config?.role === round.config.role &&
         sha256(s.jobDescription ?? '') === round.jdHash
     )
+
+    // Attempt visibility: every engine session this round's config produced
+    // counts, completed or not. >1 means the candidate started over — the
+    // card shows it; it is never silently absorbed.
+    if (matches.length > 0 && matches.length !== (round.attemptCount ?? 0)) {
+      await HireRound.updateOne(
+        { _id: round._id, workspaceId },
+        { $set: { attemptCount: matches.length } }
+      )
+    }
 
     let linked = false
     for (const s of matches) {
@@ -175,6 +188,7 @@ export async function reconcileApplicationRounds(
               status: 'completed',
               results: buildResultsSnapshot(s),
             },
+            $unset: { live: 1 },
           },
           { new: true }
         )

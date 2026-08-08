@@ -11,8 +11,18 @@
 import { describe, it, expect } from 'vitest'
 import { CreateSessionSchema } from '@interview/validators/interview'
 import { isDepthAllowedForExperience } from '@interview'
+import {
+  INTERVIEW_ROLE_SLUG_MAX_CHARS,
+  INTERVIEW_JOB_DESCRIPTION_MAX_CHARS,
+} from '@shared/interviewContract'
 import { STORAGE_KEYS } from '@shared/storageKeys'
-import { AI_ROUND_INTERVIEW_TYPE, GuestConsentSchema, GuestVerifyOtpSchema } from '..'
+import {
+  AI_ROUND_INTERVIEW_TYPE,
+  GuestConsentSchema,
+  GuestVerifyOtpSchema,
+  CreateJobSchema,
+  buildJdSnapshot,
+} from '..'
 import type { GuestInterviewConfig } from '../services/aiRoundService'
 
 describe('session-provisioning seam: the engine accepts the guest config', () => {
@@ -43,6 +53,33 @@ describe('session-provisioning seam: the engine accepts the guest config', () =>
     for (const experience of ['0-2', '3-6', '7+']) {
       expect(isDepthAllowedForExperience(AI_ROUND_INTERVIEW_TYPE, experience)).toBe(true)
     }
+  })
+
+  it('every title CreateJobSchema accepts fits the engine role contract (boundary pinned)', () => {
+    const maxTitle = 'T'.repeat(INTERVIEW_ROLE_SLUG_MAX_CHARS)
+    expect(() => CreateJobSchema.parse({ title: maxTitle, jdText: 'x'.repeat(60) })).not.toThrow()
+    expect(() =>
+      CreateJobSchema.parse({ title: maxTitle + 'X', jdText: 'x'.repeat(60) })
+    ).toThrow()
+    expect(() =>
+      CreateSessionSchema.parse({ config: { ...guestConfig, role: maxTitle } })
+    ).not.toThrow()
+  })
+
+  it('the jdSnapshot (JD + round reference) never exceeds the engine JD contract', () => {
+    const roundId = 'a'.repeat(24)
+    const maxJd = 'J'.repeat(INTERVIEW_JOB_DESCRIPTION_MAX_CHARS)
+    const snapshot = buildJdSnapshot(maxJd, roundId)
+    expect(snapshot.length).toBeLessThanOrEqual(INTERVIEW_JOB_DESCRIPTION_MAX_CHARS)
+    expect(snapshot).toContain(`[Interview reference: HR-${roundId}]`)
+    expect(() =>
+      CreateSessionSchema.parse({ config: { ...guestConfig, jobDescription: snapshot } })
+    ).not.toThrow()
+    // Distinct rounds over an identical JD produce distinct match keys — the
+    // property the cross-tenant claim fix rests on.
+    expect(buildJdSnapshot('same jd', 'a'.repeat(24))).not.toBe(
+      buildJdSnapshot('same jd', 'b'.repeat(24))
+    )
   })
 })
 

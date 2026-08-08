@@ -102,13 +102,21 @@ describe('sendAiRound', () => {
     expect(result.inviteUrl).toContain(`/candidate/${ROUND_ID}?token=`)
   })
 
-  it('stamps workspace scoping, config, jdHash, and the candidate identity', async () => {
+  it('stamps workspace scoping, config, a round-unique jdHash, and the candidate identity', async () => {
     armHappyPath()
     await sendAiRound(CTX, { applicationId: 'a1', experience: '7+', duration: 30 })
     const doc = mockRound.create.mock.calls[0][0]
     expect(doc.workspaceId).toBe('ws-A')
     expect(doc.candidateEmail).toBe('jane@ex.com')
-    expect(doc.jdHash).toBe(crypto.createHash('sha256').update('Great JD text here').digest('hex'))
+    expect(doc.live).toBe(true)
+    // jdSnapshot = job JD + a per-round reference line; jdHash covers the
+    // snapshot, making the match key unique per round (cross-tenant claim fix).
+    expect(doc.jdSnapshot).toContain('Great JD text here')
+    expect(doc.jdSnapshot).toContain(`[Interview reference: HR-${doc._id.toString()}]`)
+    expect(doc.jdHash).toBe(crypto.createHash('sha256').update(doc.jdSnapshot).digest('hex'))
+    expect(doc.jdHash).not.toBe(
+      crypto.createHash('sha256').update('Great JD text here').digest('hex')
+    )
     expect(doc.config).toEqual({
       role: 'Backend Engineer',
       interviewType: AI_ROUND_INTERVIEW_TYPE,
@@ -118,6 +126,29 @@ describe('sendAiRound', () => {
     const expiryMs = doc.inviteTokenExpiry.getTime() - Date.now()
     expect(expiryMs).toBeGreaterThan(6.9 * 24 * 3600 * 1000)
     expect(expiryMs).toBeLessThan(7.1 * 24 * 3600 * 1000)
+  })
+
+  it('clamps a >100-char job title to the engine role contract', async () => {
+    armHappyPath()
+    const longTitle = 'Senior Staff Backend Platform Engineer '.repeat(4) // 156 chars
+    mockJob.findOne.mockResolvedValue({
+      _id: 'j1',
+      title: longTitle,
+      jdText: 'Great JD text here',
+      status: 'open',
+    })
+    await sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
+    const doc = mockRound.create.mock.calls[0][0]
+    expect(doc.config.role).toBe(longTitle.slice(0, 100))
+    expect(doc.config.role.length).toBe(100)
+  })
+
+  it('maps a duplicate-live-round race (E11000 on the partial unique index) to 409', async () => {
+    armHappyPath()
+    mockRound.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }))
+    await expect(
+      sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
+    ).rejects.toMatchObject({ code: 'ROUND_IN_FLIGHT', statusCode: 409 })
   })
 
   it('emails the candidate and records the send in the application event log', async () => {
@@ -142,7 +173,7 @@ describe('sendAiRound', () => {
     expect(mockRound.create).not.toHaveBeenCalled()
   })
 
-  it('supersedes an expired pre-auth round explicitly (revoke + resend)', async () => {
+  it('supersedes an expired pre-auth round explicitly (revoke + audit event + resend)', async () => {
     armHappyPath()
     mockRound.find.mockResolvedValue([
       { _id: 'r0', status: 'invited', inviteTokenExpiry: new Date(Date.now() - 3600_000) },
@@ -151,6 +182,13 @@ describe('sendAiRound', () => {
     const [filter, update] = mockRound.updateOne.mock.calls[0]
     expect(filter).toMatchObject({ _id: 'r0', workspaceId: 'ws-A' })
     expect(update.$set.status).toBe('revoked')
+    expect(update.$unset).toEqual({ live: 1 })
+    // The supersede is a witnessed action — it must appear in the audit log.
+    expect(mockAppendEvent).toHaveBeenCalledWith(
+      'ws-A',
+      'a1',
+      expect.objectContaining({ type: 'ai_round_revoked' })
+    )
     expect(mockRound.create).toHaveBeenCalled()
   })
 
@@ -196,8 +234,15 @@ describe('verifyRoundToken', () => {
       status: 'prepared',
       inviteTokenExpiry: new Date(Date.now() - 1000),
     })
-    // Post-auth statuses survive token expiry (the candidate is mid-flow).
+    // Post-auth statuses survive token expiry (the candidate is mid-flow)…
     expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('ok')
+
+    // …but only within the grace ceiling — links are not immortal.
+    mockRound.findOne.mockResolvedValue({
+      status: 'prepared',
+      inviteTokenExpiry: new Date(Date.now() - 15 * 24 * 3600 * 1000),
+    })
+    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('expired')
   })
 })
 
@@ -246,16 +291,17 @@ describe('prepareRound', () => {
     expect(mockRound.findOne).toHaveBeenCalledWith({ _id: ROUND_ID, guestUserId: 'other-user' })
   })
 
-  it('returns the engine config (JD + company) and opens the reconciliation window once', async () => {
+  it('returns the immutable jdSnapshot (not live job text) and opens the reconciliation window once', async () => {
+    const jdSnapshot = `The JD\n\n[Interview reference: HR-${ROUND_ID}]`
     mockRound.findOne.mockResolvedValue({
       _id: ROUND_ID,
       workspaceId: 'ws-A',
       jobId: 'j1',
       status: 'auth_verified',
       consentAt: new Date(),
+      jdSnapshot,
       config: { role: 'Backend Engineer', interviewType: 'behavioral', experience: '3-6', duration: 15 },
     })
-    mockJob.findOne.mockResolvedValue({ _id: 'j1', jdText: 'The JD' })
     mockWorkspaceModel.findById.mockResolvedValue({ name: 'Acme' })
     mockRound.findOneAndUpdate.mockResolvedValue({ _id: ROUND_ID, preparedAt: new Date() })
 
@@ -265,9 +311,12 @@ describe('prepareRound', () => {
       interviewType: 'behavioral',
       experience: '3-6',
       duration: 15,
-      jobDescription: 'The JD',
+      jobDescription: jdSnapshot,
       targetCompany: 'Acme',
     })
+    // The live HireJob is never consulted — a post-send JD edit can neither
+    // change the assessment nor break the reconciliation hash.
+    expect(mockJob.findOne).not.toHaveBeenCalled()
     const [filter] = mockRound.findOneAndUpdate.mock.calls[0]
     expect(filter).toMatchObject({ _id: ROUND_ID, preparedAt: { $exists: false } })
   })
@@ -293,6 +342,7 @@ describe('revokeRound', () => {
     })
     expect(update.$set.status).toBe('revoked')
     expect(update.$set.revokedBy).toBe('u1')
+    expect(update.$unset).toEqual({ live: 1 })
     expect(mockAppendEvent).toHaveBeenCalledWith(
       'ws-A',
       'a1',

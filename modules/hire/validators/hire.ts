@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 
 export const objectIdSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id')
 
@@ -12,7 +13,10 @@ export const AddMemberSchema = z.object({
 })
 
 export const CreateJobSchema = z.object({
-  title: z.string().trim().min(2).max(200),
+  // The job title doubles as the engine's `role` in AI rounds; the engine
+  // contract caps role at 100 chars, so a longer title must be rejected at
+  // authoring time, not dead-end the candidate mid-flow.
+  title: z.string().trim().min(2).max(INTERVIEW_ROLE_SLUG_MAX_CHARS),
   jdText: z.string().trim().min(50, 'Job description is too short').max(50000),
 })
 

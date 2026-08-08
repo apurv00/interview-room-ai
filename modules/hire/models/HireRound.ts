@@ -94,8 +94,25 @@ export interface IHireRound extends Document {
     experience: string
     duration: number
   }
-  /** sha256 of the job's jdText at send time — reconciliation match key. */
+  /**
+   * sha256 of jdSnapshot — the reconciliation match key. jdSnapshot embeds a
+   * per-round reference line, so this hash is unique PER ROUND: an engine
+   * session can only ever match the one round that provisioned it (kills the
+   * cross-tenant/cross-round ambiguity class outright).
+   */
   jdHash: string
+  /** The exact JD text provisioned to the guest (job.jdText at send time +
+   * the round reference line). Immutable snapshot — editing the job's JD
+   * after sending cannot break or redirect reconciliation. */
+  jdSnapshot: string
+  /** Engine sessions observed for this round at last reconcile (completed +
+   * in-progress). >1 means the candidate started the interview more than
+   * once — surfaced on the card, never hidden. */
+  attemptCount?: number
+  /** Present (true) only while the round is claimable/in-flight. Backs the
+   * partial unique index enforcing ONE live AI round per application even
+   * under concurrent sends. Unset on revoke and on completion-claim. */
+  live?: boolean
   results?: HireRoundResults
   createdBy: mongoose.Types.ObjectId
   createdAt: Date
@@ -147,6 +164,9 @@ const HireRoundSchema = new Schema<IHireRound>(
       duration: { type: Number, required: true, min: 5, max: 60 },
     },
     jdHash: { type: String, required: true },
+    jdSnapshot: { type: String, required: true, maxlength: 50000 },
+    attemptCount: { type: Number },
+    live: { type: Boolean },
     results: { type: Schema.Types.Mixed },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },
@@ -154,6 +174,13 @@ const HireRoundSchema = new Schema<IHireRound>(
 )
 
 HireRoundSchema.index({ workspaceId: 1, applicationId: 1, createdAt: -1 })
+// ONE live AI round per application, enforced by the database — the
+// check-then-create in sendAiRound is only the friendly-error fast path;
+// concurrent sends race into this index and surface as 409.
+HireRoundSchema.index(
+  { workspaceId: 1, applicationId: 1, live: 1 },
+  { unique: true, partialFilterExpression: { live: true } }
+)
 // One engine session can back at most one round — the double-claim guard the
 // reconciler's atomic claim relies on.
 HireRoundSchema.index({ sessionId: 1 }, { unique: true, sparse: true })

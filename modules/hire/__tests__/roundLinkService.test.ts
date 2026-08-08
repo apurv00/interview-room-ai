@@ -146,6 +146,7 @@ describe('reconcileApplicationRounds', () => {
     expect(claimFilter).toMatchObject({ workspaceId: 'ws-A', sessionId: { $exists: false } })
     expect(claimUpdate.$set.status).toBe('completed')
     expect(claimUpdate.$set.results.overallScore).toBe(75)
+    expect(claimUpdate.$unset).toEqual({ live: 1 })
     expect(mockAppendEvent).toHaveBeenCalledWith(
       'ws-A',
       'a1',
@@ -165,12 +166,29 @@ describe('reconcileApplicationRounds', () => {
     expect(mockRound.findOneAndUpdate).not.toHaveBeenCalled()
   })
 
-  it('reports in-progress matches as transient activity without persisting anything', async () => {
+  it('reports in-progress matches as transient activity without claiming', async () => {
     mockRound.find.mockResolvedValue([round()])
     mockSessionFind.mockReturnValue(chainTo([session({ status: 'in_progress' })]))
     const activity = await reconcileApplicationRounds('ws-A', 'a1')
     expect(activity).toEqual([{ roundId: 'r1', inProgress: true }])
     expect(mockRound.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('persists attemptCount so retries are visible on the card, never silently absorbed', async () => {
+    mockRound.find.mockResolvedValue([round()])
+    mockSessionFind.mockReturnValue(
+      chainTo([
+        session({ status: 'in_progress' }),
+        session({ _id: { toString: () => 's2' } }),
+      ])
+    )
+    mockRound.findOneAndUpdate.mockResolvedValue({ _id: 'r1' })
+    await reconcileApplicationRounds('ws-A', 'a1')
+    const attemptUpdate = mockRound.updateOne.mock.calls.find(
+      ([, update]) => update.$set?.attemptCount !== undefined
+    )
+    expect(attemptUpdate).toBeDefined()
+    expect(attemptUpdate![1].$set.attemptCount).toBe(2)
   })
 
   it('on a duplicate-claim race (E11000) it tries the next candidate session', async () => {

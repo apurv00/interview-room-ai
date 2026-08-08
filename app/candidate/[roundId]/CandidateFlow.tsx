@@ -120,10 +120,20 @@ export default function CandidateFlow({
         return
       }
       setStep('signing-in')
-      await signIn('invite-otp', {
+      // redirect:false so a failed sign-in (e.g. the 60s ticket expired
+      // because the user waited) surfaces HERE with a retry path, instead
+      // of stranding the guest on the generic B2C /signin page.
+      const result = await signIn('invite-otp', {
         ticket: data.ticket,
-        callbackUrl: `/candidate/${encodeURIComponent(roundId)}/prepare`,
+        redirect: false,
       })
+      if (!result?.ok) {
+        setError('Sign-in took too long — request a new code and try again.')
+        setStep('email')
+        setOtp('')
+        return
+      }
+      window.location.href = `/candidate/${encodeURIComponent(roundId)}/prepare`
     } catch {
       setError('Something went wrong. Please try again.')
       setStep('otp')

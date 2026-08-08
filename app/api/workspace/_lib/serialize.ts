@@ -108,6 +108,7 @@ export function serializeRound(r: IHireRound) {
     linkedAt: r.linkedAt ?? null,
     revokedAt: r.revokedAt ?? null,
     config: r.config,
+    attemptCount: r.attemptCount ?? null,
     results: r.results ?? null,
   }
 }

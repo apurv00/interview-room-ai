@@ -56,6 +56,7 @@ interface Round {
   linkedAt: string | null
   revokedAt: string | null
   config: { role: string; experience: string; duration: number }
+  attemptCount: number | null
   results: RoundResults | null
 }
 
@@ -364,6 +365,13 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
             <p className="text-sm text-amber-600">
               Interview finished — the full report is still being generated. Per-answer
               scores below are already final.
+            </p>
+          )}
+
+          {(round.attemptCount ?? 0) > 1 && (
+            <p className="text-sm text-amber-600">
+              The candidate started this interview {round.attemptCount} times — the
+              scores below are from the first completed run.
             </p>
           )}
 

@@ -1,4 +1,9 @@
 import crypto from 'crypto'
+import mongoose from 'mongoose'
+import {
+  INTERVIEW_ROLE_SLUG_MAX_CHARS,
+  INTERVIEW_JOB_DESCRIPTION_MAX_CHARS,
+} from '@shared/interviewContract'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
 import { sendEmail } from '@shared/services/emailService'
@@ -35,8 +40,26 @@ export const AI_ROUND_INTERVIEW_TYPE = 'behavioral'
 
 export const INVITE_TOKEN_EXPIRY_DAYS = 7
 
+/** How long past token expiry a mid-flow (post-auth) round stays usable
+ * before the link finally dies. Keeps "resume my interview" working without
+ * making invite links immortal. */
+export const POST_AUTH_GRACE_DAYS = 14
+
 export function sha256(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex')
+}
+
+/**
+ * The JD text provisioned to the guest: the job's JD plus a per-round
+ * reference line. The reference makes sha256(jdSnapshot) unique PER ROUND,
+ * so reconciliation can only ever match an engine session to the one round
+ * that provisioned it — two workspaces (or two rounds) with byte-identical
+ * JDs can never claim each other's interviews. Clamped so the total stays
+ * within the engine's jobDescription contract.
+ */
+export function buildJdSnapshot(jdText: string, roundId: string): string {
+  const ref = `\n\n[Interview reference: HR-${roundId}]`
+  return jdText.slice(0, INTERVIEW_JOB_DESCRIPTION_MAX_CHARS - ref.length) + ref
 }
 
 function appBaseUrl(): string {
@@ -103,8 +126,17 @@ export async function sendAiRound(
     if (preAuth && r.inviteTokenExpiry <= now) {
       await HireRound.updateOne(
         { _id: r._id, workspaceId: ctx.workspace._id },
-        { $set: { status: 'revoked', revokedAt: now, revokedBy: ctx.membership.userId } }
+        {
+          $set: { status: 'revoked', revokedAt: now, revokedBy: ctx.membership.userId },
+          $unset: { live: 1 },
+        }
       )
+      await appendApplicationEvent(ctx.workspace._id, application._id, {
+        type: 'ai_round_revoked',
+        actorUserId: ctx.membership.userId,
+        actorName: ctx.membership.name || ctx.membership.email,
+        note: 'Previous AI interview link expired — superseded by a new invite',
+      })
     } else {
       throw new AppError(
         'An AI interview is already in flight for this candidate. Revoke it before sending a new one.',
@@ -115,27 +147,49 @@ export async function sendAiRound(
   }
 
   const token = crypto.randomBytes(32).toString('hex')
-  const round = await HireRound.create({
-    workspaceId: ctx.workspace._id,
-    applicationId: application._id,
-    jobId: job._id,
-    candidateId: candidate._id,
-    candidateEmail: candidate.email,
-    candidateName: candidate.name,
-    kind: 'ai',
-    status: 'invited',
-    inviteTokenHash: sha256(token),
-    inviteTokenExpiry: new Date(Date.now() + INVITE_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
-    invitedAt: now,
-    config: {
-      role: job.title,
-      interviewType: AI_ROUND_INTERVIEW_TYPE,
-      experience: input.experience,
-      duration: input.duration,
-    },
-    jdHash: sha256(job.jdText),
-    createdBy: ctx.membership.userId,
-  })
+  const roundId = new mongoose.Types.ObjectId()
+  const jdSnapshot = buildJdSnapshot(job.jdText, roundId.toString())
+  let round: IHireRound
+  try {
+    round = await HireRound.create({
+      _id: roundId,
+      workspaceId: ctx.workspace._id,
+      applicationId: application._id,
+      jobId: job._id,
+      candidateId: candidate._id,
+      candidateEmail: candidate.email,
+      candidateName: candidate.name,
+      kind: 'ai',
+      status: 'invited',
+      live: true,
+      inviteTokenHash: sha256(token),
+      inviteTokenExpiry: new Date(Date.now() + INVITE_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000),
+      invitedAt: now,
+      config: {
+        // The engine's role contract caps at 100 chars; job titles are the
+        // role in Phase 1, so clamp — a longer title must never produce a
+        // config the engine's CreateSessionSchema would reject mid-flow.
+        role: job.title.slice(0, INTERVIEW_ROLE_SLUG_MAX_CHARS),
+        interviewType: AI_ROUND_INTERVIEW_TYPE,
+        experience: input.experience,
+        duration: input.duration,
+      },
+      jdHash: sha256(jdSnapshot),
+      jdSnapshot,
+      createdBy: ctx.membership.userId,
+    })
+  } catch (err: unknown) {
+    // Partial unique index {workspaceId, applicationId, live:true}: a
+    // concurrent send won the race — same outcome as the fast-path check.
+    if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
+      throw new AppError(
+        'An AI interview is already in flight for this candidate. Revoke it before sending a new one.',
+        409,
+        'ROUND_IN_FLIGHT'
+      )
+    }
+    throw err
+  }
 
   const inviteUrl = `${appBaseUrl()}/candidate/${round._id.toString()}?token=${token}`
   const email = buildAiInviteEmail({
@@ -188,6 +242,16 @@ export async function verifyRoundToken(
   if (round.status === 'completed') return { round, state: 'completed' }
   const preAuth = (PRE_AUTH_STATUSES as readonly string[]).includes(round.status)
   if (preAuth && round.inviteTokenExpiry <= new Date()) {
+    return { round, state: 'expired' }
+  }
+  // Post-auth (mid-flow) rounds survive token expiry so "resume my
+  // interview" works, but not forever — after the grace ceiling the link
+  // dies like any other.
+  if (
+    !preAuth &&
+    round.inviteTokenExpiry.getTime() + POST_AUTH_GRACE_DAYS * 24 * 60 * 60 * 1000 <=
+      Date.now()
+  ) {
     return { round, state: 'expired' }
   }
   return { round, state: 'ok' }
@@ -280,8 +344,6 @@ export async function prepareRound(
     throw new AppError('Consent is required before starting', 409, 'CONSENT_REQUIRED')
   }
 
-  const job = await HireJob.findOne({ _id: round.jobId, workspaceId: round.workspaceId })
-  if (!job) throw new NotFoundError('Round')
   const workspace = await HireWorkspace.findById(round.workspaceId)
 
   const updated = await HireRound.findOneAndUpdate(
@@ -297,7 +359,10 @@ export async function prepareRound(
       interviewType: round.config.interviewType,
       experience: round.config.experience,
       duration: round.config.duration,
-      jobDescription: job.jdText,
+      // The immutable snapshot (with the per-round reference line), NOT the
+      // live job.jdText — a JD edit after send can neither change what the
+      // candidate is assessed against nor break reconciliation's hash match.
+      jobDescription: round.jdSnapshot,
       targetCompany: workspace?.name ?? '',
     },
   }
@@ -316,7 +381,10 @@ export async function revokeRound(
       workspaceId: ctx.workspace._id,
       status: { $nin: ['completed', 'revoked'] },
     },
-    { $set: { status: 'revoked', revokedAt: new Date(), revokedBy: ctx.membership.userId } },
+    {
+      $set: { status: 'revoked', revokedAt: new Date(), revokedBy: ctx.membership.userId },
+      $unset: { live: 1 },
+    },
     { new: true }
   )
   if (!round) throw new NotFoundError('Round')
