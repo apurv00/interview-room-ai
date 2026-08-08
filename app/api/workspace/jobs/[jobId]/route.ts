@@ -18,6 +18,9 @@ export const dynamic = 'force-dynamic'
 
 export const GET = composeApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-job' },
+  // Account-lifecycle egress fence: a deleted/deleting account with a
+  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
+  requireActiveAccount: true,
   async handler(_req, { user, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const pipeline = await getJobPipeline(ctx, params.jobId)
@@ -31,6 +34,9 @@ export const GET = composeApiRoute({
 export const PATCH = composeApiRoute<UpdateJobStatusPayload>({
   schema: UpdateJobStatusSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:hire-job-status' },
+  // Account-lifecycle egress fence: a deleted/deleting account with a
+  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
+  requireActiveAccount: true,
   async handler(_req, { user, body, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const job = await updateJobStatus(ctx, params.jobId, body)

@@ -5,9 +5,11 @@ vi.mock('@shared/db/connection', () => ({
 }))
 
 const mockUserFindOne = vi.fn()
+const mockUserExists = vi.fn()
 vi.mock('@shared/db/models', () => ({
   User: {
     findOne: (...args: unknown[]) => mockUserFindOne(...args),
+    exists: (...args: unknown[]) => mockUserExists(...args),
     create: vi.fn(() => {
       throw new Error('workspaceService must NEVER create B2C User rows')
     }),
@@ -99,6 +101,39 @@ describe('getWorkspaceForUser', () => {
     mockMember.findOne.mockResolvedValue(null)
     mockMember.findOneAndUpdate.mockResolvedValue(null)
     expect(await getWorkspaceForUser(ACTOR)).toBeNull()
+  })
+
+  it('self-heals a membership whose linked User was erased (account deletion) — same email re-links', async () => {
+    const staleRow = { _id: 'm9', userId: 'erased-user', workspaceId: 'ws1' }
+    mockMember.findOne.mockImplementation((filter: Record<string, unknown>) =>
+      Promise.resolve('email' in filter ? staleRow : null)
+    )
+    // Lazy-link (unlinked rows only) misses; heal path fires.
+    mockMember.findOneAndUpdate.mockImplementation((filter: Record<string, unknown>) =>
+      Promise.resolve('_id' in filter ? { ...staleRow, userId: ACTOR.userId } : null)
+    )
+    mockUserExists.mockResolvedValue(null) // the erased User no longer exists
+    mockWorkspace.findById.mockResolvedValue({ _id: 'ws1', name: 'Acme' })
+
+    const ctx = await getWorkspaceForUser(ACTOR)
+    expect(ctx?.workspace.name).toBe('Acme')
+    const healCall = mockMember.findOneAndUpdate.mock.calls.find(([f]) => '_id' in f)
+    // Conditional on the stale id — a concurrent heal cannot double-apply.
+    expect(healCall![0]).toEqual({ _id: 'm9', userId: 'erased-user' })
+    expect(healCall![1]).toEqual({ $set: { userId: ACTOR.userId } })
+  })
+
+  it('does NOT re-link when the referenced User still exists', async () => {
+    const linkedRow = { _id: 'm9', userId: 'alive-user', workspaceId: 'ws1' }
+    mockMember.findOne.mockImplementation((filter: Record<string, unknown>) =>
+      Promise.resolve('email' in filter ? linkedRow : null)
+    )
+    mockMember.findOneAndUpdate.mockResolvedValue(null)
+    mockUserExists.mockResolvedValue({ _id: 'alive-user' })
+
+    expect(await getWorkspaceForUser(ACTOR)).toBeNull()
+    const healCall = mockMember.findOneAndUpdate.mock.calls.find(([f]) => '_id' in f)
+    expect(healCall).toBeUndefined()
   })
 })
 

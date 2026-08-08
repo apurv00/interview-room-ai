@@ -67,6 +67,36 @@ export async function getWorkspaceForUser(
       }
     }
   }
+  // Self-heal a DANGLING link: if this email's membership points at a User
+  // the account-deletion cascade has since erased, re-link it to the caller.
+  // Without this, the sole admin deleting their account orphans the whole
+  // workspace forever — a same-email re-signup could never get back in
+  // (Codex P1 on #604). Guarded: only re-links when the referenced User row
+  // no longer exists, and only via a conditional update on the stale id.
+  if (!membership && actor.email) {
+    const stale = await HireWorkspaceMember.findOne(
+      { email: actor.email.toLowerCase(), userId: { $ne: null } },
+      null,
+      { sort: { createdAt: 1 } }
+    )
+    if (stale?.userId && !(await User.exists({ _id: stale.userId }))) {
+      try {
+        membership = await HireWorkspaceMember.findOneAndUpdate(
+          { _id: stale._id, userId: stale.userId },
+          { $set: { userId: actor.userId } },
+          { new: true }
+        )
+      } catch (err: unknown) {
+        if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
+          membership = await HireWorkspaceMember.findOne({ userId: actor.userId }, null, {
+            sort: { createdAt: 1 },
+          })
+        } else {
+          throw err
+        }
+      }
+    }
+  }
   if (!membership) return null
 
   const workspace = await HireWorkspace.findById(membership.workspaceId)
