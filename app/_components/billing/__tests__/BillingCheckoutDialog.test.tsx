@@ -310,7 +310,7 @@ describe('BillingCheckoutDialog completion and recovery', () => {
     })
   })
 
-  it('requires one extra confirmation only when the server price changed', async () => {
+  it('opens Razorpay directly when checkout applies a better coupon price', async () => {
     const termsText = 'Save ₹100 for the first billing cycle.'
     const changedCheckout = {
       ...checkout,
@@ -359,12 +359,177 @@ describe('BillingCheckoutDialog completion and recovery', () => {
       name: 'Pay ₹599 Now',
     }))
 
+    await waitFor(() => expect(mocks.openRazorpay).toHaveBeenCalledOnce())
+    expect(screen.queryByText(
+      'Your price or coupon terms changed. Review the updated amount before paying.',
+    )).not.toBeInTheDocument()
+  })
+
+  it('rechecks a coupon held by a previous-plan checkout and opens the better Pro price directly', async () => {
+    const proEntitlementSummary = {
+      ...entitlementSummary,
+      displayName: 'Pro',
+      interview: {
+        ...entitlementSummary.interview,
+        includedPerPeriod: 15,
+      },
+      resume: {
+        ...entitlementSummary.resume,
+        premiumSavedResumeLimitPerPeriod: 15,
+      },
+    }
+    const proQuote = {
+      ...quote,
+      planKey: 'pro',
+      listPricePaise: 99_900,
+      payablePaise: 99_900,
+      nextChargePaise: 99_900,
+      renewalPricePaise: 99_900,
+      disclosure: {
+        ...quote.disclosure,
+        summary: 'Pro monthly subscription',
+      },
+      entitlementSummary: proEntitlementSummary,
+    }
+    const couponTerms = 'Save ₹100 for the first billing cycle.'
+    const proCheckout = {
+      ...checkout,
+      quote: {
+        ...checkout.quote,
+        planKey: 'pro',
+        listPricePaise: 99_900,
+        discountPaise: 10_000,
+        payablePaise: 89_900,
+        nextChargePaise: 99_900,
+        renewalPricePaise: 99_900,
+        discountedBillingCycles: 1,
+        coupon: {
+          campaignId: '84b64c0f2f4e8b6a8c7d9e10',
+          revision: 1,
+          mode: 'code',
+          code: 'GURU100',
+          displayText: 'Save ₹100 on your subscription',
+          termsText: couponTerms,
+        },
+        disclosure: {
+          ...checkout.quote.disclosure,
+          summary: 'Pro monthly subscription',
+          why: 'Coupon code GURU100 applied.',
+          terms: couponTerms,
+        },
+        entitlementSummary: proEntitlementSummary,
+      },
+    }
+    saveBillingCheckoutRecovery({
+      accountId: ACCOUNT_ID,
+      intentId: '94b64c0f2f4e8b6a8c7d9e10',
+      planKey: 'plus',
+      catalogVersion: quote.catalogVersion,
+      idempotencyKey: 'billing-subscription:previous-plus',
+      manualCouponCode: 'GURU100',
+    })
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/billing/quote') {
+        return response({
+          ...proQuote,
+          manualCodeResult: 'ineligible',
+        })
+      }
+      if (url === '/api/billing/subscriptions/checkout') {
+        return response(proCheckout, 201)
+      }
+      return standardFetch(input, init)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="pro"
+        accountId={ACCOUNT_ID}
+        initialQuote={proQuote}
+        initialSummary={summary}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Have a coupon code?',
+    }))
+    fireEvent.change(screen.getByRole('textbox', {
+      name: 'Coupon code',
+    }), { target: { value: 'GURU100' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+
+    expect(await screen.findByText(
+      'Your previous checkout may be holding this coupon. We will recheck it when you pay.',
+    )).toBeInTheDocument()
+    const pay = screen.getByRole('button', { name: 'Pay ₹999 Now' })
+    expect(pay).toBeEnabled()
+    fireEvent.click(pay)
+
+    await waitFor(() => expect(mocks.openRazorpay).toHaveBeenCalledOnce())
+    const checkoutRequest = fetchMock.mock.calls.find(
+      ([input]) => String(input) === '/api/billing/subscriptions/checkout',
+    )
+    expect(JSON.parse(String(checkoutRequest?.[1]?.body))).toEqual({
+      planKey: 'pro',
+      manualCouponCode: 'GURU100',
+    })
+    expect(screen.queryByText(
+      'Your price or coupon terms changed. Review the updated amount before paying.',
+    )).not.toBeInTheDocument()
+  })
+
+  it('still requires confirmation when checkout removes a displayed coupon', async () => {
+    const couponTerms = 'Save ₹100 for the first billing cycle.'
+    const discountedQuote = {
+      ...quote,
+      discountPaise: 10_000,
+      payablePaise: 49_900,
+      discountedBillingCycles: 1,
+      coupon: {
+        campaignId: '84b64c0f2f4e8b6a8c7d9e10',
+        revision: 1,
+        mode: 'code',
+        code: 'GURU100',
+        displayText: 'Save ₹100 on your subscription',
+        termsText: couponTerms,
+      },
+      disclosure: {
+        ...quote.disclosure,
+        why: 'Coupon code GURU100 applied.',
+        terms: couponTerms,
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn(standardFetch))
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        initialQuote={discountedQuote}
+        initialSummary={summary}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Pay ₹499 Now',
+    }))
+
     expect(await screen.findByText(
       'Your price or coupon terms changed. Review the updated amount before paying.',
     )).toBeInTheDocument()
     expect(mocks.openRazorpay).not.toHaveBeenCalled()
     const updatedPay = screen.getByRole('button', {
-      name: 'Pay ₹499 Now',
+      name: 'Pay ₹599 Now',
     })
     expect(updatedPay).toBeEnabled()
 
@@ -373,7 +538,8 @@ describe('BillingCheckoutDialog completion and recovery', () => {
   })
 
   it('requires an edited coupon code to be applied or cleared before Pay', async () => {
-    vi.stubGlobal('fetch', vi.fn(standardFetch))
+    const fetchMock = vi.fn(standardFetch)
+    vi.stubGlobal('fetch', fetchMock)
 
     render(
       <BillingCheckoutDialog
@@ -406,7 +572,10 @@ describe('BillingCheckoutDialog completion and recovery', () => {
     await screen.findByText('This code is not available for this checkout.')
     expect(screen.getByRole('button', {
       name: 'Pay ₹599 Now',
-    })).toBeEnabled()
+    })).toBeDisabled()
+    expect(fetchMock.mock.calls.some(
+      ([input]) => String(input) === '/api/billing/subscriptions/checkout',
+    )).toBe(false)
   })
 
   it('does not open Razorpay after the checkout dialog unmounts', async () => {

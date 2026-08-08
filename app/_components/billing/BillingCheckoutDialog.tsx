@@ -13,9 +13,9 @@ import Badge from '@shared/ui/Badge'
 import {
   billingResponseSchemas,
   BillingClientError,
+  checkoutChangeRequiresConfirmation,
   formatInr,
   parseBillingResponse,
-  quoteChangedAtCheckout,
   recordCheckoutObservation,
   type BillingIntentStatus,
   type CustomerBillingQuote,
@@ -53,6 +53,11 @@ type CheckoutStage =
   | 'completed'
   | 'manual_review'
   | 'failed'
+
+type ManualCouponValidation = {
+  code: string
+  result: 'applied' | 'not_better_than_automatic' | 'recheck_at_checkout'
+}
 
 interface BillingCheckoutDialogProps {
   catalog: PublicBillingCatalog
@@ -172,13 +177,22 @@ export function BillingCheckoutDialog({
   const [couponOpen, setCouponOpen] = useState(false)
   const [couponMessage, setCouponMessage] = useState<string | null>(null)
   const [couponApplying, setCouponApplying] = useState(false)
+  const [manualCouponValidation, setManualCouponValidation] =
+    useState<ManualCouponValidation | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [idempotencyKey, setIdempotencyKey] = useState(
     createBillingIdempotencyKey,
   )
+  const normalizedManualCode = manualCode.trim().toUpperCase()
   const manualCodeNeedsValidation =
-    manualCode.trim().length > 0 && couponMessage === null
+    normalizedManualCode.length > 0 &&
+    manualCouponValidation?.code !== normalizedManualCode
+  const checkoutManualCouponCode =
+    manualCouponValidation?.code === normalizedManualCode &&
+    manualCouponValidation.result !== 'not_better_than_automatic'
+      ? normalizedManualCode
+      : undefined
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
@@ -535,6 +549,7 @@ export function BillingCheckoutDialog({
     }
     setCouponApplying(true)
     setCouponMessage(null)
+    setManualCouponValidation(null)
     setError(null)
     try {
       const nextQuote = await requestQuote(code)
@@ -543,23 +558,56 @@ export function BillingCheckoutDialog({
       setIdempotencyKey(createBillingIdempotencyKey())
       if (
         nextQuote.manualCodeResult === 'applied' &&
-        nextQuote.coupon
+        nextQuote.coupon?.mode === 'code' &&
+        nextQuote.coupon.code?.trim().toUpperCase() === code
       ) {
+        setManualCouponValidation({ code, result: 'applied' })
         setCouponMessage(`${nextQuote.coupon.displayText} applied.`)
+      } else if (
+        nextQuote.manualCodeResult === 'not_better_than_automatic'
+      ) {
+        setManualCouponValidation({
+          code,
+          result: 'not_better_than_automatic',
+        })
+        setCouponMessage(
+          'Your automatic coupon is already better, so we kept it.',
+        )
+      } else if (
+        nextQuote.manualCodeResult === 'system_unavailable' ||
+        (
+          nextQuote.manualCodeResult === 'ineligible' &&
+          (
+            (initialRecovery && initialRecovery.planKey !== planKey) ||
+            (
+              summary?.subscription.state === 'activation_pending' &&
+              summary.subscription.planKey !== planKey
+            )
+          )
+        )
+      ) {
+        setManualCouponValidation({
+          code,
+          result: 'recheck_at_checkout',
+        })
+        setCouponMessage(
+          nextQuote.manualCodeResult === 'ineligible'
+            ? 'Your previous checkout may be holding this coupon. We will recheck it when you pay.'
+            : 'Coupon validation is temporarily unavailable. We will recheck it when you pay.',
+        )
       } else {
         setCouponMessage(
-          nextQuote.manualCodeResult === 'not_better_than_automatic'
-            ? 'Your automatic coupon is already better, so we kept it.'
-            : nextQuote.manualCodeResult === 'system_unavailable'
-              ? 'Coupon validation is temporarily unavailable.'
-              : 'This code is not available for this checkout.',
+          'This code is not available for this checkout.',
         )
       }
-    } catch (cause) {
-      setCouponMessage(userFacingError(
-        cause,
-        'Coupon validation is temporarily unavailable.',
-      ))
+    } catch {
+      setManualCouponValidation({
+        code,
+        result: 'recheck_at_checkout',
+      })
+      setCouponMessage(
+        'Coupon validation is temporarily unavailable. We will recheck it when you pay.',
+      )
     } finally {
       setCouponApplying(false)
     }
@@ -587,8 +635,8 @@ export function BillingCheckoutDialog({
         },
         body: JSON.stringify({
           planKey,
-          ...(manualCode.trim()
-            ? { manualCouponCode: manualCode.trim() }
+          ...(checkoutManualCouponCode
+            ? { manualCouponCode: checkoutManualCouponCode }
             : {}),
         }),
       })
@@ -603,25 +651,29 @@ export function BillingCheckoutDialog({
           'Billing returned a different plan. Please try again.',
         )
       }
-      const changed = quoteChangedAtCheckout(quote, prepared)
+      const requiresConfirmation = checkoutChangeRequiresConfirmation(
+        quote,
+        prepared,
+        checkoutManualCouponCode,
+      )
       saveBillingCheckoutRecovery({
         accountId,
         intentId: prepared.intentId,
         planKey,
         catalogVersion: prepared.quote.catalogVersion,
         idempotencyKey,
-        ...(manualCode.trim()
-          ? { manualCouponCode: manualCode.trim() }
+        ...(checkoutManualCouponCode
+          ? { manualCouponCode: checkoutManualCouponCode }
           : {}),
       })
       if (!mountedRef.current) return
       setCheckout(prepared)
       setStatusMessage(
-        changed
+        requiresConfirmation
           ? 'Your price or coupon terms changed. Review the updated amount before paying.'
           : null,
       )
-      if (changed) {
+      if (requiresConfirmation) {
         setStage('final_review')
         return
       }
@@ -997,6 +1049,7 @@ export function BillingCheckoutDialog({
                           onChange={(event) => {
                             setManualCode(event.target.value.toUpperCase())
                             setCouponMessage(null)
+                            setManualCouponValidation(null)
                           }}
                           disabled={couponApplying}
                         />

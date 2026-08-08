@@ -590,3 +590,39 @@ export function quoteChangedAtCheckout(
     preview.coupon?.termsText !== finalQuote.coupon?.termsText
   )
 }
+
+export function checkoutChangeRequiresConfirmation(
+  preview: CustomerBillingQuote,
+  checkout: SubscriptionCheckout,
+  expectedManualCouponCode?: string,
+): boolean {
+  const finalQuote = checkout.quote
+  const expectedCode = expectedManualCouponCode?.trim().toUpperCase()
+  if (
+    expectedCode &&
+    (
+      finalQuote.coupon?.mode !== 'code' ||
+      finalQuote.coupon.code?.trim().toUpperCase() !== expectedCode
+    )
+  ) return true
+
+  if (!quoteChangedAtCheckout(preview, checkout)) return false
+
+  const previewRenewal = preview.renewalPricePaise ?? preview.listPricePaise
+  const finalRenewal = finalQuote.renewalPricePaise
+  const previewNextCharge = preview.nextChargePaise ?? previewRenewal
+  const previewDiscountedCycles = preview.discountedBillingCycles ?? 0
+  const finalDiscountedCycles = finalQuote.discountedBillingCycles ?? 0
+  const strictlyBetterNow =
+    finalQuote.payablePaise < preview.payablePaise &&
+    finalQuote.discountPaise > preview.discountPaise
+  const commitmentsUnchangedOrBetter =
+    finalQuote.planKey === preview.planKey &&
+    finalQuote.catalogVersion === preview.catalogVersion &&
+    finalQuote.listPricePaise === preview.listPricePaise &&
+    finalRenewal === previewRenewal &&
+    finalQuote.nextChargePaise <= previewNextCharge &&
+    finalDiscountedCycles >= previewDiscountedCycles
+
+  return !(strictlyBetterNow && commitmentsUnchangedOrBetter)
+}
