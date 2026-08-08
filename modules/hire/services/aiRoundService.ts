@@ -343,6 +343,15 @@ export async function prepareRound(
   if (!round.consentAt) {
     throw new AppError('Consent is required before starting', 409, 'CONSENT_REQUIRED')
   }
+  // Same grace ceiling verifyRoundToken enforces — a guest whose NextAuth
+  // session outlives the round cannot keep re-preparing via this authed
+  // endpoint after the link itself has died (Codex P2 on #603).
+  if (
+    round.inviteTokenExpiry.getTime() + POST_AUTH_GRACE_DAYS * 24 * 60 * 60 * 1000 <=
+    Date.now()
+  ) {
+    throw new AppError('This interview link is no longer valid', 410, 'ROUND_LINK_INVALID')
+  }
 
   const workspace = await HireWorkspace.findById(round.workspaceId)
 

@@ -221,13 +221,48 @@ describe('reconcileApplicationRounds', () => {
     expect(update.$set.results.pending).toBe(false)
   })
 
-  it('skips revoked rounds and rounds that never reached prepare', async () => {
+  it('skips rounds that never reached prepare', async () => {
     mockRound.find.mockResolvedValue([
-      round({ status: 'revoked' }),
       round({ preparedAt: undefined }),
       round({ guestUserId: undefined }),
     ])
     await reconcileApplicationRounds('ws-A', 'a1')
     expect(mockSessionFind).not.toHaveBeenCalled()
+  })
+
+  it('attaches a revoked round\'s completed session FLAGGED — never silently untracked', async () => {
+    mockRound.find.mockResolvedValue([round({ status: 'revoked', revokedAt: new Date() })])
+    mockSessionFind.mockReturnValue(chainTo([session()]))
+    mockRound.findOneAndUpdate.mockResolvedValue({ _id: 'r1' })
+
+    await reconcileApplicationRounds('ws-A', 'a1')
+    const [, update] = mockRound.findOneAndUpdate.mock.calls[0]
+    expect(update.$set.results.completedAfterRevoke).toBe(true)
+    // The round stays administratively revoked — results attached, status kept.
+    expect(update.$set.status).toBeUndefined()
+    expect(mockAppendEvent).toHaveBeenCalledWith(
+      'ws-A',
+      'a1',
+      expect.objectContaining({
+        type: 'ai_result_linked',
+        note: expect.stringContaining('AFTER the link was revoked'),
+      })
+    )
+  })
+
+  it('keeps counting attempts for already-linked rounds (second-device retakes stay visible)', async () => {
+    mockRound.find.mockResolvedValue([
+      round({ sessionId: '.session-1', results: { overallScore: 80, pending: false }, attemptCount: 1 }),
+    ])
+    mockSessionFind.mockReturnValue(
+      chainTo([session(), session({ _id: { toString: () => 's2' }, status: 'in_progress' })])
+    )
+    await reconcileApplicationRounds('ws-A', 'a1')
+    const attemptUpdate = mockRound.updateOne.mock.calls.find(
+      ([, update]) => update.$set?.attemptCount !== undefined
+    )
+    expect(attemptUpdate![1].$set.attemptCount).toBe(2)
+    // Linked round: no re-claim attempted.
+    expect(mockRound.findOneAndUpdate).not.toHaveBeenCalled()
   })
 })

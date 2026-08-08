@@ -55,6 +55,12 @@ export interface HireRoundResults {
   /** True when the session completed but session-level feedback isn't
    * generated yet — the snapshot is refreshed on later reads. */
   pending?: boolean
+  /** True when the guest completed the interview AFTER the round was
+   * revoked (they had already reached the engine flow — no engine-side
+   * handoff check exists to stop them; see the flagged first-class seam).
+   * Results are attached so the outcome is never silently lost, and the
+   * card labels them for the workspace to judge. */
+  completedAfterRevoke?: boolean
   sessionCompletedAt?: Date
 }
 

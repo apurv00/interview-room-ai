@@ -130,9 +130,9 @@ export async function reconcileApplicationRounds(
   const activity: RoundActivity[] = []
 
   for (const round of rounds) {
-    if (round.status === 'revoked') continue
-
-    // Refresh a linked-but-pending snapshot once feedback lands.
+    // Refresh a linked-but-pending snapshot once feedback lands. The
+    // completedAfterRevoke flag is round-derived state, not session state —
+    // preserve it across the rebuild.
     if (round.sessionId && round.results?.pending) {
       const session = (await InterviewSession.findById(round.sessionId)
         .select(SESSION_SELECT)
@@ -140,12 +140,18 @@ export async function reconcileApplicationRounds(
       if (session?.feedback) {
         await HireRound.updateOne(
           { _id: round._id, workspaceId },
-          { $set: { results: buildResultsSnapshot(session) } }
+          {
+            $set: {
+              results: {
+                ...buildResultsSnapshot(session),
+                ...(round.results?.completedAfterRevoke ? { completedAfterRevoke: true } : {}),
+              },
+            },
+          }
         )
       }
-      continue
     }
-    if (round.sessionId || !round.guestUserId || !round.preparedAt) continue
+    if (!round.guestUserId || !round.preparedAt) continue
 
     const sessions = (await InterviewSession.find({
       userId: round.guestUserId,
@@ -166,14 +172,24 @@ export async function reconcileApplicationRounds(
     )
 
     // Attempt visibility: every engine session this round's config produced
-    // counts, completed or not. >1 means the candidate started over — the
-    // card shows it; it is never silently absorbed.
+    // counts, completed or not, and counting continues even after a session
+    // has been linked (a second device holding the prepared config can start
+    // another run post-link). >1 is surfaced on the card, never absorbed.
     if (matches.length > 0 && matches.length !== (round.attemptCount ?? 0)) {
       await HireRound.updateOne(
         { _id: round._id, workspaceId },
         { $set: { attemptCount: matches.length } }
       )
     }
+    if (round.sessionId) continue
+
+    // Revoked rounds are still reconciled: without an engine-side handoff
+    // check (flagged first-class seam), a guest who reached the lobby before
+    // revocation can complete the interview anyway. Skipping it would leave
+    // that completed session and its cost silently untracked — instead the
+    // results are attached FLAGGED, and the round stays revoked; the
+    // workspace decides what the flagged result is worth.
+    const revoked = !!round.revokedAt || round.status === 'revoked'
 
     let linked = false
     for (const s of matches) {
@@ -185,8 +201,11 @@ export async function reconcileApplicationRounds(
             $set: {
               sessionId: s._id,
               linkedAt: new Date(),
-              status: 'completed',
-              results: buildResultsSnapshot(s),
+              results: {
+                ...buildResultsSnapshot(s),
+                ...(revoked ? { completedAfterRevoke: true } : {}),
+              },
+              ...(revoked ? {} : { status: 'completed' as const }),
             },
             $unset: { live: 1 },
           },
@@ -197,7 +216,9 @@ export async function reconcileApplicationRounds(
           await appendApplicationEvent(workspaceId, applicationId, {
             type: 'ai_result_linked',
             actorName: 'System',
-            note: 'AI interview completed — results attached',
+            note: revoked
+              ? 'AI interview completed AFTER the link was revoked — results attached flagged'
+              : 'AI interview completed — results attached',
           })
         }
         break

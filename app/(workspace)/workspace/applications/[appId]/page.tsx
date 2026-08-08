@@ -52,6 +52,7 @@ interface RoundResults {
   endReason?: string | null
   perQuestion?: PerQuestion[]
   pending?: boolean
+  completedAfterRevoke?: boolean
 }
 
 interface Round {
@@ -237,7 +238,9 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
           </div>
           {!terminal && job.status === 'open' && (
             <div className="flex gap-2 shrink-0">
-              {!liveRound && latest?.status !== 'completed' && (
+              {/* Visible whenever no round is live — a follow-up AI round
+                  after a completed one is a supported flow. */}
+              {!liveRound && (
                 <Button onClick={() => setShowSend((v) => !v)}>
                   {showSend ? 'Cancel' : 'Send AI interview'}
                 </Button>
@@ -363,6 +366,14 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
             <p className="text-sm text-amber-600">
               Interview finished — the full report is still being generated. Per-answer
               scores below are already final.
+            </p>
+          )}
+
+          {round.results?.completedAfterRevoke && (
+            <p className="text-sm text-red-600">
+              This interview was completed <strong>after the link was revoked</strong> —
+              the candidate had already started when the link was killed. Results are
+              attached for completeness; treat them at your discretion.
             </p>
           )}
 

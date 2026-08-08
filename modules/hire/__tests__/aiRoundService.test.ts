@@ -299,6 +299,7 @@ describe('prepareRound', () => {
       jobId: 'j1',
       status: 'auth_verified',
       consentAt: new Date(),
+      inviteTokenExpiry: new Date(Date.now() + 3600_000),
       jdSnapshot,
       config: { role: 'Backend Engineer', interviewType: 'behavioral', experience: '3-6', duration: 15 },
     })
@@ -327,6 +328,21 @@ describe('prepareRound', () => {
 
     mockRound.findOne.mockResolvedValue({ _id: ROUND_ID, status: 'auth_verified' })
     await expect(prepareRound(ROUND_ID, 'g')).rejects.toMatchObject({ code: 'CONSENT_REQUIRED' })
+  })
+
+  it('enforces the post-auth grace ceiling — a lingering NextAuth session cannot re-prepare forever', async () => {
+    mockRound.findOne.mockResolvedValue({
+      _id: ROUND_ID,
+      status: 'prepared',
+      consentAt: new Date(),
+      inviteTokenExpiry: new Date(Date.now() - 15 * 24 * 3600 * 1000),
+      jdSnapshot: 'jd',
+      config: { role: 'R', interviewType: 'behavioral', experience: '3-6', duration: 15 },
+    })
+    await expect(prepareRound(ROUND_ID, 'guest-1')).rejects.toMatchObject({
+      statusCode: 410,
+      code: 'ROUND_LINK_INVALID',
+    })
   })
 })
 
