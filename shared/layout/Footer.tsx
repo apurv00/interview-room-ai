@@ -24,7 +24,7 @@ const TOOLS_LINKS = [
   { href: '/resume/tailor', label: 'Resume Tailor' },
   { href: '/resume/ats-check', label: 'ATS Checker' },
   { href: '/resume/templates', label: 'Resume Templates' },
-  { href: '/hire', label: 'For Recruiters' },
+  { href: '/workspace', label: 'For Recruiters' },
 ]
 
 const HUB_LINKS = [

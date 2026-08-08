@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import AppShell from '@shared/layout/AppShell'
-import HireLayout from '../../../app/(hire)/hire/layout'
+import WorkspaceLayout from '../../../app/(workspace)/workspace/layout'
 import ResumeLayout from '../../../app/(resume)/resume/layout'
 import { JOBS_STORAGE_KEYS, STORAGE_KEYS } from '@shared/storageKeys'
 
@@ -13,6 +13,7 @@ const auth = vi.hoisted(() => ({
 vi.mock('next-auth/react', () => auth)
 vi.mock('next/navigation', () => ({
   usePathname: () => '/jobs',
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
 }))
 vi.mock('@shared/providers/AuthGateProvider', () => ({
   useAuthGate: () => ({ open: vi.fn() }),
@@ -73,11 +74,12 @@ describe('direct sign-out surfaces', () => {
     expectPrivateBrowserStateCleared()
   })
 
-  it('scrubs account-bound state before Hire signs out', async () => {
+  it('scrubs account-bound state before the IPG Hire workspace signs out', async () => {
     seedPrivateBrowserState()
-    render(<HireLayout><p>Hire page</p></HireLayout>)
+    render(<WorkspaceLayout><p>Workspace page</p></WorkspaceLayout>)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    // Desktop + mobile shells both render a sign-out button — either works.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0])
 
     await waitFor(() => expect(auth.signOut).toHaveBeenCalledWith({ callbackUrl: '/' }))
     expectPrivateBrowserStateCleared()
