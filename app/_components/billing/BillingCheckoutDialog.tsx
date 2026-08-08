@@ -58,6 +58,8 @@ interface BillingCheckoutDialogProps {
   catalog: PublicBillingCatalog
   planKey: PaidBillingPlanKey
   accountId: string
+  initialQuote: CustomerBillingQuote | undefined
+  initialSummary: CustomerBillingSummary | undefined
   refreshSession: () => Promise<unknown>
   onClose: () => void
   onCompleted: () => Promise<void>
@@ -138,15 +140,34 @@ export function BillingCheckoutDialog({
   catalog,
   planKey,
   accountId,
+  initialQuote,
+  initialSummary,
   refreshSession,
   onClose,
   onCompleted,
 }: BillingCheckoutDialogProps) {
   const plan = catalog.plans[planKey]
-  const [stage, setStage] = useState<CheckoutStage>('loading')
-  const [quote, setQuote] = useState<CustomerBillingQuote | null>(null)
+  const [initialPlanQuote] = useState<CustomerBillingQuote | null>(
+    () => initialQuote?.planKey === planKey ? initialQuote : null,
+  )
+  const [initialCheckoutSummary] = useState<CustomerBillingSummary | null>(
+    () => initialSummary ?? null,
+  )
+  const [initialRecovery] = useState(
+    () => readBillingCheckoutRecovery(accountId),
+  )
+  const [stage, setStage] = useState<CheckoutStage>(
+    initialPlanQuote && initialCheckoutSummary && !initialRecovery
+      ? 'review'
+      : 'loading',
+  )
+  const [quote, setQuote] = useState<CustomerBillingQuote | null>(
+    initialPlanQuote,
+  )
   const [checkout, setCheckout] = useState<SubscriptionCheckout | null>(null)
-  const [summary, setSummary] = useState<CustomerBillingSummary | null>(null)
+  const [summary, setSummary] = useState<CustomerBillingSummary | null>(
+    initialCheckoutSummary,
+  )
   const [manualCode, setManualCode] = useState('')
   const [couponOpen, setCouponOpen] = useState(false)
   const [couponMessage, setCouponMessage] = useState<string | null>(null)
@@ -156,10 +177,13 @@ export function BillingCheckoutDialog({
   const [idempotencyKey, setIdempotencyKey] = useState(
     createBillingIdempotencyKey,
   )
+  const manualCodeNeedsValidation =
+    manualCode.trim().length > 0 && couponMessage === null
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
   const recoveryAbortRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
 
   const requestQuote = useCallback(async (
     code?: string,
@@ -401,6 +425,7 @@ export function BillingCheckoutDialog({
   ])
 
   useEffect(() => {
+    mountedRef.current = true
     restoreFocusRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null
@@ -408,6 +433,7 @@ export function BillingCheckoutDialog({
     document.body.style.overflow = 'hidden'
     window.setTimeout(() => closeRef.current?.focus(), 0)
     return () => {
+      mountedRef.current = false
       document.body.style.overflow = previousOverflow
       recoveryAbortRef.current?.abort()
       restoreFocusRef.current?.focus()
@@ -415,31 +441,38 @@ export function BillingCheckoutDialog({
   }, [])
 
   useEffect(() => {
+    if (stage !== 'review' && stage !== 'final_review') return
+    void loadRazorpayCheckout().catch(() => undefined)
+  }, [stage])
+
+  useEffect(() => {
     const controller = new AbortController()
     recoveryAbortRef.current = controller
-    const recovery = readBillingCheckoutRecovery(accountId)
+    const recovery = initialRecovery
 
     if (recovery?.planKey === planKey) {
       setIdempotencyKey(recovery.idempotencyKey)
       setManualCode(recovery.manualCouponCode ?? '')
-      void requestQuote(
-        recovery.manualCouponCode,
-        controller.signal,
-      )
-        .then((nextQuote) => {
-          if (!controller.signal.aborted) setQuote(nextQuote)
-        })
-        .catch(() => {
-          // Recovery status and the immutable checkout quote remain usable
-          // even when a fresh informational quote is unavailable.
-        })
+      if (!initialPlanQuote) {
+        void requestQuote(
+          recovery.manualCouponCode,
+          controller.signal,
+        )
+          .then((nextQuote) => {
+            if (!controller.signal.aborted) setQuote(nextQuote)
+          })
+          .catch(() => {
+            // Recovery status and the immutable checkout quote remain usable
+            // even when a fresh informational quote is unavailable.
+          })
+      }
       void resumeRecovery(recovery, controller)
       return () => controller.abort()
     }
 
     void Promise.all([
-      requestQuote(undefined, controller.signal),
-      loadSummary(controller.signal),
+      initialPlanQuote ?? requestQuote(undefined, controller.signal),
+      initialCheckoutSummary ?? loadSummary(controller.signal),
     ])
       .then(([nextQuote, nextSummary]) => {
         if (controller.signal.aborted) return
@@ -460,6 +493,9 @@ export function BillingCheckoutDialog({
     return () => controller.abort()
   }, [
     accountId,
+    initialPlanQuote,
+    initialRecovery,
+    initialCheckoutSummary,
     loadSummary,
     planKey,
     requestQuote,
@@ -530,15 +566,18 @@ export function BillingCheckoutDialog({
   }
 
   async function prepareCheckout() {
-    if (!quote || !summary || stage === 'preparing') return
+    if (
+      !quote ||
+      !summary ||
+      couponApplying ||
+      manualCodeNeedsValidation ||
+      stage === 'preparing'
+    ) return
     setStage('preparing')
     setError(null)
-    setStatusMessage('Confirming your final price and reserving any coupon…')
+    setStatusMessage('Preparing your secure payment…')
 
     try {
-      const latestSummary = await loadSummary()
-      assertNewCheckoutAllowed(latestSummary)
-      setSummary(latestSummary)
       const response = await billingFetch('/api/billing/subscriptions/checkout', {
         method: 'POST',
         headers: {
@@ -565,7 +604,6 @@ export function BillingCheckoutDialog({
         )
       }
       const changed = quoteChangedAtCheckout(quote, prepared)
-      setCheckout(prepared)
       saveBillingCheckoutRecovery({
         accountId,
         intentId: prepared.intentId,
@@ -576,13 +614,20 @@ export function BillingCheckoutDialog({
           ? { manualCouponCode: manualCode.trim() }
           : {}),
       })
+      if (!mountedRef.current) return
+      setCheckout(prepared)
       setStatusMessage(
         changed
-          ? 'The final checkout price changed. Review the updated amount before opening Razorpay.'
-          : 'Your final checkout is ready. Review it before opening Razorpay.',
+          ? 'Your price or coupon terms changed. Review the updated amount before paying.'
+          : null,
       )
-      setStage('final_review')
+      if (changed) {
+        setStage('final_review')
+        return
+      }
+      await openRazorpay(prepared)
     } catch (cause) {
+      if (!mountedRef.current) return
       setError(userFacingError(
         cause,
         'Secure checkout could not be prepared.',
@@ -595,6 +640,7 @@ export function BillingCheckoutDialog({
   async function verifyPaymentOnce(
     payload: RazorpaySuccessPayload,
     signal: AbortSignal,
+    activeCheckout: SubscriptionCheckout,
   ) {
     const response = await billingFetch('/api/billing/verify/subscription', {
       method: 'POST',
@@ -603,7 +649,7 @@ export function BillingCheckoutDialog({
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        intentId: checkout!.intentId,
+        intentId: activeCheckout.intentId,
         razorpayPaymentId: payload.razorpay_payment_id,
         razorpaySignature: payload.razorpay_signature,
       }),
@@ -616,8 +662,10 @@ export function BillingCheckoutDialog({
     )
   }
 
-  async function verifyPayment(payload: RazorpaySuccessPayload) {
-    if (!checkout) return
+  async function verifyPayment(
+    payload: RazorpaySuccessPayload,
+    activeCheckout: SubscriptionCheckout,
+  ) {
     recoveryAbortRef.current?.abort()
     const controller = new AbortController()
     recoveryAbortRef.current = controller
@@ -631,6 +679,7 @@ export function BillingCheckoutDialog({
         const verification = await verifyPaymentOnce(
           payload,
           controller.signal,
+          activeCheckout,
         )
         if (verification.status === 'completed') {
           await completeCheckout('Payment verified. Your plan is active.')
@@ -648,7 +697,7 @@ export function BillingCheckoutDialog({
           setStatusMessage(
             'Payment was captured. Your plan is being activated.',
           )
-          await pollIntent(checkout.intentId, controller)
+          await pollIntent(activeCheckout.intentId, controller)
           return
         }
         setStatusMessage(
@@ -682,7 +731,7 @@ export function BillingCheckoutDialog({
           'Payment verification is temporarily unavailable. Do not pay again.',
         ))
         setStage('pending')
-        await pollIntent(checkout.intentId, controller)
+        await pollIntent(activeCheckout.intentId, controller)
         return
       }
     }
@@ -695,28 +744,30 @@ export function BillingCheckoutDialog({
     }
   }
 
-  async function openRazorpay() {
-    if (!checkout || stage === 'opening') return
+  async function openRazorpay(preparedCheckout?: SubscriptionCheckout) {
+    const activeCheckout = preparedCheckout ?? checkout
+    if (!activeCheckout || !mountedRef.current || stage === 'opening') return
     setStage('opening')
     setError(null)
     setStatusMessage('Opening Razorpay secure checkout…')
 
     try {
       const Razorpay = await loadRazorpayCheckout()
+      if (!mountedRef.current) return
       const instance = new Razorpay({
-        key: checkout.checkout.keyId,
-        subscription_id: checkout.checkout.subscriptionId,
+        key: activeCheckout.checkout.keyId,
+        subscription_id: activeCheckout.checkout.subscriptionId,
         name: 'interviewprep.guru',
         description:
-          `${checkout.quote.entitlementSummary.displayName} monthly plan`,
-        handler: verifyPayment,
+          `${activeCheckout.quote.entitlementSummary.displayName} monthly plan`,
+        handler: (payload) => verifyPayment(payload, activeCheckout),
         modal: {
           escape: true,
           confirm_close: true,
           ondismiss: () => {
-            if (checkout.analyticsObservation) {
+            if (activeCheckout.analyticsObservation) {
               void recordCheckoutObservation({
-                authority: checkout.analyticsObservation,
+                authority: activeCheckout.analyticsObservation,
                 eventName: 'checkout_dismissed',
               })
             }
@@ -726,7 +777,7 @@ export function BillingCheckoutDialog({
             setStatusMessage(
               'Checkout closed. Checking whether a payment completed in the background…',
             )
-            void pollIntent(checkout.intentId, controller)
+            void pollIntent(activeCheckout.intentId, controller)
           },
         },
         theme: { color: '#2563eb' },
@@ -739,12 +790,12 @@ export function BillingCheckoutDialog({
         setStatusMessage(
           'Razorpay reported a payment problem. Checking the server before another attempt…',
         )
-        void pollIntent(checkout.intentId, controller)
+        void pollIntent(activeCheckout.intentId, controller)
       })
       instance.open()
-      if (checkout.analyticsObservation) {
+      if (activeCheckout.analyticsObservation) {
         void recordCheckoutObservation({
-          authority: checkout.analyticsObservation,
+          authority: activeCheckout.analyticsObservation,
           eventName: 'checkout_opened',
         })
       }
@@ -753,6 +804,7 @@ export function BillingCheckoutDialog({
         'Complete the Razorpay mandate. You can return safely after a UPI app switch.',
       )
     } catch {
+      if (!mountedRef.current) return
       setError(
         'Razorpay Checkout could not be opened. Your saved checkout is safe; try reopening it without creating another payment.',
       )
@@ -774,6 +826,7 @@ export function BillingCheckoutDialog({
         type="button"
         aria-label="Close checkout"
         onClick={() => !busy && onClose()}
+        disabled={busy}
         className="absolute inset-0 bg-black/55 backdrop-blur-sm"
       />
       <div
@@ -812,8 +865,7 @@ export function BillingCheckoutDialog({
             id="billing-checkout-description"
             className="mt-1 text-sm text-[#536471]"
           >
-            Review the server-confirmed price and monthly renewal before
-            authorizing a Razorpay mandate.
+            Review your price and monthly renewal before paying.
           </p>
         </div>
 
@@ -967,6 +1019,11 @@ export function BillingCheckoutDialog({
                       {couponMessage}
                     </p>
                   )}
+                  {manualCodeNeedsValidation && !couponApplying && (
+                    <p className="mt-2 text-xs text-[#536471]" role="status">
+                      Apply or clear the coupon code before paying.
+                    </p>
+                  )}
                 </section>
               </>
             )}
@@ -1019,17 +1076,31 @@ export function BillingCheckoutDialog({
                 <Button type="button" variant="secondary" onClick={onClose}>
                   Close
                 </Button>
-              ) : stage === 'review' ? (
+              ) : stage === 'review' || stage === 'preparing' ? (
                 <>
-                  <Button type="button" variant="secondary" onClick={onClose}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={onClose}
+                    disabled={stage === 'preparing'}
+                  >
                     Cancel
                   </Button>
                   <Button
                     type="button"
                     onClick={prepareCheckout}
-                    disabled={!quote || !summary}
+                    disabled={
+                      !quote ||
+                      !summary ||
+                      couponApplying ||
+                      manualCodeNeedsValidation ||
+                      stage === 'preparing'
+                    }
+                    aria-busy={stage === 'preparing'}
                   >
-                    Review secure checkout
+                    Pay {displayedQuote
+                      ? formatInr(displayedQuote.payablePaise)
+                      : ''} Now
                   </Button>
                 </>
               ) : stage === 'final_review' ? (
@@ -1039,10 +1110,9 @@ export function BillingCheckoutDialog({
                   </Button>
                   <Button
                     type="button"
-                    onClick={openRazorpay}
+                    onClick={() => void openRazorpay()}
                   >
-                    Pay {checkout ? formatInr(checkout.quote.payablePaise) : ''}
-                    {' '}with Razorpay
+                    Pay {checkout ? formatInr(checkout.quote.payablePaise) : ''} Now
                   </Button>
                 </>
               ) : stage === 'failed' ? (
@@ -1059,7 +1129,7 @@ export function BillingCheckoutDialog({
                         setStage('review')
                       }}
                     >
-                      Return to review
+                      Return to payment
                     </Button>
                   )}
                 </>

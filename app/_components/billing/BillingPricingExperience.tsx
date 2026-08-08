@@ -654,10 +654,12 @@ export function BillingPricingExperience({
 
       {selectedPlan && accountId && (
         <BillingCheckoutDialog
-          key={selectedPlan}
+          key={`${accountId}:${selectedPlan}`}
           catalog={catalog}
           planKey={selectedPlan}
           accountId={accountId}
+          initialQuote={quotes[selectedPlan]}
+          initialSummary={billingSummary ?? undefined}
           refreshSession={refreshSession}
           onClose={() => setSelectedPlan(null)}
           onCompleted={refreshCompletedBilling}

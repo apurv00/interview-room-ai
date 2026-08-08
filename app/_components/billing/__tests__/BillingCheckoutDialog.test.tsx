@@ -16,6 +16,7 @@ import { billingResponseSchemas } from '../billingClient'
 
 const mocks = vi.hoisted(() => ({
   loadRazorpayCheckout: vi.fn(),
+  openRazorpay: vi.fn(),
 }))
 
 vi.mock('../razorpayBrowser', () => ({
@@ -170,6 +171,7 @@ beforeEach(() => {
     ) {
       this.on = () => {}
       this.open = () => {
+        mocks.openRazorpay()
         void options.handler({
           razorpay_payment_id: 'pay_checkout123',
           razorpay_signature: 'valid-signature',
@@ -177,6 +179,7 @@ beforeEach(() => {
       }
     },
   )
+  mocks.openRazorpay.mockReset()
 })
 
 afterEach(() => {
@@ -185,8 +188,17 @@ afterEach(() => {
 })
 
 describe('BillingCheckoutDialog completion and recovery', () => {
-  it('prepares checkout without billing-profile UI or requests', async () => {
-    const fetchMock = vi.fn(standardFetch)
+  it('shows the preloaded price immediately and opens Razorpay from one Pay click', async () => {
+    let resolveCheckout!: (value: Response) => void
+    const pendingCheckout = new Promise<Response>((resolve) => {
+      resolveCheckout = resolve
+    })
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/billing/subscriptions/checkout') {
+        return pendingCheckout
+      }
+      return standardFetch(input, init)
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     render(
@@ -194,16 +206,22 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         catalog={catalog}
         planKey="plus"
         accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={summary}
         refreshSession={vi.fn().mockResolvedValue(undefined)}
         onClose={vi.fn()}
         onCompleted={vi.fn().mockResolvedValue(undefined)}
       />,
     )
 
-    const review = await screen.findByRole('button', {
-      name: 'Review secure checkout',
+    const pay = screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
     })
-    expect(review).toBeEnabled()
+    expect(pay).toBeEnabled()
+    expect(screen.queryByRole('button', {
+      name: 'Review secure checkout',
+    })).not.toBeInTheDocument()
+    expect(screen.queryByText(/with Razorpay/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', {
       name: 'Billing state / Union Territory',
     })).not.toBeInTheDocument()
@@ -211,15 +229,27 @@ describe('BillingCheckoutDialog completion and recovery', () => {
     expect(fetchMock.mock.calls.some(
       ([input]) => String(input) === '/api/billing/profile',
     )).toBe(false)
-
-    fireEvent.click(review)
-
-    expect(await screen.findByRole('button', {
-      name: /Pay ₹599 with Razorpay/,
-    })).toBeEnabled()
     expect(fetchMock.mock.calls.some(
-      ([input]) => String(input) === '/api/billing/profile',
+      ([input]) => String(input) === '/api/billing/quote',
     )).toBe(false)
+    expect(fetchMock.mock.calls.some(
+      ([input]) => String(input) === '/api/billing/me',
+    )).toBe(false)
+
+    fireEvent.click(pay)
+
+    expect(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
+    })).toBeDisabled()
+    expect(screen.getByText('Preparing your secure payment…'))
+      .toBeInTheDocument()
+    expect(mocks.openRazorpay).not.toHaveBeenCalled()
+
+    resolveCheckout(new Response(JSON.stringify(checkout), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await waitFor(() => expect(mocks.openRazorpay).toHaveBeenCalledOnce())
   })
 
   it('allows a server-side retry when another device has the pending checkout', async () => {
@@ -234,9 +264,16 @@ describe('BillingCheckoutDialog completion and recovery', () => {
       },
     }
     const recoveredCheckout = { ...checkout, reused: true }
+    mocks.loadRazorpayCheckout.mockResolvedValue(
+      function PendingRazorpay(
+        this: { on: () => void; open: () => void },
+      ) {
+        this.on = () => {}
+        this.open = () => mocks.openRazorpay()
+      },
+    )
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === '/api/billing/me') return response(pendingSummary)
       if (url === '/api/billing/subscriptions/checkout') {
         return response(recoveredCheckout)
       }
@@ -249,19 +286,19 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         catalog={catalog}
         planKey="plus"
         accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={pendingSummary}
         refreshSession={vi.fn().mockResolvedValue(undefined)}
         onClose={vi.fn()}
         onCompleted={vi.fn().mockResolvedValue(undefined)}
       />,
     )
 
-    fireEvent.click(await screen.findByRole('button', {
-      name: 'Review secure checkout',
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
     }))
 
-    expect(await screen.findByRole('button', {
-      name: /Pay ₹599 with Razorpay/,
-    })).toBeEnabled()
+    await waitFor(() => expect(mocks.openRazorpay).toHaveBeenCalledOnce())
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/billing/subscriptions/checkout',
       expect.objectContaining({ method: 'POST' }),
@@ -271,6 +308,147 @@ describe('BillingCheckoutDialog completion and recovery', () => {
       intentId: INTENT_ID,
       planKey: 'plus',
     })
+  })
+
+  it('requires one extra confirmation only when the server price changed', async () => {
+    const termsText = 'Save ₹100 for the first billing cycle.'
+    const changedCheckout = {
+      ...checkout,
+      quote: {
+        ...checkout.quote,
+        discountPaise: 10_000,
+        payablePaise: 49_900,
+        nextChargePaise: 59_900,
+        discountedBillingCycles: 1,
+        coupon: {
+          campaignId: '84b64c0f2f4e8b6a8c7d9e10',
+          revision: 1,
+          mode: 'code',
+          code: 'GURU100',
+          displayText: 'Save ₹100 on your subscription',
+          termsText,
+        },
+        disclosure: {
+          ...checkout.quote.disclosure,
+          why: 'Coupon code GURU100 applied.',
+          terms: termsText,
+        },
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/billing/subscriptions/checkout') {
+        return response(changedCheckout, 201)
+      }
+      return standardFetch(input, init)
+    }))
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={summary}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
+    }))
+
+    expect(await screen.findByText(
+      'Your price or coupon terms changed. Review the updated amount before paying.',
+    )).toBeInTheDocument()
+    expect(mocks.openRazorpay).not.toHaveBeenCalled()
+    const updatedPay = screen.getByRole('button', {
+      name: 'Pay ₹499 Now',
+    })
+    expect(updatedPay).toBeEnabled()
+
+    fireEvent.click(updatedPay)
+    await waitFor(() => expect(mocks.openRazorpay).toHaveBeenCalledOnce())
+  })
+
+  it('requires an edited coupon code to be applied or cleared before Pay', async () => {
+    vi.stubGlobal('fetch', vi.fn(standardFetch))
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={summary}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Have a coupon code?',
+    }))
+    fireEvent.change(screen.getByRole('textbox', {
+      name: 'Coupon code',
+    }), { target: { value: 'GURU100' } })
+
+    expect(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
+    })).toBeDisabled()
+    expect(screen.getByText(
+      'Apply or clear the coupon code before paying.',
+    )).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    await screen.findByText('This code is not available for this checkout.')
+    expect(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
+    })).toBeEnabled()
+  })
+
+  it('does not open Razorpay after the checkout dialog unmounts', async () => {
+    let resolveCheckout!: (value: Response) => void
+    const pendingCheckout = new Promise<Response>((resolve) => {
+      resolveCheckout = resolve
+    })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/billing/subscriptions/checkout') {
+        return pendingCheckout
+      }
+      return standardFetch(input, init)
+    }))
+    const view = render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={summary}
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
+    }))
+    view.unmount()
+    resolveCheckout(new Response(JSON.stringify(checkout), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await waitFor(() => {
+      expect(readBillingCheckoutRecovery(ACCOUNT_ID)).toMatchObject({
+        intentId: INTENT_ID,
+        planKey: 'plus',
+      })
+    })
+    expect(mocks.openRazorpay).not.toHaveBeenCalled()
   })
 
   it('refreshes both NextAuth and billing summary after immediate verification', async () => {
@@ -284,18 +462,16 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         catalog={catalog}
         planKey="plus"
         accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={summary}
         refreshSession={refreshSession}
         onClose={onClose}
         onCompleted={onCompleted}
       />,
     )
 
-    const review = await screen.findByRole('button', {
-      name: 'Review secure checkout',
-    })
-    fireEvent.click(review)
-    fireEvent.click(await screen.findByRole('button', {
-      name: /Pay ₹599 with Razorpay/,
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
     }))
 
     await waitFor(() => expect(refreshSession).toHaveBeenCalledOnce())
@@ -349,17 +525,16 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         catalog={catalog}
         planKey="plus"
         accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={summary}
         refreshSession={vi.fn().mockResolvedValue(undefined)}
         onClose={onClose}
         onCompleted={onCompleted}
       />,
     )
 
-    fireEvent.click(await screen.findByRole('button', {
-      name: 'Review secure checkout',
-    }))
-    fireEvent.click(await screen.findByRole('button', {
-      name: /Pay ₹599 with Razorpay/,
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
     }))
 
     expect(await screen.findByText(
@@ -406,6 +581,8 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         catalog={catalog}
         planKey="plus"
         accountId={ACCOUNT_ID}
+        initialQuote={undefined}
+        initialSummary={undefined}
         refreshSession={refreshSession}
         onClose={onClose}
         onCompleted={onCompleted}
@@ -431,21 +608,23 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         catalog={catalog}
         planKey="plus"
         accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={summary}
         refreshSession={vi.fn().mockResolvedValue(undefined)}
         onClose={vi.fn()}
         onCompleted={vi.fn().mockResolvedValue(undefined)}
       />,
     )
 
-    fireEvent.click(await screen.findByRole('button', {
-      name: 'Review secure checkout',
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Pay ₹599 Now',
     }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Secure checkout could not be prepared.',
     )
     expect(screen.getByRole('button', {
-      name: 'Review secure checkout',
+      name: 'Pay ₹599 Now',
     })).toBeEnabled()
     const closeButtons = screen.getAllByRole('button', {
       name: 'Close checkout',
