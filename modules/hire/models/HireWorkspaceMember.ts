@@ -44,8 +44,11 @@ const HireWorkspaceMemberSchema = new Schema<IHireWorkspaceMember>(
 
 // One membership per email per workspace — the add-member idempotency guarantee.
 HireWorkspaceMemberSchema.index({ workspaceId: 1, email: 1 }, { unique: true })
-// Sign-in resolution paths: by linked user, and by email for the lazy backfill.
-HireWorkspaceMemberSchema.index({ userId: 1 }, { sparse: true })
+// ONE LINKED workspace per user, enforced by the database (Phase 1 rule) —
+// the service-level pre-checks are only the friendly-error fast path;
+// concurrent creates/links race into this index. Sparse: email-only
+// (not-yet-signed-in) rows are exempt.
+HireWorkspaceMemberSchema.index({ userId: 1 }, { unique: true, sparse: true })
 HireWorkspaceMemberSchema.index({ email: 1 })
 
 export const HireWorkspaceMember: Model<IHireWorkspaceMember> =

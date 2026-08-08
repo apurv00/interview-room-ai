@@ -210,10 +210,31 @@ describe('addMember', () => {
   })
 
   it('maps the duplicate-key error to 409 MEMBER_EXISTS', async () => {
-    mockMember.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }))
+    mockMember.create.mockRejectedValue(
+      Object.assign(new Error('dup'), { code: 11000, keyPattern: { workspaceId: 1, email: 1 } })
+    )
     await expect(
       addMember(ctxWith('admin'), { email: 'new@acme.com' })
     ).rejects.toMatchObject({ statusCode: 409, code: 'MEMBER_EXISTS' })
+  })
+
+  it('falls back to an email-only row when the userId link races (E11000 on the unique userId index)', async () => {
+    mockUserFindOne.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve({ _id: 'existing-user' }) }),
+    })
+    mockMember.findOne.mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve(null) }),
+    })
+    mockMember.create
+      .mockRejectedValueOnce(
+        Object.assign(new Error('dup'), { code: 11000, keyPattern: { userId: 1 } })
+      )
+      .mockResolvedValueOnce({ _id: 'm4' })
+
+    await addMember(ctxWith('admin'), { email: 'racer@x.com' })
+    expect(mockMember.create).toHaveBeenCalledTimes(2)
+    expect(mockMember.create.mock.calls[1][0].userId).toBeUndefined()
+    expect(mockMember.create.mock.calls[1][0].email).toBe('racer@x.com')
   })
 })
 

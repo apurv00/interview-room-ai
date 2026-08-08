@@ -194,6 +194,24 @@ describe('POST /begin — otp mode', () => {
     const res = await begin(post('begin', { token: TOKEN }), { params: { roundId: ROUND_ID } })
     expect(res.status).toBe(503)
   })
+
+  it('caps code issuance at 3 per 15 min per round (v1 parity — no inbox flooding)', async () => {
+    const { checkRateLimit } = await import('@shared/middleware/checkRateLimit')
+    const rateLimitMock = checkRateLimit as unknown as ReturnType<typeof vi.fn>
+    rateLimitMock.mockImplementation(async (_id: string, cfg: { keyPrefix: string }) =>
+      cfg.keyPrefix === 'rl:hire-otp-issue'
+        ? new Response(null, { status: 429 })
+        : null
+    )
+    mocks.verifyRoundToken.mockResolvedValue(round('otp'))
+
+    const res = await begin(post('begin', { token: TOKEN }), { params: { roundId: ROUND_ID } })
+    expect(res.status).toBe(429)
+    expect(mocks.issueOtp).not.toHaveBeenCalled()
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+
+    rateLimitMock.mockResolvedValue(null)
+  })
 })
 
 describe('POST /verify — otp mode second step', () => {

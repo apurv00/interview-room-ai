@@ -46,14 +46,26 @@ export async function getWorkspaceForUser(
     sort: { createdAt: 1 },
   })
   if (!membership && actor.email) {
-    membership = await HireWorkspaceMember.findOneAndUpdate(
-      {
-        email: actor.email.toLowerCase(),
-        $or: [{ userId: { $exists: false } }, { userId: null }],
-      },
-      { $set: { userId: actor.userId } },
-      { new: true, sort: { createdAt: 1 } }
-    )
+    try {
+      membership = await HireWorkspaceMember.findOneAndUpdate(
+        {
+          email: actor.email.toLowerCase(),
+          $or: [{ userId: { $exists: false } }, { userId: null }],
+        },
+        { $set: { userId: actor.userId } },
+        { new: true, sort: { createdAt: 1 } }
+      )
+    } catch (err: unknown) {
+      // Unique sparse userId index: a concurrent request linked this user
+      // elsewhere between our two lookups — resolve to that membership.
+      if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
+        membership = await HireWorkspaceMember.findOne({ userId: actor.userId }, null, {
+          sort: { createdAt: 1 },
+        })
+      } else {
+        throw err
+      }
+    }
   }
   if (!membership) return null
 
@@ -87,15 +99,26 @@ export async function createWorkspace(
     guestAuthMode: input.guestAuthMode ?? 'magic_link',
     createdBy: actor.userId,
   })
-  const membership = await HireWorkspaceMember.create({
-    workspaceId: workspace._id,
-    email: actor.email.toLowerCase(),
-    name: actor.name,
-    userId: actor.userId,
-    role: 'admin',
-    addedBy: actor.userId,
-  })
-  return { workspace, membership }
+  try {
+    const membership = await HireWorkspaceMember.create({
+      workspaceId: workspace._id,
+      email: actor.email.toLowerCase(),
+      name: actor.name,
+      userId: actor.userId,
+      role: 'admin',
+      addedBy: actor.userId,
+    })
+    return { workspace, membership }
+  } catch (err: unknown) {
+    // Unique sparse userId index: a concurrent createWorkspace won the race.
+    // Remove the now-orphaned workspace and surface the same 409 the
+    // fast-path check gives.
+    if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
+      await HireWorkspace.deleteOne({ _id: workspace._id })
+      throw new AppError('You already belong to a workspace', 409, 'WORKSPACE_EXISTS')
+    }
+    throw err
+  }
 }
 
 /**
@@ -156,17 +179,27 @@ export async function addMember(
     if (alreadyLinked) linkableUserId = undefined
   }
 
+  const memberDoc = (userId?: typeof linkableUserId) => ({
+    workspaceId: ctx.workspace._id,
+    email,
+    name: input.name,
+    userId,
+    role: 'member' as const,
+    addedBy: ctx.membership.userId,
+  })
+
   try {
-    return await HireWorkspaceMember.create({
-      workspaceId: ctx.workspace._id,
-      email,
-      name: input.name,
-      userId: linkableUserId,
-      role: 'member',
-      addedBy: ctx.membership.userId,
-    })
+    return await HireWorkspaceMember.create(memberDoc(linkableUserId))
   } catch (err: unknown) {
     if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
+      // Which unique index fired? {workspaceId,email} → genuine duplicate.
+      // {userId} → a concurrent request linked this user elsewhere between
+      // our pre-check and create — fall back to an email-only row (same
+      // outcome as the pre-check path: "not signed in yet").
+      const keyPattern = (err as { keyPattern?: Record<string, unknown> }).keyPattern ?? {}
+      if (linkableUserId && 'userId' in keyPattern) {
+        return await HireWorkspaceMember.create(memberDoc(undefined))
+      }
       throw new AppError('This person is already a member', 409, 'MEMBER_EXISTS')
     }
     throw err

@@ -82,6 +82,14 @@ describe('uniqueness constraints', () => {
     expect(idx?.[1].unique).toBe(true)
     expect(idx?.[1].partialFilterExpression).toEqual({ live: true })
   })
+
+  it('one LINKED workspace per user — unique sparse userId index on memberships', () => {
+    const idx = indexes(HireWorkspaceMember as unknown as Model<never>).find(
+      ([spec]) => spec.userId === 1
+    )
+    expect(idx?.[1].unique).toBe(true)
+    expect(idx?.[1].sparse).toBe(true)
+  })
 })
 
 describe('token storage', () => {

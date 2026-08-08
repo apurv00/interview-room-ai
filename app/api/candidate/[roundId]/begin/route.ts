@@ -89,6 +89,16 @@ export async function POST(
       // Mailbox-control challenge: the code goes to the address on record —
       // the caller never supplies an email. Re-calling begin rotates the
       // code (resend) but never resets the 5-attempt lockout (otpService).
+      // Issue cap mirrors the v1 invite flow's 3-per-15-min: a link holder
+      // must not be able to flood the candidate's inbox or keep
+      // invalidating their legitimate code (Codex P2 on #604).
+      const issueBlocked = await checkRateLimit(roundId, {
+        windowMs: 15 * 60_000,
+        maxRequests: 3,
+        keyPrefix: 'rl:hire-otp-issue',
+      })
+      if (issueBlocked) return issueBlocked
+
       const issued = await issueOtp(`hire:${roundId}`, round.candidateEmail)
       if (!issued) {
         return NextResponse.json(
