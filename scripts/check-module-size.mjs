@@ -69,6 +69,13 @@ const BUDGETS = {
   'modules/resume':    { maxLOC: 20_000, maxFiles: 104 },
   'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },
   'modules/cms':       { maxLOC: 5_000,  maxFiles: 20 },
+  // Added 2026-08-08 with the IPG Hire v2 Phase 1 spine (workspace-based ATS,
+  // docs/ipg-hire-build-plan.md). New top-level module so v1 modules/b2b stays
+  // untouched and its 5k budget isn't consumed by v2. Budget sized for all five
+  // build-plan phases: Phase 1 lands ~15 files / ~3k LOC; kits, reports, and
+  // dashboards (Phases 3-5) fit inside 10k/45 without a re-bump.
+  // See docs/adr/0028-hire-module-budget.md.
+  'modules/hire':      { maxLOC: 10_000, maxFiles: 45 },
   // Bumped maxFiles 130 → 132 on 2026-05-23 (PR #402): added
   // shared/hooks/useOnboardingProfile.ts (cross-module client data
   // hook consumed by both @interview/InterviewSetupForm and
