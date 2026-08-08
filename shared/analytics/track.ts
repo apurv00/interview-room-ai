@@ -41,8 +41,9 @@ const DISTINCT_ID_KEY = 'ipg_distinct_id'
 // Admin surfaces shouldn't pollute product analytics. PostHog still
 // receives these (we use it for ops debugging too), but GA only sees
 // candidate-facing traffic. Prefixes match the Next.js App Router URLs
-// produced by the `(cms)` and `(hire)` route groups.
-const ADMIN_ROUTE_PREFIXES = ['/cms', '/hire'] as const
+// produced by the `(cms)` and `(workspace)` route groups (the v1 `(hire)`
+// group was deleted 2026-08-09).
+const ADMIN_ROUTE_PREFIXES = ['/cms', '/workspace'] as const
 
 const GA_STRING_PROP_LIMIT = 500
 

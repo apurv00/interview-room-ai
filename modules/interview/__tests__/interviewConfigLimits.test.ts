@@ -5,7 +5,7 @@ import {
   INTERVIEW_TARGET_COMPANY_MAX_CHARS,
 } from '@shared/interviewContract'
 import { InterviewConfigSchema } from '../validators/interview'
-import { InviteSchema } from '@b2b/validators/hire'
+import { CreateJobSchema } from '@hire'
 
 const BASE_CONFIG = {
   role: 'backend',
@@ -60,10 +60,12 @@ describe('InterviewConfigSchema shared producer limits', () => {
       role: overLimit,
     }).success).toBe(false)
 
-    // These are downstream consumers of the exact role persisted on an
-    // InterviewSession. A CMS-valid role must not fail after session start.
-    expect(InviteSchema.safeParse({ candidateEmail: 'candidate@example.com', role: atLimit }).success).toBe(true)
-
-    expect(InviteSchema.safeParse({ candidateEmail: 'candidate@example.com', role: overLimit }).success).toBe(false)
+    // Downstream consumer of the exact role persisted on an InterviewSession:
+    // IPG Hire job titles become AI-round roles (v1's InviteSchema was
+    // deleted 2026-08-09; CreateJobSchema is its successor pin). A title the
+    // hire UI accepts must never fail the engine contract mid-flow.
+    const jdText = 'x'.repeat(60)
+    expect(CreateJobSchema.safeParse({ title: atLimit, jdText }).success).toBe(true)
+    expect(CreateJobSchema.safeParse({ title: overLimit, jdText }).success).toBe(false)
   })
 })

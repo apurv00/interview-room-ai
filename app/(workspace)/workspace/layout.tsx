@@ -13,6 +13,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { signOut, useSession } from 'next-auth/react'
+import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 const NAV = [
   { href: '/workspace/jobs', label: 'Jobs', icon: '📋' },
@@ -68,7 +69,13 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
     <div className="px-5 py-4 border-t border-[#e1e8ed] text-sm">
       <p className="truncate text-[#0f1419]">{session?.user?.email ?? ''}</p>
       <button
-        onClick={() => signOut({ callbackUrl: '/' })}
+        onClick={async () => {
+          // Shared-browser privacy: scrub account-bound state BEFORE the
+          // session ends (same contract as AppShell/Resume; pinned by
+          // shared/layout/__tests__/signOutStorage.test.tsx).
+          await clearAllInterviewStorage()
+          await signOut({ callbackUrl: '/' })
+        }}
         className="mt-1 text-xs text-[#71767b] hover:text-[#f4212e] transition-colors"
       >
         Sign out

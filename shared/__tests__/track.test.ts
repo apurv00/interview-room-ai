@@ -68,8 +68,8 @@ describe('shared/analytics/track', () => {
       expect(gtag).not.toHaveBeenCalled()
     })
 
-    it('skips GA dispatch on /hire admin routes', async () => {
-      window.history.pushState({}, '', '/hire/candidates/abc123')
+    it('skips GA dispatch on /workspace admin routes', async () => {
+      window.history.pushState({}, '', '/workspace/applications/abc123')
 
       const { track } = await import('@shared/analytics/track')
       track('cta_clicked', { cta: 'view', location: 'hire_candidate' })
@@ -78,9 +78,9 @@ describe('shared/analytics/track', () => {
     })
 
     it('still fires GA on routes that merely contain admin prefix mid-path', async () => {
-      // /hires-something is not /hire — guard against startsWith without
-      // trailing-slash discipline.
-      window.history.pushState({}, '', '/hireling-news')
+      // /workspaces-something is not /workspace — guard against startsWith
+      // without trailing-slash discipline.
+      window.history.pushState({}, '', '/workspaces-news')
 
       const { track } = await import('@shared/analytics/track')
       track('cta_clicked', { cta: 'start', location: 'news' })
