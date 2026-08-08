@@ -59,6 +59,10 @@ export interface HireRoundResults {
   /** True when the session completed but session-level feedback isn't
    * generated yet — the snapshot is refreshed on later reads. */
   pending?: boolean
+  /** True when the engine deliberately REFUSED to score (no answers / G.10
+   * short-form guard, persisted as all-zero sentinels) — scores are null,
+   * never 0, and redFlags carry the engine's explanation. */
+  unscored?: boolean
   /** True when the guest completed the interview AFTER the round was
    * revoked (they had already reached the engine flow — no engine-side
    * handoff check exists to stop them; see the flagged first-class seam).

@@ -92,6 +92,48 @@ describe('buildResultsSnapshot', () => {
     expect(q.jdAlignment).toBe(55)
   })
 
+  it('maps the engine\'s unscored sentinels (all-zero shape) to null + unscored — never "AI 0"', () => {
+    const snap = buildResultsSnapshot({
+      _id: { toString: () => 's1' },
+      status: 'completed',
+      createdAt: new Date(),
+      feedback: {
+        overall_score: 0,
+        pass_probability: 'Low',
+        confidence_level: 'Low',
+        dimensions: {
+          answer_quality: { score: 0, strengths: [], weaknesses: ['Answered 2 of 6 planned — not enough to score.'] },
+          communication: { score: 0, wpm: 0, filler_rate: 0, pause_score: 0, rambling_index: 0 },
+        },
+        red_flags: ['Interview ended after 2 answers'],
+      },
+      evaluations: [{ questionIndex: 0, question: 'Q', relevance: 70, structure: 60, specificity: 65, ownership: 70 }],
+    })
+    expect(snap.unscored).toBe(true)
+    expect(snap.overallScore).toBeNull()
+    expect(snap.answerQualityScore).toBeNull()
+    expect(snap.communicationScore).toBeNull()
+    expect(snap.passProbability).toBeUndefined()
+    // The engine's explanation survives; real per-answer scores survive.
+    expect(snap.redFlags).toEqual(['Interview ended after 2 answers'])
+    expect(snap.perQuestion![0].score).toBe(66)
+  })
+
+  it('a genuine low score is NOT mistaken for the unscored sentinel', () => {
+    const snap = buildResultsSnapshot({
+      _id: { toString: () => 's1' },
+      status: 'completed',
+      createdAt: new Date(),
+      feedback: {
+        overall_score: 0,
+        dimensions: { answer_quality: { score: 12 }, communication: { score: 8 } },
+      },
+      evaluations: [],
+    })
+    expect(snap.unscored).toBeUndefined()
+    expect(snap.overallScore).toBe(0)
+  })
+
   it('marks the snapshot pending when session-level feedback is absent', () => {
     const snap = buildResultsSnapshot({
       _id: { toString: () => 's1' },
@@ -263,9 +305,12 @@ describe('reconcileApplicationRounds', () => {
     expect(mockSessionFind).not.toHaveBeenCalled()
   })
 
-  it('attaches a revoked round\'s completed session FLAGGED — never silently untracked', async () => {
-    mockRound.find.mockResolvedValue([round({ status: 'revoked', revokedAt: new Date() })])
-    mockSessionFind.mockReturnValue(chainTo([session()]))
+  it('flags a completion that happened AFTER the revoke — never silently untracked', async () => {
+    const revokedAt = new Date(Date.now() - 3600_000)
+    mockRound.find.mockResolvedValue([round({ status: 'revoked', revokedAt })])
+    mockSessionFind.mockReturnValue(
+      chainTo([session({ completedAt: new Date() })]) // completed an hour after revoke
+    )
     mockRound.findOneAndUpdate.mockResolvedValue({ _id: 'r1' })
 
     await reconcileApplicationRounds('ws-A', 'a1')
@@ -280,6 +325,25 @@ describe('reconcileApplicationRounds', () => {
         type: 'ai_result_linked',
         note: expect.stringContaining('AFTER the link was revoked'),
       })
+    )
+  })
+
+  it('a completion BEFORE the revoke is a normal completion — no false flag (timestamps compared)', async () => {
+    const revokedAt = new Date(Date.now() - 3600_000)
+    mockRound.find.mockResolvedValue([round({ status: 'revoked', revokedAt })])
+    mockSessionFind.mockReturnValue(
+      chainTo([session({ completedAt: new Date(Date.now() - 2 * 3600_000) })]) // done BEFORE revoke
+    )
+    mockRound.findOneAndUpdate.mockResolvedValue({ _id: 'r1' })
+
+    await reconcileApplicationRounds('ws-A', 'a1')
+    const [, update] = mockRound.findOneAndUpdate.mock.calls[0]
+    expect(update.$set.results.completedAfterRevoke).toBeUndefined()
+    expect(update.$set.status).toBe('completed')
+    expect(mockAppendEvent).toHaveBeenCalledWith(
+      'ws-A',
+      'a1',
+      expect.objectContaining({ note: 'AI interview completed — results attached' })
     )
   })
 

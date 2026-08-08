@@ -45,6 +45,7 @@ interface Entry {
     linkedAt: string | null
     overallScore: number | null
     resultsPending: boolean
+    resultsUnscored: boolean
   } | null
 }
 
@@ -74,6 +75,7 @@ function roundChip(round: Entry['latestRound']): { label: string; variant: 'defa
       variant: band === 'strong' ? 'success' : band === 'ok' ? 'caution' : 'danger',
     }
   }
+  if (round.resultsUnscored) return { label: 'AI — not enough answers to score', variant: 'caution' }
   if (round.status === 'completed') return { label: 'AI done — report pending', variant: 'primary' }
   if (round.status === 'prepared' || round.status === 'auth_verified') return { label: 'AI in progress', variant: 'primary' }
   if (new Date(round.inviteExpiresAt) < new Date()) return { label: 'AI link expired', variant: 'caution' }

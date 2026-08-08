@@ -53,6 +53,7 @@ interface RoundResults {
   endReason?: string | null
   perQuestion?: PerQuestion[]
   pending?: boolean
+  unscored?: boolean
   completedAfterRevoke?: boolean
 }
 
@@ -367,6 +368,14 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
             <p className="text-sm text-amber-600">
               Interview finished — the full report is still being generated. Per-answer
               scores below are already final.
+            </p>
+          )}
+
+          {round.results?.unscored && (
+            <p className="text-sm text-amber-600">
+              The AI declined to score this interview — the candidate didn&apos;t answer
+              enough questions. Details are in the flags below; per-answer scores (if
+              any) are shown for the answers that were given.
             </p>
           )}
 

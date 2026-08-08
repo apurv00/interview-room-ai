@@ -128,6 +128,7 @@ export function serializePipelineEntry(entry: PipelineEntry) {
           linkedAt: entry.latestRound.linkedAt ?? null,
           overallScore: entry.latestRound.results?.overallScore ?? null,
           resultsPending: entry.latestRound.results?.pending ?? false,
+          resultsUnscored: entry.latestRound.results?.unscored ?? false,
         }
       : null,
   }

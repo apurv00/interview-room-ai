@@ -95,15 +95,35 @@ export function buildResultsSnapshot(session: EngineSessionLean): HireRoundResul
     }
   })
 
+  // The engine's unscored sentinels (no answers / G.10 short-form guard)
+  // persist overall_score:0 with all-zero dimensions — deliberate "refused
+  // to score" markers, not scores. Publishing them would show a fabricated
+  // "AI 0" on the card (Codex P1 on #604): map them to null + unscored, and
+  // let redFlags carry the WHY (the engine writes the explanation there).
+  const unscored =
+    feedback != null &&
+    numberOrNull(feedback.overall_score) === 0 &&
+    numberOrNull(feedback.dimensions?.answer_quality?.score) === 0 &&
+    numberOrNull(feedback.dimensions?.communication?.score) === 0
+
   return {
-    overallScore: numberOrNull(feedback?.overall_score),
+    overallScore: unscored ? null : numberOrNull(feedback?.overall_score),
     passProbability:
-      typeof feedback?.pass_probability === 'string' ? feedback.pass_probability : undefined,
+      !unscored && typeof feedback?.pass_probability === 'string'
+        ? feedback.pass_probability
+        : undefined,
     confidenceLevel:
-      typeof feedback?.confidence_level === 'string' ? feedback.confidence_level : undefined,
-    answerQualityScore: numberOrNull(feedback?.dimensions?.answer_quality?.score),
-    communicationScore: numberOrNull(feedback?.dimensions?.communication?.score),
-    jdMatchScore: numberOrNull(feedback?.jd_match_score),
+      !unscored && typeof feedback?.confidence_level === 'string'
+        ? feedback.confidence_level
+        : undefined,
+    answerQualityScore: unscored
+      ? null
+      : numberOrNull(feedback?.dimensions?.answer_quality?.score),
+    communicationScore: unscored
+      ? null
+      : numberOrNull(feedback?.dimensions?.communication?.score),
+    jdMatchScore: unscored ? null : numberOrNull(feedback?.jd_match_score),
+    ...(unscored ? { unscored: true } : {}),
     redFlags: Array.isArray(feedback?.red_flags) ? (feedback.red_flags as string[]) : undefined,
     topImprovements: Array.isArray(feedback?.top_3_improvements)
       ? (feedback.top_3_improvements as string[])
@@ -203,6 +223,15 @@ export async function reconcileApplicationRounds(
     let linked = false
     for (const s of matches) {
       if (s.status !== 'completed') continue
+      // A revoked round's completion is only suspect if it actually happened
+      // AFTER the revoke — a candidate who finished before a (belated)
+      // revoke must not be falsely flagged. Unknown completion time on a
+      // revoked round stays flagged (can't verify = say so, don't assume).
+      const afterRevoke =
+        revoked &&
+        (!s.completedAt || !round.revokedAt
+          ? true
+          : new Date(s.completedAt) > round.revokedAt)
       try {
         const claimed = await HireRound.findOneAndUpdate(
           { _id: round._id, workspaceId, sessionId: { $exists: false } },
@@ -212,9 +241,12 @@ export async function reconcileApplicationRounds(
               linkedAt: new Date(),
               results: {
                 ...buildResultsSnapshot(s),
-                ...(revoked ? { completedAfterRevoke: true } : {}),
+                ...(afterRevoke ? { completedAfterRevoke: true } : {}),
               },
-              ...(revoked ? {} : { status: 'completed' as const }),
+              // Completed BEFORE the revoke = a legitimate completion the
+              // reconciler simply hadn't seen yet — the round completes
+              // normally. Only a genuinely post-revoke run stays 'revoked'.
+              ...(afterRevoke ? {} : { status: 'completed' as const }),
             },
             $unset: { live: 1 },
           },
@@ -225,7 +257,7 @@ export async function reconcileApplicationRounds(
           await appendApplicationEvent(workspaceId, applicationId, {
             type: 'ai_result_linked',
             actorName: 'System',
-            note: revoked
+            note: afterRevoke
               ? 'AI interview completed AFTER the link was revoked — results attached flagged'
               : 'AI interview completed — results attached',
           })
