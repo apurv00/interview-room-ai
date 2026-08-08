@@ -36,8 +36,12 @@ vi.mock('../FutureSubscriptionCheckoutDialog', () => ({
     operation: string
     currentPlanKey: string
     targetPlanKey: string
+    customerEmail?: string | null
   }) => (
-    <div data-testid="future-plan-dialog">
+    <div
+      data-testid="future-plan-dialog"
+      data-customer-email={props.customerEmail ?? 'none'}
+    >
       {props.operation}:{props.currentPlanKey}:{props.targetPlanKey}
     </div>
   ),
@@ -46,6 +50,7 @@ vi.mock('../FutureSubscriptionCheckoutDialog', () => ({
 import { BillingPricingExperience } from '../BillingPricingExperience'
 
 const ACCOUNT_ID = '64b64c0f2f4e8b6a8c7d9e10'
+const CUSTOMER_EMAIL = 'customer@example.com'
 
 function paidSummary(cancelAtPeriodEnd: boolean) {
   return {
@@ -95,6 +100,7 @@ function renderPricing(cancelAtPeriodEnd: boolean) {
       currentPlan="plus"
       authStatus="authenticated"
       accountId={ACCOUNT_ID}
+      customerEmail={CUSTOMER_EMAIL}
       refreshSession={vi.fn().mockResolvedValue(undefined)}
     />,
   )
@@ -163,6 +169,10 @@ describe('paid plan management on Pricing', () => {
     }))
     expect(screen.getByTestId('future-plan-dialog')).toHaveTextContent(
       'tier_change:plus:pro',
+    )
+    expect(screen.getByTestId('future-plan-dialog')).toHaveAttribute(
+      'data-customer-email',
+      CUSTOMER_EMAIL,
     )
   })
 

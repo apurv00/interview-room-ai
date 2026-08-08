@@ -63,6 +63,7 @@ interface BillingCheckoutDialogProps {
   catalog: PublicBillingCatalog
   planKey: PaidBillingPlanKey
   accountId: string
+  customerEmail?: string | null
   initialQuote: CustomerBillingQuote | undefined
   initialSummary: CustomerBillingSummary | undefined
   initialManualCouponCode?: string
@@ -147,6 +148,7 @@ export function BillingCheckoutDialog({
   catalog,
   planKey,
   accountId,
+  customerEmail,
   initialQuote,
   initialSummary,
   initialManualCouponCode,
@@ -884,6 +886,9 @@ export function BillingCheckoutDialog({
         name: 'interviewprep.guru',
         description:
           `${activeCheckout.quote.entitlementSummary.displayName} monthly plan`,
+        ...(customerEmail
+          ? { prefill: { email: customerEmail } }
+          : {}),
         handler: (payload) => verifyPayment(payload, activeCheckout),
         modal: {
           escape: true,

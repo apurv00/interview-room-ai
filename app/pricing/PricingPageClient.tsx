@@ -278,6 +278,7 @@ export default function PricingPageClient({
         currentPlan={currentPlan}
         authStatus={status}
         accountId={session?.user?.id ?? null}
+        customerEmail={session?.user?.email?.trim() || null}
         refreshSession={refreshBillingSession}
       />
     )

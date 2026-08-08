@@ -17,6 +17,9 @@ import { billingResponseSchemas } from '../billingClient'
 const mocks = vi.hoisted(() => ({
   loadRazorpayCheckout: vi.fn(),
   openRazorpay: vi.fn(),
+  checkoutOptions: null as null | {
+    prefill?: { email?: string }
+  },
 }))
 
 vi.mock('../razorpayBrowser', () => ({
@@ -156,6 +159,7 @@ function standardFetch(input: RequestInfo | URL, init?: RequestInit) {
 
 beforeEach(() => {
   localStorage.clear()
+  mocks.checkoutOptions = null
   mocks.loadRazorpayCheckout.mockReset().mockResolvedValue(
     function FakeRazorpay(
       this: {
@@ -163,12 +167,14 @@ beforeEach(() => {
         open: () => void
       },
       options: {
+        prefill?: { email?: string }
         handler: (payload: {
           razorpay_payment_id: string
           razorpay_signature: string
         }) => Promise<void>
       },
     ) {
+      mocks.checkoutOptions = options
       this.on = () => {}
       this.open = () => {
         mocks.openRazorpay()
@@ -206,6 +212,7 @@ describe('BillingCheckoutDialog completion and recovery', () => {
         catalog={catalog}
         planKey="plus"
         accountId={ACCOUNT_ID}
+        customerEmail="customer@example.com"
         initialQuote={quote}
         initialSummary={summary}
         autoStart
@@ -227,6 +234,9 @@ describe('BillingCheckoutDialog completion and recovery', () => {
       headers: { 'Content-Type': 'application/json' },
     }))
     await waitFor(() => expect(mocks.openRazorpay).toHaveBeenCalledOnce())
+    expect(mocks.checkoutOptions?.prefill).toEqual({
+      email: 'customer@example.com',
+    })
   })
 
   it('starts a fresh same-plan checkout when the pricing coupon differs from the saved recovery', async () => {

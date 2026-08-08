@@ -34,6 +34,7 @@ interface FutureSubscriptionCheckoutDialogProps {
   currentPlanKey: PaidBillingPlanKey
   targetPlanKey: PaidBillingPlanKey
   effectiveAt: string
+  customerEmail?: string | null
   onClose: () => void
   onCompleted: () => Promise<void>
 }
@@ -79,6 +80,7 @@ export function FutureSubscriptionCheckoutDialog({
   currentPlanKey,
   targetPlanKey,
   effectiveAt,
+  customerEmail,
   onClose,
   onCompleted,
 }: FutureSubscriptionCheckoutDialogProps) {
@@ -263,6 +265,9 @@ export function FutureSubscriptionCheckoutDialog({
         name: 'interviewprep.guru',
         description:
           `${planName(targetPlanKey)} future monthly mandate`,
+        ...(customerEmail
+          ? { prefill: { email: customerEmail } }
+          : {}),
         handler: verifyAuthorization,
         modal: {
           escape: true,

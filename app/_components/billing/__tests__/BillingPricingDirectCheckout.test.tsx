@@ -44,6 +44,7 @@ vi.mock('../FutureSubscriptionCheckoutDialog', () => ({
 import { BillingPricingExperience } from '../BillingPricingExperience'
 
 const ACCOUNT_ID = '64b64c0f2f4e8b6a8c7d9e10'
+const CUSTOMER_EMAIL = 'customer@example.com'
 
 const summary = {
   schemaVersion: 1,
@@ -192,6 +193,7 @@ describe('direct acquisition checkout on Pricing', () => {
         currentPlan="free"
         authStatus="authenticated"
         accountId={ACCOUNT_ID}
+        customerEmail={CUSTOMER_EMAIL}
         refreshSession={vi.fn().mockResolvedValue(undefined)}
       />,
     )
@@ -206,6 +208,7 @@ describe('direct acquisition checkout on Pricing', () => {
       expect.objectContaining({
         planKey: 'plus',
         autoStart: true,
+        customerEmail: CUSTOMER_EMAIL,
       }),
     )
   })

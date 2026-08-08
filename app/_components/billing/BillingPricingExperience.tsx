@@ -57,6 +57,7 @@ interface BillingPricingExperienceProps {
   currentPlan: LegacyStoredPlanKey
   authStatus: 'loading' | 'authenticated' | 'unauthenticated'
   accountId: string | null
+  customerEmail?: string | null
   refreshSession: () => Promise<unknown>
 }
 
@@ -76,6 +77,7 @@ export function BillingPricingExperience({
   currentPlan,
   authStatus,
   accountId,
+  customerEmail,
   refreshSession,
 }: BillingPricingExperienceProps) {
   const { catalog, error, loading, reload } = usePublicBillingCatalog()
@@ -1016,6 +1018,7 @@ export function BillingPricingExperience({
           catalog={catalog}
           planKey={checkoutSelection.planKey}
           accountId={accountId}
+          customerEmail={customerEmail}
           initialQuote={quotes[checkoutSelection.planKey]}
           initialSummary={billingSummary ?? undefined}
           autoStart={checkoutSelection.autoStart}
@@ -1040,6 +1043,7 @@ export function BillingPricingExperience({
           currentPlanKey={futureSelection.currentPlanKey}
           targetPlanKey={futureSelection.targetPlanKey}
           effectiveAt={futureSelection.effectiveAt}
+          customerEmail={customerEmail}
           onClose={() => {
             setFutureSelection(null)
             void refreshCompletedBilling().catch(() => undefined)

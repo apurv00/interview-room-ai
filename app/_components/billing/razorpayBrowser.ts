@@ -21,6 +21,9 @@ interface RazorpayCheckoutBaseOptions {
   key: string
   name: string
   description: string
+  prefill?: {
+    email?: string
+  }
   handler: (payload: RazorpaySuccessPayload) => void | Promise<void>
   modal: {
     ondismiss: () => void

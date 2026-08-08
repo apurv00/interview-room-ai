@@ -9,6 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   loadRazorpayCheckout: vi.fn(),
+  checkoutOptions: null as null | {
+    prefill?: { email?: string }
+  },
 }))
 
 vi.mock('../razorpayBrowser', () => ({
@@ -91,6 +94,7 @@ function response(body: unknown, status = 200) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.checkoutOptions = null
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const url = String(input)
     if (url === '/api/billing/subscription/plan-change') {
@@ -115,12 +119,14 @@ beforeEach(() => {
     function FakeRazorpay(
       this: { on: () => void; open: () => void },
       options: {
+        prefill?: { email?: string }
         handler: (payload: {
           razorpay_payment_id: string
           razorpay_signature: string
         }) => Promise<void>
       },
     ) {
+      mocks.checkoutOptions = options
       this.on = () => {}
       this.open = () => {
         void options.handler({
@@ -146,6 +152,7 @@ describe('FutureSubscriptionCheckoutDialog', () => {
         currentPlanKey="plus"
         targetPlanKey="pro"
         effectiveAt={EFFECTIVE_AT}
+        customerEmail="customer@example.com"
         onClose={vi.fn()}
         onCompleted={onCompleted}
       />,
@@ -171,6 +178,9 @@ describe('FutureSubscriptionCheckoutDialog', () => {
     })
 
     fireEvent.click(authorize)
+    await waitFor(() => expect(mocks.checkoutOptions?.prefill).toEqual({
+      email: 'customer@example.com',
+    }))
     await waitFor(() => expect(onCompleted).toHaveBeenCalledOnce())
     expect(await screen.findByText(/Pro is scheduled for/i)).toBeInTheDocument()
   })

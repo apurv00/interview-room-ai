@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => ({
   session: {
     value: {
       data: null as null | {
-        user: { id: string; plan: 'free' | 'plus' | 'pro' | 'enterprise' }
+        user: {
+          id: string
+          email: string
+          plan: 'free' | 'plus' | 'pro' | 'enterprise'
+        }
       },
       status: 'loading' as 'loading' | 'authenticated' | 'unauthenticated',
       update: vi.fn(),
@@ -29,8 +33,10 @@ vi.mock(
     return {
       BillingPricingExperience: ({
         accountId,
+        customerEmail,
       }: {
         accountId: string | null
+        customerEmail?: string | null
       }) => {
         const [mountId] = useState(() => {
           mocks.mountCount += 1
@@ -40,6 +46,7 @@ vi.mock(
           <div
             data-testid="billing-pricing-experience"
             data-account-id={accountId ?? 'none'}
+            data-customer-email={customerEmail ?? 'none'}
             data-mount-id={mountId}
           />
         )
@@ -55,6 +62,7 @@ function authenticatedSession(accountId: string) {
     data: {
       user: {
         id: accountId,
+        email: `${accountId}@example.com`,
         plan: 'free' as const,
       },
     },
@@ -86,6 +94,10 @@ describe('PricingPageClient billing identity boundary', () => {
     expect(screen.getByTestId('billing-pricing-experience')).toHaveAttribute(
       'data-mount-id',
       '1',
+    )
+    expect(screen.getByTestId('billing-pricing-experience')).toHaveAttribute(
+      'data-customer-email',
+      `${ACCOUNT_A}@example.com`,
     )
 
     mocks.session.value = authenticatedSession(ACCOUNT_B)
