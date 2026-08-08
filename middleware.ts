@@ -201,6 +201,13 @@ export default withAuth(
           // signed in yet). Token + OTP are the gates — not NextAuth.
           pathname.startsWith('/invite/') ||
           pathname.startsWith('/api/invite/') ||
+          // IPG Hire v2 guest surface (consent → OTP → sign-in). Same
+          // auth-entry-point posture as /invite: the emailed round token +
+          // OTP are the gates, with consent + dual rate limits enforced
+          // server-side. /candidate/[roundId]/prepare additionally requires
+          // the NextAuth session it just minted (checked in-route).
+          pathname.startsWith('/candidate/') ||
+          pathname.startsWith('/api/candidate/') ||
           pathname.startsWith('/api/qa/automation-login')
           || pathname === '/api/billing/catalog'
           || pathname === '/api/billing/analytics/checkout-observation'

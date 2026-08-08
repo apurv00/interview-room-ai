@@ -13,7 +13,8 @@
               "@resume/*",
               "@cms/*",
               "@feedback/*",
-              "@jobs/*"
+              "@jobs/*",
+              "@hire/*"
             ],
             "message": "Cross-module imports must go through the module barrel (e.g. '@interview') rather than reaching into internal paths. If the symbol you need isn't exported, add it to the module's index.ts."
           }
@@ -38,7 +39,8 @@
                   "@resume/*",
                   "@cms/*",
                   "@feedback/*",
-                  "@jobs/*"
+                  "@jobs/*",
+                  "@hire/*"
                 ],
                 "message": "Cross-module imports must use the module barrel (e.g. '@learn')."
               }
@@ -63,7 +65,8 @@
                   "@resume/*",
                   "@cms/*",
                   "@feedback/*",
-                  "@jobs/*"
+                  "@jobs/*",
+                  "@hire/*"
                 ],
                 "message": "Cross-module imports must use the module barrel (e.g. '@interview')."
               }
@@ -88,7 +91,8 @@
                   "@resume/*",
                   "@cms/*",
                   "@feedback/*",
-                  "@jobs/*"
+                  "@jobs/*",
+                  "@hire/*"
                 ],
                 "message": "Cross-module imports must use the module barrel."
               }
@@ -113,7 +117,8 @@
                   "@b2b/*",
                   "@cms/*",
                   "@feedback/*",
-                  "@jobs/*"
+                  "@jobs/*",
+                  "@hire/*"
                 ],
                 "message": "Cross-module imports must use the module barrel."
               }
@@ -138,7 +143,8 @@
                   "@b2b/*",
                   "@resume/*",
                   "@feedback/*",
-                  "@jobs/*"
+                  "@jobs/*",
+                  "@hire/*"
                 ],
                 "message": "Cross-module imports must use the module barrel."
               }
@@ -162,14 +168,16 @@
                   "@b2b/*",
                   "@resume/*",
                   "@cms/*",
-                  "@jobs/*"
+                  "@jobs/*",
+                  "@hire/*"
                 ],
                 "message": "Cross-module imports must use the module barrel (e.g. '@interview'). Note: @interview/* deep imports are also barred \u2014 go through the @interview barrel."
               },
               {
                 "group": [
                   "@interview/*",
-                  "@jobs/*"
+                  "@jobs/*",
+                  "@hire/*"
                 ],
                 "message": "Use the @interview barrel (e.g. `from '@interview'`). If the symbol you need isn't exported, add it to modules/interview/index.ts."
               }
@@ -194,9 +202,36 @@
                   "@b2b/*",
                   "@resume/*",
                   "@cms/*",
-                  "@feedback/*"
+                  "@feedback/*",
+                  "@hire/*"
                 ],
                 "message": "Cross-module imports must use the module barrel (e.g. '@interview')."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "modules/hire/**/*"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "@interview/*",
+                  "@learn/*",
+                  "@resume/*",
+                  "@cms/*",
+                  "@feedback/*",
+                  "@jobs/*",
+                  "@b2b/*"
+                ],
+                "message": "Cross-module imports must use the module barrel."
               }
             ]
           }
@@ -227,7 +262,8 @@
                   "@feedback",
                   "@feedback/*",
                   "@jobs",
-                  "@jobs/*"
+                  "@jobs/*",
+                  "@hire/*"
                 ],
                 "message": "shared/ is the kernel \u2014 it cannot depend on any domain module. Inject module-specific behavior via slot props or callbacks from the composition root (app/)."
               }
