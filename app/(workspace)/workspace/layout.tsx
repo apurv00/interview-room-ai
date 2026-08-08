@@ -2,14 +2,16 @@
 
 /**
  * IPG Hire v2 member shell — sidebar layout for the workspace surface
- * (/workspace/*). Middleware requires auth for these paths; workspace
- * membership is enforced per-request by the API layer (requireMembership),
- * so this shell stays dumb: nav + brand + sign-out.
+ * (/workspace/* on www, and the whole hire.* subdomain via the middleware
+ * rewrite). On www the middleware auth-gates /workspace directly; on the
+ * hire subdomain the PRE-REWRITE pathname (e.g. "/", "/jobs") can be in the
+ * public allowlist, so this shell owns the signed-out redirect. Workspace
+ * membership is enforced per-request by the API layer (requireMembership).
  */
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { signOut, useSession } from 'next-auth/react'
 
 const NAV = [
@@ -20,8 +22,15 @@ const NAV = [
 
 export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const { data: session } = useSession()
+  const router = useRouter()
+  const { data: session, status } = useSession()
   const [mobileOpen, setMobileOpen] = useState(false)
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.replace(`/signin?callbackUrl=${encodeURIComponent(pathname ?? '/workspace')}`)
+    }
+  }, [status, router, pathname])
 
   const nav = (
     <nav className="flex-1 px-3 py-4 space-y-1">
