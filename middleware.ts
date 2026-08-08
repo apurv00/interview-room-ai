@@ -47,15 +47,23 @@ export default withAuth(
       return NextResponse.rewrite(url)
     }
 
-    // Rewrite Hire subdomain requests to /hire prefix
+    // Rewrite Hire subdomain requests to the IPG Hire v2 workspace surface
+    // (founder flip, 2026-08-09 — the subdomain previously served the v1
+    // org-based product, whose role gate made every nav bounce to settings).
+    // /workspace* passes through untouched so the v2 layout's absolute links
+    // resolve; /candidate* passes through so a guest link opened on this
+    // host still works; legacy /hire* stays reachable by direct URL until
+    // v1 is deleted.
     const shouldRewriteToHire =
       isHire &&
+      !pathname.startsWith('/workspace') &&
+      !pathname.startsWith('/candidate') &&
       !pathname.startsWith('/hire') &&
       !subdomainExcludedPaths.some((p) => pathname.startsWith(p))
 
     if (shouldRewriteToHire) {
       const url = req.nextUrl.clone()
-      url.pathname = `/hire${pathname === '/' ? '/dashboard' : pathname}`
+      url.pathname = `/workspace${pathname === '/' ? '' : pathname}`
       return NextResponse.rewrite(url)
     }
 
