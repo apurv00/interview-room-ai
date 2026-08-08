@@ -1,8 +1,9 @@
 /**
- * Guest auth-seam routes: consent gating, anti-enumeration, and the
- * find-or-create User boundary (the ONLY sanctioned B2C write in the hire
- * flow — goal item 2). Service internals are mocked; what's under test is
- * the routes' gate ordering and response discipline.
+ * Guest auth-seam route (magic-link model): POST /begin is the single entry
+ * — consent is recorded before any identity exists, the guest User is a
+ * per-round SYNTHETIC identity (never the candidate's real email), and the
+ * ticket only exists downstream of both. Service internals are mocked; under
+ * test are the route's gate ordering, identity discipline, and error paths.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -12,10 +13,7 @@ const mocks = vi.hoisted(() => ({
   verifyRoundToken: vi.fn(),
   bindGuestUser: vi.fn(),
   recordConsent: vi.fn(),
-  issueOtp: vi.fn(),
-  verifyOtp: vi.fn(),
   issueAuthTicket: vi.fn(),
-  sendEmail: vi.fn(),
   userFindOne: vi.fn(),
   userCreate: vi.fn(),
 }))
@@ -29,15 +27,8 @@ vi.mock('@hire', async () => {
     recordConsent: mocks.recordConsent,
   }
 })
-vi.mock('@b2b/services/otpService', () => ({
-  issueOtp: mocks.issueOtp,
-  verifyOtp: mocks.verifyOtp,
-}))
 vi.mock('@b2b/services/inviteTicketService', () => ({
   issueAuthTicket: mocks.issueAuthTicket,
-}))
-vi.mock('@shared/services/emailService', () => ({
-  sendEmail: mocks.sendEmail,
 }))
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
@@ -56,159 +47,122 @@ vi.mock('@shared/logger', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
 
-import { POST as requestOtp } from '../[roundId]/request-otp/route'
-import { POST as verifyOtpRoute } from '../[roundId]/verify-otp/route'
-import { POST as consentRoute } from '../[roundId]/consent/route'
+import { POST as begin } from '../[roundId]/begin/route'
+import { guestEmailForRound } from '@hire'
+import { AppError } from '@shared/errors'
 
 const ROUND_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa'
 const TOKEN = 'ab'.repeat(32)
-const EMAIL = 'jane@ex.com'
+const SYNTHETIC = guestEmailForRound(ROUND_ID)
 
-function post(path: string, body: Record<string, unknown>) {
-  return new NextRequest(`http://localhost${path}`, {
+function post(body: Record<string, unknown>) {
+  return new NextRequest(`http://localhost/api/candidate/${ROUND_ID}/begin`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'user-agent': 'TestBrowser/1.0' },
     body: JSON.stringify(body),
   })
 }
 
-function okRound(over: Record<string, unknown> = {}) {
+function okRound() {
   return {
     state: 'ok',
-    round: {
-      _id: ROUND_ID,
-      consentAt: new Date(),
-      candidateEmail: EMAIL,
-      candidateName: 'Jane Doe',
-      ...over,
-    },
+    round: { _id: ROUND_ID, candidateName: 'Jane Doe', candidateEmail: 'jane@ex.com' },
   }
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mocks.sendEmail.mockResolvedValue({ ok: true })
-  mocks.issueOtp.mockResolvedValue({ code: '123456' })
   mocks.issueAuthTicket.mockResolvedValue('ticket-1')
+  mocks.recordConsent.mockResolvedValue({})
+  mocks.bindGuestUser.mockResolvedValue({})
 })
 
-describe('POST /api/candidate/[roundId]/request-otp', () => {
-  it('returns the constant shape and issues nothing when consent is missing', async () => {
-    mocks.verifyRoundToken.mockResolvedValue(okRound({ consentAt: undefined }))
-    const res = await requestOtp(post(`/api/candidate/${ROUND_ID}/request-otp`, { token: TOKEN, email: EMAIL }), {
-      params: { roundId: ROUND_ID },
-    })
-    expect(res.status).toBe(200)
-    expect((await res.json()).ok).toBe(true)
-    expect(mocks.issueOtp).not.toHaveBeenCalled()
-    expect(mocks.sendEmail).not.toHaveBeenCalled()
-  })
-
-  it('returns the same constant shape on an email mismatch (anti-enumeration)', async () => {
-    mocks.verifyRoundToken.mockResolvedValue(okRound())
-    const res = await requestOtp(
-      post(`/api/candidate/${ROUND_ID}/request-otp`, { token: TOKEN, email: 'wrong@ex.com' }),
-      { params: { roundId: ROUND_ID } }
-    )
-    expect(res.status).toBe(200)
-    expect((await res.json()).ok).toBe(true)
-    expect(mocks.issueOtp).not.toHaveBeenCalled()
-  })
-
-  it('issues the OTP under the hire: namespace and emails the candidate', async () => {
-    mocks.verifyRoundToken.mockResolvedValue(okRound())
-    const res = await requestOtp(post(`/api/candidate/${ROUND_ID}/request-otp`, { token: TOKEN, email: EMAIL }), {
-      params: { roundId: ROUND_ID },
-    })
-    expect(res.status).toBe(200)
-    expect(mocks.issueOtp).toHaveBeenCalledWith(`hire:${ROUND_ID}`, EMAIL)
-    expect(mocks.sendEmail.mock.calls[0][0].to).toBe(EMAIL)
-  })
-})
-
-describe('POST /api/candidate/[roundId]/verify-otp', () => {
-  const body = { token: TOKEN, email: EMAIL, code: '123456' }
-
-  it('refuses before consent — the disclosure cannot be skipped via the API', async () => {
-    mocks.verifyRoundToken.mockResolvedValue(okRound({ consentAt: undefined }))
-    const res = await verifyOtpRoute(post(`/api/candidate/${ROUND_ID}/verify-otp`, body), {
-      params: { roundId: ROUND_ID },
-    })
-    expect(res.status).toBe(400)
-    expect(mocks.verifyOtp).not.toHaveBeenCalled()
+describe('POST /api/candidate/[roundId]/begin', () => {
+  it('410s dead links without recording consent or touching Users', async () => {
+    mocks.verifyRoundToken.mockResolvedValue({ state: 'revoked', round: {} })
+    const res = await begin(post({ token: TOKEN }), { params: { roundId: ROUND_ID } })
+    expect(res.status).toBe(410)
+    expect(mocks.recordConsent).not.toHaveBeenCalled()
     expect(mocks.userCreate).not.toHaveBeenCalled()
+    expect(mocks.issueAuthTicket).not.toHaveBeenCalled()
   })
 
-  it('creates the guest User once (v1 parity: uncapped limit), binds the round, returns a ticket', async () => {
+  it('records consent, mints the SYNTHETIC per-round user, binds, and returns a ticket', async () => {
     mocks.verifyRoundToken.mockResolvedValue(okRound())
-    mocks.verifyOtp.mockResolvedValue({ ok: true })
     mocks.userFindOne.mockResolvedValue(null)
     mocks.userCreate.mockResolvedValue({ _id: { toString: () => 'guest-1' } })
-    mocks.bindGuestUser.mockResolvedValue({})
 
-    const res = await verifyOtpRoute(post(`/api/candidate/${ROUND_ID}/verify-otp`, body), {
-      params: { roundId: ROUND_ID },
-    })
+    const res = await begin(post({ token: TOKEN }), { params: { roundId: ROUND_ID } })
     const data = await res.json()
     expect(res.status).toBe(200)
-    expect(data).toEqual({ ok: true, ticket: 'ticket-1' })
-    expect(mocks.verifyOtp).toHaveBeenCalledWith(`hire:${ROUND_ID}`, EMAIL, '123456')
-    expect(mocks.userCreate.mock.calls[0][0]).toMatchObject({
-      email: EMAIL,
+    expect(data.ok).toBe(true)
+    expect(data.ticket).toBe('ticket-1')
+
+    // Consent is recorded before any identity exists.
+    expect(mocks.recordConsent).toHaveBeenCalledWith(ROUND_ID, TOKEN, {
+      userAgent: 'TestBrowser/1.0',
+    })
+    expect(mocks.recordConsent.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userCreate.mock.invocationCallOrder[0]
+    )
+
+    // Synthetic identity — the candidate's REAL email never reaches Users.
+    const doc = mocks.userCreate.mock.calls[0][0]
+    expect(doc.email).toBe(SYNTHETIC)
+    expect(doc.email).toContain('@guests.interviewprep.internal')
+    expect(doc.email).not.toContain('jane@ex.com')
+    expect(doc).toMatchObject({
       role: 'candidate',
       plan: 'free',
       monthlyInterviewLimit: 999999,
+      name: 'Jane Doe',
     })
+
     expect(mocks.bindGuestUser).toHaveBeenCalledWith(ROUND_ID, TOKEN, 'guest-1')
     expect(mocks.issueAuthTicket).toHaveBeenCalledWith('guest-1', ROUND_ID)
   })
 
-  it('reuses an existing User row instead of creating a duplicate', async () => {
+  it('reuses the round synthetic user on re-entry (idempotent)', async () => {
     mocks.verifyRoundToken.mockResolvedValue(okRound())
-    mocks.verifyOtp.mockResolvedValue({ ok: true })
-    mocks.userFindOne.mockResolvedValue({ _id: { toString: () => 'existing-guest' } })
-    mocks.bindGuestUser.mockResolvedValue({})
+    mocks.userFindOne.mockResolvedValue({ _id: { toString: () => 'guest-1' } })
 
-    const res = await verifyOtpRoute(post(`/api/candidate/${ROUND_ID}/verify-otp`, body), {
-      params: { roundId: ROUND_ID },
-    })
+    const res = await begin(post({ token: TOKEN }), { params: { roundId: ROUND_ID } })
     expect(res.status).toBe(200)
     expect(mocks.userCreate).not.toHaveBeenCalled()
-    expect(mocks.issueAuthTicket).toHaveBeenCalledWith('existing-guest', ROUND_ID)
+    expect(mocks.issueAuthTicket).toHaveBeenCalledWith('guest-1', ROUND_ID)
   })
 
-  it('maps OTP lockout to 429', async () => {
+  it('collapses a concurrent double-begin via the unique email index (E11000 → reuse)', async () => {
     mocks.verifyRoundToken.mockResolvedValue(okRound())
-    mocks.verifyOtp.mockResolvedValue({ ok: false, reason: 'locked' })
-    const res = await verifyOtpRoute(post(`/api/candidate/${ROUND_ID}/verify-otp`, body), {
-      params: { roundId: ROUND_ID },
-    })
-    expect(res.status).toBe(429)
-    expect(mocks.userCreate).not.toHaveBeenCalled()
-  })
-})
+    mocks.userFindOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ _id: { toString: () => 'guest-race-winner' } })
+    mocks.userCreate.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }))
 
-describe('POST /api/candidate/[roundId]/consent', () => {
-  it('records consent with the caller user agent', async () => {
-    mocks.recordConsent.mockResolvedValue({})
-    const req = new NextRequest(`http://localhost/api/candidate/${ROUND_ID}/consent`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'user-agent': 'TestBrowser/1.0' },
-      body: JSON.stringify({ token: TOKEN }),
-    })
-    const res = await consentRoute(req, { params: { roundId: ROUND_ID } })
+    const res = await begin(post({ token: TOKEN }), { params: { roundId: ROUND_ID } })
     expect(res.status).toBe(200)
-    expect(mocks.recordConsent).toHaveBeenCalledWith(ROUND_ID, TOKEN, {
-      userAgent: 'TestBrowser/1.0',
-    })
+    expect(mocks.issueAuthTicket).toHaveBeenCalledWith('guest-race-winner', ROUND_ID)
   })
 
-  it('propagates the 410 for dead links', async () => {
-    const { AppError } = await import('@shared/errors')
+  it('propagates a consent-stage 410 (link died between verify and consent)', async () => {
+    mocks.verifyRoundToken.mockResolvedValue(okRound())
     mocks.recordConsent.mockRejectedValue(new AppError('gone', 410, 'ROUND_LINK_INVALID'))
-    const res = await consentRoute(post(`/api/candidate/${ROUND_ID}/consent`, { token: TOKEN }), {
-      params: { roundId: ROUND_ID },
-    })
+    const res = await begin(post({ token: TOKEN }), { params: { roundId: ROUND_ID } })
     expect(res.status).toBe(410)
+    expect(mocks.userCreate).not.toHaveBeenCalled()
+  })
+
+  it('503s when the ticket store is unavailable', async () => {
+    mocks.verifyRoundToken.mockResolvedValue(okRound())
+    mocks.userFindOne.mockResolvedValue({ _id: { toString: () => 'guest-1' } })
+    mocks.issueAuthTicket.mockResolvedValue(null)
+    const res = await begin(post({ token: TOKEN }), { params: { roundId: ROUND_ID } })
+    expect(res.status).toBe(503)
+  })
+
+  it('rejects malformed tokens at the schema boundary', async () => {
+    const res = await begin(post({ token: 'short' }), { params: { roundId: ROUND_ID } })
+    expect(res.status).toBe(400)
+    expect(mocks.verifyRoundToken).not.toHaveBeenCalled()
   })
 })

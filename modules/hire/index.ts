@@ -48,6 +48,7 @@ export {
   revokeRound,
   sha256,
   buildJdSnapshot,
+  guestEmailForRound,
   HIRE_CONSENT_VERSION,
   AI_ROUND_INTERVIEW_TYPE,
   INVITE_TOKEN_EXPIRY_DAYS,

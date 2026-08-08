@@ -5,8 +5,8 @@
  * renders (v1 invite-page posture): every failure mode gets the same generic
  * "no longer valid" page so the URL can't be probed for state, and the page
  * is noindex. A valid link renders the consent + recording disclosure gate
- * first (CandidateFlow); OTP verification is unreachable until consent is
- * recorded server-side.
+ * (CandidateFlow); the link itself is the authentication (magic-link model)
+ * and /begin refuses to mint a session ticket until consent is recorded.
  */
 
 import type { Metadata } from 'next'
@@ -18,12 +18,6 @@ export const dynamic = 'force-dynamic'
 export const metadata: Metadata = {
   title: 'Your interview — IPG Hire',
   robots: { index: false, follow: false },
-}
-
-function obfuscateEmail(email: string): string {
-  const [local, domain] = email.split('@')
-  if (!local || !domain) return '***'
-  return `${local[0]}***@${domain}`
 }
 
 function InvalidLink() {
@@ -98,7 +92,6 @@ export default async function CandidateLandingPage({
           roundId={params.roundId}
           token={token}
           consentAlreadyGiven={!!round.consentAt}
-          expectedEmailHint={obfuscateEmail(round.candidateEmail)}
           workspaceName={workspace.name}
         />
       </div>

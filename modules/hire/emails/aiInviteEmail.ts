@@ -36,8 +36,9 @@ export function buildAiInviteEmail(params: AiInviteEmailParams): {
   </p>
   <p style="line-height: 1.6;">
     Before it starts you&rsquo;ll see exactly what is recorded and how it is
-    used, and you&rsquo;ll be asked for your consent. You&rsquo;ll verify your
-    email with a one-time code &mdash; no account or password needed.
+    used, and you&rsquo;ll be asked for your consent. No account, password, or
+    code needed &mdash; the button takes you straight there. This link is
+    personal to you, so please don&rsquo;t forward this email.
   </p>
   <p style="margin: 28px 0;">
     <a href="${url}" style="background: #4f46e5; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600;">
@@ -56,7 +57,7 @@ export function buildAiInviteEmail(params: AiInviteEmailParams): {
     '',
     `${params.workspaceName} has invited you to complete a short AI-led interview for the ${params.jobTitle} position.`,
     '',
-    'Before it starts you will see exactly what is recorded and how it is used, and you will be asked for your consent. You will verify your email with a one-time code — no account or password needed.',
+    'Before it starts you will see exactly what is recorded and how it is used, and you will be asked for your consent. No account, password, or code needed — the link below takes you straight there. It is personal to you, so please do not forward this email.',
     '',
     `Start here: ${params.inviteUrl}`,
     '',

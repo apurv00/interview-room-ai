@@ -19,9 +19,9 @@ import { STORAGE_KEYS } from '@shared/storageKeys'
 import {
   AI_ROUND_INTERVIEW_TYPE,
   GuestConsentSchema,
-  GuestVerifyOtpSchema,
   CreateJobSchema,
   buildJdSnapshot,
+  guestEmailForRound,
 } from '..'
 import type { GuestInterviewConfig } from '../services/aiRoundService'
 
@@ -94,17 +94,18 @@ describe('localStorage handoff contract (prepare page ↔ engine room)', () => {
   })
 })
 
-describe('guest token contract', () => {
+describe('guest token contract (magic-link model)', () => {
   it('accepts exactly 32-byte hex tokens', () => {
     expect(() => GuestConsentSchema.parse({ token: 'ab'.repeat(32) })).not.toThrow()
     expect(() => GuestConsentSchema.parse({ token: 'ab'.repeat(31) })).toThrow()
     expect(() => GuestConsentSchema.parse({ token: 'zz'.repeat(32) })).toThrow()
   })
 
-  it('requires a 6-digit numeric OTP', () => {
-    const base = { token: 'ab'.repeat(32), email: 'a@b.com' }
-    expect(() => GuestVerifyOtpSchema.parse({ ...base, code: '123456' })).not.toThrow()
-    expect(() => GuestVerifyOtpSchema.parse({ ...base, code: '12345' })).toThrow()
-    expect(() => GuestVerifyOtpSchema.parse({ ...base, code: 'abcdef' })).toThrow()
+  it('synthetic guest identities are per-round, deterministic, and never routable', () => {
+    const a = guestEmailForRound('a'.repeat(24))
+    const b = guestEmailForRound('b'.repeat(24))
+    expect(a).not.toBe(b)
+    expect(a).toBe(guestEmailForRound('A'.repeat(24)))
+    expect(a.endsWith('@guests.interviewprep.internal')).toBe(true)
   })
 })

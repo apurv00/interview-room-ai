@@ -56,18 +56,8 @@ export const SendAiRoundSchema = z.object({
 /** Raw invite tokens are 32 random bytes hex-encoded — 64 hex chars exactly. */
 const inviteTokenSchema = z.string().regex(/^[a-f0-9]{64}$/i, 'Invalid token')
 
+/** Body of POST /begin — the magic link's token is the entire credential. */
 export const GuestConsentSchema = z.object({ token: inviteTokenSchema })
-
-export const GuestRequestOtpSchema = z.object({
-  token: inviteTokenSchema,
-  email: z.string().trim().email().max(254),
-})
-
-export const GuestVerifyOtpSchema = z.object({
-  token: inviteTokenSchema,
-  email: z.string().trim().email().max(254),
-  code: z.string().regex(/^\d{6}$/, 'Invalid code'),
-})
 
 export type CreateWorkspacePayload = z.infer<typeof CreateWorkspaceSchema>
 export type AddMemberPayload = z.infer<typeof AddMemberSchema>
@@ -78,5 +68,3 @@ export type CreateApplicationPayload = z.infer<typeof CreateApplicationSchema>
 export type MoveStagePayload = z.infer<typeof MoveStageSchema>
 export type SendAiRoundPayload = z.infer<typeof SendAiRoundSchema>
 export type GuestConsentPayload = z.infer<typeof GuestConsentSchema>
-export type GuestRequestOtpPayload = z.infer<typeof GuestRequestOtpSchema>
-export type GuestVerifyOtpPayload = z.infer<typeof GuestVerifyOtpSchema>

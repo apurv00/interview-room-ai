@@ -50,6 +50,20 @@ export function sha256(value: string): string {
 }
 
 /**
+ * Synthetic per-round guest identity. The engine requires a User row +
+ * NextAuth session for every interview API call, but guests must not be
+ * keyed by their real email: sharing a User across workspaces/rounds caused
+ * the whole identity edge-case class (cross-workspace ambiguity, OAuth
+ * account-linking hazards, real-email accounts left roaming the B2C
+ * product). One synthetic user per round makes round↔session attribution
+ * exact by userId alone, and keeps candidate PII in workspace-scoped hire
+ * tables only. `.internal` is ICANN-reserved — never routable.
+ */
+export function guestEmailForRound(roundId: string): string {
+  return `round-${roundId.toLowerCase()}@guests.interviewprep.internal`
+}
+
+/**
  * The JD text provisioned to the guest: the job's JD plus a per-round
  * reference line. The reference makes sha256(jdSnapshot) unique PER ROUND,
  * so reconciliation can only ever match an engine session to the one round
