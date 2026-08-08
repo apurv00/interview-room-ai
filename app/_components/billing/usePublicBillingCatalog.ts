@@ -7,6 +7,7 @@ import {
   parseBillingResponse,
   type PublicBillingCatalog,
 } from './billingClient'
+import { billingFetch } from './billingRequestTimeout'
 
 interface PublicBillingCatalogState {
   catalog: PublicBillingCatalog | null
@@ -32,7 +33,7 @@ export function usePublicBillingCatalog(): PublicBillingCatalogState {
     setLoading(true)
     setError(null)
 
-    void fetch('/api/billing/catalog', {
+    void billingFetch('/api/billing/catalog', {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
     })

@@ -800,6 +800,50 @@ function exactSelectedCoupon(
   )
 }
 
+function normalizedManualCouponCode(
+  value: string | undefined,
+): string | undefined {
+  const normalized = value?.trim().toUpperCase()
+  return normalized || undefined
+}
+
+function storedManualCouponAssertionMatches(
+  stored: StoredSubscriptionCheckoutIntent,
+  requestedCode: string | undefined,
+): boolean {
+  const requested = normalizedManualCouponCode(requestedCode)
+  if (requested === undefined) return true
+
+  const reservation = stored.couponReservation
+  if (!reservation) return false
+  if (reservation.campaignModeSnapshot === 'code') {
+    const storedCode = normalizedManualCouponCode(
+      reservation.codeSnapshot,
+    )
+    return storedCode === requested
+  }
+  return false
+}
+
+function resolvedManualCouponAssertionMatches(
+  resolved: ResolvedCustomerBillingQuote,
+  commercial: SubscriptionCommercialPreflight,
+  requestedCode: string | undefined,
+): boolean {
+  const requested = normalizedManualCouponCode(requestedCode)
+  if (!requested) return true
+  const candidate = resolved.selectedCandidate
+  const quoteCoupon = resolved.quote.coupon
+  return (
+    resolved.quote.manualCodeResult === 'applied' &&
+    commercial.couponAccepted &&
+    candidate?.mode === 'code' &&
+    normalizedManualCouponCode(candidate.code) === requested &&
+    quoteCoupon?.mode === 'code' &&
+    normalizedManualCouponCode(quoteCoupon.code) === requested
+  )
+}
+
 async function defaultPreflightQuote(
   resolved: ResolvedCustomerBillingQuote,
   providerMode: ProviderMode,
@@ -1984,11 +2028,32 @@ export async function createSubscriptionCheckout(
         userId: input.userId,
         providerMode: sale.providerMode,
         replacementPlanKey: input.request.planKey,
+        manualCouponCode: input.request.manualCouponCode,
         expectedSubscriptionTotalCount:
           PROVISIONAL_SUBSCRIPTION_TOTAL_COUNT,
         requestStartedAt,
       })
       if (blockingCheckout.outcome === 'reusable') {
+        const loadIntent = dependencies.loadIntent ?? defaultLoadIntent
+        const stored = await loadIntent({
+          intentId: blockingCheckout.intentId,
+          userId: input.userId,
+        })
+        if (!stored) {
+          throw failure(
+            'review_required',
+            'The existing subscription checkout cannot be reopened safely',
+          )
+        }
+        if (!storedManualCouponAssertionMatches(
+          stored,
+          input.request.manualCouponCode,
+        )) {
+          throw failure(
+            'subscription_conflict',
+            'The existing checkout uses a different coupon selection',
+          )
+        }
         return await reopenBlockingSubscriptionCheckout({
           userId: input.userId,
           planKey: input.request.planKey,
@@ -2044,6 +2109,16 @@ export async function createSubscriptionCheckout(
       resolved,
       sale.providerMode,
     )
+    if (!resolvedManualCouponAssertionMatches(
+      resolved,
+      commercial,
+      input.request.manualCouponCode,
+    )) {
+      throw failure(
+        'commercial_unavailable',
+        'The requested coupon is unavailable for this checkout',
+      )
+    }
     const useCoupon = Boolean(
       resolved.selectedCandidate && commercial.couponAccepted,
     )

@@ -63,6 +63,10 @@ function blockingCheckout(
       status: 'held',
     },
     intent,
+    couponSelection: {
+      campaignModeSnapshot: 'code',
+      codeSnapshot: 'GURU100',
+    },
     hasLocalPaymentEvidence: false,
     ...overrides,
   }
@@ -277,6 +281,46 @@ describe('unpaid subscription checkout supersession', () => {
     expect(deps.fetchSubscriptionInvoices).toHaveBeenCalledOnce()
     expect(deps.cancelSubscriptionImmediately).not.toHaveBeenCalled()
     expect(deps.persistObservation).not.toHaveBeenCalled()
+  })
+
+  it('reuses an unexpired same-plan checkout for the exact asserted coupon', async () => {
+    const deps = dependencies()
+
+    await expect(supersedeBlockingUnpaidSubscriptionCheckout({
+      userId: USER_ID.toHexString(),
+      providerMode: 'test',
+      replacementPlanKey: 'plus',
+      manualCouponCode: 'guru100',
+      expectedSubscriptionTotalCount: 300,
+      requestStartedAt: new Date('2026-08-07T10:05:00.000Z'),
+    }, deps)).resolves.toEqual({
+      outcome: 'reusable',
+      intentId: INTENT_ID.toHexString(),
+      planKey: 'plus',
+    })
+
+    expect(deps.cancelSubscriptionImmediately).not.toHaveBeenCalled()
+    expect(deps.persistObservation).not.toHaveBeenCalled()
+  })
+
+  it('supersedes an unpaid same-plan checkout for a different asserted coupon', async () => {
+    const deps = dependencies()
+
+    await expect(supersedeBlockingUnpaidSubscriptionCheckout({
+      userId: USER_ID.toHexString(),
+      providerMode: 'test',
+      replacementPlanKey: 'plus',
+      manualCouponCode: 'GURU200',
+      expectedSubscriptionTotalCount: 300,
+      requestStartedAt: new Date('2026-08-07T10:05:00.000Z'),
+    }, deps)).resolves.toMatchObject({
+      outcome: 'superseded',
+      previousPlanKey: 'plus',
+      providerStatus: 'cancelled',
+    })
+
+    expect(deps.cancelSubscriptionImmediately).toHaveBeenCalledWith(REMOTE_ID)
+    expect(deps.persistObservation).toHaveBeenCalledOnce()
   })
 
   it('replaces an unexpired same-plan checkout with an obsolete mandate horizon', async () => {

@@ -4,9 +4,11 @@ import Link from 'next/link'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Accordion from '@shared/ui/Accordion'
 import Button from '@shared/ui/Button'
+import Input from '@shared/ui/Input'
 import type { LegacyStoredPlanKey } from '@shared/services/planConfig'
 import {
   billingResponseSchemas,
+  formatInr,
   parseBillingResponse,
   type CustomerBillingSummary,
   type CustomerBillingQuote,
@@ -14,9 +16,11 @@ import {
 } from './billingClient'
 import {
   clearBillingAuthIntent,
+  clearBillingCheckoutRecovery,
   readBillingAuthIntent,
   readBillingCheckoutRecovery,
   saveBillingAuthIntent,
+  type BillingCheckoutRecovery,
 } from './billingIntentStorage'
 import { BillingCheckoutDialog } from './BillingCheckoutDialog'
 import { BillingPlanCard } from './BillingPlanCard'
@@ -56,6 +60,18 @@ interface BillingPricingExperienceProps {
   refreshSession: () => Promise<unknown>
 }
 
+type AcquisitionCheckoutSelection = {
+  planKey: PaidBillingPlanKey
+  autoStart: boolean
+  manualCouponCode?: string
+}
+
+type AcquisitionCouponDecision = {
+  blocked: boolean
+  manualCouponCode?: string
+  message?: string
+}
+
 export function BillingPricingExperience({
   currentPlan,
   authStatus,
@@ -67,7 +83,14 @@ export function BillingPricingExperience({
     Partial<Record<PaidBillingPlanKey, CustomerBillingQuote>>
   >({})
   const [quoteLoading, setQuoteLoading] = useState(false)
-  const [selectedPlan, setSelectedPlan] =
+  const [quoteError, setQuoteError] = useState<string | null>(null)
+  const [quotedCouponCode, setQuotedCouponCode] = useState<string | null>(null)
+  const [couponCode, setCouponCode] = useState('')
+  const [checkoutSelection, setCheckoutSelection] =
+    useState<AcquisitionCheckoutSelection | null>(null)
+  const [pendingRecovery, setPendingRecovery] =
+    useState<BillingCheckoutRecovery | null>(null)
+  const [resumedAfterSignIn, setResumedAfterSignIn] =
     useState<PaidBillingPlanKey | null>(null)
   const [futureSelection, setFutureSelection] = useState<{
     operation: 'tier_change' | 'resubscribe'
@@ -83,8 +106,9 @@ export function BillingPricingExperience({
     useState<string | null>(null)
   const [cancellingScheduledChange, setCancellingScheduledChange] =
     useState(false)
-  const resumeCheckedRef = useRef(false)
+  const resumeCheckedRef = useRef<string | null>(null)
   const sessionRefreshKeyRef = useRef<string | null>(null)
+  const normalizedCouponCode = couponCode.trim().toUpperCase()
 
   const loadBillingSummary = useCallback(async (signal?: AbortSignal) => {
     const response = await billingFetch('/api/billing/me', {
@@ -101,7 +125,8 @@ export function BillingPricingExperience({
   useEffect(() => {
     if (
       !catalog?.customerBillingUiReady ||
-      authStatus !== 'authenticated'
+      authStatus !== 'authenticated' ||
+      !accountId
     ) {
       setBillingSummary(null)
       return
@@ -118,7 +143,12 @@ export function BillingPricingExperience({
         }
       })
     return () => controller.abort()
-  }, [authStatus, catalog?.customerBillingUiReady, loadBillingSummary])
+  }, [
+    accountId,
+    authStatus,
+    catalog?.customerBillingUiReady,
+    loadBillingSummary,
+  ])
 
   useEffect(() => {
     if (
@@ -158,14 +188,35 @@ export function BillingPricingExperience({
     if (
       !catalog?.customerBillingUiReady ||
       authStatus !== 'authenticated' ||
-      currentPlan === 'plus' ||
-      currentPlan === 'pro' ||
-      currentPlan === 'enterprise'
+      !accountId ||
+      !billingSummary ||
+      billingSummary.entitlement.planKey !== 'free' ||
+      billingSummary.saleAvailability !== 'available' ||
+      (
+        billingSummary.subscription.state !== 'none' &&
+        billingSummary.subscription.state !== 'activation_pending'
+      )
     ) {
+      setQuotes({})
+      setQuotedCouponCode(null)
+      setQuoteError(null)
+      setQuoteLoading(false)
       return
     }
+    if (
+      normalizedCouponCode.length > 0 &&
+      normalizedCouponCode.length < 3
+    ) {
+      setQuotedCouponCode(null)
+      setQuoteError(null)
+      setQuoteLoading(false)
+      return
+    }
+
     const controller = new AbortController()
+    const requestedCode = normalizedCouponCode || null
     setQuoteLoading(true)
+    setQuoteError(null)
 
     const loadQuote = async (
       planKey: PaidBillingPlanKey,
@@ -176,7 +227,13 @@ export function BillingPricingExperience({
           Accept: 'application/json',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ planKey, surface: 'pricing' }),
+        body: JSON.stringify({
+          planKey,
+          surface: 'pricing',
+          ...(requestedCode
+            ? { manualCouponCode: requestedCode }
+            : {}),
+        }),
         signal: controller.signal,
       })
       const quote = await parseBillingResponse(
@@ -190,40 +247,61 @@ export function BillingPricingExperience({
       return quote
     }
 
-    void Promise.allSettled([
-      loadQuote('plus'),
-      loadQuote('pro'),
-    ])
-      .then(([plus, pro]) => {
-        if (controller.signal.aborted) return
-        setQuotes({
-          ...(plus.status === 'fulfilled' ? { plus: plus.value } : {}),
-          ...(pro.status === 'fulfilled' ? { pro: pro.value } : {}),
+    const debounceMs = requestedCode ? 300 : 0
+    const timeout = window.setTimeout(() => {
+      void Promise.allSettled([
+        loadQuote('plus'),
+        loadQuote('pro'),
+      ])
+        .then(([plus, pro]) => {
+          if (controller.signal.aborted) return
+          const nextQuotes = {
+            ...(plus.status === 'fulfilled' ? { plus: plus.value } : {}),
+            ...(pro.status === 'fulfilled' ? { pro: pro.value } : {}),
+          }
+          setQuotes(nextQuotes)
+          setQuotedCouponCode(requestedCode)
+          if (
+            plus.status === 'rejected' ||
+            pro.status === 'rejected'
+          ) {
+            setQuoteError(
+              requestedCode
+                ? 'Coupon pricing could not be checked for every plan. Retry or clear the code.'
+                : 'One or more current paid-plan prices could not be loaded.',
+            )
+          }
         })
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setQuoteLoading(false)
-      })
+        .finally(() => {
+          if (!controller.signal.aborted) setQuoteLoading(false)
+        })
+    }, debounceMs)
 
-    return () => controller.abort()
-  }, [authStatus, catalog, currentPlan])
+    return () => {
+      window.clearTimeout(timeout)
+      controller.abort()
+    }
+  }, [
+    accountId,
+    authStatus,
+    billingSummary,
+    catalog?.customerBillingUiReady,
+    normalizedCouponCode,
+  ])
 
   useEffect(() => {
     if (
       !catalog?.customerBillingUiReady ||
       authStatus !== 'authenticated' ||
       !accountId ||
-      resumeCheckedRef.current
+      resumeCheckedRef.current === accountId
     ) {
       return
     }
-    resumeCheckedRef.current = true
+    resumeCheckedRef.current = accountId
 
     const recovery = readBillingCheckoutRecovery(accountId)
-    if (recovery) {
-      setSelectedPlan(recovery.planKey)
-      return
-    }
+    setPendingRecovery(recovery)
 
     const params = new URLSearchParams(window.location.search)
     const shouldResume = params.get('resumeBilling') === '1'
@@ -233,7 +311,7 @@ export function BillingPricingExperience({
       authIntent?.surface === 'pricing' &&
       currentPlan === 'free'
     ) {
-      setSelectedPlan(authIntent.planKey)
+      setResumedAfterSignIn(authIntent.planKey)
       clearBillingAuthIntent()
     } else if (shouldResume && authIntent) {
       clearBillingAuthIntent()
@@ -247,7 +325,92 @@ export function BillingPricingExperience({
         query ? `/pricing?${query}` : '/pricing',
       )
     }
-  }, [accountId, authStatus, catalog, currentPlan])
+  }, [
+    accountId,
+    authStatus,
+    catalog?.customerBillingUiReady,
+    currentPlan,
+  ])
+
+  useEffect(() => {
+    if (
+      !accountId ||
+      !pendingRecovery ||
+      !billingSummary ||
+      billingSummary.entitlement.planKey === 'free'
+    ) return
+    clearBillingCheckoutRecovery(accountId)
+    setPendingRecovery(null)
+  }, [accountId, billingSummary, pendingRecovery])
+
+  function couponDecisionForPlan(
+    planKey: PaidBillingPlanKey,
+  ): AcquisitionCouponDecision {
+    const quote = quotes[planKey]
+    if (!normalizedCouponCode) {
+      if (quoteLoading || quotedCouponCode !== null) {
+        return { blocked: true, message: 'Refreshing standard pricing…' }
+      }
+      return quote
+        ? { blocked: false }
+        : {
+            blocked: true,
+            message: quoteError ?? 'Current price is still loading.',
+          }
+    }
+    if (
+      normalizedCouponCode.length < 3 ||
+      quoteLoading ||
+      quotedCouponCode !== normalizedCouponCode
+    ) {
+      return { blocked: true, message: 'Checking coupon pricing…' }
+    }
+    if (!quote) {
+      return {
+        blocked: true,
+        message: quoteError ?? 'Coupon pricing is temporarily unavailable.',
+      }
+    }
+    if (quote.manualCodeResult === 'not_better_than_automatic') {
+      return { blocked: false }
+    }
+    if (
+      quote.manualCodeResult === 'applied' &&
+      quote.coupon?.mode === 'code' &&
+      quote.coupon.code?.trim().toUpperCase() === normalizedCouponCode
+    ) {
+      return {
+        blocked: false,
+        manualCouponCode: normalizedCouponCode,
+      }
+    }
+    const previousCheckoutMayHoldCode =
+      quote.manualCodeResult === 'ineligible' &&
+      (
+        (
+          pendingRecovery !== null &&
+          pendingRecovery.planKey !== planKey
+        ) ||
+        (
+          billingSummary?.subscription.state === 'activation_pending' &&
+          billingSummary.subscription.planKey !== planKey
+        )
+      )
+    if (previousCheckoutMayHoldCode) {
+      return {
+        blocked: false,
+        manualCouponCode: normalizedCouponCode,
+        message:
+          'Your previous checkout may hold this coupon. It will be rechecked when you pay.',
+      }
+    }
+    return {
+      blocked: true,
+      message: quote.manualCodeResult === 'system_unavailable'
+        ? 'Coupon validation is temporarily unavailable. Retry or clear the code.'
+        : 'This coupon is not available for this plan.',
+    }
+  }
 
   function selectPlan(planKey: PaidBillingPlanKey) {
     if (authStatus === 'loading') return
@@ -282,7 +445,22 @@ export function BillingPricingExperience({
       })
       return
     }
-    setSelectedPlan(planKey)
+    if (
+      !accountId ||
+      !billingSummary ||
+      billingSummary.saleAvailability !== 'available' ||
+      billingSummary.entitlement.planKey !== 'free'
+    ) return
+    const couponDecision = couponDecisionForPlan(planKey)
+    if (couponDecision.blocked) return
+    setResumedAfterSignIn(null)
+    setCheckoutSelection({
+      planKey,
+      autoStart: true,
+      ...(couponDecision.manualCouponCode
+        ? { manualCouponCode: couponDecision.manualCouponCode }
+        : {}),
+    })
   }
 
   async function cancelRenewal() {
@@ -438,6 +616,107 @@ export function BillingPricingExperience({
       : currentPlan === 'enterprise'
         ? 'Contact us to change plan'
         : 'Manage subscription below'
+  const acquisitionControlsVisible =
+    authoritativeCurrentPlan === 'free' && !subscriptionReviewLocked
+
+  function acquisitionCtaForPlan(planKey: PaidBillingPlanKey): {
+    label: string
+    disabled: boolean
+    busy: boolean
+  } {
+    if (authStatus === 'loading') {
+      return { label: 'Loading account…', disabled: true, busy: true }
+    }
+    if (authStatus !== 'authenticated') {
+      return {
+        label: `Sign in to buy ${planKey === 'plus' ? 'Plus' : 'Pro'}`,
+        disabled: false,
+        busy: false,
+      }
+    }
+    if (!accountId) {
+      return { label: 'Account unavailable', disabled: true, busy: false }
+    }
+    if (checkoutSelection) {
+      return {
+        label: checkoutSelection.planKey === planKey
+          ? 'Preparing payment…'
+          : 'Payment opening…',
+        disabled: true,
+        busy: checkoutSelection.planKey === planKey,
+      }
+    }
+    if (!billingSummary) {
+      return { label: 'Loading account…', disabled: true, busy: true }
+    }
+    if (billingSummary.saleAvailability !== 'available') {
+      return {
+        label: 'Purchases unavailable',
+        disabled: true,
+        busy: false,
+      }
+    }
+    const decision = couponDecisionForPlan(planKey)
+    if (decision.blocked) {
+      const waitingForQuote = quoteLoading ||
+        (!quotes[planKey] && quoteError === null)
+      return {
+        label: waitingForQuote ? 'Checking price…' : 'Coupon unavailable',
+        disabled: true,
+        busy: waitingForQuote,
+      }
+    }
+    const quote = quotes[planKey]
+    return quote
+      ? {
+          label: `Pay ${formatInr(quote.payablePaise)} Now`,
+          disabled: false,
+          busy: false,
+        }
+      : { label: 'Price unavailable', disabled: true, busy: false }
+  }
+
+  let couponStatusMessage: string | null = null
+  if (normalizedCouponCode) {
+    if (normalizedCouponCode.length < 3) {
+      couponStatusMessage =
+        'Enter at least 3 characters, or clear the coupon code.'
+    } else if (
+      quoteLoading ||
+      quotedCouponCode !== normalizedCouponCode
+    ) {
+      couponStatusMessage = 'Checking this coupon for Plus and Pro…'
+    } else {
+      const appliedPlans = PLAN_ORDER.filter((planKey) =>
+        planKey !== 'free' &&
+        quotes[planKey]?.manualCodeResult === 'applied',
+      ) as PaidBillingPlanKey[]
+      const recheckPlans = (['plus', 'pro'] as const).filter((planKey) =>
+        couponDecisionForPlan(planKey).manualCouponCode ===
+          normalizedCouponCode &&
+        quotes[planKey]?.manualCodeResult === 'ineligible',
+      )
+      const automaticBetter = (['plus', 'pro'] as const).every((planKey) =>
+        quotes[planKey]?.manualCodeResult === 'not_better_than_automatic',
+      )
+      if (appliedPlans.length > 0) {
+        couponStatusMessage = `${normalizedCouponCode} applied to ${appliedPlans
+          .map((planKey) => planKey === 'plus' ? 'Plus' : 'Pro')
+          .join(' and ')}. The Pay button shows the updated amount.`
+      } else if (recheckPlans.length > 0) {
+        couponStatusMessage =
+          'Your previous checkout may hold this coupon. We will recheck it once when you pay; a better final price opens Razorpay directly.'
+      } else if (automaticBetter) {
+        couponStatusMessage =
+          'A better automatic coupon is already applied to these plans.'
+      } else {
+        couponStatusMessage = quoteError ??
+          'This coupon is not available for the selected paid plan.'
+      }
+    }
+  } else if (quoteError) {
+    couponStatusMessage = quoteError
+  }
 
   if (loading) {
     return (
@@ -518,25 +797,132 @@ export function BillingPricingExperience({
           </section>
         ) : null}
 
+        {acquisitionControlsVisible && pendingRecovery ? (
+          <section
+            aria-label="Unfinished payment"
+            className="mb-6 flex flex-col gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <h2 className="text-sm font-semibold text-blue-950">
+                Unfinished {pendingRecovery.planKey === 'plus'
+                  ? 'Plus'
+                  : 'Pro'} payment
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-blue-900">
+                Resume the existing Razorpay checkout, or choose another plan
+                below. Starting another plan safely replaces the unpaid one.
+              </p>
+            </div>
+            <Button
+              type="button"
+              disabled={checkoutSelection !== null}
+              onClick={() => setCheckoutSelection({
+                planKey: pendingRecovery.planKey,
+                autoStart: true,
+                ...(pendingRecovery.manualCouponCode
+                  ? { manualCouponCode: pendingRecovery.manualCouponCode }
+                  : {}),
+              })}
+            >
+              Resume payment
+            </Button>
+          </section>
+        ) : null}
+
+        {acquisitionControlsVisible && resumedAfterSignIn ? (
+          <p
+            className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
+            role="status"
+          >
+            You are signed in. Review the current{' '}
+            {resumedAfterSignIn === 'plus' ? 'Plus' : 'Pro'} price below and
+            select Pay when you are ready.
+          </p>
+        ) : null}
+
+        {acquisitionControlsVisible ? (
+          <section
+            aria-label="Paid plan coupon and terms"
+            className="mb-8 rounded-2xl border border-[#e1e8ed] bg-white p-5"
+          >
+            {authStatus === 'authenticated' && accountId ? (
+              <div className="max-w-md">
+                <Input
+                  id="pricing-coupon-code"
+                  label="Coupon code (optional)"
+                  autoComplete="off"
+                  maxLength={40}
+                  value={couponCode}
+                  onChange={(event) => {
+                    setCouponCode(event.target.value.toUpperCase())
+                    setResumedAfterSignIn(null)
+                  }}
+                  disabled={checkoutSelection !== null}
+                  hint="Checked automatically as you type. No Razorpay Offer is required."
+                />
+                {couponStatusMessage ? (
+                  <p
+                    className="mt-2 text-xs leading-5 text-[#536471]"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {couponStatusMessage}
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-sm text-[#536471]">
+                Sign in from a paid plan below to check a coupon for your
+                account.
+              </p>
+            )}
+            <p className="mt-4 text-xs leading-5 text-[#71767b]">
+              By selecting Pay, you agree to the{' '}
+              <Link href="/terms" className="text-blue-600 hover:underline">
+                Terms
+              </Link>{' '}and acknowledge the{' '}
+              <Link
+                href="/cancellation-refunds"
+                className="text-blue-600 hover:underline"
+              >
+                cancellation and refund terms
+              </Link>
+              . Review our{' '}
+              <Link href="/privacy" className="text-blue-600 hover:underline">
+                Privacy Policy
+              </Link>
+              . Your plan activates only after server-confirmed payment.
+            </p>
+          </section>
+        ) : null}
+
         <section
           aria-label="Interview preparation plans"
           className="grid gap-component md:grid-cols-3"
         >
-          {PLAN_ORDER.map((planKey) => (
-            <BillingPlanCard
-              key={planKey}
-              plan={catalog.plans[planKey]}
-              currentPlan={authoritativeCurrentPlan}
-              quote={planKey === 'free' ? undefined : quotes[planKey]}
-              quoteLoading={planKey !== 'free' && quoteLoading}
-              paidPlanChangeAvailable={paidPlanChangeAvailable}
-              paidPlanChangeBlockedLabel={paidPlanChangeBlockedLabel}
-              paidSelectionBlockedLabel={subscriptionReviewLocked
-                ? 'Billing review in progress'
-                : undefined}
-              onSelect={selectPlan}
-            />
-          ))}
+          {PLAN_ORDER.map((planKey) => {
+            const acquisitionCta = planKey === 'free'
+              ? null
+              : acquisitionCtaForPlan(planKey)
+            return (
+              <BillingPlanCard
+                key={planKey}
+                plan={catalog.plans[planKey]}
+                currentPlan={authoritativeCurrentPlan}
+                quote={planKey === 'free' ? undefined : quotes[planKey]}
+                quoteLoading={planKey !== 'free' && quoteLoading}
+                paidPlanChangeAvailable={paidPlanChangeAvailable}
+                paidPlanChangeBlockedLabel={paidPlanChangeBlockedLabel}
+                paidSelectionBlockedLabel={subscriptionReviewLocked
+                  ? 'Billing review in progress'
+                  : undefined}
+                acquisitionCtaLabel={acquisitionCta?.label}
+                acquisitionCtaDisabled={acquisitionCta?.disabled}
+                acquisitionCtaBusy={acquisitionCta?.busy}
+                onSelect={selectPlan}
+              />
+            )
+          })}
         </section>
 
         {authStatus === 'authenticated' &&
@@ -652,16 +1038,26 @@ export function BillingPricingExperience({
         </div>
       </div>
 
-      {selectedPlan && accountId && (
+      {checkoutSelection && accountId && (
         <BillingCheckoutDialog
-          key={`${accountId}:${selectedPlan}`}
+          key={`${accountId}:${checkoutSelection.planKey}:${checkoutSelection.manualCouponCode ?? 'automatic'}`}
           catalog={catalog}
-          planKey={selectedPlan}
+          planKey={checkoutSelection.planKey}
           accountId={accountId}
-          initialQuote={quotes[selectedPlan]}
+          initialQuote={quotes[checkoutSelection.planKey]}
           initialSummary={billingSummary ?? undefined}
+          autoStart={checkoutSelection.autoStart}
+          {...(checkoutSelection.manualCouponCode
+            ? {
+                initialManualCouponCode:
+                  checkoutSelection.manualCouponCode,
+              }
+            : {})}
           refreshSession={refreshSession}
-          onClose={() => setSelectedPlan(null)}
+          onClose={() => {
+            setCheckoutSelection(null)
+            setPendingRecovery(readBillingCheckoutRecovery(accountId))
+          }}
           onCompleted={refreshCompletedBilling}
         />
       )}

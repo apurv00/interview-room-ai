@@ -5,6 +5,7 @@ import { CheckoutIntent } from '../models/CheckoutIntent'
 import {
   ConsumerSubscriptionLease,
 } from '../models/ConsumerSubscriptionLease'
+import { CouponReservation } from '../models/CouponReservation'
 import { PaymentAttempt } from '../models/PaymentAttempt'
 import {
   Subscription,
@@ -20,7 +21,10 @@ import type {
   RazorpayInvoiceDto,
   RazorpaySubscriptionDto,
 } from '../providers/razorpayServerAdapter'
-import type { ProviderMode } from '../types/catalog'
+import type {
+  CouponCampaignMode,
+  ProviderMode,
+} from '../types/catalog'
 import {
   assertSubscriptionCommercialIntent,
   assertSubscriptionLifecycleIntent,
@@ -87,6 +91,10 @@ export interface BlockingSubscriptionCheckout {
     razorpaySubscriptionId: string
     receipt: string
   }
+  couponSelection?: {
+    campaignModeSnapshot: CouponCampaignMode
+    codeSnapshot?: string
+  }
   hasLocalPaymentEvidence: boolean
 }
 
@@ -123,6 +131,11 @@ interface LeanCheckoutIntent {
   razorpaySubscriptionId?: string
   receipt: string
   createdAt: Date
+}
+
+interface LeanCouponSelection {
+  campaignModeSnapshot: CouponCampaignMode
+  codeSnapshot?: string
 }
 
 interface LeanSubscriptionEvidence {
@@ -230,6 +243,26 @@ function terminalUnpaidSubscription(
       subscription.status === 'expired'
     ) &&
     subscriptionHasNoPaidPeriod(subscription)
+  )
+}
+
+function normalizedManualCouponCode(
+  value: string | undefined,
+): string | undefined {
+  const normalized = value?.trim().toUpperCase()
+  return normalized || undefined
+}
+
+function reusableCouponSelectionMatches(
+  blocking: BlockingSubscriptionCheckout,
+  requestedCode: string | undefined,
+): boolean {
+  const requested = normalizedManualCouponCode(requestedCode)
+  if (!requested) return true
+  const selection = blocking.couponSelection
+  return (
+    selection?.campaignModeSnapshot === 'code' &&
+    normalizedManualCouponCode(selection.codeSnapshot) === requested
   )
 }
 
@@ -377,7 +410,12 @@ UnpaidSubscriptionCheckoutSupersessionStore = {
       throw reviewRequired('The blocking checkout is not safely supersedable')
     }
 
-    const [paymentAttempt, fulfillment, subscription] = await Promise.all([
+    const [
+      paymentAttempt,
+      fulfillment,
+      subscription,
+      couponSelection,
+    ] = await Promise.all([
       PaymentAttempt.exists({
         userId,
         providerMode: input.providerMode,
@@ -400,6 +438,14 @@ UnpaidSubscriptionCheckoutSupersessionStore = {
         currentPeriodStart: 1,
         currentPeriodEnd: 1,
       }).lean<LeanSubscriptionEvidence>(),
+      CouponReservation.findOne({
+        userId,
+        providerMode: input.providerMode,
+        checkoutIntentId: checkout._id,
+      }).select({
+        campaignModeSnapshot: 1,
+        codeSnapshot: 1,
+      }).lean<LeanCouponSelection>(),
     ])
     const localSubscriptionUnsafe = Boolean(
       subscription && (
@@ -436,6 +482,7 @@ UnpaidSubscriptionCheckoutSupersessionStore = {
         createdAt: checkout.createdAt,
         quote: checkout.quoteSnapshot,
       },
+      ...(couponSelection ? { couponSelection } : {}),
       hasLocalPaymentEvidence: Boolean(
         paymentAttempt || fulfillment || localSubscriptionUnsafe,
       ),
@@ -469,13 +516,15 @@ export type UnpaidSubscriptionCheckoutSupersessionResult =
     }
 
 /**
- * Clears only an older, different-plan acquisition checkout after Razorpay
- * proves that its exact subscription is terminal and has no payment evidence.
+ * Clears an obsolete acquisition checkout after Razorpay proves that its
+ * exact subscription is terminal and has no payment evidence. An unexpired
+ * same-plan checkout is reusable only when an asserted coupon still matches.
  */
 export async function supersedeBlockingUnpaidSubscriptionCheckout(input: {
   userId: string
   providerMode: ProviderMode
   replacementPlanKey: 'plus' | 'pro'
+  manualCouponCode?: string
   expectedSubscriptionTotalCount: number
   requestStartedAt: Date
 }, dependencies: UnpaidSubscriptionCheckoutSupersessionDependencies = {}):
@@ -586,6 +635,10 @@ Promise<UnpaidSubscriptionCheckoutSupersessionResult> {
 
   if (
     samePlan &&
+    reusableCouponSelectionMatches(
+      blocking,
+      input.manualCouponCode,
+    ) &&
     intent.status === 'remote_created' &&
     subscription.status === 'created' &&
     intent.quote.subscriptionTotalCount ===

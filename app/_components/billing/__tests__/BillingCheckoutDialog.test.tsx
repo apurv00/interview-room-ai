@@ -188,6 +188,128 @@ afterEach(() => {
 })
 
 describe('BillingCheckoutDialog completion and recovery', () => {
+  it('starts the pricing-card checkout without rendering a pre-payment dialog', async () => {
+    let resolveCheckout!: (value: Response) => void
+    const pendingCheckout = new Promise<Response>((resolve) => {
+      resolveCheckout = resolve
+    })
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/billing/subscriptions/checkout') {
+        return pendingCheckout
+      }
+      return standardFetch(input, init)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        initialQuote={quote}
+        initialSummary={summary}
+        autoStart
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/billing/subscriptions/checkout',
+      expect.objectContaining({ method: 'POST' }),
+    ))
+    expect(mocks.openRazorpay).not.toHaveBeenCalled()
+
+    resolveCheckout(new Response(JSON.stringify(checkout), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await waitFor(() => expect(mocks.openRazorpay).toHaveBeenCalledOnce())
+  })
+
+  it('starts a fresh same-plan checkout when the pricing coupon differs from the saved recovery', async () => {
+    const couponTerms = 'Save ₹100 for the first billing cycle.'
+    const discountedQuote = {
+      ...quote,
+      discountPaise: 10_000,
+      payablePaise: 49_900,
+      manualCodeResult: 'applied' as const,
+      discountedBillingCycles: 1,
+      coupon: {
+        campaignId: '84b64c0f2f4e8b6a8c7d9e10',
+        revision: 1,
+        mode: 'code' as const,
+        code: 'GURU100',
+        displayText: 'Save ₹100 on your subscription',
+        termsText: couponTerms,
+        whyApplied: 'Coupon code GURU100 applied.',
+      },
+      disclosure: {
+        ...quote.disclosure,
+        why: 'Coupon code GURU100 applied.',
+        terms: couponTerms,
+      },
+    }
+    const discountedCheckout = {
+      ...checkout,
+      quote: {
+        ...checkout.quote,
+        discountPaise: 10_000,
+        payablePaise: 49_900,
+        discountedBillingCycles: 1,
+        coupon: discountedQuote.coupon,
+        disclosure: discountedQuote.disclosure,
+      },
+    }
+    saveBillingCheckoutRecovery({
+      accountId: ACCOUNT_ID,
+      intentId: '94b64c0f2f4e8b6a8c7d9e10',
+      planKey: 'plus',
+      catalogVersion: quote.catalogVersion,
+      idempotencyKey: 'billing-subscription:previous-plus',
+    })
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/billing/subscriptions/checkout') {
+        return response(discountedCheckout, 201)
+      }
+      return standardFetch(input, init)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <BillingCheckoutDialog
+        catalog={catalog}
+        planKey="plus"
+        accountId={ACCOUNT_ID}
+        initialQuote={discountedQuote}
+        initialSummary={summary}
+        initialManualCouponCode="GURU100"
+        autoStart
+        refreshSession={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        onCompleted={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    await waitFor(() => expect(mocks.openRazorpay).toHaveBeenCalledOnce())
+    const checkoutRequests = fetchMock.mock.calls.filter(
+      ([input]) => String(input) === '/api/billing/subscriptions/checkout',
+    )
+    expect(checkoutRequests).toHaveLength(1)
+    expect(JSON.parse(String(checkoutRequests[0]?.[1]?.body))).toEqual({
+      planKey: 'plus',
+      manualCouponCode: 'GURU100',
+    })
+    expect(checkoutRequests[0]?.[1]?.headers).toEqual(expect.objectContaining({
+      'Idempotency-Key': expect.not.stringContaining('previous-plus'),
+    }))
+    expect(fetchMock.mock.calls.some(
+      ([input]) => String(input).includes('/api/billing/status/'),
+    )).toBe(false)
+  })
+
   it('shows the preloaded price immediately and opens Razorpay from one Pay click', async () => {
     let resolveCheckout!: (value: Response) => void
     const pendingCheckout = new Promise<Response>((resolve) => {

@@ -65,6 +65,8 @@ interface BillingCheckoutDialogProps {
   accountId: string
   initialQuote: CustomerBillingQuote | undefined
   initialSummary: CustomerBillingSummary | undefined
+  initialManualCouponCode?: string
+  autoStart?: boolean
   refreshSession: () => Promise<unknown>
   onClose: () => void
   onCompleted: () => Promise<void>
@@ -147,6 +149,8 @@ export function BillingCheckoutDialog({
   accountId,
   initialQuote,
   initialSummary,
+  initialManualCouponCode,
+  autoStart = false,
   refreshSession,
   onClose,
   onCompleted,
@@ -158,9 +162,19 @@ export function BillingCheckoutDialog({
   const [initialCheckoutSummary] = useState<CustomerBillingSummary | null>(
     () => initialSummary ?? null,
   )
-  const [initialRecovery] = useState(
-    () => readBillingCheckoutRecovery(accountId),
-  )
+  const [initialRecovery] = useState(() => {
+    const recovery = readBillingCheckoutRecovery(accountId)
+    const requestedCode = initialManualCouponCode?.trim().toUpperCase()
+    const recoveredCode = recovery?.manualCouponCode?.trim().toUpperCase()
+    if (
+      recovery?.planKey === planKey &&
+      requestedCode &&
+      requestedCode !== recoveredCode
+    ) {
+      return null
+    }
+    return recovery
+  })
   const [stage, setStage] = useState<CheckoutStage>(
     initialPlanQuote && initialCheckoutSummary && !initialRecovery
       ? 'review'
@@ -173,12 +187,27 @@ export function BillingCheckoutDialog({
   const [summary, setSummary] = useState<CustomerBillingSummary | null>(
     initialCheckoutSummary,
   )
-  const [manualCode, setManualCode] = useState('')
-  const [couponOpen, setCouponOpen] = useState(false)
+  const [manualCode, setManualCode] = useState(
+    () => initialManualCouponCode?.trim().toUpperCase() ?? '',
+  )
+  const [couponOpen, setCouponOpen] = useState(
+    () => Boolean(initialManualCouponCode),
+  )
   const [couponMessage, setCouponMessage] = useState<string | null>(null)
   const [couponApplying, setCouponApplying] = useState(false)
   const [manualCouponValidation, setManualCouponValidation] =
-    useState<ManualCouponValidation | null>(null)
+    useState<ManualCouponValidation | null>(() => {
+      const code = initialManualCouponCode?.trim().toUpperCase()
+      if (!code) return null
+      const applied =
+        initialPlanQuote?.manualCodeResult === 'applied' &&
+        initialPlanQuote.coupon?.mode === 'code' &&
+        initialPlanQuote.coupon.code?.trim().toUpperCase() === code
+      return {
+        code,
+        result: applied ? 'applied' : 'recheck_at_checkout',
+      }
+    })
   const [error, setError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [idempotencyKey, setIdempotencyKey] = useState(
@@ -198,6 +227,13 @@ export function BillingCheckoutDialog({
   const restoreFocusRef = useRef<HTMLElement | null>(null)
   const recoveryAbortRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
+  const autoStartAttemptedRef = useRef(false)
+  const prepareCheckoutRef = useRef<() => Promise<void>>(async () => {})
+  const openRazorpayRef = useRef<(
+    preparedCheckout?: SubscriptionCheckout,
+  ) => Promise<void>>(async () => {})
+  const quoteRef = useRef<CustomerBillingQuote | null>(initialPlanQuote)
+  quoteRef.current = quote
 
   const requestQuote = useCallback(async (
     code?: string,
@@ -389,11 +425,22 @@ export function BillingCheckoutDialog({
     setIdempotencyKey(recovery.idempotencyKey)
     setManualCode(recovery.manualCouponCode ?? '')
     setCheckout(recovered)
+    const previewQuote = quoteRef.current
+    const requiresConfirmation = !previewQuote || checkoutChangeRequiresConfirmation(
+      previewQuote,
+      recovered,
+      recovery.manualCouponCode,
+    )
+    if (autoStart && !requiresConfirmation) {
+      setStatusMessage(null)
+      await openRazorpayRef.current(recovered)
+      return
+    }
     setStatusMessage(
       'Your existing secure checkout was recovered. Review the final amount before reopening Razorpay.',
     )
     setStage('final_review')
-  }, [planKey])
+  }, [autoStart, planKey])
 
   const resumeRecovery = useCallback(async (
     recovery: BillingCheckoutRecovery,
@@ -689,6 +736,29 @@ export function BillingCheckoutDialog({
     }
   }
 
+  prepareCheckoutRef.current = prepareCheckout
+
+  useEffect(() => {
+    if (
+      !autoStart ||
+      autoStartAttemptedRef.current ||
+      stage !== 'review' ||
+      !quote ||
+      !summary ||
+      couponApplying ||
+      manualCodeNeedsValidation
+    ) return
+    autoStartAttemptedRef.current = true
+    void prepareCheckoutRef.current()
+  }, [
+    autoStart,
+    couponApplying,
+    manualCodeNeedsValidation,
+    quote,
+    stage,
+    summary,
+  ])
+
   async function verifyPaymentOnce(
     payload: RazorpaySuccessPayload,
     signal: AbortSignal,
@@ -799,6 +869,8 @@ export function BillingCheckoutDialog({
   async function openRazorpay(preparedCheckout?: SubscriptionCheckout) {
     const activeCheckout = preparedCheckout ?? checkout
     if (!activeCheckout || !mountedRef.current || stage === 'opening') return
+    recoveryAbortRef.current?.abort()
+    recoveryAbortRef.current = null
     setStage('opening')
     setError(null)
     setStatusMessage('Opening Razorpay secure checkout…')
@@ -865,9 +937,17 @@ export function BillingCheckoutDialog({
     }
   }
 
+  openRazorpayRef.current = openRazorpay
+
   const displayedQuote = checkout?.quote ?? quote
   const finalEntitlement = checkout?.quote.entitlementSummary
   const busy = ['preparing', 'opening', 'verifying'].includes(stage)
+  const hideDirectPreparation =
+    autoStart &&
+    !error &&
+    ['loading', 'review', 'preparing', 'opening'].includes(stage)
+
+  if (hideDirectPreparation) return null
 
   return (
     <div
@@ -1159,7 +1239,7 @@ export function BillingCheckoutDialog({
               ) : stage === 'final_review' ? (
                 <>
                   <Button type="button" variant="secondary" onClick={onClose}>
-                    Finish later
+                    Cancel
                   </Button>
                   <Button
                     type="button"
@@ -1169,27 +1249,23 @@ export function BillingCheckoutDialog({
                   </Button>
                 </>
               ) : stage === 'failed' ? (
+                <Button type="button" variant="secondary" onClick={onClose}>
+                  Close
+                </Button>
+              ) : stage === 'pending' ? (
                 <>
                   <Button type="button" variant="secondary" onClick={onClose}>
                     Close
                   </Button>
-                  {!readBillingCheckoutRecovery(accountId) && (
+                  {checkout ? (
                     <Button
                       type="button"
-                      onClick={() => {
-                        setError(null)
-                        setStatusMessage(null)
-                        setStage('review')
-                      }}
+                      onClick={() => void openRazorpay()}
                     >
-                      Return to payment
+                      Reopen payment
                     </Button>
-                  )}
+                  ) : null}
                 </>
-              ) : stage === 'pending' ? (
-                <Button type="button" variant="secondary" onClick={onClose}>
-                  Finish later
-                </Button>
               ) : null}
             </div>
           </div>

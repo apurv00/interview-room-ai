@@ -264,6 +264,9 @@ export default function PricingPageClient({
     | 'plus'
     | 'pro'
     | 'enterprise'
+  const billingExperienceIdentity = status === 'authenticated'
+    ? `account:${session?.user?.id ?? 'missing'}`
+    : `session:${status}`
 
   if (
     PR6_CUSTOMER_BILLING_UI_READY &&
@@ -271,6 +274,7 @@ export default function PricingPageClient({
   ) {
     return (
       <BillingPricingExperience
+        key={billingExperienceIdentity}
         currentPlan={currentPlan}
         authStatus={status}
         accountId={session?.user?.id ?? null}

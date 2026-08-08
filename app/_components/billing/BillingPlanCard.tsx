@@ -19,6 +19,9 @@ interface BillingPlanCardProps {
   currentPlan: LegacyStoredPlanKey
   quote?: CustomerBillingQuote
   quoteLoading?: boolean
+  acquisitionCtaLabel?: string
+  acquisitionCtaDisabled?: boolean
+  acquisitionCtaBusy?: boolean
   paidPlanChangeAvailable?: boolean
   paidPlanChangeBlockedLabel?: string
   paidSelectionBlockedLabel?: string
@@ -64,6 +67,9 @@ export function BillingPlanCard({
   currentPlan,
   quote,
   quoteLoading = false,
+  acquisitionCtaLabel,
+  acquisitionCtaDisabled = false,
+  acquisitionCtaBusy = false,
   paidPlanChangeAvailable = false,
   paidPlanChangeBlockedLabel = 'Manage current change below',
   paidSelectionBlockedLabel,
@@ -127,7 +133,7 @@ export function BillingPlanCard({
             <p className="mt-1 text-xs text-[#71767b]">
               {quoteLoading
                 ? 'Checking eligible coupon pricing…'
-                : 'Enter an eligible coupon code during checkout.'}
+                : 'Enter an eligible coupon code above before paying.'}
             </p>
           </>
         )}
@@ -197,9 +203,12 @@ export function BillingPlanCard({
           <Button
             type="button"
             isFullWidth
+            disabled={acquisitionCtaDisabled || acquisitionCtaBusy}
+            isLoading={acquisitionCtaBusy}
+            aria-busy={acquisitionCtaBusy || undefined}
             onClick={() => onSelect(paidPlanKey)}
           >
-            Choose {plan.displayName}
+            {acquisitionCtaLabel ?? `Choose ${plan.displayName}`}
           </Button>
         ) : null}
       </div>
