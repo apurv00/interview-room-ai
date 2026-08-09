@@ -38,7 +38,7 @@ const CTX = {
 
 const SESSION = { id: 'tx' }
 
-function appDoc(subs: Array<{ resumeText: string; resumeFileName?: string; submittedAt: Date }>) {
+function appDoc(subs: Array<{ _id: string; resumeText: string; resumeFileName?: string; submittedAt: Date }>) {
   return {
     _id: 'app-1',
     candidateId: 'cand-1',
@@ -55,8 +55,8 @@ beforeEach(() => {
 })
 
 const SUBS = [
-  { resumeText: 'submission A', resumeFileName: 'a.pdf', submittedAt: new Date('2026-08-01') },
-  { resumeText: 'submission B', resumeFileName: 'b.pdf', submittedAt: new Date('2026-07-01') },
+  { _id: 'sub-a', resumeText: 'submission A', resumeFileName: 'a.pdf', submittedAt: new Date('2026-08-01') },
+  { _id: 'sub-b', resumeText: 'submission B', resumeFileName: 'b.pdf', submittedAt: new Date('2026-07-01') },
 ]
 
 describe('promote', () => {
@@ -66,7 +66,7 @@ describe('promote', () => {
     mockApplication.findOne.mockReturnValue({ session: () => Promise.resolve(app) })
     mockCandidate.findOne.mockReturnValue({ session: () => Promise.resolve(candidate) })
 
-    await adjudicateSubmission(CTX, 'app-1', { index: 0, action: 'promote' })
+    await adjudicateSubmission(CTX, 'app-1', { submissionId: 'sub-a', action: 'promote' })
 
     expect(candidate.resumeText).toBe('submission A')
     expect(app.applicantSubmissions).toHaveLength(2) // promote removes nothing
@@ -83,7 +83,7 @@ describe('delete', () => {
     const app = appDoc([...SUBS])
     mockApplication.findOne.mockReturnValue({ session: () => Promise.resolve(app) })
 
-    await adjudicateSubmission(CTX, 'app-1', { index: 0, action: 'delete' })
+    await adjudicateSubmission(CTX, 'app-1', { submissionId: 'sub-a', action: 'delete' })
 
     expect(app.applicantSubmissions).toHaveLength(1)
     expect(app.applicantSubmissions[0].resumeText).toBe('submission B')
@@ -96,13 +96,13 @@ describe('delete', () => {
 describe('guards', () => {
   it('runs under the account-deletion write barrier', async () => {
     mockApplication.findOne.mockReturnValue({ session: () => Promise.resolve(appDoc([...SUBS])) })
-    await adjudicateSubmission(CTX, 'app-1', { index: 1, action: 'delete' })
+    await adjudicateSubmission(CTX, 'app-1', { submissionId: 'sub-b', action: 'delete' })
     expect(txMock).toHaveBeenCalledWith('u1', expect.any(Function))
   })
 
   it('is workspace-scoped', async () => {
     mockApplication.findOne.mockReturnValue({ session: () => Promise.resolve(appDoc([...SUBS])) })
-    await adjudicateSubmission(CTX, 'app-1', { index: 0, action: 'delete' })
+    await adjudicateSubmission(CTX, 'app-1', { submissionId: 'sub-a', action: 'delete' })
     expect(mockApplication.findOne.mock.calls[0][0]).toMatchObject({ workspaceId: 'ws-A' })
   })
 
@@ -110,8 +110,42 @@ describe('guards', () => {
     const app = appDoc([...SUBS])
     mockApplication.findOne.mockReturnValue({ session: () => Promise.resolve(app) })
     await expect(
-      adjudicateSubmission(CTX, 'app-1', { index: 9, action: 'delete' }),
+      adjudicateSubmission(CTX, 'app-1', { submissionId: 'does-not-exist', action: 'delete' }),
     ).rejects.toThrow()
     expect(app.save).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('erasure reaches every copy', () => {
+  beforeEach(() => {
+    mockApplication.findOne.mockReturnValue({ session: () => Promise.resolve(appDoc([...SUBS])) })
+  })
+
+  it('deleting a PROMOTED submission also clears it from the candidate record', async () => {
+    const app = appDoc([...SUBS])
+    // Promotion copied submission A to the pool; filtering the array alone
+    // would leave the "deleted" résumé exposed there (Codex P1 on #618).
+    const candidate = { _id: 'cand-1', resumeText: 'submission A', resumeFileName: 'a.pdf', save: vi.fn() }
+    mockApplication.findOne.mockReturnValue({ session: () => Promise.resolve(app) })
+    mockCandidate.findOne.mockReturnValue({ session: () => Promise.resolve(candidate) })
+
+    await adjudicateSubmission(CTX, 'app-1', { submissionId: 'sub-a', action: 'delete' })
+
+    expect(app.applicantSubmissions).toHaveLength(1)
+    expect(candidate.resumeText).toBeUndefined()
+    expect(candidate.save).toHaveBeenCalled()
+  })
+
+  it('erases the POOL copy when no submissionId is given (first-ever public application)', async () => {
+    const app = appDoc([])
+    const candidate = { _id: 'cand-1', resumeText: 'first-ever public CV', resumeFileName: 'x.pdf', save: vi.fn() }
+    mockApplication.findOne.mockReturnValue({ session: () => Promise.resolve(app) })
+    mockCandidate.findOne.mockReturnValue({ session: () => Promise.resolve(candidate) })
+
+    await adjudicateSubmission(CTX, 'app-1', { action: 'delete' })
+
+    expect(candidate.resumeText).toBeUndefined()
+    expect(app.events[0]).toMatchObject({ type: 'submission_deleted', actorUserId: 'u1' })
   })
 })

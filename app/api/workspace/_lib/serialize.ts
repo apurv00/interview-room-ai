@@ -145,6 +145,8 @@ export function serializeApplication(
     ...(opts.includeApplicantResume
       ? {
           applicantSubmissions: (a.applicantSubmissions ?? []).map((sub) => ({
+            // Stable id — the UI must never address a submission by index.
+            id: sub._id?.toString() ?? null,
             text: sub.resumeText,
             fileName: sub.resumeFileName ?? null,
             submittedAt: sub.submittedAt,

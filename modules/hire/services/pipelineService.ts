@@ -372,7 +372,7 @@ export type SubmissionAction = 'promote' | 'delete'
 export async function adjudicateSubmission(
   ctx: MembershipContext,
   appId: string,
-  input: { index: number; action: SubmissionAction; note?: string },
+  input: { submissionId?: string; action: SubmissionAction; note?: string },
 ): Promise<{ ok: true }> {
   const actorUserId = ctx.membership.userId
   if (!actorUserId) {
@@ -386,31 +386,58 @@ export async function adjudicateSubmission(
     }).session(session)
     if (!application) throw new NotFoundError('Application')
 
-    const submissions = application.applicantSubmissions ?? []
-    const target = submissions[input.index]
-    if (!target) throw new NotFoundError('Submission')
+    const candidate = await HireCandidate.findOne({
+      _id: application.candidateId,
+      workspaceId: ctx.workspace._id,
+    }).session(session)
+    if (!candidate) throw new NotFoundError('Candidate')
 
+    const submissions = application.applicantSubmissions ?? []
+    // No submissionId ⇒ the target is the POOL copy. A first-ever public
+    // application stores its résumé there and nowhere else, so without
+    // this it had no adjudication or erasure path at all (Codex P2 on
+    // #618). Promoting the pool copy is a no-op, so only delete applies.
+    const target = input.submissionId
+      ? submissions.find((sub) => sub._id?.toString() === input.submissionId)
+      : undefined
+    if (input.submissionId && !target) throw new NotFoundError('Submission')
+
+    let label: string
     if (input.action === 'promote') {
-      const candidate = await HireCandidate.findOne({
-        _id: application.candidateId,
-        workspaceId: ctx.workspace._id,
-      }).session(session)
-      if (!candidate) throw new NotFoundError('Candidate')
+      if (!target) throw new AppError('Nothing to promote', 422, 'NO_SUBMISSION')
       candidate.resumeText = target.resumeText
       candidate.resumeFileName = target.resumeFileName
       await candidate.save({ session })
-    } else {
-      application.applicantSubmissions = submissions.filter((_, i) => i !== input.index)
+      label = target.resumeFileName ?? 'Submitted résumé'
+    } else if (target) {
+      application.applicantSubmissions = submissions.filter(
+        (sub) => sub._id?.toString() !== input.submissionId,
+      )
       application.markModified('applicantSubmissions')
+      // A previously PROMOTED submission also lives on the candidate
+      // record. Filtering the array alone left the "deleted" résumé
+      // exposed there and still feeding downstream flows (Codex P1 on
+      // #618) — erasure has to reach every copy.
+      if (candidate.resumeText === target.resumeText) {
+        candidate.resumeText = undefined
+        candidate.resumeFileName = undefined
+        await candidate.save({ session })
+      }
+      label = target.resumeFileName ?? 'Submitted résumé'
+    } else {
+      // Pool-copy erasure (first-ever public application, or a request
+      // from the person whose résumé it is).
+      label = candidate.resumeFileName ?? 'Résumé on the candidate record'
+      candidate.resumeText = undefined
+      candidate.resumeFileName = undefined
+      await candidate.save({ session })
     }
 
     application.events.push({
       type: input.action === 'promote' ? 'submission_promoted' : 'submission_deleted',
       actorUserId,
       actorName: ctx.membership.name || ctx.membership.email,
-      note:
-        input.note ||
-        `${target.resumeFileName ?? 'Submitted résumé'} (received ${target.submittedAt.toISOString()})`,
+      note: input.note || label,
       at: new Date(),
     })
     await application.save({ session })

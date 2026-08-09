@@ -85,7 +85,8 @@ export type GuestVerifyCodePayload = z.infer<typeof GuestVerifyCodeSchema>
 
 /** Recruiter adjudication of a public apply-page submission. */
 export const AdjudicateSubmissionSchema = z.object({
-  index: z.number().int().min(0).max(10),
+  /** Omit to target the candidate-record (pool) copy. */
+  submissionId: objectIdSchema.optional(),
   action: z.enum(['promote', 'delete']),
   note: z.string().trim().max(4000).optional(),
 })

@@ -72,6 +72,11 @@ export interface IHireResumeMatch {
 
 /** One public apply-page submission, with the score it produced. */
 export interface IHireApplicantSubmission {
+  /** Stable identity. Array position is NOT identity — a submission
+   *  arriving between page load and action would shift every index and
+   *  make the recruiter promote or delete a different document than the
+   *  one they read (Codex P1 on #618). */
+  _id?: mongoose.Types.ObjectId
   resumeText: string
   resumeFileName?: string
   submittedAt: Date
@@ -130,7 +135,8 @@ const HireApplicantSubmissionSchema = new Schema<IHireApplicantSubmission>(
     submittedAt: { type: Date, required: true },
     match: { type: HireResumeMatchSchema },
   },
-  { _id: false }
+  // _id ENABLED deliberately: adjudication addresses a submission by id.
+  { _id: true }
 )
 
 const HireApplicationEventSchema = new Schema<IHireApplicationEvent>(

@@ -85,6 +85,7 @@ interface CardData {
     } | null
     /** Append-only public apply-page submissions, newest first. */
     applicantSubmissions?: Array<{
+      id: string | null
       text: string
       fileName: string | null
       submittedAt: string
@@ -169,7 +170,10 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
     }
   }
 
-  async function adjudicateSubmission(index: number, action: 'promote' | 'delete') {
+  async function adjudicateSubmission(
+    submissionId: string | null,
+    action: 'promote' | 'delete',
+  ) {
     if (action === 'delete' && !confirm('Delete this submitted résumé? This is recorded in the audit trail.')) return
     setBusy(true)
     setActionError(null)
@@ -177,7 +181,7 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
       const res = await fetch(`/api/workspace/applications/${params.appId}/submissions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ index, action }),
+        body: JSON.stringify({ ...(submissionId ? { submissionId } : {}), action }),
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -416,6 +420,17 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
               <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
                 {candidate.resumeText}
               </pre>
+              {/* A first-ever public application stores its résumé only
+                  here, so this is its sole erasure path. */}
+              <div className="mt-2">
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void adjudicateSubmission(null, 'delete')}
+                >
+                  Erase this résumé
+                </Button>
+              </div>
             </details>
           )}
 
@@ -440,14 +455,14 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
                 <Button
                   variant="secondary"
                   disabled={busy}
-                  onClick={() => void adjudicateSubmission(i, 'promote')}
+                  onClick={() => void adjudicateSubmission(sub.id, 'promote')}
                 >
                   This one is authentic
                 </Button>
                 <Button
                   variant="secondary"
                   disabled={busy}
-                  onClick={() => void adjudicateSubmission(i, 'delete')}
+                  onClick={() => void adjudicateSubmission(sub.id, 'delete')}
                 >
                   Delete as fraudulent
                 </Button>
