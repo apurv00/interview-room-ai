@@ -4,11 +4,11 @@ import { authOptions } from '@shared/auth/authOptions'
 import { aiLogger } from '@shared/logger'
 import { getCachedTTS, cacheTTS } from '@shared/services/ttsCache'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
-import { azureSynthesize, isAzureTTSConfigured, AZURE_TTS_MODEL } from '@shared/services/providers/azureTTS'
+import { sarvamSynthesize, isSarvamTTSConfigured, SARVAM_TTS_MODEL } from '@shared/services/providers/sarvamTTS'
 
 export const dynamic = 'force-dynamic'
 // Region: this Node function is pinned to bom1 (Mumbai) via vercel.json `functions` —
-// close to India users + the Azure centralindia endpoint. Node functions CANNOT use the
+// close to India users + the Sarvam api.sarvam.ai endpoint (Mumbai). Node functions CANNOT use the
 // `preferredRegion` route export (that is Edge-only; it compiled to nothing here — it left
 // /api/tts/stream as {} in functions-config-manifest.json). The region lives in vercel.json.
 // Verify post-deploy (INTERVIEW_FLOW.md §8): the Deepgram default path + Upstash rate-limit
@@ -29,6 +29,11 @@ const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-luna-en'
  * response before returning. That regression broke the interview
  * pipeline in commit 133e44f; see
  * modules/interview/docs/INTERVIEW_FLOW.md §8.
+ *
+ * Indian-voice nuance: Sarvam's REST endpoint is buffered upstream (its
+ * adapter returns one complete MP3 body), so on that branch the tee below
+ * flushes in a single append — the Deepgram default branch keeps true
+ * progressive streaming and the invariant above still holds for it.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -61,16 +66,23 @@ export async function POST(req: NextRequest) {
     }
 
     const encoding = req.nextUrl.searchParams.get('encoding') === 'opus' ? 'opus' : 'mp3'
-    // Indian-voice personality → Azure. Purely additive: only when the request
-    // carries ?voice=indian AND Azure is configured; the Deepgram path below is
-    // otherwise byte-for-byte unchanged. Azure emits MP3, so force mp3 there.
-    const useAzure = req.nextUrl.searchParams.get('voice') === 'indian' && isAzureTTSConfigured()
-    const enc = useAzure ? 'mp3' : encoding
-    const ttsModel = useAzure ? AZURE_TTS_MODEL : TTS_MODEL
+    // Indian-voice personality → Sarvam (Bulbul). Purely additive: only when
+    // the request carries ?voice=indian AND Sarvam is configured; the Deepgram
+    // path below is otherwise byte-for-byte unchanged. Sarvam emits MP3, so
+    // force mp3 there.
+    const wantsIndianVoice = req.nextUrl.searchParams.get('voice') === 'indian'
+    const useSarvam = wantsIndianVoice && isSarvamTTSConfigured()
+    if (wantsIndianVoice && !useSarvam) {
+      // Fail LOUD in logs: a missing key must read as an incident, not a
+      // quiet accent swap — the Azure key died silently this way (§8).
+      aiLogger.error({ voice: 'indian' }, 'Indian voice requested but SARVAM_API_KEY is not set — serving the Deepgram voice')
+    }
+    const enc = useSarvam ? 'mp3' : encoding
+    const ttsModel = useSarvam ? SARVAM_TTS_MODEL : TTS_MODEL
     const contentType = enc === 'opus' ? 'audio/opus' : 'audio/mpeg'
 
     // Check R2 cache first — serves cached audio without a provider call.
-    // Keyed by ttsModel so Azure and Deepgram audio never collide.
+    // Keyed by ttsModel so Sarvam and Deepgram audio never collide.
     const cached = await getCachedTTS(text, enc, ttsModel)
     if (cached) {
       return new Response(new Uint8Array(cached), {
@@ -78,6 +90,7 @@ export async function POST(req: NextRequest) {
           'Content-Type': contentType,
           'Cache-Control': 'public, max-age=86400',
           'X-TTS-Cache': 'hit',
+          'X-TTS-Provider': useSarvam ? 'sarvam' : 'deepgram',
         },
       })
     }
@@ -89,8 +102,8 @@ export async function POST(req: NextRequest) {
     processedText = processedText.replace(/--/g, ',')     // double-hyphen
     processedText = processedText.replace(/\b(So,|Now,|Alright,|Great,|Okay,|Well,) /g, '$1... ')
 
-    const response = useAzure
-      ? await azureSynthesize(processedText)
+    const response = useSarvam
+      ? await sarvamSynthesize(processedText)
       : await fetch(
           `https://api.deepgram.com/v1/speak?model=${TTS_MODEL}&encoding=${enc}`,
           {
@@ -105,11 +118,11 @@ export async function POST(req: NextRequest) {
 
     if (!response.ok || !response.body) {
       const errorText = await response.text()
-      aiLogger.error({ status: response.status, error: errorText, provider: useAzure ? 'azure' : 'deepgram' }, 'TTS stream failed')
+      aiLogger.error({ status: response.status, error: errorText, provider: useSarvam ? 'sarvam' : 'deepgram' }, 'TTS stream failed')
       return new Response(JSON.stringify({ error: 'TTS generation failed' }), { status: 502 })
     }
 
-    // Tee the Deepgram stream: one branch streams to the client so the
+    // Tee the provider stream: one branch streams to the client so the
     // browser starts decoding audio as the first chunk arrives (~300ms
     // time-to-first-sound), the other drains in the background and
     // writes the complete buffer to R2 for next time.
@@ -140,6 +153,7 @@ export async function POST(req: NextRequest) {
         'Content-Type': contentType,
         'Cache-Control': 'no-store',
         'X-TTS-Cache': 'miss',
+        'X-TTS-Provider': useSarvam ? 'sarvam' : 'deepgram',
       },
     })
   } catch (err) {

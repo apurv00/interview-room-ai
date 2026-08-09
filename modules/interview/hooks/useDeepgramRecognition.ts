@@ -260,7 +260,7 @@ const TERMINAL_PUNCTUATION = /[.?!]["')\]]*\s*$/
  *
  *  model=nova-3: Deepgram's GA streaming model, materially more accurate on accented / Indian
  *  English. The `language` param is now per-session: en-IN when the candidate chose the Indian
- *  English experience in the lobby (the same `?voice=indian` choice that drives the Azure
+ *  English experience in the lobby (the same `?voice=indian` choice that drives the Sarvam
  *  interviewer voice — see useAvatarSpeech), otherwise plain `en`. This keeps the en path
  *  byte-identical to before for anyone NOT on Indian English (no regression by construction).
  *  Re-validate utterance_end/VAD timing against GRACE_MS_BY_INTENT on a real prod interview —

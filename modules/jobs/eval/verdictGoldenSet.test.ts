@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest'
 // concern.
 // ALL completion providers the CMS can route the slot to — a cutover eval
 // on openrouter/google/groq would otherwise die with "Provider not
-// registered" for every fixture (Codex on #516). azureTTS is speech-only,
+// registered" for every fixture (Codex on #516). sarvamTTS is speech-only,
 // not a completion provider.
 import '@shared/services/providers/openai'
 import '@shared/services/providers/anthropic'

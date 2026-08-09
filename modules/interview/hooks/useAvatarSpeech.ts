@@ -79,7 +79,7 @@ export function useAvatarSpeech({
 
   // Indian-voice personality (feedback #4): read ?voice from the room URL once
   // (carried from the lobby, like ?lc) and append it to every TTS fetch so the
-  // routes pick the Azure voice. Self-contained here so useInterview and the
+  // routes pick the Sarvam voice. Self-contained here so useInterview and the
   // room stay untouched; empty string ⇒ default Deepgram, the streaming path
   // and playback are byte-for-byte unchanged.
   const voiceQueryRef = useRef('')
