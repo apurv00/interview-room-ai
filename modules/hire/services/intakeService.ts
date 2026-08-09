@@ -93,8 +93,17 @@ export async function intakeCandidate(
     throw new AppError('This job is closed', 409, 'JOB_CLOSED')
   }
 
+  // userId is optional on the membership type (linked lazily on first
+  // sign-in), but requireMembership always resolves or links it — a
+  // missing id here means a context built some other way; refuse rather
+  // than write personal data without a claimable actor.
+  const actorUserId = ctx.membership.userId
+  if (!actorUserId) {
+    throw new AppError('Workspace membership is not linked to a user', 403, 'MEMBERSHIP_UNLINKED')
+  }
+
   const runIntakeTx = () =>
-    withPersonalDataWriteTransaction(ctx.membership.userId, (session) =>
+    withPersonalDataWriteTransaction(actorUserId, (session) =>
       writeIntake(session, ctx, input, email),
     )
 
