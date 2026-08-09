@@ -83,8 +83,13 @@ interface CardData {
       scoredAt: string
       stale: boolean
     } | null
-    /** Résumé submitted via the public apply page (pool record kept). */
-    applicantResume?: { text: string; fileName: string | null } | null
+    /** Append-only public apply-page submissions, newest first. */
+    applicantSubmissions?: Array<{
+      text: string
+      fileName: string | null
+      submittedAt: string
+      score: number | null
+    }>
     events: Array<{
       type: string
       from: string | null
@@ -353,30 +358,56 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
       {/* Résumé submitted through the public apply page. Shown whenever it
           exists, because it — not the pool résumé — is what the JD-match
           score above was computed from. */}
-      {/* The résumé behind the score. A public application on an existing
-          candidate carries its own quarantined copy; a first-time
-          applicant's (and a bulk upload's) lands on the pool record — both
-          must be readable, or the recruiter judges a score whose source
-          they cannot open (Codex P1 on #615). */}
-      {(application.applicantResume || candidate.resumeText) && (
-        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-2">
-          <div className="flex items-center gap-2">
-            <p className="text-sm font-semibold text-[#0f1419]">
-              {application.applicantResume ? 'Résumé submitted by the applicant' : 'Résumé'}
-            </p>
-            {application.applicantResume && <Badge variant="caution">via apply page</Badge>}
+      {/* The résumé behind the score. Public submissions are append-only
+          and shown in full: an anonymous caller can add a document but can
+          never replace one, so a recruiter sees every version submitted —
+          which is also how a tampering attempt becomes visible rather than
+          silent (Codex P1 on #615). A first-time applicant's (and a bulk
+          upload's) CV lives on the pool record and is shown instead. */}
+      {(application.applicantSubmissions?.length || candidate.resumeText) && (
+        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-semibold text-[#0f1419]">Résumé</p>
+            {application.applicantSubmissions && application.applicantSubmissions.length > 1 && (
+              <Badge variant="caution">
+                {application.applicantSubmissions.length} submissions via apply page
+              </Badge>
+            )}
           </div>
-          <p className="text-xs text-[#71767b]">
-            {application.applicantResume
-              ? `${application.applicantResume.fileName ?? 'Attached file'} — this candidate already had a different résumé in your talent pool, so the pool copy was left untouched. The score above was computed from THIS document.`
-              : `${candidate.resumeFileName ?? 'On file'} — the résumé on this candidate's record, which the score above was computed from.`}
-          </p>
-          <details className="text-sm">
-            <summary className="cursor-pointer text-[#2563eb] text-xs">Read the résumé</summary>
-            <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
-              {application.applicantResume?.text ?? candidate.resumeText}
-            </pre>
-          </details>
+
+          {application.applicantSubmissions?.length ? (
+            <div className="space-y-2">
+              {application.applicantSubmissions.length > 1 && (
+                <p className="text-xs text-[#f4212e]">
+                  More than one résumé was submitted for this candidate through the public
+                  link. Review each before deciding — the newest is not automatically the
+                  authentic one.
+                </p>
+              )}
+              {application.applicantSubmissions.map((sub, i) => (
+                <details key={i} className="text-sm border border-[#e1e8ed] rounded-xl p-3">
+                  <summary className="cursor-pointer text-xs text-[#536471]">
+                    {sub.fileName ?? 'Attached file'} ·{' '}
+                    {new Date(sub.submittedAt).toLocaleString()}
+                    {sub.score != null ? ` · JD match ${sub.score}` : ' · unscored'}
+                    {i === 0 ? ' · newest' : ''}
+                  </summary>
+                  <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
+                    {sub.text}
+                  </pre>
+                </details>
+              ))}
+            </div>
+          ) : (
+            <details className="text-sm">
+              <summary className="cursor-pointer text-[#2563eb] text-xs">
+                Read the résumé ({candidate.resumeFileName ?? 'on file'})
+              </summary>
+              <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
+                {candidate.resumeText}
+              </pre>
+            </details>
+          )}
         </div>
       )}
 

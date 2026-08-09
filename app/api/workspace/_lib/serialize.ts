@@ -87,8 +87,11 @@ export function serializeApplication(
   a: IHireApplication,
   opts: { candidateResumeHash?: string | null; includeApplicantResume?: boolean } = {},
 ) {
-  const scoredAgainstHash = a.applicantResumeText
-    ? resumeHashOf(a.applicantResumeText)
+  // The document the headline score was computed from: an application's
+  // own newest public submission when it has one, else the pool copy.
+  const ownSubmission = a.applicantSubmissions?.[0]
+  const scoredAgainstHash = ownSubmission
+    ? resumeHashOf(ownSubmission.resumeText)
     : opts.candidateResumeHash
   return {
     id: a._id.toString(),
@@ -113,9 +116,15 @@ export function serializeApplication(
           // validated against that, not the pool copy. Using the pool hash
           // marked every apply-page match permanently "outdated" — a
           // false warning on every public application (Codex P2 on #615).
-          stale:
-            a.resumeMatch.stale === true ||
-            (scoredAgainstHash != null && a.resumeMatch.resumeHash !== scoredAgainstHash),
+          // The stored flag is set by the POOL staleness sweep, which is
+          // irrelevant to an application anchored to its own submission —
+          // honouring it there showed a false "outdated" warning on
+          // documents that never changed (Codex P2 on #615). Hash
+          // comparison is authoritative whenever we have the document.
+          stale: ownSubmission
+            ? a.resumeMatch.resumeHash !== scoredAgainstHash
+            : a.resumeMatch.stale === true ||
+              (scoredAgainstHash != null && a.resumeMatch.resumeHash !== scoredAgainstHash),
         }
       : null,
     // Résumé submitted through the public apply page when the pool record
@@ -126,9 +135,12 @@ export function serializeApplication(
     // response for text the board never renders (Codex P2 on #615).
     ...(opts.includeApplicantResume
       ? {
-          applicantResume: a.applicantResumeText
-            ? { text: a.applicantResumeText, fileName: a.applicantResumeFileName ?? null }
-            : null,
+          applicantSubmissions: (a.applicantSubmissions ?? []).map((sub) => ({
+            text: sub.resumeText,
+            fileName: sub.resumeFileName ?? null,
+            submittedAt: sub.submittedAt,
+            score: sub.match?.score ?? null,
+          })),
         }
       : {}),
     events: a.events.map((e) => ({

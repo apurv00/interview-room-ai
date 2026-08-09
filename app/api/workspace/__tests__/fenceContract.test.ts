@@ -62,14 +62,14 @@ describe('serializer + routing contracts (Codex P2 on #615)', () => {
   // API_ROOT is app/api/workspace → repo root is three levels up.
   const MIDDLEWARE = readFileSync(join(API_ROOT, '../../../middleware.ts'), 'utf8')
 
-  it('applicantResume is opt-in, so the pipeline board never ships 50k-char résumés', () => {
+  it('applicant submissions are opt-in, so the pipeline board never ships 50k-char résumés', () => {
     // serializeApplication feeds BOTH the detail endpoint and
     // serializePipelineEntry (hundreds of cards per job).
     expect(SERIALIZE).toContain('includeApplicantResume')
-    const guarded = /\.\.\.\(opts\.includeApplicantResume[\s\S]{0,400}?applicantResume:/
+    const guarded = /\.\.\.\(opts\.includeApplicantResume[\s\S]{0,400}?applicantSubmissions:/
     expect(
       guarded.test(SERIALIZE),
-      'applicantResume must be emitted only under the includeApplicantResume flag',
+      'applicantSubmissions must be emitted only under the includeApplicantResume flag',
     ).toBe(true)
     // The board path must not opt in. Slice from the DECLARATION, not the
     // first textual mention (which is a comment referencing it).
@@ -101,10 +101,11 @@ describe('serializer + routing contracts (Codex P2 on #615)', () => {
 describe('staleness is measured against the scored document', () => {
   const SERIALIZE = readFileSync(join(API_ROOT, '_lib/serialize.ts'), 'utf8')
 
-  it('prefers the application résumé hash over the pool hash', () => {
-    expect(SERIALIZE).toContain('const scoredAgainstHash = a.applicantResumeText')
+  it("prefers the application's own submission hash over the pool hash", () => {
+    expect(SERIALIZE).toContain('const ownSubmission = a.applicantSubmissions?.[0]')
     expect(SERIALIZE).toContain('resumeHash !== scoredAgainstHash')
-    // The pool hash must no longer be compared directly.
-    expect(SERIALIZE).not.toContain('resumeHash !== opts.candidateResumeHash')
+    // And the POOL sweep flag must not force stale on an application that
+    // is anchored to its own submission (Codex P2 on #615).
+    expect(SERIALIZE).toContain('stale: ownSubmission')
   })
 })

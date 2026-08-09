@@ -74,19 +74,6 @@ async function handleApply(
     return NextResponse.json({ error: 'This application link is no longer active' }, { status: 404 })
   }
 
-  const jobCap = await checkRateLimit(job._id.toString(), {
-    windowMs: 24 * 60 * 60 * 1000,
-    maxRequests: 300,
-    keyPrefix: 'rl:apply-job-day',
-    // Fail CLOSED here, unlike the authed paths: every other limiter in
-    // this repo fails open so a Redis blip cannot block real users, but
-    // this endpoint is anonymous AND spends money per request (parse +
-    // model call). A limiter outage must pause applications, not remove
-    // the only bound on spend (self-review on the apply page).
-    failClosed: true,
-  })
-  if (jobCap) return jobCap
-
   const formData = await req.formData()
   const fields = ApplicantSchema.safeParse({
     name: str(formData.get('name')),
@@ -110,6 +97,23 @@ async function handleApply(
       { status: 400 },
     )
   }
+
+  // Job-wide daily ceiling — deliberately AFTER the cheap checks. Charging
+  // malformed requests (no file, bad email) against it lets a caller
+  // exhaust a job's whole allowance with junk that never costs a parse or
+  // a model call, 429'ing every real applicant for the rest of the window
+  // (Codex P2 on #615). It gates EXPENSIVE work, so it is spent only when
+  // expensive work is about to happen.
+  const jobCap = await checkRateLimit(job._id.toString(), {
+    windowMs: 24 * 60 * 60 * 1000,
+    maxRequests: 300,
+    keyPrefix: 'rl:apply-job-day',
+    // Fail CLOSED, unlike the authed paths: this endpoint is anonymous AND
+    // spends money per request, so a limiter outage must pause
+    // applications rather than remove the only bound on spend.
+    failClosed: true,
+  })
+  if (jobCap) return jobCap
 
   let parsed
   try {

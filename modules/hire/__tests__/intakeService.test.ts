@@ -458,8 +458,10 @@ describe('public apply-page intake', () => {
     // No throw, an application exists, and the stored résumé is untouched.
     expect(result.applicationId).toBe('app-1')
     expect(existing.resumeText).toBe('rahul original resume')
-    // Quarantined on the APPLICATION, never discarded (Codex P1 on #615).
-    expect(mockApplication.create.mock.calls[0][0][0].applicantResumeText).toBe('resume body')
+    // Recorded on the APPLICATION, never discarded (Codex P1 on #615).
+    expect(mockApplication.create.mock.calls[0][0][0].applicantSubmissions[0].resumeText).toBe(
+      'resume body',
+    )
   })
 })
 
@@ -468,11 +470,12 @@ describe('quarantined résumé and its score move together (Codex P1 on #615)', 
   const JOB2 = { _id: 'job-1', workspaceId: 'ws-A' } as never
   const OPTS = { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' }
 
-  it('a REPEAT public submission updates the quarantined document, not just the score', async () => {
+  it('a REPEAT public submission APPENDS — an anonymous caller can never overwrite evidence', async () => {
     const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'pool résumé of rahul' })
     const app = applicationDoc({
-      applicantResumeText: 'FIRST submitted résumé',
-      applicantResumeFileName: 'first.pdf',
+      applicantSubmissions: [
+        { resumeText: 'FIRST submitted résumé', resumeFileName: 'first.pdf', submittedAt: new Date(), match: { ...MATCH, score: 40 } },
+      ],
       resumeMatch: { ...MATCH, score: 40 },
     })
     mockCandidate.findOne.mockReturnValue(inTx(existing))
@@ -491,12 +494,15 @@ describe('quarantined résumé and its score move together (Codex P1 on #615)', 
       OPTS,
     )
 
-    // Both advanced — a new score beside the OLD document is the exact
-    // failure the quarantine exists to prevent.
-    expect(app.applicantResumeText).toBe('SECOND submitted résumé')
-    expect(app.applicantResumeFileName).toBe('second.pdf')
-    expect((app.resumeMatch as { score: number }).score).toBe(91)
-    // The workspace pool copy is still untouched.
+    const subs = app.applicantSubmissions as Array<{ resumeText: string; match?: { score: number } }>
+    // Newest first, and the ORIGINAL is still intact beside it.
+    expect(subs).toHaveLength(2)
+    expect(subs[0].resumeText).toBe('SECOND submitted résumé')
+    expect(subs[0].match?.score).toBe(91)
+    expect(subs[1].resumeText).toBe('FIRST submitted résumé')
+    expect(subs[1].match?.score).toBe(40)
+    // Nothing pre-existing was mutated: headline score and pool copy stand.
+    expect((app.resumeMatch as { score: number }).score).toBe(40)
     expect(existing.resumeText).toBe('pool résumé of rahul')
   })
 })
@@ -508,8 +514,9 @@ describe('an obsolete quarantine is cleared when the score comes from the pool c
     // quarantined document from an earlier public submission.
     const existing = candidateDoc({ name: 'Jane Doe', resumeText: 'resume body' })
     const app = applicationDoc({
-      applicantResumeText: 'OBSOLETE public submission',
-      applicantResumeFileName: 'old-public.pdf',
+      applicantSubmissions: [
+        { resumeText: 'OBSOLETE public submission', resumeFileName: 'old-public.pdf', submittedAt: new Date() },
+      ],
       resumeMatch: { ...MATCH, score: 30 },
     })
     mockCandidate.findOne.mockReturnValue(inTx(existing))
@@ -521,7 +528,33 @@ describe('an obsolete quarantine is cleared when the score comes from the pool c
     expect((app.resumeMatch as { score: number }).score).toBe(77)
     // The stale document is gone — otherwise the card shows B beside a
     // score computed from A, and staleness anchors to B as well.
-    expect(app.applicantResumeText).toBeUndefined()
-    expect(app.applicantResumeFileName).toBeUndefined()
+    expect(app.applicantSubmissions).toBeUndefined()
+  })
+})
+
+
+describe('append-only submissions are bounded', () => {
+  const JOB3 = { _id: 'job-1', workspaceId: 'ws-A' } as never
+  it('keeps only the newest APPLICANT_SUBMISSION_CAP entries', async () => {
+    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'pool résumé' })
+    const old = Array.from({ length: 3 }, (_, i) => ({
+      resumeText: `old-${i}`,
+      submittedAt: new Date(),
+    }))
+    const app = applicationDoc({ applicantSubmissions: old })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(app))
+
+    await intakeFromApplyPage(
+      JOB3,
+      { name: 'Jane', email: 'jane@example.com', resumeText: 'newest', resumeFileName: 'n.pdf' },
+      { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
+    )
+
+    const subs = app.applicantSubmissions as Array<{ resumeText: string }>
+    // Bounded so an anonymous caller cannot grow the document without end.
+    expect(subs).toHaveLength(3)
+    expect(subs[0].resumeText).toBe('newest')
+    expect(subs[2].resumeText).toBe('old-1')
   })
 })

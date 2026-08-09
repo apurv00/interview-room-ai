@@ -11,6 +11,7 @@ import {
   type IHireCandidate,
   type IHireJob,
   type IHireResumeMatch,
+  APPLICANT_SUBMISSION_CAP,
 } from '../models'
 import type { MembershipContext } from './workspaceService'
 
@@ -233,9 +234,10 @@ async function writeIntake(
   let createdCandidate = false
   let resumeReplaced = false
   // Set when a public submission must not touch the shared pool résumé —
-  // the file rides on the APPLICATION instead of being discarded.
-  let applicantResumeText: string | undefined
-  let applicantResumeFileName: string | undefined
+  // the file is APPENDED to the application instead of being discarded.
+  let applicantSubmission:
+    | { resumeText: string; resumeFileName?: string; submittedAt: Date; match?: IHireResumeMatch }
+    | undefined
   let candidate = await HireCandidate.findOne({ workspaceId, email }).session(session)
   if (!candidate) {
     const created = await HireCandidate.create(
@@ -283,8 +285,12 @@ async function writeIntake(
       namesDisjoint(candidate.name, input.name)
 
     if (publicSubmissionKeepsPoolRecord) {
-      applicantResumeText = input.resumeText
-      applicantResumeFileName = input.resumeFileName
+      applicantSubmission = {
+        resumeText: input.resumeText as string,
+        resumeFileName: input.resumeFileName,
+        submittedAt: new Date(),
+        match: input.resumeMatch,
+      }
       input = { ...input, resumeText: undefined, resumeFileName: undefined }
     } else if (identityConflict && input.source !== 'apply_page') {
       // MEMBER path: surface it — the recruiter can confirm the email via
@@ -314,13 +320,8 @@ async function writeIntake(
           jobId: input.jobId,
           candidateId: candidate._id,
           stage: 'new',
-          resumeMatch: input.resumeMatch,
-          ...(applicantResumeText
-            ? {
-                applicantResumeText,
-                applicantResumeFileName,
-              }
-            : {}),
+          resumeMatch: input.resumeMatch ?? applicantSubmission?.match,
+          ...(applicantSubmission ? { applicantSubmissions: [applicantSubmission] } : {}),
           events: [
             {
               type: 'created',
@@ -338,17 +339,19 @@ async function writeIntake(
     )
     application = created[0]
     createdApplication = true
-  } else if (applicantResumeText) {
-    // REPEAT public submission on an existing application: the quarantined
-    // document and its score must move together. Refreshing the match
-    // while leaving the old quarantined résumé in place would show the
-    // recruiter a new score beside the document it was NOT computed from
-    // (Codex P1 on #615) — the precise failure the quarantine exists to
-    // prevent.
-    application.applicantResumeText = applicantResumeText
-    application.applicantResumeFileName = applicantResumeFileName
-    application.resumeMatch = input.resumeMatch
-    application.markModified('resumeMatch')
+  } else if (applicantSubmission) {
+    // REPEAT public submission on an existing application: APPEND it with
+    // the score it produced, and mutate NOTHING that is already there.
+    // An anonymous caller must never be able to overwrite a real
+    // applicant's evidence just by knowing their email and the shared link
+    // (Codex P1 on #615) — each submission stands on its own and a
+    // recruiter can see all of them, which also makes tampering visible.
+    const existingSubs = application.applicantSubmissions ?? []
+    application.applicantSubmissions = [applicantSubmission, ...existingSubs].slice(
+      0,
+      APPLICANT_SUBMISSION_CAP,
+    )
+    application.markModified('applicantSubmissions')
     await application.save({ session })
   } else if (input.resumeMatch) {
     // A fresh analysis always refreshes the match. This branch means the
@@ -358,11 +361,13 @@ async function writeIntake(
     // score computed from A, and would anchor staleness to B as well
     // (Codex P1 on #615).
     application.resumeMatch = input.resumeMatch
-    if (application.applicantResumeText) {
-      application.applicantResumeText = undefined
-      application.applicantResumeFileName = undefined
-      application.markModified('applicantResumeText')
-      application.markModified('applicantResumeFileName')
+    if (application.applicantSubmissions?.length) {
+      // The headline score now comes from the POOL résumé, so earlier
+      // public submissions are no longer the document behind it. Drop them
+      // rather than leave a card showing B beside a score computed from A
+      // (Codex P1 on #615).
+      application.applicantSubmissions = undefined
+      application.markModified('applicantSubmissions')
     }
     await application.save({ session })
   } else if (input.resumeText && resumeReplaced) {
