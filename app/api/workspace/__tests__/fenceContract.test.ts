@@ -39,21 +39,13 @@ describe('workspace API fence contract', () => {
     (_label, file) => {
       const src = readFileSync(file as string, 'utf8')
       // Call sites only — `composeApiRoute<T>({` or `composeApiRoute({` —
-      // the import line matches neither.
+      // the import line matches neither. STRICT on purpose: there is no
+      // hand-rolled exemption. Multipart routes belong on composeApiRoute
+      // too — omit `schema` and the middleware never reads the body
+      // (jobs/[jobId]/intake is the precedent, Codex round on #612).
       const calls = (src.match(/composeApiRoute[<(]/g) ?? []).length
       const fences = (src.match(/requireActiveAccount:\s*true/g) ?? []).length
-      if (calls === 0) {
-        // Hand-rolled handlers (multipart bodies — composeApiRoute parses
-        // JSON only) must carry the manual fence instead, and use it: at
-        // least one isJobsAccountActive call site (jobs/[jobId]/intake is
-        // the precedent). The intent is identical — a deleted account's
-        // still-valid JWT reads/mutates nothing here.
-        expect(
-          (src.match(/isJobsAccountActive\(/g) ?? []).length,
-          `${file} uses neither composeApiRoute+requireActiveAccount nor the manual isJobsAccountActive fence`
-        ).toBeGreaterThan(0)
-        return
-      }
+      expect(calls).toBeGreaterThan(0)
       expect(fences).toBe(calls)
     }
   )

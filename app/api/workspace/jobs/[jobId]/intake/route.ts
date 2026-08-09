@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@shared/auth/authOptions'
 import { logger } from '@shared/logger'
-import { connectDB } from '@shared/db/connection'
-import { checkRateLimit } from '@shared/middleware/checkRateLimit'
-import { AppError } from '@shared/errors'
+import { composeApiRoute, type ApiContext } from '@shared/middleware/composeApiRoute'
 import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 import { parseDocument, UnsupportedFileTypeError } from '@shared/services/documentParser'
 import {
@@ -28,8 +24,14 @@ export const dynamic = 'force-dynamic'
  * batch. This deliberately avoids a background-job dependency at bulk
  * sizes ≤ ~100 (founder decision 2026-08-09: no Inngest for intake).
  *
- * Hand-rolled (not composeApiRoute) because the body is multipart —
- * same reason as /api/documents/upload, whose guards this mirrors.
+ * ON THE RAILS: composeApiRoute without a `schema` never reads the body,
+ * so multipart routes belong on it like every other workspace route —
+ * auth, the account-lifecycle egress fence (entry + post-handler +
+ * exception-path rechecks), plan-scaled rate limiting, and AppError
+ * mapping all come from the middleware. The handler adds ONLY the two
+ * fences compose documents as handler responsibility on long mutation
+ * requests: before each model-provider attempt and before writes
+ * (Codex P1×2 on #612).
  *
  * Pipeline per file: parse (documentParser) → ONE LLM call extracts
  * identity + scores resume-vs-JD (hire.resume-intake slot, advisory) →
@@ -49,190 +51,169 @@ const OverrideFieldsSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254).optional(),
 })
 
-export async function POST(
+async function handleIntake(
   req: NextRequest,
-  { params }: { params: { jobId: string } },
-) {
+  { user, params }: ApiContext,
+): Promise<NextResponse> {
+  // Long-request fence: entry/egress checks live in composeApiRoute; this
+  // closure re-checks at the two boundaries the middleware cannot see —
+  // before every model-provider attempt and before persistence — so a
+  // deletion starting mid-parse neither ships documents to a provider nor
+  // persists hiring data under the deleted user (Codex P1×2 on #612).
+  const accountActive = () => isJobsAccountActive(user.id)
+
+  const ctx = await requireMembership({ userId: user.id, email: user.email })
+
+  const job = await HireJob.findOne({
+    _id: params.jobId,
+    workspaceId: ctx.workspace._id,
+  })
+  if (!job) {
+    return NextResponse.json({ error: 'Job not found' }, { status: 404 })
+  }
+  if (job.status === 'closed') {
+    return NextResponse.json(
+      { error: 'This job is closed', code: 'JOB_CLOSED' },
+      { status: 409 },
+    )
+  }
+
+  const formData = await req.formData()
+  const file = formData.get('file')
+  if (!(file instanceof File)) {
+    return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    return NextResponse.json(
+      { error: 'File too large (max 10MB)', code: 'FILE_TOO_LARGE' },
+      { status: 400 },
+    )
+  }
+
+  let parsed
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    await connectDB()
-    // Account-lifecycle egress fence, re-checked at every trust boundary in
-    // this handler (entry → before each model-provider attempt → before
-    // writes): parse + LLM make this a long request, and a deletion that
-    // starts mid-flight must neither ship documents to a provider nor
-    // persist hiring data under the deleted user (Codex P1×2 on #612).
-    const accountActive = () => isJobsAccountActive(session.user.id)
-    if (!(await accountActive())) {
-      return NextResponse.json(
-        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
-        { status: 401 },
-      )
-    }
-
-    // Sized for real batches: 20 files at browser concurrency 3 finishes
-    // inside a minute — 60/min leaves headroom without opening a
-    // parse-compute hose (each request costs a parse + an LLM call).
-    const limited = await checkRateLimit(session.user.id, {
-      windowMs: 60_000,
-      maxRequests: 60,
-      keyPrefix: 'rl:hire-intake',
-    })
-    if (limited) return limited
-
-    const ctx = await requireMembership({
-      userId: session.user.id,
-      email: session.user.email,
-    })
-
-    const job = await HireJob.findOne({
-      _id: params.jobId,
-      workspaceId: ctx.workspace._id,
-    })
-    if (!job) {
-      return NextResponse.json({ error: 'Job not found' }, { status: 404 })
-    }
-    if (job.status === 'closed') {
-      return NextResponse.json(
-        { error: 'This job is closed', code: 'JOB_CLOSED' },
-        { status: 409 },
-      )
-    }
-
-    const formData = await req.formData()
-    const file = formData.get('file')
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 })
-    }
-    if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json(
-        { error: 'File too large (max 10MB)', code: 'FILE_TOO_LARGE' },
-        { status: 400 },
-      )
-    }
-
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const parsed = await parseDocument(buffer, file.name)
-    if (parsed.wordCount === 0 || (parsed.docType === 'pdf' && parsed.wordCount < 20)) {
-      return NextResponse.json(
-        {
-          error: 'No readable text in this file — scanned image PDFs are not supported',
-          code: 'EMPTY_TEXT',
-          fileName: file.name,
-        },
-        { status: 422 },
-      )
-    }
-    const resumeText = parsed.text.slice(0, RESUME_TEXT_CAP)
-
-    // Advisory analysis: identity + JD match in one call. Null → intake
-    // still proceeds if the caller can supply identity another way. The
-    // fail-closed precondition runs before EVERY provider attempt.
-    const analysis = await analyzeResumeForJob({
-      resumeText,
-      jdText: job.jdText,
-      beforeProviderCall: accountActive,
-    })
-
-    // Recruiter-supplied overrides (single-file "add with resume" path and
-    // the client's fix-up retry after NO_EMAIL) beat extraction — validated
-    // to the same standard as model output before becoming the dedupe key.
-    const overrideParse = OverrideFieldsSchema.safeParse({
-      name: str(formData.get('name')) || undefined,
-      email: str(formData.get('email')) || undefined,
-    })
-    if (!overrideParse.success) {
-      return NextResponse.json(
-        {
-          error: 'Invalid name or email override',
-          code: 'INVALID_OVERRIDE',
-          fileName: file.name,
-        },
-        { status: 422 },
-      )
-    }
-    const overrideName = overrideParse.data.name ?? ''
-    const overrideEmail = overrideParse.data.email ?? ''
-    const email = overrideEmail || analysis?.email || ''
-    if (!email) {
-      // Explicit contract for the client: show this file as "needs email",
-      // let the recruiter type it, retry with the override field.
-      return NextResponse.json(
-        {
-          error: 'No email address found in this resume',
-          code: 'NO_EMAIL',
-          fileName: file.name,
-          extractedName: analysis?.name ?? null,
-        },
-        { status: 422 },
-      )
-    }
-    const name =
-      overrideName || analysis?.name || file.name.replace(/\.[^.]+$/, '').slice(0, 120)
-
-    const resumeMatch: IHireResumeMatch | undefined = analysis
-      ? {
-          score: analysis.matchScore,
-          strengths: analysis.strengths,
-          gaps: analysis.gaps,
-          scoredAt: new Date(),
-          jdHash: sha256(job.jdText),
-        }
-      : undefined
-
-    // Last fence before writes: the parse/LLM phase above is the long part
-    // of this request — do not persist hiring data for an account whose
-    // deletion completed meanwhile.
-    if (!(await accountActive())) {
-      return NextResponse.json(
-        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
-        { status: 401 },
-      )
-    }
-
-    const result = await intakeCandidate(ctx, {
-      jobId: params.jobId,
-      name,
-      email,
-      phone: analysis?.phone ?? undefined,
-      resumeText,
-      resumeFileName: file.name.slice(0, 255),
-      source: 'bulk_upload',
-      resumeMatch,
-    })
-
-    return NextResponse.json({
-      fileName: file.name,
-      candidateId: result.candidateId,
-      applicationId: result.applicationId,
-      createdCandidate: result.createdCandidate,
-      createdApplication: result.createdApplication,
-      seenBefore: result.seenBefore,
-      candidate: { name, email },
-      resumeMatch: resumeMatch
-        ? { score: resumeMatch.score, strengths: resumeMatch.strengths, gaps: resumeMatch.gaps }
-        : null,
-    })
+    parsed = await parseDocument(Buffer.from(await file.arrayBuffer()), file.name)
   } catch (err) {
     if (err instanceof UnsupportedFileTypeError) {
       return NextResponse.json(
-        { error: err.message, code: 'UNSUPPORTED_TYPE' },
+        { error: err.message, code: 'UNSUPPORTED_TYPE', fileName: file.name },
         { status: 415 },
       )
     }
-    if (err instanceof AppError) {
-      return NextResponse.json(
-        { error: err.message, code: err.code },
-        { status: err.statusCode },
-      )
-    }
-    logger.error({ err }, 'hire intake failed')
-    return NextResponse.json({ error: 'Intake failed' }, { status: 500 })
+    logger.error({ err, fileName: file.name }, 'hire intake: parse failed')
+    return NextResponse.json(
+      { error: 'Could not parse this file', code: 'PARSE_FAILED', fileName: file.name },
+      { status: 422 },
+    )
   }
+  if (parsed.wordCount === 0 || (parsed.docType === 'pdf' && parsed.wordCount < 20)) {
+    return NextResponse.json(
+      {
+        error: 'No readable text in this file — scanned image PDFs are not supported',
+        code: 'EMPTY_TEXT',
+        fileName: file.name,
+      },
+      { status: 422 },
+    )
+  }
+  const resumeText = parsed.text.slice(0, RESUME_TEXT_CAP)
+
+  // Advisory analysis: identity + JD match in one call. Null → intake
+  // still proceeds if the caller can supply identity another way. The
+  // fail-closed precondition runs before EVERY provider attempt.
+  const analysis = await analyzeResumeForJob({
+    resumeText,
+    jdText: job.jdText,
+    beforeProviderCall: accountActive,
+  })
+
+  // Recruiter-supplied overrides (single-file "add with resume" path and
+  // the client's fix-up retry after NO_EMAIL) beat extraction — validated
+  // to the same standard as model output before becoming the dedupe key.
+  const overrideParse = OverrideFieldsSchema.safeParse({
+    name: str(formData.get('name')) || undefined,
+    email: str(formData.get('email')) || undefined,
+  })
+  if (!overrideParse.success) {
+    return NextResponse.json(
+      { error: 'Invalid name or email override', code: 'INVALID_OVERRIDE', fileName: file.name },
+      { status: 422 },
+    )
+  }
+  const overrideName = overrideParse.data.name ?? ''
+  const overrideEmail = overrideParse.data.email ?? ''
+  const email = overrideEmail || analysis?.email || ''
+  if (!email) {
+    // Explicit contract for the client: show this file as "needs email",
+    // let the recruiter type it, retry with the override field.
+    return NextResponse.json(
+      {
+        error: 'No email address found in this resume',
+        code: 'NO_EMAIL',
+        fileName: file.name,
+        extractedName: analysis?.name ?? null,
+      },
+      { status: 422 },
+    )
+  }
+  const name =
+    overrideName || analysis?.name || file.name.replace(/\.[^.]+$/, '').slice(0, 120)
+
+  const resumeMatch: IHireResumeMatch | undefined = analysis
+    ? {
+        score: analysis.matchScore,
+        strengths: analysis.strengths,
+        gaps: analysis.gaps,
+        scoredAt: new Date(),
+        jdHash: sha256(job.jdText),
+      }
+    : undefined
+
+  // Last fence before writes: the parse/LLM phase above is the long part
+  // of this request — do not persist hiring data for an account whose
+  // deletion completed meanwhile.
+  if (!(await accountActive())) {
+    return NextResponse.json(
+      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+      { status: 401 },
+    )
+  }
+
+  const result = await intakeCandidate(ctx, {
+    jobId: params.jobId,
+    name,
+    email,
+    phone: analysis?.phone ?? undefined,
+    resumeText,
+    resumeFileName: file.name.slice(0, 255),
+    source: 'bulk_upload',
+    resumeMatch,
+  })
+
+  return NextResponse.json({
+    fileName: file.name,
+    candidateId: result.candidateId,
+    applicationId: result.applicationId,
+    createdCandidate: result.createdCandidate,
+    createdApplication: result.createdApplication,
+    seenBefore: result.seenBefore,
+    candidate: { name, email },
+    resumeMatch: resumeMatch
+      ? { score: resumeMatch.score, strengths: resumeMatch.strengths, gaps: resumeMatch.gaps }
+      : null,
+  })
 }
 
 function str(v: FormDataEntryValue | null): string {
   return typeof v === 'string' ? v.trim() : ''
 }
+
+export const POST = composeApiRoute({
+  // No `schema`: compose never reads the body, the handler parses the
+  // multipart form itself — the sanctioned pattern for upload routes.
+  // Sized for real batches: 20 files at browser concurrency 3 finishes
+  // inside a minute; each request costs a parse + one LLM call.
+  rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-intake' },
+  requireActiveAccount: true,
+  handler: handleIntake,
+})
