@@ -14,7 +14,7 @@ export async function GET() {
 
   await connectDB()
   const user = await User.findById(session.user.id).select(
-    'plan monthlyInterviewsUsed monthlyInterviewLimit planExpiresAt stripeCustomerId createdAt usageResetAt'
+    'plan entitlementSource monthlyInterviewsUsed monthlyInterviewLimit planExpiresAt stripeCustomerId createdAt usageResetAt'
   )
 
   if (!user) {
@@ -27,6 +27,9 @@ export async function GET() {
 
   return NextResponse.json({
     plan: user.plan,
+    // Client entitlement pre-flights (interviewUnlockEligibility) must see
+    // the same authority signal the server admission query honors.
+    entitlementSource: (user as { entitlementSource?: string }).entitlementSource ?? null,
     monthlyInterviewsUsed: user.monthlyInterviewsUsed,
     monthlyInterviewLimit: user.monthlyInterviewLimit,
     planExpiresAt: user.planExpiresAt?.toISOString() || null,

@@ -42,4 +42,30 @@ describe('additional interview checkout eligibility', () => {
       },
     )).toBe(false)
   })
+
+  it('never intercepts admin-granted accounts (comped users, hire guests) — mirrors the server authority', () => {
+    // Long duration AND exhausted quota: the server admission honors the
+    // admin_grant branch, so the pre-flight must not contradict it with a
+    // personal checkout (a hire candidate saw the ₹69 modal — founder on #605).
+    expect(shouldOfferPaidInterviewCheckout(
+      { duration: 30 },
+      {
+        plan: 'free',
+        entitlementSource: 'admin_grant',
+        monthlyInterviewsUsed: 3,
+        monthlyInterviewLimit: 3,
+      },
+    )).toBe(false)
+    // A free account with any OTHER entitlementSource value still gets the
+    // normal offer.
+    expect(shouldOfferPaidInterviewCheckout(
+      { duration: 30 },
+      {
+        plan: 'free',
+        entitlementSource: 'legacy',
+        monthlyInterviewsUsed: 0,
+        monthlyInterviewLimit: 1,
+      },
+    )).toBe(true)
+  })
 })
