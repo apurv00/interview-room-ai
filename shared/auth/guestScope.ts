@@ -51,33 +51,39 @@ const ALLOWED_PAGE_PREFIXES = [
  *   /api/learn/*, /api/jobs/*, /api/resume/*, /api/account, /api/settings/*
  *   except usage, /api/documents/upload, /api/onboarding/*.
  */
-const ALLOWED_API_EXACT = new Set([
-  '/api/interviews', // POST: engine self-provisions the session
-  '/api/generate-question',
-  '/api/evaluate-answer',
-  '/api/evaluate-code',
-  '/api/evaluate-design',
-  '/api/generate-feedback', // engine fires this at completion (HR's report)
-  '/api/code/generate-problem',
-  '/api/code/history',
-  '/api/code/run',
-  '/api/design/generate-problem',
-  '/api/design/history',
-  '/api/problems/served',
-  '/api/interview/answer-candidate-question',
-  '/api/interview/clarify-case-context',
-  '/api/interview/clarify-coding',
-  '/api/transcribe/token',
-  '/api/turn-router',
-  '/api/tts',
-  '/api/tts/stream',
-  '/api/recordings/finalize',
-  '/api/recordings/landmarks',
-  '/api/storage/presign',
-  '/api/storage/multipart',
-  '/api/settings/usage', // lobby pre-flight reads plan/entitlement
-  '/api/debug/deepgram-ws-close',
-  '/api/health',
+/**
+ * path → the methods a guest may use. Method-aware because several routes
+ * serve results on GET and interview work on POST: GET /api/interviews
+ * lists sessions WITH feedback (HR-only score, dimensions, red flags), so
+ * only POST is granted (Codex P1 on #607).
+ */
+const ALLOWED_API_EXACT = new Map<string, readonly string[]>([
+  ['/api/interviews', ['POST']], // engine self-provisions the session
+  ['/api/generate-question', ['POST']],
+  ['/api/evaluate-answer', ['POST']],
+  ['/api/evaluate-code', ['POST']],
+  ['/api/evaluate-design', ['POST']],
+  ['/api/generate-feedback', ['POST']], // fired at completion (HR's report)
+  ['/api/code/generate-problem', ['POST']],
+  ['/api/code/history', ['GET']], // no-repeat ledger, no results
+  ['/api/code/run', ['POST']],
+  ['/api/design/generate-problem', ['POST']],
+  ['/api/design/history', ['GET']],
+  ['/api/problems/served', ['POST']],
+  ['/api/interview/answer-candidate-question', ['POST']],
+  ['/api/interview/clarify-case-context', ['POST']],
+  ['/api/interview/clarify-coding', ['POST']],
+  ['/api/transcribe/token', ['POST']],
+  ['/api/turn-router', ['POST']],
+  ['/api/tts', ['POST']],
+  ['/api/tts/stream', ['POST']],
+  ['/api/recordings/finalize', ['POST']],
+  ['/api/recordings/landmarks', ['POST']],
+  ['/api/storage/presign', ['POST']],
+  ['/api/storage/multipart', ['POST', 'PUT']],
+  ['/api/settings/usage', ['GET']], // lobby pre-flight: plan/entitlement
+  ['/api/debug/deepgram-ws-close', ['POST']],
+  ['/api/health', ['GET']],
 ])
 
 const ALLOWED_API_PREFIXES = [
@@ -122,7 +128,8 @@ export function evaluateGuestAccess(pathname: string, method: string): GuestAcce
     return allowed ? { allowed: true } : { allowed: false, redirectTo: '/candidate/thank-you' }
   }
 
-  if (ALLOWED_API_EXACT.has(pathname)) return { allowed: true }
+  const methods = ALLOWED_API_EXACT.get(pathname)
+  if (methods?.includes(method)) return { allowed: true }
   if (ALLOWED_API_PREFIXES.some((p) => pathname.startsWith(p))) return { allowed: true }
   if (isInterviewSessionWrite(pathname, method)) return { allowed: true }
 

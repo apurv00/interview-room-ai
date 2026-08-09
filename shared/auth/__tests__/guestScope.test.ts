@@ -114,3 +114,16 @@ describe('everything else is denied by default', () => {
     expect(evaluateGuestAccess('/api/interviews/last-config', 'PATCH').allowed).toBe(false)
   })
 })
+
+describe('method-aware scoping (result reads hide behind shared paths)', () => {
+  it('allows POST /api/interviews but DENIES GET (the collection lists feedback)', () => {
+    expect(evaluateGuestAccess('/api/interviews', 'POST').allowed).toBe(true)
+    expect(evaluateGuestAccess('/api/interviews', 'GET').allowed).toBe(false)
+  })
+
+  it('denies methods not granted for an allowed path', () => {
+    expect(evaluateGuestAccess('/api/settings/usage', 'GET').allowed).toBe(true)
+    expect(evaluateGuestAccess('/api/settings/usage', 'DELETE').allowed).toBe(false)
+    expect(evaluateGuestAccess('/api/tts', 'GET').allowed).toBe(false)
+  })
+})

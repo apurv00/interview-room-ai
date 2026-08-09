@@ -7,6 +7,32 @@ export default withAuth(
     const { pathname } = req.nextUrl
     const token = req.nextauth.token
 
+    // ── IPG Hire guest capability scope (DEFAULT-DENY) ──
+    // FIRST, before any subdomain rewrite: the guest flow can run on any
+    // host (hire.* included), and a rewrite branch returns early — which
+    // would carry a guest straight past this gate into the rewritten target
+    // (Codex P1 on #607). An invited candidate is not a B2C user: their
+    // session exists only because the engine requires one, and it may reach
+    // only what running ONE interview needs. Everything else — results,
+    // GDPR export, account, resumes, history, learn, jobs, and any future
+    // authed surface — is denied by default, never patched away one door at
+    // a time. Authority + rationale: shared/auth/guestScope.ts.
+    if (isHireGuestEmail(token?.email)) {
+      const decision = evaluateGuestAccess(pathname, req.method)
+      if (!decision.allowed) {
+        if (decision.redirectTo) {
+          const url = req.nextUrl.clone()
+          url.pathname = decision.redirectTo
+          url.search = ''
+          return NextResponse.redirect(url)
+        }
+        return NextResponse.json(
+          { error: 'Not available for interview candidates', code: 'GUEST_SCOPE' },
+          { status: 403 }
+        )
+      }
+    }
+
     // ── Subdomain detection ──
     const hostname = req.headers.get('host') || ''
     const isCms = hostname.startsWith('cms.')
@@ -96,29 +122,6 @@ export default withAuth(
       const url = req.nextUrl.clone()
       url.pathname = pathname.replace('/replay/', '/feedback/')
       return NextResponse.redirect(url, 301)
-    }
-
-    // ── IPG Hire guest capability scope (DEFAULT-DENY) ──
-    // An invited candidate is not a B2C user: their session exists only
-    // because the engine requires one, and it may reach only what running
-    // one interview needs. Everything else — results, GDPR export, account,
-    // resumes, history, learn, jobs, and any future authed surface — is
-    // denied by default rather than patched away one door at a time.
-    // Authority + rationale: shared/auth/guestScope.ts.
-    if (isHireGuestEmail(token?.email)) {
-      const decision = evaluateGuestAccess(pathname, req.method)
-      if (!decision.allowed) {
-        if (decision.redirectTo) {
-          const url = req.nextUrl.clone()
-          url.pathname = decision.redirectTo
-          url.search = ''
-          return NextResponse.redirect(url)
-        }
-        return NextResponse.json(
-          { error: 'Not available for interview candidates', code: 'GUEST_SCOPE' },
-          { status: 403 }
-        )
-      }
     }
 
     const response = NextResponse.next()
