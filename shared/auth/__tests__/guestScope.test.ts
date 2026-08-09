@@ -54,6 +54,8 @@ describe('the interview flow keeps working', () => {
     ['/api/storage/presign', 'POST'],
     ['/api/storage/multipart', 'POST'],
     ['/api/settings/usage', 'GET'],
+    ['/api/health', 'HEAD'],
+    ['/api/analysis/start', 'POST'],
     ['/api/auth/session', 'GET'],
     ['/api/auth/signout', 'POST'],
     ['/api/candidate/aaaaaaaaaaaaaaaaaaaaaaaa/begin', 'POST'],
@@ -125,5 +127,14 @@ describe('method-aware scoping (result reads hide behind shared paths)', () => {
     expect(evaluateGuestAccess('/api/settings/usage', 'GET').allowed).toBe(true)
     expect(evaluateGuestAccess('/api/settings/usage', 'DELETE').allowed).toBe(false)
     expect(evaluateGuestAccess('/api/tts', 'GET').allowed).toBe(false)
+  })
+})
+
+describe('prefix denial cannot be inherited', () => {
+  it('permits the analysis TRIGGER but denies analysis result reads', () => {
+    expect(evaluateGuestAccess('/api/analysis/start', 'POST').allowed).toBe(true)
+    expect(evaluateGuestAccess('/api/analysis/a1b2c3d4e5f6a7b8c9d0e1f2', 'GET').allowed).toBe(false)
+    // A future /api/analysis/* route does not inherit access.
+    expect(evaluateGuestAccess('/api/analysis/anything-new', 'POST').allowed).toBe(false)
   })
 })

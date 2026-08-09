@@ -83,8 +83,23 @@ const ALLOWED_API_EXACT = new Map<string, readonly string[]>([
   ['/api/storage/multipart', ['POST', 'PUT']],
   ['/api/settings/usage', ['GET']], // lobby pre-flight: plan/entitlement
   ['/api/debug/deepgram-ws-close', ['POST']],
-  ['/api/health', ['GET']],
+  // The lobby's network check pings HEAD and treats a non-OK as a hard
+  // failure — without HEAD the Join button never enables (Codex P1 on #607).
+  ['/api/health', ['GET', 'HEAD']],
+  // Completion trigger for multimodal analysis (fire-and-forget from
+  // useInterview). A 403 here silently discards the candidate's recording,
+  // transcript and landmark analysis — nothing retries it, because the
+  // guest is redirected away and signed out (Codex P2 on #607).
+  ['/api/analysis/start', ['POST']],
 ])
+
+/**
+ * Result surfaces that share a prefix with something allowed. Checked
+ * AFTER the exact allowlist, so POST /api/analysis/start is permitted while
+ * GET /api/analysis/:id (the results read) stays denied — and a future
+ * /api/analysis/* route cannot accidentally inherit access.
+ */
+const DENIED_API_PREFIXES = ['/api/analysis/']
 
 const ALLOWED_API_PREFIXES = [
   '/api/auth/', // NextAuth itself (sign-out must always work)
@@ -130,6 +145,7 @@ export function evaluateGuestAccess(pathname: string, method: string): GuestAcce
 
   const methods = ALLOWED_API_EXACT.get(pathname)
   if (methods?.includes(method)) return { allowed: true }
+  if (DENIED_API_PREFIXES.some((p) => pathname.startsWith(p))) return { allowed: false }
   if (ALLOWED_API_PREFIXES.some((p) => pathname.startsWith(p))) return { allowed: true }
   if (isInterviewSessionWrite(pathname, method)) return { allowed: true }
 
