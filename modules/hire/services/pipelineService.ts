@@ -1,6 +1,7 @@
 import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, ForbiddenError, NotFoundError } from '@shared/errors'
+import { withPersonalDataWriteTransaction } from '@shared/services/accountDeletion'
 import {
   HireApplication,
   HireCandidate,
@@ -346,4 +347,74 @@ export async function appendApplicationEvent(
     { _id: applicationId, workspaceId },
     { $push: { events: { ...event, at: new Date() } } }
   )
+}
+
+/**
+ * Recruiter adjudication of public apply-page submissions.
+ *
+ * Anonymous callers may only ever ADD documents (never edit or remove) —
+ * which means a workspace needs a way to resolve a contested candidate.
+ * These two actions are that way, and they are the ONLY sanctioned
+ * exception to evidence monotonicity (founder ruling 2026-08-09):
+ *
+ *   promote — this submission is the authentic one; copy it to the
+ *             workspace pool record so downstream flows use it.
+ *   delete  — this submission is fraudulent (or a subject asked for
+ *             erasure); remove it.
+ *
+ * Both are MEMBER actions: attributed, transactional, and written into the
+ * application's audit timeline, so a document leaving the record always
+ * leaves a trace of who removed it and when. That trace is what keeps
+ * deletion an accountable act rather than a hole in the guarantee.
+ */
+export type SubmissionAction = 'promote' | 'delete'
+
+export async function adjudicateSubmission(
+  ctx: MembershipContext,
+  appId: string,
+  input: { index: number; action: SubmissionAction; note?: string },
+): Promise<{ ok: true }> {
+  const actorUserId = ctx.membership.userId
+  if (!actorUserId) {
+    throw new AppError('Workspace membership is not linked to a user', 403, 'MEMBERSHIP_UNLINKED')
+  }
+
+  await withPersonalDataWriteTransaction(actorUserId, async (session) => {
+    const application = await HireApplication.findOne({
+      _id: appId,
+      workspaceId: ctx.workspace._id,
+    }).session(session)
+    if (!application) throw new NotFoundError('Application')
+
+    const submissions = application.applicantSubmissions ?? []
+    const target = submissions[input.index]
+    if (!target) throw new NotFoundError('Submission')
+
+    if (input.action === 'promote') {
+      const candidate = await HireCandidate.findOne({
+        _id: application.candidateId,
+        workspaceId: ctx.workspace._id,
+      }).session(session)
+      if (!candidate) throw new NotFoundError('Candidate')
+      candidate.resumeText = target.resumeText
+      candidate.resumeFileName = target.resumeFileName
+      await candidate.save({ session })
+    } else {
+      application.applicantSubmissions = submissions.filter((_, i) => i !== input.index)
+      application.markModified('applicantSubmissions')
+    }
+
+    application.events.push({
+      type: input.action === 'promote' ? 'submission_promoted' : 'submission_deleted',
+      actorUserId,
+      actorName: ctx.membership.name || ctx.membership.email,
+      note:
+        input.note ||
+        `${target.resumeFileName ?? 'Submitted résumé'} (received ${target.submittedAt.toISOString()})`,
+      at: new Date(),
+    })
+    await application.save({ session })
+  })
+
+  return { ok: true }
 }

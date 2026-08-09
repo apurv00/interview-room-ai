@@ -32,6 +32,8 @@ export {
   moveStage,
   getApplicationDetail,
   appendApplicationEvent,
+  adjudicateSubmission,
+  type SubmissionAction,
   type JobListItem,
   type JobPipeline,
   type PipelineEntry,

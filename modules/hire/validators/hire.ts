@@ -82,3 +82,11 @@ export type MoveStagePayload = z.infer<typeof MoveStageSchema>
 export type SendAiRoundPayload = z.infer<typeof SendAiRoundSchema>
 export type GuestBeginPayload = z.infer<typeof GuestBeginSchema>
 export type GuestVerifyCodePayload = z.infer<typeof GuestVerifyCodeSchema>
+
+/** Recruiter adjudication of a public apply-page submission. */
+export const AdjudicateSubmissionSchema = z.object({
+  index: z.number().int().min(0).max(10),
+  action: z.enum(['promote', 'delete']),
+  note: z.string().trim().max(4000).optional(),
+})
+export type AdjudicateSubmissionPayload = z.infer<typeof AdjudicateSubmissionSchema>

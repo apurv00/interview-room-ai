@@ -169,6 +169,29 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
     }
   }
 
+  async function adjudicateSubmission(index: number, action: 'promote' | 'delete') {
+    if (action === 'delete' && !confirm('Delete this submitted résumé? This is recorded in the audit trail.')) return
+    setBusy(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/workspace/applications/${params.appId}/submissions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index, action }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setActionError(body.error || 'Could not update the submission.')
+        return
+      }
+      await load()
+    } catch {
+      setActionError('Something went wrong.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function revoke(roundId: string) {
     setBusy(true)
     setActionError(null)
@@ -411,6 +434,24 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
               <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
                 {sub.text}
               </pre>
+              {/* Adjudication — the only path that removes evidence, so it
+                  is deliberate, attributed and written to the timeline. */}
+              <div className="mt-2 flex gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void adjudicateSubmission(i, 'promote')}
+                >
+                  This one is authentic
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void adjudicateSubmission(i, 'delete')}
+                >
+                  Delete as fraudulent
+                </Button>
+              </div>
             </details>
           ))}
         </div>

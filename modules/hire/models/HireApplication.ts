@@ -24,6 +24,11 @@ export const HIRE_EVENT_TYPES = [
   'ai_round_sent',
   'ai_round_revoked',
   'ai_result_linked',
+  // Recruiter adjudication of public submissions — the ONLY sanctioned
+  // exception to evidence monotonicity (founder ruling 2026-08-09), so
+  // both are attributed and permanently recorded.
+  'submission_promoted',
+  'submission_deleted',
 ] as const
 export type HireEventType = (typeof HIRE_EVENT_TYPES)[number]
 
