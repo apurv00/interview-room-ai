@@ -29,6 +29,31 @@ export function isHireGuestEmail(email: unknown): boolean {
 }
 
 /**
+ * Extract the round id from a synthetic guest email
+ * (`round-<id>@guests.interviewprep.internal` → `<id>`), or null for
+ * anything else. Used to SCOPE guest sign-outs to their own round: with
+ * multiple invites in one browser (2+ AI interviews sent in a day), an
+ * older round's thank-you/terminal tab must never end a NEWER round's
+ * session — that stranded a mid-flow candidate at the B2C sign-in modal
+ * (founder-hit bug, 2026-08-09).
+ */
+export function guestRoundIdFromEmail(email: unknown): string | null {
+  if (typeof email !== 'string') return null
+  const lower = email.toLowerCase()
+  if (!lower.endsWith(GUEST_EMAIL_DOMAIN)) return null
+  const local = lower.slice(0, -GUEST_EMAIL_DOMAIN.length)
+  return local.startsWith('round-') && local.length > 'round-'.length
+    ? local.slice('round-'.length)
+    : null
+}
+
+/** True only when `email` is the synthetic guest identity of THIS round. */
+export function isGuestEmailForRound(email: unknown, roundId: string): boolean {
+  const id = guestRoundIdFromEmail(email)
+  return id !== null && id === roundId.toLowerCase()
+}
+
+/**
  * Pages a guest may load. The interview flow only ever needs its own
  * surface plus the engine's lobby/room; results pages are deliberately
  * absent (handled by an explicit redirect, so the candidate gets the

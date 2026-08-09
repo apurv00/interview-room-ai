@@ -1,6 +1,6 @@
 import { withAuth } from 'next-auth/middleware'
 import { NextResponse } from 'next/server'
-import { isHireGuestEmail, evaluateGuestAccess } from '@shared/auth/guestScope'
+import { isHireGuestEmail, evaluateGuestAccess, guestRoundIdFromEmail } from '@shared/auth/guestScope'
 
 export default withAuth(
   function middleware(req) {
@@ -23,7 +23,11 @@ export default withAuth(
         if (decision.redirectTo) {
           const url = req.nextUrl.clone()
           url.pathname = decision.redirectTo
-          url.search = ''
+          // Carry the guest's OWN round id so the thank-you sign-out stays
+          // scoped to it: a reloaded stale thank-you tab (older invite) must
+          // never end a newer round's session (multi-invite bug, 2026-08-09).
+          const guestRoundId = guestRoundIdFromEmail(token?.email)
+          url.search = guestRoundId ? `round=${guestRoundId}` : ''
           return NextResponse.redirect(url)
         }
         return NextResponse.json(

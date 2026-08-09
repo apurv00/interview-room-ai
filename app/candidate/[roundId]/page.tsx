@@ -27,11 +27,13 @@ function obfuscateEmail(email: string): string {
   return `${local[0]}***@${domain}`
 }
 
-function InvalidLink() {
+function InvalidLink({ roundId }: { roundId: string }) {
   return (
     <main className="min-h-screen flex items-center justify-center bg-[#f8fafc] px-4">
-      {/* Terminal state: a lingering synthetic-guest session ends here. */}
-      <GuestSignOut />
+      {/* Terminal state: a lingering synthetic-guest session ends here —
+          scoped to THIS round so an old link never ends a newer round's
+          live session (multi-invite bug, 2026-08-09). */}
+      <GuestSignOut roundId={roundId} />
       <div className="max-w-md w-full bg-white border border-[#e1e8ed] rounded-2xl p-8 text-center space-y-3">
         <div className="text-3xl">🔗</div>
         <h1 className="text-lg font-semibold text-[#0f1419]">
@@ -46,12 +48,13 @@ function InvalidLink() {
   )
 }
 
-function AlreadyCompleted() {
+function AlreadyCompleted({ roundId }: { roundId: string }) {
   return (
     <main className="min-h-screen flex items-center justify-center bg-[#f8fafc] px-4">
       {/* Terminal state: a lingering synthetic-guest session ends here —
-          revisiting a finished invite must leave the candidate logged out. */}
-      <GuestSignOut />
+          revisiting a finished invite must leave the candidate logged out.
+          Scoped to THIS round only (multi-invite bug, 2026-08-09). */}
+      <GuestSignOut roundId={roundId} />
       <div className="max-w-md w-full bg-white border border-[#e1e8ed] rounded-2xl p-8 text-center space-y-3">
         <div className="text-3xl">✅</div>
         <h1 className="text-lg font-semibold text-[#0f1419]">Interview completed</h1>
@@ -72,12 +75,12 @@ export default async function CandidateLandingPage({
   searchParams: { token?: string }
 }) {
   const token = searchParams.token
-  if (!token) return <InvalidLink />
+  if (!token) return <InvalidLink roundId={params.roundId} />
 
   const verified = await verifyRoundToken(params.roundId, token).catch(() => null)
-  if (!verified) return <InvalidLink />
-  if (verified.state === 'completed') return <AlreadyCompleted />
-  if (verified.state !== 'ok') return <InvalidLink />
+  if (!verified) return <InvalidLink roundId={params.roundId} />
+  if (verified.state === 'completed') return <AlreadyCompleted roundId={params.roundId} />
+  if (verified.state !== 'ok') return <InvalidLink roundId={params.roundId} />
 
   const { round } = verified
   const [job, workspace] = await Promise.all([
@@ -86,7 +89,7 @@ export default async function CandidateLandingPage({
       .lean(),
     HireWorkspace.findById(round.workspaceId).select('name').lean(),
   ])
-  if (!job || !workspace) return <InvalidLink />
+  if (!job || !workspace) return <InvalidLink roundId={params.roundId} />
 
   return (
     <main className="min-h-screen bg-[#f8fafc] px-4 py-10">

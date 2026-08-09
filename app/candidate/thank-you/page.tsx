@@ -15,10 +15,22 @@
  * before the candidate can close the tab — and only for synthetic guests:
  * a real signed-in user who opens this public URL directly is never
  * logged out (Codex P2 on #607).
+ *
+ * SCOPED to one round via ?round=<id> (appended by the middleware redirect
+ * that sends guests here): with 2+ invites in one browser, a stale
+ * thank-you tab from an OLDER round — reloaded by tab discard or revisit —
+ * must never end a NEWER round's live session (founder-hit bug,
+ * 2026-08-09). Without the param there is NO trustworthy round identity,
+ * so this page signs out NOTHING (Codex P1 on #609): pre-deploy stale tabs
+ * are queryless, and an unscoped fallback would re-create the cross-round
+ * kill for exactly those tabs. A queryless guest stays signed in — the
+ * default-deny middleware scope means that session can reach nothing
+ * anyway, and every real completion arrives here WITH the param.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { signOut, useSession } from 'next-auth/react'
+import { isGuestEmailForRound } from '@shared/auth/guestScope'
 
 export default function CandidateThankYouPage() {
   const { data: session, status } = useSession()
@@ -29,7 +41,17 @@ export default function CandidateThankYouPage() {
     if (firedRef.current || status === 'loading') return
     firedRef.current = true
     const email = session?.user?.email ?? ''
-    if (status === 'authenticated' && email.endsWith('@guests.interviewprep.internal')) {
+    // window.location (not useSearchParams) — client-only read, no Suspense
+    // boundary needed, and the param survives tab-discard reloads.
+    let roundParam: string | null = null
+    try {
+      roundParam = new URLSearchParams(window.location.search).get('round')
+    } catch {
+      roundParam = null
+    }
+    const isOwnGuestSession =
+      roundParam !== null && isGuestEmailForRound(email, roundParam)
+    if (status === 'authenticated' && isOwnGuestSession) {
       void signOut({ redirect: false }).finally(() => setReady(true))
     } else {
       setReady(true)
