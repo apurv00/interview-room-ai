@@ -2,6 +2,7 @@ import type { InterviewConfig } from '@shared/types'
 
 export interface InterviewUsageSummary {
   plan?: unknown
+  entitlementSource?: unknown
   monthlyInterviewsUsed?: unknown
   monthlyInterviewLimit?: unknown
 }
@@ -11,6 +12,13 @@ export function shouldOfferPaidInterviewCheckout(
   usage: InterviewUsageSummary,
 ): boolean {
   if (usage.plan !== 'free') return false
+  // Mirrors the server admission authority (interviewService admin_grant
+  // branch): an admin-granted account — comped users, and IPG Hire's
+  // employer-funded synthetic guests — must never be offered a personal
+  // checkout. Without this, the pre-flight modal contradicted the server,
+  // which would have admitted them (Codex/founder on #605: a hire candidate
+  // was shown the ₹69 paywall).
+  if (usage.entitlementSource === 'admin_grant') return false
   if (config.duration > 10) return true
   return (
     typeof usage.monthlyInterviewsUsed === 'number' &&
