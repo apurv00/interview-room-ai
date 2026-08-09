@@ -85,8 +85,13 @@ Copy and verify from the provider/source of truth:
   as a coordinated session-invalidating change.
 - AI/speech: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `GROQ_API_KEY`, `GOOGLE_AI_API_KEY`, `DEEPGRAM_API_KEY`,
-  `DEEPGRAM_TTS_MODEL`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, and
-  `AZURE_SPEECH_VOICE`.
+  `DEEPGRAM_TTS_MODEL`, and `SARVAM_API_KEY` (Indian interviewer voice —
+  replaced the retired `AZURE_SPEECH_*` trio on 2026-08-09, see
+  INTERVIEW_FLOW.md §8; optional overrides `SARVAM_TTS_SPEAKER`,
+  `SARVAM_TTS_MODEL_ID`). Omitting `SARVAM_API_KEY` makes the default
+  Indian voice silently serve the US Deepgram voice — the routes log it at
+  ERROR and stamp `X-TTS-Provider` on responses; verify `sarvam` appears
+  there post-cutover.
 - OAuth: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`,
   and `GITHUB_CLIENT_SECRET`.
 - Inngest/email/jobs: `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`,
