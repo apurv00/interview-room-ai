@@ -97,6 +97,27 @@ export default withAuth(
       return NextResponse.redirect(url, 301)
     }
 
+    // IPG Hire guests must never see interview results — scores belong to
+    // the hiring team's portal only (founder ruling 2026-08-09). Synthetic
+    // guest identities are recognizable by their per-round email domain
+    // (guestEmailForRound in modules/hire — literal here because middleware
+    // runs on the Edge and cannot import the module; consistency is pinned
+    // by guestFlowContract.test.ts). The engine's post-interview navigation
+    // lands on /feedback/:sessionId; guests are diverted to a thank-you page
+    // that finishes report generation for the hiring team and signs them
+    // out. Real users' emails can never match — the D2C flow is untouched.
+    if (
+      pathname.startsWith('/feedback') &&
+      typeof token?.email === 'string' &&
+      token.email.endsWith('@guests.interviewprep.internal')
+    ) {
+      const url = req.nextUrl.clone()
+      const sessionId = pathname.split('/')[2] ?? ''
+      url.pathname = '/candidate/thank-you'
+      url.search = sessionId ? `?session=${encodeURIComponent(sessionId)}` : ''
+      return NextResponse.redirect(url)
+    }
+
     const response = NextResponse.next()
 
     // Request correlation ID for tracing
