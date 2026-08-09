@@ -1,6 +1,5 @@
-import { inflateRawSync } from 'zlib'
+import { Worker } from 'worker_threads'
 import { extractText, getDocumentProxy } from 'unpdf'
-import mammoth from 'mammoth'
 import { logger } from '@shared/logger'
 
 export interface ParseResult {
@@ -28,101 +27,83 @@ export class UnsupportedFileTypeError extends Error {
 }
 
 /**
- * Decompression-bomb guard for .docx. Callers cap the COMPRESSED upload
- * size, but mammoth inflates the zip fully in memory — a 10MB docx can
- * expand to gigabytes.
+ * Decompression-bomb defence for .docx — a HARD memory ceiling, not a
+ * prediction.
  *
- * TWO things here are deliberately NOT trusted, both learned the hard way
- * (Codex P1 ×2 on #613):
+ * History (three review rounds, one lesson): earlier versions inspected the
+ * ZIP structure to estimate how much mammoth would inflate. Every version
+ * was bypassed by metadata the attacker writes — declared uncompressed
+ * sizes, then central-directory offsets (a ZIP64 sentinel), then the
+ * compression method (JSZip takes method/size from the CENTRAL directory
+ * but the data start from the LOCAL header). Each fix modelled the other
+ * parser slightly better and was wrong slightly differently, and the
+ * accounting could never be both complete and free of false rejections.
  *
- * 1. Declared uncompressed sizes — a bomb simply declares 1 byte. So we
- *    MEASURE: every deflate stream is inflated under zlib's
- *    `maxOutputLength`, which stops allocating and throws the instant
- *    output would exceed the shared budget. Peak memory is bounded by the
- *    limit no matter what the metadata claims.
+ * So we stopped predicting the allocation and started BOUNDING it: mammoth
+ * runs inside a worker whose V8 heap is capped. A bomb exhausts that heap
+ * and the worker dies with ERR_WORKER_OUT_OF_MEMORY — the request fails
+ * cleanly, the server is untouched, and no ZIP field is consulted anywhere.
+ * There is nothing left for a crafted archive to lie about.
  *
- * 2. Any DECLARED metadata about where or how an entry is compressed.
- *    Two rounds of parser-differential bugs came from reading it:
- *    resolving central-directory offsets missed a ZIP64 sentinel entry
- *    that JSZip resolved and inflated; then trusting the LOCAL header's
- *    compression method missed a bomb marked "stored" locally and
- *    "deflated" centrally — JSZip takes `compressionMethod` and
- *    `compressedSize` from the CENTRAL directory (jszip/lib/zipEntry.js
- *    readLocalPart) while deriving the data START from the local header.
- *
- *    So this guard reads exactly ONE thing from the archive: where each
- *    entry's payload begins — from the local header's name/extra lengths,
- *    which is the same derivation JSZip uses and the only one the physical
- *    layout permits. It then ATTEMPTS TO INFLATE at that position
- *    regardless of any declared method. If the bytes are a deflate stream,
- *    their real output counts against the budget no matter what either
- *    header claims; if they are not, inflation simply fails and the entry
- *    is skipped. There is no method, size, or offset field left to lie
- *    about.
- *
- * Stored (uncompressed) entries need no budget at all: their output equals
- * their input, which is bounded by the caller's upload-size cap — the
- * budget here exists solely to bound INFLATION. Charging them by declared
- * size was itself a bug: zero-length directory records report size 0 and a
- * fallback charged the rest of the archive, rejecting ordinary DOCX files.
- *
- * Exported for tests.
+ * Fail-closed: any worker failure (including a module-resolution problem)
+ * surfaces as an unsupported-file error and is logged at ERROR, rather than
+ * silently falling back to an unbounded in-process parse.
  */
-const ZIP_LOCAL_HEADER_SIG = Buffer.from([0x50, 0x4b, 0x03, 0x04])
-const ZIP_LOCAL_HEADER_BYTES = 30
-const MAX_DOCX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+const DOCX_WORKER_HEAP_MB = 128
 
-export function docxInflatedWithinLimit(
+const DOCX_WORKER_SOURCE = `
+const { parentPort, workerData } = require('worker_threads')
+const mammoth = require('mammoth')
+mammoth
+  .extractRawText({ buffer: Buffer.from(workerData) })
+  .then((r) => parentPort.postMessage({ ok: true, text: r.value }))
+  .catch((e) => parentPort.postMessage({ ok: false, error: String((e && e.message) || e) }))
+`
+
+export async function extractDocxBounded(
   buffer: Buffer,
-  limit: number = MAX_DOCX_UNCOMPRESSED_BYTES,
-): boolean {
-  let remaining = limit
-  let cursor = 0
-
-  while (cursor < buffer.length) {
-    const header = buffer.indexOf(ZIP_LOCAL_HEADER_SIG, cursor)
-    if (header === -1 || header + ZIP_LOCAL_HEADER_BYTES > buffer.length) break
-    // Advance past this signature before any `continue` so a malformed
-    // header can never spin the loop.
-    cursor = header + 4
-
-    // The ONLY fields read: local name/extra lengths, which is exactly how
-    // JSZip locates the payload (readLocalPart). Method and sizes are
-    // deliberately ignored — see the header comment.
-    const nameLen = buffer.readUInt16LE(header + 26)
-    const extraLen = buffer.readUInt16LE(header + 28)
-    const dataStart = header + ZIP_LOCAL_HEADER_BYTES + nameLen + extraLen
-    if (dataStart >= buffer.length) continue
-
-    // Slice to EOF: inflateRawSync stops at the deflate stream's own
-    // terminus and ignores trailing bytes (verified), so no length field
-    // is needed here either.
-    try {
-      const out = inflateRawSync(buffer.subarray(dataStart), {
-        maxOutputLength: Math.max(1, remaining),
+  heapMb: number = DOCX_WORKER_HEAP_MB,
+): Promise<string> {
+  const result = await new Promise<{ ok: boolean; text?: string; error?: string }>(
+    (resolve) => {
+      let worker: Worker
+      try {
+        worker = new Worker(DOCX_WORKER_SOURCE, {
+          eval: true,
+          workerData: buffer,
+          resourceLimits: {
+            maxOldGenerationSizeMb: heapMb,
+            maxYoungGenerationSizeMb: 16,
+          },
+        })
+      } catch (err) {
+        resolve({ ok: false, error: `worker start failed: ${String(err)}` })
+        return
+      }
+      let settled = false
+      const done = (r: { ok: boolean; text?: string; error?: string }) => {
+        if (settled) return
+        settled = true
+        resolve(r)
+        void worker.terminate()
+      }
+      worker.on('message', done)
+      worker.on('error', (err: NodeJS.ErrnoException) => {
+        done({ ok: false, error: err.code || err.message })
       })
-      remaining -= out.length
-    } catch (err) {
-      // Budget exceeded ⇒ this file inflates past the cap: REJECT.
-      // Anything else ⇒ these bytes are not a deflate stream (a stored
-      // entry, a directory record, or a stray PK\x03\x04 pattern inside
-      // compressed data): skip. Genuinely corrupt archives still fail
-      // inside mammoth with its own error; bounding memory is this
-      // guard's only job.
-      if (isOutputBudgetError(err)) return false
-    }
-  }
-  return true
-}
-
-/** zlib signals an exceeded `maxOutputLength` as ERR_BUFFER_TOO_LARGE. */
-function isOutputBudgetError(err: unknown): boolean {
-  return (
-    err instanceof RangeError ||
-    (typeof err === 'object' &&
-      err !== null &&
-      (err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE')
+      worker.on('exit', (code) => {
+        done({ ok: false, error: `worker exited (${code})` })
+      })
+    },
   )
+
+  if (!result.ok) {
+    logger.error({ reason: result.error }, 'docx worker parse failed')
+    throw new UnsupportedFileTypeError(
+      'We could not process that DOCX file. Please export it as PDF or plain text.',
+    )
+  }
+  return result.text ?? ''
 }
 
 const MAX_WORDS = 8000
@@ -159,13 +140,9 @@ export async function parseDocument(buffer: Buffer, filename: string): Promise<P
       break
     }
     case '.docx': {
-      if (!docxInflatedWithinLimit(buffer)) {
-        throw new UnsupportedFileTypeError(
-          'This DOCX file expands too large to process safely. Please export it as PDF or plain text.',
-        )
-      }
-      const result = await mammoth.extractRawText({ buffer })
-      rawText = result.value
+      // Bounded worker — see extractDocxBounded. A decompression bomb dies
+      // with the worker instead of the server.
+      rawText = await extractDocxBounded(buffer)
       break
     }
     case '.txt': {
