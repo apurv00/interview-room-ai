@@ -358,7 +358,10 @@ describe('reconcileApplicationRounds', () => {
     mockSessionFind.mockReturnValue(
       chainTo([session(), session({ _id: { toString: () => 's2' }, status: 'in_progress' })])
     )
-    await reconcileApplicationRounds('ws-A', 'a1')
+    const result = await reconcileApplicationRounds('ws-A', 'a1')
+    // Idempotent retirement: an ALREADY-linked round re-reports its guest on
+    // every pass, so a previously-failed budget retirement heals itself.
+    expect(result.completedGuestUserIds).toEqual(['guest-1'])
     const attemptUpdate = mockRound.updateOne.mock.calls.find(
       ([, update]) => update.$set?.attemptCount !== undefined
     )

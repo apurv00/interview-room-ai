@@ -41,8 +41,10 @@ export const GET = composeApiRoute({
     )
     if (completedGuestUserIds.length > 0) {
       await connectDB()
+      // Idempotent — completed guests are re-reported every pass, so a
+      // failed retirement heals on the next card load.
       await User.updateMany(
-        { _id: { $in: completedGuestUserIds } },
+        { _id: { $in: completedGuestUserIds }, monthlyInterviewLimit: { $ne: 0 } },
         { $set: { monthlyInterviewLimit: 0 } }
       )
     }

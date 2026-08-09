@@ -174,6 +174,15 @@ export async function reconcileApplicationRounds(
   const completedGuestUserIds: string[] = []
 
   for (const round of rounds) {
+    // Retirement is derived from PERSISTED state, not just this pass's
+    // claims: any round that holds a sessionId is completed, and its guest
+    // is reported every pass. This makes budget retirement idempotent — if
+    // the retiring updateMany (or the audit append) failed after a claim,
+    // the next card load reports the guest again instead of losing it
+    // forever behind the claimed round (Codex P2 round 2 on #606).
+    if (round.guestUserId && round.sessionId) {
+      completedGuestUserIds.push(round.guestUserId.toString())
+    }
     // Refresh a linked-but-pending snapshot once feedback lands. The
     // completedAfterRevoke flag is round-derived state, not session state —
     // preserve it across the rebuild.
@@ -299,7 +308,7 @@ export async function reconcileApplicationRounds(
       activity.push({ roundId: round._id.toString(), inProgress: true })
     }
   }
-  return { activity, completedGuestUserIds }
+  return { activity, completedGuestUserIds: Array.from(new Set(completedGuestUserIds)) }
 }
 
 export type { IHireRound }
