@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 
 const mockSession = { deleteMany: vi.fn(), find: vi.fn() }
-const mockUser = { deleteMany: vi.fn(), countDocuments: vi.fn() }
+const mockUser = { deleteMany: vi.fn(), countDocuments: vi.fn(), updateMany: vi.fn() }
+const mockAnalysis = { deleteMany: vi.fn() }
 vi.mock('@shared/db/models', () => ({
   InterviewSession: {
     deleteMany: (...a: unknown[]) => mockSession.deleteMany(...a),
@@ -19,7 +20,9 @@ vi.mock('@shared/db/models', () => ({
   User: {
     deleteMany: (...a: unknown[]) => mockUser.deleteMany(...a),
     countDocuments: (...a: unknown[]) => mockUser.countDocuments(...a),
+    updateMany: (...a: unknown[]) => mockUser.updateMany(...a),
   },
+  MultimodalAnalysis: { deleteMany: (...a: unknown[]) => mockAnalysis.deleteMany(...a) },
 }))
 
 const r2DeleteMock = vi.fn()
@@ -62,6 +65,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   m.member.find.mockReturnValue({ select: () => Promise.resolve([{ workspaceId: WS }]) })
   mockSession.find.mockReturnValue({ select: () => Promise.resolve([]) })
+  mockUser.updateMany.mockResolvedValue({ modifiedCount: 1 })
+  mockAnalysis.deleteMany.mockResolvedValue({ deletedCount: 1 })
   r2DeleteMock.mockResolvedValue(undefined)
   m.round.find.mockReturnValue({ select: () => Promise.resolve([{ guestUserId: GUEST }]) })
   for (const op of [
@@ -190,5 +195,54 @@ describe('an orphaned workspace takes its candidates’ data with it', () => {
     m.round.find.mockReturnValue({ select: () => Promise.resolve([{ guestUserId: undefined }]) })
     await deleteOrphanedWorkspacesForUser(USER)
     expect(mockUser.deleteMany).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('guest artifact erasure is complete and race-fenced (Codex P1x3 on #619)', () => {
+  beforeEach(() => {
+    m.member.find
+      .mockReturnValueOnce({ select: () => Promise.resolve([{ workspaceId: WS }]) })
+      .mockReturnValueOnce({ select: () => Promise.resolve([]) })
+    mockUser.countDocuments.mockResolvedValue(0)
+    mockSession.find.mockReturnValue({
+      select: () => Promise.resolve([{ _id: 's1', userId: GUEST, recordingR2Key: `recordings/${GUEST}/a.webm` }]),
+    })
+  })
+
+  it('authorizes R2 deletion with the GUEST who owns the key namespace', async () => {
+    await deleteOrphanedWorkspacesForUser(USER)
+    // Passing the recruiter's id made deleteFromR2 reject every guest
+    // artifact and fail the whole deletion.
+    expect(r2DeleteMock).toHaveBeenCalledWith(
+      `recordings/${GUEST}/a.webm`,
+      expect.objectContaining({ ownerUserId: String(GUEST) }),
+    )
+  })
+
+  it('sweeps guest MultimodalAnalysis, which holds transcripts and facial segments', async () => {
+    await deleteOrphanedWorkspacesForUser(USER)
+    expect(mockAnalysis.deleteMany).toHaveBeenCalledWith({ userId: { $in: [GUEST] } })
+  })
+
+  it('fences guest writes BEFORE inventorying artifacts', async () => {
+    const order: string[] = []
+    mockUser.updateMany.mockImplementation(() => {
+      order.push('fence')
+      return Promise.resolve({ modifiedCount: 1 })
+    })
+    mockSession.find.mockImplementation(() => {
+      order.push('inventory')
+      return { select: () => Promise.resolve([]) }
+    })
+
+    await deleteOrphanedWorkspacesForUser(USER)
+
+    // Inventory first would let a mid-interview recording attach a key
+    // after the read and orphan the object permanently.
+    expect(order).toEqual(['fence', 'inventory'])
+    expect(mockUser.updateMany.mock.calls[0][1]).toMatchObject({
+      $set: expect.objectContaining({ accountState: 'deleting' }),
+    })
   })
 })
