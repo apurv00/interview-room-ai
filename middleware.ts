@@ -61,6 +61,15 @@ export default withAuth(
       '/favicon.ico',
       '/sitemap.xml',
       '/robots.txt',
+      // Legal/policy pages are global — they exist only at app/<page> and
+      // must render as-is on every subdomain, never be rewritten to a
+      // per-subdomain prefix (e.g. hire.* → /workspace/privacy, which 404s
+      // and stranded the apply page's Privacy link — Codex P2 on #615).
+      '/privacy',
+      '/terms',
+      '/cancellation-refunds',
+      '/fulfilment',
+      '/contact',
     ]
 
     // Rewrite CMS subdomain requests to /cms prefix

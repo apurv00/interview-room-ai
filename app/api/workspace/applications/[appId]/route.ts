@@ -53,6 +53,7 @@ export const GET = composeApiRoute({
     return NextResponse.json({
       application: serializeApplication(detail.application, {
         candidateResumeHash: resumeHashOf(detail.candidate.resumeText),
+        includeApplicantResume: true,
       }),
       candidate: serializeCandidate(detail.candidate, { includeResume: true }),
       job: serializeJob(detail.job, { includeJd: true }),

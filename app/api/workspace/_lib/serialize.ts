@@ -85,7 +85,7 @@ export function serializeCandidate(c: IHireCandidate, opts: { includeResume?: bo
 
 export function serializeApplication(
   a: IHireApplication,
-  opts: { candidateResumeHash?: string | null } = {},
+  opts: { candidateResumeHash?: string | null; includeApplicantResume?: boolean } = {},
 ) {
   return {
     id: a._id.toString(),
@@ -112,12 +112,18 @@ export function serializeApplication(
         }
       : null,
     // Résumé submitted through the public apply page when the pool record
-    // already had a different one. Surfaced so a recruiter can read the
-    // exact document the displayed JD-match score came from — a quarantine
-    // nobody can see is just a silent discard (Codex P1 on #615).
-    applicantResume: a.applicantResumeText
-      ? { text: a.applicantResumeText, fileName: a.applicantResumeFileName ?? null }
-      : null,
+    // already had a different one — the document the JD-match score came
+    // from (Codex P1 on #615). DETAIL ENDPOINT ONLY: this field is up to
+    // 50k chars, and serializeApplication also feeds the pipeline board
+    // (serializePipelineEntry), where hundreds of cards would balloon the
+    // response for text the board never renders (Codex P2 on #615).
+    ...(opts.includeApplicantResume
+      ? {
+          applicantResume: a.applicantResumeText
+            ? { text: a.applicantResumeText, fileName: a.applicantResumeFileName ?? null }
+            : null,
+        }
+      : {}),
     events: a.events.map((e) => ({
       type: e.type,
       from: e.from ?? null,
