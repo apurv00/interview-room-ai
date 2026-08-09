@@ -119,14 +119,17 @@ describe('guest token contract (both verification modes)', () => {
     expect(a.endsWith('@guests.interviewprep.internal')).toBe(true)
   })
 
-  it("middleware's Edge-side guest detection matches guestEmailForRound (results diversion)", () => {
-    // Middleware runs on the Edge and cannot import the hire module, so it
-    // carries the guest email domain as a literal. If guestEmailForRound's
-    // domain ever changes, this pin fails BEFORE guests start seeing B2C
-    // score pages again.
-    const middlewareSrc = readFileSync(join(process.cwd(), 'middleware.ts'), 'utf8')
+  it("the guest capability scope's domain matches guestEmailForRound", () => {
+    // shared/auth/guestScope.ts is Edge-safe and cannot import the hire
+    // module, so it carries the guest email domain as a literal. If
+    // guestEmailForRound's domain ever changes, this pin fails BEFORE
+    // guests silently gain full B2C session scope.
+    const scopeSrc = readFileSync(
+      join(process.cwd(), 'shared/auth/guestScope.ts'),
+      'utf8'
+    )
     const domain = guestEmailForRound('a'.repeat(24)).split('@')[1]
-    expect(middlewareSrc).toContain(`@${domain}`)
-    expect(middlewareSrc).toContain("'/candidate/thank-you'")
+    expect(scopeSrc).toContain(`@${domain}`)
+    expect(scopeSrc).toContain("'/candidate/thank-you'")
   })
 })

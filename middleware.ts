@@ -1,5 +1,6 @@
 import { withAuth } from 'next-auth/middleware'
 import { NextResponse } from 'next/server'
+import { isHireGuestEmail, evaluateGuestAccess } from '@shared/auth/guestScope'
 
 export default withAuth(
   function middleware(req) {
@@ -97,39 +98,24 @@ export default withAuth(
       return NextResponse.redirect(url, 301)
     }
 
-    // IPG Hire guests must never see interview results — scores belong to
-    // the hiring team's portal only (founder ruling 2026-08-09). Synthetic
-    // guest identities are recognizable by their per-round email domain
-    // (guestEmailForRound in modules/hire — literal here because middleware
-    // runs on the Edge and cannot import the module; consistency is pinned
-    // by guestFlowContract.test.ts). Real users' emails can never match —
-    // the D2C flow is untouched.
-    const isSyntheticGuest =
-      typeof token?.email === 'string' &&
-      token.email.endsWith('@guests.interviewprep.internal')
-
-    if (isSyntheticGuest) {
-      // UI: the engine's post-interview navigation lands on
-      // /feedback/:sessionId; guests are diverted to the thank-you page,
-      // which ends their session.
-      if (pathname.startsWith('/feedback')) {
-        const url = req.nextUrl.clone()
-        url.pathname = '/candidate/thank-you'
-        url.search = ''
-        return NextResponse.redirect(url)
-      }
-      // API boundary: while the guest JWT lives, result reads must be
-      // denied — the session-owner routes would happily serve feedback and
-      // scored evaluations to a curl (Codex P1 on #607). Reads only: the
-      // interview flow's own POST /api/interviews and PATCH
-      // /api/interviews/:id are untouched, and guests make no in-flow GETs
-      // to these paths (verified against the room/lobby hooks).
-      if (
-        req.method === 'GET' &&
-        (pathname.startsWith('/api/interviews') || pathname.startsWith('/api/analysis'))
-      ) {
+    // ── IPG Hire guest capability scope (DEFAULT-DENY) ──
+    // An invited candidate is not a B2C user: their session exists only
+    // because the engine requires one, and it may reach only what running
+    // one interview needs. Everything else — results, GDPR export, account,
+    // resumes, history, learn, jobs, and any future authed surface — is
+    // denied by default rather than patched away one door at a time.
+    // Authority + rationale: shared/auth/guestScope.ts.
+    if (isHireGuestEmail(token?.email)) {
+      const decision = evaluateGuestAccess(pathname, req.method)
+      if (!decision.allowed) {
+        if (decision.redirectTo) {
+          const url = req.nextUrl.clone()
+          url.pathname = decision.redirectTo
+          url.search = ''
+          return NextResponse.redirect(url)
+        }
         return NextResponse.json(
-          { error: 'Interview results are available to the hiring team only' },
+          { error: 'Not available for interview candidates', code: 'GUEST_SCOPE' },
           { status: 403 }
         )
       }
