@@ -49,6 +49,8 @@ export const TASK_SLOTS = [
   // Jobs — async posting verdict (INGESTION §4.5 layer 2)
   'jobs.evaluate-posting',
   'jobs.evidence-attribution',
+  // Hire — resume intake: identity extraction + JD-match in one call per CV
+  'hire.resume-intake',
 ] as const
 
 export type TaskSlot = (typeof TASK_SLOTS)[number]
@@ -141,4 +143,10 @@ export const TASK_SLOT_DEFAULTS: Record<
   // 30-answer worst case (the G.3 truncation lesson). Deploy gate: verify
   // no CMS ModelConfig row overrides this (#487 lesson).
   'jobs.evidence-attribution':           { model: 'gpt-5.6-luna', maxTokens: 1400, provider: 'openai', reasoningEffort: 'low' },
+  // Hire intake (Phase 2): ONE call per uploaded CV does identity extraction
+  // (name/email/phone) + resume-vs-JD match scoring. Volume path — bulk
+  // upload fans out per file — so 'medium', not the async-judgment 'high':
+  // a 50-CV batch must not burn deep-reasoning tokens per file. Anthropic
+  // fallback so a provider outage degrades to slower intake, not lost CVs.
+  'hire.resume-intake':                  { model: 'gpt-5.6-luna', maxTokens: 1200, provider: 'openai', fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic', reasoningEffort: 'medium' },
 }

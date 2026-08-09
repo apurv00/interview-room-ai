@@ -84,6 +84,14 @@ export function serializeApplication(a: IHireApplication) {
     candidateId: a.candidateId.toString(),
     stage: a.stage,
     decisionNote: a.decisionNote ?? null,
+    resumeMatch: a.resumeMatch
+      ? {
+          score: a.resumeMatch.score ?? null,
+          strengths: a.resumeMatch.strengths,
+          gaps: a.resumeMatch.gaps,
+          scoredAt: a.resumeMatch.scoredAt,
+        }
+      : null,
     events: a.events.map((e) => ({
       type: e.type,
       from: e.from ?? null,

@@ -68,6 +68,18 @@ export {
   type RoundActivity,
 } from './services/roundLinkService'
 
+// Phase 2 intake: idempotent bulk/apply-page candidate creation + dedupe
+export {
+  intakeCandidate,
+  type IntakeInput,
+  type IntakeResult,
+  type SeenBeforeEntry,
+} from './services/intakeService'
+export {
+  analyzeResumeForJob,
+  type ResumeIntakeAnalysis,
+} from './services/jdMatchService'
+
 // Emails
 export { buildAiInviteEmail, type AiInviteEmailParams } from './emails/aiInviteEmail'
 

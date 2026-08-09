@@ -35,6 +35,7 @@ export {
   type HireEventType,
   type IHireApplication,
   type IHireApplicationEvent,
+  type IHireResumeMatch,
 } from './HireApplication'
 export {
   HireRound,
