@@ -168,6 +168,17 @@ async function handleApply(
       }
     : undefined
 
+  // Re-resolve the authority for the WRITE. beforeProviderCall accepts any
+  // live member, so pinning persistence to the one chosen before parsing
+  // meant a mid-flight deletion of THAT member failed the transaction after
+  // the paid analysis, even though another member was live and the model
+  // call had been allowed on that basis (Codex on #615). Both fences now
+  // ask the same question at the moment they act.
+  const writeAuthorityUserId = await resolveWorkspaceWriteAuthority(job.workspaceId)
+  if (!writeAuthorityUserId) {
+    return NextResponse.json({ error: 'This application link is no longer active' }, { status: 404 })
+  }
+
   await intakeFromApplyPage(
     job,
     {
@@ -178,7 +189,7 @@ async function handleApply(
       resumeFileName: file.name.slice(0, 255),
       resumeMatch,
     },
-    { authorityUserId, applyTokenHash: sha256(params.token) },
+    { authorityUserId: writeAuthorityUserId, applyTokenHash: sha256(params.token) },
   )
 
   // Deliberately NOT returning ids, seenBefore, dedupe state or match

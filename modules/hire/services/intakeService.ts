@@ -346,11 +346,22 @@ async function writeIntake(
     // applicant's evidence just by knowing their email and the shared link
     // (Codex P1 on #615) — each submission stands on its own and a
     // recruiter can see all of them, which also makes tampering visible.
+    // Retention PROTECTS THE ORIGINAL. A newest-first cap still let an
+    // attacker evict the genuine applicant's first submission by sending
+    // enough of their own — append-only is worthless if the oldest entry
+    // can be pushed out (Codex on #615). The first submission is therefore
+    // pinned forever; the cap bounds only the later ones.
     const existingSubs = application.applicantSubmissions ?? []
-    application.applicantSubmissions = [applicantSubmission, ...existingSubs].slice(
-      0,
-      APPLICANT_SUBMISSION_CAP,
-    )
+    const original = existingSubs.length > 0 ? existingSubs[existingSubs.length - 1] : undefined
+    if (!original) {
+      application.applicantSubmissions = [applicantSubmission]
+    } else {
+      const laterOnly = [applicantSubmission, ...existingSubs.slice(0, -1)].slice(
+        0,
+        APPLICANT_SUBMISSION_CAP - 1,
+      )
+      application.applicantSubmissions = [...laterOnly, original]
+    }
     application.markModified('applicantSubmissions')
     await application.save({ session })
   } else if (input.resumeMatch) {

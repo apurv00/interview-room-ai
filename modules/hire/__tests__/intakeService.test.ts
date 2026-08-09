@@ -535,26 +535,31 @@ describe('an obsolete quarantine is cleared when the score comes from the pool c
 
 describe('append-only submissions are bounded', () => {
   const JOB3 = { _id: 'job-1', workspaceId: 'ws-A' } as never
-  it('keeps only the newest APPLICANT_SUBMISSION_CAP entries', async () => {
+  it('bounds growth while PINNING the original — flooding cannot evict the genuine first submission', async () => {
     const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'pool résumé' })
-    const old = Array.from({ length: 3 }, (_, i) => ({
-      resumeText: `old-${i}`,
-      submittedAt: new Date(),
-    }))
-    const app = applicationDoc({ applicantSubmissions: old })
+    // Newest-first, so the applicant's genuine first submission is LAST.
+    const app = applicationDoc({
+      applicantSubmissions: [
+        { resumeText: 'attacker-2', submittedAt: new Date() },
+        { resumeText: 'attacker-1', submittedAt: new Date() },
+        { resumeText: 'GENUINE ORIGINAL', submittedAt: new Date() },
+      ],
+    })
     mockCandidate.findOne.mockReturnValue(inTx(existing))
     mockApplication.findOne.mockReturnValue(inTx(app))
 
     await intakeFromApplyPage(
       JOB3,
-      { name: 'Jane', email: 'jane@example.com', resumeText: 'newest', resumeFileName: 'n.pdf' },
+      { name: 'Jane', email: 'jane@example.com', resumeText: 'attacker-3', resumeFileName: 'n.pdf' },
       { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
     )
 
     const subs = app.applicantSubmissions as Array<{ resumeText: string }>
-    // Bounded so an anonymous caller cannot grow the document without end.
+    // Bounded, so the document cannot grow without end...
     expect(subs).toHaveLength(3)
-    expect(subs[0].resumeText).toBe('newest')
-    expect(subs[2].resumeText).toBe('old-1')
+    // ...but the genuine original is PINNED: a newest-first cap alone let a
+    // flood of submissions push it out, which made append-only meaningless.
+    expect(subs[subs.length - 1].resumeText).toBe('GENUINE ORIGINAL')
+    expect(subs[0].resumeText).toBe('attacker-3')
   })
 })
