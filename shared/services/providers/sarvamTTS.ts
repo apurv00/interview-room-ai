@@ -10,17 +10,21 @@
  *
  * Contract with the TTS routes (kept identical to the Azure adapter so the
  * hot-path diff is a name swap): `sarvamSynthesize(text)` resolves to a
- * fetch-shaped Response whose body is complete MP3 bytes — tee()-able by
+ * fetch-shaped Response whose body is chunked MP3 — tee()-able by
  * /api/tts/stream and arrayBuffer()-able by /api/tts. A non-2xx provider
  * response is passed through as-is so the routes log status/body and
  * surface a 502 (the client then walks its existing TTS fallback chain).
  *
- * Sarvam's REST endpoint is buffered (base64 audio in JSON — no chunked
- * stream), so on a cache miss the "stream" route delivers the whole clip in
- * one flush: time-to-first-sound equals full synthesis time instead of
- * first-chunk time. R2-cached repeats are unaffected. Sarvam's WebSocket
- * streaming API cannot be proxied through these route handlers — the same
- * constraint that kept the Azure adapter on REST.
+ * STREAMING (2026-08-09, second cut): the primary path is Sarvam's REST
+ * Stream endpoint (`/text-to-speech/stream`), which returns chunked binary
+ * MP3 with real progressive synthesis — measured TTFB 0.31s vs 3.9s for
+ * the buffered `/text-to-speech` endpoint (a ~1450-char probe streamed its
+ * first byte at 0.30s while total synthesis ran 32s). The first buffered
+ * cut broke interview pacing: the engine's silence timers are calibrated
+ * for sub-second first-audio, so 4s of dead air per question fired
+ * "take your time" nudges and advanced questions early (§8). The buffered
+ * endpoint remains only as the fallback for texts over the stream
+ * endpoint's 3500-char cap (routes cap at 5000).
  */
 
 const SARVAM_KEY = process.env.SARVAM_API_KEY
@@ -44,7 +48,10 @@ export function isSarvamTTSConfigured(): boolean {
   return !!SARVAM_KEY
 }
 
-/** bulbul:v3 rejects inputs over 2500 characters per request. */
+/** The stream endpoint accepts up to 3500 chars per request. */
+const STREAM_MAX_CHARS = 3500
+
+/** bulbul:v3 rejects inputs over 2500 chars on the buffered REST endpoint. */
 const MAX_CHARS_PER_REQUEST = 2500
 
 /**
@@ -94,6 +101,83 @@ export function buildSarvamRequestBody(text: string): Record<string, unknown> {
 }
 
 export async function sarvamSynthesize(text: string): Promise<Response> {
+  // Primary: real streaming. Chunked MP3 starts arriving ~300ms in, so the
+  // route's tee() streams progressively exactly like the Deepgram branch.
+  if (text.length <= STREAM_MAX_CHARS) {
+    const response = await fetch('https://api.sarvam.ai/text-to-speech/stream', {
+      method: 'POST',
+      headers: {
+        'api-subscription-key': SARVAM_KEY as string,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        ...buildSarvamRequestBody(text),
+        // Speech at 64k mono MP3 is transparent; half the bytes of the 128k
+        // default matters on Indian mobile networks mid-interview.
+        output_audio_bitrate: '64k',
+      }),
+    })
+    if (!response.ok) return response // routes log status + 502
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!contentType.includes('audio/mpeg')) {
+      // Codec contract drift (e.g. WAV despite mp3): fail loud rather than
+      // hand MediaSource undecodable bytes.
+      await response.body?.cancel().catch(() => undefined)
+      return new Response(
+        `Sarvam stream returned unexpected content-type: ${contentType}`,
+        { status: 502 },
+      )
+    }
+    if (!response.body) {
+      return new Response('Sarvam stream had no body', { status: 502 })
+    }
+
+    // Peek the FIRST audio chunk before handing the stream to the routes
+    // (Codex P2 on #611): a 200 with an empty body would otherwise flow
+    // through as "success" — the buffered route would cache ZERO bytes in
+    // R2, permanently silencing that text (empty Buffer is truthy, so the
+    // cache would serve it forever). Zero added latency: no byte reaches
+    // the client before the first chunk exists anyway. Remaining chunks are
+    // forwarded progressively — do NOT drain here (re-buffering is the bug
+    // this endpoint switch fixed).
+    const reader = response.body.getReader()
+    let first = await reader.read()
+    while (!first.done && (!first.value || first.value.byteLength === 0)) {
+      first = await reader.read()
+    }
+    if (first.done) {
+      await reader.cancel().catch(() => undefined)
+      return new Response('Sarvam stream returned no audio', { status: 502 })
+    }
+    const firstChunk = first.value
+    if (Buffer.from(firstChunk.buffer, firstChunk.byteOffset, Math.min(4, firstChunk.byteLength)).toString('ascii') === 'RIFF') {
+      await reader.cancel().catch(() => undefined)
+      return new Response('Sarvam stream returned WAV despite output_audio_codec=mp3', { status: 502 })
+    }
+    const forwarded = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(firstChunk)
+      },
+      async pull(controller) {
+        const { done, value } = await reader.read()
+        if (done) {
+          controller.close()
+          return
+        }
+        if (value && value.byteLength > 0) controller.enqueue(value)
+      },
+      cancel(reason) {
+        return reader.cancel(reason).catch(() => undefined)
+      },
+    })
+    return new Response(forwarded, {
+      status: 200,
+      headers: { 'Content-Type': 'audio/mpeg' },
+    })
+  }
+
+  // Fallback for oversize texts (3500–5000 chars): buffered REST, split at
+  // sentence boundaries, MP3 frame streams concatenated.
   const pieces = chunkForSarvam(text)
   const responses = await Promise.all(
     pieces.map((piece) =>
