@@ -371,15 +371,14 @@ async function writeIntake(
     // obsolete: leaving it would show the recruiter document B beside a
     // score computed from A, and would anchor staleness to B as well
     // (Codex P1 on #615).
+    // Refresh the headline score ONLY. Earlier public submissions are
+    // retained: deleting them let anyone holding the link, the applicant's
+    // email and a copy of the pool résumé erase the append-only history —
+    // evidence retention cannot depend on which document was scored last
+    // (Codex P1 on #615). Which document the headline score belongs to is
+    // resolved by HASH at read time, so history and score coexist without
+    // either misrepresenting the other.
     application.resumeMatch = input.resumeMatch
-    if (application.applicantSubmissions?.length) {
-      // The headline score now comes from the POOL résumé, so earlier
-      // public submissions are no longer the document behind it. Drop them
-      // rather than leave a card showing B beside a score computed from A
-      // (Codex P1 on #615).
-      application.applicantSubmissions = undefined
-      application.markModified('applicantSubmissions')
-    }
     await application.save({ session })
   } else if (input.resumeText && resumeReplaced) {
     // FAILED analysis on a genuinely NEW resume: clear — the new CV must

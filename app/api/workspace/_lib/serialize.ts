@@ -87,12 +87,21 @@ export function serializeApplication(
   a: IHireApplication,
   opts: { candidateResumeHash?: string | null; includeApplicantResume?: boolean } = {},
 ) {
-  // The document the headline score was computed from: an application's
-  // own newest public submission when it has one, else the pool copy.
-  const ownSubmission = a.applicantSubmissions?.[0]
-  const scoredAgainstHash = ownSubmission
-    ? resumeHashOf(ownSubmission.resumeText)
-    : opts.candidateResumeHash
+  // A score belongs to the document that PRODUCED it, identified by hash —
+  // never by position. Assuming "newest submission" made an anonymous
+  // caller able to force a false "outdated" warning on a still-valid score
+  // simply by appending, and it broke as soon as the headline score came
+  // from the pool copy instead (Codex P2 on #615).
+  const submissionHashes = (a.applicantSubmissions ?? []).map((sub) =>
+    resumeHashOf(sub.resumeText),
+  )
+  const headlineHash = a.resumeMatch?.resumeHash
+  const headlineSourceExists =
+    headlineHash != null &&
+    (headlineHash === opts.candidateResumeHash || submissionHashes.includes(headlineHash))
+  // With the sources in hand the hash IS the answer; the stored sweep flag
+  // is only a fallback for callers that have neither.
+  const haveSources = opts.candidateResumeHash != null || submissionHashes.length > 0
   return {
     id: a._id.toString(),
     jobId: a.jobId.toString(),
@@ -116,15 +125,10 @@ export function serializeApplication(
           // validated against that, not the pool copy. Using the pool hash
           // marked every apply-page match permanently "outdated" — a
           // false warning on every public application (Codex P2 on #615).
-          // The stored flag is set by the POOL staleness sweep, which is
-          // irrelevant to an application anchored to its own submission —
-          // honouring it there showed a false "outdated" warning on
-          // documents that never changed (Codex P2 on #615). Hash
-          // comparison is authoritative whenever we have the document.
-          stale: ownSubmission
-            ? a.resumeMatch.resumeHash !== scoredAgainstHash
-            : a.resumeMatch.stale === true ||
-              (scoredAgainstHash != null && a.resumeMatch.resumeHash !== scoredAgainstHash),
+          // Stale means: the document this score came from is no longer on
+          // file. Not "a newer one exists" — a newer submission does not
+          // invalidate a score computed from a document that is still here.
+          stale: haveSources ? !headlineSourceExists : a.resumeMatch.stale === true,
         }
       : null,
     // Résumé submitted through the public apply page when the pool record

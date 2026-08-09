@@ -358,56 +358,59 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
       {/* Résumé submitted through the public apply page. Shown whenever it
           exists, because it — not the pool résumé — is what the JD-match
           score above was computed from. */}
-      {/* The résumé behind the score. Public submissions are append-only
-          and shown in full: an anonymous caller can add a document but can
-          never replace one, so a recruiter sees every version submitted —
-          which is also how a tampering attempt becomes visible rather than
-          silent (Codex P1 on #615). A first-time applicant's (and a bulk
-          upload's) CV lives on the pool record and is shown instead. */}
-      {(application.applicantSubmissions?.length || candidate.resumeText) && (
+      {/* EVERY résumé on file, never one instead of another. The pool copy
+          (a first-time applicant's, or a bulk upload's) and each public
+          submission are shown together: rendering only the submissions let
+          an anonymous caller hide the original simply by appending one of
+          their own (Codex P1 on #615). Divergence is called out, because
+          two different documents for one person is itself the signal. */}
+      {(candidate.resumeText || application.applicantSubmissions?.length) && (
         <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
           <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-sm font-semibold text-[#0f1419]">Résumé</p>
-            {application.applicantSubmissions && application.applicantSubmissions.length > 1 && (
+            <p className="text-sm font-semibold text-[#0f1419]">Résumés on file</p>
+            {(application.applicantSubmissions?.length ?? 0) > 0 && candidate.resumeText && (
               <Badge variant="caution">
-                {application.applicantSubmissions.length} submissions via apply page
+                {application.applicantSubmissions!.length} submitted via apply page
               </Badge>
             )}
           </div>
 
-          {application.applicantSubmissions?.length ? (
-            <div className="space-y-2">
-              {application.applicantSubmissions.length > 1 && (
-                <p className="text-xs text-[#f4212e]">
-                  More than one résumé was submitted for this candidate through the public
-                  link. Review each before deciding — the newest is not automatically the
-                  authentic one.
-                </p>
-              )}
-              {application.applicantSubmissions.map((sub, i) => (
-                <details key={i} className="text-sm border border-[#e1e8ed] rounded-xl p-3">
-                  <summary className="cursor-pointer text-xs text-[#536471]">
-                    {sub.fileName ?? 'Attached file'} ·{' '}
-                    {new Date(sub.submittedAt).toLocaleString()}
-                    {sub.score != null ? ` · JD match ${sub.score}` : ' · unscored'}
-                    {i === 0 ? ' · newest' : ''}
-                  </summary>
-                  <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
-                    {sub.text}
-                  </pre>
-                </details>
-              ))}
-            </div>
-          ) : (
-            <details className="text-sm">
-              <summary className="cursor-pointer text-[#2563eb] text-xs">
-                Read the résumé ({candidate.resumeFileName ?? 'on file'})
+          {(application.applicantSubmissions?.length ?? 0) > 0 && (
+            <p className="text-xs text-[#f4212e]">
+              More than one résumé exists for this candidate. Anyone with the public link can
+              add a document, so review each before deciding — the newest is not automatically
+              the authentic one, and nothing here has replaced anything.
+            </p>
+          )}
+
+          {candidate.resumeText && (
+            <details className="text-sm border border-[#e1e8ed] rounded-xl p-3">
+              <summary className="cursor-pointer text-xs text-[#536471]">
+                {candidate.resumeFileName ?? 'On file'} · on the candidate record
               </summary>
               <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
                 {candidate.resumeText}
               </pre>
             </details>
           )}
+
+          {application.applicantSubmissions?.map((sub, i) => (
+            <details key={i} className="text-sm border border-[#e1e8ed] rounded-xl p-3">
+              <summary className="cursor-pointer text-xs text-[#536471]">
+                {sub.fileName ?? 'Attached file'} · submitted{' '}
+                {new Date(sub.submittedAt).toLocaleString()}
+                {sub.score != null ? ` · JD match ${sub.score}` : ' · unscored'}
+                {i === 0 ? ' · newest' : ''}
+                {i === application.applicantSubmissions!.length - 1 &&
+                application.applicantSubmissions!.length > 1
+                  ? ' · first received'
+                  : ''}
+              </summary>
+              <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
+                {sub.text}
+              </pre>
+            </details>
+          ))}
         </div>
       )}
 

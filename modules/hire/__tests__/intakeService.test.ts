@@ -508,8 +508,8 @@ describe('quarantined résumé and its score move together (Codex P1 on #615)', 
 })
 
 
-describe('an obsolete quarantine is cleared when the score comes from the pool copy (Codex P1 on #615)', () => {
-  it('drops the old application-specific résumé so document and score cannot disagree', async () => {
+describe('a pool-copy rescore refreshes the score WITHOUT erasing history (Codex P1 on #615)', () => {
+  it('advances the headline score and keeps every prior public submission', async () => {
     // Bulk upload (member path) rescoring an application that still holds a
     // quarantined document from an earlier public submission.
     const existing = candidateDoc({ name: 'Jane Doe', resumeText: 'resume body' })
@@ -528,7 +528,11 @@ describe('an obsolete quarantine is cleared when the score comes from the pool c
     expect((app.resumeMatch as { score: number }).score).toBe(77)
     // The stale document is gone — otherwise the card shows B beside a
     // score computed from A, and staleness anchors to B as well.
-    expect(app.applicantSubmissions).toBeUndefined()
+    // History is RETAINED — deleting it let anyone with the link, the
+    // email and a copy of the pool résumé erase the append-only record.
+    const kept = app.applicantSubmissions as Array<{ resumeText: string }>
+    expect(kept).toHaveLength(1)
+    expect(kept[0].resumeText).toBe('OBSOLETE public submission')
   })
 })
 

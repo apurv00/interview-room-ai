@@ -101,11 +101,13 @@ describe('serializer + routing contracts (Codex P2 on #615)', () => {
 describe('staleness is measured against the scored document', () => {
   const SERIALIZE = readFileSync(join(API_ROOT, '_lib/serialize.ts'), 'utf8')
 
-  it("prefers the application's own submission hash over the pool hash", () => {
-    expect(SERIALIZE).toContain('const ownSubmission = a.applicantSubmissions?.[0]')
-    expect(SERIALIZE).toContain('resumeHash !== scoredAgainstHash')
-    // And the POOL sweep flag must not force stale on an application that
-    // is anchored to its own submission (Codex P2 on #615).
-    expect(SERIALIZE).toContain('stale: ownSubmission')
+  it('resolves the scored document by HASH IDENTITY, never by position', () => {
+    // Position-based anchoring ("newest submission produced the score") let
+    // an anonymous caller force a false outdated warning by appending, and
+    // broke whenever the headline came from the pool copy instead.
+    expect(SERIALIZE).toContain('const headlineHash = a.resumeMatch?.resumeHash')
+    expect(SERIALIZE).toContain('submissionHashes.includes(headlineHash)')
+    expect(SERIALIZE).toContain('stale: haveSources ? !headlineSourceExists')
+    expect(SERIALIZE).not.toContain('a.applicantSubmissions?.[0]')
   })
 })
