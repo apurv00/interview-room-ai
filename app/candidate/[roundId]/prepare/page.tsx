@@ -47,7 +47,15 @@ export default function CandidatePreparePage({
         return
       }
 
-      const persistable = { ...data.config, _ownerId: session.user.id }
+      // _hireRoundId marks this as a hire-guest config: if the guest's
+      // session later dies (e.g. an older round's tab signed the browser
+      // out), the lobby says "reopen your email link" instead of offering
+      // a PERSONAL Google/GitHub sign-in mid-round (2026-08-09).
+      const persistable = {
+        ...data.config,
+        _ownerId: session.user.id,
+        _hireRoundId: params.roundId,
+      }
       localStorage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, JSON.stringify(persistable))
       localStorage.setItem(
         `${STORAGE_KEYS.INTERVIEW_CONFIG}:${session.user.id}`,

@@ -9,6 +9,8 @@ import { describe, it, expect } from 'vitest'
 import {
   evaluateGuestAccess,
   isHireGuestEmail,
+  guestRoundIdFromEmail,
+  isGuestEmailForRound,
   GUEST_EMAIL_DOMAIN,
 } from '../guestScope'
 
@@ -21,6 +23,34 @@ describe('guest identity detection', () => {
     expect(isHireGuestEmail(undefined)).toBe(false)
     expect(isHireGuestEmail(null)).toBe(false)
     expect(isHireGuestEmail(42)).toBe(false)
+  })
+})
+
+describe('round-scoped guest identity (multi-invite sign-out scoping)', () => {
+  const roundA = 'a1b2c3d4e5f6a7b8c9d0e1f2'
+  const roundB = 'ffffffffffffffffffffffff'
+
+  it('extracts the round id from a synthetic guest email', () => {
+    expect(guestRoundIdFromEmail(`round-${roundA}${GUEST_EMAIL_DOMAIN}`)).toBe(roundA)
+    // Case-insensitive: cookies/JWTs may normalize either way.
+    expect(guestRoundIdFromEmail(`ROUND-${roundA.toUpperCase()}${GUEST_EMAIL_DOMAIN}`)).toBe(roundA)
+  })
+
+  it('returns null for non-guests, lookalikes, and malformed locals', () => {
+    expect(guestRoundIdFromEmail('jane@example.com')).toBe(null)
+    expect(guestRoundIdFromEmail(`round-${roundA}${GUEST_EMAIL_DOMAIN}.evil.com`)).toBe(null)
+    expect(guestRoundIdFromEmail(`nothing${GUEST_EMAIL_DOMAIN}`)).toBe(null)
+    expect(guestRoundIdFromEmail(`round-${GUEST_EMAIL_DOMAIN}`)).toBe(null)
+    expect(guestRoundIdFromEmail(undefined)).toBe(null)
+    expect(guestRoundIdFromEmail(null)).toBe(null)
+  })
+
+  it('matches only its OWN round — an older round can never end a newer session', () => {
+    expect(isGuestEmailForRound(`round-${roundA}${GUEST_EMAIL_DOMAIN}`, roundA)).toBe(true)
+    expect(isGuestEmailForRound(`round-${roundA.toUpperCase()}${GUEST_EMAIL_DOMAIN}`, roundA)).toBe(true)
+    // The founder-hit bug: round A's terminal/thank-you tab vs round B's session.
+    expect(isGuestEmailForRound(`round-${roundB}${GUEST_EMAIL_DOMAIN}`, roundA)).toBe(false)
+    expect(isGuestEmailForRound('jane@example.com', roundA)).toBe(false)
   })
 })
 

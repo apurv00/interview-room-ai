@@ -15,10 +15,18 @@
  * before the candidate can close the tab — and only for synthetic guests:
  * a real signed-in user who opens this public URL directly is never
  * logged out (Codex P2 on #607).
+ *
+ * SCOPED to one round via ?round=<id> (appended by the middleware redirect
+ * that sends guests here): with 2+ invites in one browser, a stale
+ * thank-you tab from an OLDER round — reloaded by tab discard or revisit —
+ * must never end a NEWER round's live session (founder-hit bug,
+ * 2026-08-09). Without the param (direct visit) the pre-scoping behavior
+ * is kept: any synthetic guest is signed out.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { signOut, useSession } from 'next-auth/react'
+import { isHireGuestEmail, isGuestEmailForRound } from '@shared/auth/guestScope'
 
 export default function CandidateThankYouPage() {
   const { data: session, status } = useSession()
@@ -29,7 +37,18 @@ export default function CandidateThankYouPage() {
     if (firedRef.current || status === 'loading') return
     firedRef.current = true
     const email = session?.user?.email ?? ''
-    if (status === 'authenticated' && email.endsWith('@guests.interviewprep.internal')) {
+    // window.location (not useSearchParams) — client-only read, no Suspense
+    // boundary needed, and the param survives tab-discard reloads.
+    let roundParam: string | null = null
+    try {
+      roundParam = new URLSearchParams(window.location.search).get('round')
+    } catch {
+      roundParam = null
+    }
+    const isOwnGuestSession = roundParam
+      ? isGuestEmailForRound(email, roundParam)
+      : isHireGuestEmail(email)
+    if (status === 'authenticated' && isOwnGuestSession) {
       void signOut({ redirect: false }).finally(() => setReady(true))
     } else {
       setReady(true)

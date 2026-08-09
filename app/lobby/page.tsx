@@ -443,6 +443,20 @@ function LobbyPageInner() {
     track('interview_join_clicked', { degraded: srFailed })
 
     if (authStatus !== 'authenticated') {
+      // A hire guest can only be session-less here if their per-round
+      // sign-in was ended after prepare (e.g. an OLDER round's thank-you /
+      // terminal tab signed the browser out — multi-invite bug,
+      // 2026-08-09). Offering Google/GitHub would mint a PERSONAL account
+      // mid-round — wrong identity for a recruiter-owned interview — so
+      // point them back at their emailed link instead.
+      const hireRoundId = (config as (InterviewConfig & { _hireRoundId?: string }) | null)
+        ?._hireRoundId
+      if (hireRoundId) {
+        setBootstrapError(
+          'Your interview sign-in has ended. Please reopen the interview link from your email to continue — your progress and invite are unaffected.',
+        )
+        return
+      }
       // Anonymous: gate at the room entry. Config is already in localStorage.
       requireAuth('start_interview', () => {
         beginJoining()
