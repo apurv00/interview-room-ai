@@ -24,6 +24,7 @@ import {
   serializeCandidate,
   serializeJob,
   serializeRound,
+  resumeHashOf,
 } from '../../_lib/serialize'
 
 export const dynamic = 'force-dynamic'
@@ -50,7 +51,9 @@ export const GET = composeApiRoute({
     }
     const detail = await getApplicationDetail(ctx, params.appId)
     return NextResponse.json({
-      application: serializeApplication(detail.application),
+      application: serializeApplication(detail.application, {
+        candidateResumeHash: resumeHashOf(detail.candidate.resumeText),
+      }),
       candidate: serializeCandidate(detail.candidate, { includeResume: true }),
       job: serializeJob(detail.job, { includeJd: true }),
       rounds: detail.rounds.map(serializeRound),

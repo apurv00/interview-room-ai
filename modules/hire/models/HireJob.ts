@@ -15,6 +15,8 @@ export interface IHireJob extends Document {
   title: string
   jdText: string
   status: HireJobStatus
+  /** Conflict-inducing counter for the in-transaction intake claim. */
+  intakeWriteVersion?: number
   closeNote?: string
   closedAt?: Date
   closedBy?: mongoose.Types.ObjectId
@@ -34,6 +36,11 @@ const HireJobSchema = new Schema<IHireJob>(
     title: { type: String, required: true, trim: true, maxlength: 200 },
     jdText: { type: String, required: true, maxlength: 50000 },
     status: { type: String, enum: HIRE_JOB_STATUSES, default: 'open' },
+    // Conflict-inducing counter for the in-transaction intake claim: intake
+    // $incs it with `status: {$ne:'closed'}` in the filter so a concurrent
+    // job-close serializes against intake writes instead of racing them
+    // (snapshot reads alone permit write skew). The value itself is unused.
+    intakeWriteVersion: { type: Number, default: 0 },
     closeNote: { type: String, maxlength: 4000 },
     closedAt: { type: Date },
     closedBy: { type: Schema.Types.ObjectId, ref: 'User' },

@@ -56,6 +56,12 @@ export interface IntakeInput {
   source: Extract<HireCandidateSource, 'bulk_upload' | 'apply_page'>
   /** Resume-vs-JD analysis, when scoring succeeded (advisory). */
   resumeMatch?: IHireResumeMatch
+  /**
+   * True when the identity email was explicitly supplied/confirmed by the
+   * recruiter (override field), not extracted from the document. Bypasses
+   * the identity-conflict guard below.
+   */
+  identityConfirmed?: boolean
 }
 
 export interface SeenBeforeEntry {
@@ -143,6 +149,20 @@ async function writeIntake(
 }> {
   const workspaceId = ctx.workspace._id
 
+  // In-transaction job claim (self-review on #612): the pre-transaction
+  // status check is a fast-path only — snapshot reads do not serialize
+  // against a concurrent close, so the authority is this conflict-inducing
+  // WRITE on the job row. A close committing first makes this claim miss
+  // (409); this claim committing first makes the close retry after us.
+  const jobClaim = await HireJob.updateOne(
+    { _id: input.jobId, workspaceId, status: { $ne: 'closed' } },
+    { $inc: { intakeWriteVersion: 1 } },
+    { session },
+  )
+  if (jobClaim.matchedCount !== 1) {
+    throw new AppError('This job is closed', 409, 'JOB_CLOSED')
+  }
+
   // ── Candidate: find-or-create; merge on revisit ──
   let createdCandidate = false
   let resumeReplaced = false
@@ -166,6 +186,25 @@ async function writeIntake(
     candidate = created[0]
     createdCandidate = true
   } else {
+    // Identity-conflict guard (self-review on #612): an EXTRACTED email
+    // landing on an existing candidate whose stored name shares no tokens
+    // with the incoming one, while carrying a DIFFERENT resume, is more
+    // likely a shared/agency address or a crafted CV than the same person.
+    // Refuse the destructive overwrite; the recruiter confirms via the
+    // email-override retry, which sets identityConfirmed.
+    if (
+      !input.identityConfirmed &&
+      input.resumeText &&
+      candidate.resumeText &&
+      input.resumeText !== candidate.resumeText &&
+      namesDisjoint(candidate.name, input.name)
+    ) {
+      throw new AppError(
+        `This email already belongs to "${candidate.name}" in this workspace — confirm the email to replace their résumé`,
+        422,
+        'IDENTITY_CONFLICT',
+      )
+    }
     resumeReplaced = applyMerge(candidate, input)
     if (candidate.isModified()) await candidate.save({ session })
   }
@@ -202,15 +241,18 @@ async function writeIntake(
     )
     application = created[0]
     createdApplication = true
-  } else if (input.resumeText) {
-    // Re-upload for THIS application: a fresh analysis replaces the match;
-    // a FAILED analysis clears it — the new CV must never wear the old
-    // CV's score (Codex P1 on #612).
-    application.resumeMatch = input.resumeMatch ?? undefined
-    application.markModified('resumeMatch')
-    await application.save({ session })
   } else if (input.resumeMatch) {
+    // A fresh analysis always refreshes the match.
     application.resumeMatch = input.resumeMatch
+    await application.save({ session })
+  } else if (input.resumeText && resumeReplaced) {
+    // FAILED analysis on a genuinely NEW resume: clear — the new CV must
+    // never wear the old CV's score (Codex P1 on #612). Gated on
+    // resumeReplaced: an IDENTICAL re-upload during a provider outage
+    // must PRESERVE the still-valid match, not wipe the pipeline's
+    // evidence (self-review on #612).
+    application.resumeMatch = undefined
+    application.markModified('resumeMatch')
     await application.save({ session })
   }
 
@@ -231,6 +273,25 @@ async function writeIntake(
   }
 
   return { candidate, application, createdCandidate, createdApplication }
+}
+
+/**
+ * True when two names share NO alphabetic tokens at all — deliberately
+ * conservative ("Jane D." vs "Jane Doe" overlaps; only fully different
+ * names trip the identity-conflict guard).
+ */
+function namesDisjoint(a: string, b: string): boolean {
+  const tokens = (s: string) =>
+    new Set(
+      s
+        .toLowerCase()
+        .split(/[^a-z]+/)
+        .filter((t) => t.length >= 2),
+    )
+  const ta = tokens(a)
+  const tb = tokens(b)
+  if (ta.size === 0 || tb.size === 0) return false
+  return !Array.from(ta).some((t) => tb.has(t))
 }
 
 /** Returns true when the workspace-level resume was actually replaced. */

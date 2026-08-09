@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { logger } from '@shared/logger'
+import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { composeApiRoute, type ApiContext } from '@shared/middleware/composeApiRoute'
 import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 import { parseDocument, UnsupportedFileTypeError } from '@shared/services/documentParser'
@@ -8,7 +9,7 @@ import {
   requireMembership,
   intakeCandidate,
   analyzeResumeForJob,
-  extractEmailFromText,
+  extractAllEmails,
   sha256,
   HireJob,
   type IHireResumeMatch,
@@ -64,6 +65,16 @@ async function handleIntake(
   const accountActive = () => isJobsAccountActive(user.id)
 
   const ctx = await requireMembership({ userId: user.id, email: user.email })
+
+  // Workspace-level abuse ceiling on the paid parse+LLM path — generous for
+  // real hiring (500 CVs/day), fixed-window Redis, fails open like every
+  // limiter here. Per-plan product quotas are a separate founder decision.
+  const dailyCap = await checkRateLimit(`ws:${ctx.workspace._id.toString()}`, {
+    windowMs: 24 * 60 * 60 * 1000,
+    maxRequests: 500,
+    keyPrefix: 'rl:hire-intake-day',
+  })
+  if (dailyCap) return dailyCap
 
   const job = await HireJob.findOne({
     _id: params.jobId,
@@ -143,11 +154,18 @@ async function handleIntake(
   }
   const overrideName = overrideParse.data.name ?? ''
   const overrideEmail = overrideParse.data.email ?? ''
-  // Priority: recruiter override → model extraction → deterministic regex
-  // over the parsed text. The regex tier is what keeps a model outage
-  // degrading to UNSCORED candidates instead of a stalled NO_EMAIL batch.
-  const email =
-    overrideEmail || analysis?.email || extractEmailFromText(resumeText) || ''
+  // The deterministic set of validated email TOKENS actually present in the
+  // document. The model's email is trusted only if it is one of these exact
+  // tokens — a substring test would accept `victim@x.com` from a document
+  // that only contains `notvictim@x.com`, letting an injected instruction
+  // steer dedupe onto the wrong candidate (Codex P1 on #613).
+  const documentEmails = extractAllEmails(resumeText)
+  const modelEmail =
+    analysis?.email && documentEmails.includes(analysis.email) ? analysis.email : null
+  // Priority: recruiter override → verbatim model extraction → first
+  // deterministic token. The token tier keeps a model outage degrading to
+  // UNSCORED candidates instead of a stalled NO_EMAIL batch.
+  const email = overrideEmail || modelEmail || documentEmails[0] || ''
   if (!email) {
     // Explicit contract for the client: show this file as "needs email",
     // let the recruiter type it, retry with the override field.
@@ -189,6 +207,9 @@ async function handleIntake(
     resumeFileName: file.name.slice(0, 255),
     source: 'bulk_upload',
     resumeMatch,
+    // Recruiter-typed email = explicit identity confirmation; extracted
+    // emails go through the identity-conflict guard in intakeCandidate.
+    identityConfirmed: !!overrideEmail,
   })
 
   return NextResponse.json({

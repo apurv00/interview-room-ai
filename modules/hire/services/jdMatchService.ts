@@ -45,7 +45,8 @@ const JD_CHARS = 12000
  * those drive workspace dedupe identity and ranking (Codex P1 on #612).
  */
 function neutralizeDelimiters(text: string): string {
-  return text.replace(/<\/?\s*(resume|job_description)\s*>/gi, ' ')
+  // \s* after '<' too: '< /resume>' must not survive (self-review on #612).
+  return text.replace(/<\s*\/?\s*(resume|job_description)\s*>/gi, ' ')
 }
 
 /**
@@ -54,18 +55,42 @@ function neutralizeDelimiters(text: string): string {
  * NO_EMAIL rejections (Codex P1 on #612). First plausible address wins —
  * resumes carry their contact block near the top.
  */
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/
-export function extractEmailFromText(text: string): string | null {
-  const match = text.match(EMAIL_RE)
-  return match ? match[0].toLowerCase() : null
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+const FallbackEmailSchema = z.string().trim().toLowerCase().email().max(254)
+
+/**
+ * Every validated, lowercased email TOKEN in the text. The tokens are whole
+ * regex matches, so membership in this set is exact — `victim@x.com` is not
+ * a member of a text containing only `notvictim@x.com` (Codex P1 on #613:
+ * a substring check would accept the fabricated address the model returned).
+ */
+export function extractAllEmails(text: string): string[] {
+  const out: string[] = []
+  for (const raw of text.match(EMAIL_RE) ?? []) {
+    const parsed = FallbackEmailSchema.safeParse(raw)
+    if (parsed.success && !out.includes(parsed.data)) out.push(parsed.data)
+  }
+  return out
 }
 
-/** Tolerant JSON extraction: strip code fences, take the outermost object. */
-function extractJson(raw: string): string {
+export function extractEmailFromText(text: string): string | null {
+  // First validated token — deterministic fallback identity. Validated to
+  // the same standard as the other tiers so an oversized token degrades to
+  // the next / NO_EMAIL, never a 500 inside the write tx (self-review #612).
+  return extractAllEmails(text)[0] ?? null
+}
+
+/**
+ * Tolerant JSON extraction: strip code fences, take the outermost object.
+ * NULL when there is no object at all (refusal prose, empty output) — that
+ * must surface as "no analysis", not as an empty-but-truthy analysis that
+ * gets persisted as an unscored match (self-review on #612).
+ */
+function extractJson(raw: string): string | null {
   const unfenced = raw.replace(/```(?:json)?/gi, '').trim()
   const start = unfenced.indexOf('{')
   const end = unfenced.lastIndexOf('}')
-  return start >= 0 && end > start ? unfenced.slice(start, end + 1) : '{}'
+  return start >= 0 && end > start ? unfenced.slice(start, end + 1) : null
 }
 
 export async function analyzeResumeForJob(input: {
@@ -106,7 +131,12 @@ Scoring calibration: 80+ only when core requirements are clearly evidenced; 50-7
       ],
     })
 
-    const parsed = ResumeIntakeSchema.safeParse(JSON.parse(extractJson(result.text || '{}')))
+    const jsonText = extractJson(result.text || '')
+    if (jsonText === null) {
+      aiLogger.warn({}, 'hire.resume-intake: no JSON object in model output')
+      return null
+    }
+    const parsed = ResumeIntakeSchema.safeParse(JSON.parse(jsonText))
     if (!parsed.success) {
       aiLogger.warn({ issues: parsed.error.issues.length }, 'hire.resume-intake: LLM output failed schema')
       return null
