@@ -99,9 +99,14 @@ export function serializeApplication(
   const headlineSourceExists =
     headlineHash != null &&
     (headlineHash === opts.candidateResumeHash || submissionHashes.includes(headlineHash))
-  // With the sources in hand the hash IS the answer; the stored sweep flag
-  // is only a fallback for callers that have neither.
-  const haveSources = opts.candidateResumeHash != null || submissionHashes.length > 0
+  // Derive ONLY with the FULL source set. Submissions alone are not
+  // enough: a caller that omits candidate context (e.g. the stage route)
+  // would compare a pool-derived headline hash against submissions only,
+  // find no match, and report a perfectly valid score as stale. Presence
+  // of the key — not its value — is what signals context, since `null`
+  // legitimately means "this candidate has no pool résumé" (Codex P2 on
+  // #616).
+  const haveSources = 'candidateResumeHash' in opts
   return {
     id: a._id.toString(),
     jobId: a.jobId.toString(),
