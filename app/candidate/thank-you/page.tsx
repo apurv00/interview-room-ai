@@ -20,13 +20,17 @@
  * that sends guests here): with 2+ invites in one browser, a stale
  * thank-you tab from an OLDER round — reloaded by tab discard or revisit —
  * must never end a NEWER round's live session (founder-hit bug,
- * 2026-08-09). Without the param (direct visit) the pre-scoping behavior
- * is kept: any synthetic guest is signed out.
+ * 2026-08-09). Without the param there is NO trustworthy round identity,
+ * so this page signs out NOTHING (Codex P1 on #609): pre-deploy stale tabs
+ * are queryless, and an unscoped fallback would re-create the cross-round
+ * kill for exactly those tabs. A queryless guest stays signed in — the
+ * default-deny middleware scope means that session can reach nothing
+ * anyway, and every real completion arrives here WITH the param.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { signOut, useSession } from 'next-auth/react'
-import { isHireGuestEmail, isGuestEmailForRound } from '@shared/auth/guestScope'
+import { isGuestEmailForRound } from '@shared/auth/guestScope'
 
 export default function CandidateThankYouPage() {
   const { data: session, status } = useSession()
@@ -45,9 +49,8 @@ export default function CandidateThankYouPage() {
     } catch {
       roundParam = null
     }
-    const isOwnGuestSession = roundParam
-      ? isGuestEmailForRound(email, roundParam)
-      : isHireGuestEmail(email)
+    const isOwnGuestSession =
+      roundParam !== null && isGuestEmailForRound(email, roundParam)
     if (status === 'authenticated' && isOwnGuestSession) {
       void signOut({ redirect: false }).finally(() => setReady(true))
     } else {
