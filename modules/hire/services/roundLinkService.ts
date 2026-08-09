@@ -145,20 +145,44 @@ export interface RoundActivity {
   inProgress: boolean
 }
 
+export interface ReconcileResult {
+  activity: RoundActivity[]
+  /**
+   * Guest userIds whose round was claimed as completed in THIS pass. The
+   * app-layer caller retires their engine-run budget (monthlyInterviewLimit
+   * → 0): the round is done, so neither retake farming nor the engine's
+   * IST calendar-month counter reset (which would re-arm a straddling
+   * guest's allowance — Codex P2 on #606) can buy more runs. The write
+   * stays in the app layer per the seam discipline: this module never
+   * writes B2C rows.
+   */
+  completedGuestUserIds: string[]
+}
+
 /**
  * Reconcile all AI rounds of one application. Returns transient activity info
  * (e.g. "interview in progress right now") the card can show but that is
- * deliberately not persisted.
+ * deliberately not persisted, plus the guests to retire.
  */
 export async function reconcileApplicationRounds(
   workspaceId: string,
   applicationId: string
-): Promise<RoundActivity[]> {
+): Promise<ReconcileResult> {
   await connectDB()
   const rounds = await HireRound.find({ workspaceId, applicationId, kind: 'ai' })
   const activity: RoundActivity[] = []
+  const completedGuestUserIds: string[] = []
 
   for (const round of rounds) {
+    // Retirement is derived from PERSISTED state, not just this pass's
+    // claims: any round that holds a sessionId is completed, and its guest
+    // is reported every pass. This makes budget retirement idempotent — if
+    // the retiring updateMany (or the audit append) failed after a claim,
+    // the next card load reports the guest again instead of losing it
+    // forever behind the claimed round (Codex P2 round 2 on #606).
+    if (round.guestUserId && round.sessionId) {
+      completedGuestUserIds.push(round.guestUserId.toString())
+    }
     // Refresh a linked-but-pending snapshot once feedback lands. The
     // completedAfterRevoke flag is round-derived state, not session state —
     // preserve it across the rebuild.
@@ -254,6 +278,9 @@ export async function reconcileApplicationRounds(
         )
         if (claimed) {
           linked = true
+          if (round.guestUserId) {
+            completedGuestUserIds.push(round.guestUserId.toString())
+          }
           await appendApplicationEvent(workspaceId, applicationId, {
             type: 'ai_result_linked',
             actorName: 'System',
@@ -281,7 +308,7 @@ export async function reconcileApplicationRounds(
       activity.push({ roundId: round._id.toString(), inProgress: true })
     }
   }
-  return activity
+  return { activity, completedGuestUserIds: Array.from(new Set(completedGuestUserIds)) }
 }
 
 export type { IHireRound }

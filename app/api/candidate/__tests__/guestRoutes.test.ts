@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   sendEmail: vi.fn(),
   userFindOne: vi.fn(),
   userCreate: vi.fn(),
+  userUpdateOne: vi.fn(),
 }))
 
 vi.mock('@hire', async () => {
@@ -52,6 +53,7 @@ vi.mock('@shared/db/models', () => ({
   User: {
     findOne: mocks.userFindOne,
     create: mocks.userCreate,
+    updateOne: mocks.userUpdateOne,
   },
 }))
 vi.mock('@shared/middleware/checkRateLimit', () => ({
@@ -147,18 +149,43 @@ describe('POST /begin — magic_link mode', () => {
     const doc = mocks.userCreate.mock.calls[0][0]
     expect(doc.email).toBe(SYNTHETIC)
     expect(doc.email).not.toContain('jane@ex.com')
-    expect(doc).toMatchObject({ role: 'candidate', plan: 'free', monthlyInterviewLimit: 999999 })
+    expect(doc).toMatchObject({ role: 'candidate', plan: 'free', monthlyInterviewLimit: 3 })
+    // Employer-funded: the billing system's own grant lever ($set, the same
+    // write path payments uses), bounded — the candidate must never see the
+    // consumer paywall, and a leaked guest JWT cannot farm unlimited engine
+    // runs (founder P0 on #605: a hire candidate was shown the ₹69 checkout).
+    expect(mocks.userUpdateOne.mock.calls[0][1].$set).toEqual({
+      entitlementSource: 'admin_grant',
+      monthlyInterviewLimit: 3,
+    })
     expect(mocks.bindGuestUser).toHaveBeenCalledWith(ROUND_ID, TOKEN, 'guest-1')
     expect(mocks.issueAuthTicket).toHaveBeenCalledWith('guest-1', ROUND_ID)
     expect(mocks.issueOtp).not.toHaveBeenCalled()
   })
 
-  it('reuses the round synthetic user on re-entry (idempotent)', async () => {
+  it('reuses the round synthetic user on re-entry (idempotent, no re-grant)', async () => {
     mocks.verifyRoundToken.mockResolvedValue(round('magic_link'))
-    mocks.userFindOne.mockResolvedValue({ _id: { toString: () => 'guest-1' } })
+    mocks.userFindOne.mockResolvedValue({
+      _id: { toString: () => 'guest-1' },
+      entitlementSource: 'admin_grant',
+    })
     const res = await begin(post('begin', { token: TOKEN }), { params: { roundId: ROUND_ID } })
     expect(res.status).toBe(200)
     expect(mocks.userCreate).not.toHaveBeenCalled()
+    expect(mocks.userUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('upgrades a pre-grant guest in place so it never hits the consumer paywall', async () => {
+    mocks.verifyRoundToken.mockResolvedValue(round('magic_link'))
+    mocks.userFindOne.mockResolvedValue({ _id: 'guest-legacy-id' })
+    const res = await begin(post('begin', { token: TOKEN }), { params: { roundId: ROUND_ID } })
+    expect(res.status).toBe(200)
+    const [filter, update] = mocks.userUpdateOne.mock.calls[0]
+    expect(filter).toEqual({ _id: 'guest-legacy-id' })
+    expect(update.$set).toEqual({
+      entitlementSource: 'admin_grant',
+      monthlyInterviewLimit: 3,
+    })
   })
 
   it('collapses a concurrent double-begin via the unique email index (E11000 → reuse)', async () => {

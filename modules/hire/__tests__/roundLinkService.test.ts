@@ -211,7 +211,10 @@ describe('reconcileApplicationRounds', () => {
     mockSessionFind.mockReturnValue(chainTo([session()]))
     mockRound.findOneAndUpdate.mockResolvedValue({ _id: 'r1' })
 
-    await reconcileApplicationRounds('ws-A', 'a1')
+    const result = await reconcileApplicationRounds('ws-A', 'a1')
+    // The claimed round's guest is reported for retirement (budget → 0 in
+    // the app layer) so month-boundary counter resets can't re-arm it.
+    expect(result.completedGuestUserIds).toEqual(['guest-1'])
 
     const [sessionFilter] = mockSessionFind.mock.calls[0]
     expect(sessionFilter.userId).toBe('guest-1')
@@ -244,8 +247,9 @@ describe('reconcileApplicationRounds', () => {
   it('reports in-progress matches as transient activity without claiming', async () => {
     mockRound.find.mockResolvedValue([round()])
     mockSessionFind.mockReturnValue(chainTo([session({ status: 'in_progress' })]))
-    const activity = await reconcileApplicationRounds('ws-A', 'a1')
-    expect(activity).toEqual([{ roundId: 'r1', inProgress: true }])
+    const result = await reconcileApplicationRounds('ws-A', 'a1')
+    expect(result.activity).toEqual([{ roundId: 'r1', inProgress: true }])
+    expect(result.completedGuestUserIds).toEqual([])
     expect(mockRound.findOneAndUpdate).not.toHaveBeenCalled()
   })
 
@@ -354,7 +358,10 @@ describe('reconcileApplicationRounds', () => {
     mockSessionFind.mockReturnValue(
       chainTo([session(), session({ _id: { toString: () => 's2' }, status: 'in_progress' })])
     )
-    await reconcileApplicationRounds('ws-A', 'a1')
+    const result = await reconcileApplicationRounds('ws-A', 'a1')
+    // Idempotent retirement: an ALREADY-linked round re-reports its guest on
+    // every pass, so a previously-failed budget retirement heals itself.
+    expect(result.completedGuestUserIds).toEqual(['guest-1'])
     const attemptUpdate = mockRound.updateOne.mock.calls.find(
       ([, update]) => update.$set?.attemptCount !== undefined
     )

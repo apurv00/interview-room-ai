@@ -48,17 +48,16 @@ export default withAuth(
     }
 
     // Rewrite Hire subdomain requests to the IPG Hire v2 workspace surface
-    // (founder flip, 2026-08-09 — the subdomain previously served the v1
-    // org-based product, whose role gate made every nav bounce to settings).
-    // /workspace* passes through untouched so the v2 layout's absolute links
-    // resolve; /candidate* passes through so a guest link opened on this
-    // host still works; legacy /hire* stays reachable by direct URL until
-    // v1 is deleted.
+    // (founder flip 2026-08-09; the v1 org-based product was deleted the
+    // same day). /workspace* passes through untouched so the v2 layout's
+    // absolute links resolve; /candidate* passes through so a guest link
+    // opened on this host still works.
     const shouldRewriteToHire =
       isHire &&
       !pathname.startsWith('/workspace') &&
-      !pathname.startsWith('/candidate') &&
-      !pathname.startsWith('/hire') &&
+      // Guest surface only — segment-exact so the PLURAL /candidates (the
+      // workspace clean URL) still rewrites (Codex P2 on #605).
+      !(pathname === '/candidate' || pathname.startsWith('/candidate/')) &&
       !subdomainExcludedPaths.some((p) => pathname.startsWith(p))
 
     if (shouldRewriteToHire) {
@@ -117,19 +116,6 @@ export default withAuth(
     if (pathname.startsWith('/cms')) {
       if (token?.role !== 'platform_admin') {
         return redirectToPrimaryApp()
-      }
-    }
-
-    // Hire routes require recruiter role or higher (or allow org creation)
-    if (pathname.startsWith('/hire')) {
-      // Allow access to /hire/settings for org creation (any authenticated user)
-      if (pathname !== '/hire/settings' && pathname !== '/hire') {
-        if (
-          !token?.organizationId ||
-          !['recruiter', 'org_admin', 'platform_admin'].includes(token.role as string)
-        ) {
-          return NextResponse.redirect(new URL('/hire/settings', req.url))
-        }
       }
     }
 
@@ -208,15 +194,12 @@ export default withAuth(
           // Public scorecard pages
           pathname.startsWith('/scorecard') ||
           pathname.startsWith('/api/public') ||
-          // Candidate invite OTP flow is auth-entry-point (user is not
-          // signed in yet). Token + OTP are the gates — not NextAuth.
-          pathname.startsWith('/invite/') ||
-          pathname.startsWith('/api/invite/') ||
-          // IPG Hire v2 guest surface (consent → OTP → sign-in). Same
-          // auth-entry-point posture as /invite: the emailed round token +
-          // OTP are the gates, with consent + dual rate limits enforced
-          // server-side. /candidate/[roundId]/prepare additionally requires
-          // the NextAuth session it just minted (checked in-route).
+          // IPG Hire guest surface — auth-entry-point (the candidate is not
+          // signed in yet): the emailed round token is the gate (plus the
+          // 6-digit code in otp-mode workspaces), with consent + dual rate
+          // limits enforced server-side. /candidate/[roundId]/prepare
+          // additionally requires the NextAuth session it just minted
+          // (checked in-route).
           pathname.startsWith('/candidate/') ||
           pathname.startsWith('/api/candidate/') ||
           pathname.startsWith('/api/qa/automation-login')
