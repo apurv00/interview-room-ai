@@ -500,3 +500,28 @@ describe('quarantined résumé and its score move together (Codex P1 on #615)', 
     expect(existing.resumeText).toBe('pool résumé of rahul')
   })
 })
+
+
+describe('an obsolete quarantine is cleared when the score comes from the pool copy (Codex P1 on #615)', () => {
+  it('drops the old application-specific résumé so document and score cannot disagree', async () => {
+    // Bulk upload (member path) rescoring an application that still holds a
+    // quarantined document from an earlier public submission.
+    const existing = candidateDoc({ name: 'Jane Doe', resumeText: 'resume body' })
+    const app = applicationDoc({
+      applicantResumeText: 'OBSOLETE public submission',
+      applicantResumeFileName: 'old-public.pdf',
+      resumeMatch: { ...MATCH, score: 30 },
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(app))
+
+    const poolMatch = { ...MATCH, score: 77, resumeHash: 'hash-of-pool' }
+    await intakeCandidate(CTX, { ...BASE_INPUT, resumeMatch: poolMatch, identityConfirmed: true })
+
+    expect((app.resumeMatch as { score: number }).score).toBe(77)
+    // The stale document is gone — otherwise the card shows B beside a
+    // score computed from A, and staleness anchors to B as well.
+    expect(app.applicantResumeText).toBeUndefined()
+    expect(app.applicantResumeFileName).toBeUndefined()
+  })
+})

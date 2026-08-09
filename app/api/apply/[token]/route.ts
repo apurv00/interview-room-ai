@@ -138,7 +138,21 @@ async function handleApply(
   // Advisory as everywhere else: a model outage yields an UNSCORED
   // application, never a rejected candidate. Identity here comes from the
   // typed form, so extraction is not needed — only the JD match.
-  const analysis = await analyzeResumeForJob({ resumeText, jdText: job.jdText })
+  const analysis = await analyzeResumeForJob({
+    resumeText,
+    jdText: job.jdText,
+    // Fail-closed precondition, re-evaluated before EVERY provider attempt:
+    // the transactional job guard only stops the later WRITE, while parsing
+    // takes seconds during which the link can be rotated/disabled or the
+    // workspace's last live member can start deleting their account.
+    // Without this, a revoked link still ships the applicant's résumé to an
+    // external model — cost plus personal-data disclosure past the privacy
+    // boundary (Codex P2 on #615, same class as the member intake route).
+    beforeProviderCall: async () => {
+      if (!(await resolveApplyToken(params.token))) return false
+      return !!(await resolveWorkspaceWriteAuthority(job.workspaceId))
+    },
+  })
   const resumeMatch: IHireResumeMatch | undefined = analysis
     ? {
         score: analysis.matchScore,

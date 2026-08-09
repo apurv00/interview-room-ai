@@ -94,7 +94,15 @@ interface CardData {
       at: string
     }>
   }
-  candidate: { id: string; name: string; email: string; phone: string | null }
+  candidate: {
+    id: string
+    name: string
+    email: string
+    phone: string | null
+    /** Workspace pool résumé — what a FIRST-TIME applicant's CV lands in. */
+    resumeText?: string | null
+    resumeFileName?: string | null
+  }
   job: { id: string; title: string; status: string }
   rounds: Round[]
   activity: Array<{ roundId: string; inProgress: boolean }>
@@ -345,21 +353,28 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
       {/* Résumé submitted through the public apply page. Shown whenever it
           exists, because it — not the pool résumé — is what the JD-match
           score above was computed from. */}
-      {application.applicantResume && (
+      {/* The résumé behind the score. A public application on an existing
+          candidate carries its own quarantined copy; a first-time
+          applicant's (and a bulk upload's) lands on the pool record — both
+          must be readable, or the recruiter judges a score whose source
+          they cannot open (Codex P1 on #615). */}
+      {(application.applicantResume || candidate.resumeText) && (
         <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-2">
           <div className="flex items-center gap-2">
-            <p className="text-sm font-semibold text-[#0f1419]">Résumé submitted by the applicant</p>
-            <Badge variant="caution">via apply page</Badge>
+            <p className="text-sm font-semibold text-[#0f1419]">
+              {application.applicantResume ? 'Résumé submitted by the applicant' : 'Résumé'}
+            </p>
+            {application.applicantResume && <Badge variant="caution">via apply page</Badge>}
           </div>
           <p className="text-xs text-[#71767b]">
-            {application.applicantResume.fileName ?? 'Attached file'} — this candidate already had a
-            different résumé in your talent pool, so the pool copy was left untouched. The score
-            above was computed from THIS document.
+            {application.applicantResume
+              ? `${application.applicantResume.fileName ?? 'Attached file'} — this candidate already had a different résumé in your talent pool, so the pool copy was left untouched. The score above was computed from THIS document.`
+              : `${candidate.resumeFileName ?? 'On file'} — the résumé on this candidate's record, which the score above was computed from.`}
           </p>
           <details className="text-sm">
-            <summary className="cursor-pointer text-[#2563eb] text-xs">Read the submitted résumé</summary>
+            <summary className="cursor-pointer text-[#2563eb] text-xs">Read the résumé</summary>
             <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
-              {application.applicantResume.text}
+              {application.applicantResume?.text ?? candidate.resumeText}
             </pre>
           </details>
         </div>

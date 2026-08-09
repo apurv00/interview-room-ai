@@ -351,8 +351,19 @@ async function writeIntake(
     application.markModified('resumeMatch')
     await application.save({ session })
   } else if (input.resumeMatch) {
-    // A fresh analysis always refreshes the match.
+    // A fresh analysis always refreshes the match. This branch means the
+    // score came from the POOL résumé (nothing was quarantined this time),
+    // so any quarantined document from an earlier submission is now
+    // obsolete: leaving it would show the recruiter document B beside a
+    // score computed from A, and would anchor staleness to B as well
+    // (Codex P1 on #615).
     application.resumeMatch = input.resumeMatch
+    if (application.applicantResumeText) {
+      application.applicantResumeText = undefined
+      application.applicantResumeFileName = undefined
+      application.markModified('applicantResumeText')
+      application.markModified('applicantResumeFileName')
+    }
     await application.save({ session })
   } else if (input.resumeText && resumeReplaced) {
     // FAILED analysis on a genuinely NEW resume: clear — the new CV must
