@@ -567,3 +567,65 @@ describe('append-only submissions are bounded', () => {
     expect(subs[0].resumeText).toBe('attacker-3')
   })
 })
+
+
+describe('anonymous submissions are CREATE-ONLY on an existing candidate (threat-model pass)', () => {
+  const JOB4 = { _id: 'job-1', workspaceId: 'ws-A' } as never
+  const OPTS4 = { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' }
+
+  it('cannot write into the pool record of a candidate who has NO résumé yet', async () => {
+    // The common Phase 1 flow: a recruiter adds someone by name + email
+    // only. Keying the guard on "is a résumé already there" left this case
+    // wide open — an anonymous caller who knew the email could populate
+    // the workspace-level record and fire the sibling staleness sweep.
+    const existing = candidateDoc({
+      name: 'Rahul Verma',
+      resumeText: undefined,
+      phone: undefined,
+      isModified: vi.fn(() => true),
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(
+      JOB4,
+      {
+        name: 'Jane Doe',
+        email: 'jane@example.com',
+        phone: '+910000000000',
+        resumeText: 'anonymous document',
+        resumeFileName: 'anon.pdf',
+      },
+      OPTS4,
+    )
+
+    // Pool record untouched — no résumé, no name, no phone written.
+    expect(existing.resumeText).toBeUndefined()
+    expect(existing.name).toBe('Rahul Verma')
+    expect(existing.phone).toBeUndefined()
+    expect(existing.save).not.toHaveBeenCalled()
+    // No sibling staleness sweep triggered by an anonymous caller.
+    expect(mockApplication.updateMany).not.toHaveBeenCalled()
+    // The document is still captured, on the application.
+    expect(mockApplication.create.mock.calls[0][0][0].applicantSubmissions[0].resumeText).toBe(
+      'anonymous document',
+    )
+  })
+
+  it('still becomes the pool résumé when the anonymous caller CREATES the candidate', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-new' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(
+      JOB4,
+      { name: 'New Person', email: 'new@example.com', resumeText: 'first ever', resumeFileName: 'f.pdf' },
+      OPTS4,
+    )
+
+    // Creating is allowed; only EDITING an existing record is not.
+    expect(mockCandidate.create.mock.calls[0][0][0].resumeText).toBe('first ever')
+  })
+})

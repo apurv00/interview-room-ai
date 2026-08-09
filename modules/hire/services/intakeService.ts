@@ -263,19 +263,21 @@ async function writeIntake(
     // with the incoming one, while carrying a DIFFERENT resume, is more
     // likely a shared/agency address, a crafted CV, or a stranger typing
     // someone else's address than the same person.
-    // PUBLIC path: an anonymous submission NEVER overwrites a résumé that
-    // is already on file — no name heuristic decides it (self-review found
-    // the heuristic fails OPEN for single-token and non-Latin names, which
-    // handed an anonymous caller a résumé-overwrite primitive). The
-    // applicant's file is instead attached to THEIR application below, so
-    // nothing is lost and the recruiter sees exactly what was submitted.
-    // Response stays byte-identical either way — the endpoint must not
-    // become an oracle for who is already in the pool.
+    // PUBLIC path is CREATE-ONLY on an existing candidate. The rule is
+    // PROVENANCE, not content: any anonymous submission landing on a
+    // candidate that already exists goes to that application's append-only
+    // submissions and touches the pool record in no way at all.
+    //
+    // Keying this on content emptiness ("only protect a résumé that is
+    // already there") left a hole in the most common Phase 1 flow — a
+    // recruiter adds someone by name+email with NO résumé, and an
+    // anonymous caller who knows that email could then write their own
+    // document into the workspace-level pool record, flip resumeReplaced,
+    // and fire the sibling staleness sweep across that person's OTHER
+    // applications. Provenance has no such precondition to exploit
+    // (threat-model pass, #616).
     const publicSubmissionKeepsPoolRecord =
-      input.source === 'apply_page' &&
-      !!input.resumeText &&
-      !!candidate.resumeText &&
-      input.resumeText !== candidate.resumeText
+      input.source === 'apply_page' && !!input.resumeText
 
     const identityConflict =
       !input.identityConfirmed &&
@@ -301,8 +303,12 @@ async function writeIntake(
         'IDENTITY_CONFLICT',
       )
     }
-    resumeReplaced = applyMerge(candidate, input)
-    if (candidate.isModified()) await candidate.save({ session })
+    if (input.source !== 'apply_page') {
+      resumeReplaced = applyMerge(candidate, input)
+      if (candidate.isModified()) await candidate.save({ session })
+    }
+    // (apply_page deliberately falls through with NO candidate write: an
+    // anonymous caller may create a candidate, never edit one.)
   }
 
   // ── Application: find-or-create; keep score coherent with the CV ──
