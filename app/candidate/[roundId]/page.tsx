@@ -12,6 +12,7 @@
 import type { Metadata } from 'next'
 import { verifyRoundToken, HireJob, HireWorkspace } from '@hire'
 import CandidateFlow from './CandidateFlow'
+import GuestSignOut from './GuestSignOut'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,6 +30,8 @@ function obfuscateEmail(email: string): string {
 function InvalidLink() {
   return (
     <main className="min-h-screen flex items-center justify-center bg-[#f8fafc] px-4">
+      {/* Terminal state: a lingering synthetic-guest session ends here. */}
+      <GuestSignOut />
       <div className="max-w-md w-full bg-white border border-[#e1e8ed] rounded-2xl p-8 text-center space-y-3">
         <div className="text-3xl">🔗</div>
         <h1 className="text-lg font-semibold text-[#0f1419]">
@@ -46,6 +49,9 @@ function InvalidLink() {
 function AlreadyCompleted() {
   return (
     <main className="min-h-screen flex items-center justify-center bg-[#f8fafc] px-4">
+      {/* Terminal state: a lingering synthetic-guest session ends here —
+          revisiting a finished invite must leave the candidate logged out. */}
+      <GuestSignOut />
       <div className="max-w-md w-full bg-white border border-[#e1e8ed] rounded-2xl p-8 text-center space-y-3">
         <div className="text-3xl">✅</div>
         <h1 className="text-lg font-semibold text-[#0f1419]">Interview completed</h1>

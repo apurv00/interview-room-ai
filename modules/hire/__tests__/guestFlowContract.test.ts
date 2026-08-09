@@ -9,6 +9,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { CreateSessionSchema } from '@interview/validators/interview'
 import { isDepthAllowedForExperience } from '@interview'
 import {
@@ -115,5 +117,19 @@ describe('guest token contract (both verification modes)', () => {
     expect(a).not.toBe(b)
     expect(a).toBe(guestEmailForRound('A'.repeat(24)))
     expect(a.endsWith('@guests.interviewprep.internal')).toBe(true)
+  })
+
+  it("the guest capability scope's domain matches guestEmailForRound", () => {
+    // shared/auth/guestScope.ts is Edge-safe and cannot import the hire
+    // module, so it carries the guest email domain as a literal. If
+    // guestEmailForRound's domain ever changes, this pin fails BEFORE
+    // guests silently gain full B2C session scope.
+    const scopeSrc = readFileSync(
+      join(process.cwd(), 'shared/auth/guestScope.ts'),
+      'utf8'
+    )
+    const domain = guestEmailForRound('a'.repeat(24)).split('@')[1]
+    expect(scopeSrc).toContain(`@${domain}`)
+    expect(scopeSrc).toContain("'/candidate/thank-you'")
   })
 })

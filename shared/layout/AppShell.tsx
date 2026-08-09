@@ -30,7 +30,10 @@ const NAV_LINKS: Array<{ href: string; label: string; prefetch?: boolean }> = [
 // Pages where the shell is hidden (full-screen experience).
 // /interview/setup is intentionally NOT hidden — it shows the standard nav.
 // Only the interview lobby/room itself (/interview, /interview/[id]) is full-screen.
-const HIDDEN_PATHS = ['/signin', '/signup']
+// /candidate/* is the IPG Hire guest surface: an invited candidate must see
+// a clean employer-facing flow, never the B2C nav/account chrome (their
+// identity is a synthetic per-round account — founder ruling 2026-08-09).
+const HIDDEN_PATHS = ['/signin', '/signup', '/candidate']
 const INTERVIEW_ALLOW_NAV = ['/interview/setup']
 
 interface AppShellProps {
