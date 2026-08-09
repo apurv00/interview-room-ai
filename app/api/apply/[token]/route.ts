@@ -6,6 +6,7 @@ import { composeApiRoute, type ApiContext } from '@shared/middleware/composeApiR
 import { parseDocument, UnsupportedFileTypeError } from '@shared/services/documentParser'
 import {
   resolveApplyToken,
+  resolveWorkspaceWriteAuthority,
   intakeFromApplyPage,
   analyzeResumeForJob,
   sha256,
@@ -63,6 +64,16 @@ async function handleApply(
 
   // Per-job daily ceiling: one viral or scripted link must not drain the
   // workspace's parse+model budget (which the member path also draws on).
+  // Resolve the live workspace authority BEFORE parsing or scoring: if the
+  // workspace has no member whose account still exists, this link cannot
+  // accept applications, and the applicant must learn that immediately
+  // rather than after we have paid for a parse + model call (Codex P1 on
+  // #615). Same generic 404 as every other dead-link case — no oracle.
+  const authorityUserId = await resolveWorkspaceWriteAuthority(job.workspaceId)
+  if (!authorityUserId) {
+    return NextResponse.json({ error: 'This application link is no longer active' }, { status: 404 })
+  }
+
   const jobCap = await checkRateLimit(job._id.toString(), {
     windowMs: 24 * 60 * 60 * 1000,
     maxRequests: 300,
@@ -139,14 +150,18 @@ async function handleApply(
       }
     : undefined
 
-  await intakeFromApplyPage(job, {
-    name: fields.data.name,
-    email: fields.data.email,
-    phone: fields.data.phone,
-    resumeText,
-    resumeFileName: file.name.slice(0, 255),
-    resumeMatch,
-  })
+  await intakeFromApplyPage(
+    job,
+    {
+      name: fields.data.name,
+      email: fields.data.email,
+      phone: fields.data.phone,
+      resumeText,
+      resumeFileName: file.name.slice(0, 255),
+      resumeMatch,
+    },
+    { authorityUserId, applyTokenHash: sha256(params.token) },
+  )
 
   // Deliberately NOT returning ids, seenBefore, dedupe state or match
   // scores — the applicant learns nothing about the employer's pipeline.

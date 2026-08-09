@@ -1,7 +1,9 @@
 import crypto from 'crypto'
+import type mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
-import { HireJob, HireWorkspace, type IHireJob } from '../models'
+import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
+import { HireJob, HireWorkspace, HireWorkspaceMember, type IHireJob } from '../models'
 import type { MembershipContext } from './workspaceService'
 
 /**
@@ -80,4 +82,38 @@ export async function resolveApplyToken(rawToken: string): Promise<PublicJobView
   const workspace = await HireWorkspace.findById(job.workspaceId).select('name')
   if (!workspace) return null
   return { job, workspaceName: workspace.name }
+}
+
+
+/**
+ * Whose account state gates writes made on the workspace's behalf by an
+ * anonymous applicant.
+ *
+ * NOT job.createdBy: a member who created a job and later deleted their
+ * account leaves the job (and its live apply link) behind, and binding the
+ * write barrier to that vanished User would fail EVERY submission —
+ * silently, and only after the parse and model call had already been paid
+ * for (Codex P1 on #615). The authority is therefore resolved at submit
+ * time to a member who actually still exists: the workspace admin if
+ * possible, else any linked member.
+ *
+ * Returns null when the workspace has no live member at all, which the
+ * caller must treat as "not accepting applications" — checked BEFORE the
+ * expensive work, not after.
+ */
+export async function resolveWorkspaceWriteAuthority(
+  workspaceId: mongoose.Types.ObjectId,
+): Promise<mongoose.Types.ObjectId | null> {
+  await connectDB()
+  const members = await HireWorkspaceMember.find({
+    workspaceId,
+    userId: { $exists: true },
+  })
+    // Admin first — the workspace's owner is the natural authority.
+    .sort({ role: 1, createdAt: 1 })
+  for (const member of members) {
+    if (!member.userId) continue
+    if (await isJobsAccountActive(member.userId.toString())) return member.userId
+  }
+  return null
 }

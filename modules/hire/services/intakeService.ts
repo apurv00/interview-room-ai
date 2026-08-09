@@ -129,16 +129,27 @@ export async function intakeCandidate(
  * The event carries no actorUserId: nobody on the team performed it.
  */
 export async function intakeFromApplyPage(
-  job: Pick<IHireJob, '_id' | 'workspaceId' | 'createdBy'>,
+  job: Pick<IHireJob, '_id' | 'workspaceId'>,
   input: Omit<IntakeInput, 'jobId' | 'source' | 'identityConfirmed'>,
+  opts: {
+    /** Live workspace authority — see resolveWorkspaceWriteAuthority. */
+    authorityUserId: mongoose.Types.ObjectId
+    /**
+     * sha256 of the apply token this submission arrived with. Folded into
+     * the in-transaction job claim so a link rotated or disabled DURING the
+     * parse/model phase cannot still commit (Codex P2 on #615).
+     */
+    applyTokenHash: string
+  },
 ): Promise<IntakeResult> {
   return runIntake(
     job.workspaceId,
     { ...input, jobId: job._id.toString(), source: 'apply_page' },
     {
-      userId: job.createdBy,
+      userId: opts.authorityUserId,
       displayName: 'Applicant (public apply page)',
     },
+    { applyTokenHash: opts.applyTokenHash, applyPageEnabled: true },
   )
 }
 
@@ -146,6 +157,8 @@ async function runIntake(
   workspaceId: mongoose.Types.ObjectId,
   input: IntakeInput,
   actor: IntakeActor,
+  /** Extra conditions the job row must STILL satisfy at write time. */
+  jobGuard?: Record<string, unknown>,
 ): Promise<IntakeResult> {
   await connectDB()
   const email = input.email.toLowerCase().trim()
@@ -159,7 +172,7 @@ async function runIntake(
 
   const runIntakeTx = () =>
     withPersonalDataWriteTransaction(actor.userId, (session) =>
-      writeIntake(session, workspaceId, input, email, actor),
+      writeIntake(session, workspaceId, input, email, actor, jobGuard),
     )
 
   let outcome: Awaited<ReturnType<typeof writeIntake>>
@@ -193,6 +206,7 @@ async function writeIntake(
   input: IntakeInput,
   email: string,
   actor: IntakeActor,
+  jobGuard?: Record<string, unknown>,
 ): Promise<{
   candidate: IHireCandidate
   application: IHireApplication
@@ -205,12 +219,14 @@ async function writeIntake(
   // WRITE on the job row. A close committing first makes this claim miss
   // (409); this claim committing first makes the close retry after us.
   const jobClaim = await HireJob.updateOne(
-    { _id: input.jobId, workspaceId, status: { $ne: 'closed' } },
+    { _id: input.jobId, workspaceId, status: { $ne: 'closed' }, ...(jobGuard ?? {}) },
     { $inc: { intakeWriteVersion: 1 } },
     { session },
   )
   if (jobClaim.matchedCount !== 1) {
-    throw new AppError('This job is closed', 409, 'JOB_CLOSED')
+    // Either the job closed, or (public path) the apply link was rotated
+    // or disabled while this submission was being parsed and scored.
+    throw new AppError('This job is no longer accepting applications', 409, 'JOB_CLOSED')
   }
 
   // ── Candidate: find-or-create; merge on revisit ──

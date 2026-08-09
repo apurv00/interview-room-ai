@@ -83,6 +83,7 @@ export {
   issueApplyLink,
   disableApplyLink,
   resolveApplyToken,
+  resolveWorkspaceWriteAuthority,
   type ApplyLinkResult,
   type PublicJobView,
 } from './services/applyPageService'

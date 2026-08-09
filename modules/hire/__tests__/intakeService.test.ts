@@ -368,7 +368,7 @@ describe('seen-before signal', () => {
 
 
 describe('public apply-page intake', () => {
-  const JOB = { _id: 'job-1', workspaceId: 'ws-A', createdBy: 'owner-1' } as never
+  const JOB = { _id: 'job-1', workspaceId: 'ws-A' } as never
 
   const APPLY_INPUT = {
     name: 'Jane Doe',
@@ -377,17 +377,50 @@ describe('public apply-page intake', () => {
     resumeFileName: 'jane.pdf',
   }
 
-  it('claims write authority against the JOB OWNER, not a member session', async () => {
+  it('folds the apply-token hash into the transactional job claim (rotation mid-parse cannot commit)', async () => {
     mockCandidate.findOne.mockReturnValue(inTx(null))
     mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
     mockApplication.findOne.mockReturnValue(inTx(null))
     mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
 
-    await intakeFromApplyPage(JOB, APPLY_INPUT)
+    await intakeFromApplyPage(JOB, APPLY_INPUT, {
+      authorityUserId: 'authority-1' as never,
+      applyTokenHash: 'hash-abc',
+    })
 
-    // The deletion barrier is claimed on the owner's account: if the
-    // recruiter is being deleted, their workspace stops accepting.
-    expect(txMock.mock.calls[0][0]).toBe('owner-1')
+    expect(mockJob.updateOne.mock.calls[0][0]).toMatchObject({
+      applyTokenHash: 'hash-abc',
+      applyPageEnabled: true,
+      status: { $ne: 'closed' },
+    })
+  })
+
+  it('rejects when the link was rotated or disabled during parsing (claim misses)', async () => {
+    mockJob.updateOne.mockResolvedValue({ matchedCount: 0 })
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    await expect(
+      intakeFromApplyPage(JOB, APPLY_INPUT, {
+        authorityUserId: 'authority-1' as never,
+        applyTokenHash: 'stale-hash',
+      }),
+    ).rejects.toMatchObject({ code: 'JOB_CLOSED' })
+  })
+
+  it('claims write authority against the resolved LIVE authority, not a member session', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(JOB, APPLY_INPUT, {
+      authorityUserId: 'authority-1' as never,
+      applyTokenHash: 'hash-abc',
+    })
+
+    // The barrier claims a member who still EXISTS — binding it to the
+    // job's original creator broke every apply link once that member
+    // deleted their account (Codex P1 on #615).
+    expect(txMock.mock.calls[0][0]).toBe('authority-1')
     expect(mockCandidate.create.mock.calls[0][0][0].source).toBe('apply_page')
   })
 
@@ -397,7 +430,10 @@ describe('public apply-page intake', () => {
     mockApplication.findOne.mockReturnValue(inTx(null))
     mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
 
-    await intakeFromApplyPage(JOB, APPLY_INPUT)
+    await intakeFromApplyPage(JOB, APPLY_INPUT, {
+      authorityUserId: 'authority-1' as never,
+      applyTokenHash: 'hash-abc',
+    })
 
     const event = mockApplication.create.mock.calls[0][0][0].events[0]
     expect(event.actorUserId).toBeUndefined()
@@ -413,11 +449,16 @@ describe('public apply-page intake', () => {
     mockApplication.findOne.mockReturnValue(inTx(null))
     mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
 
-    const result = await intakeFromApplyPage(JOB, { ...APPLY_INPUT, name: 'Jane Doe' })
+    const result = await intakeFromApplyPage(
+      JOB,
+      { ...APPLY_INPUT, name: 'Jane Doe' },
+      { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
+    )
 
     // No throw, an application exists, and the stored résumé is untouched.
     expect(result.applicationId).toBe('app-1')
     expect(existing.resumeText).toBe('rahul original resume')
-    expect(mockApplication.create.mock.calls[0][0][0].resumeMatch).toBeUndefined()
+    // Quarantined on the APPLICATION, never discarded (Codex P1 on #615).
+    expect(mockApplication.create.mock.calls[0][0][0].applicantResumeText).toBe('resume body')
   })
 })

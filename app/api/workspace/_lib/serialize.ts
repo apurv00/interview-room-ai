@@ -111,6 +111,13 @@ export function serializeApplication(
               a.resumeMatch.resumeHash !== opts.candidateResumeHash),
         }
       : null,
+    // Résumé submitted through the public apply page when the pool record
+    // already had a different one. Surfaced so a recruiter can read the
+    // exact document the displayed JD-match score came from — a quarantine
+    // nobody can see is just a silent discard (Codex P1 on #615).
+    applicantResume: a.applicantResumeText
+      ? { text: a.applicantResumeText, fileName: a.applicantResumeFileName ?? null }
+      : null,
     events: a.events.map((e) => ({
       type: e.type,
       from: e.from ?? null,

@@ -12,6 +12,12 @@ vi.mock('@shared/db/connection', () => ({
 
 const mockJob = { findOne: vi.fn() }
 const mockWorkspace = { findById: vi.fn() }
+const mockMember = { find: vi.fn() }
+const accountActiveMock = vi.fn()
+
+vi.mock('@shared/services/jobsAccountFence', () => ({
+  isJobsAccountActive: (...a: unknown[]) => accountActiveMock(...a),
+}))
 
 vi.mock('../models', async () => {
   const actual = await vi.importActual<typeof import('../models')>('../models')
@@ -19,6 +25,7 @@ vi.mock('../models', async () => {
     ...actual,
     HireJob: { findOne: (...a: unknown[]) => mockJob.findOne(...a) },
     HireWorkspace: { findById: (...a: unknown[]) => mockWorkspace.findById(...a) },
+    HireWorkspaceMember: { find: (...a: unknown[]) => mockMember.find(...a) },
   }
 })
 
@@ -26,6 +33,7 @@ import {
   issueApplyLink,
   disableApplyLink,
   resolveApplyToken,
+  resolveWorkspaceWriteAuthority,
   sha256,
 } from '../services/applyPageService'
 import type { MembershipContext } from '../services/workspaceService'
@@ -140,5 +148,39 @@ describe('resolveApplyToken — uniform failure (no enumeration)', () => {
     const view = await resolveApplyToken(RAW)
     expect(view?.job.title).toBe('Backend Engineer')
     expect(view?.workspaceName).toBe('Acme')
+  })
+})
+
+
+describe('resolveWorkspaceWriteAuthority — survives the creator deleting their account', () => {
+  function members(list: Array<{ userId: string; role: string }>) {
+    return { sort: () => Promise.resolve(list) }
+  }
+
+  it('returns the first member whose account is still active', async () => {
+    mockMember.find.mockReturnValue(
+      members([
+        { userId: 'admin-gone', role: 'admin' },
+        { userId: 'member-live', role: 'member' },
+      ]),
+    )
+    accountActiveMock.mockImplementation(async (id: string) => id === 'member-live')
+
+    // The job's original creator may be long deleted: the authority is
+    // whoever still exists, so the apply link keeps working (Codex P1 #615).
+    await expect(resolveWorkspaceWriteAuthority('ws-A' as never)).resolves.toBe('member-live')
+  })
+
+  it('returns null when NO member account survives — caller must stop accepting', async () => {
+    mockMember.find.mockReturnValue(members([{ userId: 'gone', role: 'admin' }]))
+    accountActiveMock.mockResolvedValue(false)
+    await expect(resolveWorkspaceWriteAuthority('ws-A' as never)).resolves.toBe(null)
+  })
+
+  it('only considers members already linked to a user id', async () => {
+    mockMember.find.mockReturnValue(members([]))
+    accountActiveMock.mockResolvedValue(true)
+    await resolveWorkspaceWriteAuthority('ws-A' as never)
+    expect(mockMember.find.mock.calls[0][0]).toMatchObject({ userId: { $exists: true } })
   })
 })

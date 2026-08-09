@@ -83,6 +83,8 @@ interface CardData {
       scoredAt: string
       stale: boolean
     } | null
+    /** Résumé submitted via the public apply page (pool record kept). */
+    applicantResume?: { text: string; fileName: string | null } | null
     events: Array<{
       type: string
       from: string | null
@@ -337,6 +339,29 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Résumé submitted through the public apply page. Shown whenever it
+          exists, because it — not the pool résumé — is what the JD-match
+          score above was computed from. */}
+      {application.applicantResume && (
+        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-2">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-[#0f1419]">Résumé submitted by the applicant</p>
+            <Badge variant="caution">via apply page</Badge>
+          </div>
+          <p className="text-xs text-[#71767b]">
+            {application.applicantResume.fileName ?? 'Attached file'} — this candidate already had a
+            different résumé in your talent pool, so the pool copy was left untouched. The score
+            above was computed from THIS document.
+          </p>
+          <details className="text-sm">
+            <summary className="cursor-pointer text-[#2563eb] text-xs">Read the submitted résumé</summary>
+            <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
+              {application.applicantResume.text}
+            </pre>
+          </details>
         </div>
       )}
 
