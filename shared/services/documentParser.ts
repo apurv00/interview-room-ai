@@ -26,6 +26,31 @@ export class UnsupportedFileTypeError extends Error {
   }
 }
 
+/**
+ * Decompression-bomb guard for .docx: callers cap the COMPRESSED upload
+ * size, but mammoth inflates the zip fully in memory — a 10MB docx can
+ * expand to gigabytes. Sum the uncompressed sizes declared in the zip
+ * central directory and refuse before inflating (Codex-class finding on
+ * hire intake, applies to every docx caller). Exported for tests.
+ */
+const ZIP_CENTRAL_DIR_SIG = Buffer.from([0x50, 0x4b, 0x01, 0x02])
+const MAX_DOCX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+
+export function docxDeclaredUncompressedBytes(buffer: Buffer): number {
+  let total = 0
+  let offset = 0
+  while (offset < buffer.length) {
+    const idx = buffer.indexOf(ZIP_CENTRAL_DIR_SIG, offset)
+    if (idx === -1 || idx + 28 > buffer.length) break
+    const size = buffer.readUInt32LE(idx + 24)
+    // 0xFFFFFFFF is the zip64 sentinel — treat as "declared enormous".
+    total += size === 0xffffffff ? Number.MAX_SAFE_INTEGER : size
+    if (total >= Number.MAX_SAFE_INTEGER) return Number.MAX_SAFE_INTEGER
+    offset = idx + 4
+  }
+  return total
+}
+
 const MAX_WORDS = 8000
 
 function normalizeText(raw: string): string {
@@ -60,6 +85,11 @@ export async function parseDocument(buffer: Buffer, filename: string): Promise<P
       break
     }
     case '.docx': {
+      if (docxDeclaredUncompressedBytes(buffer) > MAX_DOCX_UNCOMPRESSED_BYTES) {
+        throw new UnsupportedFileTypeError(
+          'This DOCX file expands too large to process safely. Please export it as PDF or plain text.',
+        )
+      }
       const result = await mammoth.extractRawText({ buffer })
       rawText = result.value
       break

@@ -15,7 +15,13 @@ interface CandidateRow {
   email: string
   phone: string | null
   hasResume: boolean
+  source?: 'manual' | 'apply_page' | 'bulk_upload'
   addedAt: string
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  bulk_upload: 'bulk upload',
+  apply_page: 'apply page',
 }
 
 export default function CandidatesPage() {
@@ -121,6 +127,9 @@ export default function CandidatesPage() {
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {c.hasResume && <Badge variant="default">résumé</Badge>}
+                {c.source && SOURCE_LABEL[c.source] && (
+                  <Badge variant="default">{SOURCE_LABEL[c.source]}</Badge>
+                )}
                 <span className="text-xs text-[#71767b]">
                   added {new Date(c.addedAt).toLocaleDateString()}
                 </span>

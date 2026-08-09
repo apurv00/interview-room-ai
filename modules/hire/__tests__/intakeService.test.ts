@@ -21,7 +21,7 @@ vi.mock('@shared/services/accountDeletion', () => ({
   ) => txMock(userId, work),
 }))
 
-const mockJob = { findOne: vi.fn(), find: vi.fn() }
+const mockJob = { findOne: vi.fn(), find: vi.fn(), updateOne: vi.fn() }
 const mockCandidate = { create: vi.fn(), findOne: vi.fn() }
 const mockApplication = { create: vi.fn(), findOne: vi.fn(), find: vi.fn(), updateMany: vi.fn() }
 
@@ -32,6 +32,7 @@ vi.mock('../models', async () => {
     HireJob: {
       findOne: (...a: unknown[]) => mockJob.findOne(...a),
       find: (...a: unknown[]) => mockJob.find(...a),
+      updateOne: (...a: unknown[]) => mockJob.updateOne(...a),
     },
     HireCandidate: {
       create: (...a: unknown[]) => mockCandidate.create(...a),
@@ -96,6 +97,7 @@ beforeEach(() => {
   txMock.mockImplementation(async (_userId, work) => work(SESSION, 'u1-oid'))
   mockJob.findOne.mockResolvedValue(OPEN_JOB)
   mockJob.find.mockReturnValue({ select: () => Promise.resolve([]) })
+  mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockApplication.find.mockReturnValue(findChain([]))
   mockApplication.updateMany.mockResolvedValue({ modifiedCount: 0 })
 })
@@ -196,7 +198,9 @@ describe('idempotency and merge', () => {
     mockCandidate.findOne.mockReturnValue(inTx(existing))
     mockApplication.findOne.mockReturnValue(inTx(applicationDoc()))
 
-    const result = await intakeCandidate(CTX, BASE_INPUT)
+    // identityConfirmed: fully-different name + different resume otherwise
+    // trips the identity-conflict guard by design (covered below).
+    const result = await intakeCandidate(CTX, { ...BASE_INPUT, identityConfirmed: true })
 
     expect(result.createdCandidate).toBe(false)
     expect(result.createdApplication).toBe(false)
@@ -224,6 +228,65 @@ describe('idempotency and merge', () => {
     expect(result.candidateId).toBe('cand-1')
     expect(result.createdCandidate).toBe(false)
     expect(result.createdApplication).toBe(true)
+  })
+})
+
+describe('in-transaction job claim', () => {
+  it('409s JOB_CLOSED when the claim misses (job closed between fast-path and transaction)', async () => {
+    mockJob.updateOne.mockResolvedValue({ matchedCount: 0 })
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    await expect(intakeCandidate(CTX, BASE_INPUT)).rejects.toMatchObject({ code: 'JOB_CLOSED' })
+    expect(mockCandidate.create).not.toHaveBeenCalled()
+  })
+
+  it('claims via a conflict-inducing WRITE on the job row, inside the session', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeCandidate(CTX, BASE_INPUT)
+
+    expect(mockJob.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ status: { $ne: 'closed' } }),
+      { $inc: { intakeWriteVersion: 1 } },
+      { session: SESSION },
+    )
+  })
+})
+
+describe('identity-conflict guard', () => {
+  it('422s IDENTITY_CONFLICT: extracted email joins a different-named candidate with a different resume', async () => {
+    mockCandidate.findOne.mockReturnValue(
+      inTx(candidateDoc({ name: 'Rahul Verma', resumeText: 'old resume of rahul' })),
+    )
+    await expect(
+      intakeCandidate(CTX, { ...BASE_INPUT, name: 'Jane Doe' }),
+    ).rejects.toMatchObject({ code: 'IDENTITY_CONFLICT' })
+  })
+
+  it('identityConfirmed (recruiter-typed email) bypasses the guard and merges', async () => {
+    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'old resume of rahul' })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(applicationDoc()))
+
+    const result = await intakeCandidate(CTX, {
+      ...BASE_INPUT,
+      name: 'Jane Doe',
+      identityConfirmed: true,
+    })
+
+    expect(result.createdCandidate).toBe(false)
+    expect(existing.resumeText).toBe('resume body')
+  })
+
+  it('overlapping names ("Jane D." vs "Jane Doe") do NOT trip the guard', async () => {
+    const existing = candidateDoc({ name: 'Jane D.', resumeText: 'older jane resume' })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(applicationDoc()))
+
+    await intakeCandidate(CTX, { ...BASE_INPUT, name: 'Jane Doe' })
+    expect(existing.resumeText).toBe('resume body')
   })
 })
 
@@ -258,6 +321,19 @@ describe('resume/score coherence', () => {
       { $set: { 'resumeMatch.stale': true } },
       { session: SESSION },
     )
+  })
+
+  it('identical re-upload + FAILED analysis PRESERVES the still-valid match (outage must not wipe evidence)', async () => {
+    const existing = candidateDoc({ resumeText: 'resume body', name: 'Jane' })
+    const app = applicationDoc({ resumeMatch: { ...MATCH, score: 88 } })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(app))
+
+    // Same bytes, no analysis (provider down): the old match is still valid.
+    await intakeCandidate(CTX, { ...BASE_INPUT, resumeMatch: undefined })
+
+    expect((app.resumeMatch as { score: number }).score).toBe(88)
+    expect(app.save).not.toHaveBeenCalled()
   })
 
   it('an identical re-upload is NOT a replacement — no staleness sweep', async () => {

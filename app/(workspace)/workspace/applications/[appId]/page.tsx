@@ -76,6 +76,13 @@ interface CardData {
     jobId: string
     stage: string
     decisionNote: string | null
+    resumeMatch?: {
+      score: number | null
+      strengths: string[]
+      gaps: string[]
+      scoredAt: string
+      stale: boolean
+    } | null
     events: Array<{
       type: string
       from: string | null
@@ -288,6 +295,50 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
           </div>
         )}
       </div>
+
+      {/* Resume-vs-JD match from intake (Phase 2) — evidence, not verdict */}
+      {application.resumeMatch && (
+        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-[#0f1419]">Résumé match</p>
+            {application.resumeMatch.score != null ? (
+              <Badge variant={scoreBadgeVariant(application.resumeMatch.score)} dot>
+                {application.resumeMatch.score} / 100
+              </Badge>
+            ) : (
+              <Badge>unscored</Badge>
+            )}
+            {application.resumeMatch.stale && (
+              <Badge variant="caution">outdated — résumé replaced since scoring</Badge>
+            )}
+          </div>
+          {application.resumeMatch.score != null && (
+            <ScoreBar label="JD match (résumé)" score={application.resumeMatch.score} />
+          )}
+          <div className="grid md:grid-cols-2 gap-4 text-sm">
+            {application.resumeMatch.strengths.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-[#536471] mb-1">Evidence for</p>
+                <ul className="space-y-1 text-[#0f1419]">
+                  {application.resumeMatch.strengths.map((s, i) => (
+                    <li key={i}>· {s}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {application.resumeMatch.gaps.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-[#536471] mb-1">No evidence of</p>
+                <ul className="space-y-1 text-[#0f1419]">
+                  {application.resumeMatch.gaps.map((g, i) => (
+                    <li key={i}>· {g}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Send AI interview */}
       {showSend && (

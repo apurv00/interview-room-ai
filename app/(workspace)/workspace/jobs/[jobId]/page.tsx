@@ -14,6 +14,7 @@ import Button from '@shared/ui/Button'
 import Input from '@shared/ui/Input'
 import StateView from '@shared/ui/StateView'
 import { scoreBand } from '@shared/ui/ScoreBar'
+import BulkUploadPanel from './BulkUploadPanel'
 
 const STAGES = ['new', 'screened', 'interviewing', 'shortlist', 'offer', 'hired', 'rejected'] as const
 type Stage = (typeof STAGES)[number]
@@ -90,6 +91,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
+  const [showBulk, setShowBulk] = useState(false)
   const [addName, setAddName] = useState('')
   const [addEmail, setAddEmail] = useState('')
   const [selectedPoolId, setSelectedPoolId] = useState('')
@@ -242,6 +244,9 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
               <Button variant="secondary" onClick={() => setShowAdd((v) => !v)}>
                 {showAdd ? 'Cancel' : 'Add candidate'}
               </Button>
+              <Button variant="secondary" onClick={() => setShowBulk((v) => !v)}>
+                {showBulk ? 'Hide bulk upload' : 'Bulk upload résumés'}
+              </Button>
               <Button variant="secondary" onClick={() => setShowClose((v) => !v)}>
                 Close job
               </Button>
@@ -251,6 +256,10 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       </div>
 
       {actionError && <p className="text-sm text-[#f4212e]">{actionError}</p>}
+
+      {showBulk && job.status !== 'closed' && (
+        <BulkUploadPanel jobId={params.jobId} onSettled={() => void load()} />
+      )}
 
       {showClose && (
         <form onSubmit={closeJob} className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">

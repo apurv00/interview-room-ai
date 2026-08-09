@@ -5,6 +5,7 @@
  * not reach the client.
  */
 
+import { createHash } from 'crypto'
 import type {
   IHireApplication,
   IHireCandidate,
@@ -72,12 +73,16 @@ export function serializeCandidate(c: IHireCandidate, opts: { includeResume?: bo
     phone: c.phone ?? null,
     hasResume: !!c.resumeText,
     resumeFileName: c.resumeFileName ?? null,
+    source: c.source,
     addedAt: c.createdAt,
     ...(opts.includeResume ? { resumeText: c.resumeText ?? null } : {}),
   }
 }
 
-export function serializeApplication(a: IHireApplication) {
+export function serializeApplication(
+  a: IHireApplication,
+  opts: { candidateResumeHash?: string | null } = {},
+) {
   return {
     id: a._id.toString(),
     jobId: a.jobId.toString(),
@@ -90,9 +95,16 @@ export function serializeApplication(a: IHireApplication) {
           strengths: a.resumeMatch.strengths,
           gaps: a.resumeMatch.gaps,
           scoredAt: a.resumeMatch.scoredAt,
-          // True when the candidate's resume was replaced AFTER this match
-          // was scored — the UI must not present outdated evidence as fresh.
-          stale: a.resumeMatch.stale === true,
+          // Outdated evidence must never present as fresh. Staleness is
+          // DERIVED at read time (match.resumeHash vs the candidate's
+          // current resume hash) — the write-time sweep is only a hint,
+          // since snapshot isolation lets a concurrently-scored sibling
+          // slip past it (self-review on #612). Stored flag kept as a
+          // fallback for callers without candidate context.
+          stale:
+            a.resumeMatch.stale === true ||
+            (opts.candidateResumeHash != null &&
+              a.resumeMatch.resumeHash !== opts.candidateResumeHash),
         }
       : null,
     events: a.events.map((e) => ({
@@ -125,9 +137,16 @@ export function serializeRound(r: IHireRound) {
   }
 }
 
+/** sha256 of the candidate's current resume — read-time staleness anchor. */
+export function resumeHashOf(resumeText: string | null | undefined): string | null {
+  return resumeText ? createHash('sha256').update(resumeText).digest('hex') : null
+}
+
 export function serializePipelineEntry(entry: PipelineEntry) {
   return {
-    application: serializeApplication(entry.application),
+    application: serializeApplication(entry.application, {
+      candidateResumeHash: resumeHashOf(entry.candidate?.resumeText),
+    }),
     candidate: entry.candidate ? serializeCandidate(entry.candidate) : null,
     latestRound: entry.latestRound
       ? {
