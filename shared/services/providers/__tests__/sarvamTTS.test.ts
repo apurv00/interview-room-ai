@@ -1,10 +1,15 @@
 /**
  * Sarvam TTS adapter — the load-bearing parts are (1) the wire contract
- * (field names chosen from shipping integrations, NOT verifiable locally
- * without a live key — these tests pin them against accidental "fixes"),
- * (2) the fetch-shaped Response contract the hot-path TTS routes depend on
- * (tee()-able MP3 body, non-2xx passthrough), and (3) the guards that turn
- * silent audio corruption into a loud 502 (empty audio, WAV-despite-mp3).
+ * (field names live-verified against api.sarvam.ai on 2026-08-09 — these
+ * tests pin them against accidental "fixes"), (2) the fetch-shaped Response
+ * contract the hot-path TTS routes depend on (chunked/tee()-able MP3 body,
+ * non-2xx passthrough), and (3) the guards that turn silent audio
+ * corruption into a loud 502 (content-type drift, empty audio, WAV bytes).
+ *
+ * Two paths: texts ≤3500 chars use the REST STREAM endpoint (progressive
+ * chunked MP3, measured TTFB ~0.3s — interview pacing depends on this);
+ * oversize texts fall back to the buffered REST endpoint in ≤2500-char
+ * sentence-boundary pieces.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
@@ -21,11 +26,25 @@ const MP3_A = Buffer.from([0xff, 0xfb, 0x90, 0x64, 0x01, 0x02, 0x03])
 const MP3_B = Buffer.from([0xff, 0xfb, 0x90, 0x64, 0x0a, 0x0b])
 const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.from([36, 0, 0, 0]), Buffer.from('WAVE')])
 
-function sarvamOk(audio: Buffer): Response {
+/** The buffered REST endpoint's response shape (base64 JSON). */
+function bufferedOk(audio: Buffer): Response {
   return new Response(
     JSON.stringify({ request_id: 'req_test', audios: [audio.toString('base64')] }),
     { status: 200, headers: { 'Content-Type': 'application/json' } },
   )
+}
+
+/** The stream endpoint's response shape (chunked binary MP3). */
+function streamOk(audio: Buffer): Response {
+  return new Response(new Uint8Array(audio), {
+    status: 200,
+    headers: { 'Content-Type': 'audio/mpeg' },
+  })
+}
+
+/** ~4000 chars of sentences — forces the oversize buffered fallback. */
+function oversizeText(): string {
+  return `${'This sentence pads the interview intro to force chunking. '.repeat(70)}`.trim()
 }
 
 afterEach(() => {
@@ -38,15 +57,16 @@ describe('buildSarvamRequestBody — the wire contract', () => {
     const body = buildSarvamRequestBody('Hello there')
     expect(body).toEqual({
       text: 'Hello there',
-      // Pinned: shipping integrations use target_language_code (docs also
-      // show language_code). Changing this requires a live-key test.
+      // Pinned: live-verified on both /text-to-speech and /stream
+      // (2026-08-09). Docs oscillate between this and language_code —
+      // changing it requires a live-key test.
       target_language_code: 'en-IN',
       speaker: 'ishita',
       model: 'bulbul:v3',
       output_audio_codec: 'mp3',
     })
     // Minimal payload by design: no sample-rate/pace keys whose names vary
-    // between doc revisions — provider defaults (24 kHz, 1.0) are correct.
+    // between doc revisions — provider defaults are correct.
     expect(Object.keys(body).sort()).toEqual([
       'model',
       'output_audio_codec',
@@ -106,54 +126,42 @@ describe('chunkForSarvam', () => {
   })
 })
 
-describe('sarvamSynthesize — the Response contract the TTS routes rely on', () => {
-  it('POSTs to the Sarvam endpoint with the subscription-key header', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(sarvamOk(MP3_A))
+describe('sarvamSynthesize — STREAMING path (≤3500 chars, the hot path)', () => {
+  it('POSTs to the STREAM endpoint with the subscription-key header and 64k bitrate', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(streamOk(MP3_A))
     vi.stubGlobal('fetch', fetchMock)
 
     await sarvamSynthesize('Hello')
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('https://api.sarvam.ai/text-to-speech')
+    expect(url).toBe('https://api.sarvam.ai/text-to-speech/stream')
     expect(init.method).toBe('POST')
     expect(init.headers['Content-Type']).toBe('application/json')
     expect('api-subscription-key' in init.headers).toBe(true)
-    expect(JSON.parse(init.body).text).toBe('Hello')
+    const body = JSON.parse(init.body)
+    expect(body.text).toBe('Hello')
+    expect(body.model).toBe('bulbul:v3')
+    expect(body.output_audio_codec).toBe('mp3')
+    expect(body.output_audio_bitrate).toBe('64k')
   })
 
-  it('returns a 200 audio/mpeg Response whose body is the decoded MP3 — tee()-able for the stream route', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sarvamOk(MP3_A)))
+  it('returns the provider Response AS-IS so the route tee()s the live chunked body', async () => {
+    const upstream = streamOk(MP3_A)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(upstream))
 
     const res = await sarvamSynthesize('Hello')
 
-    expect(res.ok).toBe(true)
-    expect(res.headers.get('Content-Type')).toBe('audio/mpeg')
-    expect(res.body).not.toBeNull()
-    // The stream route tee()s the body; the buffered route arrayBuffer()s it.
+    // Identity matters: any re-wrapping would buffer the stream and
+    // reintroduce the 4s-dead-air pacing bug.
+    expect(res).toBe(upstream)
     const [a, b] = res.body!.tee()
     const drained = Buffer.from(await new Response(a).arrayBuffer())
     expect(drained.equals(MP3_A)).toBe(true)
     await b.cancel()
   })
 
-  it('fires one request per chunk and concatenates audio in order', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(sarvamOk(MP3_A))
-      .mockResolvedValueOnce(sarvamOk(MP3_B))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const sentence = `${'x'.repeat(200)}. `
-    const longText = sentence.repeat(16).trim() // ~3.2k chars → 2 chunks
-    const res = await sarvamSynthesize(longText)
-
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    const audio = Buffer.from(await res.arrayBuffer())
-    expect(audio.equals(Buffer.concat([MP3_A, MP3_B]))).toBe(true)
-  })
-
-  it('passes a provider error Response through untouched (route logs status, client falls back)', async () => {
+  it('passes a provider error Response through untouched', async () => {
     const unauthorized = new Response('invalid subscription key', { status: 401 })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(unauthorized))
 
@@ -161,6 +169,51 @@ describe('sarvamSynthesize — the Response contract the TTS routes rely on', ()
 
     expect(res).toBe(unauthorized)
     expect(res.status).toBe(401)
+  })
+
+  it('502s loudly on content-type drift instead of feeding MediaSource non-MP3 bytes', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(new Uint8Array(WAV), {
+          status: 200,
+          headers: { 'Content-Type': 'audio/wav' },
+        }),
+      ),
+    )
+
+    const res = await sarvamSynthesize('Hello')
+    expect(res.status).toBe(502)
+    expect(await res.text()).toContain('content-type')
+  })
+})
+
+describe('sarvamSynthesize — buffered fallback (>3500 chars)', () => {
+  it('fires one buffered REST request per chunk and concatenates audio in order', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(bufferedOk(MP3_A))
+      .mockResolvedValueOnce(bufferedOk(MP3_B))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const res = await sarvamSynthesize(oversizeText())
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [url] of fetchMock.mock.calls) {
+      expect(url).toBe('https://api.sarvam.ai/text-to-speech')
+    }
+    expect(res.headers.get('Content-Type')).toBe('audio/mpeg')
+    const audio = Buffer.from(await res.arrayBuffer())
+    expect(audio.equals(Buffer.concat([MP3_A, MP3_B]))).toBe(true)
+  })
+
+  it('passes a buffered provider error through untouched', async () => {
+    const unauthorized = new Response('invalid subscription key', { status: 401 })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(unauthorized))
+
+    const res = await sarvamSynthesize(oversizeText())
+
+    expect(res).toBe(unauthorized)
   })
 
   it('turns an empty audios payload into a loud 502 instead of caching silence', async () => {
@@ -171,14 +224,14 @@ describe('sarvamSynthesize — the Response contract the TTS routes rely on', ()
       ),
     )
 
-    const res = await sarvamSynthesize('Hello')
+    const res = await sarvamSynthesize(oversizeText())
     expect(res.status).toBe(502)
   })
 
   it('rejects WAV bytes (codec contract drift) instead of mislabeling them audio/mpeg', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sarvamOk(WAV)))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(bufferedOk(WAV)))
 
-    const res = await sarvamSynthesize('Hello')
+    const res = await sarvamSynthesize(oversizeText())
     expect(res.status).toBe(502)
     expect(await res.text()).toContain('WAV')
   })

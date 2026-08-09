@@ -30,10 +30,10 @@ const TTS_MODEL = process.env.DEEPGRAM_TTS_MODEL || 'aura-2-luna-en'
  * pipeline in commit 133e44f; see
  * modules/interview/docs/INTERVIEW_FLOW.md §8.
  *
- * Indian-voice nuance: Sarvam's REST endpoint is buffered upstream (its
- * adapter returns one complete MP3 body), so on that branch the tee below
- * flushes in a single append — the Deepgram default branch keeps true
- * progressive streaming and the invariant above still holds for it.
+ * Both branches stream progressively: Deepgram natively, Sarvam via its
+ * REST Stream endpoint (chunked MP3, TTFB ~0.3s — see sarvamTTS.ts). The
+ * first Sarvam cut used the buffered endpoint and broke interview pacing
+ * (§8, 2026-08-09) — do not regress the Indian branch to buffered.
  */
 export async function POST(req: NextRequest) {
   try {
