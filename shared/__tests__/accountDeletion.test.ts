@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
+// The hire cascade is a MANDATORY sweep reached by dynamic import; mock it
+// so these tests exercise the deletion flow without hire's real models.
+const hireCascadeMock = vi.fn().mockResolvedValue({})
+vi.mock('@hire', () => ({
+  deleteOrphanedWorkspacesForUser: (...a: unknown[]) => hireCascadeMock(...a),
+}))
+
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn(),
 }))

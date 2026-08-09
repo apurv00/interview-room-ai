@@ -524,6 +524,28 @@ export async function deleteUserAccount(
     })()],
   ]
 
+  // MANDATORY hire sweep. A workspace whose last account-holding member is
+  // leaving is deleted with them (founder ruling 2026-08-09) — otherwise it
+  // strands third-party PII: résumés, transcripts and recordings of
+  // candidates who never had an account here.
+  //
+  // Reached by DYNAMIC import on purpose: shared/ must keep no static
+  // dependency on a module (boundary rule), and a registration hook would
+  // fail OPEN — if nothing had imported the hire module, the sweep would
+  // silently never run, which on a deletion path is the one failure mode
+  // that must not exist. A failure here is fatal to the deletion, exactly
+  // like the other mandatory sweeps.
+  try {
+    const { deleteOrphanedWorkspacesForUser } = await import('@hire')
+    const hireCleared = await deleteOrphanedWorkspacesForUser(userObjectId)
+    for (const [name, count] of Object.entries(hireCleared)) {
+      collectionsCleared[name] = (collectionsCleared[name] ?? 0) + count
+    }
+  } catch (err) {
+    logger.error({ err, userId }, 'Hire workspace cascade failed — deletion incomplete')
+    throw new AccountDeletionIncompleteError(['hire workspace cascade'])
+  }
+
   for (const [name, op] of cascadeOps) {
     try {
       const res = await op

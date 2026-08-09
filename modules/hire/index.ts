@@ -78,6 +78,9 @@ export {
   type SeenBeforeEntry,
 } from './services/intakeService'
 
+// Workspace lifecycle (account-deletion cascade for orphaned workspaces)
+export { deleteOrphanedWorkspacesForUser } from './services/workspaceLifecycleService'
+
 // Public apply page (tokenized, unauthenticated candidate self-service)
 export {
   issueApplyLink,
