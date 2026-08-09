@@ -83,6 +83,13 @@ interface CardData {
       scoredAt: string
       stale: boolean
     } | null
+    /** Append-only public apply-page submissions, newest first. */
+    applicantSubmissions?: Array<{
+      text: string
+      fileName: string | null
+      submittedAt: string
+      score: number | null
+    }>
     events: Array<{
       type: string
       from: string | null
@@ -92,7 +99,15 @@ interface CardData {
       at: string
     }>
   }
-  candidate: { id: string; name: string; email: string; phone: string | null }
+  candidate: {
+    id: string
+    name: string
+    email: string
+    phone: string | null
+    /** Workspace pool résumé — what a FIRST-TIME applicant's CV lands in. */
+    resumeText?: string | null
+    resumeFileName?: string | null
+  }
   job: { id: string; title: string; status: string }
   rounds: Round[]
   activity: Array<{ roundId: string; inProgress: boolean }>
@@ -337,6 +352,62 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Résumé submitted through the public apply page. Shown whenever it
+          exists, because it — not the pool résumé — is what the JD-match
+          score above was computed from. */}
+      {/* The résumé behind the score. Public submissions are append-only
+          and shown in full: an anonymous caller can add a document but can
+          never replace one, so a recruiter sees every version submitted —
+          which is also how a tampering attempt becomes visible rather than
+          silent (Codex P1 on #615). A first-time applicant's (and a bulk
+          upload's) CV lives on the pool record and is shown instead. */}
+      {(application.applicantSubmissions?.length || candidate.resumeText) && (
+        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-semibold text-[#0f1419]">Résumé</p>
+            {application.applicantSubmissions && application.applicantSubmissions.length > 1 && (
+              <Badge variant="caution">
+                {application.applicantSubmissions.length} submissions via apply page
+              </Badge>
+            )}
+          </div>
+
+          {application.applicantSubmissions?.length ? (
+            <div className="space-y-2">
+              {application.applicantSubmissions.length > 1 && (
+                <p className="text-xs text-[#f4212e]">
+                  More than one résumé was submitted for this candidate through the public
+                  link. Review each before deciding — the newest is not automatically the
+                  authentic one.
+                </p>
+              )}
+              {application.applicantSubmissions.map((sub, i) => (
+                <details key={i} className="text-sm border border-[#e1e8ed] rounded-xl p-3">
+                  <summary className="cursor-pointer text-xs text-[#536471]">
+                    {sub.fileName ?? 'Attached file'} ·{' '}
+                    {new Date(sub.submittedAt).toLocaleString()}
+                    {sub.score != null ? ` · JD match ${sub.score}` : ' · unscored'}
+                    {i === 0 ? ' · newest' : ''}
+                  </summary>
+                  <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
+                    {sub.text}
+                  </pre>
+                </details>
+              ))}
+            </div>
+          ) : (
+            <details className="text-sm">
+              <summary className="cursor-pointer text-[#2563eb] text-xs">
+                Read the résumé ({candidate.resumeFileName ?? 'on file'})
+              </summary>
+              <pre className="mt-2 whitespace-pre-wrap text-xs text-[#0f1419] max-h-80 overflow-y-auto bg-[#f8fafc] border border-[#e1e8ed] rounded-xl p-3">
+                {candidate.resumeText}
+              </pre>
+            </details>
+          )}
         </div>
       )}
 

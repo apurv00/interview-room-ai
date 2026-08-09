@@ -61,6 +61,15 @@ export default withAuth(
       '/favicon.ico',
       '/sitemap.xml',
       '/robots.txt',
+      // Legal/policy pages are global — they exist only at app/<page> and
+      // must render as-is on every subdomain, never be rewritten to a
+      // per-subdomain prefix (e.g. hire.* → /workspace/privacy, which 404s
+      // and stranded the apply page's Privacy link — Codex P2 on #615).
+      '/privacy',
+      '/terms',
+      '/cancellation-refunds',
+      '/fulfilment',
+      '/contact',
     ]
 
     // Rewrite CMS subdomain requests to /cms prefix
@@ -89,6 +98,9 @@ export default withAuth(
       // Guest surface only — segment-exact so the PLURAL /candidates (the
       // workspace clean URL) still rewrites (Codex P2 on #605).
       !(pathname === '/candidate' || pathname.startsWith('/candidate/')) &&
+      // Public apply page — a shared link must work on the hire host too,
+      // where recruiters copy it from (segment-exact, like /candidate).
+      !(pathname === '/apply' || pathname.startsWith('/apply/')) &&
       !subdomainExcludedPaths.some((p) => pathname.startsWith(p))
 
     if (shouldRewriteToHire) {
@@ -233,6 +245,13 @@ export default withAuth(
           // (checked in-route).
           pathname.startsWith('/candidate/') ||
           pathname.startsWith('/api/candidate/') ||
+          // Public apply page + its submit endpoint. The tokenized URL IS
+          // the credential (hashed at rest); abuse is bounded by the
+          // route's anon daily cap + per-job ceiling, and every response
+          // is uniform so the endpoint cannot be probed for who is in a
+          // workspace's candidate pool.
+          pathname.startsWith('/apply/') ||
+          pathname.startsWith('/api/apply/') ||
           pathname.startsWith('/api/qa/automation-login')
           || pathname === '/api/billing/catalog'
           || pathname === '/api/billing/analytics/checkout-observation'

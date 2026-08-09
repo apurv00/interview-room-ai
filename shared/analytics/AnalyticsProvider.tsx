@@ -32,7 +32,7 @@
 import { useEffect, useRef } from 'react'
 import { usePathname } from 'next/navigation'
 import { useSession } from 'next-auth/react'
-import { track, identify } from './track'
+import { track, identify, redactSecretPathSegments } from './track'
 
 const DISTINCT_ID_KEY = 'ipg_distinct_id'
 
@@ -54,7 +54,7 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
   // ── 1. Pageview on every route change (incl. initial render) ────────
   useEffect(() => {
     if (!pathname) return
-    track('page_view', { pathname })
+    track('page_view', { pathname: redactSecretPathSegments(pathname) })
   }, [pathname])
 
   // ── 2. Identify once per user.id; ──────────────────────────────────

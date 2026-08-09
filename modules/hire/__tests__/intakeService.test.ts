@@ -47,7 +47,7 @@ vi.mock('../models', async () => {
   }
 })
 
-import { intakeCandidate } from '../services/intakeService'
+import { intakeCandidate, intakeFromApplyPage } from '../services/intakeService'
 import type { MembershipContext } from '../services/workspaceService'
 
 const CTX = {
@@ -363,5 +363,203 @@ describe('seen-before signal', () => {
     expect(result.seenBefore).toEqual([
       { jobId: 'job-9', jobTitle: 'Data Engineer', stage: 'shortlist' },
     ])
+  })
+})
+
+
+describe('public apply-page intake', () => {
+  const JOB = { _id: 'job-1', workspaceId: 'ws-A' } as never
+
+  const APPLY_INPUT = {
+    name: 'Jane Doe',
+    email: 'Jane@Example.com',
+    resumeText: 'resume body',
+    resumeFileName: 'jane.pdf',
+  }
+
+  it('folds the apply-token hash into the transactional job claim (rotation mid-parse cannot commit)', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(JOB, APPLY_INPUT, {
+      authorityUserId: 'authority-1' as never,
+      applyTokenHash: 'hash-abc',
+    })
+
+    expect(mockJob.updateOne.mock.calls[0][0]).toMatchObject({
+      applyTokenHash: 'hash-abc',
+      applyPageEnabled: true,
+      status: { $ne: 'closed' },
+    })
+  })
+
+  it('rejects when the link was rotated or disabled during parsing (claim misses)', async () => {
+    mockJob.updateOne.mockResolvedValue({ matchedCount: 0 })
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    await expect(
+      intakeFromApplyPage(JOB, APPLY_INPUT, {
+        authorityUserId: 'authority-1' as never,
+        applyTokenHash: 'stale-hash',
+      }),
+    ).rejects.toMatchObject({ code: 'JOB_CLOSED' })
+  })
+
+  it('claims write authority against the resolved LIVE authority, not a member session', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(JOB, APPLY_INPUT, {
+      authorityUserId: 'authority-1' as never,
+      applyTokenHash: 'hash-abc',
+    })
+
+    // The barrier claims a member who still EXISTS — binding it to the
+    // job's original creator broke every apply link once that member
+    // deleted their account (Codex P1 on #615).
+    expect(txMock.mock.calls[0][0]).toBe('authority-1')
+    expect(mockCandidate.create.mock.calls[0][0][0].source).toBe('apply_page')
+  })
+
+  it('records the event with NO actorUserId — nobody on the team did this', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(JOB, APPLY_INPUT, {
+      authorityUserId: 'authority-1' as never,
+      applyTokenHash: 'hash-abc',
+    })
+
+    const event = mockApplication.create.mock.calls[0][0][0].events[0]
+    expect(event.actorUserId).toBeUndefined()
+    expect(event.actorName).toBe('Applicant (public apply page)')
+    expect(event.note).toBe('via public apply page')
+  })
+
+  it('a stranger claiming someone else\'s email does NOT overwrite their résumé — and still gets a normal outcome', async () => {
+    // Enumeration defence: throwing here (as the member path does) would
+    // tell an anonymous caller that the email exists in this workspace.
+    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'rahul original resume' })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    const result = await intakeFromApplyPage(
+      JOB,
+      { ...APPLY_INPUT, name: 'Jane Doe' },
+      { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
+    )
+
+    // No throw, an application exists, and the stored résumé is untouched.
+    expect(result.applicationId).toBe('app-1')
+    expect(existing.resumeText).toBe('rahul original resume')
+    // Recorded on the APPLICATION, never discarded (Codex P1 on #615).
+    expect(mockApplication.create.mock.calls[0][0][0].applicantSubmissions[0].resumeText).toBe(
+      'resume body',
+    )
+  })
+})
+
+
+describe('quarantined résumé and its score move together (Codex P1 on #615)', () => {
+  const JOB2 = { _id: 'job-1', workspaceId: 'ws-A' } as never
+  const OPTS = { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' }
+
+  it('a REPEAT public submission APPENDS — an anonymous caller can never overwrite evidence', async () => {
+    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'pool résumé of rahul' })
+    const app = applicationDoc({
+      applicantSubmissions: [
+        { resumeText: 'FIRST submitted résumé', resumeFileName: 'first.pdf', submittedAt: new Date(), match: { ...MATCH, score: 40 } },
+      ],
+      resumeMatch: { ...MATCH, score: 40 },
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(app))
+
+    const freshMatch = { ...MATCH, score: 91, resumeHash: 'hash-of-second' }
+    await intakeFromApplyPage(
+      JOB2,
+      {
+        name: 'Jane Doe',
+        email: 'jane@example.com',
+        resumeText: 'SECOND submitted résumé',
+        resumeFileName: 'second.pdf',
+        resumeMatch: freshMatch,
+      },
+      OPTS,
+    )
+
+    const subs = app.applicantSubmissions as Array<{ resumeText: string; match?: { score: number } }>
+    // Newest first, and the ORIGINAL is still intact beside it.
+    expect(subs).toHaveLength(2)
+    expect(subs[0].resumeText).toBe('SECOND submitted résumé')
+    expect(subs[0].match?.score).toBe(91)
+    expect(subs[1].resumeText).toBe('FIRST submitted résumé')
+    expect(subs[1].match?.score).toBe(40)
+    // Nothing pre-existing was mutated: headline score and pool copy stand.
+    expect((app.resumeMatch as { score: number }).score).toBe(40)
+    expect(existing.resumeText).toBe('pool résumé of rahul')
+  })
+})
+
+
+describe('an obsolete quarantine is cleared when the score comes from the pool copy (Codex P1 on #615)', () => {
+  it('drops the old application-specific résumé so document and score cannot disagree', async () => {
+    // Bulk upload (member path) rescoring an application that still holds a
+    // quarantined document from an earlier public submission.
+    const existing = candidateDoc({ name: 'Jane Doe', resumeText: 'resume body' })
+    const app = applicationDoc({
+      applicantSubmissions: [
+        { resumeText: 'OBSOLETE public submission', resumeFileName: 'old-public.pdf', submittedAt: new Date() },
+      ],
+      resumeMatch: { ...MATCH, score: 30 },
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(app))
+
+    const poolMatch = { ...MATCH, score: 77, resumeHash: 'hash-of-pool' }
+    await intakeCandidate(CTX, { ...BASE_INPUT, resumeMatch: poolMatch, identityConfirmed: true })
+
+    expect((app.resumeMatch as { score: number }).score).toBe(77)
+    // The stale document is gone — otherwise the card shows B beside a
+    // score computed from A, and staleness anchors to B as well.
+    expect(app.applicantSubmissions).toBeUndefined()
+  })
+})
+
+
+describe('append-only submissions are bounded', () => {
+  const JOB3 = { _id: 'job-1', workspaceId: 'ws-A' } as never
+  it('bounds growth while PINNING the original — flooding cannot evict the genuine first submission', async () => {
+    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'pool résumé' })
+    // Newest-first, so the applicant's genuine first submission is LAST.
+    const app = applicationDoc({
+      applicantSubmissions: [
+        { resumeText: 'attacker-2', submittedAt: new Date() },
+        { resumeText: 'attacker-1', submittedAt: new Date() },
+        { resumeText: 'GENUINE ORIGINAL', submittedAt: new Date() },
+      ],
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(app))
+
+    await intakeFromApplyPage(
+      JOB3,
+      { name: 'Jane', email: 'jane@example.com', resumeText: 'attacker-3', resumeFileName: 'n.pdf' },
+      { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
+    )
+
+    const subs = app.applicantSubmissions as Array<{ resumeText: string }>
+    // Bounded, so the document cannot grow without end...
+    expect(subs).toHaveLength(3)
+    // ...but the genuine original is PINNED: a newest-first cap alone let a
+    // flood of submissions push it out, which made append-only meaningless.
+    expect(subs[subs.length - 1].resumeText).toBe('GENUINE ORIGINAL')
+    expect(subs[0].resumeText).toBe('attacker-3')
   })
 })

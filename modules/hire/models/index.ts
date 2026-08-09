@@ -36,6 +36,8 @@ export {
   type IHireApplication,
   type IHireApplicationEvent,
   type IHireResumeMatch,
+  type IHireApplicantSubmission,
+  APPLICANT_SUBMISSION_CAP,
 } from './HireApplication'
 export {
   HireRound,

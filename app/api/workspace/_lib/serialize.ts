@@ -53,6 +53,10 @@ export function serializeJob(job: IHireJob, opts: { includeJd?: boolean } = {}) 
     closeNote: job.closeNote ?? null,
     closedAt: job.closedAt ?? null,
     createdAt: job.createdAt,
+    // Whether the public apply page is live. The token itself is NEVER
+    // serialized — only its hash is stored, and the raw value is shown
+    // once at mint time.
+    applyPageEnabled: job.applyPageEnabled === true,
     ...(opts.includeJd ? { jdText: job.jdText } : {}),
   }
 }
@@ -81,8 +85,14 @@ export function serializeCandidate(c: IHireCandidate, opts: { includeResume?: bo
 
 export function serializeApplication(
   a: IHireApplication,
-  opts: { candidateResumeHash?: string | null } = {},
+  opts: { candidateResumeHash?: string | null; includeApplicantResume?: boolean } = {},
 ) {
+  // The document the headline score was computed from: an application's
+  // own newest public submission when it has one, else the pool copy.
+  const ownSubmission = a.applicantSubmissions?.[0]
+  const scoredAgainstHash = ownSubmission
+    ? resumeHashOf(ownSubmission.resumeText)
+    : opts.candidateResumeHash
   return {
     id: a._id.toString(),
     jobId: a.jobId.toString(),
@@ -101,12 +111,38 @@ export function serializeApplication(
           // since snapshot isolation lets a concurrently-scored sibling
           // slip past it (self-review on #612). Stored flag kept as a
           // fallback for callers without candidate context.
-          stale:
-            a.resumeMatch.stale === true ||
-            (opts.candidateResumeHash != null &&
-              a.resumeMatch.resumeHash !== opts.candidateResumeHash),
+          // Compare against the résumé this match was actually computed
+          // FROM: an application carrying its own quarantined document is
+          // validated against that, not the pool copy. Using the pool hash
+          // marked every apply-page match permanently "outdated" — a
+          // false warning on every public application (Codex P2 on #615).
+          // The stored flag is set by the POOL staleness sweep, which is
+          // irrelevant to an application anchored to its own submission —
+          // honouring it there showed a false "outdated" warning on
+          // documents that never changed (Codex P2 on #615). Hash
+          // comparison is authoritative whenever we have the document.
+          stale: ownSubmission
+            ? a.resumeMatch.resumeHash !== scoredAgainstHash
+            : a.resumeMatch.stale === true ||
+              (scoredAgainstHash != null && a.resumeMatch.resumeHash !== scoredAgainstHash),
         }
       : null,
+    // Résumé submitted through the public apply page when the pool record
+    // already had a different one — the document the JD-match score came
+    // from (Codex P1 on #615). DETAIL ENDPOINT ONLY: this field is up to
+    // 50k chars, and serializeApplication also feeds the pipeline board
+    // (serializePipelineEntry), where hundreds of cards would balloon the
+    // response for text the board never renders (Codex P2 on #615).
+    ...(opts.includeApplicantResume
+      ? {
+          applicantSubmissions: (a.applicantSubmissions ?? []).map((sub) => ({
+            text: sub.resumeText,
+            fileName: sub.resumeFileName ?? null,
+            submittedAt: sub.submittedAt,
+            score: sub.match?.score ?? null,
+          })),
+        }
+      : {}),
     events: a.events.map((e) => ({
       type: e.type,
       from: e.from ?? null,

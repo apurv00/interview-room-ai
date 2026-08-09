@@ -100,6 +100,34 @@ function dispatchToGa(
   }
 }
 
+
+/**
+ * Some URLs ARE credentials: /apply/<token>, /scorecard/<token> and
+ * /candidate/<roundId> carry a secret in the path whose server-side value
+ * is stored only as a hash. Shipping the raw path to PostHog or GA would
+ * put a working credential in a third party's logs in cleartext and defeat
+ * hash-at-rest entirely — anyone with analytics access could open a
+ * candidate's interview or an employer's apply page (self-review on the
+ * apply page). Redact before ANY emission, including the automatic
+ * $current_url / $pathname / referrer properties.
+ */
+const SECRET_PATH_RE = /^\/(apply|scorecard|candidate)\/[^/]+/
+
+export function redactSecretPathSegments(pathname: string): string {
+  return pathname.replace(SECRET_PATH_RE, (_m, prefix: string) => `/${prefix}/[redacted]`)
+}
+
+/** Same redaction applied to a full URL (href), preserving origin + query. */
+export function redactSecretUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl)
+    url.pathname = redactSecretPathSegments(url.pathname)
+    return url.toString()
+  } catch {
+    return rawUrl
+  }
+}
+
 export function track<E extends EventName>(
   event: E,
   properties: EventProps<E>
@@ -117,9 +145,9 @@ export function track<E extends EventName>(
       distinct_id: getDistinctId(),
       properties: {
         ...(properties as Record<string, unknown>),
-        $current_url: window.location.href,
-        $pathname: window.location.pathname,
-        $referrer: document.referrer || undefined,
+        $current_url: redactSecretUrl(window.location.href),
+        $pathname: redactSecretPathSegments(window.location.pathname),
+        $referrer: document.referrer ? redactSecretUrl(document.referrer) : undefined,
       },
       timestamp: new Date().toISOString(),
     }

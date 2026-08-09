@@ -65,6 +65,18 @@ export interface IHireResumeMatch {
   stale?: boolean
 }
 
+/** One public apply-page submission, with the score it produced. */
+export interface IHireApplicantSubmission {
+  resumeText: string
+  resumeFileName?: string
+  submittedAt: Date
+  /** Match computed from THIS document (advisory — may be absent). */
+  match?: IHireResumeMatch
+}
+
+/** Newest-first retention bound for append-only public submissions. */
+export const APPLICANT_SUBMISSION_CAP = 3
+
 export interface IHireApplication extends Document {
   _id: mongoose.Types.ObjectId
   workspaceId: mongoose.Types.ObjectId
@@ -74,6 +86,19 @@ export interface IHireApplication extends Document {
   /** Required when the stage becomes 'hired' (enforced in pipelineService). */
   decisionNote?: string
   resumeMatch?: IHireResumeMatch
+  /**
+   * Résumés submitted through the PUBLIC apply page, APPEND-ONLY.
+   *
+   * A single mutable slot was a vulnerability: anyone holding the shared
+   * link who knows an applicant's email could overwrite that person's
+   * résumé and score with a fabrication, corrupting the evidence a
+   * recruiter decides on (Codex P1 on #615). Nothing anonymous may
+   * overwrite anything — later submissions are appended and shown
+   * alongside, which also makes a tampering attempt visible rather than
+   * silent. Capped (APPLICANT_SUBMISSION_CAP) so an unauthenticated caller
+   * cannot grow the document without bound.
+   */
+  applicantSubmissions?: IHireApplicantSubmission[]
   events: IHireApplicationEvent[]
   createdBy: mongoose.Types.ObjectId
   createdAt: Date
@@ -89,6 +114,16 @@ const HireResumeMatchSchema = new Schema<IHireResumeMatch>(
     jdHash: { type: String, required: true, maxlength: 64 },
     resumeHash: { type: String, required: true, maxlength: 64 },
     stale: { type: Boolean },
+  },
+  { _id: false }
+)
+
+const HireApplicantSubmissionSchema = new Schema<IHireApplicantSubmission>(
+  {
+    resumeText: { type: String, required: true, maxlength: 50000 },
+    resumeFileName: { type: String, maxlength: 255 },
+    submittedAt: { type: Date, required: true },
+    match: { type: HireResumeMatchSchema },
   },
   { _id: false }
 )
@@ -124,6 +159,7 @@ const HireApplicationSchema = new Schema<IHireApplication>(
     stage: { type: String, enum: HIRE_STAGES, default: 'new' },
     decisionNote: { type: String, maxlength: 4000 },
     resumeMatch: { type: HireResumeMatchSchema },
+    applicantSubmissions: { type: [HireApplicantSubmissionSchema], default: undefined },
     events: { type: [HireApplicationEventSchema], default: [] },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },

@@ -56,6 +56,8 @@ interface JobDetail {
   status: 'open' | 'on_hold' | 'closed'
   closeNote: string | null
   jdText: string
+  /** Public apply page live? The token itself is never sent to the client. */
+  applyPageEnabled: boolean
 }
 
 interface PoolCandidate {
@@ -92,6 +94,8 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const [busy, setBusy] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   const [showBulk, setShowBulk] = useState(false)
+  const [applyLink, setApplyLink] = useState<string | null>(null)
+  const [applyBusy, setApplyBusy] = useState(false)
   const [addName, setAddName] = useState('')
   const [addEmail, setAddEmail] = useState('')
   const [selectedPoolId, setSelectedPoolId] = useState('')
@@ -120,6 +124,41 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       .then((d) => setPool(d.candidates ?? []))
       .catch(() => {})
   }, [load])
+
+  async function issueApplyLink() {
+    setApplyBusy(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/workspace/jobs/${params.jobId}/apply-link`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        setActionError(data.error || 'Could not create the apply link.')
+        return
+      }
+      // Shown once — the server stores only a hash and can never return it again.
+      setApplyLink(`${window.location.origin}/apply/${data.token}`)
+      await load()
+    } finally {
+      setApplyBusy(false)
+    }
+  }
+
+  async function disableApplyLink() {
+    setApplyBusy(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/workspace/jobs/${params.jobId}/apply-link`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setActionError(data.error || 'Could not turn the apply link off.')
+        return
+      }
+      setApplyLink(null)
+      await load()
+    } finally {
+      setApplyBusy(false)
+    }
+  }
 
   async function addToJob(e: React.FormEvent) {
     e.preventDefault()
@@ -259,6 +298,50 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
 
       {showBulk && job.status !== 'closed' && (
         <BulkUploadPanel jobId={params.jobId} onSettled={() => void load()} />
+      )}
+
+      {job.status !== 'closed' && (
+        <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-[#0f1419]">Public apply link</p>
+              <p className="text-xs text-[#71767b] mt-0.5">
+                Share anywhere — applicants submit their résumé straight into this
+                pipeline, scored against the JD. No account needed on their side.
+              </p>
+            </div>
+            <div className="shrink-0 flex gap-2">
+              <Button variant="secondary" disabled={applyBusy} onClick={() => void issueApplyLink()}>
+                {job.applyPageEnabled ? 'Replace link' : 'Create link'}
+              </Button>
+              {job.applyPageEnabled && (
+                <Button variant="secondary" disabled={applyBusy} onClick={() => void disableApplyLink()}>
+                  Turn off
+                </Button>
+              )}
+            </div>
+          </div>
+          {applyLink && (
+            <div className="space-y-1.5">
+              <input
+                readOnly
+                value={applyLink}
+                onFocus={(e) => e.currentTarget.select()}
+                className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-xs font-mono"
+              />
+              <p className="text-xs text-[#f4212e]">
+                Copy this now — it is shown only once. Creating a replacement link
+                immediately stops the previous one from working.
+              </p>
+            </div>
+          )}
+          {!applyLink && job.applyPageEnabled && (
+            <p className="text-xs text-[#71767b]">
+              A link is live. The URL cannot be shown again — use Replace link to issue a
+              new one (which disables the old).
+            </p>
+          )}
+        </div>
       )}
 
       {showClose && (
