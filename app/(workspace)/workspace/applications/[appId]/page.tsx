@@ -375,7 +375,9 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
             )}
           </div>
 
-          {(application.applicantSubmissions?.length ?? 0) > 0 && (
+          {(application.applicantSubmissions?.length ?? 0) +
+            (candidate.resumeText ? 1 : 0) >
+            1 && (
             <p className="text-xs text-[#f4212e]">
               More than one résumé exists for this candidate. Anyone with the public link can
               add a document, so review each before deciding — the newest is not automatically

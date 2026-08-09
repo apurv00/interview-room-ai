@@ -110,4 +110,13 @@ describe('staleness is measured against the scored document', () => {
     expect(SERIALIZE).toContain('stale: haveSources ? !headlineSourceExists')
     expect(SERIALIZE).not.toContain('a.applicantSubmissions?.[0]')
   })
+
+  it('derives staleness only with FULL source context, never from a partial set', () => {
+    // Submissions alone are not context: a caller omitting the candidate
+    // hash would compare a pool-derived headline against submissions only
+    // and report a valid score as stale (Codex P2 on #616). Key PRESENCE
+    // is the signal — null legitimately means "no pool résumé".
+    expect(SERIALIZE).toContain("const haveSources = 'candidateResumeHash' in opts")
+    expect(SERIALIZE).not.toContain('submissionHashes.length > 0')
+  })
 })
