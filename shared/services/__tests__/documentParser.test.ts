@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('@shared/logger', () => ({ logger: { info: vi.fn() } }))
+vi.mock('@shared/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}))
 
-import { deflateRawSync } from 'zlib'
 import {
   parseDocument,
-  docxInflatedWithinLimit,
+  docxInflationWithinLimit,
   UnsupportedFileTypeError,
 } from '../documentParser'
 
@@ -23,58 +24,62 @@ describe('parseDocument extraction limits', () => {
   })
 })
 
-describe('docx decompression-bomb guard (measures REAL inflation)', () => {
-  /**
-   * Build a single-entry zip: local header + deflate payload + central
-   * directory entry. `declaredUncompressed` is written into BOTH size
-   * fields independently of the real payload so tests can lie the way a
-   * bomb would.
-   */
-  function zipWithDeflateEntry(content: Buffer, declaredUncompressed: number): Buffer {
-    const compressed = deflateRawSync(content)
-    const name = Buffer.from('word/document.xml')
-
-    const local = Buffer.alloc(30)
-    local.writeUInt32LE(0x04034b50, 0)
-    local.writeUInt16LE(8, 8) // method: deflate
-    local.writeUInt32LE(compressed.length, 18)
-    local.writeUInt32LE(declaredUncompressed, 22)
-    local.writeUInt16LE(name.length, 26)
-    const localHeader = Buffer.concat([local, name])
-    const dataStart = 0 // local header sits at offset 0
-
-    const cd = Buffer.alloc(46)
-    cd.writeUInt32LE(0x02014b50, 0)
-    cd.writeUInt16LE(8, 10) // method: deflate
-    cd.writeUInt32LE(compressed.length, 20)
-    cd.writeUInt32LE(declaredUncompressed, 24)
-    cd.writeUInt16LE(name.length, 28)
-    cd.writeUInt32LE(dataStart, 42) // local header offset
-    const cdEntry = Buffer.concat([cd, name])
-
-    return Buffer.concat([localHeader, compressed, cdEntry])
+/**
+ * The docx defence measures real inflation with JSZip — mammoth's own
+ * unzip library — so these tests use REAL archives, including an actual
+ * decompression bomb. A synthetic zip could only prove the guard agrees
+ * with itself.
+ */
+describe('docx inflation budget (measured with the real parser)', () => {
+  async function buildDocx(bodyText: string): Promise<Buffer> {
+    const JSZip = (await import('jszip')).default
+    const zip = new JSZip()
+    zip.file(
+      '[Content_Types].xml',
+      '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+    )
+    zip
+      .folder('_rels')!
+      .file(
+        '.rels',
+        '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+      )
+    zip
+      .folder('word')!
+      .file(
+        'document.xml',
+        `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${bodyText}</w:t></w:r></w:p></w:body></w:document>`,
+      )
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   }
 
-  it('accepts a normal small docx (real inflated size under the cap)', () => {
-    const zip = zipWithDeflateEntry(Buffer.from('a real resume '.repeat(100)), 1400)
-    expect(docxInflatedWithinLimit(zip, 50 * 1024 * 1024)).toBe(true)
-  })
+  it('parses a genuine multi-entry docx end to end', async () => {
+    const docx = await buildDocx('Jane Doe jane@example.com Senior Backend Engineer')
 
-  it('rejects a bomb that LIES about uncompressed size — measured output wins', () => {
-    // Declares 1 byte; actually inflates to ~2MB. With a 1MB cap the
-    // measured inflate must reject despite the tiny declared size.
-    const big = Buffer.alloc(2 * 1024 * 1024, 0x41)
-    const zip = zipWithDeflateEntry(big, 1)
-    expect(docxInflatedWithinLimit(zip, 1024 * 1024)).toBe(false)
-  })
+    const result = await parseDocument(docx, 'jane.docx')
+    expect(result.docType).toBe('docx')
+    expect(result.text).toContain('jane@example.com')
+    expect(result.text).toContain('Senior Backend Engineer')
+  }, 20_000)
 
-  it('parseDocument rejects the lying bomb before mammoth sees it', async () => {
-    const big = Buffer.alloc(60 * 1024 * 1024, 0x41)
-    const zip = zipWithDeflateEntry(big, 1)
-    await expect(parseDocument(zip, 'cv.docx')).rejects.toBeInstanceOf(UnsupportedFileTypeError)
-  })
+  it('accepts a normal résumé well inside the budget', async () => {
+    const docx = await buildDocx('Jane Doe jane@example.com Senior Backend Engineer')
+    expect(await docxInflationWithinLimit(docx)).toBe(true)
+  }, 20_000)
 
-  it('treats a buffer with no central directory as within limit (mammoth handles the rest)', () => {
-    expect(docxInflatedWithinLimit(Buffer.from('just some words'))).toBe(true)
+  it('REJECTS a real decompression bomb — 0.4MB upload, ~120MB inflated', async () => {
+    // An actual bomb, not a synthetic header: highly compressible body that
+    // JSZip really does inflate. The earlier V8-heap-capped worker parsed a
+    // bomb like this to completion (external memory is not heap), which is
+    // why the guard measures bytes instead.
+    const bomb = await buildDocx('A'.repeat(120 * 1024 * 1024))
+    expect(bomb.length).toBeLessThan(2 * 1024 * 1024)
+
+    expect(await docxInflationWithinLimit(bomb, 50 * 1024 * 1024)).toBe(false)
+    await expect(parseDocument(bomb, 'bomb.docx')).rejects.toBeInstanceOf(UnsupportedFileTypeError)
+  }, 60_000)
+
+  it('a corrupt archive is left for mammoth to report, not treated as a bomb', async () => {
+    expect(await docxInflationWithinLimit(Buffer.from('not a zip at all'))).toBe(true)
   })
 })

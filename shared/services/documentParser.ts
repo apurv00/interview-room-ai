@@ -1,6 +1,7 @@
-import { inflateRawSync } from 'zlib'
-import { extractText, getDocumentProxy } from 'unpdf'
+import { Readable } from 'stream'
+import JSZip from 'jszip'
 import mammoth from 'mammoth'
+import { extractText, getDocumentProxy } from 'unpdf'
 import { logger } from '@shared/logger'
 
 export interface ParseResult {
@@ -28,68 +29,74 @@ export class UnsupportedFileTypeError extends Error {
 }
 
 /**
- * Decompression-bomb guard for .docx. Callers cap the COMPRESSED upload
- * size, but mammoth inflates the zip fully in memory — a 10MB docx can
- * expand to gigabytes.
+ * Decompression-bomb defence for .docx — MEASURED with the same parser
+ * mammoth uses, streamed, with a hard byte budget.
  *
- * The declared uncompressed size in the zip headers is ATTACKER-CONTROLLED
- * (a bomb can claim 1 byte), so we do NOT trust it. Instead we measure real
- * output: inflate each entry's deflate stream with zlib's `maxOutputLength`
- * budget, which stops allocating and throws the moment output would exceed
- * the cap — so peak memory is bounded by the limit regardless of any lie in
- * the metadata (Codex P1 on #613). Only if every entry inflates within the
- * shared budget do we hand the buffer to mammoth (which then re-inflates
- * content we've proven is bounded). Exported for tests.
+ * Four review rounds landed here, and the discarded approaches are worth
+ * recording because each looked right:
+ *
+ *  1. Trust the ZIP's declared uncompressed sizes → a bomb declares 1 byte.
+ *  2. Resolve central-directory offsets ourselves → a ZIP64 sentinel offset
+ *     made us skip an entry JSZip happily resolved and inflated.
+ *  3. Ignore offsets, read the local header's compression method → JSZip
+ *     takes method/size from the CENTRAL directory, so "stored" locally and
+ *     "deflated" centrally slipped through. (1–3 are the same mistake:
+ *     re-implementing a zip parser to predict another zip parser.)
+ *  4. Run mammoth in a worker with a capped V8 heap → MEASURED INEFFECTIVE:
+ *     pako inflates into Uint8Array backing stores, which are external
+ *     memory and are not governed by old/young generation limits. A
+ *     128MB-heap worker parsed a 400MB bomb from a 0.39MB upload to
+ *     completion. It also broke tracing: a string `require` inside worker
+ *     source is invisible to Next output tracing, so mammoth was absent
+ *     from the standalone build and every DOCX would have 415'd in prod.
+ *
+ * What actually works: decompress with JSZip — the very library mammoth
+ * parses with, so there is no parser to disagree with — as a STREAM,
+ * counting bytes as they materialize and destroying the stream the moment
+ * the budget is exceeded. Nothing declared is trusted (bytes are counted,
+ * not read from a header), memory stays bounded (chunk-sized buffering plus
+ * early abort), and the import is static so output tracing keeps mammoth
+ * and jszip in the standalone image.
+ *
+ * Cost: a docx is inflated twice on the happy path (once to measure, once
+ * by mammoth). Measured at ~150ms for a bomb and single-digit ms for a real
+ * résumé — worth it for a bound that is actually a bound.
  */
-const ZIP_CENTRAL_DIR_SIG = Buffer.from([0x50, 0x4b, 0x01, 0x02])
 const MAX_DOCX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
-const ZIP_METHOD_STORE = 0
-const ZIP_METHOD_DEFLATE = 8
 
-export function docxInflatedWithinLimit(
+export async function docxInflationWithinLimit(
   buffer: Buffer,
   limit: number = MAX_DOCX_UNCOMPRESSED_BYTES,
-): boolean {
-  let remaining = limit
-  let offset = 0
-  while (offset < buffer.length) {
-    const cd = buffer.indexOf(ZIP_CENTRAL_DIR_SIG, offset)
-    if (cd === -1 || cd + 46 > buffer.length) break
-    const method = buffer.readUInt16LE(cd + 10)
-    const compSize = buffer.readUInt32LE(cd + 20)
-    const localOff = buffer.readUInt32LE(cd + 42)
-    offset = cd + 4
+): Promise<boolean> {
+  let zip: JSZip
+  try {
+    zip = await JSZip.loadAsync(buffer)
+  } catch {
+    // Not a readable archive — mammoth will fail with its own error; this
+    // guard only decides whether inflation is safe to attempt.
+    return true
+  }
 
-    if (localOff + 30 > buffer.length) continue
-    const nameLen = buffer.readUInt16LE(localOff + 26)
-    const extraLen = buffer.readUInt16LE(localOff + 28)
-    const dataStart = localOff + 30 + nameLen + extraLen
-    if (dataStart > buffer.length) continue
-
-    if (method === ZIP_METHOD_STORE) {
-      // Stored: output === input; charge the real bytes present.
-      remaining -= Math.min(compSize, buffer.length - dataStart)
-    } else if (method === ZIP_METHOD_DEFLATE) {
-      // Slice by declared compressed size when plausible, else to EOF —
-      // inflateRawSync stops at the deflate terminus and ignores the rest.
-      const end =
-        compSize > 0 && dataStart + compSize <= buffer.length
-          ? dataStart + compSize
-          : buffer.length
-      try {
-        const out = inflateRawSync(buffer.subarray(dataStart, end), {
-          maxOutputLength: Math.max(1, remaining),
-        })
-        remaining -= out.length
-      } catch {
-        // RangeError = exceeded the budget; any other = corrupt stream.
-        // Either way this file is not safe/parseable — reject.
-        return false
-      }
-    }
-    // Unknown methods aren't inflated by mammoth's unzip either — skip.
-
-    if (remaining < 0) return false
+  let total = 0
+  for (const name of Object.keys(zip.files)) {
+    const entry = zip.files[name]
+    if (entry.dir) continue
+    const withinBudget = await new Promise<boolean>((resolve) => {
+      // JSZip types this as its own ReadableStream; at runtime it is a
+      // Node Readable, and destroy() is what stops pako mid-inflation.
+      const stream = entry.nodeStream('nodebuffer') as unknown as Readable
+      stream.on('data', (chunk: Buffer) => {
+        total += chunk.length
+        if (total > limit) {
+          stream.destroy()
+          resolve(false)
+        }
+      })
+      stream.on('end', () => resolve(true))
+      // A corrupt entry is not a bomb: let mammoth report it.
+      stream.on('error', () => resolve(true))
+    })
+    if (!withinBudget) return false
   }
   return true
 }
@@ -128,7 +135,10 @@ export async function parseDocument(buffer: Buffer, filename: string): Promise<P
       break
     }
     case '.docx': {
-      if (!docxInflatedWithinLimit(buffer)) {
+      // Measure inflation with JSZip (mammoth's own unzip library) before
+      // letting mammoth inflate it — see the guard's header comment.
+      if (!(await docxInflationWithinLimit(buffer))) {
+        logger.warn({ filename, bytes: buffer.length }, 'docx rejected: inflation over budget')
         throw new UnsupportedFileTypeError(
           'This DOCX file expands too large to process safely. Please export it as PDF or plain text.',
         )
