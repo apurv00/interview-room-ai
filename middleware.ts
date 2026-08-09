@@ -102,20 +102,37 @@ export default withAuth(
     // guest identities are recognizable by their per-round email domain
     // (guestEmailForRound in modules/hire — literal here because middleware
     // runs on the Edge and cannot import the module; consistency is pinned
-    // by guestFlowContract.test.ts). The engine's post-interview navigation
-    // lands on /feedback/:sessionId; guests are diverted to a thank-you page
-    // that finishes report generation for the hiring team and signs them
-    // out. Real users' emails can never match — the D2C flow is untouched.
-    if (
-      pathname.startsWith('/feedback') &&
+    // by guestFlowContract.test.ts). Real users' emails can never match —
+    // the D2C flow is untouched.
+    const isSyntheticGuest =
       typeof token?.email === 'string' &&
       token.email.endsWith('@guests.interviewprep.internal')
-    ) {
-      const url = req.nextUrl.clone()
-      const sessionId = pathname.split('/')[2] ?? ''
-      url.pathname = '/candidate/thank-you'
-      url.search = sessionId ? `?session=${encodeURIComponent(sessionId)}` : ''
-      return NextResponse.redirect(url)
+
+    if (isSyntheticGuest) {
+      // UI: the engine's post-interview navigation lands on
+      // /feedback/:sessionId; guests are diverted to the thank-you page,
+      // which ends their session.
+      if (pathname.startsWith('/feedback')) {
+        const url = req.nextUrl.clone()
+        url.pathname = '/candidate/thank-you'
+        url.search = ''
+        return NextResponse.redirect(url)
+      }
+      // API boundary: while the guest JWT lives, result reads must be
+      // denied — the session-owner routes would happily serve feedback and
+      // scored evaluations to a curl (Codex P1 on #607). Reads only: the
+      // interview flow's own POST /api/interviews and PATCH
+      // /api/interviews/:id are untouched, and guests make no in-flow GETs
+      // to these paths (verified against the room/lobby hooks).
+      if (
+        req.method === 'GET' &&
+        (pathname.startsWith('/api/interviews') || pathname.startsWith('/api/analysis'))
+      ) {
+        return NextResponse.json(
+          { error: 'Interview results are available to the hiring team only' },
+          { status: 403 }
+        )
+      }
     }
 
     const response = NextResponse.next()

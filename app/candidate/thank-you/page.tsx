@@ -5,59 +5,36 @@
  * from /feedback/:sessionId — candidates never see scores; results belong
  * to the hiring team's portal).
  *
- * Two jobs, in order:
- *   1. Fire report generation for the hiring team (POST /api/generate-feedback
- *      — normally triggered by the B2C feedback page the guest never
- *      reaches). Requires the guest's still-live session, so it runs BEFORE
- *      sign-out; failures are tolerated (the HR card shows honest per-answer
- *      results + "report pending", and reconciliation retries the snapshot).
- *   2. Sign the synthetic guest out — the candidate leaves logged out, with
- *      a close-this-tab message and an explore link.
+ * Report generation is NOT triggered here: the engine already fires the
+ * full /api/generate-feedback request fire-and-forget at completion
+ * (useInterview), and a sessionId-only call would fail schema validation
+ * anyway (Codex P1 on #607). If that engine request is ever lost, the HR
+ * card shows the honest "report pending" state with per-answer scores.
+ *
+ * The ONLY job here is ending the synthetic guest session immediately —
+ * before the candidate can close the tab — and only for synthetic guests:
+ * a real signed-in user who opens this public URL directly is never
+ * logged out (Codex P2 on #607).
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
-import { Suspense } from 'react'
-import { signOut } from 'next-auth/react'
+import { signOut, useSession } from 'next-auth/react'
 
-function ThankYouInner() {
-  const searchParams = useSearchParams()
-  const startedRef = useRef(false)
+export default function CandidateThankYouPage() {
+  const { data: session, status } = useSession()
+  const firedRef = useRef(false)
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
-    if (startedRef.current) return
-    startedRef.current = true
-    const sessionId = searchParams?.get('session') ?? ''
-
-    async function finish() {
-      // Kick the hiring team's report while the guest session still exists.
-      if (/^[a-f0-9]{24}$/i.test(sessionId)) {
-        try {
-          const controller = new AbortController()
-          const timer = setTimeout(() => controller.abort(), 10_000)
-          await fetch('/api/generate-feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId }),
-            signal: controller.signal,
-            keepalive: true,
-          })
-          clearTimeout(timer)
-        } catch {
-          // Tolerated — reconciliation surfaces "report pending" honestly.
-        }
-      }
-      try {
-        await signOut({ redirect: false })
-      } catch {
-        // Even if sign-out fails, show the terminal screen; the cookie
-        // expires on its own and the guest identity is synthetic.
-      }
+    if (firedRef.current || status === 'loading') return
+    firedRef.current = true
+    const email = session?.user?.email ?? ''
+    if (status === 'authenticated' && email.endsWith('@guests.interviewprep.internal')) {
+      void signOut({ redirect: false }).finally(() => setReady(true))
+    } else {
       setReady(true)
     }
-    void finish()
-  }, [searchParams])
+  }, [status, session?.user?.email])
 
   return (
     <main className="min-h-screen flex items-center justify-center bg-[#f8fafc] px-4">
@@ -81,13 +58,5 @@ function ThankYouInner() {
         )}
       </div>
     </main>
-  )
-}
-
-export default function CandidateThankYouPage() {
-  return (
-    <Suspense fallback={null}>
-      <ThankYouInner />
-    </Suspense>
   )
 }
