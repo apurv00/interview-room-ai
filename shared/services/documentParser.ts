@@ -117,6 +117,18 @@ function truncateToWords(text: string, maxWords: number): string {
   return words.slice(0, maxWords).join(' ') + '...'
 }
 
+export const SUPPORTED_DOCUMENT_EXTENSIONS = ['.pdf', '.docx', '.txt'] as const
+
+/**
+ * Cheap filename check so callers can reject an unsupported file BEFORE
+ * spending anything on it — quota, parse, or model call. parseDocument
+ * still throws UnsupportedFileTypeError as the authority; this is the
+ * pre-flight (Codex P2 on #615).
+ */
+export function isSupportedDocumentType(filename: string): boolean {
+  return SUPPORTED_DOCUMENT_EXTENSIONS.some((ext) => filename.toLowerCase().endsWith(ext))
+}
+
 function getExtension(filename: string): string {
   const parts = filename.toLowerCase().split('.')
   return parts.length > 1 ? `.${parts[parts.length - 1]}` : ''

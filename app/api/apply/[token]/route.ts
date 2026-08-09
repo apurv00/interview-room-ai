@@ -3,7 +3,11 @@ import { z } from 'zod'
 import { logger } from '@shared/logger'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { composeApiRoute, type ApiContext } from '@shared/middleware/composeApiRoute'
-import { parseDocument, UnsupportedFileTypeError } from '@shared/services/documentParser'
+import {
+  parseDocument,
+  isSupportedDocumentType,
+  UnsupportedFileTypeError,
+} from '@shared/services/documentParser'
 import {
   resolveApplyToken,
   resolveWorkspaceWriteAuthority,
@@ -37,6 +41,8 @@ export const dynamic = 'force-dynamic'
  */
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB — stricter than the member path
+/** Transport bound: the file cap plus room for multipart framing/fields. */
+const MAX_BODY_SIZE = MAX_FILE_SIZE + 512 * 1024
 const RESUME_TEXT_CAP = 50000
 
 const ApplicantSchema = z.object({
@@ -74,6 +80,27 @@ async function handleApply(
     return NextResponse.json({ error: 'This application link is no longer active' }, { status: 404 })
   }
 
+  // Bound the TRANSPORT before buffering. req.formData() materialises the
+  // whole body in memory, and this deployment serves Next directly (no
+  // upstream request-size limit), so a single oversized anonymous request
+  // could exhaust memory before the per-file size check ever ran (Codex P1
+  // on #615). Content-Length is mandatory here: browsers always send it
+  // for a FormData upload, and refusing the unlabelled case is what keeps
+  // the bound enforceable.
+  const declaredLength = Number(req.headers.get('content-length') ?? NaN)
+  if (!Number.isFinite(declaredLength)) {
+    return NextResponse.json(
+      { error: 'Missing Content-Length', code: 'LENGTH_REQUIRED' },
+      { status: 411 },
+    )
+  }
+  if (declaredLength > MAX_BODY_SIZE) {
+    return NextResponse.json(
+      { error: 'File too large (max 5MB)', code: 'FILE_TOO_LARGE' },
+      { status: 413 },
+    )
+  }
+
   const formData = await req.formData()
   const fields = ApplicantSchema.safeParse({
     name: str(formData.get('name')),
@@ -95,6 +122,18 @@ async function handleApply(
     return NextResponse.json(
       { error: 'File too large (max 5MB)', code: 'FILE_TOO_LARGE' },
       { status: 400 },
+    )
+  }
+  // Unsupported types are free to reject and must not consume the job's
+  // expensive-work allowance — otherwise a caller exhausts it with tiny
+  // junk files and 429s every real applicant (Codex P2 on #615).
+  if (!isSupportedDocumentType(file.name)) {
+    return NextResponse.json(
+      {
+        error: 'Please upload a PDF, DOCX or TXT file',
+        code: 'UNSUPPORTED_TYPE',
+      },
+      { status: 415 },
     )
   }
 

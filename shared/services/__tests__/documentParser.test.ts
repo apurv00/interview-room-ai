@@ -7,6 +7,7 @@ vi.mock('@shared/logger', () => ({
 import {
   parseDocument,
   docxInflationWithinLimit,
+  isSupportedDocumentType,
   UnsupportedFileTypeError,
 } from '../documentParser'
 
@@ -81,5 +82,26 @@ describe('docx inflation budget (measured with the real parser)', () => {
 
   it('a corrupt archive is left for mammoth to report, not treated as a bomb', async () => {
     expect(await docxInflationWithinLimit(Buffer.from('not a zip at all'))).toBe(true)
+  })
+})
+
+describe('isSupportedDocumentType (pre-flight before spending anything)', () => {
+  it('accepts the three supported extensions, case-insensitively', () => {
+    for (const name of ['cv.pdf', 'CV.PDF', 'resume.docx', 'notes.TXT']) {
+      expect(isSupportedDocumentType(name)).toBe(true)
+    }
+  })
+
+  it('rejects everything else, so callers can refuse before charging quota', () => {
+    for (const name of ['payload.exe', 'cv.doc', 'cv.pages', 'archive.zip', 'noextension']) {
+      expect(isSupportedDocumentType(name)).toBe(false)
+    }
+  })
+
+  it('agrees with parseDocument, which stays the authority', async () => {
+    expect(isSupportedDocumentType('cv.rtf')).toBe(false)
+    await expect(parseDocument(Buffer.from('x'), 'cv.rtf')).rejects.toBeInstanceOf(
+      UnsupportedFileTypeError,
+    )
   })
 })
