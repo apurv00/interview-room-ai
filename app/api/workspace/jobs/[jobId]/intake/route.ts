@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { logger } from '@shared/logger'
@@ -38,6 +39,16 @@ export const dynamic = 'force-dynamic'
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB — matches documents/upload
 const RESUME_TEXT_CAP = 50000 // HireCandidate.resumeText maxlength
 
+/**
+ * Recruiter-supplied fix-up fields (the NO_EMAIL retry path). Validated to
+ * the same standard as model output — an unvalidated override would become
+ * the workspace dedupe/identity key (Codex P2 on #612).
+ */
+const OverrideFieldsSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  email: z.string().trim().toLowerCase().email().max(254).optional(),
+})
+
 export async function POST(
   req: NextRequest,
   { params }: { params: { jobId: string } },
@@ -48,7 +59,13 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     await connectDB()
-    if (!(await isJobsAccountActive(session.user.id))) {
+    // Account-lifecycle egress fence, re-checked at every trust boundary in
+    // this handler (entry → before each model-provider attempt → before
+    // writes): parse + LLM make this a long request, and a deletion that
+    // starts mid-flight must neither ship documents to a provider nor
+    // persist hiring data under the deleted user (Codex P1×2 on #612).
+    const accountActive = () => isJobsAccountActive(session.user.id)
+    if (!(await accountActive())) {
       return NextResponse.json(
         { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
         { status: 401 },
@@ -111,13 +128,33 @@ export async function POST(
     const resumeText = parsed.text.slice(0, RESUME_TEXT_CAP)
 
     // Advisory analysis: identity + JD match in one call. Null → intake
-    // still proceeds if the caller can supply identity another way.
-    const analysis = await analyzeResumeForJob({ resumeText, jdText: job.jdText })
+    // still proceeds if the caller can supply identity another way. The
+    // fail-closed precondition runs before EVERY provider attempt.
+    const analysis = await analyzeResumeForJob({
+      resumeText,
+      jdText: job.jdText,
+      beforeProviderCall: accountActive,
+    })
 
     // Recruiter-supplied overrides (single-file "add with resume" path and
-    // the client's fix-up retry after NO_EMAIL) beat extraction.
-    const overrideName = str(formData.get('name'))
-    const overrideEmail = str(formData.get('email'))
+    // the client's fix-up retry after NO_EMAIL) beat extraction — validated
+    // to the same standard as model output before becoming the dedupe key.
+    const overrideParse = OverrideFieldsSchema.safeParse({
+      name: str(formData.get('name')) || undefined,
+      email: str(formData.get('email')) || undefined,
+    })
+    if (!overrideParse.success) {
+      return NextResponse.json(
+        {
+          error: 'Invalid name or email override',
+          code: 'INVALID_OVERRIDE',
+          fileName: file.name,
+        },
+        { status: 422 },
+      )
+    }
+    const overrideName = overrideParse.data.name ?? ''
+    const overrideEmail = overrideParse.data.email ?? ''
     const email = overrideEmail || analysis?.email || ''
     if (!email) {
       // Explicit contract for the client: show this file as "needs email",
@@ -144,6 +181,16 @@ export async function POST(
           jdHash: sha256(job.jdText),
         }
       : undefined
+
+    // Last fence before writes: the parse/LLM phase above is the long part
+    // of this request — do not persist hiring data for an account whose
+    // deletion completed meanwhile.
+    if (!(await accountActive())) {
+      return NextResponse.json(
+        { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
+        { status: 401 },
+      )
+    }
 
     const result = await intakeCandidate(ctx, {
       jobId: params.jobId,

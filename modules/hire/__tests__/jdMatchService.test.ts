@@ -106,6 +106,15 @@ describe('analyzeResumeForJob', () => {
     await expect(analyzeResumeForJob(INPUT)).resolves.toBeNull()
   })
 
+  it('threads beforeProviderCall through to the model router (deletion fence)', async () => {
+    completionMock.mockResolvedValue(
+      llmText({ name: null, email: null, phone: null, match_score: 50, strengths: [], gaps: [] }),
+    )
+    const fence = vi.fn().mockResolvedValue(true)
+    await analyzeResumeForJob({ ...INPUT, beforeProviderCall: fence })
+    expect(completionMock.mock.calls[0][0].beforeProviderCall).toBe(fence)
+  })
+
   it('clamps oversized documents before sending', async () => {
     completionMock.mockResolvedValue(
       llmText({ name: null, email: null, phone: null, match_score: 10, strengths: [], gaps: [] }),

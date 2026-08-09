@@ -42,7 +42,18 @@ describe('workspace API fence contract', () => {
       // the import line matches neither.
       const calls = (src.match(/composeApiRoute[<(]/g) ?? []).length
       const fences = (src.match(/requireActiveAccount:\s*true/g) ?? []).length
-      expect(calls).toBeGreaterThan(0)
+      if (calls === 0) {
+        // Hand-rolled handlers (multipart bodies — composeApiRoute parses
+        // JSON only) must carry the manual fence instead, and use it: at
+        // least one isJobsAccountActive call site (jobs/[jobId]/intake is
+        // the precedent). The intent is identical — a deleted account's
+        // still-valid JWT reads/mutates nothing here.
+        expect(
+          (src.match(/isJobsAccountActive\(/g) ?? []).length,
+          `${file} uses neither composeApiRoute+requireActiveAccount nor the manual isJobsAccountActive fence`
+        ).toBeGreaterThan(0)
+        return
+      }
       expect(fences).toBe(calls)
     }
   )
