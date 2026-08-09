@@ -165,8 +165,13 @@ export default function BulkUploadPanel({
   function retry(row: FileRow, overrideEmail?: string) {
     // Back onto the queue with the override attached — never a direct
     // uploadOne, which would dodge the concurrency cap (Codex P2 on #613).
-    patchRow(row.key, { status: 'queued', pendingOverride: overrideEmail, error: undefined })
-    enqueue({ ...row, status: 'queued', pendingOverride: overrideEmail })
+    // A generic Retry after a fix-up failed (network/5xx) carries NO new
+    // override, so fall back to the one already saved on the row —
+    // dropping it would resubmit the file that has no usable email and
+    // bounce straight back to needs_email (Codex P2 on #613 round 2).
+    const override = overrideEmail ?? row.pendingOverride
+    patchRow(row.key, { status: 'queued', pendingOverride: override, error: undefined })
+    enqueue({ ...row, status: 'queued', pendingOverride: override })
   }
 
   return (

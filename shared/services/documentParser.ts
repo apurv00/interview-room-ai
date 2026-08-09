@@ -32,16 +32,34 @@ export class UnsupportedFileTypeError extends Error {
  * size, but mammoth inflates the zip fully in memory — a 10MB docx can
  * expand to gigabytes.
  *
- * The declared uncompressed size in the zip headers is ATTACKER-CONTROLLED
- * (a bomb can claim 1 byte), so we do NOT trust it. Instead we measure real
- * output: inflate each entry's deflate stream with zlib's `maxOutputLength`
- * budget, which stops allocating and throws the moment output would exceed
- * the cap — so peak memory is bounded by the limit regardless of any lie in
- * the metadata (Codex P1 on #613). Only if every entry inflates within the
- * shared budget do we hand the buffer to mammoth (which then re-inflates
- * content we've proven is bounded). Exported for tests.
+ * TWO things here are deliberately NOT trusted, both learned the hard way
+ * (Codex P1 ×2 on #613):
+ *
+ * 1. Declared uncompressed sizes — a bomb simply declares 1 byte. So we
+ *    MEASURE: every deflate stream is inflated under zlib's
+ *    `maxOutputLength`, which stops allocating and throws the instant
+ *    output would exceed the shared budget. Peak memory is bounded by the
+ *    limit no matter what the metadata claims.
+ *
+ * 2. Central-directory OFFSETS — resolving them means re-implementing a zip
+ *    parser and matching JSZip's quirks exactly; the first attempt did that
+ *    and a ZIP64 sentinel offset (0xffffffff + real offset in an extra
+ *    field) walked straight past the cap because we skipped the entry while
+ *    JSZip resolved it. So we no longer read offsets AT ALL: we scan for
+ *    LOCAL file headers, which sit immediately before the compressed bytes
+ *    they describe. The payload has to physically exist somewhere in the
+ *    file, so signature-scanning finds it regardless of what any directory
+ *    claims — ZIP64, mismatched, or absent. Parser-differential bugs of
+ *    this class cannot recur, because there is no offset arithmetic left.
+ *
+ * Charging every deflate stream found against ONE budget is deliberately
+ * conservative (a stream JSZip would ignore still counts) — over-counting
+ * rejects a pathological file; under-counting exhausts the process.
+ *
+ * Exported for tests.
  */
-const ZIP_CENTRAL_DIR_SIG = Buffer.from([0x50, 0x4b, 0x01, 0x02])
+const ZIP_LOCAL_HEADER_SIG = Buffer.from([0x50, 0x4b, 0x03, 0x04])
+const ZIP_LOCAL_HEADER_BYTES = 30
 const MAX_DOCX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 const ZIP_METHOD_STORE = 0
 const ZIP_METHOD_DEFLATE = 8
@@ -51,47 +69,61 @@ export function docxInflatedWithinLimit(
   limit: number = MAX_DOCX_UNCOMPRESSED_BYTES,
 ): boolean {
   let remaining = limit
-  let offset = 0
-  while (offset < buffer.length) {
-    const cd = buffer.indexOf(ZIP_CENTRAL_DIR_SIG, offset)
-    if (cd === -1 || cd + 46 > buffer.length) break
-    const method = buffer.readUInt16LE(cd + 10)
-    const compSize = buffer.readUInt32LE(cd + 20)
-    const localOff = buffer.readUInt32LE(cd + 42)
-    offset = cd + 4
+  let cursor = 0
 
-    if (localOff + 30 > buffer.length) continue
-    const nameLen = buffer.readUInt16LE(localOff + 26)
-    const extraLen = buffer.readUInt16LE(localOff + 28)
-    const dataStart = localOff + 30 + nameLen + extraLen
-    if (dataStart > buffer.length) continue
+  while (cursor < buffer.length) {
+    const header = buffer.indexOf(ZIP_LOCAL_HEADER_SIG, cursor)
+    if (header === -1 || header + ZIP_LOCAL_HEADER_BYTES > buffer.length) break
+    // Advance past this signature before any `continue` so a malformed
+    // header can never spin the loop.
+    cursor = header + 4
+
+    const method = buffer.readUInt16LE(header + 8)
+    const compSize = buffer.readUInt32LE(header + 18)
+    const nameLen = buffer.readUInt16LE(header + 26)
+    const extraLen = buffer.readUInt16LE(header + 28)
+    const dataStart = header + ZIP_LOCAL_HEADER_BYTES + nameLen + extraLen
+    if (dataStart >= buffer.length) continue
 
     if (method === ZIP_METHOD_STORE) {
-      // Stored: output === input; charge the real bytes present.
-      remaining -= Math.min(compSize, buffer.length - dataStart)
+      // Stored: output === input, and the input cannot exceed the bytes
+      // physically present (already bounded by the caller's size cap).
+      remaining -= Math.min(compSize || buffer.length - dataStart, buffer.length - dataStart)
     } else if (method === ZIP_METHOD_DEFLATE) {
-      // Slice by declared compressed size when plausible, else to EOF —
-      // inflateRawSync stops at the deflate terminus and ignores the rest.
-      const end =
-        compSize > 0 && dataStart + compSize <= buffer.length
-          ? dataStart + compSize
-          : buffer.length
+      // Always slice to EOF: a declared compressed size may be 0
+      // (data-descriptor form), a ZIP64 sentinel, or a lie. inflateRawSync
+      // stops at the deflate stream's own terminus and ignores trailing
+      // bytes, so EOF is both safe and offset-free.
       try {
-        const out = inflateRawSync(buffer.subarray(dataStart, end), {
+        const out = inflateRawSync(buffer.subarray(dataStart), {
           maxOutputLength: Math.max(1, remaining),
         })
         remaining -= out.length
-      } catch {
-        // RangeError = exceeded the budget; any other = corrupt stream.
-        // Either way this file is not safe/parseable — reject.
-        return false
+      } catch (err) {
+        // Budget exceeded ⇒ this file inflates past the cap: REJECT.
+        // Anything else ⇒ not a real deflate stream (a PK\x03\x04 byte
+        // pattern occurring inside compressed data) or a corrupt entry:
+        // skip it. Corrupt files then fail in mammoth with its own error;
+        // this guard's only job is bounding memory.
+        if (isOutputBudgetError(err)) return false
+        continue
       }
     }
-    // Unknown methods aren't inflated by mammoth's unzip either — skip.
+    // Other methods are not inflated by JSZip either — nothing to charge.
 
-    if (remaining < 0) return false
+    if (remaining <= 0) return false
   }
   return true
+}
+
+/** zlib signals an exceeded `maxOutputLength` as ERR_BUFFER_TOO_LARGE. */
+function isOutputBudgetError(err: unknown): boolean {
+  return (
+    err instanceof RangeError ||
+    (typeof err === 'object' &&
+      err !== null &&
+      (err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE')
+  )
 }
 
 const MAX_WORDS = 8000
