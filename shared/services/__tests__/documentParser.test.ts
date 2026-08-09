@@ -34,13 +34,14 @@ describe('docx decompression-bomb guard (measures REAL inflation, offset-free)',
     content: Buffer,
     declaredUncompressed: number,
     cdLocalOffset = 0,
+    methods: { local?: number; central?: number } = {},
   ): Buffer {
     const compressed = deflateRawSync(content)
     const name = Buffer.from('word/document.xml')
 
     const local = Buffer.alloc(30)
     local.writeUInt32LE(0x04034b50, 0)
-    local.writeUInt16LE(8, 8) // method: deflate
+    local.writeUInt16LE(methods.local ?? 8, 8) // method (lie-able)
     local.writeUInt32LE(compressed.length, 18)
     local.writeUInt32LE(declaredUncompressed, 22)
     local.writeUInt16LE(name.length, 26)
@@ -48,7 +49,7 @@ describe('docx decompression-bomb guard (measures REAL inflation, offset-free)',
 
     const cd = Buffer.alloc(46)
     cd.writeUInt32LE(0x02014b50, 0)
-    cd.writeUInt16LE(8, 10) // method: deflate
+    cd.writeUInt16LE(methods.central ?? 8, 10) // method (lie-able)
     cd.writeUInt32LE(compressed.length, 20)
     cd.writeUInt32LE(declaredUncompressed, 24)
     cd.writeUInt16LE(name.length, 28)
@@ -56,6 +57,18 @@ describe('docx decompression-bomb guard (measures REAL inflation, offset-free)',
     const cdEntry = Buffer.concat([cd, name])
 
     return Buffer.concat([localHeader, compressed, cdEntry])
+  }
+
+  /** Zero-length STORED entry — what JSZip emits for a directory record. */
+  function storedDirectoryEntry(name: string): Buffer {
+    const nameBuf = Buffer.from(name)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(0, 8) // method: store
+    local.writeUInt32LE(0, 18) // compressed size 0
+    local.writeUInt32LE(0, 22) // uncompressed size 0
+    local.writeUInt16LE(nameBuf.length, 26)
+    return Buffer.concat([local, nameBuf])
   }
 
   it('accepts a normal small docx (real inflated size under the cap)', () => {
@@ -79,6 +92,28 @@ describe('docx decompression-bomb guard (measures REAL inflation, offset-free)',
     const big = Buffer.alloc(2 * 1024 * 1024, 0x42)
     const zip = zipWithDeflateEntry(big, 1, 0xffffffff)
     expect(docxInflatedWithinLimit(zip, 1024 * 1024)).toBe(false)
+  })
+
+  it('rejects a bomb marked STORED locally but DEFLATED centrally (Codex P1 #614)', () => {
+    // JSZip takes compressionMethod from the CENTRAL directory while
+    // deriving the data start from the local header, so a "stored" local
+    // method is not a promise that nothing inflates. The guard ignores
+    // both method fields and inflates on sight.
+    const big = Buffer.alloc(2 * 1024 * 1024, 0x44)
+    const zip = zipWithDeflateEntry(big, 1, 0, { local: 0, central: 8 })
+    expect(docxInflatedWithinLimit(zip, 1024 * 1024)).toBe(false)
+  })
+
+  it('does not charge zero-length stored directory records (Codex P2 #614)', () => {
+    // Seven directory records + a small real entry: the archive must pass
+    // comfortably. Charging dir entries by "declared size or the rest of
+    // the file" used to exhaust the budget and 415 ordinary DOCX files.
+    const dirs = ['word/', '_rels/', 'docProps/', 'customXml/', 'word/_rels/', 'word/media/', 'word/theme/']
+    const zip = Buffer.concat([
+      ...dirs.map(storedDirectoryEntry),
+      zipWithDeflateEntry(Buffer.from('real content '.repeat(50)), 650),
+    ])
+    expect(docxInflatedWithinLimit(zip, 2 * 1024 * 1024)).toBe(true)
   })
 
   it('rejects a bomb with NO central directory at all (payload is still found)', () => {

@@ -41,28 +41,36 @@ export class UnsupportedFileTypeError extends Error {
  *    output would exceed the shared budget. Peak memory is bounded by the
  *    limit no matter what the metadata claims.
  *
- * 2. Central-directory OFFSETS — resolving them means re-implementing a zip
- *    parser and matching JSZip's quirks exactly; the first attempt did that
- *    and a ZIP64 sentinel offset (0xffffffff + real offset in an extra
- *    field) walked straight past the cap because we skipped the entry while
- *    JSZip resolved it. So we no longer read offsets AT ALL: we scan for
- *    LOCAL file headers, which sit immediately before the compressed bytes
- *    they describe. The payload has to physically exist somewhere in the
- *    file, so signature-scanning finds it regardless of what any directory
- *    claims — ZIP64, mismatched, or absent. Parser-differential bugs of
- *    this class cannot recur, because there is no offset arithmetic left.
+ * 2. Any DECLARED metadata about where or how an entry is compressed.
+ *    Two rounds of parser-differential bugs came from reading it:
+ *    resolving central-directory offsets missed a ZIP64 sentinel entry
+ *    that JSZip resolved and inflated; then trusting the LOCAL header's
+ *    compression method missed a bomb marked "stored" locally and
+ *    "deflated" centrally — JSZip takes `compressionMethod` and
+ *    `compressedSize` from the CENTRAL directory (jszip/lib/zipEntry.js
+ *    readLocalPart) while deriving the data START from the local header.
  *
- * Charging every deflate stream found against ONE budget is deliberately
- * conservative (a stream JSZip would ignore still counts) — over-counting
- * rejects a pathological file; under-counting exhausts the process.
+ *    So this guard reads exactly ONE thing from the archive: where each
+ *    entry's payload begins — from the local header's name/extra lengths,
+ *    which is the same derivation JSZip uses and the only one the physical
+ *    layout permits. It then ATTEMPTS TO INFLATE at that position
+ *    regardless of any declared method. If the bytes are a deflate stream,
+ *    their real output counts against the budget no matter what either
+ *    header claims; if they are not, inflation simply fails and the entry
+ *    is skipped. There is no method, size, or offset field left to lie
+ *    about.
+ *
+ * Stored (uncompressed) entries need no budget at all: their output equals
+ * their input, which is bounded by the caller's upload-size cap — the
+ * budget here exists solely to bound INFLATION. Charging them by declared
+ * size was itself a bug: zero-length directory records report size 0 and a
+ * fallback charged the rest of the archive, rejecting ordinary DOCX files.
  *
  * Exported for tests.
  */
 const ZIP_LOCAL_HEADER_SIG = Buffer.from([0x50, 0x4b, 0x03, 0x04])
 const ZIP_LOCAL_HEADER_BYTES = 30
 const MAX_DOCX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
-const ZIP_METHOD_STORE = 0
-const ZIP_METHOD_DEFLATE = 8
 
 export function docxInflatedWithinLimit(
   buffer: Buffer,
@@ -78,40 +86,31 @@ export function docxInflatedWithinLimit(
     // header can never spin the loop.
     cursor = header + 4
 
-    const method = buffer.readUInt16LE(header + 8)
-    const compSize = buffer.readUInt32LE(header + 18)
+    // The ONLY fields read: local name/extra lengths, which is exactly how
+    // JSZip locates the payload (readLocalPart). Method and sizes are
+    // deliberately ignored — see the header comment.
     const nameLen = buffer.readUInt16LE(header + 26)
     const extraLen = buffer.readUInt16LE(header + 28)
     const dataStart = header + ZIP_LOCAL_HEADER_BYTES + nameLen + extraLen
     if (dataStart >= buffer.length) continue
 
-    if (method === ZIP_METHOD_STORE) {
-      // Stored: output === input, and the input cannot exceed the bytes
-      // physically present (already bounded by the caller's size cap).
-      remaining -= Math.min(compSize || buffer.length - dataStart, buffer.length - dataStart)
-    } else if (method === ZIP_METHOD_DEFLATE) {
-      // Always slice to EOF: a declared compressed size may be 0
-      // (data-descriptor form), a ZIP64 sentinel, or a lie. inflateRawSync
-      // stops at the deflate stream's own terminus and ignores trailing
-      // bytes, so EOF is both safe and offset-free.
-      try {
-        const out = inflateRawSync(buffer.subarray(dataStart), {
-          maxOutputLength: Math.max(1, remaining),
-        })
-        remaining -= out.length
-      } catch (err) {
-        // Budget exceeded ⇒ this file inflates past the cap: REJECT.
-        // Anything else ⇒ not a real deflate stream (a PK\x03\x04 byte
-        // pattern occurring inside compressed data) or a corrupt entry:
-        // skip it. Corrupt files then fail in mammoth with its own error;
-        // this guard's only job is bounding memory.
-        if (isOutputBudgetError(err)) return false
-        continue
-      }
+    // Slice to EOF: inflateRawSync stops at the deflate stream's own
+    // terminus and ignores trailing bytes (verified), so no length field
+    // is needed here either.
+    try {
+      const out = inflateRawSync(buffer.subarray(dataStart), {
+        maxOutputLength: Math.max(1, remaining),
+      })
+      remaining -= out.length
+    } catch (err) {
+      // Budget exceeded ⇒ this file inflates past the cap: REJECT.
+      // Anything else ⇒ these bytes are not a deflate stream (a stored
+      // entry, a directory record, or a stray PK\x03\x04 pattern inside
+      // compressed data): skip. Genuinely corrupt archives still fail
+      // inside mammoth with its own error; bounding memory is this
+      // guard's only job.
+      if (isOutputBudgetError(err)) return false
     }
-    // Other methods are not inflated by JSZip either — nothing to charge.
-
-    if (remaining <= 0) return false
   }
   return true
 }
