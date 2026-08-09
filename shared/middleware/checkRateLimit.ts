@@ -6,6 +6,17 @@ interface RateLimitConfig {
   windowMs: number
   maxRequests: number
   keyPrefix: string
+  /**
+   * Reject (503) instead of allowing when the limiter itself is
+   * unavailable. Default false — fail OPEN, so a Redis blip never blocks a
+   * legitimate signed-in user, which is right for authed paths where the
+   * session is already an abuse bound.
+   *
+   * Set TRUE on anonymous endpoints that spend money per request (document
+   * parse + model call): there the limiter is the ONLY bound, and failing
+   * open converts an outage into unbounded spend.
+   */
+  failClosed?: boolean
 }
 
 /**
@@ -37,6 +48,16 @@ export async function checkRateLimit(
       )
     }
   } catch (err) {
+    if (config.failClosed) {
+      aiLogger.error(
+        { err, keyPrefix: config.keyPrefix },
+        'Rate limit check failed on a fail-closed endpoint — rejecting',
+      )
+      return NextResponse.json(
+        { error: 'Temporarily unavailable. Please try again shortly.', code: 'RATE_LIMIT_UNAVAILABLE' },
+        { status: 503, headers: { 'Retry-After': '30' } },
+      )
+    }
     aiLogger.error({ err }, 'Rate limit check failed, allowing request')
   }
   return null

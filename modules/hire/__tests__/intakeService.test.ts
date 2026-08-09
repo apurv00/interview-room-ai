@@ -47,7 +47,7 @@ vi.mock('../models', async () => {
   }
 })
 
-import { intakeCandidate } from '../services/intakeService'
+import { intakeCandidate, intakeFromApplyPage } from '../services/intakeService'
 import type { MembershipContext } from '../services/workspaceService'
 
 const CTX = {
@@ -363,5 +363,61 @@ describe('seen-before signal', () => {
     expect(result.seenBefore).toEqual([
       { jobId: 'job-9', jobTitle: 'Data Engineer', stage: 'shortlist' },
     ])
+  })
+})
+
+
+describe('public apply-page intake', () => {
+  const JOB = { _id: 'job-1', workspaceId: 'ws-A', createdBy: 'owner-1' } as never
+
+  const APPLY_INPUT = {
+    name: 'Jane Doe',
+    email: 'Jane@Example.com',
+    resumeText: 'resume body',
+    resumeFileName: 'jane.pdf',
+  }
+
+  it('claims write authority against the JOB OWNER, not a member session', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(JOB, APPLY_INPUT)
+
+    // The deletion barrier is claimed on the owner's account: if the
+    // recruiter is being deleted, their workspace stops accepting.
+    expect(txMock.mock.calls[0][0]).toBe('owner-1')
+    expect(mockCandidate.create.mock.calls[0][0][0].source).toBe('apply_page')
+  })
+
+  it('records the event with NO actorUserId — nobody on the team did this', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(JOB, APPLY_INPUT)
+
+    const event = mockApplication.create.mock.calls[0][0][0].events[0]
+    expect(event.actorUserId).toBeUndefined()
+    expect(event.actorName).toBe('Applicant (public apply page)')
+    expect(event.note).toBe('via public apply page')
+  })
+
+  it('a stranger claiming someone else\'s email does NOT overwrite their résumé — and still gets a normal outcome', async () => {
+    // Enumeration defence: throwing here (as the member path does) would
+    // tell an anonymous caller that the email exists in this workspace.
+    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'rahul original resume' })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    const result = await intakeFromApplyPage(JOB, { ...APPLY_INPUT, name: 'Jane Doe' })
+
+    // No throw, an application exists, and the stored résumé is untouched.
+    expect(result.applicationId).toBe('app-1')
+    expect(existing.resumeText).toBe('rahul original resume')
+    expect(mockApplication.create.mock.calls[0][0][0].resumeMatch).toBeUndefined()
   })
 })

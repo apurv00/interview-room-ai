@@ -74,6 +74,15 @@ export interface IHireApplication extends Document {
   /** Required when the stage becomes 'hired' (enforced in pipelineService). */
   decisionNote?: string
   resumeMatch?: IHireResumeMatch
+  /**
+   * Résumé submitted through the PUBLIC apply page when the candidate
+   * already had one on file. Kept per-application rather than overwriting
+   * the workspace pool record, so an anonymous submission can neither
+   * destroy curated data nor be silently discarded (self-review on the
+   * apply page). Recruiters review it on the application card.
+   */
+  applicantResumeText?: string
+  applicantResumeFileName?: string
   events: IHireApplicationEvent[]
   createdBy: mongoose.Types.ObjectId
   createdAt: Date
@@ -124,6 +133,8 @@ const HireApplicationSchema = new Schema<IHireApplication>(
     stage: { type: String, enum: HIRE_STAGES, default: 'new' },
     decisionNote: { type: String, maxlength: 4000 },
     resumeMatch: { type: HireResumeMatchSchema },
+    applicantResumeText: { type: String, maxlength: 50000 },
+    applicantResumeFileName: { type: String, maxlength: 255 },
     events: { type: [HireApplicationEventSchema], default: [] },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },

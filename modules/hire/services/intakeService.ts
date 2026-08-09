@@ -1,4 +1,4 @@
-import type { ClientSession } from 'mongoose'
+import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
 import { withPersonalDataWriteTransaction } from '@shared/services/accountDeletion'
@@ -9,6 +9,7 @@ import {
   type HireCandidateSource,
   type IHireApplication,
   type IHireCandidate,
+  type IHireJob,
   type IHireResumeMatch,
 } from '../models'
 import type { MembershipContext } from './workspaceService'
@@ -84,12 +85,69 @@ const SOURCE_LABEL: Record<IntakeInput['source'], string> = {
   apply_page: 'via public apply page',
 }
 
+/**
+ * Who the write is attributed to, and whose account-deletion state gates
+ * it. Decoupled from MembershipContext so the PUBLIC apply page reuses this
+ * exact write path (transaction, merge policy, staleness sweep, identity
+ * guard) instead of duplicating it — duplicated write paths are how the
+ * two halves drift apart and only one gets the next fix.
+ */
+export interface IntakeActor {
+  /** Barrier claim target — writes abort if THIS account is deleting. */
+  userId: mongoose.Types.ObjectId
+  /** Audit display name recorded on the created event. */
+  displayName: string
+  /** Member id for member actions; absent for self-service applications. */
+  actorUserId?: mongoose.Types.ObjectId
+}
+
+/** Member-initiated intake (bulk upload / recruiter add). */
 export async function intakeCandidate(
   ctx: MembershipContext,
   input: IntakeInput,
 ): Promise<IntakeResult> {
+  // userId is optional on the membership type (linked lazily on first
+  // sign-in), but requireMembership always resolves or links it — a
+  // missing id here means a context built some other way; refuse rather
+  // than write personal data without a claimable actor.
+  const actorUserId = ctx.membership.userId
+  if (!actorUserId) {
+    throw new AppError('Workspace membership is not linked to a user', 403, 'MEMBERSHIP_UNLINKED')
+  }
+  return runIntake(ctx.workspace._id, input, {
+    userId: actorUserId,
+    displayName: ctx.membership.name || ctx.membership.email,
+    actorUserId,
+  })
+}
+
+/**
+ * Public apply-page intake. Tenancy proof is the hashed apply token that
+ * resolved this job (never a client-supplied workspace id), and the
+ * deletion barrier claims against the job's OWNER — if the recruiter's
+ * account is being deleted, their workspace stops accepting applications.
+ * The event carries no actorUserId: nobody on the team performed it.
+ */
+export async function intakeFromApplyPage(
+  job: Pick<IHireJob, '_id' | 'workspaceId' | 'createdBy'>,
+  input: Omit<IntakeInput, 'jobId' | 'source' | 'identityConfirmed'>,
+): Promise<IntakeResult> {
+  return runIntake(
+    job.workspaceId,
+    { ...input, jobId: job._id.toString(), source: 'apply_page' },
+    {
+      userId: job.createdBy,
+      displayName: 'Applicant (public apply page)',
+    },
+  )
+}
+
+async function runIntake(
+  workspaceId: mongoose.Types.ObjectId,
+  input: IntakeInput,
+  actor: IntakeActor,
+): Promise<IntakeResult> {
   await connectDB()
-  const workspaceId = ctx.workspace._id
   const email = input.email.toLowerCase().trim()
   if (!email) throw new AppError('Candidate email is required', 422, 'NO_EMAIL')
 
@@ -99,18 +157,9 @@ export async function intakeCandidate(
     throw new AppError('This job is closed', 409, 'JOB_CLOSED')
   }
 
-  // userId is optional on the membership type (linked lazily on first
-  // sign-in), but requireMembership always resolves or links it — a
-  // missing id here means a context built some other way; refuse rather
-  // than write personal data without a claimable actor.
-  const actorUserId = ctx.membership.userId
-  if (!actorUserId) {
-    throw new AppError('Workspace membership is not linked to a user', 403, 'MEMBERSHIP_UNLINKED')
-  }
-
   const runIntakeTx = () =>
-    withPersonalDataWriteTransaction(actorUserId, (session) =>
-      writeIntake(session, ctx, input, email),
+    withPersonalDataWriteTransaction(actor.userId, (session) =>
+      writeIntake(session, workspaceId, input, email, actor),
     )
 
   let outcome: Awaited<ReturnType<typeof writeIntake>>
@@ -132,23 +181,24 @@ export async function intakeCandidate(
     applicationId: outcome.application._id.toString(),
     createdCandidate: outcome.createdCandidate,
     createdApplication: outcome.createdApplication,
-    seenBefore: await seenBeforeForCandidate(ctx, outcome.candidate, outcome.application),
+    // NOTE for callers: seenBefore is HR-only intelligence. The public
+    // apply route must never include it in an applicant-facing response.
+    seenBefore: await seenBeforeForCandidate(workspaceId, outcome.candidate, outcome.application),
   }
 }
 
 async function writeIntake(
   session: ClientSession,
-  ctx: MembershipContext,
+  workspaceId: mongoose.Types.ObjectId,
   input: IntakeInput,
   email: string,
+  actor: IntakeActor,
 ): Promise<{
   candidate: IHireCandidate
   application: IHireApplication
   createdCandidate: boolean
   createdApplication: boolean
 }> {
-  const workspaceId = ctx.workspace._id
-
   // In-transaction job claim (self-review on #612): the pre-transaction
   // status check is a fast-path only — snapshot reads do not serialize
   // against a concurrent close, so the authority is this conflict-inducing
@@ -166,6 +216,10 @@ async function writeIntake(
   // ── Candidate: find-or-create; merge on revisit ──
   let createdCandidate = false
   let resumeReplaced = false
+  // Set when a public submission must not touch the shared pool résumé —
+  // the file rides on the APPLICATION instead of being discarded.
+  let applicantResumeText: string | undefined
+  let applicantResumeFileName: string | undefined
   let candidate = await HireCandidate.findOne({ workspaceId, email }).session(session)
   if (!candidate) {
     const created = await HireCandidate.create(
@@ -178,7 +232,7 @@ async function writeIntake(
           resumeText: input.resumeText,
           resumeFileName: input.resumeFileName,
           source: input.source,
-          createdBy: ctx.membership.userId,
+          createdBy: actor.userId,
         },
       ],
       { session },
@@ -186,19 +240,39 @@ async function writeIntake(
     candidate = created[0]
     createdCandidate = true
   } else {
-    // Identity-conflict guard (self-review on #612): an EXTRACTED email
+    // Identity-conflict guard (self-review on #612): an UNCONFIRMED email
     // landing on an existing candidate whose stored name shares no tokens
     // with the incoming one, while carrying a DIFFERENT resume, is more
-    // likely a shared/agency address or a crafted CV than the same person.
-    // Refuse the destructive overwrite; the recruiter confirms via the
-    // email-override retry, which sets identityConfirmed.
-    if (
+    // likely a shared/agency address, a crafted CV, or a stranger typing
+    // someone else's address than the same person.
+    // PUBLIC path: an anonymous submission NEVER overwrites a résumé that
+    // is already on file — no name heuristic decides it (self-review found
+    // the heuristic fails OPEN for single-token and non-Latin names, which
+    // handed an anonymous caller a résumé-overwrite primitive). The
+    // applicant's file is instead attached to THEIR application below, so
+    // nothing is lost and the recruiter sees exactly what was submitted.
+    // Response stays byte-identical either way — the endpoint must not
+    // become an oracle for who is already in the pool.
+    const publicSubmissionKeepsPoolRecord =
+      input.source === 'apply_page' &&
+      !!input.resumeText &&
+      !!candidate.resumeText &&
+      input.resumeText !== candidate.resumeText
+
+    const identityConflict =
       !input.identityConfirmed &&
-      input.resumeText &&
-      candidate.resumeText &&
+      !!input.resumeText &&
+      !!candidate.resumeText &&
       input.resumeText !== candidate.resumeText &&
       namesDisjoint(candidate.name, input.name)
-    ) {
+
+    if (publicSubmissionKeepsPoolRecord) {
+      applicantResumeText = input.resumeText
+      applicantResumeFileName = input.resumeFileName
+      input = { ...input, resumeText: undefined, resumeFileName: undefined }
+    } else if (identityConflict && input.source !== 'apply_page') {
+      // MEMBER path: surface it — the recruiter can confirm the email via
+      // the override retry (which sets identityConfirmed) or fix the file.
       throw new AppError(
         `This email already belongs to "${candidate.name}" in this workspace — confirm the email to replace their résumé`,
         422,
@@ -225,16 +299,23 @@ async function writeIntake(
           candidateId: candidate._id,
           stage: 'new',
           resumeMatch: input.resumeMatch,
+          ...(applicantResumeText
+            ? {
+                applicantResumeText,
+                applicantResumeFileName,
+              }
+            : {}),
           events: [
             {
               type: 'created',
-              actorUserId: ctx.membership.userId,
-              actorName: ctx.membership.name || ctx.membership.email,
+              // Absent for self-service: nobody on the team did this.
+              ...(actor.actorUserId ? { actorUserId: actor.actorUserId } : {}),
+              actorName: actor.displayName,
               note: SOURCE_LABEL[input.source],
               at: new Date(),
             },
           ],
-          createdBy: ctx.membership.userId,
+          createdBy: actor.userId,
         },
       ],
       { session },
@@ -290,7 +371,10 @@ function namesDisjoint(a: string, b: string): boolean {
     )
   const ta = tokens(a)
   const tb = tokens(b)
-  if (ta.size === 0 || tb.size === 0) return false
+  // Fail CLOSED: a name we cannot tokenize (single character, non-Latin
+  // script) must not silently DISABLE the guard — treat it as a conflict
+  // the recruiter confirms, never as proof of same-person.
+  if (ta.size === 0 || tb.size === 0) return true
   return !Array.from(ta).some((t) => tb.has(t))
 }
 
@@ -308,12 +392,12 @@ function applyMerge(candidate: IHireCandidate, input: IntakeInput): boolean {
 
 /** Everywhere else this person already is in the workspace, with job names. */
 async function seenBeforeForCandidate(
-  ctx: MembershipContext,
+  workspaceId: mongoose.Types.ObjectId,
   candidate: IHireCandidate,
   currentApplication: IHireApplication,
 ): Promise<SeenBeforeEntry[]> {
   const others = await HireApplication.find({
-    workspaceId: ctx.workspace._id,
+    workspaceId,
     candidateId: candidate._id,
     _id: { $ne: currentApplication._id },
   })
@@ -321,7 +405,7 @@ async function seenBeforeForCandidate(
     .limit(10)
   if (others.length === 0) return []
   const jobs = await HireJob.find({
-    workspaceId: ctx.workspace._id,
+    workspaceId,
     _id: { $in: others.map((a) => a.jobId) },
   }).select('title')
   const titleById = new Map(jobs.map((j) => [j._id.toString(), j.title]))

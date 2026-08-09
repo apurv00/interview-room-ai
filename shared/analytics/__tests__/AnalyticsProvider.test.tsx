@@ -4,7 +4,11 @@ import { AnalyticsProvider } from '@shared/analytics/AnalyticsProvider'
 
 const trackMock = vi.fn()
 const identifyMock = vi.fn()
-vi.mock('@shared/analytics/track', () => ({
+vi.mock('@shared/analytics/track', async (importOriginal) => ({
+  // Real redaction, mocked emitters: the provider must be exercised with
+  // the ACTUAL redactor so a regression that leaks a tokenized path fails
+  // here rather than in production analytics.
+  ...(await importOriginal<typeof import('@shared/analytics/track')>()),
   track: (...args: unknown[]) => trackMock(...args),
   identify: (...args: unknown[]) => identifyMock(...args),
 }))
@@ -196,5 +200,17 @@ describe('AnalyticsProvider', () => {
       </AnalyticsProvider>
     )
     expect(getByText('child-content')).toBeTruthy()
+  })
+})
+
+
+describe('tokenized routes never reach analytics in cleartext', () => {
+  it('emits a redacted pathname for /apply/<token>', async () => {
+    mockPathname = `/apply/${'a'.repeat(64)}`
+    render(<AnalyticsProvider>{null}</AnalyticsProvider>)
+    const pageViews = trackMock.mock.calls.filter((c) => c[0] === 'page_view')
+    const props = pageViews[pageViews.length - 1]?.[1] as { pathname: string }
+    expect(props.pathname).toBe('/apply/[redacted]')
+    expect(props.pathname).not.toContain('aaaa')
   })
 })

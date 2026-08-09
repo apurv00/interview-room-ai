@@ -53,6 +53,10 @@ export function serializeJob(job: IHireJob, opts: { includeJd?: boolean } = {}) 
     closeNote: job.closeNote ?? null,
     closedAt: job.closedAt ?? null,
     createdAt: job.createdAt,
+    // Whether the public apply page is live. The token itself is NEVER
+    // serialized — only its hash is stored, and the raw value is shown
+    // once at mint time.
+    applyPageEnabled: job.applyPageEnabled === true,
     ...(opts.includeJd ? { jdText: job.jdText } : {}),
   }
 }

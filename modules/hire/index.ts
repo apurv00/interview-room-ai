@@ -71,10 +71,21 @@ export {
 // Phase 2 intake: idempotent bulk/apply-page candidate creation + dedupe
 export {
   intakeCandidate,
+  intakeFromApplyPage,
   type IntakeInput,
   type IntakeResult,
+  type IntakeActor,
   type SeenBeforeEntry,
 } from './services/intakeService'
+
+// Public apply page (tokenized, unauthenticated candidate self-service)
+export {
+  issueApplyLink,
+  disableApplyLink,
+  resolveApplyToken,
+  type ApplyLinkResult,
+  type PublicJobView,
+} from './services/applyPageService'
 export {
   analyzeResumeForJob,
   extractEmailFromText,
