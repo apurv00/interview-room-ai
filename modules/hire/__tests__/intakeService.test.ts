@@ -508,8 +508,8 @@ describe('quarantined résumé and its score move together (Codex P1 on #615)', 
 })
 
 
-describe('an obsolete quarantine is cleared when the score comes from the pool copy (Codex P1 on #615)', () => {
-  it('drops the old application-specific résumé so document and score cannot disagree', async () => {
+describe('a pool-copy rescore refreshes the score WITHOUT erasing history (Codex P1 on #615)', () => {
+  it('advances the headline score and keeps every prior public submission', async () => {
     // Bulk upload (member path) rescoring an application that still holds a
     // quarantined document from an earlier public submission.
     const existing = candidateDoc({ name: 'Jane Doe', resumeText: 'resume body' })
@@ -528,7 +528,11 @@ describe('an obsolete quarantine is cleared when the score comes from the pool c
     expect((app.resumeMatch as { score: number }).score).toBe(77)
     // The stale document is gone — otherwise the card shows B beside a
     // score computed from A, and staleness anchors to B as well.
-    expect(app.applicantSubmissions).toBeUndefined()
+    // History is RETAINED — deleting it let anyone with the link, the
+    // email and a copy of the pool résumé erase the append-only record.
+    const kept = app.applicantSubmissions as Array<{ resumeText: string }>
+    expect(kept).toHaveLength(1)
+    expect(kept[0].resumeText).toBe('OBSOLETE public submission')
   })
 })
 
@@ -561,5 +565,67 @@ describe('append-only submissions are bounded', () => {
     // flood of submissions push it out, which made append-only meaningless.
     expect(subs[subs.length - 1].resumeText).toBe('GENUINE ORIGINAL')
     expect(subs[0].resumeText).toBe('attacker-3')
+  })
+})
+
+
+describe('anonymous submissions are CREATE-ONLY on an existing candidate (threat-model pass)', () => {
+  const JOB4 = { _id: 'job-1', workspaceId: 'ws-A' } as never
+  const OPTS4 = { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' }
+
+  it('cannot write into the pool record of a candidate who has NO résumé yet', async () => {
+    // The common Phase 1 flow: a recruiter adds someone by name + email
+    // only. Keying the guard on "is a résumé already there" left this case
+    // wide open — an anonymous caller who knew the email could populate
+    // the workspace-level record and fire the sibling staleness sweep.
+    const existing = candidateDoc({
+      name: 'Rahul Verma',
+      resumeText: undefined,
+      phone: undefined,
+      isModified: vi.fn(() => true),
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(
+      JOB4,
+      {
+        name: 'Jane Doe',
+        email: 'jane@example.com',
+        phone: '+910000000000',
+        resumeText: 'anonymous document',
+        resumeFileName: 'anon.pdf',
+      },
+      OPTS4,
+    )
+
+    // Pool record untouched — no résumé, no name, no phone written.
+    expect(existing.resumeText).toBeUndefined()
+    expect(existing.name).toBe('Rahul Verma')
+    expect(existing.phone).toBeUndefined()
+    expect(existing.save).not.toHaveBeenCalled()
+    // No sibling staleness sweep triggered by an anonymous caller.
+    expect(mockApplication.updateMany).not.toHaveBeenCalled()
+    // The document is still captured, on the application.
+    expect(mockApplication.create.mock.calls[0][0][0].applicantSubmissions[0].resumeText).toBe(
+      'anonymous document',
+    )
+  })
+
+  it('still becomes the pool résumé when the anonymous caller CREATES the candidate', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-new' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeFromApplyPage(
+      JOB4,
+      { name: 'New Person', email: 'new@example.com', resumeText: 'first ever', resumeFileName: 'f.pdf' },
+      OPTS4,
+    )
+
+    // Creating is allowed; only EDITING an existing record is not.
+    expect(mockCandidate.create.mock.calls[0][0][0].resumeText).toBe('first ever')
   })
 })
