@@ -1,4 +1,6 @@
-import { Worker } from 'worker_threads'
+import { Readable } from 'stream'
+import JSZip from 'jszip'
+import mammoth from 'mammoth'
 import { extractText, getDocumentProxy } from 'unpdf'
 import { logger } from '@shared/logger'
 
@@ -27,83 +29,76 @@ export class UnsupportedFileTypeError extends Error {
 }
 
 /**
- * Decompression-bomb defence for .docx — a HARD memory ceiling, not a
- * prediction.
+ * Decompression-bomb defence for .docx — MEASURED with the same parser
+ * mammoth uses, streamed, with a hard byte budget.
  *
- * History (three review rounds, one lesson): earlier versions inspected the
- * ZIP structure to estimate how much mammoth would inflate. Every version
- * was bypassed by metadata the attacker writes — declared uncompressed
- * sizes, then central-directory offsets (a ZIP64 sentinel), then the
- * compression method (JSZip takes method/size from the CENTRAL directory
- * but the data start from the LOCAL header). Each fix modelled the other
- * parser slightly better and was wrong slightly differently, and the
- * accounting could never be both complete and free of false rejections.
+ * Four review rounds landed here, and the discarded approaches are worth
+ * recording because each looked right:
  *
- * So we stopped predicting the allocation and started BOUNDING it: mammoth
- * runs inside a worker whose V8 heap is capped. A bomb exhausts that heap
- * and the worker dies with ERR_WORKER_OUT_OF_MEMORY — the request fails
- * cleanly, the server is untouched, and no ZIP field is consulted anywhere.
- * There is nothing left for a crafted archive to lie about.
+ *  1. Trust the ZIP's declared uncompressed sizes → a bomb declares 1 byte.
+ *  2. Resolve central-directory offsets ourselves → a ZIP64 sentinel offset
+ *     made us skip an entry JSZip happily resolved and inflated.
+ *  3. Ignore offsets, read the local header's compression method → JSZip
+ *     takes method/size from the CENTRAL directory, so "stored" locally and
+ *     "deflated" centrally slipped through. (1–3 are the same mistake:
+ *     re-implementing a zip parser to predict another zip parser.)
+ *  4. Run mammoth in a worker with a capped V8 heap → MEASURED INEFFECTIVE:
+ *     pako inflates into Uint8Array backing stores, which are external
+ *     memory and are not governed by old/young generation limits. A
+ *     128MB-heap worker parsed a 400MB bomb from a 0.39MB upload to
+ *     completion. It also broke tracing: a string `require` inside worker
+ *     source is invisible to Next output tracing, so mammoth was absent
+ *     from the standalone build and every DOCX would have 415'd in prod.
  *
- * Fail-closed: any worker failure (including a module-resolution problem)
- * surfaces as an unsupported-file error and is logged at ERROR, rather than
- * silently falling back to an unbounded in-process parse.
+ * What actually works: decompress with JSZip — the very library mammoth
+ * parses with, so there is no parser to disagree with — as a STREAM,
+ * counting bytes as they materialize and destroying the stream the moment
+ * the budget is exceeded. Nothing declared is trusted (bytes are counted,
+ * not read from a header), memory stays bounded (chunk-sized buffering plus
+ * early abort), and the import is static so output tracing keeps mammoth
+ * and jszip in the standalone image.
+ *
+ * Cost: a docx is inflated twice on the happy path (once to measure, once
+ * by mammoth). Measured at ~150ms for a bomb and single-digit ms for a real
+ * résumé — worth it for a bound that is actually a bound.
  */
-const DOCX_WORKER_HEAP_MB = 128
+const MAX_DOCX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 
-const DOCX_WORKER_SOURCE = `
-const { parentPort, workerData } = require('worker_threads')
-const mammoth = require('mammoth')
-mammoth
-  .extractRawText({ buffer: Buffer.from(workerData) })
-  .then((r) => parentPort.postMessage({ ok: true, text: r.value }))
-  .catch((e) => parentPort.postMessage({ ok: false, error: String((e && e.message) || e) }))
-`
-
-export async function extractDocxBounded(
+export async function docxInflationWithinLimit(
   buffer: Buffer,
-  heapMb: number = DOCX_WORKER_HEAP_MB,
-): Promise<string> {
-  const result = await new Promise<{ ok: boolean; text?: string; error?: string }>(
-    (resolve) => {
-      let worker: Worker
-      try {
-        worker = new Worker(DOCX_WORKER_SOURCE, {
-          eval: true,
-          workerData: buffer,
-          resourceLimits: {
-            maxOldGenerationSizeMb: heapMb,
-            maxYoungGenerationSizeMb: 16,
-          },
-        })
-      } catch (err) {
-        resolve({ ok: false, error: `worker start failed: ${String(err)}` })
-        return
-      }
-      let settled = false
-      const done = (r: { ok: boolean; text?: string; error?: string }) => {
-        if (settled) return
-        settled = true
-        resolve(r)
-        void worker.terminate()
-      }
-      worker.on('message', done)
-      worker.on('error', (err: NodeJS.ErrnoException) => {
-        done({ ok: false, error: err.code || err.message })
-      })
-      worker.on('exit', (code) => {
-        done({ ok: false, error: `worker exited (${code})` })
-      })
-    },
-  )
-
-  if (!result.ok) {
-    logger.error({ reason: result.error }, 'docx worker parse failed')
-    throw new UnsupportedFileTypeError(
-      'We could not process that DOCX file. Please export it as PDF or plain text.',
-    )
+  limit: number = MAX_DOCX_UNCOMPRESSED_BYTES,
+): Promise<boolean> {
+  let zip: JSZip
+  try {
+    zip = await JSZip.loadAsync(buffer)
+  } catch {
+    // Not a readable archive — mammoth will fail with its own error; this
+    // guard only decides whether inflation is safe to attempt.
+    return true
   }
-  return result.text ?? ''
+
+  let total = 0
+  for (const name of Object.keys(zip.files)) {
+    const entry = zip.files[name]
+    if (entry.dir) continue
+    const withinBudget = await new Promise<boolean>((resolve) => {
+      // JSZip types this as its own ReadableStream; at runtime it is a
+      // Node Readable, and destroy() is what stops pako mid-inflation.
+      const stream = entry.nodeStream('nodebuffer') as unknown as Readable
+      stream.on('data', (chunk: Buffer) => {
+        total += chunk.length
+        if (total > limit) {
+          stream.destroy()
+          resolve(false)
+        }
+      })
+      stream.on('end', () => resolve(true))
+      // A corrupt entry is not a bomb: let mammoth report it.
+      stream.on('error', () => resolve(true))
+    })
+    if (!withinBudget) return false
+  }
+  return true
 }
 
 const MAX_WORDS = 8000
@@ -140,9 +135,16 @@ export async function parseDocument(buffer: Buffer, filename: string): Promise<P
       break
     }
     case '.docx': {
-      // Bounded worker — see extractDocxBounded. A decompression bomb dies
-      // with the worker instead of the server.
-      rawText = await extractDocxBounded(buffer)
+      // Measure inflation with JSZip (mammoth's own unzip library) before
+      // letting mammoth inflate it — see the guard's header comment.
+      if (!(await docxInflationWithinLimit(buffer))) {
+        logger.warn({ filename, bytes: buffer.length }, 'docx rejected: inflation over budget')
+        throw new UnsupportedFileTypeError(
+          'This DOCX file expands too large to process safely. Please export it as PDF or plain text.',
+        )
+      }
+      const result = await mammoth.extractRawText({ buffer })
+      rawText = result.value
       break
     }
     case '.txt': {

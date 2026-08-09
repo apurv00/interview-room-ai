@@ -6,7 +6,7 @@ vi.mock('@shared/logger', () => ({
 
 import {
   parseDocument,
-  extractDocxBounded,
+  docxInflationWithinLimit,
   UnsupportedFileTypeError,
 } from '../documentParser'
 
@@ -25,12 +25,12 @@ describe('parseDocument extraction limits', () => {
 })
 
 /**
- * The docx defence is a HARD heap ceiling on the worker that runs mammoth,
- * not a prediction about ZIP contents — so these tests exercise the real
- * thing: a genuine archive built with JSZip (the library mammoth unzips
- * with) must parse, and the ceiling must actually stop an oversized parse.
+ * The docx defence measures real inflation with JSZip — mammoth's own
+ * unzip library — so these tests use REAL archives, including an actual
+ * decompression bomb. A synthetic zip could only prove the guard agrees
+ * with itself.
  */
-describe('docx parsing runs inside a memory-bounded worker', () => {
+describe('docx inflation budget (measured with the real parser)', () => {
   async function buildDocx(bodyText: string): Promise<Buffer> {
     const JSZip = (await import('jszip')).default
     const zip = new JSZip()
@@ -62,17 +62,24 @@ describe('docx parsing runs inside a memory-bounded worker', () => {
     expect(result.text).toContain('Senior Backend Engineer')
   }, 20_000)
 
-  it('enforces the heap ceiling — an over-budget parse dies with the worker, not the server', async () => {
+  it('accepts a normal résumé well inside the budget', async () => {
     const docx = await buildDocx('Jane Doe jane@example.com Senior Backend Engineer')
+    expect(await docxInflationWithinLimit(docx)).toBe(true)
+  }, 20_000)
 
-    // Same archive, a heap too small to parse it: V8 kills the worker
-    // (ERR_WORKER_OUT_OF_MEMORY) and it surfaces as a typed file error.
-    // This is the mechanism a decompression bomb hits — proven without
-    // needing a multi-gigabyte fixture.
-    await expect(extractDocxBounded(docx, 6)).rejects.toBeInstanceOf(UnsupportedFileTypeError)
+  it('REJECTS a real decompression bomb — 0.4MB upload, ~120MB inflated', async () => {
+    // An actual bomb, not a synthetic header: highly compressible body that
+    // JSZip really does inflate. The earlier V8-heap-capped worker parsed a
+    // bomb like this to completion (external memory is not heap), which is
+    // why the guard measures bytes instead.
+    const bomb = await buildDocx('A'.repeat(120 * 1024 * 1024))
+    expect(bomb.length).toBeLessThan(2 * 1024 * 1024)
 
-    // The parent process is unharmed and still parses normally afterwards.
-    const after = await parseDocument(docx, 'jane.docx')
-    expect(after.text).toContain('jane@example.com')
-  }, 30_000)
+    expect(await docxInflationWithinLimit(bomb, 50 * 1024 * 1024)).toBe(false)
+    await expect(parseDocument(bomb, 'bomb.docx')).rejects.toBeInstanceOf(UnsupportedFileTypeError)
+  }, 60_000)
+
+  it('a corrupt archive is left for mammoth to report, not treated as a bomb', async () => {
+    expect(await docxInflationWithinLimit(Buffer.from('not a zip at all'))).toBe(true)
+  })
 })
