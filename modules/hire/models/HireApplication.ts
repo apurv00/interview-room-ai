@@ -39,6 +39,32 @@ export interface IHireApplicationEvent {
   at: Date
 }
 
+/**
+ * Resume-vs-JD match produced at intake (Phase 2). Job-specific — the same
+ * candidate scores differently against different JDs, so it lives on the
+ * application, not the candidate. Typed subdoc on purpose: results-shaped
+ * Mixed fields get no schema validation (HireRound.results lesson).
+ */
+export interface IHireResumeMatch {
+  /** 0–100, null when the scoring call failed (candidate still created). */
+  score: number | null
+  strengths: string[]
+  gaps: string[]
+  scoredAt: Date
+  /** sha256 of job.jdText at scoring time — a mismatch means the JD changed. */
+  jdHash: string
+  /**
+   * sha256 of the resumeText this match was computed FROM. The candidate's
+   * resume is workspace-level and shared across applications, so a newer CV
+   * uploaded for job B silently invalidates job A's score — this hash plus
+   * the `stale` flag (set by the intake staleness sweep) make that
+   * detectable instead of quietly misleading (Codex P1 on #612).
+   */
+  resumeHash: string
+  /** True when the underlying resume was replaced after this match was scored. */
+  stale?: boolean
+}
+
 export interface IHireApplication extends Document {
   _id: mongoose.Types.ObjectId
   workspaceId: mongoose.Types.ObjectId
@@ -47,11 +73,25 @@ export interface IHireApplication extends Document {
   stage: HireStage
   /** Required when the stage becomes 'hired' (enforced in pipelineService). */
   decisionNote?: string
+  resumeMatch?: IHireResumeMatch
   events: IHireApplicationEvent[]
   createdBy: mongoose.Types.ObjectId
   createdAt: Date
   updatedAt: Date
 }
+
+const HireResumeMatchSchema = new Schema<IHireResumeMatch>(
+  {
+    score: { type: Number, min: 0, max: 100, default: null },
+    strengths: { type: [String], default: [] },
+    gaps: { type: [String], default: [] },
+    scoredAt: { type: Date, required: true },
+    jdHash: { type: String, required: true, maxlength: 64 },
+    resumeHash: { type: String, required: true, maxlength: 64 },
+    stale: { type: Boolean },
+  },
+  { _id: false }
+)
 
 const HireApplicationEventSchema = new Schema<IHireApplicationEvent>(
   {
@@ -83,6 +123,7 @@ const HireApplicationSchema = new Schema<IHireApplication>(
     },
     stage: { type: String, enum: HIRE_STAGES, default: 'new' },
     decisionNote: { type: String, maxlength: 4000 },
+    resumeMatch: { type: HireResumeMatchSchema },
     events: { type: [HireApplicationEventSchema], default: [] },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },

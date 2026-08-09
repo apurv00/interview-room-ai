@@ -38,6 +38,14 @@ interface RateLimitConfig {
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export interface ComposeOptions<T> {
+  /**
+   * Zod schema for a JSON body. OMIT for multipart/upload routes: without a
+   * schema the middleware never reads the body, so the handler can call
+   * req.formData() itself while keeping every other rail (auth, the
+   * active-account fence, plan-scaled rate limits, error mapping). Do NOT
+   * hand-roll upload routes to escape the JSON parse — that forfeits the
+   * fences and is what the workspace fence-contract test rejects.
+   */
   schema?: ZodSchema<T>
   rateLimit: RateLimitConfig
   handler: SecureHandler<T>

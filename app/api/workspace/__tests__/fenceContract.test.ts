@@ -39,7 +39,10 @@ describe('workspace API fence contract', () => {
     (_label, file) => {
       const src = readFileSync(file as string, 'utf8')
       // Call sites only — `composeApiRoute<T>({` or `composeApiRoute({` —
-      // the import line matches neither.
+      // the import line matches neither. STRICT on purpose: there is no
+      // hand-rolled exemption. Multipart routes belong on composeApiRoute
+      // too — omit `schema` and the middleware never reads the body
+      // (jobs/[jobId]/intake is the precedent, Codex round on #612).
       const calls = (src.match(/composeApiRoute[<(]/g) ?? []).length
       const fences = (src.match(/requireActiveAccount:\s*true/g) ?? []).length
       expect(calls).toBeGreaterThan(0)

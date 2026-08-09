@@ -84,6 +84,17 @@ export function serializeApplication(a: IHireApplication) {
     candidateId: a.candidateId.toString(),
     stage: a.stage,
     decisionNote: a.decisionNote ?? null,
+    resumeMatch: a.resumeMatch
+      ? {
+          score: a.resumeMatch.score ?? null,
+          strengths: a.resumeMatch.strengths,
+          gaps: a.resumeMatch.gaps,
+          scoredAt: a.resumeMatch.scoredAt,
+          // True when the candidate's resume was replaced AFTER this match
+          // was scored — the UI must not present outdated evidence as fresh.
+          stale: a.resumeMatch.stale === true,
+        }
+      : null,
     events: a.events.map((e) => ({
       type: e.type,
       from: e.from ?? null,
