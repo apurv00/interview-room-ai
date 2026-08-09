@@ -338,6 +338,18 @@ async function writeIntake(
     )
     application = created[0]
     createdApplication = true
+  } else if (applicantResumeText) {
+    // REPEAT public submission on an existing application: the quarantined
+    // document and its score must move together. Refreshing the match
+    // while leaving the old quarantined résumé in place would show the
+    // recruiter a new score beside the document it was NOT computed from
+    // (Codex P1 on #615) — the precise failure the quarantine exists to
+    // prevent.
+    application.applicantResumeText = applicantResumeText
+    application.applicantResumeFileName = applicantResumeFileName
+    application.resumeMatch = input.resumeMatch
+    application.markModified('resumeMatch')
+    await application.save({ session })
   } else if (input.resumeMatch) {
     // A fresh analysis always refreshes the match.
     application.resumeMatch = input.resumeMatch

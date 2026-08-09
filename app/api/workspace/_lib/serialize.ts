@@ -87,6 +87,9 @@ export function serializeApplication(
   a: IHireApplication,
   opts: { candidateResumeHash?: string | null; includeApplicantResume?: boolean } = {},
 ) {
+  const scoredAgainstHash = a.applicantResumeText
+    ? resumeHashOf(a.applicantResumeText)
+    : opts.candidateResumeHash
   return {
     id: a._id.toString(),
     jobId: a.jobId.toString(),
@@ -105,10 +108,14 @@ export function serializeApplication(
           // since snapshot isolation lets a concurrently-scored sibling
           // slip past it (self-review on #612). Stored flag kept as a
           // fallback for callers without candidate context.
+          // Compare against the résumé this match was actually computed
+          // FROM: an application carrying its own quarantined document is
+          // validated against that, not the pool copy. Using the pool hash
+          // marked every apply-page match permanently "outdated" — a
+          // false warning on every public application (Codex P2 on #615).
           stale:
             a.resumeMatch.stale === true ||
-            (opts.candidateResumeHash != null &&
-              a.resumeMatch.resumeHash !== opts.candidateResumeHash),
+            (scoredAgainstHash != null && a.resumeMatch.resumeHash !== scoredAgainstHash),
         }
       : null,
     // Résumé submitted through the public apply page when the pool record

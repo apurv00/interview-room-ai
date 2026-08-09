@@ -462,3 +462,41 @@ describe('public apply-page intake', () => {
     expect(mockApplication.create.mock.calls[0][0][0].applicantResumeText).toBe('resume body')
   })
 })
+
+
+describe('quarantined résumé and its score move together (Codex P1 on #615)', () => {
+  const JOB2 = { _id: 'job-1', workspaceId: 'ws-A' } as never
+  const OPTS = { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' }
+
+  it('a REPEAT public submission updates the quarantined document, not just the score', async () => {
+    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'pool résumé of rahul' })
+    const app = applicationDoc({
+      applicantResumeText: 'FIRST submitted résumé',
+      applicantResumeFileName: 'first.pdf',
+      resumeMatch: { ...MATCH, score: 40 },
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(app))
+
+    const freshMatch = { ...MATCH, score: 91, resumeHash: 'hash-of-second' }
+    await intakeFromApplyPage(
+      JOB2,
+      {
+        name: 'Jane Doe',
+        email: 'jane@example.com',
+        resumeText: 'SECOND submitted résumé',
+        resumeFileName: 'second.pdf',
+        resumeMatch: freshMatch,
+      },
+      OPTS,
+    )
+
+    // Both advanced — a new score beside the OLD document is the exact
+    // failure the quarantine exists to prevent.
+    expect(app.applicantResumeText).toBe('SECOND submitted résumé')
+    expect(app.applicantResumeFileName).toBe('second.pdf')
+    expect((app.resumeMatch as { score: number }).score).toBe(91)
+    // The workspace pool copy is still untouched.
+    expect(existing.resumeText).toBe('pool résumé of rahul')
+  })
+})
