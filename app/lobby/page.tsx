@@ -105,7 +105,7 @@ function LobbyPageInner() {
   liveCoachingEnabledRef.current = liveCoachingEnabled
   // Indian English experience: the default for this India-first product. The choice is
   // carried to the room via ?voice=indian (a storage-independent URL handoff, like ?lc) and
-  // drives BOTH the Azure interviewer voice (useAvatarSpeech / TTS routes) AND the Deepgram
+  // drives BOTH the Sarvam interviewer voice (useAvatarSpeech / TTS routes) AND the Deepgram
   // STT language=en-IN (resolveSttLanguage in useDeepgramRecognition). Default ON; candidates
   // who prefer US/International English opt out via the picker (NEXT_PUBLIC_FEATURE_VOICE_PICKER
   // — keep it enabled so non-Indian users have a visible way to switch back to en).
@@ -391,7 +391,7 @@ function LobbyPageInner() {
         if (prev <= 1) {
           clearInterval(interval)
           // Carry runtime choices via the URL (storage-independent handoff):
-          // ?lc=0 = live coaching off, ?voice=indian = Azure Indian voice. The
+          // ?lc=0 = live coaching off, ?voice=indian = Sarvam Indian voice. The
           // room reads these on mount; ?lc survives even a failed config write.
           const params = new URLSearchParams()
           if (!liveCoachingEnabledRef.current) params.set('lc', '0')
@@ -689,7 +689,7 @@ function LobbyPageInner() {
                     }`}
                   >
                     Indian
-                    <span className="block text-[11px] font-normal opacity-80 mt-0.5">en-IN · Aarti</span>
+                    <span className="block text-[11px] font-normal opacity-80 mt-0.5">en-IN · Ishita</span>
                   </button>
                 </div>
               </div>

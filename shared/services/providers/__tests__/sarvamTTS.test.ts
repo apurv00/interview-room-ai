@@ -1,0 +1,185 @@
+/**
+ * Sarvam TTS adapter — the load-bearing parts are (1) the wire contract
+ * (field names chosen from shipping integrations, NOT verifiable locally
+ * without a live key — these tests pin them against accidental "fixes"),
+ * (2) the fetch-shaped Response contract the hot-path TTS routes depend on
+ * (tee()-able MP3 body, non-2xx passthrough), and (3) the guards that turn
+ * silent audio corruption into a loud 502 (empty audio, WAV-despite-mp3).
+ */
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import {
+  chunkForSarvam,
+  buildSarvamRequestBody,
+  sarvamSynthesize,
+  SARVAM_TTS_MODEL,
+  isSarvamTTSConfigured,
+} from '../sarvamTTS'
+
+// A few bytes starting with an MP3 frame sync (0xFF 0xFB) — enough for the
+// adapter's format sniffing; it never decodes audio.
+const MP3_A = Buffer.from([0xff, 0xfb, 0x90, 0x64, 0x01, 0x02, 0x03])
+const MP3_B = Buffer.from([0xff, 0xfb, 0x90, 0x64, 0x0a, 0x0b])
+const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.from([36, 0, 0, 0]), Buffer.from('WAVE')])
+
+function sarvamOk(audio: Buffer): Response {
+  return new Response(
+    JSON.stringify({ request_id: 'req_test', audios: [audio.toString('base64')] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+})
+
+describe('buildSarvamRequestBody — the wire contract', () => {
+  it('sends exactly the fields Sarvam expects, with the pinned names', () => {
+    const body = buildSarvamRequestBody('Hello there')
+    expect(body).toEqual({
+      text: 'Hello there',
+      // Pinned: shipping integrations use target_language_code (docs also
+      // show language_code). Changing this requires a live-key test.
+      target_language_code: 'en-IN',
+      speaker: 'ishita',
+      model: 'bulbul:v3',
+      output_audio_codec: 'mp3',
+    })
+    // Minimal payload by design: no sample-rate/pace keys whose names vary
+    // between doc revisions — provider defaults (24 kHz, 1.0) are correct.
+    expect(Object.keys(body).sort()).toEqual([
+      'model',
+      'output_audio_codec',
+      'speaker',
+      'target_language_code',
+      'text',
+    ])
+  })
+})
+
+describe('cache partition key', () => {
+  it('embeds model + speaker so voice changes roll the R2 key', () => {
+    expect(SARVAM_TTS_MODEL).toBe('sarvam-bulbul:v3-ishita')
+  })
+})
+
+describe('isSarvamTTSConfigured', () => {
+  it('is false without SARVAM_API_KEY (module default in tests)', () => {
+    expect(isSarvamTTSConfigured()).toBe(false)
+  })
+
+  it('is true when SARVAM_API_KEY is set at module load', async () => {
+    vi.stubEnv('SARVAM_API_KEY', 'sk-test')
+    vi.resetModules()
+    const fresh = await import('../sarvamTTS')
+    expect(fresh.isSarvamTTSConfigured()).toBe(true)
+  })
+})
+
+describe('chunkForSarvam', () => {
+  it('passes short text through as a single piece', () => {
+    expect(chunkForSarvam('Tell me about yourself.')).toEqual(['Tell me about yourself.'])
+  })
+
+  it('splits long text at sentence boundaries with every piece under the cap', () => {
+    const sentence = `${'a'.repeat(120)}. `
+    const text = sentence.repeat(30).trim() // ~3.6k chars
+    const chunks = chunkForSarvam(text, 2500)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(2500)
+      expect(chunk.length).toBeGreaterThan(0)
+    }
+    // Nothing lost: rejoining reproduces the original modulo whitespace.
+    expect(chunks.join(' ').replace(/\s+/g, ' ')).toBe(text.replace(/\s+/g, ' '))
+  })
+
+  it('falls back to word boundaries when there are no sentence breaks', () => {
+    const text = Array.from({ length: 700 }, (_, i) => `word${i}`).join(' ') // >4k chars
+    const chunks = chunkForSarvam(text, 2500)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(2500)
+      // Word-boundary split never bisects a token.
+      expect(text.split(' ')).toEqual(expect.arrayContaining(chunk.split(' ')))
+    }
+  })
+})
+
+describe('sarvamSynthesize — the Response contract the TTS routes rely on', () => {
+  it('POSTs to the Sarvam endpoint with the subscription-key header', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sarvamOk(MP3_A))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await sarvamSynthesize('Hello')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://api.sarvam.ai/text-to-speech')
+    expect(init.method).toBe('POST')
+    expect(init.headers['Content-Type']).toBe('application/json')
+    expect('api-subscription-key' in init.headers).toBe(true)
+    expect(JSON.parse(init.body).text).toBe('Hello')
+  })
+
+  it('returns a 200 audio/mpeg Response whose body is the decoded MP3 — tee()-able for the stream route', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sarvamOk(MP3_A)))
+
+    const res = await sarvamSynthesize('Hello')
+
+    expect(res.ok).toBe(true)
+    expect(res.headers.get('Content-Type')).toBe('audio/mpeg')
+    expect(res.body).not.toBeNull()
+    // The stream route tee()s the body; the buffered route arrayBuffer()s it.
+    const [a, b] = res.body!.tee()
+    const drained = Buffer.from(await new Response(a).arrayBuffer())
+    expect(drained.equals(MP3_A)).toBe(true)
+    await b.cancel()
+  })
+
+  it('fires one request per chunk and concatenates audio in order', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(sarvamOk(MP3_A))
+      .mockResolvedValueOnce(sarvamOk(MP3_B))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const sentence = `${'x'.repeat(200)}. `
+    const longText = sentence.repeat(16).trim() // ~3.2k chars → 2 chunks
+    const res = await sarvamSynthesize(longText)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const audio = Buffer.from(await res.arrayBuffer())
+    expect(audio.equals(Buffer.concat([MP3_A, MP3_B]))).toBe(true)
+  })
+
+  it('passes a provider error Response through untouched (route logs status, client falls back)', async () => {
+    const unauthorized = new Response('invalid subscription key', { status: 401 })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(unauthorized))
+
+    const res = await sarvamSynthesize('Hello')
+
+    expect(res).toBe(unauthorized)
+    expect(res.status).toBe(401)
+  })
+
+  it('turns an empty audios payload into a loud 502 instead of caching silence', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ request_id: 'r', audios: [] }), { status: 200 }),
+      ),
+    )
+
+    const res = await sarvamSynthesize('Hello')
+    expect(res.status).toBe(502)
+  })
+
+  it('rejects WAV bytes (codec contract drift) instead of mislabeling them audio/mpeg', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sarvamOk(WAV)))
+
+    const res = await sarvamSynthesize('Hello')
+    expect(res.status).toBe(502)
+    expect(await res.text()).toContain('WAV')
+  })
+})
