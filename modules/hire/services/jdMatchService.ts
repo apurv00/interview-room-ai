@@ -37,6 +37,29 @@ export interface ResumeIntakeAnalysis {
 const RESUME_CHARS = 24000
 const JD_CHARS = 12000
 
+/**
+ * Neutralize our data-boundary delimiters inside untrusted documents: a
+ * resume containing a literal `</resume>` would close the tag and put
+ * candidate-controlled text OUTSIDE the data boundary, where it can
+ * instruct the model to fabricate a schema-valid email or score — and
+ * those drive workspace dedupe identity and ranking (Codex P1 on #612).
+ */
+function neutralizeDelimiters(text: string): string {
+  return text.replace(/<\/?\s*(resume|job_description)\s*>/gi, ' ')
+}
+
+/**
+ * Deterministic email fallback for when the model is unavailable: bulk
+ * intake must degrade to UNSCORED candidates, never to a stalled batch of
+ * NO_EMAIL rejections (Codex P1 on #612). First plausible address wins —
+ * resumes carry their contact block near the top.
+ */
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/
+export function extractEmailFromText(text: string): string | null {
+  const match = text.match(EMAIL_RE)
+  return match ? match[0].toLowerCase() : null
+}
+
 /** Tolerant JSON extraction: strip code fences, take the outermost object. */
 function extractJson(raw: string): string {
   const unfenced = raw.replace(/```(?:json)?/gi, '').trim()
@@ -78,7 +101,7 @@ Scoring calibration: 80+ only when core requirements are clearly evidenced; 50-7
       messages: [
         {
           role: 'user',
-          content: `<job_description>\n${input.jdText.slice(0, JD_CHARS)}\n</job_description>\n\n<resume>\n${input.resumeText.slice(0, RESUME_CHARS)}\n</resume>\n\nExtract identity and score the match.`,
+          content: `<job_description>\n${neutralizeDelimiters(input.jdText.slice(0, JD_CHARS))}\n</job_description>\n\n<resume>\n${neutralizeDelimiters(input.resumeText.slice(0, RESUME_CHARS))}\n</resume>\n\nExtract identity and score the match.`,
         },
       ],
     })

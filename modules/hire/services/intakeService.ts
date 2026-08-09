@@ -1,5 +1,7 @@
+import type { ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
+import { withPersonalDataWriteTransaction } from '@shared/services/accountDeletion'
 import {
   HireApplication,
   HireCandidate,
@@ -21,6 +23,13 @@ import type { MembershipContext } from './workspaceService'
  * page are the opposite — the same person showing up again is EXPECTED and
  * must merge into the existing record, not fail the row.
  *
+ * WRITE AUTHORITY: every write runs inside
+ * withPersonalDataWriteTransaction(actor) — the claim on the recruiter's
+ * User row (accountState ≠ deleting) and ALL intake writes commit in one
+ * transaction, so an account-deletion sweep can never interleave with
+ * them. A plain recheck-then-write is a TOCTOU race; this is the
+ * repository's durable barrier (Codex P1 on #612).
+ *
  * Merge policy (deliberate, keep boring):
  *   - name: existing wins (recruiter-entered names beat parsed ones); filled
  *     only when the existing record has none.
@@ -28,6 +37,13 @@ import type { MembershipContext } from './workspaceService'
  *   - resumeText/resumeFileName: NEWEST upload wins whenever the intake
  *     carries a resume — a re-uploaded CV is assumed fresher.
  *   - email: immutable here; it IS the identity key.
+ *
+ * Resume/score coherence (the resume is WORKSPACE-level, matches are
+ * per-application): replacing the shared resume (a) refreshes or — when
+ * analysis failed — CLEARS the current application's match (a new CV must
+ * never wear the old CV's score), and (b) flags every sibling
+ * application's match `stale` so pipeline readers see that its evidence
+ * predates the current CV. Matches carry resumeHash for auditability.
  */
 
 export interface IntakeInput {
@@ -77,96 +93,147 @@ export async function intakeCandidate(
     throw new AppError('This job is closed', 409, 'JOB_CLOSED')
   }
 
-  // ── Candidate: find-or-create, race-safe via the unique index ──
-  let createdCandidate = false
-  let candidate = await HireCandidate.findOne({ workspaceId, email })
-  if (!candidate) {
-    try {
-      candidate = await HireCandidate.create({
-        workspaceId,
-        name: input.name,
-        email,
-        phone: input.phone,
-        resumeText: input.resumeText,
-        resumeFileName: input.resumeFileName,
-        source: input.source,
-        createdBy: ctx.membership.userId,
-      })
-      createdCandidate = true
-    } catch (err: unknown) {
-      // Concurrent intake of the same email (two files of one person in a
-      // batch): lose the race gracefully and merge into the winner.
-      if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
-        candidate = await HireCandidate.findOne({ workspaceId, email })
-      }
-      if (!candidate) throw err
-    }
-  }
-  if (!createdCandidate) {
-    applyMerge(candidate, input)
-    if (candidate.isModified()) await candidate.save()
-  }
+  const runIntakeTx = () =>
+    withPersonalDataWriteTransaction(ctx.membership.userId, (session) =>
+      writeIntake(session, ctx, input, email),
+    )
 
-  // ── Application: find-or-create on the unique {ws, job, candidate} ──
-  let createdApplication = false
-  let application = await HireApplication.findOne({
-    workspaceId,
-    jobId: job._id,
-    candidateId: candidate._id,
-  })
-  if (!application) {
-    try {
-      application = await HireApplication.create({
-        workspaceId,
-        jobId: job._id,
-        candidateId: candidate._id,
-        stage: 'new',
-        resumeMatch: input.resumeMatch,
-        events: [
-          {
-            type: 'created',
-            actorUserId: ctx.membership.userId,
-            actorName: ctx.membership.name || ctx.membership.email,
-            note: SOURCE_LABEL[input.source],
-            at: new Date(),
-          },
-        ],
-        createdBy: ctx.membership.userId,
-      })
-      createdApplication = true
-    } catch (err: unknown) {
-      if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
-        application = await HireApplication.findOne({
-          workspaceId,
-          jobId: job._id,
-          candidateId: candidate._id,
-        })
-      }
-      if (!application) throw err
+  let outcome: Awaited<ReturnType<typeof writeIntake>>
+  try {
+    outcome = await runIntakeTx()
+  } catch (err: unknown) {
+    // A duplicate-key loss (two files of the same person racing in one
+    // batch) aborts the whole transaction — retry the claim+write once;
+    // the re-read inside then finds the winner and merges.
+    if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
+      outcome = await runIntakeTx()
+    } else {
+      throw err
     }
-  }
-  if (!createdApplication && input.resumeMatch) {
-    // Re-upload refreshes the score (same jdHash discipline as create).
-    application.resumeMatch = input.resumeMatch
-    await application.save()
   }
 
   return {
-    candidateId: candidate._id.toString(),
-    applicationId: application._id.toString(),
-    createdCandidate,
-    createdApplication,
-    seenBefore: await seenBeforeForCandidate(ctx, candidate, application),
+    candidateId: outcome.candidate._id.toString(),
+    applicationId: outcome.application._id.toString(),
+    createdCandidate: outcome.createdCandidate,
+    createdApplication: outcome.createdApplication,
+    seenBefore: await seenBeforeForCandidate(ctx, outcome.candidate, outcome.application),
   }
 }
 
-function applyMerge(candidate: IHireCandidate, input: IntakeInput): void {
+async function writeIntake(
+  session: ClientSession,
+  ctx: MembershipContext,
+  input: IntakeInput,
+  email: string,
+): Promise<{
+  candidate: IHireCandidate
+  application: IHireApplication
+  createdCandidate: boolean
+  createdApplication: boolean
+}> {
+  const workspaceId = ctx.workspace._id
+
+  // ── Candidate: find-or-create; merge on revisit ──
+  let createdCandidate = false
+  let resumeReplaced = false
+  let candidate = await HireCandidate.findOne({ workspaceId, email }).session(session)
+  if (!candidate) {
+    const created = await HireCandidate.create(
+      [
+        {
+          workspaceId,
+          name: input.name,
+          email,
+          phone: input.phone,
+          resumeText: input.resumeText,
+          resumeFileName: input.resumeFileName,
+          source: input.source,
+          createdBy: ctx.membership.userId,
+        },
+      ],
+      { session },
+    )
+    candidate = created[0]
+    createdCandidate = true
+  } else {
+    resumeReplaced = applyMerge(candidate, input)
+    if (candidate.isModified()) await candidate.save({ session })
+  }
+
+  // ── Application: find-or-create; keep score coherent with the CV ──
+  let createdApplication = false
+  let application = await HireApplication.findOne({
+    workspaceId,
+    jobId: input.jobId,
+    candidateId: candidate._id,
+  }).session(session)
+  if (!application) {
+    const created = await HireApplication.create(
+      [
+        {
+          workspaceId,
+          jobId: input.jobId,
+          candidateId: candidate._id,
+          stage: 'new',
+          resumeMatch: input.resumeMatch,
+          events: [
+            {
+              type: 'created',
+              actorUserId: ctx.membership.userId,
+              actorName: ctx.membership.name || ctx.membership.email,
+              note: SOURCE_LABEL[input.source],
+              at: new Date(),
+            },
+          ],
+          createdBy: ctx.membership.userId,
+        },
+      ],
+      { session },
+    )
+    application = created[0]
+    createdApplication = true
+  } else if (input.resumeText) {
+    // Re-upload for THIS application: a fresh analysis replaces the match;
+    // a FAILED analysis clears it — the new CV must never wear the old
+    // CV's score (Codex P1 on #612).
+    application.resumeMatch = input.resumeMatch ?? undefined
+    application.markModified('resumeMatch')
+    await application.save({ session })
+  } else if (input.resumeMatch) {
+    application.resumeMatch = input.resumeMatch
+    await application.save({ session })
+  }
+
+  if (resumeReplaced) {
+    // The shared workspace-level resume changed: every OTHER application's
+    // match was computed from the previous CV — flag, don't delete, so the
+    // evidence stays visible but visibly outdated (Codex P1 on #612).
+    await HireApplication.updateMany(
+      {
+        workspaceId,
+        candidateId: candidate._id,
+        _id: { $ne: application._id },
+        resumeMatch: { $exists: true },
+      },
+      { $set: { 'resumeMatch.stale': true } },
+      { session },
+    )
+  }
+
+  return { candidate, application, createdCandidate, createdApplication }
+}
+
+/** Returns true when the workspace-level resume was actually replaced. */
+function applyMerge(candidate: IHireCandidate, input: IntakeInput): boolean {
   if (!candidate.name && input.name) candidate.name = input.name
   if (!candidate.phone && input.phone) candidate.phone = input.phone
-  if (input.resumeText) {
+  if (input.resumeText && input.resumeText !== candidate.resumeText) {
     candidate.resumeText = input.resumeText
     candidate.resumeFileName = input.resumeFileName
+    return true
   }
+  return false
 }
 
 /** Everywhere else this person already is in the workspace, with job names. */

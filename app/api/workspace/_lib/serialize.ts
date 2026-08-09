@@ -90,6 +90,9 @@ export function serializeApplication(a: IHireApplication) {
           strengths: a.resumeMatch.strengths,
           gaps: a.resumeMatch.gaps,
           scoredAt: a.resumeMatch.scoredAt,
+          // True when the candidate's resume was replaced AFTER this match
+          // was scored — the UI must not present outdated evidence as fresh.
+          stale: a.resumeMatch.stale === true,
         }
       : null,
     events: a.events.map((e) => ({

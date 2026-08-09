@@ -8,6 +8,7 @@ import {
   requireMembership,
   intakeCandidate,
   analyzeResumeForJob,
+  extractEmailFromText,
   sha256,
   HireJob,
   type IHireResumeMatch,
@@ -142,7 +143,11 @@ async function handleIntake(
   }
   const overrideName = overrideParse.data.name ?? ''
   const overrideEmail = overrideParse.data.email ?? ''
-  const email = overrideEmail || analysis?.email || ''
+  // Priority: recruiter override → model extraction → deterministic regex
+  // over the parsed text. The regex tier is what keeps a model outage
+  // degrading to UNSCORED candidates instead of a stalled NO_EMAIL batch.
+  const email =
+    overrideEmail || analysis?.email || extractEmailFromText(resumeText) || ''
   if (!email) {
     // Explicit contract for the client: show this file as "needs email",
     // let the recruiter type it, retry with the override field.
@@ -166,19 +171,15 @@ async function handleIntake(
         gaps: analysis.gaps,
         scoredAt: new Date(),
         jdHash: sha256(job.jdText),
+        resumeHash: sha256(resumeText),
       }
     : undefined
 
-  // Last fence before writes: the parse/LLM phase above is the long part
-  // of this request — do not persist hiring data for an account whose
-  // deletion completed meanwhile.
-  if (!(await accountActive())) {
-    return NextResponse.json(
-      { error: 'account unavailable', code: 'ACCOUNT_UNAVAILABLE' },
-      { status: 401 },
-    )
-  }
-
+  // No manual pre-write fence here: intakeCandidate runs all writes inside
+  // withPersonalDataWriteTransaction, which atomically claims write
+  // authority against the recruiter's account state — the race-free form
+  // of the check (a deletion mid-request surfaces as 423
+  // ACCOUNT_DELETION_PENDING via the AppError mapper).
   const result = await intakeCandidate(ctx, {
     jobId: params.jobId,
     name,

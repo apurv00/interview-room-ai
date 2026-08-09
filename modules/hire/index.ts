@@ -77,6 +77,7 @@ export {
 } from './services/intakeService'
 export {
   analyzeResumeForJob,
+  extractEmailFromText,
   type ResumeIntakeAnalysis,
 } from './services/jdMatchService'
 

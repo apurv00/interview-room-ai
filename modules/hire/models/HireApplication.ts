@@ -53,6 +53,16 @@ export interface IHireResumeMatch {
   scoredAt: Date
   /** sha256 of job.jdText at scoring time — a mismatch means the JD changed. */
   jdHash: string
+  /**
+   * sha256 of the resumeText this match was computed FROM. The candidate's
+   * resume is workspace-level and shared across applications, so a newer CV
+   * uploaded for job B silently invalidates job A's score — this hash plus
+   * the `stale` flag (set by the intake staleness sweep) make that
+   * detectable instead of quietly misleading (Codex P1 on #612).
+   */
+  resumeHash: string
+  /** True when the underlying resume was replaced after this match was scored. */
+  stale?: boolean
 }
 
 export interface IHireApplication extends Document {
@@ -77,6 +87,8 @@ const HireResumeMatchSchema = new Schema<IHireResumeMatch>(
     gaps: { type: [String], default: [] },
     scoredAt: { type: Date, required: true },
     jdHash: { type: String, required: true, maxlength: 64 },
+    resumeHash: { type: String, required: true, maxlength: 64 },
+    stale: { type: Boolean },
   },
   { _id: false }
 )
