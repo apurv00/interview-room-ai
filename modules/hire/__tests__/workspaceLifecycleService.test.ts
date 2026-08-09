@@ -9,11 +9,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@shared/db/connection', () => ({ connectDB: vi.fn().mockResolvedValue(undefined) }))
 
-const mockSession = { deleteMany: vi.fn() }
-const mockUser = { deleteMany: vi.fn() }
+const mockSession = { deleteMany: vi.fn(), find: vi.fn() }
+const mockUser = { deleteMany: vi.fn(), countDocuments: vi.fn() }
 vi.mock('@shared/db/models', () => ({
-  InterviewSession: { deleteMany: (...a: unknown[]) => mockSession.deleteMany(...a) },
-  User: { deleteMany: (...a: unknown[]) => mockUser.deleteMany(...a) },
+  InterviewSession: {
+    deleteMany: (...a: unknown[]) => mockSession.deleteMany(...a),
+    find: (...a: unknown[]) => mockSession.find(...a),
+  },
+  User: {
+    deleteMany: (...a: unknown[]) => mockUser.deleteMany(...a),
+    countDocuments: (...a: unknown[]) => mockUser.countDocuments(...a),
+  },
+}))
+
+const r2DeleteMock = vi.fn()
+vi.mock('@shared/storage/r2', () => ({
+  deleteFromR2: (...a: unknown[]) => r2DeleteMock(...a),
 }))
 
 const m = {
@@ -50,6 +61,8 @@ const GUEST = new mongoose.Types.ObjectId()
 beforeEach(() => {
   vi.clearAllMocks()
   m.member.find.mockReturnValue({ select: () => Promise.resolve([{ workspaceId: WS }]) })
+  mockSession.find.mockReturnValue({ select: () => Promise.resolve([]) })
+  r2DeleteMock.mockResolvedValue(undefined)
   m.round.find.mockReturnValue({ select: () => Promise.resolve([{ guestUserId: GUEST }]) })
   for (const op of [
     m.member.deleteMany, m.round.deleteMany, m.application.deleteMany,
@@ -60,7 +73,9 @@ beforeEach(() => {
 
 describe('a workspace with surviving members is untouched', () => {
   it('deletes nothing when another member still holds an account', async () => {
-    m.member.countDocuments.mockResolvedValue(1)
+    m.member.find.mockReturnValueOnce({ select: () => Promise.resolve([{ workspaceId: WS }]) })
+      .mockReturnValueOnce({ select: () => Promise.resolve([{ userId: new mongoose.Types.ObjectId() }]) })
+    mockUser.countDocuments.mockResolvedValue(1) // that member's account is live
 
     const cleared = await deleteOrphanedWorkspacesForUser(USER)
 
@@ -71,18 +86,31 @@ describe('a workspace with surviving members is untouched', () => {
     }
   })
 
-  it('excludes the departing member from the survivor count', async () => {
-    m.member.countDocuments.mockResolvedValue(0)
+  it('does NOT count a membership whose User is already deleted', async () => {
+    const ghost = new mongoose.Types.ObjectId()
+    m.member.find
+      .mockReturnValueOnce({ select: () => Promise.resolve([{ workspaceId: WS }]) })
+      .mockReturnValueOnce({ select: () => Promise.resolve([{ userId: ghost }]) })
+    // The row survives, the account does not — the previous version counted
+    // this as a survivor and orphaned the workspace forever.
+    mockUser.countDocuments.mockResolvedValue(0)
+
     await deleteOrphanedWorkspacesForUser(USER)
-    expect(m.member.countDocuments.mock.calls[0][0]).toMatchObject({
-      workspaceId: WS,
-      userId: { $exists: true, $ne: USER },
+
+    expect(m.workspace.deleteMany).toHaveBeenCalled()
+    expect(mockUser.countDocuments.mock.calls[0][0]).toMatchObject({
+      accountState: { $ne: 'deleting' },
     })
   })
 })
 
 describe('an orphaned workspace takes its candidates’ data with it', () => {
-  beforeEach(() => m.member.countDocuments.mockResolvedValue(0))
+  beforeEach(() => {
+    m.member.find
+      .mockReturnValueOnce({ select: () => Promise.resolve([{ workspaceId: WS }]) })
+      .mockReturnValueOnce({ select: () => Promise.resolve([]) })
+    mockUser.countDocuments.mockResolvedValue(0)
+  })
 
   it('sweeps every hire collection for that workspace', async () => {
     const cleared = await deleteOrphanedWorkspacesForUser(USER)
@@ -104,6 +132,41 @@ describe('an orphaned workspace takes its candidates’ data with it', () => {
 
     expect(mockSession.deleteMany).toHaveBeenCalledWith({ userId: { $in: [GUEST] } })
     expect(mockUser.deleteMany).toHaveBeenCalledWith({ _id: { $in: [GUEST] } })
+  })
+
+  it('deletes guest R2 objects BEFORE the session rows that inventory them', async () => {
+    const order: string[] = []
+    mockSession.find.mockReturnValue({
+      select: () => Promise.resolve([{ _id: 's1', recordingR2Key: 'rec/1', audioRecordingR2Key: 'aud/1' }]),
+    })
+    r2DeleteMock.mockImplementation((key: string) => {
+      order.push(`r2:${key}`)
+      return Promise.resolve()
+    })
+    mockSession.deleteMany.mockImplementation(() => {
+      order.push('sessions-deleted')
+      return Promise.resolve({ deletedCount: 1 })
+    })
+
+    await deleteOrphanedWorkspacesForUser(USER)
+
+    // A row deleted first would strand the recording in R2, undiscoverable.
+    expect(order).toEqual(['r2:rec/1', 'r2:aud/1', 'sessions-deleted'])
+  })
+
+  it('deletes the membership ANCHOR last so a failed sweep stays retryable', async () => {
+    const order: string[] = []
+    m.candidate.deleteMany.mockImplementation(() => {
+      order.push('content')
+      return Promise.resolve({ deletedCount: 1 })
+    })
+    m.member.deleteMany.mockImplementation(() => {
+      order.push('anchor')
+      return Promise.resolve({ deletedCount: 1 })
+    })
+
+    await deleteOrphanedWorkspacesForUser(USER)
+    expect(order).toEqual(['content', 'anchor'])
   })
 
   it('collects guest ids BEFORE deleting the rounds that carry them', async () => {
