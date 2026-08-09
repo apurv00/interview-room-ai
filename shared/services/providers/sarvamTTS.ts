@@ -121,15 +121,59 @@ export async function sarvamSynthesize(text: string): Promise<Response> {
     const contentType = response.headers.get('content-type') ?? ''
     if (!contentType.includes('audio/mpeg')) {
       // Codec contract drift (e.g. WAV despite mp3): fail loud rather than
-      // hand MediaSource undecodable bytes. Header check — the body stays
-      // unread so this costs nothing on the happy path.
+      // hand MediaSource undecodable bytes.
       await response.body?.cancel().catch(() => undefined)
       return new Response(
         `Sarvam stream returned unexpected content-type: ${contentType}`,
         { status: 502 },
       )
     }
-    return response
+    if (!response.body) {
+      return new Response('Sarvam stream had no body', { status: 502 })
+    }
+
+    // Peek the FIRST audio chunk before handing the stream to the routes
+    // (Codex P2 on #611): a 200 with an empty body would otherwise flow
+    // through as "success" — the buffered route would cache ZERO bytes in
+    // R2, permanently silencing that text (empty Buffer is truthy, so the
+    // cache would serve it forever). Zero added latency: no byte reaches
+    // the client before the first chunk exists anyway. Remaining chunks are
+    // forwarded progressively — do NOT drain here (re-buffering is the bug
+    // this endpoint switch fixed).
+    const reader = response.body.getReader()
+    let first = await reader.read()
+    while (!first.done && (!first.value || first.value.byteLength === 0)) {
+      first = await reader.read()
+    }
+    if (first.done) {
+      await reader.cancel().catch(() => undefined)
+      return new Response('Sarvam stream returned no audio', { status: 502 })
+    }
+    const firstChunk = first.value
+    if (Buffer.from(firstChunk.buffer, firstChunk.byteOffset, Math.min(4, firstChunk.byteLength)).toString('ascii') === 'RIFF') {
+      await reader.cancel().catch(() => undefined)
+      return new Response('Sarvam stream returned WAV despite output_audio_codec=mp3', { status: 502 })
+    }
+    const forwarded = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(firstChunk)
+      },
+      async pull(controller) {
+        const { done, value } = await reader.read()
+        if (done) {
+          controller.close()
+          return
+        }
+        if (value && value.byteLength > 0) controller.enqueue(value)
+      },
+      cancel(reason) {
+        return reader.cancel(reason).catch(() => undefined)
+      },
+    })
+    return new Response(forwarded, {
+      status: 200,
+      headers: { 'Content-Type': 'audio/mpeg' },
+    })
   }
 
   // Fallback for oversize texts (3500–5000 chars): buffered REST, split at

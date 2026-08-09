@@ -146,19 +146,73 @@ describe('sarvamSynthesize — STREAMING path (≤3500 chars, the hot path)', ()
     expect(body.output_audio_bitrate).toBe('64k')
   })
 
-  it('returns the provider Response AS-IS so the route tee()s the live chunked body', async () => {
-    const upstream = streamOk(MP3_A)
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(upstream))
+  it('forwards chunks PROGRESSIVELY — resolves while the provider is still synthesizing', async () => {
+    // Chunk 2 is gated: if the adapter drained the stream before returning
+    // (the re-buffering bug the endpoint switch fixed), this await would
+    // deadlock and the test would time out.
+    let releaseSecondChunk!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseSecondChunk = resolve
+    })
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MP3_A))
+      },
+      async pull(controller) {
+        await gate
+        controller.enqueue(new Uint8Array(MP3_B))
+        controller.close()
+      },
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(body, { status: 200, headers: { 'Content-Type': 'audio/mpeg' } }),
+      ),
+    )
 
     const res = await sarvamSynthesize('Hello')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('audio/mpeg')
 
-    // Identity matters: any re-wrapping would buffer the stream and
-    // reintroduce the 4s-dead-air pacing bug.
-    expect(res).toBe(upstream)
-    const [a, b] = res.body!.tee()
-    const drained = Buffer.from(await new Response(a).arrayBuffer())
-    expect(drained.equals(MP3_A)).toBe(true)
-    await b.cancel()
+    // Only now let the "rest of the synthesis" arrive; nothing is lost or
+    // reordered across the peek-then-forward seam.
+    releaseSecondChunk()
+    const drained = Buffer.from(await res.arrayBuffer())
+    expect(drained.equals(Buffer.concat([MP3_A, MP3_B]))).toBe(true)
+  })
+
+  it('502s when a 200 stream ends before any audio byte (R2 cache-poison guard, Codex P2 on #611)', async () => {
+    const empty = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(0)) // leading empty chunk
+          controller.close()
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'audio/mpeg' } },
+    )
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(empty))
+
+    const res = await sarvamSynthesize('Hello')
+    expect(res.status).toBe(502)
+    expect(await res.text()).toContain('no audio')
+  })
+
+  it('502s when the first streamed bytes are WAV despite an audio/mpeg label', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(new Uint8Array(WAV), {
+          status: 200,
+          headers: { 'Content-Type': 'audio/mpeg' },
+        }),
+      ),
+    )
+
+    const res = await sarvamSynthesize('Hello')
+    expect(res.status).toBe(502)
+    expect(await res.text()).toContain('WAV')
   })
 
   it('passes a provider error Response through untouched', async () => {
