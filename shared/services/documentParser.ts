@@ -1,3 +1,4 @@
+import { inflateRawSync } from 'zlib'
 import { extractText, getDocumentProxy } from 'unpdf'
 import mammoth from 'mammoth'
 import { logger } from '@shared/logger'
@@ -27,28 +28,70 @@ export class UnsupportedFileTypeError extends Error {
 }
 
 /**
- * Decompression-bomb guard for .docx: callers cap the COMPRESSED upload
+ * Decompression-bomb guard for .docx. Callers cap the COMPRESSED upload
  * size, but mammoth inflates the zip fully in memory — a 10MB docx can
- * expand to gigabytes. Sum the uncompressed sizes declared in the zip
- * central directory and refuse before inflating (Codex-class finding on
- * hire intake, applies to every docx caller). Exported for tests.
+ * expand to gigabytes.
+ *
+ * The declared uncompressed size in the zip headers is ATTACKER-CONTROLLED
+ * (a bomb can claim 1 byte), so we do NOT trust it. Instead we measure real
+ * output: inflate each entry's deflate stream with zlib's `maxOutputLength`
+ * budget, which stops allocating and throws the moment output would exceed
+ * the cap — so peak memory is bounded by the limit regardless of any lie in
+ * the metadata (Codex P1 on #613). Only if every entry inflates within the
+ * shared budget do we hand the buffer to mammoth (which then re-inflates
+ * content we've proven is bounded). Exported for tests.
  */
 const ZIP_CENTRAL_DIR_SIG = Buffer.from([0x50, 0x4b, 0x01, 0x02])
 const MAX_DOCX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+const ZIP_METHOD_STORE = 0
+const ZIP_METHOD_DEFLATE = 8
 
-export function docxDeclaredUncompressedBytes(buffer: Buffer): number {
-  let total = 0
+export function docxInflatedWithinLimit(
+  buffer: Buffer,
+  limit: number = MAX_DOCX_UNCOMPRESSED_BYTES,
+): boolean {
+  let remaining = limit
   let offset = 0
   while (offset < buffer.length) {
-    const idx = buffer.indexOf(ZIP_CENTRAL_DIR_SIG, offset)
-    if (idx === -1 || idx + 28 > buffer.length) break
-    const size = buffer.readUInt32LE(idx + 24)
-    // 0xFFFFFFFF is the zip64 sentinel — treat as "declared enormous".
-    total += size === 0xffffffff ? Number.MAX_SAFE_INTEGER : size
-    if (total >= Number.MAX_SAFE_INTEGER) return Number.MAX_SAFE_INTEGER
-    offset = idx + 4
+    const cd = buffer.indexOf(ZIP_CENTRAL_DIR_SIG, offset)
+    if (cd === -1 || cd + 46 > buffer.length) break
+    const method = buffer.readUInt16LE(cd + 10)
+    const compSize = buffer.readUInt32LE(cd + 20)
+    const localOff = buffer.readUInt32LE(cd + 42)
+    offset = cd + 4
+
+    if (localOff + 30 > buffer.length) continue
+    const nameLen = buffer.readUInt16LE(localOff + 26)
+    const extraLen = buffer.readUInt16LE(localOff + 28)
+    const dataStart = localOff + 30 + nameLen + extraLen
+    if (dataStart > buffer.length) continue
+
+    if (method === ZIP_METHOD_STORE) {
+      // Stored: output === input; charge the real bytes present.
+      remaining -= Math.min(compSize, buffer.length - dataStart)
+    } else if (method === ZIP_METHOD_DEFLATE) {
+      // Slice by declared compressed size when plausible, else to EOF —
+      // inflateRawSync stops at the deflate terminus and ignores the rest.
+      const end =
+        compSize > 0 && dataStart + compSize <= buffer.length
+          ? dataStart + compSize
+          : buffer.length
+      try {
+        const out = inflateRawSync(buffer.subarray(dataStart, end), {
+          maxOutputLength: Math.max(1, remaining),
+        })
+        remaining -= out.length
+      } catch {
+        // RangeError = exceeded the budget; any other = corrupt stream.
+        // Either way this file is not safe/parseable — reject.
+        return false
+      }
+    }
+    // Unknown methods aren't inflated by mammoth's unzip either — skip.
+
+    if (remaining < 0) return false
   }
-  return total
+  return true
 }
 
 const MAX_WORDS = 8000
@@ -85,7 +128,7 @@ export async function parseDocument(buffer: Buffer, filename: string): Promise<P
       break
     }
     case '.docx': {
-      if (docxDeclaredUncompressedBytes(buffer) > MAX_DOCX_UNCOMPRESSED_BYTES) {
+      if (!docxInflatedWithinLimit(buffer)) {
         throw new UnsupportedFileTypeError(
           'This DOCX file expands too large to process safely. Please export it as PDF or plain text.',
         )

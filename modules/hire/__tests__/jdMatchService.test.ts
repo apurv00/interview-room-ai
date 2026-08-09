@@ -11,7 +11,11 @@ vi.mock('@shared/services/modelRouter', () => ({
   completion: (...a: unknown[]) => completionMock(...a),
 }))
 
-import { analyzeResumeForJob, extractEmailFromText } from '../services/jdMatchService'
+import {
+  analyzeResumeForJob,
+  extractEmailFromText,
+  extractAllEmails,
+} from '../services/jdMatchService'
 
 const INPUT = { resumeText: 'Jane Doe\njane@x.com\n8 years Node.js', jdText: 'Backend role' }
 
@@ -135,6 +139,17 @@ describe('analyzeResumeForJob', () => {
     const oversized = `${'a'.repeat(260)}@example.com real.person@company.in`
     expect(extractEmailFromText(oversized)).toBe('real.person@company.in')
     expect(extractEmailFromText(`${'a'.repeat(260)}@example.com only`)).toBe(null)
+  })
+
+  it('extractAllEmails: whole-token set — a substring is NOT a member (Codex P1 #613)', () => {
+    const emails = extractAllEmails('Contact: notvictim@example.com for details')
+    expect(emails).toEqual(['notvictim@example.com'])
+    // The fabricated substring the model might return is not a member.
+    expect(emails.includes('victim@example.com')).toBe(false)
+  })
+
+  it('extractAllEmails: dedupes and lowercases across the document', () => {
+    expect(extractAllEmails('A@X.com again a@x.com and B@y.io')).toEqual(['a@x.com', 'b@y.io'])
   })
 
   it('neutralizes the "< /resume>" spaced-closer variant too', async () => {

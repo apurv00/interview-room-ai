@@ -38,6 +38,8 @@ interface FileRow {
   /** IDENTITY_CONFLICT explanation — email belongs to someone else. */
   conflictNote?: string
   emailFix?: string
+  /** Override carried through the queue on a retry/fix-up submission. */
+  pendingOverride?: string
   error?: string
   result?: {
     candidateName: string
@@ -64,6 +66,10 @@ export default function BulkUploadPanel({
   const [rows, setRows] = useState<FileRow[]>([])
   const inFlightRef = useRef(0)
   const queueRef = useRef<FileRow[]>([])
+  // Mirror of `rows` for the batch-capacity check — synchronous, so two
+  // quick selections can't both read a pre-append count.
+  const rowsRef = useRef<FileRow[]>([])
+  rowsRef.current = rows
 
   function patchRow(key: string, patch: Partial<FileRow>) {
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
@@ -112,36 +118,55 @@ export default function BulkUploadPanel({
     }
   }
 
-  /** Small fixed-concurrency pump; refills as requests settle. */
+  /**
+   * Single fixed-concurrency pump — EVERY intake request (initial upload,
+   * retry, and fix-up submission) goes through here, so the cap of 3 holds
+   * no matter how many rows are resubmitted at once (Codex P2 on #613).
+   */
   function pump() {
     while (inFlightRef.current < CONCURRENCY && queueRef.current.length > 0) {
       const next = queueRef.current.shift()!
       inFlightRef.current += 1
-      void uploadOne(next)
+      void uploadOne(next, next.pendingOverride)
     }
     if (inFlightRef.current === 0 && queueRef.current.length === 0) {
       onSettled()
     }
   }
 
+  function enqueue(row: FileRow) {
+    queueRef.current.push(row)
+    pump()
+  }
+
   function addFiles(list: FileList | null) {
     if (!list) return
-    const fresh = Array.from(list)
-      .slice(0, MAX_BATCH)
+    // Cap across the WHOLE active batch, not just this selection — picking a
+    // second group before the first settles must not exceed MAX_BATCH paid
+    // requests (Codex P2 on #613). rowsRef mirrors the current rows so the
+    // capacity check does not depend on a stale render.
+    const remaining = MAX_BATCH - rowsRef.current.length
+    if (remaining <= 0) return
+    const fresh: FileRow[] = Array.from(list)
+      .slice(0, remaining)
       .map((file, i) => ({
         key: `${Date.now()}-${i}-${file.name}`,
         file,
         status: 'queued' as const,
       }))
     if (fresh.length === 0) return
+    // Update the ref synchronously too, so a second selection in the same
+    // tick sees the reduced remaining capacity before the re-render lands.
+    rowsRef.current = [...rowsRef.current, ...fresh]
     setRows((prev) => [...prev, ...fresh])
-    queueRef.current.push(...fresh)
-    pump()
+    for (const row of fresh) enqueue(row)
   }
 
   function retry(row: FileRow, overrideEmail?: string) {
-    inFlightRef.current += 1
-    void uploadOne(row, overrideEmail)
+    // Back onto the queue with the override attached — never a direct
+    // uploadOne, which would dodge the concurrency cap (Codex P2 on #613).
+    patchRow(row.key, { status: 'queued', pendingOverride: overrideEmail, error: undefined })
+    enqueue({ ...row, status: 'queued', pendingOverride: overrideEmail })
   }
 
   return (

@@ -9,7 +9,7 @@ import {
   requireMembership,
   intakeCandidate,
   analyzeResumeForJob,
-  extractEmailFromText,
+  extractAllEmails,
   sha256,
   HireJob,
   type IHireResumeMatch,
@@ -154,18 +154,18 @@ async function handleIntake(
   }
   const overrideName = overrideParse.data.name ?? ''
   const overrideEmail = overrideParse.data.email ?? ''
-  // The model's email is trusted only when it appears VERBATIM in the
-  // parsed text: an in-band injected instruction can fabricate a
-  // schema-valid address, and the identity/dedupe key must never come from
-  // generation (self-review on #612).
+  // The deterministic set of validated email TOKENS actually present in the
+  // document. The model's email is trusted only if it is one of these exact
+  // tokens — a substring test would accept `victim@x.com` from a document
+  // that only contains `notvictim@x.com`, letting an injected instruction
+  // steer dedupe onto the wrong candidate (Codex P1 on #613).
+  const documentEmails = extractAllEmails(resumeText)
   const modelEmail =
-    analysis?.email && resumeText.toLowerCase().includes(analysis.email)
-      ? analysis.email
-      : null
-  // Priority: recruiter override → verbatim model extraction → deterministic
-  // regex over the parsed text. The regex tier is what keeps a model outage
-  // degrading to UNSCORED candidates instead of a stalled NO_EMAIL batch.
-  const email = overrideEmail || modelEmail || extractEmailFromText(resumeText) || ''
+    analysis?.email && documentEmails.includes(analysis.email) ? analysis.email : null
+  // Priority: recruiter override → verbatim model extraction → first
+  // deterministic token. The token tier keeps a model outage degrading to
+  // UNSCORED candidates instead of a stalled NO_EMAIL batch.
+  const email = overrideEmail || modelEmail || documentEmails[0] || ''
   if (!email) {
     // Explicit contract for the client: show this file as "needs email",
     // let the recruiter type it, retry with the override field.

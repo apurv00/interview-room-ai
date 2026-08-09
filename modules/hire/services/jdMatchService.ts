@@ -57,16 +57,27 @@ function neutralizeDelimiters(text: string): string {
  */
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
 const FallbackEmailSchema = z.string().trim().toLowerCase().email().max(254)
-export function extractEmailFromText(text: string): string | null {
-  // Validate to the SAME standard as the other identity tiers — an
-  // oversized or malformed token must degrade to the next match / a
-  // classified NO_EMAIL, never a schema-level 500 inside the write
-  // transaction (self-review on #612).
+
+/**
+ * Every validated, lowercased email TOKEN in the text. The tokens are whole
+ * regex matches, so membership in this set is exact — `victim@x.com` is not
+ * a member of a text containing only `notvictim@x.com` (Codex P1 on #613:
+ * a substring check would accept the fabricated address the model returned).
+ */
+export function extractAllEmails(text: string): string[] {
+  const out: string[] = []
   for (const raw of text.match(EMAIL_RE) ?? []) {
     const parsed = FallbackEmailSchema.safeParse(raw)
-    if (parsed.success) return parsed.data
+    if (parsed.success && !out.includes(parsed.data)) out.push(parsed.data)
   }
-  return null
+  return out
+}
+
+export function extractEmailFromText(text: string): string | null {
+  // First validated token — deterministic fallback identity. Validated to
+  // the same standard as the other tiers so an oversized token degrades to
+  // the next / NO_EMAIL, never a 500 inside the write tx (self-review #612).
+  return extractAllEmails(text)[0] ?? null
 }
 
 /**
