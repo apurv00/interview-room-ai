@@ -19,7 +19,9 @@ vi.mock('@shared/analytics/GoogleAnalyticsScripts', () => ({
   GoogleAnalyticsScripts: () => <span data-testid="ga-scripts" />,
 }))
 vi.mock('@shared/providers/AuthGateProvider', () => ({
-  AuthGateProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  AuthGateProvider: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="auth-gate-provider">{children}</div>
+  ),
 }))
 vi.mock('@shared/providers/ThemeProvider', () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -96,6 +98,7 @@ describe('RootSurfaceComposition', () => {
 
       expect(screen.getByText('surface-content')).toBeTruthy()
       expect(screen.queryByTestId('session-provider')).toBeNull()
+      expect(screen.queryByTestId('auth-gate-provider')).toBeNull()
       expectB2cCompositionAbsent()
     },
   )
@@ -107,6 +110,7 @@ describe('RootSurfaceComposition', () => {
     expect(screen.getByText('surface-content')).toBeTruthy()
     expectB2cCompositionAbsent()
     expect(screen.getByTestId('session-provider')).toBeTruthy()
+    expect(screen.getByTestId('auth-gate-provider')).toBeTruthy()
   })
 
   it('preserves the complete B2C composition on the consumer lobby', () => {
@@ -121,6 +125,7 @@ describe('RootSurfaceComposition', () => {
     expect(screen.getByTestId('speed-insights')).toBeTruthy()
     expect(screen.getByTestId('ga-scripts')).toBeTruthy()
     expect(screen.getByTestId('session-provider')).toBeTruthy()
+    expect(screen.getByTestId('auth-gate-provider')).toBeTruthy()
   })
 
   it('keeps the separate legacy B2C candidate thank-you session-backed', () => {

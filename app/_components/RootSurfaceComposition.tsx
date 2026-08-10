@@ -58,8 +58,14 @@ export default function RootSurfaceComposition({
   const sessionless = isHirePublicSessionlessPath(pathname)
 
   if (isIsolated) {
+    // Candidate and public-apply capability pages are deliberately detached
+    // from NextAuth. AuthGateProvider itself calls useSession(), so it must
+    // stay outside this branch along with SessionProvider; otherwise these
+    // pages crash before they can exchange their Hire-owned capability.
+    if (sessionless) return children
+
     const content = <RequiredRuntimeProviders>{children}</RequiredRuntimeProviders>
-    return sessionless ? content : <SessionProvider>{content}</SessionProvider>
+    return <SessionProvider>{content}</SessionProvider>
   }
 
   const content = (
