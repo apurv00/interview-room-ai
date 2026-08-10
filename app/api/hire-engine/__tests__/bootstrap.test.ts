@@ -27,6 +27,14 @@ const CONFIG = {
   jobDescription: 'Canonical requirement snapshot',
 }
 
+function hydratedConfig() {
+  return {
+    ...CONFIG,
+    $isMongooseDocumentPrototype: true,
+    toObject: () => CONFIG,
+  }
+}
+
 function objectId(value: string) {
   return { toString: () => value }
 }
@@ -39,7 +47,7 @@ beforeEach(() => {
   mocks.activeBinding.mockResolvedValue({
     principalId: objectId(PRINCIPAL_ID),
     roundId: objectId(ROUND_ID),
-    config: CONFIG,
+    config: hydratedConfig(),
     candidateEmail: 'must-not-cross@example.com',
   })
 })

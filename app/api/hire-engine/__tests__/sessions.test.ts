@@ -50,6 +50,14 @@ const CANONICAL_CONFIG = {
   targetCompany: 'Example Co',
 }
 
+function hydratedConfig() {
+  return {
+    ...CANONICAL_CONFIG,
+    $isMongooseDocumentPrototype: true,
+    toObject: () => CANONICAL_CONFIG,
+  }
+}
+
 function objectId(value: string) {
   return { toString: () => value }
 }
@@ -60,7 +68,7 @@ function binding(runtimeSessionId?: string) {
     workspaceId: objectId(WORKSPACE_ID),
     principalId: objectId(PRINCIPAL_ID),
     roundId: objectId(ROUND_ID),
-    config: CANONICAL_CONFIG,
+    config: hydratedConfig(),
     createdAt: new Date('2026-08-10T00:00:00.000Z'),
     ...(runtimeSessionId ? { runtimeSessionId: objectId(runtimeSessionId) } : {}),
   }

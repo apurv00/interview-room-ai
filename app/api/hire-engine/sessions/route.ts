@@ -12,6 +12,7 @@ import {
 } from '@modules/hire-runtime/services/bindingService'
 import { ensureRuntimePrincipal } from '@modules/hire-runtime/services/runtimePrincipalService'
 import { requireRuntimeWorkspaceId } from '@modules/hire-runtime/services/runtimeTenantScope'
+import { runtimeEngineConfig } from '@modules/hire-runtime/services/runtimeEngineConfig'
 import { AppError } from '@shared/errors'
 
 export const dynamic = 'force-dynamic'
@@ -42,6 +43,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Session provisioning unavailable' }, { status: 409 })
     }
 
+    const config = runtimeEngineConfig(lease.binding.config)
+
     const principal = await ensureRuntimePrincipal(lease.binding)
     if (!principal) {
       throw new HireRuntimeBindingError(
@@ -57,11 +60,11 @@ export async function POST(req: NextRequest) {
       userId: lease.binding.principalId,
       organizationId: workspaceId,
       createdAt: { $gte: lease.binding.createdAt },
-      'config.role': lease.binding.config.role,
-      'config.interviewType': lease.binding.config.interviewType,
-      'config.experience': lease.binding.config.experience,
-      'config.duration': lease.binding.config.duration,
-      jobDescription: lease.binding.config.jobDescription,
+      'config.role': config.role,
+      'config.interviewType': config.interviewType,
+      'config.experience': config.experience,
+      'config.duration': config.duration,
+      jobDescription: config.jobDescription,
     })
       .sort({ createdAt: 1 })
       .select('_id')
@@ -70,8 +73,8 @@ export async function POST(req: NextRequest) {
     const engineSession = orphan ?? (await createSession({
       userId: lease.binding.principalId.toString(),
       organizationId: workspaceId,
-      config: lease.binding.config,
-      jobDescription: lease.binding.config.jobDescription,
+      config,
+      jobDescription: config.jobDescription,
       userAgent: req.headers.get('user-agent') ?? undefined,
     }))
     let attached
