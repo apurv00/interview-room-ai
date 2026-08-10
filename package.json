@@ -79,6 +79,8 @@
     "prepare:jobs-source-control-indexes": "tsx -r dotenv/config scripts/prepare-jobs-source-control-indexes.ts",
     "prepare:jobs-verdict-governance-indexes": "tsx -r dotenv/config scripts/prepare-jobs-verdict-governance-indexes.ts",
     "check:jobs-verdict-governance-indexes": "tsx -r dotenv/config scripts/prepare-jobs-verdict-governance-indexes.ts --check",
+    "prepare:hire-member-email-uniqueness": "tsx -r dotenv/config scripts/prepare-hire-member-email-uniqueness.ts",
+    "check:hire-member-email-uniqueness": "tsx -r dotenv/config scripts/prepare-hire-member-email-uniqueness.ts --check",
     "check:jobs-source-control": "tsx scripts/check-jobs-source-control.ts",
     "report:jobs-discovery-quality": "tsx -r dotenv/config scripts/report-jobs-discovery-quality.ts",
     "smoke:jobs-source-control": "tsx scripts/smoke-jobs-source-control.ts"

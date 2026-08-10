@@ -81,7 +81,9 @@ describe('direct sign-out surfaces', () => {
     // Desktop + mobile shells both render a sign-out button — either works.
     fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0])
 
-    await waitFor(() => expect(auth.signOut).toHaveBeenCalledWith({ callbackUrl: '/' }))
+    await waitFor(() =>
+      expect(auth.signOut).toHaveBeenCalledWith({ callbackUrl: '/hire-signin' }),
+    )
     expectPrivateBrowserStateCleared()
   })
 

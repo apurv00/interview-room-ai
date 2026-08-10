@@ -4,39 +4,42 @@
  */
 
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import {
   requireMembership,
+  getJobCloseEmailDelivery,
   getJobPipeline,
   updateJobStatus,
   UpdateJobStatusSchema,
   type UpdateJobStatusPayload,
 } from '@hire'
-import { serializeJob, serializePipelineEntry } from '../../_lib/serialize'
+import {
+  serializeJob,
+  serializeJobEmailDelivery,
+  serializePipelineEntry,
+} from '../../_lib/serialize'
+import { composeHireApiRoute } from '../../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
-export const GET = composeApiRoute({
+export const GET = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-job' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
-    const pipeline = await getJobPipeline(ctx, params.jobId)
+    const [pipeline, emailDelivery] = await Promise.all([
+      getJobPipeline(ctx, params.jobId),
+      getJobCloseEmailDelivery(ctx, params.jobId),
+    ])
     return NextResponse.json({
       job: serializeJob(pipeline.job, { includeJd: true }),
       entries: pipeline.entries.map(serializePipelineEntry),
+      emailDelivery: serializeJobEmailDelivery(emailDelivery),
     })
   },
 })
 
-export const PATCH = composeApiRoute<UpdateJobStatusPayload>({
+export const PATCH = composeHireApiRoute<UpdateJobStatusPayload>({
   schema: UpdateJobStatusSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:hire-job-status' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, body, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const job = await updateJobStatus(ctx, params.jobId, body)

@@ -10,22 +10,25 @@ vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-const mockJob = { findOne: vi.fn() }
-const mockWorkspace = { findById: vi.fn() }
-const mockMember = { find: vi.fn() }
-const accountActiveMock = vi.fn()
-
-vi.mock('@shared/services/jobsAccountFence', () => ({
-  isJobsAccountActive: (...a: unknown[]) => accountActiveMock(...a),
-}))
+const mockJob = { findOne: vi.fn(), updateOne: vi.fn() }
+const mockWorkspace = { findOne: vi.fn(), exists: vi.fn() }
+const mockMember = { findOne: vi.fn() }
 
 vi.mock('../models', async () => {
   const actual = await vi.importActual<typeof import('../models')>('../models')
   return {
     ...actual,
-    HireJob: { findOne: (...a: unknown[]) => mockJob.findOne(...a) },
-    HireWorkspace: { findById: (...a: unknown[]) => mockWorkspace.findById(...a) },
-    HireWorkspaceMember: { find: (...a: unknown[]) => mockMember.find(...a) },
+    HireJob: {
+      findOne: (...a: unknown[]) => mockJob.findOne(...a),
+      updateOne: (...a: unknown[]) => mockJob.updateOne(...a),
+    },
+    HireWorkspace: {
+      findOne: (...a: unknown[]) => mockWorkspace.findOne(...a),
+      exists: (...a: unknown[]) => mockWorkspace.exists(...a),
+    },
+    HireWorkspaceMember: {
+      findOne: (...a: unknown[]) => mockMember.findOne(...a),
+    },
   }
 })
 
@@ -39,14 +42,20 @@ import {
 import type { MembershipContext } from '../services/workspaceService'
 
 const CTX = {
-  workspace: { _id: 'ws-A', name: 'Acme' },
-  membership: { _id: 'm1', userId: 'u1', email: 'hr@acme.com', name: 'HR', role: 'admin' },
+  workspace: { _id: '111111111111111111111111', name: 'Acme' },
+  membership: {
+    _id: 'm1',
+    userId: 'u1',
+    email: 'hr@acme.com',
+    name: 'HR',
+    role: 'admin',
+  },
 } as unknown as MembershipContext
 
 function jobDoc(overrides: Record<string, unknown> = {}) {
   return {
     _id: 'job-1',
-    workspaceId: 'ws-A',
+    workspaceId: '111111111111111111111111',
     title: 'Backend Engineer',
     status: 'open',
     applyTokenHash: undefined as string | undefined,
@@ -58,7 +67,11 @@ function jobDoc(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockWorkspace.findById.mockReturnValue({ select: () => Promise.resolve({ name: 'Acme' }) })
+  mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
+  mockWorkspace.findOne.mockReturnValue({
+    select: () => Promise.resolve({ name: 'Acme' }),
+  })
+  mockWorkspace.exists.mockResolvedValue({ _id: '111111111111111111111111' })
 })
 
 describe('issueApplyLink', () => {
@@ -66,37 +79,65 @@ describe('issueApplyLink', () => {
     const job = jobDoc()
     mockJob.findOne.mockResolvedValue(job)
 
-    const { token, enabled } = await issueApplyLink(CTX, 'job-1')
+    const { capability, enabled } = await issueApplyLink(CTX, 'job-1')
+    const token = capability.split('.')[1]
 
     expect(enabled).toBe(true)
     expect(token).toMatch(/^[a-f0-9]{64}$/)
-    expect(job.applyTokenHash).toBe(sha256(token))
+    expect(mockJob.updateOne.mock.calls[0][1]).toEqual({
+      $set: {
+        applyTokenHash: sha256(token),
+        applyPageEnabled: true,
+      },
+    })
     // The raw value must never be persisted anywhere on the document.
-    expect(JSON.stringify(job)).not.toContain(token)
-    expect(job.applyPageEnabled).toBe(true)
+    expect(JSON.stringify(mockJob.updateOne.mock.calls[0])).not.toContain(token)
   })
 
   it('rotating issues a DIFFERENT token, which is what kills the old link', async () => {
-    const job = jobDoc()
-    mockJob.findOne.mockResolvedValue(job)
+    mockJob.findOne.mockResolvedValue(jobDoc())
 
     const first = await issueApplyLink(CTX, 'job-1')
-    const firstHash = job.applyTokenHash
     const second = await issueApplyLink(CTX, 'job-1')
 
-    expect(second.token).not.toBe(first.token)
-    expect(job.applyTokenHash).not.toBe(firstHash)
+    expect(second.capability).not.toBe(first.capability)
+    expect(mockJob.updateOne.mock.calls[1][1].$set.applyTokenHash).not.toBe(
+      mockJob.updateOne.mock.calls[0][1].$set.applyTokenHash,
+    )
   })
 
   it('refuses a closed job', async () => {
     mockJob.findOne.mockResolvedValue(jobDoc({ status: 'closed' }))
-    await expect(issueApplyLink(CTX, 'job-1')).rejects.toMatchObject({ code: 'JOB_CLOSED' })
+    await expect(issueApplyLink(CTX, 'job-1')).rejects.toMatchObject({
+      code: 'JOB_CLOSED',
+    })
   })
 
   it('is workspace-scoped — the query carries the tenancy id', async () => {
     mockJob.findOne.mockResolvedValue(jobDoc())
     await issueApplyLink(CTX, 'job-1')
-    expect(mockJob.findOne).toHaveBeenCalledWith({ _id: 'job-1', workspaceId: 'ws-A' })
+    expect(mockJob.findOne).toHaveBeenCalledWith({
+      _id: 'job-1',
+      workspaceId: '111111111111111111111111',
+    })
+    expect(mockJob.updateOne).toHaveBeenCalledWith(
+      {
+        _id: 'job-1',
+        workspaceId: '111111111111111111111111',
+        status: { $ne: 'closed' },
+      },
+      expect.any(Object),
+      { runValidators: true },
+    )
+  })
+
+  it('refuses the token when the job closes between read and atomic update', async () => {
+    mockJob.findOne.mockResolvedValue(jobDoc())
+    mockJob.updateOne.mockResolvedValue({ matchedCount: 0 })
+
+    await expect(issueApplyLink(CTX, 'job-1')).rejects.toMatchObject({
+      code: 'JOB_CLOSED',
+    })
   })
 })
 
@@ -107,20 +148,30 @@ describe('disableApplyLink', () => {
 
     await disableApplyLink(CTX, 'job-1')
 
-    expect(job.applyPageEnabled).toBe(false)
-    expect(job.applyTokenHash).toBeUndefined()
-    expect(job.save).toHaveBeenCalled()
+    expect(mockJob.updateOne).toHaveBeenCalledWith(
+      {
+        _id: 'job-1',
+        workspaceId: '111111111111111111111111',
+      },
+      {
+        $set: { applyPageEnabled: false },
+        $unset: { applyTokenHash: 1 },
+      },
+      { runValidators: true },
+    )
   })
 })
 
 describe('resolveApplyToken — uniform failure (no enumeration)', () => {
   const RAW = 'a'.repeat(64)
+  const CAPABILITY = `111111111111111111111111.${RAW}`
 
   it('looks the job up by HASH, never by the raw token', async () => {
     mockJob.findOne.mockResolvedValue(jobDoc({ applyPageEnabled: true }))
-    await resolveApplyToken(RAW)
+    await resolveApplyToken(CAPABILITY)
     const query = mockJob.findOne.mock.calls[0][0]
     expect(query.applyTokenHash).toBe(sha256(RAW))
+    expect(query.workspaceId).toBe('111111111111111111111111')
     // Disabled pages and closed jobs are excluded in the query itself.
     expect(query.applyPageEnabled).toBe(true)
     expect(query.status).toEqual({ $ne: 'closed' })
@@ -134,53 +185,69 @@ describe('resolveApplyToken — uniform failure (no enumeration)', () => {
 
   it('returns null — indistinguishably — when no job matches', async () => {
     mockJob.findOne.mockResolvedValue(null)
-    expect(await resolveApplyToken(RAW)).toBe(null)
+    expect(await resolveApplyToken(CAPABILITY)).toBe(null)
   })
 
   it('returns null when the owning workspace is gone', async () => {
     mockJob.findOne.mockResolvedValue(jobDoc({ applyPageEnabled: true }))
-    mockWorkspace.findById.mockReturnValue({ select: () => Promise.resolve(null) })
-    expect(await resolveApplyToken(RAW)).toBe(null)
+    mockWorkspace.findOne.mockReturnValue({
+      select: () => Promise.resolve(null),
+    })
+    expect(await resolveApplyToken(CAPABILITY)).toBe(null)
+  })
+
+  it('requires an active workspace, including compatibility for legacy rows', async () => {
+    mockJob.findOne.mockResolvedValue(jobDoc({ applyPageEnabled: true }))
+    await resolveApplyToken(CAPABILITY)
+    expect(mockWorkspace.findOne).toHaveBeenCalledWith({
+      _id: '111111111111111111111111',
+      $or: [
+        { lifecycleState: 'active' },
+        { lifecycleState: { $exists: false } },
+      ],
+    })
   })
 
   it('resolves a live link to its job + employer name', async () => {
     mockJob.findOne.mockResolvedValue(jobDoc({ applyPageEnabled: true }))
-    const view = await resolveApplyToken(RAW)
+    const view = await resolveApplyToken(CAPABILITY)
     expect(view?.job.title).toBe('Backend Engineer')
     expect(view?.workspaceName).toBe('Acme')
   })
 })
 
-
-describe('resolveWorkspaceWriteAuthority — survives the creator deleting their account', () => {
-  function members(list: Array<{ userId: string; role: string }>) {
-    return { sort: () => Promise.resolve(list) }
+describe('resolveWorkspaceWriteAuthority — Hire-owned member authority', () => {
+  function member(value: { _id: string; role: string } | null) {
+    return { sort: () => Promise.resolve(value) }
   }
 
-  it('returns the first member whose account is still active', async () => {
-    mockMember.find.mockReturnValue(
-      members([
-        { userId: 'admin-gone', role: 'admin' },
-        { userId: 'member-live', role: 'member' },
-      ]),
+  it('returns an active Hire member without resolving a B2C User', async () => {
+    mockMember.findOne.mockReturnValue(
+      member({ _id: 'member-live', role: 'member' }),
     )
-    accountActiveMock.mockImplementation(async (id: string) => id === 'member-live')
 
-    // The job's original creator may be long deleted: the authority is
-    // whoever still exists, so the apply link keeps working (Codex P1 #615).
-    await expect(resolveWorkspaceWriteAuthority('ws-A' as never)).resolves.toBe('member-live')
+    await expect(resolveWorkspaceWriteAuthority('ws-A' as never)).resolves.toBe(
+      'member-live',
+    )
+    expect(mockMember.findOne.mock.calls[0][0]).toMatchObject({
+      workspaceId: 'ws-A',
+      authState: 'active',
+    })
   })
 
-  it('returns null when NO member account survives — caller must stop accepting', async () => {
-    mockMember.find.mockReturnValue(members([{ userId: 'gone', role: 'admin' }]))
-    accountActiveMock.mockResolvedValue(false)
-    await expect(resolveWorkspaceWriteAuthority('ws-A' as never)).resolves.toBe(null)
+  it('returns null when no active Hire member survives', async () => {
+    mockMember.findOne.mockReturnValue(member(null))
+    await expect(resolveWorkspaceWriteAuthority('ws-A' as never)).resolves.toBe(
+      null,
+    )
   })
 
-  it('only considers members already linked to a user id', async () => {
-    mockMember.find.mockReturnValue(members([]))
-    accountActiveMock.mockResolvedValue(true)
-    await resolveWorkspaceWriteAuthority('ws-A' as never)
-    expect(mockMember.find.mock.calls[0][0]).toMatchObject({ userId: { $exists: true } })
+  it('returns null before member lookup when the workspace is tombstoned', async () => {
+    mockWorkspace.exists.mockResolvedValue(null)
+
+    await expect(resolveWorkspaceWriteAuthority('ws-A' as never)).resolves.toBe(
+      null,
+    )
+    expect(mockMember.findOne).not.toHaveBeenCalled()
   })
 })

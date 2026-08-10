@@ -31,6 +31,11 @@ import { getClientPromise } from '@shared/db/mongoClient'
 import { logger } from '@shared/logger'
 import { deleteFromR2 } from '@shared/storage/r2'
 import { tombstoneAccountUsageBuffers } from '@shared/services/usageBuffer'
+import {
+  commitHireMemberForB2CAccountDeletion,
+  preflightHireMemberForB2CAccountDeletion,
+  type PrepareHireMemberDeletionInput,
+} from '@shared/services/hireMemberDeletionBridgeClient'
 
 import {
   User,
@@ -353,6 +358,11 @@ export class AccountDeletionIncompleteError extends Error {
   }
 }
 
+export type DeleteUserAccountOptions = Omit<
+  PrepareHireMemberDeletionInput,
+  'operationId'
+> & { operationId?: string }
+
 /**
  * Permanently delete the user and every record that references them.
  *
@@ -363,7 +373,7 @@ export class AccountDeletionIncompleteError extends Error {
  */
 export async function deleteUserAccount(
   userId: string,
-  _sessionEmail?: string,
+  legacySessionEmailOrOptions?: string | DeleteUserAccountOptions,
 ): Promise<DeleteAccountResult> {
   if (!mongoose.Types.ObjectId.isValid(userId)) {
     throw new Error('Invalid user id')
@@ -371,12 +381,28 @@ export async function deleteUserAccount(
   await connectDB()
 
   const userObjectId = new mongoose.Types.ObjectId(userId)
+  const hireOptions =
+    typeof legacySessionEmailOrOptions === 'object' && legacySessionEmailOrOptions !== null
+      ? legacySessionEmailOrOptions
+      : {}
+  // Read-only cross-service gate before the first B2C mutation. Admin
+  // transfer and sole-workspace confirmation failures leave the B2C account
+  // fully active. The returned operation id binds the later commit/retry.
+  const hirePreflight = await preflightHireMemberForB2CAccountDeletion(
+    userId,
+    hireOptions,
+  )
+  const hireCommitInput: PrepareHireMemberDeletionInput = {
+    ...hireOptions,
+    operationId: hirePreflight.operationId,
+  }
 
   // A04 deletion-start barrier. This is the FIRST durable mutation: every
   // user-owned Jobs creator writes the same User document in its transaction.
   // A writer that commits first is visible to the sweeps below; a deletion
   // that commits first changes the predicate to `deleting`, so the writer
   // retries/fails before it can create data or pin a posting.
+  const accountDeletionRequestedAt = new Date()
   let deletionOwner = await User.findOneAndUpdate(
     {
       _id: userObjectId,
@@ -389,12 +415,13 @@ export async function deleteUserAccount(
     {
       $set: {
         accountState: 'deleting',
-        accountDeletionRequestedAt: new Date(),
+        accountDeletionRequestedAt,
       },
       $inc: { jobsWriteRevision: 1 },
     },
     { new: true, writeConcern: { w: 'majority' } },
   ).select('_id email role accountState resumeR2Key').lean()
+  const claimedFreshDeletion = !!deletionOwner
   let missingUserRecovery = false
 
   if (!deletionOwner) {
@@ -416,6 +443,38 @@ export async function deleteUserAccount(
       }
       deletionOwner = existing
     }
+  }
+
+  // Commit the Hire side only after the B2C lifecycle claim has proved this
+  // account is deletable. If a concurrent Hire authority change blocks the
+  // commit, roll back a claim made by this invocation before returning the
+  // actionable conflict; retries of an older `deleting` claim remain fenced.
+  try {
+    await commitHireMemberForB2CAccountDeletion(userId, hireCommitInput)
+  } catch (error) {
+    if (claimedFreshDeletion) {
+      const rollback = await User.updateOne(
+        {
+          _id: userObjectId,
+          accountState: 'deleting',
+          accountDeletionRequestedAt,
+        },
+        {
+          $set: { accountState: 'active' },
+          $unset: { accountDeletionRequestedAt: 1 },
+          $inc: { jobsWriteRevision: 1 },
+        },
+        { writeConcern: { w: 'majority' } },
+      )
+      if (rollback.modifiedCount !== 1) {
+        logger.error(
+          { error, userId },
+          'Hire deletion commit failed and the B2C lifecycle claim could not be rolled back',
+        )
+        throw new AccountDeletionIncompleteError(['Hire membership deletion fence'])
+      }
+    }
+    throw error
   }
 
   // Email and role are account authority. JWT snapshots can be seven days

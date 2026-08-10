@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { logger } from '@shared/logger'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
-import { composeApiRoute, type ApiContext } from '@shared/middleware/composeApiRoute'
-import { isJobsAccountActive } from '@shared/services/jobsAccountFence'
 import { parseDocument, UnsupportedFileTypeError } from '@shared/services/documentParser'
 import {
   requireMembership,
@@ -14,6 +12,10 @@ import {
   HireJob,
   type IHireResumeMatch,
 } from '@hire'
+import {
+  composeHireApiRoute,
+  type HireApiContext,
+} from '../../../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,7 +28,7 @@ export const dynamic = 'force-dynamic'
  * batch. This deliberately avoids a background-job dependency at bulk
  * sizes ≤ ~100 (founder decision 2026-08-09: no Inngest for intake).
  *
- * ON THE RAILS: composeApiRoute without a `schema` never reads the body,
+ * ON THE RAILS: composeHireApiRoute without a `schema` never reads the body,
  * so multipart routes belong on it like every other workspace route —
  * auth, the account-lifecycle egress fence (entry + post-handler +
  * exception-path rechecks), plan-scaled rate limiting, and AppError
@@ -55,14 +57,15 @@ const OverrideFieldsSchema = z.object({
 
 async function handleIntake(
   req: NextRequest,
-  { user, params }: ApiContext,
+  { user, params, isPrincipalActive }: HireApiContext<unknown>,
 ): Promise<NextResponse> {
-  // Long-request fence: entry/egress checks live in composeApiRoute; this
+  // Long-request fence: entry/egress checks live in composeHireApiRoute; this
   // closure re-checks at the two boundaries the middleware cannot see —
   // before every model-provider attempt and before persistence — so a
-  // deletion starting mid-parse neither ships documents to a provider nor
-  // persists hiring data under the deleted user (Codex P1×2 on #612).
-  const accountActive = () => isJobsAccountActive(user.id)
+  // removal/deletion starting mid-parse neither ships documents to a
+  // provider nor releases output. For a Hire principal this re-resolves the
+  // Hire member session and never queries User.
+  const accountActive = isPrincipalActive
 
   const ctx = await requireMembership({ userId: user.id, email: user.email })
 
@@ -194,10 +197,9 @@ async function handleIntake(
     : undefined
 
   // No manual pre-write fence here: intakeCandidate runs all writes inside
-  // withPersonalDataWriteTransaction, which atomically claims write
-  // authority against the recruiter's account state — the race-free form
-  // of the check (a deletion mid-request surfaces as 423
-  // ACCOUNT_DELETION_PENDING via the AppError mapper).
+  // the Hire-owned active-workspace/member transaction. A concurrent
+  // workspace tombstone or member removal conflicts or fails closed before
+  // any candidate data commits; no B2C User participates in the claim.
   const result = await intakeCandidate(ctx, {
     jobId: params.jobId,
     name,
@@ -230,12 +232,11 @@ function str(v: FormDataEntryValue | null): string {
   return typeof v === 'string' ? v.trim() : ''
 }
 
-export const POST = composeApiRoute({
+export const POST = composeHireApiRoute({
   // No `schema`: compose never reads the body, the handler parses the
   // multipart form itself — the sanctioned pattern for upload routes.
   // Sized for real batches: 20 files at browser concurrency 3 finishes
   // inside a minute; each request costs a parse + one LLM call.
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-intake' },
-  requireActiveAccount: true,
   handler: handleIntake,
 })

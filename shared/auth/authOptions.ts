@@ -9,6 +9,12 @@ import { User } from '@shared/db/models'
 import clientPromise from '@shared/db/mongoClient'
 import { authLogger } from '@shared/logger'
 import { redeemAuthTicket } from '@b2b/services/inviteTicketService'
+import { resolveFirstPartyAuthRedirect } from './redirect'
+
+const isHireRuntime = process.env.IPG_SURFACE === 'hire-engine'
+const authSecret = isHireRuntime
+  ? process.env.HIRE_RUNTIME_NEXTAUTH_SECRET
+  : process.env.NEXTAUTH_SECRET
 
 // Fail fast if NEXTAUTH_SECRET is missing or too short in production.
 // Without a proper secret, JWTs can be forged and sessions hijacked.
@@ -17,14 +23,16 @@ if (
   typeof globalThis !== 'undefined' &&
   process.env.NODE_ENV === 'production' &&
   !process.env.NEXT_PHASE &&
-  (!process.env.NEXTAUTH_SECRET || process.env.NEXTAUTH_SECRET.length < 16)
+  (!authSecret || authSecret.length < 16)
 ) {
-  throw new Error('NEXTAUTH_SECRET must be set to a strong value (>= 16 chars) in production. Generate one with: openssl rand -base64 32')
+  throw new Error(
+    `${isHireRuntime ? 'HIRE_RUNTIME_NEXTAUTH_SECRET' : 'NEXTAUTH_SECRET'} must be set to a strong value (>= 16 chars) in production. Generate one with: openssl rand -base64 32`,
+  )
 }
 
 export const authOptions: NextAuthOptions = {
   adapter: MongoDBAdapter(clientPromise) as Adapter,
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: authSecret,
 
   session: {
     strategy: 'jwt',
@@ -32,7 +40,7 @@ export const authOptions: NextAuthOptions = {
   },
 
   providers: [
-    ...(process.env.GOOGLE_CLIENT_ID
+    ...(!isHireRuntime && process.env.GOOGLE_CLIENT_ID
       ? [
           GoogleProvider({
             clientId: process.env.GOOGLE_CLIENT_ID,
@@ -45,7 +53,7 @@ export const authOptions: NextAuthOptions = {
           }),
         ]
       : []),
-    ...(process.env.GITHUB_CLIENT_ID
+    ...(!isHireRuntime && process.env.GITHUB_CLIENT_ID
       ? [
           GitHubProvider({
             clientId: process.env.GITHUB_CLIENT_ID,
@@ -72,10 +80,23 @@ export const authOptions: NextAuthOptions = {
           authLogger.warn('invite-otp: ticket redemption failed')
           return null
         }
+        if (isHireRuntime && !payload.organizationId) {
+          authLogger.warn(
+            { userId: payload.userId },
+            'invite-otp: runtime ticket is missing its workspace boundary',
+          )
+          return null
+        }
 
         try {
           await connectDB()
-          const dbUser = await User.findById(payload.userId).select(
+          const userQuery = isHireRuntime
+            ? User.findOne({
+                _id: payload.userId,
+                organizationId: payload.organizationId,
+              })
+            : User.findById(payload.userId)
+          const dbUser = await userQuery.select(
             '_id email name image',
           )
           if (!dbUser) {
@@ -85,12 +106,16 @@ export const authOptions: NextAuthOptions = {
             )
             return null
           }
-          return {
+          const authorizedUser = {
             id: dbUser._id.toString(),
             email: dbUser.email,
             name: dbUser.name ?? dbUser.email,
             image: dbUser.image ?? undefined,
+            ...(isHireRuntime
+              ? { organizationId: payload.organizationId }
+              : {}),
           }
+          return authorizedUser
         } catch (err) {
           authLogger.error({ err }, 'invite-otp: user lookup failed')
           return null
@@ -100,6 +125,10 @@ export const authOptions: NextAuthOptions = {
   ],
 
   callbacks: {
+    async redirect({ url, baseUrl }) {
+      return resolveFirstPartyAuthRedirect(url, baseUrl, isHireRuntime)
+    },
+
     async signIn({ user, account }) {
       authLogger.info({
         provider: account?.provider,
@@ -130,7 +159,27 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user, account, trigger, session }) {
       if (user) {
         await connectDB()
-        const dbUser = await User.findOne({ email: user.email })
+        const runtimeUser = user as typeof user & { organizationId?: string }
+        if (isHireRuntime && !runtimeUser.organizationId) {
+          authLogger.error(
+            { userId: user.id },
+            'Runtime JWT issuance refused without a workspace boundary',
+          )
+          throw new Error('Runtime identity is missing its workspace boundary')
+        }
+        const dbUser = isHireRuntime
+          ? await User.findOne({
+              _id: user.id,
+              organizationId: runtimeUser.organizationId,
+            })
+          : await User.findOne({ email: user.email })
+        if (isHireRuntime && !dbUser) {
+          authLogger.error(
+            { userId: user.id, organizationId: runtimeUser.organizationId },
+            'Runtime JWT issuance refused for an unknown workspace principal',
+          )
+          throw new Error('Runtime workspace principal is unavailable')
+        }
         if (dbUser) {
           token.userId = dbUser._id.toString()
           token.role = dbUser.role
@@ -160,7 +209,23 @@ export const authOptions: NextAuthOptions = {
       if (trigger === 'update' && token.userId) {
         try {
           await connectDB()
-          const dbUser = await User.findById(token.userId).select('plan role organizationId')
+          const runtimeOrganizationId =
+            typeof token.organizationId === 'string'
+              ? token.organizationId
+              : undefined
+          if (isHireRuntime && !runtimeOrganizationId) {
+            throw new Error('Runtime session is missing its workspace boundary')
+          }
+          const userQuery = isHireRuntime
+            ? User.findOne({
+                _id: token.userId,
+                organizationId: runtimeOrganizationId,
+              })
+            : User.findById(token.userId)
+          const dbUser = await userQuery.select('plan role organizationId')
+          if (isHireRuntime && !dbUser) {
+            throw new Error('Runtime workspace principal is unavailable')
+          }
           if (dbUser) {
             token.role = dbUser.role
             token.plan = dbUser.plan
@@ -169,6 +234,7 @@ export const authOptions: NextAuthOptions = {
           }
         } catch (err) {
           authLogger.error({ err, userId: token.userId }, 'JWT session-update refresh failed — keeping stale token')
+          if (isHireRuntime) throw err
         }
       }
       return token
@@ -185,8 +251,23 @@ export const authOptions: NextAuthOptions = {
     },
   },
 
-  cookies:
-    process.env.NODE_ENV === 'production'
+  cookies: isHireRuntime
+    ? {
+        sessionToken: {
+          name:
+            process.env.NODE_ENV === 'production'
+              ? '__Secure-ipg-hire-runtime'
+              : 'ipg-hire-runtime',
+          options: {
+            httpOnly: true,
+            sameSite: 'lax',
+            path: '/',
+            secure: process.env.NODE_ENV === 'production',
+            // Host-only by design: never add Domain here.
+          },
+        },
+      }
+    : process.env.NODE_ENV === 'production'
       ? {
           sessionToken: {
             name: '__Secure-next-auth.session-token',
@@ -202,11 +283,11 @@ export const authOptions: NextAuthOptions = {
       : undefined,
 
   pages: {
-    signIn: '/signin',
-    error: '/signin',
+    signIn: isHireRuntime ? '/handoff' : '/signin',
+    error: isHireRuntime ? '/handoff' : '/signin',
   },
 
-  events: {
+  events: isHireRuntime ? {} : {
     async createUser({ user }) {
       try {
         if (!user.email) {

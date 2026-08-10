@@ -1,11 +1,172 @@
 import { withAuth } from 'next-auth/middleware'
 import { NextResponse } from 'next/server'
 import { isHireGuestEmail, evaluateGuestAccess, guestRoundIdFromEmail } from '@shared/auth/guestScope'
+import { runtimeWriteDrainMs } from '@shared/contracts/hireRuntimeWriteFence'
+
+const isHireRuntimeSurface = process.env.IPG_SURFACE === 'hire-engine'
+const isHireControlSurface = process.env.IPG_SURFACE === 'hire-control'
+const HIRE_RUNTIME_FENCE_BYPASS_HEADER = 'x-ipg-hire-runtime-fence-bypass'
+const HIRE_CONTROL_PUBLIC_POLICY_PATHS = new Set(['/privacy', '/terms', '/contact'])
+
+function isHireRuntimePathAllowed(pathname: string, method: string): boolean {
+  // Candidate consent, OTP, photo, privacy, and handoff issuance belong to
+  // the Hire control plane. shared/auth/guestScope also allows that prefix
+  // for the legacy single-deployment flow, so exclude it explicitly before
+  // consulting the unchanged engine API allowlist.
+  if (
+    pathname === '/candidate' ||
+    pathname.startsWith('/candidate/') ||
+    pathname === '/api/candidate' ||
+    pathname.startsWith('/api/candidate/')
+  ) {
+    return false
+  }
+  if (
+    pathname === '/handoff' ||
+    pathname === '/handoff/complete' ||
+    pathname.startsWith('/api/hire-engine/') ||
+    pathname === '/api/internal/hire-engine/revoke' ||
+    pathname.startsWith('/api/auth/') ||
+    pathname.startsWith('/api/inngest') ||
+    pathname.startsWith('/_next/') ||
+    pathname === '/favicon.ico' ||
+    pathname === '/icon' ||
+    pathname === '/apple-icon'
+  ) {
+    return true
+  }
+  if (pathname === '/feedback' || pathname.startsWith('/feedback/')) return true
+  return evaluateGuestAccess(pathname, method).allowed
+}
+
+function isHireControlPathAllowed(pathname: string): boolean {
+  return (
+    pathname === '/' ||
+    pathname.startsWith('/workspace') ||
+    pathname.startsWith('/candidate/') ||
+    pathname === '/apply' ||
+    pathname.startsWith('/apply/') ||
+    pathname.startsWith('/hire-signin') ||
+    pathname.startsWith('/api/workspace') ||
+    pathname.startsWith('/api/candidate/') ||
+    pathname === '/api/apply' ||
+    pathname.startsWith('/api/apply/') ||
+    pathname.startsWith('/api/hire-auth/') ||
+    // Shared HR JWT support on the isolated control host. Keep this exact:
+    // session hydration and sign-out are needed, but OAuth/sign-in/callback
+    // endpoints stay on the B2C origin and remain unreachable here.
+    pathname === '/api/auth/session' ||
+    pathname === '/api/auth/csrf' ||
+    pathname === '/api/auth/signout' ||
+    pathname.startsWith('/api/internal/hire/engine/') ||
+    pathname === '/api/internal/hire/member-account-deletion' ||
+    pathname.startsWith('/api/inngest') ||
+    pathname.startsWith('/api/health') ||
+    pathname.startsWith('/_next/') ||
+    HIRE_CONTROL_PUBLIC_POLICY_PATHS.has(pathname) ||
+    pathname === '/favicon.ico' ||
+    pathname === '/icon' ||
+    pathname === '/apple-icon' ||
+    pathname === '/robots.txt'
+  )
+}
 
 export default withAuth(
   function middleware(req) {
     const { pathname } = req.nextUrl
     const token = req.nextauth.token
+
+    // Retire every request-target credential shape. Fragment capabilities
+    // never reach middleware; seeing one of these paths/query keys therefore
+    // means an old or copied-incorrectly link. Do not read or echo the value.
+    const legacyHireCredentialTransport =
+      pathname.startsWith('/apply/') ||
+      (pathname.startsWith('/api/apply/') && pathname !== '/api/apply/resolve') ||
+      pathname.startsWith('/candidate/privacy/') ||
+      (pathname.startsWith('/candidate/') && req.nextUrl.searchParams.has('token')) ||
+      (pathname === '/hire-signin' && req.nextUrl.searchParams.has('setup')) ||
+      (pathname === '/handoff' && req.nextUrl.searchParams.has('code'))
+    if (legacyHireCredentialTransport) {
+      return new NextResponse('This link format is no longer active', {
+        status: 410,
+        headers: { 'Cache-Control': 'private, no-store' },
+      })
+    }
+
+    // The isolated runtime is an engine appliance, not another copy of the
+    // product. Its network surface is allow-listed independently of whatever
+    // domain-wide B2C cookie the browser may also send.
+    if (isHireRuntimeSurface) {
+      if (pathname === '/feedback' || pathname.startsWith('/feedback/')) {
+        const url = req.nextUrl.clone()
+        url.pathname = '/handoff/complete'
+        url.search = ''
+        return NextResponse.redirect(url)
+      }
+      // The isolated runtime never starts multimodal/analysis jobs. Those
+      // engine-adjacent collections are intentionally outside the Hire data
+      // contract and would make a privacy purge impossible to acknowledge.
+      if (pathname === '/api/analysis/start') {
+        return new NextResponse('Not found', { status: 404 })
+      }
+
+      const fencedWrite = runtimeWriteDrainMs(pathname, req.method) !== null
+      const bypass = req.headers.get(HIRE_RUNTIME_FENCE_BYPASS_HEADER)
+      if (bypass !== null) {
+        const configuredSecret = process.env.HIRE_RUNTIME_FENCE_SECRET
+        if (
+          !fencedWrite ||
+          !configuredSecret ||
+          configuredSecret.length < 32 ||
+          bypass !== configuredSecret
+        ) {
+          return new NextResponse('Not found', { status: 404 })
+        }
+      } else if (fencedWrite) {
+        // Every mutable unchanged-engine route passes through the runtime
+        // capability fence. The internal proxy repeats the request with the
+        // strong bypass header, avoiding recursion while preserving body,
+        // method, and all non-reserved query parameters.
+        const url = req.nextUrl.clone()
+        url.pathname = '/api/hire-engine/write-fence'
+        url.searchParams.set('__runtime_target', pathname)
+        return NextResponse.rewrite(url)
+      }
+      // The unchanged interview UI calls the established /api/tts paths.
+      // After the write fence admits that request, route it to the isolated
+      // runtime's transient (never shared-cache) provider boundary.
+      if (pathname === '/api/tts' || pathname === '/api/tts/stream') {
+        const url = req.nextUrl.clone()
+        url.pathname = pathname === '/api/tts/stream'
+          ? '/api/hire-engine/tts/stream'
+          : '/api/hire-engine/tts'
+        return NextResponse.rewrite(url)
+      }
+      if (!isHireRuntimePathAllowed(pathname, req.method)) {
+        return new NextResponse('Not found', { status: 404 })
+      }
+      if (pathname === '/api/interviews' && req.method === 'POST') {
+        const url = req.nextUrl.clone()
+        url.pathname = '/api/hire-engine/sessions'
+        return NextResponse.rewrite(url)
+      }
+    }
+    if (isHireControlSurface) {
+      if (pathname === '/signin' || pathname === '/signup') {
+        const url = req.nextUrl.clone()
+        url.pathname = '/hire-signin'
+        url.search = ''
+        return NextResponse.redirect(url)
+      }
+      if (!isHireControlPathAllowed(pathname)) {
+        return new NextResponse('Not found', { status: 404 })
+      }
+      if (pathname === '/') {
+        const url = req.nextUrl.clone()
+        url.pathname = '/workspace'
+        return NextResponse.rewrite(url)
+      }
+    }
 
     // ── IPG Hire guest capability scope (DEFAULT-DENY) ──
     // FIRST, before any subdomain rewrite: the guest flow can run on any
@@ -17,7 +178,7 @@ export default withAuth(
     // GDPR export, account, resumes, history, learn, jobs, and any future
     // authed surface — is denied by default, never patched away one door at
     // a time. Authority + rationale: shared/auth/guestScope.ts.
-    if (isHireGuestEmail(token?.email)) {
+    if (!isHireRuntimeSurface && !isHireControlSurface && isHireGuestEmail(token?.email)) {
       const decision = evaluateGuestAccess(pathname, req.method)
       if (!decision.allowed) {
         if (decision.redirectTo) {
@@ -56,6 +217,7 @@ export default withAuth(
     const subdomainExcludedPaths = [
       '/signin',
       '/signup',
+      '/hire-signin',
       '/api/',
       '/_next',
       '/favicon.ico',
@@ -168,12 +330,19 @@ export default withAuth(
     callbacks: {
       authorized: ({ token, req }) => {
         const { pathname } = req.nextUrl
+        // Runtime authentication uses a different host-only cookie name that
+        // next-auth/middleware does not decode. Every runtime API/page still
+        // performs its own custom-cookie session check; the middleware body
+        // above supplies the default-deny route fence.
+        if (isHireRuntimeSurface || isHireControlSurface) return true
         // Public paths that don't require auth
         if (
           pathname === '/' ||
           pathname.startsWith('/signin') ||
           pathname.startsWith('/signup') ||
+          pathname.startsWith('/hire-signin') ||
           pathname.startsWith('/api/auth') ||
+          pathname.startsWith('/api/hire-auth') ||
           pathname.startsWith('/api/health') ||
           pathname.startsWith('/api/inngest') ||
           pathname.startsWith('/api/domains') ||
@@ -245,12 +414,18 @@ export default withAuth(
           // (checked in-route).
           pathname.startsWith('/candidate/') ||
           pathname.startsWith('/api/candidate/') ||
-          // Public apply page + its submit endpoint. The tokenized URL IS
-          // the credential (hashed at rest); abuse is bounded by the
-          // route's anon daily cap + per-job ceiling, and every response
-          // is uniform so the endpoint cannot be probed for who is in a
-          // workspace's candidate pool.
+          // Workspace routes carry their own dual-principal fence: either a
+          // current B2C HR session or the dedicated Hire-member cookie. The
+          // NextAuth middleware cannot decode the latter, so it must let the
+          // request reach composeHireApiRoute, which remains default-deny.
+          pathname.startsWith('/workspace') ||
+          pathname.startsWith('/api/workspace') ||
+          // Public apply page + its submit endpoint. The fragment capability
+          // is scrubbed client-side before the fixed API call; abuse remains
+          // bounded by the route's anon daily cap + per-job ceiling.
+          pathname === '/apply' ||
           pathname.startsWith('/apply/') ||
+          pathname === '/api/apply' ||
           pathname.startsWith('/api/apply/') ||
           pathname.startsWith('/api/qa/automation-login')
           || pathname === '/api/billing/catalog'

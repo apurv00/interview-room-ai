@@ -19,12 +19,7 @@ export const HIRE_ROUND_STATUSES = [
 ] as const
 export type HireRoundStatus = (typeof HIRE_ROUND_STATUSES)[number]
 
-/**
- * Results snapshot copied from the candidate's InterviewSession at link time.
- * This is the build plan's "engine writes results keyed to application/round
- * IDs" made concrete: the hire module READS the engine's session once and
- * keys the snapshot to the round — hire never writes into engine tables.
- */
+/** Workspace-owned projection delivered by the isolated runtime bridge. */
 export interface HireRoundPerQuestion {
   questionIndex: number
   question: string
@@ -93,18 +88,22 @@ export interface IHireRound extends Document {
   consentAt?: Date
   consentVersion?: string
   consentUserAgent?: string
-  /** B2C User minted/linked by the guest-auth seam at OTP verification. */
-  guestUserId?: mongoose.Types.ObjectId
-  authVerifiedAt?: Date
-  /** Set when the guest enters the engine flow — the reconciliation window
-   * for matching the engine-created InterviewSession opens here. */
   preparedAt?: Date
-  /** The engine session this round's results came from. Unique so one
-   * interview can never be claimed by two rounds. */
-  sessionId?: mongoose.Types.ObjectId
+  /** Opaque id from the physically isolated runtime database. It is not a
+   * ref and can never be populated or dereferenced by the control plane. */
+  runtimeSessionId?: mongoose.Types.ObjectId
+  resultId?: mongoose.Types.ObjectId
   linkedAt?: Date
   revokedAt?: Date
-  revokedBy?: mongoose.Types.ObjectId
+  revokedBy?: mongoose.Types.ObjectId // legacy B2C actor only
+  revokedByMemberId?: mongoose.Types.ObjectId
+  revokedByName?: string
+  revocationState?: 'not_requested' | 'pending' | 'confirmed' | 'failed'
+  revocationConfirmedAt?: Date
+  revocationFailureCode?: string
+  revocationReason?: string
+  runtimePurgeRequested?: boolean
+  runtimePurgedAt?: Date
   config: {
     role: string
     interviewType: string
@@ -122,16 +121,18 @@ export interface IHireRound extends Document {
    * the round reference line). Immutable snapshot — editing the job's JD
    * after sending cannot break or redirect reconciliation. */
   jdSnapshot: string
-  /** Engine sessions observed for this round at last reconcile (completed +
-   * in-progress). >1 means the candidate started the interview more than
-   * once — surfaced on the card, never hidden. */
   attemptCount?: number
+  requirementVersionId?: mongoose.Types.ObjectId
+  requirementVersion?: number
+  requirementHash?: string
   /** Present (true) only while the round is claimable/in-flight. Backs the
    * partial unique index enforcing ONE live AI round per application even
    * under concurrent sends. Unset on revoke and on completion-claim. */
   live?: boolean
   results?: HireRoundResults
-  createdBy: mongoose.Types.ObjectId
+  createdBy?: mongoose.Types.ObjectId // legacy B2C actor only
+  createdByMemberId: mongoose.Types.ObjectId
+  createdByName: string
   createdAt: Date
   updatedAt: Date
 }
@@ -168,13 +169,24 @@ const HireRoundSchema = new Schema<IHireRound>(
     consentAt: { type: Date },
     consentVersion: { type: String, maxlength: 40 },
     consentUserAgent: { type: String, maxlength: 512 },
-    guestUserId: { type: Schema.Types.ObjectId, ref: 'User' },
-    authVerifiedAt: { type: Date },
     preparedAt: { type: Date },
-    sessionId: { type: Schema.Types.ObjectId, ref: 'InterviewSession' },
+    runtimeSessionId: { type: Schema.Types.ObjectId },
+    resultId: { type: Schema.Types.ObjectId, ref: 'HireInterviewResult' },
     linkedAt: { type: Date },
     revokedAt: { type: Date },
     revokedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    revokedByMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },
+    revokedByName: { type: String, maxlength: 120 },
+    revocationState: {
+      type: String,
+      enum: ['not_requested', 'pending', 'confirmed', 'failed'],
+      default: 'not_requested',
+    },
+    revocationConfirmedAt: { type: Date },
+    revocationFailureCode: { type: String, maxlength: 120 },
+    revocationReason: { type: String, maxlength: 500 },
+    runtimePurgeRequested: { type: Boolean },
+    runtimePurgedAt: { type: Date },
     config: {
       role: { type: String, required: true, maxlength: 200 },
       interviewType: { type: String, required: true, maxlength: 60 },
@@ -184,9 +196,22 @@ const HireRoundSchema = new Schema<IHireRound>(
     jdHash: { type: String, required: true },
     jdSnapshot: { type: String, required: true, maxlength: 50000 },
     attemptCount: { type: Number },
+    requirementVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'HireJobRequirementVersion',
+    },
+    requirementVersion: { type: Number, min: 1 },
+    requirementHash: { type: String, match: /^[a-f0-9]{64}$/ },
     live: { type: Boolean },
     results: { type: Schema.Types.Mixed },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    createdByMemberId: {
+      type: Schema.Types.ObjectId,
+      ref: 'HireWorkspaceMember',
+      required: true,
+      immutable: true,
+    },
+    createdByName: { type: String, required: true, maxlength: 120, immutable: true },
   },
   { timestamps: true }
 )
@@ -199,11 +224,8 @@ HireRoundSchema.index(
   { workspaceId: 1, applicationId: 1, live: 1 },
   { unique: true, partialFilterExpression: { live: true } }
 )
-// One engine session can back at most one round — the double-claim guard the
-// reconciler's atomic claim relies on.
-HireRoundSchema.index({ sessionId: 1 }, { unique: true, sparse: true })
-// Reconciliation scan: unlinked rounds for a guest user.
-HireRoundSchema.index({ guestUserId: 1, status: 1 }, { sparse: true })
+// Runtime session ids are opaque but unique within an isolated runtime.
+HireRoundSchema.index({ runtimeSessionId: 1 }, { unique: true, sparse: true })
 
 export const HireRound: Model<IHireRound> =
   mongoose.models.HireRound || mongoose.model<IHireRound>('HireRound', HireRoundSchema)

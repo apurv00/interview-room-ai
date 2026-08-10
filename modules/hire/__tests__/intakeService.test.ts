@@ -1,6 +1,6 @@
 /**
- * Phase 2 intake — the load-bearing contracts: ALL writes run inside
- * withPersonalDataWriteTransaction (the account-deletion write barrier),
+ * Phase 2 intake — the load-bearing contracts: ALL writes run inside the
+ * Hire-owned active-workspace/member transaction fence,
  * idempotency (same person, same job, twice → one candidate, one
  * application), the merge policy (recruiter-entered data survives; newest
  * resume wins), resume/score coherence (failed rescore CLEARS the old
@@ -14,16 +14,23 @@ vi.mock('@shared/db/connection', () => ({
 }))
 
 const txMock = vi.fn()
-vi.mock('@shared/services/accountDeletion', () => ({
-  withPersonalDataWriteTransaction: (
-    userId: string,
-    work: (session: unknown, userObjectId: unknown) => Promise<unknown>,
-  ) => txMock(userId, work),
+vi.mock('../services/hireWorkspaceWriteFence', () => ({
+  withActiveHireWorkspaceWriteTransaction: (
+    workspaceId: string,
+    memberId: string,
+    work: (session: unknown) => Promise<unknown>,
+  ) => txMock(workspaceId, memberId, work),
 }))
 
 const mockJob = { findOne: vi.fn(), find: vi.fn(), updateOne: vi.fn() }
-const mockCandidate = { create: vi.fn(), findOne: vi.fn() }
-const mockApplication = { create: vi.fn(), findOne: vi.fn(), find: vi.fn(), updateMany: vi.fn() }
+const mockCandidate = { create: vi.fn(), findOne: vi.fn(), updateOne: vi.fn() }
+const mockApplication = {
+  create: vi.fn(),
+  findOne: vi.fn(),
+  find: vi.fn(),
+  updateOne: vi.fn(),
+  updateMany: vi.fn(),
+}
 
 vi.mock('../models', async () => {
   const actual = await vi.importActual<typeof import('../models')>('../models')
@@ -37,11 +44,13 @@ vi.mock('../models', async () => {
     HireCandidate: {
       create: (...a: unknown[]) => mockCandidate.create(...a),
       findOne: (...a: unknown[]) => mockCandidate.findOne(...a),
+      updateOne: (...a: unknown[]) => mockCandidate.updateOne(...a),
     },
     HireApplication: {
       create: (...a: unknown[]) => mockApplication.create(...a),
       findOne: (...a: unknown[]) => mockApplication.findOne(...a),
       find: (...a: unknown[]) => mockApplication.find(...a),
+      updateOne: (...a: unknown[]) => mockApplication.updateOne(...a),
       updateMany: (...a: unknown[]) => mockApplication.updateMany(...a),
     },
   }
@@ -52,10 +61,21 @@ import type { MembershipContext } from '../services/workspaceService'
 
 const CTX = {
   workspace: { _id: 'ws-A', name: 'Acme' },
-  membership: { _id: 'm1', userId: 'u1', email: 'hr@acme.com', name: 'HR One', role: 'admin' },
+  membership: {
+    _id: 'm1',
+    userId: 'u1',
+    email: 'hr@acme.com',
+    name: 'HR One',
+    role: 'admin',
+  },
 } as unknown as MembershipContext
 
-const OPEN_JOB = { _id: 'job-1', status: 'open', title: 'Backend Engineer', jdText: 'jd' }
+const OPEN_JOB = {
+  _id: 'job-1',
+  status: 'open',
+  title: 'Backend Engineer',
+  jdText: 'jd',
+}
 const SESSION = { id: 'tx-session' }
 
 /** In-transaction findOne returns a .session() chain. */
@@ -71,6 +91,7 @@ function findChain(result: unknown[]) {
 function candidateDoc(overrides: Record<string, unknown> = {}) {
   return {
     _id: 'cand-1',
+    __v: 0,
     name: 'Existing Name',
     email: 'jane@example.com',
     phone: undefined as string | undefined,
@@ -85,6 +106,7 @@ function candidateDoc(overrides: Record<string, unknown> = {}) {
 function applicationDoc(overrides: Record<string, unknown> = {}) {
   return {
     _id: 'app-1',
+    __v: 0,
     resumeMatch: undefined as unknown,
     save: vi.fn().mockResolvedValue(undefined),
     markModified: vi.fn(),
@@ -94,10 +116,14 @@ function applicationDoc(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  txMock.mockImplementation(async (_userId, work) => work(SESSION, 'u1-oid'))
+  txMock.mockImplementation(async (_workspaceId, _memberId, work) =>
+    work(SESSION),
+  )
   mockJob.findOne.mockResolvedValue(OPEN_JOB)
   mockJob.find.mockReturnValue({ select: () => Promise.resolve([]) })
   mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
+  mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
+  mockApplication.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockApplication.find.mockReturnValue(findChain([]))
   mockApplication.updateMany.mockResolvedValue({ modifiedCount: 0 })
 })
@@ -121,7 +147,7 @@ const BASE_INPUT = {
 }
 
 describe('write authority (the deletion barrier)', () => {
-  it('runs ALL writes inside withPersonalDataWriteTransaction for the acting recruiter', async () => {
+  it('runs ALL writes inside the active Hire workspace/member fence', async () => {
     mockCandidate.findOne.mockReturnValue(inTx(null))
     mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
     mockApplication.findOne.mockReturnValue(inTx(null))
@@ -130,14 +156,18 @@ describe('write authority (the deletion barrier)', () => {
     await intakeCandidate(CTX, BASE_INPUT)
 
     expect(txMock).toHaveBeenCalledTimes(1)
-    expect(txMock.mock.calls[0][0]).toBe('u1')
+    expect(txMock.mock.calls[0].slice(0, 2)).toEqual(['ws-A', 'm1'])
     // Every write op received the transaction session.
     expect(mockCandidate.create.mock.calls[0][1]).toEqual({ session: SESSION })
-    expect(mockApplication.create.mock.calls[0][1]).toEqual({ session: SESSION })
+    expect(mockApplication.create.mock.calls[0][1]).toEqual({
+      session: SESSION,
+    })
   })
 
   it('propagates the barrier rejection (deletion in progress) without writing', async () => {
-    const blocked = Object.assign(new Error('deletion pending'), { code: 'ACCOUNT_DELETION_PENDING' })
+    const blocked = Object.assign(new Error('deletion pending'), {
+      code: 'WORKSPACE_DELETION_PENDING',
+    })
     txMock.mockRejectedValue(blocked)
     await expect(intakeCandidate(CTX, BASE_INPUT)).rejects.toBe(blocked)
     expect(mockCandidate.create).not.toHaveBeenCalled()
@@ -164,6 +194,7 @@ describe('creation path', () => {
     expect(cand.email).toBe('jane@example.com')
     expect(cand.source).toBe('bulk_upload')
     expect(cand.createdBy).toBe('u1')
+    expect(cand.createdByMemberId).toBe('m1')
     const app = mockApplication.create.mock.calls[0][0][0]
     expect(app.stage).toBe('new')
     expect(app.events[0]).toMatchObject({
@@ -175,7 +206,9 @@ describe('creation path', () => {
 
   it('refuses a closed job with 409 JOB_CLOSED before claiming write authority', async () => {
     mockJob.findOne.mockResolvedValue({ ...OPEN_JOB, status: 'closed' })
-    await expect(intakeCandidate(CTX, BASE_INPUT)).rejects.toMatchObject({ code: 'JOB_CLOSED' })
+    await expect(intakeCandidate(CTX, BASE_INPUT)).rejects.toMatchObject({
+      code: 'JOB_CLOSED',
+    })
     expect(txMock).not.toHaveBeenCalled()
   })
 
@@ -200,7 +233,10 @@ describe('idempotency and merge', () => {
 
     // identityConfirmed: fully-different name + different resume otherwise
     // trips the identity-conflict guard by design (covered below).
-    const result = await intakeCandidate(CTX, { ...BASE_INPUT, identityConfirmed: true })
+    const result = await intakeCandidate(CTX, {
+      ...BASE_INPUT,
+      identityConfirmed: true,
+    })
 
     expect(result.createdCandidate).toBe(false)
     expect(result.createdApplication).toBe(false)
@@ -210,15 +246,35 @@ describe('idempotency and merge', () => {
     expect(existing.phone).toBe('+911234567890')
     expect(existing.resumeText).toBe('resume body')
     expect(existing.resumeFileName).toBe('jane.pdf')
-    expect(existing.save).toHaveBeenCalledWith({ session: SESSION })
+    expect(mockCandidate.updateOne).toHaveBeenCalledWith(
+      {
+        _id: 'cand-1',
+        workspaceId: 'ws-A',
+        email: 'jane@example.com',
+        __v: 0,
+      },
+      {
+        $set: {
+          resumeText: 'resume body',
+          resumeFileName: 'jane.pdf',
+        },
+        $inc: { __v: 1 },
+      },
+      { session: SESSION, runValidators: true },
+    )
   })
 
   it('recovers from a lost E11000 race by retrying the WHOLE transaction once', async () => {
-    const winner = candidateDoc({ name: 'Jane', isModified: vi.fn(() => false) })
+    const winner = candidateDoc({
+      name: 'Jane',
+      isModified: vi.fn(() => false),
+    })
     mockCandidate.findOne
       .mockReturnValueOnce(inTx(null)) // attempt 1: not found
       .mockReturnValueOnce(inTx(winner)) // attempt 2: winner visible
-    mockCandidate.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }))
+    mockCandidate.create.mockRejectedValue(
+      Object.assign(new Error('dup'), { code: 11000 }),
+    )
     mockApplication.findOne.mockReturnValue(inTx(null))
     mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
 
@@ -229,13 +285,29 @@ describe('idempotency and merge', () => {
     expect(result.createdCandidate).toBe(false)
     expect(result.createdApplication).toBe(true)
   })
+
+  it('fails closed when a concurrent candidate update wins the version race', async () => {
+    const existing = candidateDoc({
+      name: 'Jane Doe',
+      resumeText: 'old resume',
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockCandidate.updateOne.mockResolvedValue({ matchedCount: 0 })
+
+    await expect(intakeCandidate(CTX, BASE_INPUT)).rejects.toMatchObject({
+      code: 'INTAKE_WRITE_CONFLICT',
+    })
+    expect(mockApplication.findOne).not.toHaveBeenCalled()
+  })
 })
 
 describe('in-transaction job claim', () => {
   it('409s JOB_CLOSED when the claim misses (job closed between fast-path and transaction)', async () => {
     mockJob.updateOne.mockResolvedValue({ matchedCount: 0 })
     mockCandidate.findOne.mockReturnValue(inTx(null))
-    await expect(intakeCandidate(CTX, BASE_INPUT)).rejects.toMatchObject({ code: 'JOB_CLOSED' })
+    await expect(intakeCandidate(CTX, BASE_INPUT)).rejects.toMatchObject({
+      code: 'JOB_CLOSED',
+    })
     expect(mockCandidate.create).not.toHaveBeenCalled()
   })
 
@@ -258,7 +330,12 @@ describe('in-transaction job claim', () => {
 describe('identity-conflict guard', () => {
   it('422s IDENTITY_CONFLICT: extracted email joins a different-named candidate with a different resume', async () => {
     mockCandidate.findOne.mockReturnValue(
-      inTx(candidateDoc({ name: 'Rahul Verma', resumeText: 'old resume of rahul' })),
+      inTx(
+        candidateDoc({
+          name: 'Rahul Verma',
+          resumeText: 'old resume of rahul',
+        }),
+      ),
     )
     await expect(
       intakeCandidate(CTX, { ...BASE_INPUT, name: 'Jane Doe' }),
@@ -266,7 +343,10 @@ describe('identity-conflict guard', () => {
   })
 
   it('identityConfirmed (recruiter-typed email) bypasses the guard and merges', async () => {
-    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'old resume of rahul' })
+    const existing = candidateDoc({
+      name: 'Rahul Verma',
+      resumeText: 'old resume of rahul',
+    })
     mockCandidate.findOne.mockReturnValue(inTx(existing))
     mockApplication.findOne.mockReturnValue(inTx(applicationDoc()))
 
@@ -281,7 +361,10 @@ describe('identity-conflict guard', () => {
   })
 
   it('overlapping names ("Jane D." vs "Jane Doe") do NOT trip the guard', async () => {
-    const existing = candidateDoc({ name: 'Jane D.', resumeText: 'older jane resume' })
+    const existing = candidateDoc({
+      name: 'Jane D.',
+      resumeText: 'older jane resume',
+    })
     mockCandidate.findOne.mockReturnValue(inTx(existing))
     mockApplication.findOne.mockReturnValue(inTx(applicationDoc()))
 
@@ -301,7 +384,17 @@ describe('resume/score coherence', () => {
     await intakeCandidate(CTX, { ...BASE_INPUT, resumeMatch: undefined })
 
     expect(app.resumeMatch).toBeUndefined()
-    expect(app.save).toHaveBeenCalledWith({ session: SESSION })
+    expect(mockApplication.updateOne).toHaveBeenCalledWith(
+      {
+        _id: 'app-1',
+        workspaceId: 'ws-A',
+        jobId: 'job-1',
+        candidateId: 'cand-1',
+        __v: 0,
+      },
+      { $unset: { resumeMatch: 1 }, $inc: { __v: 1 } },
+      { session: SESSION, runValidators: true },
+    )
   })
 
   it('replacing the shared resume flags SIBLING applications stale', async () => {
@@ -333,7 +426,7 @@ describe('resume/score coherence', () => {
     await intakeCandidate(CTX, { ...BASE_INPUT, resumeMatch: undefined })
 
     expect((app.resumeMatch as { score: number }).score).toBe(88)
-    expect(app.save).not.toHaveBeenCalled()
+    expect(mockApplication.updateOne).not.toHaveBeenCalled()
   })
 
   it('an identical re-upload is NOT a replacement — no staleness sweep', async () => {
@@ -345,12 +438,36 @@ describe('resume/score coherence', () => {
 
     expect(mockApplication.updateMany).not.toHaveBeenCalled()
   })
+
+  it('fails closed when a concurrent application update wins the version race', async () => {
+    const existing = candidateDoc({
+      name: 'Jane Doe',
+      resumeText: 'resume body',
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(applicationDoc()))
+    mockApplication.updateOne.mockResolvedValue({ matchedCount: 0 })
+
+    await expect(
+      intakeCandidate(CTX, { ...BASE_INPUT, resumeMatch: MATCH }),
+    ).rejects.toMatchObject({ code: 'INTAKE_WRITE_CONFLICT' })
+  })
 })
 
 describe('seen-before signal', () => {
   it('reports the candidate’s other applications with job titles and stages', async () => {
-    mockCandidate.findOne.mockReturnValue(inTx(candidateDoc({ name: 'Jane', isModified: vi.fn(() => false), resumeText: 'resume body' })))
-    mockApplication.findOne.mockReturnValue(inTx(applicationDoc({ _id: 'app-NEW' })))
+    mockCandidate.findOne.mockReturnValue(
+      inTx(
+        candidateDoc({
+          name: 'Jane',
+          isModified: vi.fn(() => false),
+          resumeText: 'resume body',
+        }),
+      ),
+    )
+    mockApplication.findOne.mockReturnValue(
+      inTx(applicationDoc({ _id: 'app-NEW' })),
+    )
     mockApplication.find.mockReturnValue(
       findChain([{ _id: 'app-old', jobId: 'job-9', stage: 'shortlist' }]),
     )
@@ -365,7 +482,6 @@ describe('seen-before signal', () => {
     ])
   })
 })
-
 
 describe('public apply-page intake', () => {
   const JOB = { _id: 'job-1', workspaceId: 'ws-A' } as never
@@ -384,7 +500,7 @@ describe('public apply-page intake', () => {
     mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
 
     await intakeFromApplyPage(JOB, APPLY_INPUT, {
-      authorityUserId: 'authority-1' as never,
+      authorityMemberId: 'authority-1' as never,
       applyTokenHash: 'hash-abc',
     })
 
@@ -400,7 +516,7 @@ describe('public apply-page intake', () => {
     mockCandidate.findOne.mockReturnValue(inTx(null))
     await expect(
       intakeFromApplyPage(JOB, APPLY_INPUT, {
-        authorityUserId: 'authority-1' as never,
+        authorityMemberId: 'authority-1' as never,
         applyTokenHash: 'stale-hash',
       }),
     ).rejects.toMatchObject({ code: 'JOB_CLOSED' })
@@ -413,14 +529,14 @@ describe('public apply-page intake', () => {
     mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
 
     await intakeFromApplyPage(JOB, APPLY_INPUT, {
-      authorityUserId: 'authority-1' as never,
+      authorityMemberId: 'authority-1' as never,
       applyTokenHash: 'hash-abc',
     })
 
     // The barrier claims a member who still EXISTS — binding it to the
     // job's original creator broke every apply link once that member
     // deleted their account (Codex P1 on #615).
-    expect(txMock.mock.calls[0][0]).toBe('authority-1')
+    expect(txMock.mock.calls[0].slice(0, 2)).toEqual(['ws-A', 'authority-1'])
     expect(mockCandidate.create.mock.calls[0][0][0].source).toBe('apply_page')
   })
 
@@ -431,7 +547,7 @@ describe('public apply-page intake', () => {
     mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
 
     await intakeFromApplyPage(JOB, APPLY_INPUT, {
-      authorityUserId: 'authority-1' as never,
+      authorityMemberId: 'authority-1' as never,
       applyTokenHash: 'hash-abc',
     })
 
@@ -441,10 +557,13 @@ describe('public apply-page intake', () => {
     expect(event.note).toBe('via public apply page')
   })
 
-  it('a stranger claiming someone else\'s email does NOT overwrite their résumé — and still gets a normal outcome', async () => {
+  it("a stranger claiming someone else's email does NOT overwrite their résumé — and still gets a normal outcome", async () => {
     // Enumeration defence: throwing here (as the member path does) would
     // tell an anonymous caller that the email exists in this workspace.
-    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'rahul original resume' })
+    const existing = candidateDoc({
+      name: 'Rahul Verma',
+      resumeText: 'rahul original resume',
+    })
     mockCandidate.findOne.mockReturnValue(inTx(existing))
     mockApplication.findOne.mockReturnValue(inTx(null))
     mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
@@ -452,29 +571,40 @@ describe('public apply-page intake', () => {
     const result = await intakeFromApplyPage(
       JOB,
       { ...APPLY_INPUT, name: 'Jane Doe' },
-      { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
+      { authorityMemberId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
     )
 
     // No throw, an application exists, and the stored résumé is untouched.
     expect(result.applicationId).toBe('app-1')
     expect(existing.resumeText).toBe('rahul original resume')
     // Recorded on the APPLICATION, never discarded (Codex P1 on #615).
-    expect(mockApplication.create.mock.calls[0][0][0].applicantSubmissions[0].resumeText).toBe(
-      'resume body',
-    )
+    expect(
+      mockApplication.create.mock.calls[0][0][0].applicantSubmissions[0]
+        .resumeText,
+    ).toBe('resume body')
   })
 })
 
-
 describe('quarantined résumé and its score move together (Codex P1 on #615)', () => {
   const JOB2 = { _id: 'job-1', workspaceId: 'ws-A' } as never
-  const OPTS = { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' }
+  const OPTS = {
+    authorityMemberId: 'authority-1' as never,
+    applyTokenHash: 'hash-abc',
+  }
 
   it('a REPEAT public submission APPENDS — an anonymous caller can never overwrite evidence', async () => {
-    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'pool résumé of rahul' })
+    const existing = candidateDoc({
+      name: 'Rahul Verma',
+      resumeText: 'pool résumé of rahul',
+    })
     const app = applicationDoc({
       applicantSubmissions: [
-        { resumeText: 'FIRST submitted résumé', resumeFileName: 'first.pdf', submittedAt: new Date(), match: { ...MATCH, score: 40 } },
+        {
+          resumeText: 'FIRST submitted résumé',
+          resumeFileName: 'first.pdf',
+          submittedAt: new Date(),
+          match: { ...MATCH, score: 40 },
+        },
       ],
       resumeMatch: { ...MATCH, score: 40 },
     })
@@ -494,7 +624,10 @@ describe('quarantined résumé and its score move together (Codex P1 on #615)', 
       OPTS,
     )
 
-    const subs = app.applicantSubmissions as Array<{ resumeText: string; match?: { score: number } }>
+    const subs = app.applicantSubmissions as Array<{
+      resumeText: string
+      match?: { score: number }
+    }>
     // Newest first, and the ORIGINAL is still intact beside it.
     expect(subs).toHaveLength(2)
     expect(subs[0].resumeText).toBe('SECOND submitted résumé')
@@ -504,18 +637,31 @@ describe('quarantined résumé and its score move together (Codex P1 on #615)', 
     // Nothing pre-existing was mutated: headline score and pool copy stand.
     expect((app.resumeMatch as { score: number }).score).toBe(40)
     expect(existing.resumeText).toBe('pool résumé of rahul')
+    expect(mockApplication.updateOne.mock.calls[0][0]).toEqual({
+      _id: 'app-1',
+      workspaceId: 'ws-A',
+      jobId: 'job-1',
+      candidateId: 'cand-1',
+      __v: 0,
+    })
   })
 })
-
 
 describe('a pool-copy rescore refreshes the score WITHOUT erasing history (Codex P1 on #615)', () => {
   it('advances the headline score and keeps every prior public submission', async () => {
     // Bulk upload (member path) rescoring an application that still holds a
     // quarantined document from an earlier public submission.
-    const existing = candidateDoc({ name: 'Jane Doe', resumeText: 'resume body' })
+    const existing = candidateDoc({
+      name: 'Jane Doe',
+      resumeText: 'resume body',
+    })
     const app = applicationDoc({
       applicantSubmissions: [
-        { resumeText: 'OBSOLETE public submission', resumeFileName: 'old-public.pdf', submittedAt: new Date() },
+        {
+          resumeText: 'OBSOLETE public submission',
+          resumeFileName: 'old-public.pdf',
+          submittedAt: new Date(),
+        },
       ],
       resumeMatch: { ...MATCH, score: 30 },
     })
@@ -523,7 +669,11 @@ describe('a pool-copy rescore refreshes the score WITHOUT erasing history (Codex
     mockApplication.findOne.mockReturnValue(inTx(app))
 
     const poolMatch = { ...MATCH, score: 77, resumeHash: 'hash-of-pool' }
-    await intakeCandidate(CTX, { ...BASE_INPUT, resumeMatch: poolMatch, identityConfirmed: true })
+    await intakeCandidate(CTX, {
+      ...BASE_INPUT,
+      resumeMatch: poolMatch,
+      identityConfirmed: true,
+    })
 
     expect((app.resumeMatch as { score: number }).score).toBe(77)
     // The stale document is gone — otherwise the card shows B beside a
@@ -536,11 +686,13 @@ describe('a pool-copy rescore refreshes the score WITHOUT erasing history (Codex
   })
 })
 
-
 describe('append-only submissions are bounded', () => {
   const JOB3 = { _id: 'job-1', workspaceId: 'ws-A' } as never
   it('bounds growth while PINNING the original — flooding cannot evict the genuine first submission', async () => {
-    const existing = candidateDoc({ name: 'Rahul Verma', resumeText: 'pool résumé' })
+    const existing = candidateDoc({
+      name: 'Rahul Verma',
+      resumeText: 'pool résumé',
+    })
     // Newest-first, so the applicant's genuine first submission is LAST.
     const app = applicationDoc({
       applicantSubmissions: [
@@ -554,8 +706,13 @@ describe('append-only submissions are bounded', () => {
 
     await intakeFromApplyPage(
       JOB3,
-      { name: 'Jane', email: 'jane@example.com', resumeText: 'attacker-3', resumeFileName: 'n.pdf' },
-      { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
+      {
+        name: 'Jane',
+        email: 'jane@example.com',
+        resumeText: 'attacker-3',
+        resumeFileName: 'n.pdf',
+      },
+      { authorityMemberId: 'authority-1' as never, applyTokenHash: 'hash-abc' },
     )
 
     const subs = app.applicantSubmissions as Array<{ resumeText: string }>
@@ -568,10 +725,12 @@ describe('append-only submissions are bounded', () => {
   })
 })
 
-
 describe('anonymous submissions are CREATE-ONLY on an existing candidate (threat-model pass)', () => {
   const JOB4 = { _id: 'job-1', workspaceId: 'ws-A' } as never
-  const OPTS4 = { authorityUserId: 'authority-1' as never, applyTokenHash: 'hash-abc' }
+  const OPTS4 = {
+    authorityMemberId: 'authority-1' as never,
+    applyTokenHash: 'hash-abc',
+  }
 
   it('cannot write into the pool record of a candidate who has NO résumé yet', async () => {
     // The common Phase 1 flow: a recruiter adds someone by name + email
@@ -604,13 +763,14 @@ describe('anonymous submissions are CREATE-ONLY on an existing candidate (threat
     expect(existing.resumeText).toBeUndefined()
     expect(existing.name).toBe('Rahul Verma')
     expect(existing.phone).toBeUndefined()
-    expect(existing.save).not.toHaveBeenCalled()
+    expect(mockCandidate.updateOne).not.toHaveBeenCalled()
     // No sibling staleness sweep triggered by an anonymous caller.
     expect(mockApplication.updateMany).not.toHaveBeenCalled()
     // The document is still captured, on the application.
-    expect(mockApplication.create.mock.calls[0][0][0].applicantSubmissions[0].resumeText).toBe(
-      'anonymous document',
-    )
+    expect(
+      mockApplication.create.mock.calls[0][0][0].applicantSubmissions[0]
+        .resumeText,
+    ).toBe('anonymous document')
   })
 
   it('still becomes the pool résumé when the anonymous caller CREATES the candidate', async () => {
@@ -621,11 +781,18 @@ describe('anonymous submissions are CREATE-ONLY on an existing candidate (threat
 
     await intakeFromApplyPage(
       JOB4,
-      { name: 'New Person', email: 'new@example.com', resumeText: 'first ever', resumeFileName: 'f.pdf' },
+      {
+        name: 'New Person',
+        email: 'new@example.com',
+        resumeText: 'first ever',
+        resumeFileName: 'f.pdf',
+      },
       OPTS4,
     )
 
     // Creating is allowed; only EDITING an existing record is not.
-    expect(mockCandidate.create.mock.calls[0][0][0].resumeText).toBe('first ever')
+    expect(mockCandidate.create.mock.calls[0][0][0].resumeText).toBe(
+      'first ever',
+    )
   })
 })

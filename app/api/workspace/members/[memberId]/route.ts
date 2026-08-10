@@ -1,16 +1,13 @@
 /** DELETE /api/workspace/members/[memberId] — admin removes a member */
 
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { requireMembership, removeMember } from '@hire'
+import { composeHireApiRoute } from '../../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
-export const DELETE = composeApiRoute({
+export const DELETE = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:hire-members-rm' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     await removeMember(ctx, params.memberId)

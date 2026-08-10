@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { NextRequest } from 'next/server'
 
 const mocks = vi.hoisted(() => {
   class AccountDeletionForbiddenError extends Error {}
@@ -32,8 +33,19 @@ vi.mock('@shared/logger', () => ({
 }))
 
 import { DELETE } from '../route'
+import {
+  HireMemberDeletionBlockedError,
+  HireMemberDeletionBridgeUnavailableError,
+} from '@shared/services/hireMemberDeletionBridgeClient'
 
 const USER_ID = '507f1f77bcf86cd799439011'
+const request = (body?: Record<string, unknown>) =>
+  new NextRequest('https://www.interviewprep.guru/api/account', {
+    method: 'DELETE',
+    ...(body
+      ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+      : {}),
+  })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -51,7 +63,7 @@ describe('DELETE /api/account', () => {
     }
     mocks.deleteUserAccount.mockResolvedValue(result)
 
-    const response = await DELETE()
+    const response = await DELETE(request())
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ ok: true, ...result })
@@ -62,7 +74,7 @@ describe('DELETE /api/account', () => {
   it('rejects an unauthenticated request before deletion work', async () => {
     mocks.getServerSession.mockResolvedValue(null)
 
-    const response = await DELETE()
+    const response = await DELETE(request())
 
     expect(response.status).toBe(401)
     await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' })
@@ -77,7 +89,7 @@ describe('DELETE /api/account', () => {
     ])
     mocks.deleteUserAccount.mockRejectedValue(failure)
 
-    const response = await DELETE()
+    const response = await DELETE(request())
 
     expect(response.status).toBe(503)
     expect(response.headers.get('Retry-After')).toBeNull()
@@ -107,7 +119,7 @@ describe('DELETE /api/account', () => {
       alreadyDeleted: true,
     })
 
-    const response = await DELETE()
+    const response = await DELETE(request())
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({
@@ -121,7 +133,7 @@ describe('DELETE /api/account', () => {
     const failure = new mocks.AccountDeletionNotFoundError()
     mocks.deleteUserAccount.mockRejectedValue(failure)
 
-    const response = await DELETE()
+    const response = await DELETE(request())
 
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toMatchObject({
@@ -141,7 +153,7 @@ describe('DELETE /api/account', () => {
     const failure = new Error('Mongo unavailable')
     mocks.deleteUserAccount.mockRejectedValue(failure)
 
-    const response = await DELETE()
+    const response = await DELETE(request())
 
     expect(response.status).toBe(500)
     await expect(response.json()).resolves.toEqual({
@@ -150,6 +162,47 @@ describe('DELETE /api/account', () => {
     expect(mocks.loggerError).toHaveBeenCalledWith(
       { err: failure, userId: USER_ID },
       'Account deletion failed',
+    )
+  })
+
+  it('returns the sole-admin workspace confirmation without starting B2C deletion', async () => {
+    mocks.deleteUserAccount.mockRejectedValue(
+      new HireMemberDeletionBlockedError(
+        'HIRE_WORKSPACE_DELETE_CONFIRMATION_REQUIRED',
+        'Confirm workspace deletion',
+        'Acme Hiring',
+      ),
+    )
+
+    const response = await DELETE(request({
+      operationId: '123e4567-e89b-42d3-a456-426614174000',
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: 'Confirm workspace deletion',
+      code: 'HIRE_WORKSPACE_DELETE_CONFIRMATION_REQUIRED',
+      workspaceName: 'Acme Hiring',
+    })
+    expect(mocks.deleteUserAccount).toHaveBeenCalledWith(USER_ID, {
+      operationId: '123e4567-e89b-42d3-a456-426614174000',
+    })
+  })
+
+  it('fails closed when Hire control cannot verify linked membership', async () => {
+    mocks.deleteUserAccount.mockRejectedValue(
+      new HireMemberDeletionBridgeUnavailableError(),
+    )
+
+    const response = await DELETE(request())
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'HIRE_DELETION_PREFLIGHT_UNAVAILABLE',
+    })
+    expect(mocks.loggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      'Account deletion blocked because the Hire membership preflight is unavailable',
     )
   })
 })

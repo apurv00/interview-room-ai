@@ -16,6 +16,12 @@ import { jobsLinkCheckJob } from '@jobs/jobs/linkCheckJobs'
 import { jobsRetentionSweepJob } from '@jobs/jobs/retentionSweepJob'
 import { jobsTrackerStatusSweepJob } from '@jobs/jobs/trackerStatusSweepJob'
 import { paymentRecoveryJob } from '@payments/jobs/paymentRecoveryJob'
+import { hireEmailOutboxJob } from '@hire/jobs/emailOutboxJob'
+import { hireMediaRetentionJob } from '@hire/jobs/mediaRetentionJob'
+import { hireEngineRevocationJob } from '@hire/jobs/engineRevocationJob'
+import { hireLifecycleRetentionJob } from '@hire/jobs/lifecycleRetentionJob'
+import { hireRuntimeFeedbackRecoveryJob } from '@modules/hire-runtime/jobs/feedbackRecoveryJob'
+import { hireRuntimeResultPublisherJob } from '@modules/hire-runtime/jobs/resultPublisherJob'
 
 /**
  * Inngest handler route — entry point for all background jobs.
@@ -38,7 +44,21 @@ import { paymentRecoveryJob } from '@payments/jobs/paymentRecoveryJob'
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
+const b2cFunctions = [analysisJob, enrichFeedbackJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsSourceValidateJob, jobsBoardProbeJob, jobsRetentionSweepJob, jobsTrackerStatusSweepJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob, jobsAtsCheckJob, jobsEmailE0Job, jobsEmailSweepJob, jobsEvidenceAttributionJob, jobsEvidenceReconcileJob, jobsLinkCheckJob, paymentRecoveryJob]
+
+const functions =
+  process.env.IPG_SURFACE === 'hire-engine'
+    ? [hireRuntimeFeedbackRecoveryJob, hireRuntimeResultPublisherJob]
+    : process.env.IPG_SURFACE === 'hire-control'
+      ? [
+          hireEmailOutboxJob,
+          hireMediaRetentionJob,
+          hireEngineRevocationJob,
+          hireLifecycleRetentionJob,
+        ]
+      : b2cFunctions
+
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [analysisJob, enrichFeedbackJob, emailDigestJob, regeneratePlansJob, keepMongoWarmJob, recordingRetentionJob, pathwayJob, jobsIngestSchedulerJob, jobsSourceSyncJob, jobsSourceValidateJob, jobsBoardProbeJob, jobsRetentionSweepJob, jobsTrackerStatusSweepJob, jobsEvaluatePostingsJob, jobsVerdictSweeperJob, jobsAtsCheckJob, jobsEmailE0Job, jobsEmailSweepJob, jobsEvidenceAttributionJob, jobsEvidenceReconcileJob, jobsLinkCheckJob, paymentRecoveryJob],
+  functions,
 })

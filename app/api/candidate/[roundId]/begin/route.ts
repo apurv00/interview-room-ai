@@ -1,97 +1,93 @@
-/**
- * POST /api/candidate/[roundId]/begin — the guest's entry into the interview.
- *
- * Behavior follows the round's snapshotted authMode — the COMPANY's choice
- * of verification (workspace setting, fixed per link at send time):
- *
- *   magic_link → the emailed link is the authentication. Records consent,
- *     mints the round's synthetic guest User, binds it, returns the 60s
- *     single-use ticket for `signIn('invite-otp', { ticket })`.
- *
- *   otp → additionally proves CURRENT mailbox control before any identity
- *     exists: records consent, emails a 6-digit code to the candidate's
- *     address on record (never a caller-supplied address), and returns
- *     { otpRequired: true }. The ticket is only minted by /verify.
- *
- * Common to both modes: consent is recorded FIRST and no ticket can ever
- * exist without the record; the guest identity is always the per-round
- * synthetic User (`round-<id>@guests.interviewprep.internal`) — the
- * candidate's real email never enters the B2C users table. Gates: token
- * validity + expiry/grace, revocation, dual IP+round rate limits.
- */
-
+import { createHash } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
+import { verifyRoundToken } from '@hire'
+import { GuestBeginSchema, type GuestBeginPayload } from '@hire/validators/hire'
 import {
-  verifyRoundToken,
-  recordConsent,
-  bindGuestUser,
-  GuestBeginSchema,
-  HIRE_CONSENT_VERSION,
-} from '@hire'
-import { ensureGuestUser } from '../../_lib/guestUser'
-import { issueAuthTicket } from '@b2b/services/inviteTicketService'
+  acceptHireConsentAndIssueGuestSession,
+  HireGuestAccessError,
+} from '@hire/services/identityConsentService'
+import {
+  assertCompleteHireConsent,
+  HireConsentError,
+} from '@hire/policies/aiInterviewConsent'
 import { issueOtp } from '@b2b/services/otpService'
 import { sendEmail } from '@shared/services/emailService'
 import { buildInviteOtpEmail } from '@shared/services/emailTemplates/inviteOtp'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
-import { AppError } from '@shared/errors'
 import { authLogger } from '@shared/logger'
+import { setHireGuestCookie } from '../../_lib/hireGuestHttp'
 
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { roundId: string } }
-) {
-  const { roundId } = params
-  const ip =
+function requestIp(req: NextRequest): string {
+  return (
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
     'unknown'
+  )
+}
 
-  const ipBlocked = await checkRateLimit(ip, {
-    windowMs: 15 * 60_000,
-    maxRequests: 20,
-    keyPrefix: 'rl:hire-begin:ip',
-  })
+function consentError(error: unknown): NextResponse | null {
+  if (error instanceof HireConsentError || error instanceof HireGuestAccessError) {
+    return NextResponse.json(
+      { error: error.message, code: error.code },
+      { status: error.status },
+    )
+  }
+  return null
+}
+
+/**
+ * Starts a Hire-owned candidate session. The real candidate email is used only
+ * as the destination of the optional mailbox-control OTP; it is never resolved
+ * against, linked to, or written into a B2C User.
+ */
+export async function POST(
+  req: NextRequest,
+  { params }: { params: { roundId: string } },
+) {
+  const { roundId } = params
+  const [ipBlocked, roundBlocked] = await Promise.all([
+    checkRateLimit(requestIp(req), {
+      windowMs: 15 * 60_000,
+      maxRequests: 20,
+      keyPrefix: 'rl:hire-begin:ip',
+    }),
+    checkRateLimit(roundId, {
+      windowMs: 15 * 60_000,
+      maxRequests: 10,
+      keyPrefix: 'rl:hire-begin:round',
+    }),
+  ])
   if (ipBlocked) return ipBlocked
-
-  const roundBlocked = await checkRateLimit(roundId, {
-    windowMs: 15 * 60_000,
-    maxRequests: 10,
-    keyPrefix: 'rl:hire-begin:round',
-  })
   if (roundBlocked) return roundBlocked
 
-  let token: string
+  let body: GuestBeginPayload
   try {
-    token = GuestBeginSchema.parse(await req.json()).token
-  } catch {
+    body = GuestBeginSchema.parse(await req.json())
+    assertCompleteHireConsent(body.accepted)
+  } catch (error) {
+    if (error instanceof HireConsentError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: error.status },
+      )
+    }
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
   }
 
   try {
-    const verified = await verifyRoundToken(roundId, token)
+    const verified = await verifyRoundToken(roundId, body.capability)
     if (!verified || verified.state !== 'ok') {
       return NextResponse.json(
         { error: 'This interview link is no longer valid', code: 'ROUND_LINK_INVALID' },
-        { status: 410 }
+        { status: 410 },
       )
     }
     const { round } = verified
 
-    // Consent first — in either mode, nothing downstream exists without it.
-    await recordConsent(roundId, token, {
-      userAgent: req.headers.get('user-agent') ?? undefined,
-    })
-
     if (round.authMode === 'otp') {
-      // Mailbox-control challenge: the code goes to the address on record —
-      // the caller never supplies an email. Re-calling begin rotates the
-      // code (resend) but never resets the 5-attempt lockout (otpService).
-      // Issue cap mirrors the v1 invite flow's 3-per-15-min: a link holder
-      // must not be able to flood the candidate's inbox or keep
-      // invalidating their legitimate code (Codex P2 on #604).
       const issueBlocked = await checkRateLimit(roundId, {
         windowMs: 15 * 60_000,
         maxRequests: 3,
@@ -99,11 +95,12 @@ export async function POST(
       })
       if (issueBlocked) return issueBlocked
 
-      const issued = await issueOtp(`hire:${roundId}`, round.candidateEmail)
+      const otpScope = `hire:${round.workspaceId.toString()}:${roundId}`
+      const issued = await issueOtp(otpScope, round.candidateEmail)
       if (!issued) {
         return NextResponse.json(
           { error: 'Service unavailable', code: 'SERVICE_UNAVAILABLE' },
-          { status: 503 }
+          { status: 503 },
         )
       }
       const email = buildInviteOtpEmail({
@@ -115,33 +112,47 @@ export async function POST(
         to: round.candidateEmail,
         subject: email.subject,
         html: email.html,
+        text: email.text,
+        idempotencyKey: createHash('sha256')
+          .update(`hire-otp:${roundId}:${issued.code}`)
+          .digest('hex'),
       })
       if (!sent.ok) {
         authLogger.warn({ roundId }, 'hire begin: OTP email send failed')
         return NextResponse.json(
           { error: 'We could not send the code. Please try again.', code: 'OTP_SEND_FAILED' },
-          { status: 503 }
+          { status: 503 },
         )
       }
-      return NextResponse.json({ ok: true, otpRequired: true })
-    }
-
-    // magic_link: the link is the credential — mint identity + ticket now.
-    const guest = await ensureGuestUser(roundId, round.candidateName)
-    await bindGuestUser(roundId, token, guest._id.toString())
-    const ticket = await issueAuthTicket(guest._id.toString(), roundId)
-    if (!ticket) {
       return NextResponse.json(
-        { error: 'Service unavailable', code: 'SERVICE_UNAVAILABLE' },
-        { status: 503 }
+        { ok: true, otpRequired: true },
+        { headers: { 'Cache-Control': 'no-store' } },
       )
     }
-    return NextResponse.json({ ok: true, ticket, consentVersion: HIRE_CONSENT_VERSION })
-  } catch (err) {
-    if (err instanceof AppError) {
-      return NextResponse.json({ error: err.message, code: err.code }, { status: err.statusCode })
-    }
-    authLogger.error({ err, roundId }, 'hire begin: failed')
+
+    const accepted = await acceptHireConsentAndIssueGuestSession({
+      roundId,
+      inviteCapability: body.capability,
+      accepted: body.accepted,
+      userAgent: req.headers.get('user-agent') ?? undefined,
+      locale: req.headers.get('accept-language')?.split(',')[0]?.trim(),
+    })
+    const response = NextResponse.json(
+      {
+        ok: true,
+        next: 'identity_photo',
+        csrfToken: accepted.csrfToken,
+        consentVersion: accepted.consentVersion,
+        disclosureDigest: accepted.disclosureDigest,
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    )
+    setHireGuestCookie(response, accepted.credential, accepted.scope.expiresAt)
+    return response
+  } catch (error) {
+    const expected = consentError(error)
+    if (expected) return expected
+    authLogger.error({ error, roundId }, 'hire begin: failed')
     return NextResponse.json({ error: 'Something went wrong' }, { status: 500 })
   }
 }

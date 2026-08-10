@@ -11,6 +11,8 @@ interface EmailOptions {
   to: string
   subject: string
   html: string
+  /** Plain-text alternative for accessibility and conservative mail clients. */
+  text?: string
   /** Extra SMTP headers — e.g. List-Unsubscribe / List-Unsubscribe-Post
    *  (RFC 8058) on jobs emails. */
   headers?: Record<string, string>
@@ -26,7 +28,7 @@ export interface SendEmailResult {
   id?: string
 }
 
-export async function sendEmail({ to, subject, html, headers, replyTo, idempotencyKey }: EmailOptions): Promise<SendEmailResult> {
+export async function sendEmail({ to, subject, html, text, headers, replyTo, idempotencyKey }: EmailOptions): Promise<SendEmailResult> {
   if (!resend) {
     logger.warn('RESEND_API_KEY not configured, skipping email')
     return { ok: false }
@@ -34,7 +36,7 @@ export async function sendEmail({ to, subject, html, headers, replyTo, idempoten
 
   try {
     const { data, error } = await resend.emails.send(
-      { from: FROM, to, subject, html, ...(headers ? { headers } : {}), ...(replyTo ? { replyTo } : {}) },
+      { from: FROM, to, subject, html, ...(text ? { text } : {}), ...(headers ? { headers } : {}), ...(replyTo ? { replyTo } : {}) },
       idempotencyKey ? { idempotencyKey } : undefined
     )
 

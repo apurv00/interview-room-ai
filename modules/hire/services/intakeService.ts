@@ -1,7 +1,6 @@
-import mongoose, { type ClientSession } from 'mongoose'
+import mongoose, { type ClientSession, type UpdateQuery } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
-import { withPersonalDataWriteTransaction } from '@shared/services/accountDeletion'
 import {
   HireApplication,
   HireCandidate,
@@ -14,6 +13,7 @@ import {
   APPLICANT_SUBMISSION_CAP,
 } from '../models'
 import type { MembershipContext } from './workspaceService'
+import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
 
 /**
  * Phase 2 intake: idempotent candidate + application creation with
@@ -25,12 +25,10 @@ import type { MembershipContext } from './workspaceService'
  * page are the opposite — the same person showing up again is EXPECTED and
  * must merge into the existing record, not fail the row.
  *
- * WRITE AUTHORITY: every write runs inside
- * withPersonalDataWriteTransaction(actor) — the claim on the recruiter's
- * User row (accountState ≠ deleting) and ALL intake writes commit in one
- * transaction, so an account-deletion sweep can never interleave with
- * them. A plain recheck-then-write is a TOCTOU race; this is the
- * repository's durable barrier (Codex P1 on #612).
+ * WRITE AUTHORITY: every write runs inside a Hire-owned workspace/member
+ * transaction. The workspace claim and ALL intake writes commit together,
+ * so workspace deletion/removal cannot interleave with them. Candidate
+ * identity never reaches the B2C User collection.
  *
  * Merge policy (deliberate, keep boring):
  *   - name: existing wins (recruiter-entered names beat parsed ones); filled
@@ -86,6 +84,75 @@ const SOURCE_LABEL: Record<IntakeInput['source'], string> = {
   apply_page: 'via public apply page',
 }
 
+function versionConstraint(document: object): Record<string, unknown> {
+  const version = (document as { __v?: unknown }).__v
+  return typeof version === 'number' && Number.isInteger(version)
+    ? { __v: version }
+    : { __v: { $exists: false } }
+}
+
+function advanceLocalVersion(document: object): void {
+  const versionedDocument = document as { __v?: number }
+  const version = versionedDocument.__v
+  versionedDocument.__v =
+    typeof version === 'number' && Number.isInteger(version) ? version + 1 : 1
+}
+
+async function persistScopedCandidate(
+  candidate: IHireCandidate,
+  workspaceId: mongoose.Types.ObjectId,
+  update: UpdateQuery<IHireCandidate>,
+  session: ClientSession,
+): Promise<void> {
+  const result = await HireCandidate.updateOne(
+    {
+      _id: candidate._id,
+      workspaceId,
+      email: candidate.email,
+      ...versionConstraint(candidate),
+    },
+    { ...update, $inc: { __v: 1 } },
+    { session, runValidators: true },
+  )
+  if (result.matchedCount !== 1) {
+    throw new AppError(
+      'Candidate changed during intake; retry the submission',
+      409,
+      'INTAKE_WRITE_CONFLICT',
+    )
+  }
+  advanceLocalVersion(candidate)
+}
+
+async function persistScopedApplication(
+  application: IHireApplication,
+  workspaceId: mongoose.Types.ObjectId,
+  jobId: string,
+  candidateId: mongoose.Types.ObjectId,
+  update: UpdateQuery<IHireApplication>,
+  session: ClientSession,
+): Promise<void> {
+  const result = await HireApplication.updateOne(
+    {
+      _id: application._id,
+      workspaceId,
+      jobId,
+      candidateId,
+      ...versionConstraint(application),
+    },
+    { ...update, $inc: { __v: 1 } },
+    { session, runValidators: true },
+  )
+  if (result.matchedCount !== 1) {
+    throw new AppError(
+      'Application changed during intake; retry the submission',
+      409,
+      'INTAKE_WRITE_CONFLICT',
+    )
+  }
+  advanceLocalVersion(application)
+}
+
 /**
  * Who the write is attributed to, and whose account-deletion state gates
  * it. Decoupled from MembershipContext so the PUBLIC apply page reuses this
@@ -94,12 +161,14 @@ const SOURCE_LABEL: Record<IntakeInput['source'], string> = {
  * two halves drift apart and only one gets the next fix.
  */
 export interface IntakeActor {
-  /** Barrier claim target — writes abort if THIS account is deleting. */
-  userId: mongoose.Types.ObjectId
+  /** Hire-owned barrier authority; never a B2C User id. */
+  authorityMemberId: mongoose.Types.ObjectId
   /** Audit display name recorded on the created event. */
   displayName: string
-  /** Member id for member actions; absent for self-service applications. */
-  actorUserId?: mongoose.Types.ObjectId
+  /** Member actor for member actions; absent for self-service applications. */
+  actorMemberId?: mongoose.Types.ObjectId
+  /** Optional historical B2C pointer for already-linked HR members only. */
+  legacyActorUserId?: mongoose.Types.ObjectId
 }
 
 /** Member-initiated intake (bulk upload / recruiter add). */
@@ -107,34 +176,26 @@ export async function intakeCandidate(
   ctx: MembershipContext,
   input: IntakeInput,
 ): Promise<IntakeResult> {
-  // userId is optional on the membership type (linked lazily on first
-  // sign-in), but requireMembership always resolves or links it — a
-  // missing id here means a context built some other way; refuse rather
-  // than write personal data without a claimable actor.
-  const actorUserId = ctx.membership.userId
-  if (!actorUserId) {
-    throw new AppError('Workspace membership is not linked to a user', 403, 'MEMBERSHIP_UNLINKED')
-  }
   return runIntake(ctx.workspace._id, input, {
-    userId: actorUserId,
+    authorityMemberId: ctx.membership._id,
     displayName: ctx.membership.name || ctx.membership.email,
-    actorUserId,
+    actorMemberId: ctx.membership._id,
+    legacyActorUserId: ctx.membership.userId,
   })
 }
 
 /**
  * Public apply-page intake. Tenancy proof is the hashed apply token that
  * resolved this job (never a client-supplied workspace id), and the
- * deletion barrier claims against the job's OWNER — if the recruiter's
- * account is being deleted, their workspace stops accepting applications.
- * The event carries no actorUserId: nobody on the team performed it.
+ * write barrier claims an active Hire member in the active workspace. The
+ * event carries no actor member: nobody on the team performed it.
  */
 export async function intakeFromApplyPage(
   job: Pick<IHireJob, '_id' | 'workspaceId'>,
   input: Omit<IntakeInput, 'jobId' | 'source' | 'identityConfirmed'>,
   opts: {
     /** Live workspace authority — see resolveWorkspaceWriteAuthority. */
-    authorityUserId: mongoose.Types.ObjectId
+    authorityMemberId: mongoose.Types.ObjectId
     /**
      * sha256 of the apply token this submission arrived with. Folded into
      * the in-transaction job claim so a link rotated or disabled DURING the
@@ -147,7 +208,7 @@ export async function intakeFromApplyPage(
     job.workspaceId,
     { ...input, jobId: job._id.toString(), source: 'apply_page' },
     {
-      userId: opts.authorityUserId,
+      authorityMemberId: opts.authorityMemberId,
       displayName: 'Applicant (public apply page)',
     },
     { applyTokenHash: opts.applyTokenHash, applyPageEnabled: true },
@@ -172,8 +233,11 @@ async function runIntake(
   }
 
   const runIntakeTx = () =>
-    withPersonalDataWriteTransaction(actor.userId, (session) =>
-      writeIntake(session, workspaceId, input, email, actor, jobGuard),
+    withActiveHireWorkspaceWriteTransaction(
+      workspaceId,
+      actor.authorityMemberId,
+      (session) =>
+        writeIntake(session, workspaceId, input, email, actor, jobGuard),
     )
 
   let outcome: Awaited<ReturnType<typeof writeIntake>>
@@ -183,7 +247,11 @@ async function runIntake(
     // A duplicate-key loss (two files of the same person racing in one
     // batch) aborts the whole transaction — retry the claim+write once;
     // the re-read inside then finds the winner and merges.
-    if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
+    if (
+      err &&
+      typeof err === 'object' &&
+      (err as { code?: number }).code === 11000
+    ) {
       outcome = await runIntakeTx()
     } else {
       throw err
@@ -197,7 +265,11 @@ async function runIntake(
     createdApplication: outcome.createdApplication,
     // NOTE for callers: seenBefore is HR-only intelligence. The public
     // apply route must never include it in an applicant-facing response.
-    seenBefore: await seenBeforeForCandidate(workspaceId, outcome.candidate, outcome.application),
+    seenBefore: await seenBeforeForCandidate(
+      workspaceId,
+      outcome.candidate,
+      outcome.application,
+    ),
   }
 }
 
@@ -220,14 +292,23 @@ async function writeIntake(
   // WRITE on the job row. A close committing first makes this claim miss
   // (409); this claim committing first makes the close retry after us.
   const jobClaim = await HireJob.updateOne(
-    { _id: input.jobId, workspaceId, status: { $ne: 'closed' }, ...(jobGuard ?? {}) },
+    {
+      _id: input.jobId,
+      workspaceId,
+      status: { $ne: 'closed' },
+      ...(jobGuard ?? {}),
+    },
     { $inc: { intakeWriteVersion: 1 } },
     { session },
   )
   if (jobClaim.matchedCount !== 1) {
     // Either the job closed, or (public path) the apply link was rotated
     // or disabled while this submission was being parsed and scored.
-    throw new AppError('This job is no longer accepting applications', 409, 'JOB_CLOSED')
+    throw new AppError(
+      'This job is no longer accepting applications',
+      409,
+      'JOB_CLOSED',
+    )
   }
 
   // ── Candidate: find-or-create; merge on revisit ──
@@ -236,9 +317,16 @@ async function writeIntake(
   // Set when a public submission must not touch the shared pool résumé —
   // the file is APPENDED to the application instead of being discarded.
   let applicantSubmission:
-    | { resumeText: string; resumeFileName?: string; submittedAt: Date; match?: IHireResumeMatch }
+    | {
+        resumeText: string
+        resumeFileName?: string
+        submittedAt: Date
+        match?: IHireResumeMatch
+      }
     | undefined
-  let candidate = await HireCandidate.findOne({ workspaceId, email }).session(session)
+  let candidate = await HireCandidate.findOne({ workspaceId, email }).session(
+    session,
+  )
   if (!candidate) {
     const created = await HireCandidate.create(
       [
@@ -250,7 +338,13 @@ async function writeIntake(
           resumeText: input.resumeText,
           resumeFileName: input.resumeFileName,
           source: input.source,
-          createdBy: actor.userId,
+          ...(actor.actorMemberId
+            ? { createdByMemberId: actor.actorMemberId }
+            : {}),
+          createdByName: actor.displayName,
+          ...(actor.legacyActorUserId
+            ? { createdBy: actor.legacyActorUserId }
+            : {}),
         },
       ],
       { session },
@@ -304,8 +398,34 @@ async function writeIntake(
       )
     }
     if (input.source !== 'apply_page') {
+      const previous = {
+        name: candidate.name,
+        phone: candidate.phone,
+        resumeText: candidate.resumeText,
+        resumeFileName: candidate.resumeFileName,
+      }
       resumeReplaced = applyMerge(candidate, input)
-      if (candidate.isModified()) await candidate.save({ session })
+      const $set: Record<string, unknown> = {}
+      const $unset: Record<string, 1> = {}
+      if (candidate.name !== previous.name) $set.name = candidate.name
+      if (candidate.phone !== previous.phone) $set.phone = candidate.phone
+      if (candidate.resumeText !== previous.resumeText)
+        $set.resumeText = candidate.resumeText
+      if (candidate.resumeFileName !== previous.resumeFileName) {
+        if (candidate.resumeFileName === undefined) $unset.resumeFileName = 1
+        else $set.resumeFileName = candidate.resumeFileName
+      }
+      if (Object.keys($set).length > 0 || Object.keys($unset).length > 0) {
+        await persistScopedCandidate(
+          candidate,
+          workspaceId,
+          {
+            ...(Object.keys($set).length > 0 ? { $set } : {}),
+            ...(Object.keys($unset).length > 0 ? { $unset } : {}),
+          },
+          session,
+        )
+      }
     }
     // (apply_page deliberately falls through with NO candidate write: an
     // anonymous caller may create a candidate, never edit one.)
@@ -327,18 +447,31 @@ async function writeIntake(
           candidateId: candidate._id,
           stage: 'new',
           resumeMatch: input.resumeMatch ?? applicantSubmission?.match,
-          ...(applicantSubmission ? { applicantSubmissions: [applicantSubmission] } : {}),
+          ...(applicantSubmission
+            ? { applicantSubmissions: [applicantSubmission] }
+            : {}),
           events: [
             {
               type: 'created',
               // Absent for self-service: nobody on the team did this.
-              ...(actor.actorUserId ? { actorUserId: actor.actorUserId } : {}),
+              ...(actor.actorMemberId
+                ? { actorMemberId: actor.actorMemberId }
+                : {}),
+              ...(actor.legacyActorUserId
+                ? { actorUserId: actor.legacyActorUserId }
+                : {}),
               actorName: actor.displayName,
               note: SOURCE_LABEL[input.source],
               at: new Date(),
             },
           ],
-          createdBy: actor.userId,
+          ...(actor.actorMemberId
+            ? { createdByMemberId: actor.actorMemberId }
+            : {}),
+          createdByName: actor.displayName,
+          ...(actor.legacyActorUserId
+            ? { createdBy: actor.legacyActorUserId }
+            : {}),
         },
       ],
       { session },
@@ -358,18 +491,27 @@ async function writeIntake(
     // can be pushed out (Codex on #615). The first submission is therefore
     // pinned forever; the cap bounds only the later ones.
     const existingSubs = application.applicantSubmissions ?? []
-    const original = existingSubs.length > 0 ? existingSubs[existingSubs.length - 1] : undefined
+    const original =
+      existingSubs.length > 0
+        ? existingSubs[existingSubs.length - 1]
+        : undefined
     if (!original) {
       application.applicantSubmissions = [applicantSubmission]
     } else {
-      const laterOnly = [applicantSubmission, ...existingSubs.slice(0, -1)].slice(
-        0,
-        APPLICANT_SUBMISSION_CAP - 1,
-      )
+      const laterOnly = [
+        applicantSubmission,
+        ...existingSubs.slice(0, -1),
+      ].slice(0, APPLICANT_SUBMISSION_CAP - 1)
       application.applicantSubmissions = [...laterOnly, original]
     }
-    application.markModified('applicantSubmissions')
-    await application.save({ session })
+    await persistScopedApplication(
+      application,
+      workspaceId,
+      input.jobId,
+      candidate._id,
+      { $set: { applicantSubmissions: application.applicantSubmissions } },
+      session,
+    )
   } else if (input.resumeMatch) {
     // A fresh analysis always refreshes the match. This branch means the
     // score came from the POOL résumé (nothing was quarantined this time),
@@ -385,7 +527,14 @@ async function writeIntake(
     // resolved by HASH at read time, so history and score coexist without
     // either misrepresenting the other.
     application.resumeMatch = input.resumeMatch
-    await application.save({ session })
+    await persistScopedApplication(
+      application,
+      workspaceId,
+      input.jobId,
+      candidate._id,
+      { $set: { resumeMatch: input.resumeMatch } },
+      session,
+    )
   } else if (input.resumeText && resumeReplaced) {
     // FAILED analysis on a genuinely NEW resume: clear — the new CV must
     // never wear the old CV's score (Codex P1 on #612). Gated on
@@ -393,8 +542,14 @@ async function writeIntake(
     // must PRESERVE the still-valid match, not wipe the pipeline's
     // evidence (self-review on #612).
     application.resumeMatch = undefined
-    application.markModified('resumeMatch')
-    await application.save({ session })
+    await persistScopedApplication(
+      application,
+      workspaceId,
+      input.jobId,
+      candidate._id,
+      { $unset: { resumeMatch: 1 } },
+      session,
+    )
   }
 
   if (resumeReplaced) {

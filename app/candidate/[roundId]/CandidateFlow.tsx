@@ -1,81 +1,137 @@
 'use client'
 
-/**
- * Guest flow for a hire AI-interview round. The company chose the
- * verification mode when the round was sent (round.authMode):
- *
- *   magic_link — consent → /begin returns the ticket → sign-in → interview.
- *   otp        — consent → /begin emails a 6-digit code to the address on
- *                record → code step → /verify returns the ticket.
- *
- * Either way, the consent gate comes first and the server refuses to mint a
- * ticket without the recorded consent.
- */
-
-import { useState, type FormEvent } from 'react'
-import { signIn } from 'next-auth/react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react'
 
 interface Props {
   roundId: string
-  token: string
+  capability: string
   authMode: 'magic_link' | 'otp'
   consentAlreadyGiven: boolean
-  /** Obfuscated candidate email (j***@example.com) — shown on the code step. */
   emailHint: string
   workspaceName: string
 }
 
-type Step = 'consent' | 'code' | 'signing-in'
+type ConsentKey =
+  | 'recording'
+  | 'identityPhoto'
+  | 'attentionMonitoring'
+  | 'aiEvaluation'
+
+type Step = 'consent' | 'code' | 'camera' | 'starting'
+
+const EMPTY_CONSENT: Record<ConsentKey, boolean> = {
+  recording: false,
+  identityPhoto: false,
+  attentionMonitoring: false,
+  aiEvaluation: false,
+}
 
 export default function CandidateFlow({
   roundId,
-  token,
+  capability,
   authMode,
-  consentAlreadyGiven,
   emailHint,
   workspaceName,
 }: Props) {
   const [step, setStep] = useState<Step>('consent')
-  const [agreed, setAgreed] = useState(consentAlreadyGiven)
+  const [accepted, setAccepted] = useState(EMPTY_CONSENT)
   const [code, setCode] = useState('')
+  const [csrfToken, setCsrfToken] = useState<string | null>(null)
+  const [photo, setPhoto] = useState<Blob | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [cameraReady, setCameraReady] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [codeResent, setCodeResent] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
 
-  async function signInWithTicket(ticket: string) {
-    setStep('signing-in')
-    // redirect:false so a failed sign-in (e.g. the 60s ticket expired)
-    // surfaces here with a retry, instead of stranding the candidate on the
-    // generic B2C /signin page.
-    const result = await signIn('invite-otp', { ticket, redirect: false })
-    if (!result?.ok) {
-      setStep(authMode === 'otp' ? 'code' : 'consent')
-      setError('Sign-in took too long — please try again.')
+  const consentComplete = useMemo(
+    () => Object.values(accepted).every(Boolean),
+    [accepted],
+  )
+
+  useEffect(() => {
+    if (step !== 'camera' || photo) return
+    let cancelled = false
+    async function openCamera() {
+      setCameraError(null)
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        })
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+        streamRef.current = stream
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          await videoRef.current.play()
+        }
+        setCameraReady(true)
+      } catch {
+        setCameraError(
+          'Camera access is required for the identity photo. Allow camera access in your browser, then try again, or contact the hiring team.',
+        )
+      }
+    }
+    void openCamera()
+    return () => {
+      cancelled = true
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+      setCameraReady(false)
+    }
+  }, [step, photo])
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+    }
+  }, [previewUrl])
+
+  function setConsent(key: ConsentKey, value: boolean) {
+    setAccepted((current) => ({ ...current, [key]: value }))
+  }
+
+  function completeCandidateSession(data: { csrfToken?: string }) {
+    if (!data.csrfToken) {
+      setError('The interview session could not be created. Please try again.')
       return
     }
-    window.location.href = `/candidate/${encodeURIComponent(roundId)}/prepare`
+    setCsrfToken(data.csrfToken)
+    setStep('camera')
   }
 
   async function begin(e?: FormEvent) {
     e?.preventDefault()
-    if (!agreed) return
+    if (!consentComplete) return
     setError(null)
     setCodeResent(false)
     setBusy(true)
     try {
-      const res = await fetch(`/api/candidate/${roundId}/begin`, {
+      const response = await fetch(`/api/candidate/${roundId}/begin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ capability, accepted }),
       })
-      const data = (await res.json().catch(() => ({}))) as {
+      const data = (await response.json().catch(() => ({}))) as {
         ok?: boolean
-        ticket?: string
         otpRequired?: boolean
+        csrfToken?: string
         error?: string
       }
-      if (!res.ok || !data.ok) {
-        setError(messageForStatus(res.status, data.error))
+      if (!response.ok || !data.ok) {
+        setError(messageForStatus(response.status, data.error))
         return
       }
       if (data.otpRequired) {
@@ -83,13 +139,9 @@ export default function CandidateFlow({
         setStep('code')
         return
       }
-      if (data.ticket) {
-        await signInWithTicket(data.ticket)
-        return
-      }
-      setError('Something went wrong. Please try again.')
+      completeCandidateSession(data)
     } catch {
-      setError('Something went wrong. Please check your connection and try again.')
+      setError('Please check your connection and try again.')
     } finally {
       setBusy(false)
     }
@@ -100,42 +152,195 @@ export default function CandidateFlow({
     setError(null)
     setBusy(true)
     try {
-      const res = await fetch(`/api/candidate/${roundId}/verify`, {
+      const response = await fetch(`/api/candidate/${roundId}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, code: code.trim() }),
+        body: JSON.stringify({ capability, code: code.trim(), accepted }),
       })
-      const data = (await res.json().catch(() => ({}))) as {
+      const data = (await response.json().catch(() => ({}))) as {
         ok?: boolean
-        ticket?: string
+        csrfToken?: string
         reason?: string
       }
-      if (!res.ok || !data.ok || !data.ticket) {
-        setError(messageForReason(data.reason, res.status))
+      if (!response.ok || !data.ok) {
+        setError(messageForReason(data.reason, response.status))
         return
       }
-      await signInWithTicket(data.ticket)
+      completeCandidateSession(data)
     } catch {
-      setError('Something went wrong. Please try again.')
+      setError('Please check your connection and try again.')
     } finally {
       setBusy(false)
     }
   }
 
-  if (step === 'signing-in') {
+  async function capturePhoto() {
+    const video = videoRef.current
+    if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+      setCameraError('The camera is still starting. Wait a moment and try again.')
+      return
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const context = canvas.getContext('2d')
+    if (!context) {
+      setCameraError('The photo could not be captured. Please try again.')
+      return
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+    const captured = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', 0.9),
+    )
+    if (!captured) {
+      setCameraError('The photo could not be captured. Please try again.')
+      return
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(URL.createObjectURL(captured))
+    setPhoto(captured)
+  }
+
+  function retakePhoto() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(null)
+    setPhoto(null)
+    setCameraReady(false)
+    setCameraError(null)
+  }
+
+  async function confirmPhoto() {
+    if (!photo || !csrfToken) return
+    setBusy(true)
+    setError(null)
+    try {
+      const form = new FormData()
+      form.append('photo', photo, 'identity-photo.jpg')
+      const upload = await fetch(`/api/candidate/${roundId}/identity-photo`, {
+        method: 'POST',
+        headers: { 'x-hire-csrf': csrfToken },
+        body: form,
+      })
+      const uploadData = (await upload.json().catch(() => ({}))) as { error?: string }
+      if (!upload.ok) {
+        setError(uploadData.error || 'The photo could not be saved. Please try again.')
+        return
+      }
+
+      setStep('starting')
+      const start = await fetch(`/api/candidate/${roundId}/start`, {
+        method: 'POST',
+        headers: { 'x-hire-csrf': csrfToken },
+      })
+      const startData = (await start.json().catch(() => ({}))) as {
+        handoffUrl?: string
+        error?: string
+      }
+      if (!start.ok || !startData.handoffUrl) {
+        setStep('camera')
+        setError(startData.error || 'The interview could not start. Please try again.')
+        return
+      }
+      window.location.assign(startData.handoffUrl)
+    } catch {
+      setStep('camera')
+      setError('Please check your connection and try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (step === 'starting') {
     return (
-      <div className="flex flex-col items-center gap-3 py-8">
-        <div className="w-6 h-6 rounded-full border-2 border-[#2563eb] border-t-transparent animate-spin" />
-        <p className="text-sm text-[#536471]">Setting things up…</p>
+      <div className="flex flex-col items-center gap-3 py-10" aria-live="polite">
+        <div className="h-7 w-7 animate-spin rounded-full border-2 border-[#2563eb] border-t-transparent" />
+        <p className="text-sm text-[#536471]">Opening your secure interview…</p>
       </div>
+    )
+  }
+
+  if (step === 'camera') {
+    return (
+      <section className="space-y-4 rounded-2xl border border-[#e1e8ed] bg-white p-6">
+        <div>
+          <h2 className="text-base font-semibold text-[#0f1419]">Identity photo</h2>
+          <p className="mt-1 text-sm leading-relaxed text-[#536471]">
+            Take a live selfie for the hiring team to compare visually later. We do
+            not accept uploads or government IDs, and no automated face match is used.
+          </p>
+        </div>
+        <div className="overflow-hidden rounded-xl bg-slate-950 aspect-video">
+          {photo && previewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- local camera blob preview
+            <img src={previewUrl} alt="Captured identity selfie preview" className="h-full w-full object-cover" />
+          ) : (
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
+              aria-label="Live camera preview"
+              className="h-full w-full -scale-x-100 object-cover"
+            />
+          )}
+        </div>
+        {cameraError && (
+          <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm text-amber-900">{cameraError}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setCameraError(null)
+                setStep('consent')
+                queueMicrotask(() => setStep('camera'))
+              }}
+              className="text-sm font-semibold text-amber-900 underline"
+            >
+              Try camera again
+            </button>
+          </div>
+        )}
+        {error && <p className="text-sm text-[#f4212e]" role="alert">{error}</p>}
+        {photo ? (
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={retakePhoto}
+              disabled={busy}
+              className="rounded-xl border border-[#cfd9de] px-4 py-2.5 text-sm font-semibold text-[#0f1419] disabled:opacity-50"
+            >
+              Retake
+            </button>
+            <button
+              type="button"
+              onClick={() => void confirmPhoto()}
+              disabled={busy}
+              className="rounded-xl bg-[#2563eb] px-4 py-2.5 text-sm font-semibold text-white disabled:bg-[#e1e8ed] disabled:text-[#8b98a5]"
+            >
+              {busy ? 'Saving…' : 'Use photo and start'}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void capturePhoto()}
+            disabled={!cameraReady || Boolean(cameraError)}
+            className="w-full rounded-xl bg-[#2563eb] py-2.5 text-sm font-semibold text-white disabled:bg-[#e1e8ed] disabled:text-[#8b98a5]"
+          >
+            {cameraReady ? 'Capture photo' : 'Starting camera…'}
+          </button>
+        )}
+      </section>
     )
   }
 
   if (step === 'code') {
     return (
-      <form onSubmit={verifyCode} className="bg-white border border-[#e1e8ed] rounded-2xl p-6 space-y-4">
+      <form onSubmit={verifyCode} className="space-y-4 rounded-2xl border border-[#e1e8ed] bg-white p-6">
         <div className="space-y-1.5">
-          <label htmlFor="cand-code" className="text-sm font-medium text-[#0f1419] block">
+          <label htmlFor="cand-code" className="block text-sm font-medium text-[#0f1419]">
             Enter your 6-digit code
           </label>
           <p className="text-xs text-[#71767b]">
@@ -151,111 +356,122 @@ export default function CandidateFlow({
             autoFocus
             required
             value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
             placeholder="000000"
-            className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-center text-lg tracking-[8px] font-mono focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30 focus:border-[#2563eb] transition-colors"
+            className="w-full rounded-xl border border-[#e1e8ed] bg-[#f8fafc] px-3 py-2 text-center font-mono text-lg tracking-[8px] focus:border-[#2563eb] focus:outline-none focus:ring-2 focus:ring-[#2563eb]/30"
           />
         </div>
-        {error && <p className="text-xs text-[#f4212e]">{error}</p>}
-        {codeResent && !error && (
-          <p className="text-xs text-emerald-600">New code sent — check your email.</p>
-        )}
+        {error && <p className="text-xs text-[#f4212e]" role="alert">{error}</p>}
+        {codeResent && !error && <p className="text-xs text-emerald-600">New code sent.</p>}
         <button
           type="submit"
           disabled={busy || code.length !== 6}
-          className="w-full py-2.5 rounded-xl bg-[#2563eb] text-white text-sm font-semibold hover:bg-blue-500 disabled:bg-[#e1e8ed] disabled:text-[#8b98a5] disabled:cursor-not-allowed transition-colors"
+          className="w-full rounded-xl bg-[#2563eb] py-2.5 text-sm font-semibold text-white disabled:bg-[#e1e8ed] disabled:text-[#8b98a5]"
         >
-          {busy ? 'Verifying…' : 'Verify and start'}
+          {busy ? 'Verifying…' : 'Verify and continue'}
         </button>
-        <div className="text-right text-xs text-[#71767b]">
-          <button
-            type="button"
-            onClick={() => void begin()}
-            disabled={busy}
-            className="hover:text-[#2563eb] transition-colors disabled:opacity-50"
-          >
-            Resend code
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => void begin()}
+          disabled={busy}
+          className="w-full text-xs text-[#536471] underline disabled:opacity-50"
+        >
+          Resend code
+        </button>
       </form>
     )
   }
 
+  const consentItems: Array<{ key: ConsentKey; text: string }> = [
+    {
+      key: 'recording',
+      text: 'I consent to camera and microphone recording, transcription, and sharing with the hiring team.',
+    },
+    {
+      key: 'identityPhoto',
+      text: 'I consent to a live selfie being shown to the hiring team for later human identity comparison.',
+    },
+    {
+      key: 'attentionMonitoring',
+      text: 'I consent to neutral attention observations such as tab changes, gaze-away cues, and reading-cadence cues. They are not scores.',
+    },
+    {
+      key: 'aiEvaluation',
+      text: 'I consent to AI evaluation and understand that a human makes every hiring decision.',
+    },
+  ]
+
   return (
-    <form onSubmit={begin} className="bg-white border border-[#e1e8ed] rounded-2xl p-6 space-y-4">
-      <h2 className="text-base font-semibold text-[#0f1419]">
-        Before you start: recording &amp; consent
-      </h2>
-      <div className="text-sm text-[#536471] space-y-2 leading-relaxed">
-        <p>This interview is conducted by an AI interviewer. During it:</p>
-        <ul className="list-disc pl-5 space-y-1">
-          <li>
-            Your <strong>camera and microphone are recorded</strong>, and what you say
-            is transcribed.
-          </li>
-          <li>
-            Your answers are <strong>evaluated by AI</strong> to produce scores and a
-            written assessment.
-          </li>
-          <li>
-            The recording, transcript, and assessment are shared with the hiring team
-            at <strong>{workspaceName}</strong> to inform their decision — a human
-            makes every hiring decision, not the AI.
-          </li>
-        </ul>
-        <p>
-          This link is personal to you — please don&apos;t forward the invite email.
-          {authMode === 'otp' &&
-            ` After you agree, we'll email a 6-digit code to ${emailHint} to confirm it's you.`}
-        </p>
+    <form onSubmit={begin} className="space-y-5 rounded-2xl border border-[#e1e8ed] bg-white p-6">
+      <div>
+        <h2 className="text-base font-semibold text-[#0f1419]">Before you start</h2>
+        <div className="mt-2 space-y-2 text-sm leading-relaxed text-[#536471]">
+          <p>
+            Your camera and microphone are recorded and your spoken answers are
+            transcribed. AI prepares evidence-linked scores and observations for{' '}
+            <strong>{workspaceName}</strong>; people alone make hiring decisions.
+          </p>
+          <p>
+            A live selfie is captured after consent for later human comparison. No
+            government ID or automated face matching is used. Neutral attention
+            events—including tab/window changes, sustained gaze-away cues, and
+            reading-cadence cues—may be recorded, but are not scores.
+          </p>
+          <p>
+            Interview recordings and identity photos are removed six calendar months
+            after the job closes, or earlier after a verified deletion request.
+          </p>
+        </div>
       </div>
-      <label className="flex items-start gap-2 text-sm text-[#0f1419] cursor-pointer">
-        <input
-          type="checkbox"
-          checked={agreed}
-          onChange={(e) => setAgreed(e.target.checked)}
-          className="mt-0.5"
-        />
-        <span>
-          I consent to being recorded and to my responses being analyzed by AI and
-          shared with {workspaceName}.
-        </span>
-      </label>
-      {error && <p className="text-xs text-[#f4212e]">{error}</p>}
+      <fieldset className="space-y-3">
+        <legend className="sr-only">Required interview consent acknowledgements</legend>
+        {consentItems.map((item) => (
+          <label key={item.key} className="flex cursor-pointer items-start gap-3 text-sm text-[#0f1419]">
+            <input
+              type="checkbox"
+              checked={accepted[item.key]}
+              onChange={(event) => setConsent(item.key, event.target.checked)}
+              className="mt-0.5"
+            />
+            <span>{item.text}</span>
+          </label>
+        ))}
+      </fieldset>
+      <p className="text-xs text-[#71767b]">
+        Declining stops here; no camera or microphone permission is requested. Contact
+        the hiring team if you need an accommodation.
+        {authMode === 'otp' && ` After consent, we'll send a code to ${emailHint}.`}
+      </p>
+      {error && <p className="text-xs text-[#f4212e]" role="alert">{error}</p>}
       <button
         type="submit"
-        disabled={busy || !agreed}
-        className="w-full py-2.5 rounded-xl bg-[#2563eb] text-white text-sm font-semibold hover:bg-blue-500 disabled:bg-[#e1e8ed] disabled:text-[#8b98a5] disabled:cursor-not-allowed transition-colors"
+        disabled={busy || !consentComplete}
+        className="w-full rounded-xl bg-[#2563eb] py-2.5 text-sm font-semibold text-white disabled:bg-[#e1e8ed] disabled:text-[#8b98a5]"
       >
-        {busy
-          ? 'Starting…'
-          : consentAlreadyGiven
-            ? 'Continue to your interview'
-            : authMode === 'otp'
-              ? 'I agree — send my code'
-              : 'I agree — start my interview'}
+        {busy ? 'Continuing…' : authMode === 'otp' ? 'Consent and send code' : 'Consent and continue'}
       </button>
     </form>
   )
 }
 
 function messageForStatus(status: number, serverError?: string): string {
-  if (status === 410)
-    return 'This interview link is no longer valid. Please contact the company that invited you.'
+  if (status === 410) {
+    return 'This interview link is no longer valid. Contact the company that invited you.'
+  }
   if (status === 429) return 'Too many attempts. Please wait a few minutes and try again.'
-  if (status === 503) return 'The service is temporarily unavailable. Please try again in a moment.'
+  if (status === 503) return 'The service is temporarily unavailable. Please try again.'
   return serverError || 'Something went wrong. Please try again.'
 }
 
 function messageForReason(reason: string | undefined, status: number): string {
-  switch (reason) {
-    case 'locked':
-      return 'Too many incorrect attempts. Please wait 30 minutes and request a new code.'
-    case 'service_unavailable':
-      return 'The service is temporarily unavailable. Please try again in a moment.'
-    case 'invalid_code':
-      return 'That code is incorrect or has expired. Check your email or resend the code.'
-    default:
-      return messageForStatus(status)
+  if (reason === 'locked') {
+    return 'Too many incorrect attempts. Wait 30 minutes and request a new code.'
   }
+  if (reason === 'service_unavailable') {
+    return 'The service is temporarily unavailable. Please try again.'
+  }
+  if (reason === 'invalid_code') {
+    return 'That code is incorrect or expired. Check your email or resend the code.'
+  }
+  return messageForStatus(status)
 }

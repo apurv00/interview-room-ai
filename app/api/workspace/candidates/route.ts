@@ -4,7 +4,6 @@
  */
 
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import {
   requireMembership,
   addCandidate,
@@ -13,14 +12,12 @@ import {
   type AddCandidatePayload,
 } from '@hire'
 import { serializeCandidate } from '../_lib/serialize'
+import { composeHireApiRoute } from '../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
-export const GET = composeApiRoute({
+export const GET = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-cands' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const candidates = await listCandidates(ctx)
@@ -28,12 +25,9 @@ export const GET = composeApiRoute({
   },
 })
 
-export const POST = composeApiRoute<AddCandidatePayload>({
+export const POST = composeHireApiRoute<AddCandidatePayload>({
   schema: AddCandidateSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 30, keyPrefix: 'rl:hire-cands-add' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, body }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const candidate = await addCandidate(ctx, body)

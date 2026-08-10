@@ -14,9 +14,13 @@ export const HIRE_STAGES = [
   'offer',
   'hired',
   'rejected',
+  'withdrawn',
 ] as const
 export type HireStage = (typeof HIRE_STAGES)[number]
-export const TERMINAL_STAGES: readonly HireStage[] = ['hired', 'rejected']
+export const TERMINAL_STAGES: readonly HireStage[] = ['hired', 'rejected', 'withdrawn']
+
+export const HIRE_OFFER_OUTCOMES = ['accepted', 'declined'] as const
+export type HireOfferOutcome = (typeof HIRE_OFFER_OUTCOMES)[number]
 
 export const HIRE_EVENT_TYPES = [
   'created',
@@ -33,7 +37,20 @@ export interface IHireApplicationEvent {
   to?: string
   /** Member User id for member actions; absent for system events (reconciler). */
   actorUserId?: mongoose.Types.ObjectId
+  /** Hire-owned actor authority; survives separation from B2C identity. */
+  actorMemberId?: mongoose.Types.ObjectId
   /** Display name recorded at event time — 'System' for automatic linking. */
+  actorName: string
+  note?: string
+  /** Idempotency/audit correlation for close batches and explicit commands. */
+  operationId?: string
+  at: Date
+}
+
+export interface IHireOfferDecision {
+  outcome: HireOfferOutcome
+  actorUserId?: mongoose.Types.ObjectId
+  actorMemberId?: mongoose.Types.ObjectId
   actorName: string
   note?: string
   at: Date
@@ -85,6 +102,7 @@ export interface IHireApplication extends Document {
   stage: HireStage
   /** Required when the stage becomes 'hired' (enforced in pipelineService). */
   decisionNote?: string
+  offerDecision?: IHireOfferDecision
   resumeMatch?: IHireResumeMatch
   /**
    * Résumés submitted through the PUBLIC apply page, APPEND-ONLY.
@@ -100,7 +118,9 @@ export interface IHireApplication extends Document {
    */
   applicantSubmissions?: IHireApplicantSubmission[]
   events: IHireApplicationEvent[]
-  createdBy: mongoose.Types.ObjectId
+  createdBy?: mongoose.Types.ObjectId
+  createdByMemberId?: mongoose.Types.ObjectId
+  createdByName?: string
   createdAt: Date
   updatedAt: Date
 }
@@ -134,11 +154,25 @@ const HireApplicationEventSchema = new Schema<IHireApplicationEvent>(
     from: { type: String, maxlength: 40 },
     to: { type: String, maxlength: 40 },
     actorUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    actorMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },
+    actorName: { type: String, required: true, maxlength: 120 },
+    note: { type: String, maxlength: 4000 },
+    operationId: { type: String, maxlength: 80 },
+    at: { type: Date, required: true },
+  },
+  { _id: false }
+)
+
+const HireOfferDecisionSchema = new Schema<IHireOfferDecision>(
+  {
+    outcome: { type: String, enum: HIRE_OFFER_OUTCOMES, required: true },
+    actorUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    actorMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },
     actorName: { type: String, required: true, maxlength: 120 },
     note: { type: String, maxlength: 4000 },
     at: { type: Date, required: true },
   },
-  { _id: false }
+  { _id: false },
 )
 
 const HireApplicationSchema = new Schema<IHireApplication>(
@@ -158,10 +192,15 @@ const HireApplicationSchema = new Schema<IHireApplication>(
     },
     stage: { type: String, enum: HIRE_STAGES, default: 'new' },
     decisionNote: { type: String, maxlength: 4000 },
+    offerDecision: { type: HireOfferDecisionSchema },
     resumeMatch: { type: HireResumeMatchSchema },
     applicantSubmissions: { type: [HireApplicantSubmissionSchema], default: undefined },
     events: { type: [HireApplicationEventSchema], default: [] },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    // Legacy B2C actor pointer. Hire member identity is authoritative for new
+    // records so password-only members never need a synthetic User row.
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    createdByMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },
+    createdByName: { type: String, maxlength: 120 },
   },
   { timestamps: true }
 )

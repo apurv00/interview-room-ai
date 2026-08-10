@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { requireMembership, issueApplyLink, disableApplyLink } from '@hire'
+import { composeHireApiRoute } from '../../../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,19 +12,17 @@ export const dynamic = 'force-dynamic'
  * is stored, so nothing can hand it back later. Rotating is therefore also
  * the revocation mechanism: a shared URL cannot be un-shared, only killed.
  */
-export const POST = composeApiRoute({
+export const POST = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 10, keyPrefix: 'rl:hire-apply-link' },
-  requireActiveAccount: true,
   async handler(_req, { user, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
-    const { token } = await issueApplyLink(ctx, params.jobId)
-    return NextResponse.json({ token, enabled: true })
+    const { capability } = await issueApplyLink(ctx, params.jobId)
+    return NextResponse.json({ capability, enabled: true })
   },
 })
 
-export const DELETE = composeApiRoute({
+export const DELETE = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 10, keyPrefix: 'rl:hire-apply-link-off' },
-  requireActiveAccount: true,
   async handler(_req, { user, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     await disableApplyLink(ctx, params.jobId)

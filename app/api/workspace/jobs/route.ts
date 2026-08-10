@@ -4,23 +4,20 @@
  */
 
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import {
   requireMembership,
   createJob,
   listJobs,
-  CreateJobSchema,
+  CreateStructuredJobSchema,
   type CreateJobPayload,
 } from '@hire'
 import { serializeJob, serializeJobListItem } from '../_lib/serialize'
+import { composeHireApiRoute } from '../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
-export const GET = composeApiRoute({
+export const GET = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-jobs' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const jobs = await listJobs(ctx)
@@ -28,12 +25,9 @@ export const GET = composeApiRoute({
   },
 })
 
-export const POST = composeApiRoute<CreateJobPayload>({
-  schema: CreateJobSchema,
+export const POST = composeHireApiRoute<CreateJobPayload>({
+  schema: CreateStructuredJobSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:hire-jobs-create' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, body }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const job = await createJob(ctx, body)

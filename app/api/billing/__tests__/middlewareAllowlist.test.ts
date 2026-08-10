@@ -59,4 +59,11 @@ describe('customer billing middleware allowlist', () => {
       )
     }
   })
+
+  it('keeps the fragment-based Hire apply entry and fixed API public', () => {
+    const source = readFileSync(join(process.cwd(), 'middleware.ts'), 'utf8')
+
+    expect(source).toContain("pathname === '/apply'")
+    expect(source).toContain("pathname === '/api/apply'")
+  })
 })

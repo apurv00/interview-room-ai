@@ -4,7 +4,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
+import { composeHireApiRoute } from '../_lib/composeHireApiRoute'
 import {
   requireMembership,
   addMember,
@@ -16,11 +16,8 @@ import { serializeMember } from '../_lib/serialize'
 
 export const dynamic = 'force-dynamic'
 
-export const GET = composeApiRoute({
+export const GET = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-members' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const members = await listMembers(ctx)
@@ -28,15 +25,25 @@ export const GET = composeApiRoute({
   },
 })
 
-export const POST = composeApiRoute<AddMemberPayload>({
+export const POST = composeHireApiRoute<AddMemberPayload>({
   schema: AddMemberSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:hire-members-add' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, body }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
-    const member = await addMember(ctx, body)
-    return NextResponse.json({ member: serializeMember(member) }, { status: 201 })
+    const provisioned = await addMember(ctx, body)
+    return NextResponse.json(
+      {
+        member: serializeMember(provisioned.member),
+        credentialSetup: {
+          url: provisioned.setupUrl,
+          expiresAt: provisioned.expiresAt,
+          emailSent: provisioned.emailSent,
+        },
+      },
+      {
+        status: 201,
+        headers: { 'Cache-Control': 'private, no-store' },
+      },
+    )
   },
 })
