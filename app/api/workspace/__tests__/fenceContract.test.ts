@@ -49,9 +49,15 @@ describe('workspace API fence contract', () => {
   it('rechecks the correct identity system on success, exception, and long requests', () => {
     expect(COMPOSE_HIRE).toContain("kind: 'hire_member'")
     expect(COMPOSE_HIRE).toContain('resolveHireMemberSession(principal.rawHireToken)')
-    expect(COMPOSE_HIRE).toContain('isPrincipalActive: () => principalStillActive(principal)')
+    expect(COMPOSE_HIRE).toContain('isPrincipalActive: () => principalStillActive(principal, req)')
     expect(COMPOSE_HIRE).toContain('catch (handlerError)')
-    expect((COMPOSE_HIRE.match(/principalStillActive\(principal\)/g) ?? []).length).toBeGreaterThanOrEqual(3)
+    expect((COMPOSE_HIRE.match(/principalStillActive\(principal, req\)/g) ?? []).length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('permits only the exact workspace GET/POST bootstrap without weakening removal races', () => {
+    expect(COMPOSE_HIRE).toContain("req.nextUrl.pathname === '/api/workspace'")
+    expect(COMPOSE_HIRE).toContain("req.method === 'GET' || req.method === 'POST'")
+    expect(COMPOSE_HIRE).toContain('workspaceIdAtEntry')
   })
 })
 

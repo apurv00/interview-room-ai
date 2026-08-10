@@ -44,6 +44,20 @@ type ResolvedPrincipal = {
   user: HireApiUser
   kind: 'hire_member' | 'b2c'
   rawHireToken?: string
+  /**
+   * Snapshot the linked workspace at request entry. `null` is meaningful: a
+   * valid B2C HR principal has not created its first workspace yet. Keeping
+   * this snapshot lets the egress fence distinguish onboarding from a member
+   * whose access was removed while private output was being prepared.
+   */
+  workspaceIdAtEntry?: string | null
+}
+
+function isWorkspaceBootstrapRequest(req: NextRequest): boolean {
+  return (
+    req.nextUrl.pathname === '/api/workspace' &&
+    (req.method === 'GET' || req.method === 'POST')
+  )
 }
 
 async function resolvePrincipal(req: NextRequest): Promise<ResolvedPrincipal | null> {
@@ -64,26 +78,47 @@ async function resolvePrincipal(req: NextRequest): Promise<ResolvedPrincipal | n
 
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return null
+  const user: HireApiUser = {
+    id: session.user.id,
+    email: session.user.email,
+    role: session.user.role,
+    plan: session.user.plan,
+    organizationId: session.user.organizationId,
+  }
+  const workspaceAtEntry = await getWorkspaceForUser({
+    userId: user.id,
+    email: user.email,
+  })
   return {
     kind: 'b2c',
-    user: {
-      id: session.user.id,
-      email: session.user.email,
-      role: session.user.role,
-      plan: session.user.plan,
-      organizationId: session.user.organizationId,
-    },
+    user,
+    workspaceIdAtEntry:
+      workspaceAtEntry?.workspace._id.toString() ?? null,
   }
 }
 
-async function principalStillActive(principal: ResolvedPrincipal): Promise<boolean> {
+async function principalStillActive(
+  principal: ResolvedPrincipal,
+  req: NextRequest,
+): Promise<boolean> {
   if (principal.kind === 'hire_member') {
     return !!(await resolveHireMemberSession(principal.rawHireToken))
   }
-  return !!(await getWorkspaceForUser({
+  const current = await getWorkspaceForUser({
     userId: principal.user.id,
     email: principal.user.email,
-  }))
+  })
+  if (principal.workspaceIdAtEntry) {
+    return (
+      current?.workspace._id.toString() === principal.workspaceIdAtEntry
+    )
+  }
+
+  // A signed B2C principal with no Hire membership may only discover or
+  // create its first workspace. Every other endpoint remains membership
+  // gated, and a linked principal that loses access never reaches this branch
+  // because its entry snapshot contains the former workspace id.
+  return isWorkspaceBootstrapRequest(req)
 }
 
 function accountUnavailableResponse(): NextResponse {
@@ -148,11 +183,11 @@ export function composeHireApiRoute<T = unknown>(options: ComposeHireOptions<T>)
           user: principal.user,
           body,
           params: context?.params ?? {},
-          isPrincipalActive: () => principalStillActive(principal),
+          isPrincipalActive: () => principalStillActive(principal, req),
         })
       } catch (handlerError) {
         try {
-          if (!(await principalStillActive(principal))) {
+          if (!(await principalStillActive(principal, req))) {
             return accountUnavailableResponse()
           }
         } catch (recheckError) {
@@ -167,7 +202,7 @@ export function composeHireApiRoute<T = unknown>(options: ComposeHireOptions<T>)
       }
 
       // Removal/account-deletion racing a read cannot release private output.
-      if (!(await principalStillActive(principal))) {
+      if (!(await principalStillActive(principal, req))) {
         return accountUnavailableResponse()
       }
       return response
