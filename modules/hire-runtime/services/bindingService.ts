@@ -151,6 +151,30 @@ export async function activeBindingForPrincipal(
   return binding
 }
 
+/**
+ * Resolve the exact terminal-check authority after an engine session exists.
+ * Unlike a new handoff/session claim, completion may legitimately happen after
+ * invite expiry and the publisher may already have moved the binding to its
+ * completed state. Revoked or privacy-purging bindings remain unavailable.
+ */
+export async function completionBindingForPrincipal(
+  input: { workspaceId: string; principalId: string },
+): Promise<IHireRuntimeBinding> {
+  await connectHireRuntimeDB()
+  const binding = await HireRuntimeBinding.findOne({
+    workspaceId: input.workspaceId,
+    principalId: input.principalId,
+    runtimeSessionId: { $exists: true },
+    status: { $in: ['active', 'completed'] },
+    revokedAt: { $exists: false },
+    purgePersonalData: { $ne: true },
+  })
+  if (!binding) {
+    throw new HireRuntimeBindingError('Runtime binding unavailable', 'not_found', 404)
+  }
+  return binding
+}
+
 export async function acquireSessionProvisioningLease(
   input: { workspaceId: string; principalId: string; now?: Date },
 ): Promise<{ binding: IHireRuntimeBinding; leaseToken?: string }> {

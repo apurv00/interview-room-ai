@@ -35,7 +35,15 @@ function internalTargetUrl(req: NextRequest, pathname: string): URL {
   if (process.env.NODE_ENV === 'production' && base.protocol !== 'https:') {
     throw new RuntimeWriteFenceError('Runtime internal origin must use HTTPS', 503)
   }
-  const target = new URL(pathname, base)
+  // TTS has a runtime-owned transient implementation. Send the admitted body
+  // there directly; another middleware rewrite would drop it on self-hosted
+  // Next.js just like the original fenced PATCH failure.
+  const internalPathname = pathname === '/api/tts'
+    ? '/api/hire-engine/tts'
+    : pathname === '/api/tts/stream'
+      ? '/api/hire-engine/tts/stream'
+      : pathname
+  const target = new URL(internalPathname, base)
   for (const [key, value] of Array.from(req.nextUrl.searchParams.entries())) {
     if (key !== TARGET_PARAM) target.searchParams.append(key, value)
   }

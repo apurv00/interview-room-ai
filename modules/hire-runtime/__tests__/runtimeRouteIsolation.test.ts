@@ -111,18 +111,19 @@ describe('isolated runtime route fence', () => {
     ['/api/generate-feedback?source=browser', 'POST', '/api/generate-feedback'],
     ['/api/tts?voice=indian', 'POST', '/api/tts'],
     [`/api/interviews/${'a'.repeat(24)}?final=true`, 'PATCH', `/api/interviews/${'a'.repeat(24)}`],
-  ])('rewrites mutable engine route %s through the capability fence', async (path, method, target) => {
+  ])('redirects mutable engine route %s through the body-preserving capability fence', async (path, method, target) => {
     const response = await runtimeMiddleware(request(path, method))
-    expect(response.status).toBe(200)
-    const rewritten = new URL(response.headers.get('x-middleware-rewrite') || '')
-    expect(rewritten.pathname).toBe('/api/hire-engine/write-fence')
-    expect(rewritten.searchParams.get('__runtime_target')).toBe(target)
+    expect(response.status).toBe(307)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    const redirected = new URL(response.headers.get('location') || '')
+    expect(redirected.pathname).toBe('/api/hire-engine/write-fence')
+    expect(redirected.searchParams.get('__runtime_target')).toBe(target)
     const [queryKey, queryValue] = path.includes('source=')
       ? ['source', 'browser']
       : path.includes('voice=')
         ? ['voice', 'indian']
         : ['final', 'true']
-    expect(rewritten.searchParams.get(queryKey)).toBe(queryValue)
+    expect(redirected.searchParams.get(queryKey)).toBe(queryValue)
   })
 
   it.each([
@@ -145,6 +146,16 @@ describe('isolated runtime route fence', () => {
   it('allows only the strong internal bypass on an allow-listed write', async () => {
     const response = await runtimeMiddleware(
       request('/api/generate-feedback', 'POST', false, {
+        'x-ipg-hire-runtime-fence-bypass': 'f'.repeat(64),
+      }),
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-middleware-next')).toBe('1')
+  })
+
+  it('allows the strong internal bypass to reach the bound PATCH handler', async () => {
+    const response = await runtimeMiddleware(
+      request(`/api/interviews/${'a'.repeat(24)}`, 'PATCH', false, {
         'x-ipg-hire-runtime-fence-bypass': 'f'.repeat(64),
       }),
     )

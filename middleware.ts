@@ -124,13 +124,18 @@ export default withAuth(
         }
       } else if (fencedWrite) {
         // Every mutable unchanged-engine route passes through the runtime
-        // capability fence. The internal proxy repeats the request with the
-        // strong bypass header, avoiding recursion while preserving body,
-        // method, and all non-reserved query parameters.
+        // capability fence. A same-origin 307 is deliberate: the self-hosted
+        // Next.js middleware rewrite path drops PATCH/POST request bodies,
+        // while 307 preserves both method and body for the fenced endpoint.
+        // The internal proxy then repeats the admitted request with the strong
+        // bypass header, avoiding recursion and preserving non-reserved query
+        // parameters.
         const url = req.nextUrl.clone()
         url.pathname = '/api/hire-engine/write-fence'
         url.searchParams.set('__runtime_target', pathname)
-        return NextResponse.rewrite(url)
+        const response = NextResponse.redirect(url, 307)
+        response.headers.set('Cache-Control', 'private, no-store')
+        return response
       }
       // The unchanged interview UI calls the established /api/tts paths.
       // After the write fence admits that request, route it to the isolated

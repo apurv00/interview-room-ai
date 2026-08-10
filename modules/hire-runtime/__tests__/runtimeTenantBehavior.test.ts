@@ -21,7 +21,10 @@ vi.mock('../models/HireRuntimeRevocation', () => ({
 vi.mock('@shared/db/models/InterviewSession', () => ({ InterviewSession: {} }))
 vi.mock('@shared/db/models/User', () => ({ User: {} }))
 
-import { activeBindingForPrincipal } from '../services/bindingService'
+import {
+  activeBindingForPrincipal,
+  completionBindingForPrincipal,
+} from '../services/bindingService'
 import { claimRuntimeWriteCapability } from '../services/runtimeWriteFence'
 
 const WORKSPACE_A = 'a'.repeat(24)
@@ -78,5 +81,22 @@ describe('isolated runtime two-tenant behavior', () => {
     expect(
       mocks.findOneAndUpdate.mock.calls.map(([filter]) => filter.workspaceId),
     ).toEqual([WORKSPACE_A, WORKSPACE_B])
+  })
+
+  it('checks completion in the exact workspace without reapplying invite expiry', async () => {
+    await expect(completionBindingForPrincipal({
+      workspaceId: WORKSPACE_A,
+      principalId: PRINCIPAL_ID,
+    })).resolves.toBe(bindingA)
+
+    expect(mocks.findOne).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_A,
+      principalId: PRINCIPAL_ID,
+      runtimeSessionId: { $exists: true },
+      status: { $in: ['active', 'completed'] },
+      revokedAt: { $exists: false },
+      purgePersonalData: { $ne: true },
+    })
+    expect(mocks.findOne.mock.calls[0][0]).not.toHaveProperty('inviteExpiresAt')
   })
 })

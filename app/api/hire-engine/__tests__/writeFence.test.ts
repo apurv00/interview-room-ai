@@ -23,7 +23,7 @@ vi.mock('@modules/hire-runtime/services/runtimeWriteFence', async () => {
   }
 })
 
-import { POST } from '../write-fence/route'
+import { PATCH, POST } from '../write-fence/route'
 
 const WORKSPACE_ID = '1'.repeat(24)
 const APPLICATION_ID = '2'.repeat(24)
@@ -49,11 +49,15 @@ function binding() {
   }
 }
 
-function request(pathname: string, body: Record<string, unknown>): NextRequest {
+function request(
+  pathname: string,
+  body: Record<string, unknown>,
+  method = 'POST',
+): NextRequest {
   const url = new URL('http://engine.test/api/hire-engine/write-fence')
   url.searchParams.set('__runtime_target', pathname)
   return new NextRequest(url, {
-    method: 'POST',
+    method,
     headers: {
       'content-type': 'application/json',
       'x-origin-user-id': FOREIGN_SESSION_ID,
@@ -103,5 +107,33 @@ describe('POST /api/hire-engine/write-fence', () => {
     expect(new Headers(init.headers).get('x-ipg-hire-runtime-fence-bypass')).toBe(
       'f'.repeat(64),
     )
+  })
+
+  it('forwards the exact bound PATCH method and JSON bytes to the unchanged session route', async () => {
+    const body = {
+      status: 'in_progress',
+      startedAt: '2026-08-10T10:00:00.000Z',
+    }
+    const response = await PATCH(request(
+      `/api/interviews/${SESSION_ID}`,
+      body,
+      'PATCH',
+    ))
+
+    expect(response.status).toBe(200)
+    const [target, init] = mocks.fetch.mock.calls[0] as [URL, RequestInit]
+    expect(target.pathname).toBe(`/api/interviews/${SESSION_ID}`)
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(new TextDecoder().decode(init.body as Uint8Array))).toEqual(body)
+  })
+
+  it('routes admitted TTS bytes directly to the runtime-owned endpoint', async () => {
+    const body = { text: 'Short interviewer prompt', voice: 'indian' }
+    const response = await POST(request('/api/tts', body))
+
+    expect(response.status).toBe(200)
+    const [target, init] = mocks.fetch.mock.calls[0] as [URL, RequestInit]
+    expect(target.pathname).toBe('/api/hire-engine/tts')
+    expect(JSON.parse(new TextDecoder().decode(init.body as Uint8Array))).toEqual(body)
   })
 })
