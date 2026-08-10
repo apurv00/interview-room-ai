@@ -522,6 +522,414 @@ describe('isolated engine result ingestion', () => {
     })
   })
 
+  it('keeps repeated raw question indexes as distinct evidence-backed response moments', () => {
+    const input = payload({
+      results: {
+        overallScore: 72,
+        answerQualityScore: 74,
+        communicationScore: 70,
+        jdMatchScore: 68,
+        redFlags: [],
+        topImprovements: ['Q2 needs stronger detail'],
+        perQuestion: [
+          {
+            questionIndex: 1,
+            question: 'Describe the initial decision.',
+            answer: 'Exact first response.',
+            score: 70,
+            relevance: 72,
+            structure: 70,
+            specificity: 68,
+            ownership: 70,
+            jdAlignment: 66,
+            flags: ['First response gap'],
+          },
+          {
+            questionIndex: 1,
+            question: 'Explain the follow-up tradeoff.',
+            answer: 'Exact follow-up response.',
+            score: 74,
+            relevance: 76,
+            structure: 72,
+            specificity: 74,
+            ownership: 74,
+            jdAlignment: 70,
+            flags: ['Follow-up response gap'],
+          },
+        ],
+      },
+      transcript: [
+        {
+          speaker: 'interviewer',
+          text: 'Describe the initial decision.',
+          timestampMs: 1_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Exact first response.',
+          timestampMs: 5_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'interviewer',
+          text: 'Explain the follow-up tradeoff.',
+          timestampMs: 15_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Exact follow-up response.',
+          timestampMs: 20_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'interviewer',
+          text: 'Next question.',
+          timestampMs: 30_000,
+          questionIndex: 2,
+        },
+      ],
+      media: [],
+    })
+
+    const { projection, evidenceIndex } =
+      __resultIngestion.buildEvidenceProjection(input, IDS.attemptId)
+
+    expect(projection.questions).toMatchObject([
+      {
+        questionId: 'q-1',
+        answer: 'Exact first response.',
+        evidenceIds: ['q-1-answer'],
+      },
+      {
+        questionId: 'q-1-2',
+        answer: 'Exact follow-up response.',
+        evidenceIds: ['q-1-2-answer'],
+      },
+    ])
+    expect(evidenceIndex.map((evidence) => evidence.id)).toEqual([
+      'q-1-answer',
+      'q-1-2-answer',
+    ])
+    expect(new Set(evidenceIndex.map((evidence) => evidence.id)).size).toBe(
+      evidenceIndex.length,
+    )
+    expect(evidenceIndex).toMatchObject([
+      {
+        transcriptStart: 0,
+        transcriptEnd: 1,
+        transcriptExcerpt:
+          'Interviewer: Describe the initial decision.\nCandidate: Exact first response.',
+      },
+      {
+        transcriptStart: 2,
+        transcriptEnd: 3,
+        transcriptExcerpt:
+          'Interviewer: Explain the follow-up tradeoff.\nCandidate: Exact follow-up response.',
+      },
+    ])
+    expect(
+      projection.findings.find(
+        (finding) => finding.text === 'First response gap',
+      ),
+    ).toMatchObject({ evidenceIds: ['q-1-answer'] })
+    expect(
+      projection.findings.find(
+        (finding) => finding.text === 'Follow-up response gap',
+      ),
+    ).toMatchObject({ evidenceIds: ['q-1-2-answer'] })
+    expect(
+      projection.findings.find(
+        (finding) => finding.text === 'Q2 needs stronger detail',
+      ),
+    ).toMatchObject({ evidenceIds: ['q-1-answer', 'q-1-2-answer'] })
+  })
+
+  it('reserves later exact answer matches before assigning positional fallbacks', () => {
+    const input = payload({
+      results: {
+        overallScore: 70,
+        perQuestion: [
+          {
+            questionIndex: 1,
+            question: 'Response without an engine answer copy',
+            score: 68,
+            relevance: 68,
+          },
+          {
+            questionIndex: 1,
+            question: 'Response with an exact engine answer copy',
+            answer: 'Transcript answer A.',
+            score: 72,
+            relevance: 72,
+          },
+        ],
+      },
+      transcript: [
+        {
+          speaker: 'interviewer',
+          text: 'First prompt.',
+          timestampMs: 1_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Transcript answer A.',
+          timestampMs: 5_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'interviewer',
+          text: 'Follow-up prompt.',
+          timestampMs: 10_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Transcript answer B.',
+          timestampMs: 15_000,
+          questionIndex: 1,
+        },
+      ],
+      media: [],
+    })
+
+    const { projection, evidenceIndex } =
+      __resultIngestion.buildEvidenceProjection(input, IDS.attemptId)
+
+    expect(projection.questions).toMatchObject([
+      {
+        questionId: 'q-1',
+        answer: 'Transcript answer B.',
+        evidenceIds: ['q-1-answer'],
+      },
+      {
+        questionId: 'q-1-2',
+        answer: 'Transcript answer A.',
+        evidenceIds: ['q-1-2-answer'],
+      },
+    ])
+    expect(evidenceIndex).toMatchObject([
+      { id: 'q-1-answer', transcriptStart: 2, transcriptEnd: 3 },
+      { id: 'q-1-2-answer', transcriptStart: 0, transcriptEnd: 1 },
+    ])
+  })
+
+  it('fails closed when a normalized answer cannot identify one of several same-index turns', () => {
+    const input = payload({
+      results: {
+        overallScore: 80,
+        perQuestion: [
+          {
+            questionIndex: 1,
+            question: 'Explain the decision.',
+            answer: 'An engine-normalized answer that is not in the transcript.',
+            score: 80,
+            relevance: 80,
+          },
+        ],
+      },
+      transcript: [
+        {
+          speaker: 'interviewer',
+          text: 'Explain the decision.',
+          timestampMs: 1_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Could you repeat that?',
+          timestampMs: 5_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'interviewer',
+          text: 'Explain the decision and tradeoff.',
+          timestampMs: 10_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'The actual scored response.',
+          timestampMs: 15_000,
+          questionIndex: 1,
+        },
+      ],
+      media: [],
+    })
+
+    expect(() =>
+      __resultIngestion.buildEvidenceProjection(input, IDS.attemptId),
+    ).toThrowError(
+      expect.objectContaining({ code: 'evidence_missing', status: 409 }),
+    )
+  })
+
+  it('does not infer transcript order for multiple unmatched duplicate-index results', () => {
+    const input = payload({
+      results: {
+        overallScore: 80,
+        perQuestion: [
+          {
+            questionIndex: 1,
+            question: 'Evaluation completed second.',
+            answer: 'Normalized response B.',
+            score: 82,
+            relevance: 82,
+          },
+          {
+            questionIndex: 1,
+            question: 'Evaluation completed first.',
+            answer: 'Normalized response A.',
+            score: 78,
+            relevance: 78,
+          },
+        ],
+      },
+      transcript: [
+        {
+          speaker: 'interviewer',
+          text: 'First prompt.',
+          timestampMs: 1_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Verbatim response A.',
+          timestampMs: 5_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'interviewer',
+          text: 'Follow-up prompt.',
+          timestampMs: 10_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Verbatim response B.',
+          timestampMs: 15_000,
+          questionIndex: 1,
+        },
+      ],
+      media: [],
+    })
+
+    expect(() =>
+      __resultIngestion.buildEvidenceProjection(input, IDS.attemptId),
+    ).toThrowError(
+      expect.objectContaining({ code: 'evidence_missing', status: 409 }),
+    )
+  })
+
+  it('fails closed when identical answer text occurs at multiple transcript moments', () => {
+    const input = payload({
+      results: {
+        overallScore: 80,
+        perQuestion: [
+          {
+            questionIndex: 1,
+            question: 'Which repeated response was evaluated?',
+            answer: 'The same response.',
+            score: 80,
+            relevance: 80,
+          },
+        ],
+      },
+      transcript: [
+        {
+          speaker: 'interviewer',
+          text: 'First prompt.',
+          timestampMs: 1_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'The same response.',
+          timestampMs: 5_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'interviewer',
+          text: 'Follow-up prompt.',
+          timestampMs: 10_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'The same response.',
+          timestampMs: 15_000,
+          questionIndex: 1,
+        },
+      ],
+      media: [],
+    })
+
+    expect(() =>
+      __resultIngestion.buildEvidenceProjection(input, IDS.attemptId),
+    ).toThrowError(
+      expect.objectContaining({ code: 'evidence_missing', status: 409 }),
+    )
+  })
+
+  it('does not fall back after another result consumes the claimed exact answer', () => {
+    const input = payload({
+      results: {
+        overallScore: 80,
+        perQuestion: [
+          {
+            questionIndex: 1,
+            question: 'First evaluation.',
+            answer: 'Claimed response A.',
+            score: 80,
+            relevance: 80,
+          },
+          {
+            questionIndex: 1,
+            question: 'Conflicting second evaluation.',
+            answer: 'Claimed response A.',
+            score: 80,
+            relevance: 80,
+          },
+        ],
+      },
+      transcript: [
+        {
+          speaker: 'interviewer',
+          text: 'First prompt.',
+          timestampMs: 1_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Claimed response A.',
+          timestampMs: 5_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'interviewer',
+          text: 'Second prompt.',
+          timestampMs: 10_000,
+          questionIndex: 1,
+        },
+        {
+          speaker: 'candidate',
+          text: 'Different response B.',
+          timestampMs: 15_000,
+          questionIndex: 1,
+        },
+      ],
+      media: [],
+    })
+
+    expect(() =>
+      __resultIngestion.buildEvidenceProjection(input, IDS.attemptId),
+    ).toThrowError(
+      expect.objectContaining({ code: 'evidence_missing', status: 409 }),
+    )
+  })
+
   it('rejects timeline or media tampering before any database connection', async () => {
     const input = payload()
     input.durationMs += 1

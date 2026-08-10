@@ -66,29 +66,98 @@ function evidenceForQuestions(payload: HireEngineResultIngestion): {
   questions: HireAssessmentProjection['questions']
 } {
   const evidenceIndex: HireEvidenceRef[] = []
-  const questions = (payload.results.perQuestion ?? []).map((question) => {
-    const matchingIndexes = payload.transcript.flatMap((entry, index) =>
-      entry.questionIndex === question.questionIndex ? [index] : [],
+  const resultQuestions = payload.results.perQuestion ?? []
+  const candidateIndexesByQuestion = new Map<number, number[]>()
+  payload.transcript.forEach((entry, index) => {
+    if (entry.speaker !== 'candidate' || entry.questionIndex == null)
+      return
+    const indexes = candidateIndexesByQuestion.get(entry.questionIndex) ?? []
+    indexes.push(index)
+    candidateIndexesByQuestion.set(entry.questionIndex, indexes)
+  })
+  const consumedCandidateIndexes = new Set<number>()
+  const candidateIndexByResult = new Map<number, number>()
+  const fallbackEligibleResults = new Set<number>()
+  // Reserve all exact answer matches before positional fallback. Otherwise an
+  // earlier result with an omitted/normalized answer can steal the transcript
+  // entry that a later result identifies exactly.
+  resultQuestions.forEach((question, resultIndex) => {
+    if (typeof question.answer !== 'string') {
+      fallbackEligibleResults.add(resultIndex)
+      return
+    }
+    const allExactCandidateIndexes = (
+      candidateIndexesByQuestion.get(question.questionIndex) ?? []
+    ).filter((index) => payload.transcript[index].text === question.answer)
+    if (allExactCandidateIndexes.length === 0) {
+      fallbackEligibleResults.add(resultIndex)
+      return
+    }
+    const availableExactCandidateIndexes = allExactCandidateIndexes.filter(
+      (index) => !consumedCandidateIndexes.has(index),
     )
-    const interviewerIndex =
-      matchingIndexes.find(
-        (index) => payload.transcript[index].speaker === 'interviewer',
-      ) ?? -1
-    const candidateIndexes = matchingIndexes.filter(
-      (index) => payload.transcript[index].speaker === 'candidate',
+    if (
+      allExactCandidateIndexes.length !== 1 ||
+      availableExactCandidateIndexes.length !== 1
     )
-    const candidateIndex = candidateIndexes[0] ?? -1
-    const candidateEndIndex =
-      candidateIndexes[candidateIndexes.length - 1] ?? -1
+      return
+    const candidateIndex = availableExactCandidateIndexes[0]
+    consumedCandidateIndexes.add(candidateIndex)
+    candidateIndexByResult.set(resultIndex, candidateIndex)
+  })
+  const fallbackResultsByQuestion = new Map<number, number[]>()
+  resultQuestions.forEach((question, resultIndex) => {
+    if (
+      candidateIndexByResult.has(resultIndex) ||
+      !fallbackEligibleResults.has(resultIndex)
+    )
+      return
+    const indexes = fallbackResultsByQuestion.get(question.questionIndex) ?? []
+    indexes.push(resultIndex)
+    fallbackResultsByQuestion.set(question.questionIndex, indexes)
+  })
+  fallbackResultsByQuestion.forEach((resultIndexes, questionIndex) => {
+    const candidateIndexes = (
+      candidateIndexesByQuestion.get(questionIndex) ?? []
+    ).filter((index) => !consumedCandidateIndexes.has(index))
+    // Positional fallback is authoritative only for one remaining result and
+    // one remaining transcript response. Multiple unmatched results can be
+    // persisted in evaluation-completion order rather than transcript order,
+    // so equal counts alone are not enough to establish provenance.
+    if (candidateIndexes.length !== 1 || resultIndexes.length !== 1) return
+    consumedCandidateIndexes.add(candidateIndexes[0])
+    candidateIndexByResult.set(resultIndexes[0], candidateIndexes[0])
+  })
+  const occurrencesByQuestion = new Map<number, number>()
+  const questions = resultQuestions.map((question, resultIndex) => {
+    const occurrence =
+      (occurrencesByQuestion.get(question.questionIndex) ?? 0) + 1
+    occurrencesByQuestion.set(question.questionIndex, occurrence)
+    const questionId =
+      occurrence === 1
+        ? `q-${question.questionIndex}`
+        : `q-${question.questionIndex}-${occurrence}`
+    const candidateIndex = candidateIndexByResult.get(resultIndex) ?? -1
+    let interviewerIndex = -1
+    for (let index = candidateIndex - 1; index >= 0; index -= 1) {
+      const entry = payload.transcript[index]
+      if (
+        entry.questionIndex === question.questionIndex &&
+        entry.speaker === 'interviewer'
+      ) {
+        interviewerIndex = index
+        break
+      }
+    }
     const evidenceIds: string[] = []
     if (candidateIndex >= 0) {
       const answerEntry = payload.transcript[candidateIndex]
-      const nextEntry = payload.transcript[candidateEndIndex + 1]
-      const id = `q-${question.questionIndex}-answer`
+      const nextEntry = payload.transcript[candidateIndex + 1]
+      const id = `${questionId}-answer`
       const transcriptStart =
         interviewerIndex >= 0 ? interviewerIndex : candidateIndex
       const transcriptExcerpt = payload.transcript
-        .slice(transcriptStart, candidateEndIndex + 1)
+        .slice(transcriptStart, candidateIndex + 1)
         .map(
           (entry) =>
             `${entry.speaker === 'candidate' ? 'Candidate' : 'Interviewer'}: ${entry.text}`,
@@ -99,9 +168,9 @@ function evidenceForQuestions(payload: HireEngineResultIngestion): {
         id,
         type: 'transcript_span',
         attemptId: '', // scoped attempt id is injected after lookup
-        questionId: `q-${question.questionIndex}`,
+        questionId,
         transcriptStart,
-        transcriptEnd: candidateEndIndex,
+        transcriptEnd: candidateIndex,
         transcriptExcerpt,
         startMs: answerEntry.timestampMs,
         endMs: Math.max(
@@ -115,16 +184,11 @@ function evidenceForQuestions(payload: HireEngineResultIngestion): {
       evidenceIds.push(id)
     }
     return {
-      questionId: `q-${question.questionIndex}`,
+      questionId,
       index: question.questionIndex,
       prompt: question.question,
-      ...(candidateIndexes.length > 0
-        ? {
-            answer: candidateIndexes
-              .map((index) => payload.transcript[index].text)
-              .join('\n')
-              .slice(0, 20_000),
-          }
+      ...(candidateIndex >= 0
+        ? { answer: payload.transcript[candidateIndex].text.slice(0, 20_000) }
         : {}),
       score: question.score,
       evidenceIds,
@@ -206,12 +270,7 @@ function buildEvidenceProjection(
       .filter((question) => question.score !== null)
       .flatMap((question) => question.evidenceIds),
   )
-  const resultByQuestion = new Map(
-    (payload.results.perQuestion ?? []).map((question) => [
-      question.questionIndex,
-      question,
-    ]),
-  )
+  const resultQuestions = payload.results.perQuestion ?? []
   const evidenceForDimension = (
     predicate: (
       question: NonNullable<
@@ -221,8 +280,8 @@ function buildEvidenceProjection(
   ) =>
     uniqueEvidenceIds(
       built.questions
-        .filter((question) => {
-          const result = resultByQuestion.get(question.index)
+        .filter((_question, index) => {
+          const result = resultQuestions[index]
           return result ? predicate(result) : false
         })
         .flatMap((question) => question.evidenceIds),
@@ -285,8 +344,9 @@ function buildEvidenceProjection(
     return uniqueEvidenceIds(
       referenced.flatMap(
         (index) =>
-          built.questions.find((question) => question.index === index)
-            ?.evidenceIds ?? [],
+          built.questions
+            .filter((question) => question.index === index)
+            .flatMap((question) => question.evidenceIds),
       ),
     )
   }
@@ -299,13 +359,10 @@ function buildEvidenceProjection(
     seenFindings.add(normalized)
     findings.push({ kind: 'gap', text: normalized, evidenceIds })
   }
-  for (const question of payload.results.perQuestion ?? []) {
-    const ids =
-      built.questions.find(
-        (candidate) => candidate.index === question.questionIndex,
-      )?.evidenceIds ?? []
+  resultQuestions.forEach((question, index) => {
+    const ids = built.questions[index]?.evidenceIds ?? []
     for (const flag of question.flags ?? []) addGap(flag, ids)
-  }
+  })
   for (const text of payload.results.redFlags ?? [])
     addGap(text, evidenceForFinding(text))
   for (const text of payload.results.topImprovements ?? [])
@@ -340,7 +397,13 @@ function buildEvidenceProjection(
     projection.overallScore !== null ||
     projection.dimensions.some((dimension) => dimension.score !== null) ||
     projection.questions.some((question) => question.score !== null)
-  if (hasDisplayedScore && scoredEvidenceIds.length === 0) {
+  const hasUncitedScoredQuestion = projection.questions.some(
+    (question) => question.score !== null && question.evidenceIds.length === 0,
+  )
+  if (
+    hasDisplayedScore &&
+    (scoredEvidenceIds.length === 0 || hasUncitedScoredQuestion)
+  ) {
     throw new HireEngineIngestionError(
       'Scored engine results arrived without timestamped answer evidence',
       'evidence_missing',
