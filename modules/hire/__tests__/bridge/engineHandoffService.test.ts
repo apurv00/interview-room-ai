@@ -131,6 +131,13 @@ describe('Hire control handoff service', () => {
   })
 
   it('exchanges only the atomically request-bound code into three-key coordinates', async () => {
+    const persistedConfig = {
+      role: 'Backend engineer',
+      interviewType: 'behavioral',
+      experience: '3-6',
+      duration: 20,
+      jobDescription: 'Canonical JD',
+    }
     mocks.findOneAndUpdate.mockResolvedValue({
       codeHash: 'e'.repeat(64),
       workspaceId: { toString: () => IDS.workspaceId },
@@ -141,11 +148,11 @@ describe('Hire control handoff service', () => {
       consentVersion: 'hire-ai-v1',
       consentAt: new Date('2026-08-09T23:59:00.000Z'),
       config: {
-        role: 'Backend engineer',
-        interviewType: 'behavioral',
-        experience: '3-6',
-        duration: 20,
-        jobDescription: 'Canonical JD',
+        ...persistedConfig,
+        // Hydrated Mongoose subdocuments expose enumerable document helpers.
+        // The bridge must explicitly flatten them before strict wire parsing.
+        $isMongooseDocumentPrototype: true,
+        toObject: () => persistedConfig,
       },
     })
     const envelope = await exchangeHireEngineHandoff(
@@ -153,6 +160,7 @@ describe('Hire control handoff service', () => {
       NOW,
     )
     expect(envelope).toMatchObject(IDS)
+    expect(envelope.config).toEqual(persistedConfig)
     expect(mocks.findOneAndUpdate.mock.calls[0][0]).toMatchObject({
       workspaceId: IDS.workspaceId,
       codeHash: expect.stringMatching(/^[a-f0-9]{64}$/),

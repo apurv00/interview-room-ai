@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   applicationExists: vi.fn(),
   attemptFindOne: vi.fn(),
   consentExists: vi.fn(),
+  mediaExists: vi.fn(),
   guestUpdateMany: vi.fn(),
   guestCreate: vi.fn(),
   withTransaction: vi.fn(),
@@ -31,6 +32,9 @@ vi.mock('../models/HireInterviewAttempt', () => ({
 }))
 vi.mock('../models/HireConsentReceipt', () => ({
   HireConsentReceipt: { exists: mocks.consentExists },
+}))
+vi.mock('../models/HireMediaAsset', () => ({
+  HireMediaAsset: { exists: mocks.mediaExists },
 }))
 vi.mock('../models/HireGuestSession', () => ({
   HireGuestSession: {
@@ -91,9 +95,12 @@ beforeEach(() => {
     session: vi.fn().mockResolvedValue({
       _id: IDS.attemptId,
       consentReceiptId: IDS.receiptId,
+      status: 'ready',
+      identityPhotoAssetId: '888888888888888888888888',
     }),
   })
   mocks.consentExists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
+  mocks.mediaExists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
   mocks.guestUpdateMany.mockResolvedValue({ modifiedCount: 0 })
   mocks.guestCreate.mockResolvedValue([{}])
 })
@@ -113,6 +120,18 @@ describe('candidate authority versus workspace deletion', () => {
       roundId: IDS.roundId,
       attemptId: IDS.attemptId,
     })
+    expect(result.next).toBe('resume')
+    expect(mocks.mediaExists).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        roundId: IDS.roundId,
+        attemptId: IDS.attemptId,
+        kind: 'identity_photo',
+        state: 'ready',
+        active: true,
+      }),
+    )
     expect(mocks.roundFindOne).toHaveBeenCalledWith(
       expect.objectContaining({
         _id: IDS.roundId,
@@ -146,6 +165,31 @@ describe('candidate authority versus workspace deletion', () => {
       status: 410,
     })
     expect(mocks.applicationExists).not.toHaveBeenCalled()
+    expect(mocks.guestCreate).not.toHaveBeenCalled()
+  })
+
+  it('fails closed instead of recapturing when an in-progress attempt is inconsistent', async () => {
+    mocks.attemptFindOne.mockReturnValue({
+      session: vi.fn().mockResolvedValue({
+        _id: IDS.attemptId,
+        consentReceiptId: IDS.receiptId,
+        status: 'in_progress',
+        identityPhotoAssetId: '888888888888888888888888',
+      }),
+    })
+
+    await expect(
+      acceptHireConsentAndIssueGuestSession({
+        roundId: IDS.roundId,
+        inviteCapability: `${IDS.workspaceId}.${'a'.repeat(64)}`,
+        accepted,
+        now,
+      }),
+    ).rejects.toMatchObject<HireGuestAccessError>({
+      code: 'GUEST_SESSION_CONFLICT',
+      status: 409,
+    })
+    expect(mocks.mediaExists).not.toHaveBeenCalled()
     expect(mocks.guestCreate).not.toHaveBeenCalled()
   })
 })

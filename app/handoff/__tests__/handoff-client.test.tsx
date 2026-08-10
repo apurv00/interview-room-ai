@@ -16,7 +16,10 @@ vi.mock('next-auth/react', () => ({
   signOut: mocks.signOut,
 }))
 
-import HireRuntimeHandoffClient from '../handoff-client'
+import {
+  __hireRuntimeHandoffClient,
+  default as HireRuntimeHandoffClient,
+} from '../handoff-client'
 
 const CODE = `${'c'.repeat(24)}.${'a'.repeat(64)}`
 const TICKET = 'b'.repeat(64)
@@ -30,6 +33,7 @@ const CONFIG = {
   jobDescription: 'Canonical server-owned JD',
   targetCompany: 'Example Co',
 }
+const HANDOFF_SESSION_KEY = __hireRuntimeHandoffClient.HANDOFF_SESSION_KEY
 
 function jsonResponse(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -109,6 +113,7 @@ describe('isolated runtime handoff page', () => {
     expect(stored).not.toContain(CODE)
     expect(stored).not.toContain(TICKET)
     expect(stored).not.toContain('candidateEmail')
+    expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBeNull()
   })
 
   it('shows a terminal expired state for a consumed or expired code', async () => {
@@ -120,6 +125,7 @@ describe('isolated runtime handoff page', () => {
     ).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
     expect(mocks.signIn).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBeNull()
   })
 
   it('keeps the one-time code in memory for a retryable service failure', async () => {
@@ -133,9 +139,45 @@ describe('isolated runtime handoff page', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<HireRuntimeHandoffClient />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }))
+    const retry = await screen.findByRole('button', { name: 'Try again' })
+    expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBe(CODE)
+    fireEvent.click(retry)
     await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/lobby'))
     expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ code: CODE })
+    expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBeNull()
+  })
+
+  it('recovers the scrubbed code from tab storage after a remount', async () => {
+    const firstFetch = vi.fn().mockResolvedValue(jsonResponse({}, 503))
+    vi.stubGlobal('fetch', firstFetch)
+    const firstRender = render(<HireRuntimeHandoffClient />)
+
+    await screen.findByRole('button', { name: 'Try again' })
+    expect(window.location.hash).toBe('')
+    expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBe(CODE)
+    firstRender.unmount()
+
+    const recoveredFetch = successfulFetch()
+    vi.stubGlobal('fetch', recoveredFetch)
+    render(<HireRuntimeHandoffClient />)
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/lobby'))
+    expect(recoveredFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/hire-engine/handoff/exchange',
+      expect.objectContaining({ body: JSON.stringify({ code: CODE }) }),
+    )
+    expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBeNull()
+  })
+
+  it('clears the tab-scoped code after a terminal invalid response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({}, 400)))
+    render(<HireRuntimeHandoffClient />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'This interview link is invalid' }),
+    ).toBeTruthy()
+    expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBeNull()
   })
 })

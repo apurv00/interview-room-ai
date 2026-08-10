@@ -211,6 +211,13 @@ export async function exchangeHireEngineHandoff(
   const envelopeExpiresAt = new Date(
     Math.min(handoff.expiresAt.getTime(), now.getTime() + HANDOFF_TTL_SECONDS * 1_000),
   )
+  // `config` is a hydrated Mongoose subdocument here. Zod's strict object
+  // parser correctly rejects its enumerable document helpers, so cross the
+  // internal-API seam with a plain object rather than the persistence wrapper.
+  const storedConfig =
+    handoff.config && typeof (handoff.config as { toObject?: unknown }).toObject === 'function'
+      ? (handoff.config as unknown as { toObject: () => unknown }).toObject()
+      : handoff.config
   return {
     schemaVersion: HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
     workspaceId: handoff.workspaceId.toString(),
@@ -222,7 +229,7 @@ export async function exchangeHireEngineHandoff(
     inviteExpiresAt: handoff.inviteExpiresAt.toISOString(),
     consentVersion: handoff.consentVersion,
     consentAt: handoff.consentAt.toISOString(),
-    config: HireEngineConfigSchema.parse(handoff.config),
+    config: HireEngineConfigSchema.parse(storedConfig),
   }
 }
 

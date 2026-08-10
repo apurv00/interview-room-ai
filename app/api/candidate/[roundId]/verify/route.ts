@@ -86,7 +86,7 @@ export async function POST(
     const response = NextResponse.json(
       {
         ok: true,
-        next: 'identity_photo',
+        next: accepted.next,
         csrfToken: accepted.csrfToken,
         consentVersion: accepted.consentVersion,
         disclosureDigest: accepted.disclosureDigest,

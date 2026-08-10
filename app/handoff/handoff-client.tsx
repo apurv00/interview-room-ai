@@ -12,6 +12,7 @@ import { clearAllInterviewStorage, STORAGE_KEYS } from '@shared/storageKeys'
 const HANDOFF_CODE_PATTERN = /^[a-f0-9]{24}\.[a-f0-9]{64}$/i
 const AUTH_TICKET_PATTERN = /^[a-f0-9]{64}$/i
 const REQUEST_TIMEOUT_MS = 15_000
+const HANDOFF_SESSION_KEY = 'hire-runtime:handoff-code:v1'
 
 type HandoffViewState =
   | { kind: 'working'; message: string }
@@ -29,6 +30,30 @@ async function fetchWithTimeout(
     return await fetch(input, { ...init, signal: controller.signal })
   } finally {
     window.clearTimeout(timeout)
+  }
+}
+
+function readStoredHandoffCode(): string {
+  try {
+    return window.sessionStorage.getItem(HANDOFF_SESSION_KEY)?.trim() ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function storeHandoffCode(code: string): void {
+  try {
+    window.sessionStorage.setItem(HANDOFF_SESSION_KEY, code)
+  } catch {
+    // Private browsing and locked-down clients may deny sessionStorage.
+  }
+}
+
+function clearStoredHandoffCode(): void {
+  try {
+    window.sessionStorage.removeItem(HANDOFF_SESSION_KEY)
+  } catch {
+    // The in-memory copy still expires with this page if storage is unavailable.
   }
 }
 
@@ -104,10 +129,12 @@ export default function HireRuntimeHandoffClient() {
         },
       )
       if (exchangeResponse.status === 410) {
+        clearStoredHandoffCode()
         setView({ kind: 'expired' })
         return
       }
       if (exchangeResponse.status === 400) {
+        clearStoredHandoffCode()
         setView({ kind: 'invalid' })
         return
       }
@@ -158,6 +185,7 @@ export default function HireRuntimeHandoffClient() {
         },
       )
       if (bootstrapResponse.status === 404 || bootstrapResponse.status === 410) {
+        clearStoredHandoffCode()
         setView({ kind: 'expired' })
         return
       }
@@ -173,6 +201,7 @@ export default function HireRuntimeHandoffClient() {
         await bootstrapResponse.json(),
       )
       seedRuntimeInterviewStorage(window.localStorage, bootstrap)
+      clearStoredHandoffCode()
       router.replace('/lobby')
     } catch {
       setView({
@@ -186,10 +215,18 @@ export default function HireRuntimeHandoffClient() {
     if (startedRef.current) return
     startedRef.current = true
     const fragment = new URLSearchParams(window.location.hash.slice(1))
-    codeRef.current = fragment.get('code')?.trim() ?? ''
+    const fragmentCode = fragment.get('code')?.trim() ?? ''
+    if (HANDOFF_CODE_PATTERN.test(fragmentCode)) {
+      // Preserve the capability within this tab before removing it from the
+      // address bar. A reload can then resume after a transient interruption.
+      storeHandoffCode(fragmentCode)
+      codeRef.current = fragmentCode
+    } else {
+      codeRef.current = readStoredHandoffCode()
+    }
     // Remove the one-time credential from browser history/referrers before
-    // making any network call. The code remains only in this in-memory ref so
-    // a transient failure can be retried idempotently.
+    // making any network call. Its tab-scoped recovery copy is cleared after
+    // successful completion or a terminal response.
     window.history.replaceState(window.history.state, '', window.location.pathname)
     clearRuntimeInterviewStorage(window.localStorage)
     // Also clear prior runtime sessionStorage and replay-upload IndexedDB.
@@ -261,4 +298,7 @@ export default function HireRuntimeHandoffClient() {
   )
 }
 
-export const __hireRuntimeHandoffClient = { REQUEST_TIMEOUT_MS }
+export const __hireRuntimeHandoffClient = {
+  HANDOFF_SESSION_KEY,
+  REQUEST_TIMEOUT_MS,
+}

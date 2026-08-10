@@ -7,6 +7,7 @@ import {
 } from '../models/HireConsentReceipt'
 import { HireGuestSession, type IHireGuestSession } from '../models/HireGuestSession'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
+import { HireMediaAsset } from '../models/HireMediaAsset'
 import { HireRound } from '../models/HireRound'
 import { HireWorkspace } from '../models/HireWorkspace'
 import {
@@ -72,6 +73,7 @@ export interface AcceptedHireConsent {
   csrfToken: string
   consentVersion: string
   disclosureDigest: string
+  next: 'identity_photo' | 'resume'
 }
 
 function digest(value: string): string {
@@ -123,6 +125,7 @@ async function issueSession(
   inviteExpiresAt: Date,
   now: Date,
   dbSession: ClientSession,
+  next: AcceptedHireConsent['next'],
 ): Promise<AcceptedHireConsent> {
   const secret = randomBytes(32).toString('hex')
   const csrfToken = randomBytes(32).toString('hex')
@@ -168,7 +171,67 @@ async function issueSession(
     csrfToken,
     consentVersion: HIRE_AI_CONSENT_VERSION,
     disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
+    next,
   }
+}
+
+async function resolveCandidateNextStep(
+  attempt: {
+    _id: mongoose.Types.ObjectId
+    status: string
+    identityPhotoAssetId?: mongoose.Types.ObjectId
+    startedAt?: Date
+    recordingEpoch?: Date
+  },
+  coordinate: {
+    workspaceId: string
+    applicationId: string
+    roundId: string
+  },
+  now: Date,
+  dbSession: ClientSession,
+): Promise<AcceptedHireConsent['next']> {
+  if (attempt.status !== 'ready' && attempt.status !== 'in_progress') {
+    return 'identity_photo'
+  }
+  if (
+    !attempt.identityPhotoAssetId ||
+    (attempt.status === 'in_progress' && (!attempt.startedAt || !attempt.recordingEpoch))
+  ) {
+    if (attempt.status === 'in_progress') {
+      throw new HireGuestAccessError(
+        'The active interview attempt cannot be resumed safely',
+        'GUEST_SESSION_CONFLICT',
+        409,
+      )
+    }
+    return 'identity_photo'
+  }
+  const retainedPhoto = await HireMediaAsset.exists({
+    _id: attempt.identityPhotoAssetId,
+    workspaceId: coordinate.workspaceId,
+    applicationId: coordinate.applicationId,
+    roundId: coordinate.roundId,
+    attemptId: attempt._id,
+    kind: 'identity_photo',
+    state: 'ready',
+    active: true,
+    $or: [
+      { purgeEligibleAt: { $exists: false } },
+      { purgeEligibleAt: { $gt: now } },
+    ],
+  }).session(dbSession)
+  if (!retainedPhoto) {
+    if (attempt.status === 'in_progress') {
+      throw new HireGuestAccessError(
+        'The saved identity photo is no longer available',
+        'GUEST_SESSION_CONFLICT',
+        409,
+      )
+    }
+    return 'identity_photo'
+  }
+  return 'resume'
 }
 
 async function acceptOnce(
@@ -322,11 +385,13 @@ async function acceptOnce(
         }
       }
 
+      const next = await resolveCandidateNextStep(attempt, coordinate, now, dbSession)
       output = await issueSession(
         { ...coordinate, attemptId: attempt._id.toString() },
         round.inviteTokenExpiry,
         now,
         dbSession,
+        next,
       )
     })
     if (!output) {

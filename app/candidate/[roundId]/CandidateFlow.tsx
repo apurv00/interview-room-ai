@@ -23,7 +23,8 @@ type ConsentKey =
   | 'attentionMonitoring'
   | 'aiEvaluation'
 
-type Step = 'consent' | 'code' | 'camera' | 'starting'
+type Step = 'consent' | 'code' | 'camera' | 'resume' | 'starting'
+type CandidateNextStep = 'identity_photo' | 'resume'
 
 const EMPTY_CONSENT: Record<ConsentKey, boolean> = {
   recording: false,
@@ -93,23 +94,20 @@ export default function CandidateFlow({
     }
   }, [step, photo])
 
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
-    }
-  }, [previewUrl])
-
   function setConsent(key: ConsentKey, value: boolean) {
     setAccepted((current) => ({ ...current, [key]: value }))
   }
 
-  function completeCandidateSession(data: { csrfToken?: string }) {
+  function completeCandidateSession(data: {
+    csrfToken?: string
+    next?: CandidateNextStep
+  }) {
     if (!data.csrfToken) {
       setError('The interview session could not be created. Please try again.')
       return
     }
     setCsrfToken(data.csrfToken)
-    setStep('camera')
+    setStep(data.next === 'resume' ? 'resume' : 'camera')
   }
 
   async function begin(e?: FormEvent) {
@@ -128,6 +126,7 @@ export default function CandidateFlow({
         ok?: boolean
         otpRequired?: boolean
         csrfToken?: string
+        next?: CandidateNextStep
         error?: string
       }
       if (!response.ok || !data.ok) {
@@ -160,6 +159,7 @@ export default function CandidateFlow({
       const data = (await response.json().catch(() => ({}))) as {
         ok?: boolean
         csrfToken?: string
+        next?: CandidateNextStep
         reason?: string
       }
       if (!response.ok || !data.ok) {
@@ -198,17 +198,45 @@ export default function CandidateFlow({
     }
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
-    setPreviewUrl(URL.createObjectURL(captured))
+    setPreviewUrl(canvas.toDataURL('image/jpeg', 0.9))
     setPhoto(captured)
   }
 
   function retakePhoto() {
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
     setPreviewUrl(null)
     setPhoto(null)
     setCameraReady(false)
     setCameraError(null)
+  }
+
+  async function openInterview(
+    token: string,
+    fallbackStep: Extract<Step, 'camera' | 'resume'>,
+  ) {
+    setBusy(true)
+    setError(null)
+    setStep('starting')
+    try {
+      const start = await fetch(`/api/candidate/${roundId}/start`, {
+        method: 'POST',
+        headers: { 'x-hire-csrf': token },
+      })
+      const startData = (await start.json().catch(() => ({}))) as {
+        handoffUrl?: string
+        error?: string
+      }
+      if (!start.ok || !startData.handoffUrl) {
+        setStep(fallbackStep)
+        setError(startData.error || 'The interview could not start. Please try again.')
+        return
+      }
+      window.location.assign(startData.handoffUrl)
+    } catch {
+      setStep(fallbackStep)
+      setError('Please check your connection and try again.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function confirmPhoto() {
@@ -229,23 +257,8 @@ export default function CandidateFlow({
         return
       }
 
-      setStep('starting')
-      const start = await fetch(`/api/candidate/${roundId}/start`, {
-        method: 'POST',
-        headers: { 'x-hire-csrf': csrfToken },
-      })
-      const startData = (await start.json().catch(() => ({}))) as {
-        handoffUrl?: string
-        error?: string
-      }
-      if (!start.ok || !startData.handoffUrl) {
-        setStep('camera')
-        setError(startData.error || 'The interview could not start. Please try again.')
-        return
-      }
-      window.location.assign(startData.handoffUrl)
+      await openInterview(csrfToken, 'camera')
     } catch {
-      setStep('camera')
       setError('Please check your connection and try again.')
     } finally {
       setBusy(false)
@@ -261,6 +274,32 @@ export default function CandidateFlow({
     )
   }
 
+  if (step === 'resume') {
+    return (
+      <section className="space-y-4 rounded-2xl border border-[#e1e8ed] bg-white p-6">
+        <div>
+          <h2 className="text-base font-semibold text-[#0f1419]">
+            Your identity photo is saved
+          </h2>
+          <p className="mt-1 text-sm leading-relaxed text-[#536471]">
+            Continue with the secure interview using the photo you already captured.
+          </p>
+        </div>
+        {error && <p className="text-sm text-[#f4212e]" role="alert">{error}</p>}
+        <button
+          type="button"
+          onClick={() => {
+            if (csrfToken) void openInterview(csrfToken, 'resume')
+          }}
+          disabled={busy || !csrfToken}
+          className="w-full rounded-xl bg-[#2563eb] py-2.5 text-sm font-semibold text-white disabled:bg-[#e1e8ed] disabled:text-[#8b98a5]"
+        >
+          {busy ? 'Opening…' : 'Resume secure interview'}
+        </button>
+      </section>
+    )
+  }
+
   if (step === 'camera') {
     return (
       <section className="space-y-4 rounded-2xl border border-[#e1e8ed] bg-white p-6">
@@ -273,7 +312,7 @@ export default function CandidateFlow({
         </div>
         <div className="overflow-hidden rounded-xl bg-slate-950 aspect-video">
           {photo && previewUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- local camera blob preview
+            // eslint-disable-next-line @next/next/no-img-element -- ephemeral local camera data URL
             <img src={previewUrl} alt="Captured identity selfie preview" className="h-full w-full object-cover" />
           ) : (
             <video

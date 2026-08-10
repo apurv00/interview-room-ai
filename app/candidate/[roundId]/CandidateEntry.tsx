@@ -5,6 +5,7 @@ import CandidateFlow from './CandidateFlow'
 import CandidatePrivacyRequest from './CandidatePrivacyRequest'
 
 const INVITE_CAPABILITY = /^[a-f0-9]{24}\.[a-f0-9]{64}$/i
+const INVITE_STORAGE_PREFIX = 'hire:candidate-invite:v1:'
 
 interface CandidateBootstrap {
   state: 'ok' | 'expired' | 'completed' | 'revoked'
@@ -24,7 +25,24 @@ export default function CandidateEntry({ roundId }: { roundId: string }) {
 
   useEffect(() => {
     const fragment = new URLSearchParams(window.location.hash.slice(1))
-    const invite = fragment.get('invite')?.trim() ?? ''
+    const fragmentInvite = fragment.get('invite')?.trim() ?? ''
+    const storageKey = `${INVITE_STORAGE_PREFIX}${roundId}`
+    let storedInvite = ''
+
+    try {
+      storedInvite = window.sessionStorage.getItem(storageKey)?.trim() ?? ''
+      if (INVITE_CAPABILITY.test(fragmentInvite)) {
+        window.sessionStorage.setItem(storageKey, fragmentInvite)
+      }
+    } catch {
+      // Storage may be unavailable; the original fragment still works.
+    }
+
+    const invite = INVITE_CAPABILITY.test(fragmentInvite)
+      ? fragmentInvite
+      : INVITE_CAPABILITY.test(storedInvite)
+        ? storedInvite
+        : ''
 
     // Fragments are never sent in the page request. Scrub the secret from
     // history before the first client-initiated request as well.

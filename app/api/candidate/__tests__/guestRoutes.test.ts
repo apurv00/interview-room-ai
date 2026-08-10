@@ -89,6 +89,7 @@ beforeEach(() => {
     csrfToken: 'cd'.repeat(32),
     consentVersion: 'hire-ai-v1-2026-08-10',
     disclosureDigest: 'ef'.repeat(32),
+    next: 'identity_photo',
     scope: { expiresAt: new Date(Date.now() + 60_000) },
   })
 })
@@ -142,6 +143,25 @@ describe('POST /begin', () => {
     expect(response.headers.get('set-cookie')).toContain('hire_guest=hire-guest-credential')
     expect(response.headers.get('set-cookie')).toContain('HttpOnly')
     expect(response.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('returns a saved-photo resume instruction without recapturing identity media', async () => {
+    mocks.verifyRoundToken.mockResolvedValue(verified('magic_link'))
+    mocks.acceptConsent.mockResolvedValueOnce({
+      credential: 'hire-guest-credential',
+      csrfToken: 'cd'.repeat(32),
+      consentVersion: 'hire-ai-v1-2026-08-10',
+      disclosureDigest: 'ef'.repeat(32),
+      next: 'resume',
+      scope: { expiresAt: new Date(Date.now() + 60_000) },
+    })
+    const response = await begin(
+      request('begin', { capability: CAPABILITY, accepted: ACCEPTED }),
+      { params: { roundId: ROUND_ID } },
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ ok: true, next: 'resume' })
   })
 
   it('sends OTP only to the email stored on the Hire round—even if it matches B2C', async () => {
