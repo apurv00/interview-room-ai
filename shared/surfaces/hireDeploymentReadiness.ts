@@ -188,6 +188,11 @@ export function hireDeploymentConfigurationIssues(
     requireVariables(
       env,
       [
+        // next-auth/middleware reads the conventional secret before its
+        // runtime-surface callback can default-allow the request. Keep this
+        // middleware-only key distinct from the runtime session-signing key
+        // below so a B2C cookie can never authenticate on the engine host.
+        'NEXTAUTH_SECRET',
         'HIRE_RUNTIME_NEXTAUTH_SECRET',
         'HIRE_RUNTIME_FENCE_SECRET',
         'HIRE_CONTROL_INTERNAL_URL',
@@ -204,6 +209,9 @@ export function hireDeploymentConfigurationIssues(
       ],
       issues,
     )
+    if ((env.NEXTAUTH_SECRET?.trim().length ?? 0) < 32) {
+      issues.add('weak:NEXTAUTH_SECRET')
+    }
     if ((env.HIRE_RUNTIME_NEXTAUTH_SECRET?.trim().length ?? 0) < 32) {
       issues.add('weak:HIRE_RUNTIME_NEXTAUTH_SECRET')
     }

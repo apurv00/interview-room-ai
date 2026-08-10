@@ -71,11 +71,11 @@ const BUDGETS = {
   'modules/cms':       { maxLOC: 5_000,  maxFiles: 20 },
   // Added 2026-08-08 with the IPG Hire v2 Phase 1 spine (workspace-based ATS,
   // docs/ipg-hire-build-plan.md). New top-level module so v1 modules/b2b stays
-  // untouched and its 5k budget isn't consumed by v2. Budget sized for all five
-  // build-plan phases: Phase 1 lands ~15 files / ~3k LOC; kits, reports, and
-  // dashboards (Phases 3-5) fit inside 10k/45 without a re-bump.
-  // See docs/adr/0028-hire-module-budget.md.
-  'modules/hire':      { maxLOC: 10_000, maxFiles: 45 },
+  // untouched and its 5k budget isn't consumed by v2. Phase 1's production
+  // control/runtime, tenant, privacy, media, evidence, and delivery seams take
+  // 62 files / ~12.9k LOC; 14k/66 leaves bounded near-term headroom without
+  // folding those auditable boundaries into large files. See ADR 0029.
+  'modules/hire':      { maxLOC: 14_000, maxFiles: 66 },
   // Bumped maxFiles 130 → 132 on 2026-05-23 (PR #402): added
   // shared/hooks/useOnboardingProfile.ts (cross-module client data
   // hook consumed by both @interview/InterviewSetupForm and
@@ -141,7 +141,12 @@ const BUDGETS = {
   // Bumped maxFiles 160 → 167 on 2026-08-04 for the guarded Razorpay payment
   // foundation: six counted cross-domain contracts/persistence files, plus one
   // headroom slot. Runtime rollout gates remain disabled. See ADR 0027.
-  'shared':            { maxLOC: 25_000, maxFiles: 167 },
+  // Bumped maxLOC 25k → 26k and maxFiles 167 → 180 on 2026-08-10 for
+  // Phase 1's cross-surface bridge, database-fence, internal-auth, redirect,
+  // deletion, and deployment-readiness contracts. Actual is 175 / ~25.3k;
+  // the unchanged interview engine and B2C persistence remain outside Hire.
+  // See docs/adr/0029-hire-phase1-bounded-service-budgets.md.
+  'shared':            { maxLOC: 26_000, maxFiles: 180 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   // Bumped maxLOC 14,000 → 16,000 on 2026-07-22 for the bounded A08

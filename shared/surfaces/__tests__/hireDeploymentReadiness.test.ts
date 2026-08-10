@@ -48,7 +48,7 @@ const runtime = {
   IPG_SURFACE: 'hire-engine',
   MONGODB_URI: 'mongodb://mongo.example/ipg-hire-runtime',
   INNGEST_APP_ID: 'ipg-hire-runtime-production',
-  NEXTAUTH_SECRET: 'b2c-shared-secret'.repeat(4),
+  NEXTAUTH_SECRET: 'runtime-middleware-secret'.repeat(3),
   NEXTAUTH_URL: 'https://engine.hire.interviewprep.guru',
   HIRE_RUNTIME_NEXTAUTH_SECRET: 'r'.repeat(64),
   HIRE_RUNTIME_FENCE_SECRET: 'f'.repeat(64),
@@ -96,6 +96,32 @@ describe('Hire deployment readiness', () => {
   it('accepts an isolated production runtime manifest', () => {
     expect(currentDeploymentSurface(runtime)).toBe('hire-engine')
     expect(hireDeploymentConfigurationIssues(runtime)).toEqual([])
+  })
+
+  it('requires a strong runtime middleware secret distinct from the runtime session secret', () => {
+    expect(
+      hireDeploymentConfigurationIssues({
+        ...runtime,
+        NEXTAUTH_SECRET: undefined,
+      }),
+    ).toEqual(expect.arrayContaining([
+      'missing:NEXTAUTH_SECRET',
+      'weak:NEXTAUTH_SECRET',
+    ]))
+
+    expect(
+      hireDeploymentConfigurationIssues({
+        ...runtime,
+        NEXTAUTH_SECRET: 'short',
+      }),
+    ).toContain('weak:NEXTAUTH_SECRET')
+
+    expect(
+      hireDeploymentConfigurationIssues({
+        ...runtime,
+        NEXTAUTH_SECRET: runtime.HIRE_RUNTIME_NEXTAUTH_SECRET,
+      }),
+    ).toContain('collision:nextauth-secrets')
   })
 
   it('rejects database, origin, and Inngest app collisions', () => {
