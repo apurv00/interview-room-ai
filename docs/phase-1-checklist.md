@@ -9,7 +9,7 @@ Plan of record: the task-supplied `ipg-hire-build-plan (1).md` dated August 2026
 - [x] **Manual candidate add.** Candidate and application creation are workspace-scoped, transactionally deduplicated, and retain the member actor snapshot. Covered by intake and pipeline tests.
 - [x] **AI interview invite, consent, and copy-link recovery.** An invite is hashed at rest, expires/revokes, sends through the durable outbox, and has an authenticated copy/retry recovery path. Consent is recorded before any runtime ticket is issued. The controlled production run created and redeemed a live invitation.
 - [x] **Identity photo at interview start.** The candidate flow captures live camera output only, writes it as a private Hire media asset, and persists the ready asset before handoff. The controlled live run stored and read back the photo from private storage with matching dimensions and checksum.
-- [x] **Evidence-linked candidate result.** The isolated runtime now publishes a completed result through the signed control bridge. The controlled live run produced one processed ingestion event, one linked result, three uniquely cited questions/evidence moments, three dimensions, and six findings.
+- [x] **Evidence-linked candidate result.** The isolated runtime now publishes a completed result through the signed control bridge. The controlled live run produced one processed ingestion event, one linked result, three uniquely cited questions/evidence moments, three dimensions, and six findings. An active recruiter card revalidates its private no-store detail response every 15 seconds and stops once publication reaches a terminal state.
 - [x] **Human stage moves and close behavior.** Stage transitions use expected-from CAS and actor/name snapshots; hired and job-close actions require a note; job close creates durable rejection-email outbox work. Covered by pipeline and email-outbox tests.
 
 ## Goal 2 — engine seams and zero B2C writes
@@ -28,7 +28,7 @@ Plan of record: the task-supplied `ipg-hire-build-plan (1).md` dated August 2026
 
 ## Goal 9 — production deliverability and operations
 
-- [x] **Production topology.** Control and runtime are independently deployed and healthy on the same commit `73389d833d40d450dca7a54720761cf9eab9c053`; each reports healthy configuration, MongoDB, Redis, and its expected surface.
+- [x] **Production topology.** Control and runtime are independently deployed and healthy on the same commit `3814336fe5b3761e053c63a84b6efe399fe6dd02`; each reports healthy configuration, MongoDB, Redis, and its expected surface.
 - [x] **Async operations.** Control registers its Hire jobs and runtime registers feedback-recovery/result-publisher jobs. The live completed session was published by the scheduled publisher without a forced replay.
 - [x] **Transactional email and recovery.** Invite and job-close messages use durable provider-idempotent outbox records; failed sends are visible and retryable by an HR member; invite recovery has a copy-link fallback.
 - [x] **DNS authentication is published.** The sending domain has observable SPF, DKIM, and DMARC records; the transactional provider accepted the controlled invite and stored its provider message identifier.
@@ -36,8 +36,8 @@ Plan of record: the task-supplied `ipg-hire-build-plan (1).md` dated August 2026
 
 ## Verification record
 
-- [x] **Automated validation.** On commit `73389d83`: `npx vitest run` passed 9,056 tests (18 skipped); `npx tsc --noEmit --pretty false`, `npm run build`, `git diff --check`, and the protected-path diff check all passed.
-- [x] **GitHub CI.** PR #620 is clean and its CI and commit-message checks passed for the current head.
+- [x] **Automated validation.** On commit `73389d83`: `npx vitest run` passed 9,056 tests (18 skipped); `npx tsc --noEmit --pretty false`, `npm run build`, `git diff --check`, and the protected-path diff check all passed. The recruiter refresh follow-up at `3814336f` passed its focused UI tests, TypeScript, ESLint, production build, and whitespace checks.
+- [x] **GitHub CI.** PR #620 is clean and its CI and commit-message checks passed for `3814336f`.
 - [x] **Live AI spine to evidence.** The controlled production candidate completed the interview; runtime feedback existed; control ingested a single result and linked it to the application with valid evidence references.
 
 ## Remaining done-when gates
