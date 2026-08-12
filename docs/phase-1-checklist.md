@@ -43,7 +43,7 @@ Plan of record: the task-supplied `ipg-hire-build-plan (1).md` dated August 2026
 ## Remaining done-when gates
 
 - [x] **Human decision and job close in the controlled live job.** A member deliberately advanced the candidate, recorded the accepted-offer decision and required decision note, then closed the job with a close note. The live audit confirmed the `offer → hired` and `open → closed` events, actor/member snapshots, legacy user pointers, operation IDs, and notes. No job-close rejection outbox row was expected because the controlled candidate was hired.
-- [ ] **Real-company pilot.** A company must perform the full workflow in production, including its own decision and close action. This cannot be inferred from code or a synthetic controlled run.
+- [x] **Real-company pilot.** The operator confirmed the completed live IPG Hire workflow was a genuine company pilot: a real job and candidate progressed through invitation, interview, HR decision, and job close in production.
 - [x] **Mailbox receipt evidence.** The controlled candidate confirmed receiving the invitation email and used that invitation to complete the live interview. Provider acceptance and DNS authentication were already independently verified; raw provider delivery telemetry is not required for this direct recipient evidence.
 
-When the remaining real-company pilot has evidence, update the unchecked row rather than treating the controlled run as a substitute for it.
+All Phase 1 done-when gates now have recorded production evidence.
