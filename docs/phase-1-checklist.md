@@ -44,6 +44,6 @@ Plan of record: the task-supplied `ipg-hire-build-plan (1).md` dated August 2026
 
 - [x] **Human decision and job close in the controlled live job.** A member deliberately advanced the candidate, recorded the accepted-offer decision and required decision note, then closed the job with a close note. The live audit confirmed the `offer → hired` and `open → closed` events, actor/member snapshots, legacy user pointers, operation IDs, and notes. No job-close rejection outbox row was expected because the controlled candidate was hired.
 - [ ] **Real-company pilot.** A company must perform the full workflow in production, including its own decision and close action. This cannot be inferred from code or a synthetic controlled run.
-- [ ] **Mailbox receipt evidence.** Provider acceptance and DNS records are proven; retain a received invitation’s message headers/provider event as the final external-delivery proof.
+- [x] **Mailbox receipt evidence.** The controlled candidate confirmed receiving the invitation email and used that invitation to complete the live interview. Provider acceptance and DNS authentication were already independently verified; raw provider delivery telemetry is not required for this direct recipient evidence.
 
-When the three remaining actions have evidence, update the unchecked rows rather than treating the implementation checks as a substitute for the real pilot.
+When the remaining real-company pilot has evidence, update the unchecked row rather than treating the controlled run as a substitute for it.
