@@ -42,7 +42,7 @@ Plan of record: the task-supplied `ipg-hire-build-plan (1).md` dated August 2026
 
 ## Remaining done-when gates
 
-- [ ] **Human decision and job close in the controlled live job.** A member must deliberately choose the candidate outcome, enter the required note, and close the job. This checklist does not make that hiring decision automatically.
+- [x] **Human decision and job close in the controlled live job.** A member deliberately advanced the candidate, recorded the accepted-offer decision and required decision note, then closed the job with a close note. The live audit confirmed the `offer → hired` and `open → closed` events, actor/member snapshots, legacy user pointers, operation IDs, and notes. No job-close rejection outbox row was expected because the controlled candidate was hired.
 - [ ] **Real-company pilot.** A company must perform the full workflow in production, including its own decision and close action. This cannot be inferred from code or a synthetic controlled run.
 - [ ] **Mailbox receipt evidence.** Provider acceptance and DNS records are proven; retain a received invitation’s message headers/provider event as the final external-delivery proof.
 
