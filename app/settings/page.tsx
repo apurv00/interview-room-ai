@@ -76,15 +76,44 @@ export default function SettingsPage() {
   const [deleteConfirmEmail, setDeleteConfirmEmail] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deleteOperationId, setDeleteOperationId] = useState<string | null>(null)
+  const [hireWorkspaceName, setHireWorkspaceName] = useState<string | null>(null)
+  const [hireWorkspaceConfirmation, setHireWorkspaceConfirmation] = useState('')
+  const [hireWorkspaceAcknowledged, setHireWorkspaceAcknowledged] = useState(false)
 
   async function handleDeleteAccount() {
     if (deleting) return
     setDeleting(true)
     setDeleteError(null)
     try {
-      const res = await fetch('/api/account', { method: 'DELETE' })
+      const operationId = deleteOperationId ?? crypto.randomUUID()
+      setDeleteOperationId(operationId)
+      const res = await fetch('/api/account', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operationId,
+          ...(hireWorkspaceName
+            ? {
+                workspaceConfirmationName: hireWorkspaceConfirmation,
+                acknowledgeWorkspaceDeletion: hireWorkspaceAcknowledged,
+              }
+            : {}),
+        }),
+      })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
+        if (
+          data?.code === 'HIRE_WORKSPACE_DELETE_CONFIRMATION_REQUIRED' &&
+          typeof data.workspaceName === 'string'
+        ) {
+          setHireWorkspaceName(data.workspaceName)
+          setDeleteError(
+            'This is the sole administrator account. Confirm the hiring workspace deletion below.',
+          )
+          setDeleting(false)
+          return
+        }
         setDeleteError(data?.error || 'Could not delete account. Please try again.')
         setDeleting(false)
         return
@@ -636,7 +665,15 @@ export default function SettingsPage() {
         </p>
         <button
           type="button"
-          onClick={() => { setDeleteOpen(true); setDeleteConfirmEmail(''); setDeleteError(null) }}
+          onClick={() => {
+            setDeleteOpen(true)
+            setDeleteConfirmEmail('')
+            setDeleteError(null)
+            setDeleteOperationId(null)
+            setHireWorkspaceName(null)
+            setHireWorkspaceConfirmation('')
+            setHireWorkspaceAcknowledged(false)
+          }}
           className="px-4 py-2 rounded-lg border border-red-300 text-sm font-medium text-red-700 hover:bg-red-50 transition"
         >
           Delete account
@@ -669,6 +706,37 @@ export default function SettingsPage() {
               disabled={deleting}
               aria-label="Confirm email"
             />
+            {hireWorkspaceName && (
+              <div className="mt-4 space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+                <p className="text-sm text-amber-950">
+                  Deleting this sole administrator account also schedules the hiring
+                  workspace for deletion. It remains recoverable for 30 days, then its
+                  jobs, candidates, and media are permanently purged.
+                </p>
+                <label className="block text-sm text-amber-950">
+                  Type <span className="font-mono font-semibold">{hireWorkspaceName}</span>{' '}
+                  to confirm
+                  <input
+                    type="text"
+                    value={hireWorkspaceConfirmation}
+                    onChange={(event) => setHireWorkspaceConfirmation(event.target.value)}
+                    className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    disabled={deleting}
+                    aria-label="Confirm hiring workspace name"
+                  />
+                </label>
+                <label className="flex items-start gap-2 text-sm text-amber-950">
+                  <input
+                    type="checkbox"
+                    checked={hireWorkspaceAcknowledged}
+                    onChange={(event) => setHireWorkspaceAcknowledged(event.target.checked)}
+                    className="mt-0.5"
+                    disabled={deleting}
+                  />
+                  <span>I understand the hiring workspace enters a 30-day deletion period.</span>
+                </label>
+              </div>
+            )}
             {deleteError && (
               <p className="text-xs text-red-600 mt-2" role="alert">{deleteError}</p>
             )}
@@ -684,7 +752,13 @@ export default function SettingsPage() {
               <button
                 type="button"
                 onClick={handleDeleteAccount}
-                disabled={deleting || deleteConfirmEmail.trim().toLowerCase() !== session.user.email.toLowerCase()}
+                disabled={
+                  deleting ||
+                  deleteConfirmEmail.trim().toLowerCase() !== session.user.email.toLowerCase() ||
+                  (hireWorkspaceName !== null &&
+                    (hireWorkspaceConfirmation !== hireWorkspaceName ||
+                      !hireWorkspaceAcknowledged))
+                }
                 className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {deleting ? 'Deleting…' : 'Delete forever'}

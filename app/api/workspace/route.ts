@@ -5,7 +5,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
+import { composeHireApiRoute } from './_lib/composeHireApiRoute'
 import {
   createWorkspace,
   getWorkspaceForUser,
@@ -20,11 +20,8 @@ import { serializeMembership } from './_lib/serialize'
 
 export const dynamic = 'force-dynamic'
 
-export const GET = composeApiRoute({
+export const GET = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-ws' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user }) {
     const ctx = await getWorkspaceForUser({ userId: user.id, email: user.email })
     if (!ctx) return NextResponse.json({ workspace: null, membership: null })
@@ -32,12 +29,9 @@ export const GET = composeApiRoute({
   },
 })
 
-export const POST = composeApiRoute<CreateWorkspacePayload>({
+export const POST = composeHireApiRoute<CreateWorkspacePayload>({
   schema: CreateWorkspaceSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 5, keyPrefix: 'rl:hire-ws-create' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, body }) {
     const ctx = await createWorkspace(
       { userId: user.id, email: user.email },
@@ -47,12 +41,9 @@ export const POST = composeApiRoute<CreateWorkspacePayload>({
   },
 })
 
-export const PATCH = composeApiRoute<UpdateWorkspaceSettingsPayload>({
+export const PATCH = composeHireApiRoute<UpdateWorkspaceSettingsPayload>({
   schema: UpdateWorkspaceSettingsSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:hire-ws-settings' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, body }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const workspace = await updateWorkspaceSettings(ctx, body)

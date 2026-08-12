@@ -15,6 +15,11 @@ import { useEffect, useState } from 'react'
 import { signOut, useSession } from 'next-auth/react'
 import { clearAllInterviewStorage } from '@shared/storageKeys'
 
+interface HireMemberSessionView {
+  authenticated: boolean
+  member?: { name: string; email: string; role: 'admin' | 'member' }
+}
+
 const NAV = [
   { href: '/workspace/jobs', label: 'Jobs', icon: '📋' },
   { href: '/workspace/candidates', label: 'Candidates', icon: '👥' },
@@ -25,13 +30,29 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
   const pathname = usePathname()
   const router = useRouter()
   const { data: session, status } = useSession()
+  const [hireSession, setHireSession] = useState<HireMemberSessionView | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.replace(`/signin?callbackUrl=${encodeURIComponent(pathname ?? '/workspace')}`)
+    let live = true
+    void fetch('/api/hire-auth/session', { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((value: HireMemberSessionView) => {
+        if (live) setHireSession(value)
+      })
+      .catch(() => {
+        if (live) setHireSession({ authenticated: false })
+      })
+    return () => {
+      live = false
     }
-  }, [status, router, pathname])
+  }, [])
+
+  useEffect(() => {
+    if (status === 'unauthenticated' && hireSession?.authenticated === false) {
+      router.replace('/hire-signin')
+    }
+  }, [status, hireSession, router, pathname])
 
   const nav = (
     <nav className="flex-1 px-3 py-4 space-y-1">
@@ -67,14 +88,21 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
 
   const userBlock = (
     <div className="px-5 py-4 border-t border-[#e1e8ed] text-sm">
-      <p className="truncate text-[#0f1419]">{session?.user?.email ?? ''}</p>
+      <p className="truncate text-[#0f1419]">
+        {hireSession?.member?.email ?? session?.user?.email ?? ''}
+      </p>
       <button
         onClick={async () => {
           // Shared-browser privacy: scrub account-bound state BEFORE the
           // session ends (same contract as AppShell/Resume; pinned by
           // shared/layout/__tests__/signOutStorage.test.tsx).
           await clearAllInterviewStorage()
-          await signOut({ callbackUrl: '/' })
+          await fetch('/api/hire-auth/signout', { method: 'POST' }).catch(() => undefined)
+          if (session?.user) {
+            await signOut({ callbackUrl: '/hire-signin' })
+          } else {
+            window.location.assign('/hire-signin')
+          }
         }}
         className="mt-1 text-xs text-[#71767b] hover:text-[#f4212e] transition-colors"
       >

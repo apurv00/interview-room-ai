@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
+import { z } from 'zod'
 import { authOptions } from '@shared/auth/authOptions'
 import {
   AccountDeletionForbiddenError,
@@ -7,6 +8,10 @@ import {
   AccountDeletionNotFoundError,
   deleteUserAccount,
 } from '@shared/services/accountDeletion'
+import {
+  HireMemberDeletionBlockedError,
+  HireMemberDeletionBridgeUnavailableError,
+} from '@shared/services/hireMemberDeletionBridgeClient'
 import { logger } from '@shared/logger'
 
 export const dynamic = 'force-dynamic'
@@ -23,18 +28,58 @@ export const dynamic = 'force-dynamic'
  * does not revoke an already-issued cookie; the durable account write fence
  * is the server-side authority after deletion begins.
  */
-export async function DELETE() {
+const AccountDeletionRequestSchema = z
+  .object({
+    operationId: z.string().uuid().optional(),
+    workspaceConfirmationName: z.string().min(1).max(120).optional(),
+    acknowledgeWorkspaceDeletion: z.literal(true).optional(),
+  })
+  .strict()
+
+export async function DELETE(req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   try {
+    const requestText = await req.text()
+    const hireDeletion = requestText
+      ? AccountDeletionRequestSchema.parse(JSON.parse(requestText))
+      : undefined
     // The service loads current email/role from Mongo while claiming the
     // deletion lifecycle. JWT snapshots are not privacy authority.
-    const result = await deleteUserAccount(session.user.id)
+    const result = hireDeletion
+      ? await deleteUserAccount(session.user.id, hireDeletion)
+      : await deleteUserAccount(session.user.id)
     return NextResponse.json({ ok: true, ...result })
   } catch (err) {
+    if (err instanceof z.ZodError || err instanceof SyntaxError) {
+      return NextResponse.json({ error: 'Invalid deletion confirmation' }, { status: 400 })
+    }
+    if (err instanceof HireMemberDeletionBlockedError) {
+      return NextResponse.json(
+        {
+          error: err.message,
+          code: err.code,
+          ...(err.workspaceName ? { workspaceName: err.workspaceName } : {}),
+        },
+        { status: 409 },
+      )
+    }
+    if (err instanceof HireMemberDeletionBridgeUnavailableError) {
+      logger.error(
+        { err, userId: session.user.id },
+        'Account deletion blocked because the Hire membership preflight is unavailable',
+      )
+      return NextResponse.json(
+        {
+          error: 'We could not verify your hiring workspace membership. Please retry before deleting your account.',
+          code: 'HIRE_DELETION_PREFLIGHT_UNAVAILABLE',
+        },
+        { status: 503 },
+      )
+    }
     if (err instanceof AccountDeletionForbiddenError) {
       return NextResponse.json(
         { error: 'Platform admins cannot self-delete via this endpoint. Contact support.' },

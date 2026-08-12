@@ -1,9 +1,7 @@
 /**
- * Contract test: EVERY member-facing workspace route must carry the
- * account-lifecycle egress fence (requireActiveAccount) — a deleted or
- * deleting account holding a still-valid 7-day JWT must not be able to read
- * or mutate hiring data (Codex P1 on #604). Source-level assertion so a new
- * route added without the fence fails here, not in production.
+ * Contract test: every member-facing workspace route uses the Hire-aware
+ * principal boundary. It re-resolves Hire member sessions without touching
+ * User and retains the B2C deletion fence for legacy principals.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -12,6 +10,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
 const API_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const COMPOSE_HIRE = readFileSync(join(API_ROOT, '_lib/composeHireApiRoute.ts'), 'utf8')
 
 function routeFiles(dir: string): string[] {
   const out: string[] = []
@@ -35,20 +34,31 @@ describe('workspace API fence contract', () => {
   })
 
   it.each(files.map((f) => [f.slice(API_ROOT.length + 1), f]))(
-    '%s: every composeApiRoute handler carries requireActiveAccount',
-    (_label, file) => {
+    '%s: uses the Hire principal boundary',
+    (label, file) => {
       const src = readFileSync(file as string, 'utf8')
-      // Call sites only — `composeApiRoute<T>({` or `composeApiRoute({` —
-      // the import line matches neither. STRICT on purpose: there is no
-      // hand-rolled exemption. Multipart routes belong on composeApiRoute
-      // too — omit `schema` and the middleware never reads the body
-      // (jobs/[jobId]/intake is the precedent, Codex round on #612).
-      const calls = (src.match(/composeApiRoute[<(]/g) ?? []).length
-      const fences = (src.match(/requireActiveAccount:\s*true/g) ?? []).length
-      expect(calls).toBeGreaterThan(0)
-      expect(fences).toBe(calls)
+      expect(src).not.toContain('@shared/middleware/composeApiRoute')
+      expect(src).not.toMatch(/\bcomposeApiRoute[<(]/)
+      expect(src).not.toContain('requireActiveAccount')
+
+      // Call sites only — import lines do not match this expression.
+      expect((src.match(/composeHireApiRoute[<(]/g) ?? []).length).toBeGreaterThan(0)
     }
   )
+
+  it('rechecks the correct identity system on success, exception, and long requests', () => {
+    expect(COMPOSE_HIRE).toContain("kind: 'hire_member'")
+    expect(COMPOSE_HIRE).toContain('resolveHireMemberSession(principal.rawHireToken)')
+    expect(COMPOSE_HIRE).toContain('isPrincipalActive: () => principalStillActive(principal, req)')
+    expect(COMPOSE_HIRE).toContain('catch (handlerError)')
+    expect((COMPOSE_HIRE.match(/principalStillActive\(principal, req\)/g) ?? []).length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('permits only the exact workspace GET/POST bootstrap without weakening removal races', () => {
+    expect(COMPOSE_HIRE).toContain("req.nextUrl.pathname === '/api/workspace'")
+    expect(COMPOSE_HIRE).toContain("req.method === 'GET' || req.method === 'POST'")
+    expect(COMPOSE_HIRE).toContain('workspaceIdAtEntry')
+  })
 })
 
 /**

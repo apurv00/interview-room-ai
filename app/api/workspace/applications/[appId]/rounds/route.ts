@@ -6,18 +6,15 @@
  */
 
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { requireMembership, sendAiRound, SendAiRoundSchema, type SendAiRoundPayload } from '@hire'
 import { serializeRound } from '../../../_lib/serialize'
+import { composeHireApiRoute } from '../../../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
-export const POST = composeApiRoute<SendAiRoundPayload>({
+export const POST = composeHireApiRoute<SendAiRoundPayload>({
   schema: SendAiRoundSchema,
   rateLimit: { windowMs: 60_000, maxRequests: 10, keyPrefix: 'rl:hire-round-send' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, body, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const result = await sendAiRound(ctx, {

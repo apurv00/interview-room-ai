@@ -1,17 +1,14 @@
 /** POST /api/workspace/rounds/[roundId]/revoke — kill an invite link. */
 
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
 import { requireMembership, revokeRound } from '@hire'
 import { serializeRound } from '../../../_lib/serialize'
+import { composeHireApiRoute } from '../../../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
-export const POST = composeApiRoute({
+export const POST = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 20, keyPrefix: 'rl:hire-round-revoke' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const round = await revokeRound(ctx, params.roundId)

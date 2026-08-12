@@ -43,30 +43,16 @@ export {
 export {
   sendAiRound,
   verifyRoundToken,
-  recordConsent,
-  bindGuestUser,
-  prepareRound,
   revokeRound,
   sha256,
   buildJdSnapshot,
-  guestEmailForRound,
-  HIRE_CONSENT_VERSION,
   AI_ROUND_INTERVIEW_TYPE,
   INVITE_TOKEN_EXPIRY_DAYS,
-  POST_AUTH_GRACE_DAYS,
   type SendAiRoundInput,
   type SendAiRoundResult,
   type VerifiedRound,
   type RoundTokenState,
-  type GuestInterviewConfig,
 } from './services/aiRoundService'
-
-// Completion reconciliation (read-only against the engine)
-export {
-  reconcileApplicationRounds,
-  buildResultsSnapshot,
-  type RoundActivity,
-} from './services/roundLinkService'
 
 // Phase 2 intake: idempotent bulk/apply-page candidate creation + dedupe
 export {
@@ -96,6 +82,19 @@ export {
 
 // Emails
 export { buildAiInviteEmail, type AiInviteEmailParams } from './emails/aiInviteEmail'
+export {
+  createAiInviteDeliveryRecord,
+  deliverAiInvite,
+  getAiInviteDeliveryViews,
+  type AiInviteDeliveryResult,
+  type AiInviteDeliveryView,
+} from './services/aiInviteDeliveryService'
+export {
+  getJobCloseEmailDelivery,
+  retryFailedJobCloseEmails,
+  type HireJobEmailDeliveryFailure,
+  type HireJobEmailDeliverySummary,
+} from './services/emailOutboxService'
 
 // Validators
 export * from './validators/hire'

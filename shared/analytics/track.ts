@@ -29,6 +29,10 @@
  */
 
 import type { EventName, EventProps, UserTraits } from './events'
+import {
+  isHireIsolatedSurface,
+  resolveDeploymentSurface,
+} from '@shared/surfaces/hireSurfaceIsolation'
 
 declare global {
   interface Window {
@@ -46,6 +50,42 @@ const DISTINCT_ID_KEY = 'ipg_distinct_id'
 const ADMIN_ROUTE_PREFIXES = ['/cms', '/workspace'] as const
 
 const GA_STRING_PROP_LIMIT = 500
+
+const SECRET_QUERY_KEYS = new Set([
+  'access_token',
+  'code',
+  'handoff',
+  'handoff_code',
+  'id_token',
+  'invite',
+  'invite_token',
+  'key',
+  'otp',
+  'refresh_token',
+  'secret',
+  'setup',
+  'setup_token',
+  'sig',
+  'signature',
+  'ticket',
+  'token',
+  'verification_code',
+])
+
+function isProductAnalyticsBlocked(): boolean {
+  if (typeof window === 'undefined') return true
+
+  const configuredSurface = document.documentElement.dataset.ipgSurface
+  const deploymentSurface = resolveDeploymentSurface({
+    configuredSurface,
+    hostname: window.location.hostname,
+  })
+
+  return isHireIsolatedSurface({
+    deploymentSurface,
+    pathname: window.location.pathname,
+  })
+}
 
 function getDistinctId(): string {
   if (typeof window === 'undefined') return 'server'
@@ -100,7 +140,6 @@ function dispatchToGa(
   }
 }
 
-
 /**
  * Some URLs ARE credentials: /apply/<token>, /scorecard/<token> and
  * /candidate/<roundId> carry a secret in the path whose server-side value
@@ -117,11 +156,26 @@ export function redactSecretPathSegments(pathname: string): string {
   return pathname.replace(SECRET_PATH_RE, (_m, prefix: string) => `/${prefix}/[redacted]`)
 }
 
-/** Same redaction applied to a full URL (href), preserving origin + query. */
+/**
+ * Same path redaction applied to a full URL. Query credentials are removed,
+ * nested URL values are sanitized recursively, and fragments are discarded;
+ * ordinary attribution parameters remain available to product analytics.
+ */
 export function redactSecretUrl(rawUrl: string): string {
   try {
     const url = new URL(rawUrl)
     url.pathname = redactSecretPathSegments(url.pathname)
+    for (const [key, value] of Array.from(url.searchParams.entries())) {
+      if (SECRET_QUERY_KEYS.has(key.toLowerCase())) {
+        url.searchParams.delete(key)
+        continue
+      }
+
+      if (/^https?:\/\//i.test(value)) {
+        url.searchParams.set(key, redactSecretUrl(value))
+      }
+    }
+    url.hash = ''
     return url.toString()
   } catch {
     return rawUrl
@@ -133,6 +187,7 @@ export function track<E extends EventName>(
   properties: EventProps<E>
 ): void {
   if (typeof window === 'undefined') return
+  if (isProductAnalyticsBlocked()) return
 
   const apiKey = process.env.NEXT_PUBLIC_POSTHOG_KEY
   if (apiKey) {

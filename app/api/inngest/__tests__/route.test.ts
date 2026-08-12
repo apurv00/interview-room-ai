@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const { mockServe, paymentRecoveryJob, retentionJob, sourceValidateJob, trackerStatusSweepJob } = vi.hoisted(() => ({
+const {
+  mockServe,
+  paymentRecoveryJob,
+  retentionJob,
+  sourceValidateJob,
+  trackerStatusSweepJob,
+  hireLifecycleRetentionJob,
+} = vi.hoisted(() => ({
   mockServe: vi.fn(() => ({ GET: vi.fn(), POST: vi.fn(), PUT: vi.fn() })),
   paymentRecoveryJob: { id: 'payment-recovery-sentinel' },
   retentionJob: { id: 'retention-sentinel' },
   sourceValidateJob: { id: 'source-validate-sentinel' },
   trackerStatusSweepJob: { id: 'tracker-status-sweep-sentinel' },
+  hireLifecycleRetentionJob: { id: 'hire-lifecycle-retention-sentinel' },
 }))
 
 vi.mock('inngest/next', () => ({ serve: mockServe }))
@@ -40,6 +48,16 @@ vi.mock('@jobs/jobs/linkCheckJobs', () => ({ jobsLinkCheckJob: { id: 'link-check
 vi.mock('@jobs/jobs/retentionSweepJob', () => ({ jobsRetentionSweepJob: retentionJob }))
 vi.mock('@jobs/jobs/trackerStatusSweepJob', () => ({ jobsTrackerStatusSweepJob: trackerStatusSweepJob }))
 vi.mock('@payments/jobs/paymentRecoveryJob', () => ({ paymentRecoveryJob }))
+vi.mock('@hire/jobs/emailOutboxJob', () => ({ hireEmailOutboxJob: { id: 'hire-email' } }))
+vi.mock('@hire/jobs/mediaRetentionJob', () => ({ hireMediaRetentionJob: { id: 'hire-media' } }))
+vi.mock('@hire/jobs/engineRevocationJob', () => ({ hireEngineRevocationJob: { id: 'hire-revoke' } }))
+vi.mock('@hire/jobs/lifecycleRetentionJob', () => ({ hireLifecycleRetentionJob }))
+vi.mock('@modules/hire-runtime/jobs/feedbackRecoveryJob', () => ({
+  hireRuntimeFeedbackRecoveryJob: { id: 'hire-runtime-feedback' },
+}))
+vi.mock('@modules/hire-runtime/jobs/resultPublisherJob', () => ({
+  hireRuntimeResultPublisherJob: { id: 'hire-runtime-result' },
+}))
 
 import '../route'
 
@@ -66,5 +84,41 @@ describe('Inngest route registration', () => {
     expect(mockServe).toHaveBeenCalledOnce()
     const options = mockServe.mock.calls[0][0] as { functions: unknown[] }
     expect(options.functions.filter((fn) => fn === paymentRecoveryJob)).toHaveLength(1)
+  })
+
+  it('registers lifecycle retention only on the Hire control surface', async () => {
+    const previousSurface = process.env.IPG_SURFACE
+    try {
+      process.env.IPG_SURFACE = 'hire-control'
+      mockServe.mockClear()
+      vi.resetModules()
+      await import('../route')
+      const options = mockServe.mock.calls[0][0] as { functions: unknown[] }
+      expect(options.functions.filter((fn) => fn === hireLifecycleRetentionJob)).toHaveLength(1)
+      expect(options.functions).not.toContain(retentionJob)
+    } finally {
+      if (previousSurface === undefined) delete process.env.IPG_SURFACE
+      else process.env.IPG_SURFACE = previousSurface
+    }
+  })
+
+  it('registers only feedback recovery and result publication on the runtime surface', async () => {
+    const previousSurface = process.env.IPG_SURFACE
+    try {
+      process.env.IPG_SURFACE = 'hire-engine'
+      mockServe.mockClear()
+      vi.resetModules()
+      await import('../route')
+      const options = mockServe.mock.calls[0][0] as {
+        functions: Array<{ id: string }>
+      }
+      expect(options.functions.map((fn) => fn.id)).toEqual([
+        'hire-runtime-feedback',
+        'hire-runtime-result',
+      ])
+    } finally {
+      if (previousSurface === undefined) delete process.env.IPG_SURFACE
+      else process.env.IPG_SURFACE = previousSurface
+    }
   })
 })

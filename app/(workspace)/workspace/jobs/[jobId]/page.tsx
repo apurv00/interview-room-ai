@@ -16,8 +16,18 @@ import StateView from '@shared/ui/StateView'
 import { scoreBand } from '@shared/ui/ScoreBar'
 import BulkUploadPanel from './BulkUploadPanel'
 
-const STAGES = ['new', 'screened', 'interviewing', 'shortlist', 'offer', 'hired', 'rejected'] as const
+const STAGES = [
+  'new',
+  'screened',
+  'interviewing',
+  'shortlist',
+  'offer',
+  'hired',
+  'rejected',
+  'withdrawn',
+] as const
 type Stage = (typeof STAGES)[number]
+type StageAction = 'advance' | 'reject' | 'withdraw' | 'offer_accepted' | 'offer_declined'
 
 const STAGE_LABEL: Record<Stage, string> = {
   new: 'New',
@@ -27,6 +37,7 @@ const STAGE_LABEL: Record<Stage, string> = {
   offer: 'Offer',
   hired: 'Hired',
   rejected: 'Rejected',
+  withdrawn: 'Withdrawn',
 }
 
 interface Entry {
@@ -34,6 +45,12 @@ interface Entry {
     id: string
     stage: Stage
     decisionNote: string | null
+    offerDecision: {
+      outcome: 'accepted' | 'declined'
+      actorName: string
+      note: string | null
+      at: string
+    } | null
     createdAt: string
   }
   candidate: { id: string; name: string; email: string } | null
@@ -55,6 +72,7 @@ interface JobDetail {
   title: string
   status: 'open' | 'on_hold' | 'closed'
   closeNote: string | null
+  closedByName: string | null
   jdText: string
   /** Public apply page live? The token itself is never sent to the client. */
   applyPageEnabled: boolean
@@ -64,6 +82,32 @@ interface PoolCandidate {
   id: string
   name: string
   email: string
+}
+
+interface EmailDeliveryFailure {
+  recipientEmail: string
+  recipientName: string
+  attempts: number
+  lastError: string | null
+  failedAt: string
+}
+
+interface EmailDeliverySummary {
+  total: number
+  pending: number
+  sending: number
+  sent: number
+  failed: number
+  failures: EmailDeliveryFailure[]
+}
+
+const EMPTY_EMAIL_DELIVERY: EmailDeliverySummary = {
+  total: 0,
+  pending: 0,
+  sending: 0,
+  sent: 0,
+  failed: 0,
+  failures: [],
 }
 
 function roundChip(round: Entry['latestRound']): { label: string; variant: 'default' | 'primary' | 'success' | 'caution' | 'danger' } | null {
@@ -89,8 +133,11 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const [job, setJob] = useState<JobDetail | null>(null)
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [pool, setPool] = useState<PoolCandidate[]>([])
+  const [emailDelivery, setEmailDelivery] = useState<EmailDeliverySummary>(EMPTY_EMAIL_DELIVERY)
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [emailRetryNotice, setEmailRetryNotice] = useState<string | null>(null)
+  const [retryingEmails, setRetryingEmails] = useState(false)
   const [busy, setBusy] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   const [showBulk, setShowBulk] = useState(false)
@@ -101,8 +148,24 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const [selectedPoolId, setSelectedPoolId] = useState('')
   const [showClose, setShowClose] = useState(false)
   const [closeNote, setCloseNote] = useState('')
-  const [noteFor, setNoteFor] = useState<{ appId: string; action: 'advance' | 'reject' } | null>(null)
+  const [noteFor, setNoteFor] = useState<{
+    appId: string
+    expectedFrom: Stage
+    action: StageAction
+  } | null>(null)
   const [note, setNote] = useState('')
+  const [closeOperationId, setCloseOperationId] = useState<string | null>(null)
+  const [statusCommand, setStatusCommand] = useState<{
+    expectedStatus: JobDetail['status']
+    status: JobDetail['status']
+    operationId: string
+  } | null>(null)
+  const [stageCommand, setStageCommand] = useState<{
+    appId: string
+    expectedFrom: Stage
+    action: StageAction
+    operationId: string
+  } | null>(null)
 
   const load = useCallback(async () => {
     setError(null)
@@ -112,6 +175,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       if (!res.ok) throw new Error(data.error)
       setJob(data.job)
       setEntries(data.entries)
+      setEmailDelivery(data.emailDelivery ?? EMPTY_EMAIL_DELIVERY)
     } catch {
       setError('Could not load this job.')
     }
@@ -131,12 +195,14 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
     try {
       const res = await fetch(`/api/workspace/jobs/${params.jobId}/apply-link`, { method: 'POST' })
       const data = await res.json()
-      if (!res.ok) {
+      if (!res.ok || typeof data.capability !== 'string') {
         setActionError(data.error || 'Could not create the apply link.')
         return
       }
       // Shown once — the server stores only a hash and can never return it again.
-      setApplyLink(`${window.location.origin}/apply/${data.token}`)
+      setApplyLink(
+        `${window.location.origin}/apply#apply=${encodeURIComponent(data.capability)}`,
+      )
       await load()
     } finally {
       setApplyBusy(false)
@@ -201,19 +267,40 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
     }
   }
 
-  async function moveStage(appId: string, action: 'advance' | 'reject', moveNote?: string) {
+  async function moveStage(
+    appId: string,
+    expectedFrom: Stage,
+    action: StageAction,
+    moveNote?: string,
+  ) {
+    if (action === 'offer_accepted' && !moveNote) {
+      setNoteFor({ appId, expectedFrom, action })
+      return
+    }
     setBusy(true)
     setActionError(null)
     try {
+      const operationId =
+        stageCommand?.appId === appId &&
+        stageCommand.expectedFrom === expectedFrom &&
+        stageCommand.action === action
+          ? stageCommand.operationId
+          : crypto.randomUUID()
+      setStageCommand({ appId, expectedFrom, action, operationId })
       const res = await fetch(`/api/workspace/applications/${appId}/stage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, ...(moveNote ? { note: moveNote } : {}) }),
+        body: JSON.stringify({
+          action,
+          expectedFrom,
+          operationId,
+          ...(moveNote ? { note: moveNote } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok) {
         if (data.code === 'DECISION_NOTE_REQUIRED') {
-          setNoteFor({ appId, action })
+          setNoteFor({ appId, expectedFrom, action })
           return
         }
         setActionError(data.error || 'Could not move the candidate.')
@@ -221,6 +308,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       }
       setNoteFor(null)
       setNote('')
+      setStageCommand(null)
       await load()
     } catch {
       setActionError('Something went wrong. Check your connection.')
@@ -231,13 +319,21 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
 
   async function closeJob(e: React.FormEvent) {
     e.preventDefault()
+    if (!job) return
     setBusy(true)
     setActionError(null)
     try {
+      const operationId = closeOperationId ?? crypto.randomUUID()
+      setCloseOperationId(operationId)
       const res = await fetch(`/api/workspace/jobs/${params.jobId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'closed', closeNote: closeNote.trim() }),
+        body: JSON.stringify({
+          status: 'closed',
+          expectedStatus: job.status,
+          operationId,
+          closeNote: closeNote.trim(),
+        }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -245,11 +341,71 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
         return
       }
       setShowClose(false)
+      setCloseOperationId(null)
       await load()
     } catch {
       setActionError('Something went wrong. Check your connection.')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function changeJobStatus(status: 'open' | 'on_hold') {
+    if (!job || status === job.status) return
+    const command =
+      statusCommand?.expectedStatus === job.status && statusCommand.status === status
+        ? statusCommand
+        : { expectedStatus: job.status, status, operationId: crypto.randomUUID() }
+    setStatusCommand(command)
+    setBusy(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/workspace/jobs/${params.jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setActionError(data.details?.[0]?.message || data.error || 'Could not update the job.')
+        return
+      }
+      setStatusCommand(null)
+      setShowAdd(false)
+      setShowBulk(false)
+      await load()
+    } catch {
+      setActionError('Something went wrong. Check your connection.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function retryFailedEmails() {
+    setRetryingEmails(true)
+    setActionError(null)
+    setEmailRetryNotice(null)
+    try {
+      const res = await fetch(
+        `/api/workspace/jobs/${params.jobId}/email-delivery/retry`,
+        { method: 'POST' },
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setActionError(data.error || 'Could not retry the failed emails.')
+        return
+      }
+      const requeued = typeof data.requeued === 'number' ? data.requeued : 0
+      setEmailRetryNotice(
+        requeued > 0
+          ? `${requeued} failed ${requeued === 1 ? 'email was' : 'emails were'} requeued for delivery.`
+          : 'No terminal email failures remain to retry.',
+      )
+      await load()
+    } catch {
+      setActionError('Something went wrong. Check your connection.')
+    } finally {
+      setRetryingEmails(false)
     }
   }
 
@@ -273,19 +429,35 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
               {job.status.replace('_', ' ')}
             </Badge>
             {job.closeNote && (
-              <span className="text-xs text-[#71767b]">Decision: {job.closeNote}</span>
+              <span className="text-xs text-[#71767b]">
+                Decision{job.closedByName ? ` by ${job.closedByName}` : ''}: {job.closeNote}
+              </span>
             )}
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
+          {job.status === 'open' && (
+            <Button variant="secondary" disabled={busy} onClick={() => void changeJobStatus('on_hold')}>
+              Put on hold
+            </Button>
+          )}
+          {job.status !== 'open' && (
+            <Button variant="secondary" disabled={busy} onClick={() => void changeJobStatus('open')}>
+              Reopen
+            </Button>
+          )}
           {job.status !== 'closed' && (
             <>
-              <Button variant="secondary" onClick={() => setShowAdd((v) => !v)}>
-                {showAdd ? 'Cancel' : 'Add candidate'}
-              </Button>
-              <Button variant="secondary" onClick={() => setShowBulk((v) => !v)}>
-                {showBulk ? 'Hide bulk upload' : 'Bulk upload résumés'}
-              </Button>
+              {job.status === 'open' && (
+                <>
+                  <Button variant="secondary" onClick={() => setShowAdd((v) => !v)}>
+                    {showAdd ? 'Cancel' : 'Add candidate'}
+                  </Button>
+                  <Button variant="secondary" onClick={() => setShowBulk((v) => !v)}>
+                    {showBulk ? 'Hide bulk upload' : 'Bulk upload résumés'}
+                  </Button>
+                </>
+              )}
               <Button variant="secondary" onClick={() => setShowClose((v) => !v)}>
                 Close job
               </Button>
@@ -296,11 +468,55 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
 
       {actionError && <p className="text-sm text-[#f4212e]">{actionError}</p>}
 
-      {showBulk && job.status !== 'closed' && (
+      {emailRetryNotice && (
+        <p role="status" className="text-sm text-emerald-700">
+          {emailRetryNotice}
+        </p>
+      )}
+
+      {emailDelivery.failed > 0 && (
+        <section
+          role="alert"
+          aria-labelledby="email-delivery-failure-title"
+          className="rounded-2xl border border-amber-300 bg-amber-50 p-5 space-y-3"
+        >
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h2 id="email-delivery-failure-title" className="text-sm font-semibold text-amber-950">
+                {emailDelivery.failed} rejection {emailDelivery.failed === 1 ? 'email' : 'emails'} could not be delivered
+              </h2>
+              <p className="mt-1 text-xs text-amber-900">
+                Automatic delivery stopped after repeated provider failures. Retrying
+                requeues only these failed messages; sent and in-flight email is untouched.
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              disabled={retryingEmails}
+              onClick={() => void retryFailedEmails()}
+            >
+              {retryingEmails
+                ? 'Requeuing…'
+                : `Retry failed ${emailDelivery.failed === 1 ? 'email' : 'emails'}`}
+            </Button>
+          </div>
+          <ul className="space-y-1 text-xs text-amber-950">
+            {emailDelivery.failures.map((failure, index) => (
+              <li key={`${failure.recipientEmail}:${failure.failedAt}:${index}`}>
+                {failure.recipientName} ({failure.recipientEmail}) · {failure.attempts}{' '}
+                attempts
+                {failure.lastError ? ` · ${failure.lastError}` : ''}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {showBulk && job.status === 'open' && (
         <BulkUploadPanel jobId={params.jobId} onSettled={() => void load()} />
       )}
 
-      {job.status !== 'closed' && (
+      {job.status === 'open' && (
         <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -347,7 +563,11 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       {showClose && (
         <form onSubmit={closeJob} className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
           <p className="text-sm font-medium text-[#0f1419]">
-            Close this job — a decision note is required (it becomes the close-out record).
+            Close this job — a decision note is required.
+          </p>
+          <p className="text-xs text-[#71767b]">
+            Every candidate without a final decision will be moved to Rejected with your
+            name and timestamp recorded, and one rejection email will be queued for each.
           </p>
           <textarea
             value={closeNote}
@@ -365,7 +585,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
         </form>
       )}
 
-      {showAdd && (
+      {showAdd && job.status === 'open' && (
         <form onSubmit={addToJob} className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-4">
           {availablePool.length > 0 && (
             <div className="space-y-1.5">
@@ -415,8 +635,16 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
         <StateView
           state="empty"
           title="No candidates yet"
-          description="Add your first candidate — then send them the AI interview from their card."
-          action={{ label: 'Add candidate', onClick: () => setShowAdd(true) }}
+          description={
+            job.status === 'open'
+              ? 'Add your first candidate — then send them the AI interview from their card.'
+              : 'Reopen this job before adding candidates.'
+          }
+          action={
+            job.status === 'open'
+              ? { label: 'Add candidate', onClick: () => setShowAdd(true) }
+              : undefined
+          }
         />
       ) : (
         <div className="space-y-6">
@@ -431,7 +659,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                 <div className="space-y-2">
                   {stageEntries.map((en) => {
                     const chip = roundChip(en.latestRound)
-                    const terminal = stage === 'hired' || stage === 'rejected'
+                    const terminal = stage === 'hired' || stage === 'rejected' || stage === 'withdrawn'
                     const needsNote = noteFor?.appId === en.application.id
                     return (
                       <div
@@ -458,21 +686,68 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                             </Link>
                             {!terminal && job.status === 'open' && (
                               <>
+                                {stage === 'offer' ? (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        setNoteFor({
+                                          appId: en.application.id,
+                                          expectedFrom: stage,
+                                          action: 'offer_accepted',
+                                        })
+                                      }
+                                    >
+                                      Offer accepted
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        void moveStage(
+                                          en.application.id,
+                                          stage,
+                                          'offer_declined',
+                                        )
+                                      }
+                                    >
+                                      Offer declined
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void moveStage(en.application.id, stage, 'advance')
+                                    }
+                                  >
+                                    Advance
+                                  </Button>
+                                )}
+                                {stage !== 'offer' && (
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void moveStage(en.application.id, stage, 'reject')
+                                    }
+                                  >
+                                    Reject
+                                  </Button>
+                                )}
                                 <Button
                                   size="sm"
                                   variant="secondary"
                                   disabled={busy}
-                                  onClick={() => void moveStage(en.application.id, 'advance')}
+                                  onClick={() => void moveStage(en.application.id, stage, 'withdraw')}
                                 >
-                                  Advance
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  disabled={busy}
-                                  onClick={() => void moveStage(en.application.id, 'reject')}
-                                >
-                                  Reject
+                                  Withdraw
                                 </Button>
                               </>
                             )}
@@ -481,7 +756,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                         {needsNote && (
                           <div className="mt-3 space-y-2">
                             <p className="text-xs text-[#536471]">
-                              A decision note is required to mark this candidate Hired.
+                              Record why the candidate accepted the offer and should be hired.
                             </p>
                             <textarea
                               value={note}
@@ -495,9 +770,16 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                               <Button
                                 size="sm"
                                 disabled={busy || note.trim().length === 0}
-                                onClick={() => void moveStage(en.application.id, noteFor.action, note.trim())}
+                                onClick={() =>
+                                  void moveStage(
+                                    en.application.id,
+                                    noteFor.expectedFrom,
+                                    noteFor.action,
+                                    note.trim(),
+                                  )
+                                }
                               >
-                                Confirm
+                                Confirm hire
                               </Button>
                               <Button
                                 size="sm"
@@ -515,6 +797,13 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                         {en.application.decisionNote && stage === 'hired' && (
                           <p className="mt-2 text-xs text-emerald-700">
                             Decision: {en.application.decisionNote}
+                          </p>
+                        )}
+                        {en.application.offerDecision && (
+                          <p className="mt-2 text-xs text-[#536471]">
+                            Offer {en.application.offerDecision.outcome} · recorded by{' '}
+                            {en.application.offerDecision.actorName} ·{' '}
+                            {new Date(en.application.offerDecision.at).toLocaleString()}
                           </p>
                         )}
                       </div>

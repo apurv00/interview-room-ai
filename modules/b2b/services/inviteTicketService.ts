@@ -18,7 +18,8 @@
  *   - 60-second TTL (minted and redeemed in the same browser flow)
  *   - Single-use: Redis DEL runs before the ticket is returned, so a
  *     replay can't succeed even if intercepted
- *   - Stored alongside { userId, sessionId } for the provider to look up
+ *   - Stored alongside { userId, sessionId }; the isolated Hire runtime also
+ *     carries its organizationId so every principal lookup is tenant-scoped
  */
 
 import mongoose from 'mongoose'
@@ -32,17 +33,23 @@ const TICKET_TTL_SECONDS = 60
 export interface TicketPayload {
   userId: string
   sessionId: string
+  organizationId?: string
 }
 
 export async function issueAuthTicket(
   userId: string,
   sessionId: string,
+  organizationId?: string,
 ): Promise<string | null> {
   const ticket = randomBytes(32).toString('hex')
   try {
     await redis.set(
       `${TICKET_PREFIX}${ticket}`,
-      JSON.stringify({ userId, sessionId }),
+      JSON.stringify({
+        userId,
+        sessionId,
+        ...(organizationId ? { organizationId } : {}),
+      }),
       'EX',
       TICKET_TTL_SECONDS,
     )
@@ -70,7 +77,9 @@ export async function redeemAuthTicket(
       !parsed.userId ||
       !parsed.sessionId ||
       !mongoose.Types.ObjectId.isValid(parsed.userId) ||
-      !mongoose.Types.ObjectId.isValid(parsed.sessionId)
+      !mongoose.Types.ObjectId.isValid(parsed.sessionId) ||
+      (parsed.organizationId !== undefined &&
+        !mongoose.Types.ObjectId.isValid(parsed.organizationId))
     ) {
       return null
     }

@@ -66,6 +66,10 @@ describe('connectDBIfNeeded (Phase 1 PR C)', () => {
     }
     // MONGODB_URI must be present for connectDB to attempt a connect.
     process.env.MONGODB_URI = 'mongodb://localhost/test'
+    delete process.env.IPG_SURFACE
+    delete process.env.HIRE_CONTROL_DATABASE_NAME
+    delete process.env.HIRE_RUNTIME_DATABASE_NAME
+    delete process.env.B2C_DATABASE_NAME
   })
 
   it('calls connectDB when needsMongo is true, regardless of flag', async () => {
@@ -180,5 +184,61 @@ describe('connectDBIfNeeded (Phase 1 PR C)', () => {
 
     await expect(connectDB()).rejects.toThrow(/already initialized in disabled schema mode/)
     expect(mongoose.connect).toHaveBeenCalledOnce()
+  })
+
+  it('leaves the ordinary B2C connection path unchanged when no Hire surface is set', async () => {
+    await connectDB()
+
+    expect(mongoose.connect).toHaveBeenCalledWith(
+      'mongodb://localhost/test',
+      expect.objectContaining({ readPreference: 'primary' }),
+    )
+  })
+
+  it.each([
+    ['hire-control', 'ipg-hire-control'],
+    ['hire-engine', 'ipg-hire-runtime'],
+  ] as const)('accepts a correctly isolated %s database before connecting', async (surface, name) => {
+    process.env.IPG_SURFACE = surface
+    process.env.HIRE_CONTROL_DATABASE_NAME = 'ipg-hire-control'
+    process.env.HIRE_RUNTIME_DATABASE_NAME = 'ipg-hire-runtime'
+    process.env.B2C_DATABASE_NAME = 'ipg-b2c'
+    process.env.MONGODB_URI = `mongodb://db-a:27017,db-b:27017/${name}?replicaSet=rs0`
+
+    await connectDB()
+
+    expect(mongoose.connect).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed before connecting when a Hire database sentinel is missing', async () => {
+    process.env.IPG_SURFACE = 'hire-control'
+    process.env.HIRE_CONTROL_DATABASE_NAME = 'ipg-hire-control'
+    process.env.HIRE_RUNTIME_DATABASE_NAME = 'ipg-hire-runtime'
+    process.env.MONGODB_URI = 'mongodb://localhost/ipg-hire-control'
+
+    await expect(connectDB()).rejects.toThrow(/boundary is not configured/)
+    expect(mongoose.connect).not.toHaveBeenCalled()
+  })
+
+  it('fails closed before connecting when the URI selects the wrong Hire database', async () => {
+    process.env.IPG_SURFACE = 'hire-control'
+    process.env.HIRE_CONTROL_DATABASE_NAME = 'ipg-hire-control'
+    process.env.HIRE_RUNTIME_DATABASE_NAME = 'ipg-hire-runtime'
+    process.env.B2C_DATABASE_NAME = 'ipg-b2c'
+    process.env.MONGODB_URI = 'mongodb+srv://cluster.example/ipg-b2c?retryWrites=true'
+
+    await expect(connectDB()).rejects.toThrow(/control database URI mismatch/)
+    expect(mongoose.connect).not.toHaveBeenCalled()
+  })
+
+  it('fails closed before connecting when any database identities collide', async () => {
+    process.env.IPG_SURFACE = 'hire-engine'
+    process.env.HIRE_CONTROL_DATABASE_NAME = 'ipg-hire-control'
+    process.env.HIRE_RUNTIME_DATABASE_NAME = 'ipg-b2c'
+    process.env.B2C_DATABASE_NAME = 'ipg-b2c'
+    process.env.MONGODB_URI = 'mongodb://localhost/ipg-b2c'
+
+    await expect(connectDB()).rejects.toThrow(/must be distinct/)
+    expect(mongoose.connect).not.toHaveBeenCalled()
   })
 })

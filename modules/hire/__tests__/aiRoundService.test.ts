@@ -1,393 +1,480 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import crypto from 'crypto'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@shared/db/connection', () => ({
-  connectDB: vi.fn().mockResolvedValue(undefined),
+const mocks = vi.hoisted(() => ({
+  connectHireControlDB: vi.fn().mockResolvedValue(undefined),
+  sendEmail: vi.fn().mockResolvedValue({ ok: true, id: 'email-1' }),
+  createInviteDelivery: vi.fn().mockResolvedValue({}),
+  deliverInvite: vi.fn(),
+  appendEvent: vi.fn().mockResolvedValue(undefined),
+  revokeGuestAccess: vi.fn().mockResolvedValue(undefined),
+  deliverRuntimeRevocation: vi.fn().mockResolvedValue(undefined),
+  roundCreate: vi.fn(),
+  roundFind: vi.fn(),
+  roundFindOne: vi.fn(),
+  roundFindOneAndUpdate: vi.fn(),
+  roundUpdateOne: vi.fn(),
+  jobFindOne: vi.fn(),
+  jobUpdateOne: vi.fn(),
+  requirementFindOne: vi.fn(),
+  candidateFindOne: vi.fn(),
+  applicationFindOne: vi.fn(),
+  workspaceExists: vi.fn(),
 }))
-const mockSendEmail = vi.fn().mockResolvedValue({ ok: true, id: 'email-1' })
+
+vi.mock('../services/hireControlBoundary', () => ({
+  connectHireControlDB: mocks.connectHireControlDB,
+}))
 vi.mock('@shared/services/emailService', () => ({
-  sendEmail: (...a: unknown[]) => mockSendEmail(...a),
+  sendEmail: mocks.sendEmail,
 }))
 vi.mock('@shared/logger', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
-const mockAppendEvent = vi.fn().mockResolvedValue(undefined)
 vi.mock('../services/pipelineService', () => ({
-  appendApplicationEvent: (...a: unknown[]) => mockAppendEvent(...a),
+  appendApplicationEvent: mocks.appendEvent,
 }))
-
-const mockRound = {
-  create: vi.fn(),
-  find: vi.fn(),
-  findOne: vi.fn(),
-  findOneAndUpdate: vi.fn(),
-  updateOne: vi.fn(),
-}
-const mockJob = { findOne: vi.fn() }
-const mockCandidate = { findOne: vi.fn() }
-const mockApplication = { findOne: vi.fn() }
-const mockWorkspaceModel = { findById: vi.fn() }
-
+vi.mock('../services/engineRevocationService', () => ({
+  revokeControlPlaneGuestAccess: mocks.revokeGuestAccess,
+  deliverRuntimeRevocation: mocks.deliverRuntimeRevocation,
+}))
+vi.mock('../services/hireWorkspaceWriteFence', () => ({
+  withActiveHireWorkspaceWriteTransaction: (
+    _workspaceId: unknown,
+    _memberId: unknown,
+    work: (session: unknown) => Promise<unknown>,
+  ) => work({ id: 'hire-tx' }),
+}))
+vi.mock('../services/aiInviteDeliveryService', () => ({
+  createAiInviteDeliveryRecord: (...args: unknown[]) => mocks.createInviteDelivery(...args),
+  deliverAiInvite: (...args: unknown[]) => mocks.deliverInvite(...args),
+}))
 vi.mock('../models', () => ({
   HireRound: {
-    create: (...a: unknown[]) => mockRound.create(...a),
-    find: (...a: unknown[]) => mockRound.find(...a),
-    findOne: (...a: unknown[]) => mockRound.findOne(...a),
-    findOneAndUpdate: (...a: unknown[]) => mockRound.findOneAndUpdate(...a),
-    updateOne: (...a: unknown[]) => mockRound.updateOne(...a),
+    create: mocks.roundCreate,
+    find: mocks.roundFind,
+    findOne: mocks.roundFindOne,
+    findOneAndUpdate: mocks.roundFindOneAndUpdate,
+    updateOne: mocks.roundUpdateOne,
   },
-  HireJob: { findOne: (...a: unknown[]) => mockJob.findOne(...a) },
-  HireCandidate: { findOne: (...a: unknown[]) => mockCandidate.findOne(...a) },
-  HireApplication: { findOne: (...a: unknown[]) => mockApplication.findOne(...a) },
-  HireWorkspace: { findById: (...a: unknown[]) => mockWorkspaceModel.findById(...a) },
+  HireJob: { findOne: mocks.jobFindOne, updateOne: mocks.jobUpdateOne },
+  HireJobRequirementVersion: { findOne: mocks.requirementFindOne },
+  HireCandidate: { findOne: mocks.candidateFindOne },
+  HireApplication: { findOne: mocks.applicationFindOne },
+  HireWorkspace: { exists: mocks.workspaceExists },
 }))
 
 import {
-  sendAiRound,
-  verifyRoundToken,
-  recordConsent,
-  bindGuestUser,
-  prepareRound,
-  revokeRound,
-  sha256,
   AI_ROUND_INTERVIEW_TYPE,
+  buildJdSnapshot,
+  revokeRound,
+  sendAiRound,
+  sha256,
+  verifyRoundToken,
 } from '../services/aiRoundService'
 import type { MembershipContext } from '../services/workspaceService'
 
+const IDS = {
+  workspace: '111111111111111111111111',
+  member: '222222222222222222222222',
+  user: '333333333333333333333333',
+  application: '444444444444444444444444',
+  job: '555555555555555555555555',
+  candidate: '666666666666666666666666',
+  requirement: '777777777777777777777777',
+  round: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+}
+const RAW_TOKEN = 'ab'.repeat(32)
+const INVITE_CAPABILITY = `${IDS.workspace}.${RAW_TOKEN}`
+
 const CTX = {
-  workspace: { _id: 'ws-A', name: 'Acme' },
-  membership: { _id: 'm1', userId: 'u1', email: 'hr@acme.com', name: 'HR One' },
+  workspace: { _id: IDS.workspace, name: 'Acme' },
+  membership: {
+    _id: IDS.member,
+    userId: IDS.user,
+    email: 'hr@acme.example',
+    name: 'HR One',
+  },
 } as unknown as MembershipContext
 
-const ROUND_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa'
-const RAW_TOKEN = 'ab'.repeat(32) // 64 hex chars
+function happyPath() {
+  mocks.applicationFindOne.mockResolvedValue({
+    _id: IDS.application,
+    jobId: IDS.job,
+    candidateId: IDS.candidate,
+  })
+  mocks.jobFindOne.mockResolvedValue({
+    _id: IDS.job,
+    title: 'Backend Engineer',
+    status: 'open',
+    activeRequirementVersionId: IDS.requirement,
+    activeRequirementVersion: 2,
+  })
+  mocks.candidateFindOne.mockResolvedValue({
+    _id: IDS.candidate,
+    email: 'same-as-b2c@example.com',
+    name: 'Jane Candidate',
+  })
+  mocks.requirementFindOne.mockResolvedValue({
+    _id: IDS.requirement,
+    version: 2,
+    state: 'active',
+    contentHash: 'cd'.repeat(32),
+    proseJd: 'Build production APIs for a growing software platform.',
+    requirements: [
+      { id: 'must-1', text: 'Production TypeScript', importance: 'must_have' },
+      { id: 'nice-1', text: 'Distributed systems', importance: 'nice_to_have' },
+    ],
+  })
+  mocks.roundFind.mockResolvedValue([])
+  mocks.roundCreate.mockImplementation(async (docs: Array<Record<string, unknown>>) => docs)
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockSendEmail.mockResolvedValue({ ok: true, id: 'email-1' })
+  mocks.connectHireControlDB.mockResolvedValue(undefined)
+  mocks.sendEmail.mockResolvedValue({ ok: true, id: 'email-1' })
+  mocks.createInviteDelivery.mockResolvedValue({})
+  mocks.deliverInvite.mockImplementation(async (_ctx: unknown, roundId: string) => {
+    const input = mocks.createInviteDelivery.mock.calls.at(-1)?.[0]
+    const capability = `${IDS.workspace}.${input.rawToken}`
+    return {
+      emailSent: true,
+      view: {
+        inviteUrl: `https://hire.interviewprep.guru/candidate/${roundId}#invite=${capability}`,
+      },
+    }
+  })
+  mocks.appendEvent.mockResolvedValue(undefined)
+  mocks.revokeGuestAccess.mockResolvedValue(undefined)
+  mocks.deliverRuntimeRevocation.mockResolvedValue(undefined)
+  mocks.workspaceExists.mockResolvedValue({ _id: IDS.workspace })
+  mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  happyPath()
 })
 
 describe('sendAiRound', () => {
-  function armHappyPath() {
-    mockApplication.findOne.mockResolvedValue({ _id: 'a1', jobId: 'j1', candidateId: 'c1' })
-    mockJob.findOne.mockResolvedValue({
-      _id: 'j1',
-      title: 'Backend Engineer',
-      jdText: 'Great JD text here',
-      status: 'open',
-    })
-    mockCandidate.findOne.mockResolvedValue({
-      _id: 'c1',
-      email: 'jane@ex.com',
-      name: 'Jane Doe',
-    })
-    mockRound.find.mockResolvedValue([])
-    mockRound.create.mockImplementation((doc: Record<string, unknown>) =>
-      Promise.resolve({ ...doc, _id: { toString: () => ROUND_ID } })
-    )
-  }
-
-  it('stores only the sha256 of the token; the raw token appears only in the URL', async () => {
-    armHappyPath()
+  it('atomically stores only the token hash plus encrypted-delivery input and returns a fragment URL', async () => {
     const result = await sendAiRound(CTX, {
-      applicationId: 'a1',
+      applicationId: IDS.application,
       experience: '3-6',
       duration: 15,
     })
-    const doc = mockRound.create.mock.calls[0][0]
-    const rawToken = new URL(result.inviteUrl).searchParams.get('token')!
+    const document = mocks.roundCreate.mock.calls[0][0][0]
+    const url = new URL(result.inviteUrl)
+    const rawCapability = new URLSearchParams(url.hash.slice(1)).get('invite')
+    const rawToken = rawCapability?.split('.')[1]
+
     expect(rawToken).toMatch(/^[a-f0-9]{64}$/)
-    expect(doc.inviteTokenHash).toBe(sha256(rawToken))
-    expect(doc.inviteTokenHash).not.toBe(rawToken)
-    expect(result.inviteUrl).toContain(`/candidate/${ROUND_ID}?token=`)
+    expect(document.inviteTokenHash).toBe(sha256(rawToken!))
+    expect(document).not.toHaveProperty('inviteToken')
+    expect(mocks.createInviteDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: IDS.workspace,
+        applicationId: IDS.application,
+        jobId: IDS.job,
+        candidateId: IDS.candidate,
+        rawToken,
+        session: { id: 'hire-tx' },
+      }),
+    )
+    expect(url.search).toBe('')
+    expect(rawCapability).toMatch(new RegExp(`^${IDS.workspace}\\.[a-f0-9]{64}$`))
   })
 
-  it('stamps workspace scoping, config, a round-unique jdHash, and the candidate identity', async () => {
-    armHappyPath()
-    await sendAiRound(CTX, { applicationId: 'a1', experience: '7+', duration: 30 })
-    const doc = mockRound.create.mock.calls[0][0]
-    expect(doc.workspaceId).toBe('ws-A')
-    expect(doc.candidateEmail).toBe('jane@ex.com')
-    expect(doc.live).toBe(true)
-    // Workspace has no explicit setting → magic_link default, snapshotted.
-    expect(doc.authMode).toBe('magic_link')
-    // jdSnapshot = job JD + a per-round reference line; jdHash covers the
-    // snapshot, making the match key unique per round (cross-tenant claim fix).
-    expect(doc.jdSnapshot).toContain('Great JD text here')
-    expect(doc.jdSnapshot).toContain(`[Interview reference: HR-${doc._id.toString()}]`)
-    expect(doc.jdHash).toBe(crypto.createHash('sha256').update(doc.jdSnapshot).digest('hex'))
-    expect(doc.jdHash).not.toBe(
-      crypto.createHash('sha256').update('Great JD text here').digest('hex')
-    )
-    expect(doc.config).toEqual({
-      role: 'Backend Engineer',
-      interviewType: AI_ROUND_INTERVIEW_TYPE,
+  it('freezes the active structured requirement version into the engine config', async () => {
+    await sendAiRound(CTX, {
+      applicationId: IDS.application,
       experience: '7+',
       duration: 30,
     })
-    const expiryMs = doc.inviteTokenExpiry.getTime() - Date.now()
-    expect(expiryMs).toBeGreaterThan(6.9 * 24 * 3600 * 1000)
-    expect(expiryMs).toBeLessThan(7.1 * 24 * 3600 * 1000)
-  })
+    const document = mocks.roundCreate.mock.calls[0][0][0]
 
-  it('clamps a >100-char job title to the engine role contract', async () => {
-    armHappyPath()
-    const longTitle = 'Senior Staff Backend Platform Engineer '.repeat(4) // 156 chars
-    mockJob.findOne.mockResolvedValue({
-      _id: 'j1',
-      title: longTitle,
-      jdText: 'Great JD text here',
-      status: 'open',
+    expect(mocks.requirementFindOne).toHaveBeenCalledWith({
+      _id: IDS.requirement,
+      workspaceId: IDS.workspace,
+      jobId: IDS.job,
+      version: 2,
+      state: 'active',
     })
-    await sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
-    const doc = mockRound.create.mock.calls[0][0]
-    expect(doc.config.role).toBe(longTitle.slice(0, 100))
-    expect(doc.config.role.length).toBe(100)
+    expect(document).toMatchObject({
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+      candidateEmail: 'same-as-b2c@example.com',
+      authMode: 'magic_link',
+      live: true,
+      requirementVersionId: IDS.requirement,
+      requirementVersion: 2,
+      requirementHash: 'cd'.repeat(32),
+      createdByMemberId: IDS.member,
+      createdByName: 'HR One',
+      createdBy: IDS.user,
+      config: {
+        role: 'Backend Engineer',
+        interviewType: AI_ROUND_INTERVIEW_TYPE,
+        experience: '7+',
+        duration: 30,
+      },
+    })
+    expect(document.jdSnapshot).toContain('## Immutable interview scoring contract')
+    expect(document.jdSnapshot).toContain('Requirement version: 2')
+    expect(document.jdSnapshot).toContain('[MUST_HAVE][must-1] Production TypeScript')
+    expect(document.jdHash).toBe(sha256(document.jdSnapshot))
+    expect(document).not.toHaveProperty('guestUserId')
+    expect(document).not.toHaveProperty('sessionId')
   })
 
-  it('maps a duplicate-live-round race (E11000 on the partial unique index) to 409', async () => {
-    armHappyPath()
-    mockRound.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }))
+  it('supports a password-only Hire member without writing a legacy B2C actor id', async () => {
+    const hireOnly = {
+      ...CTX,
+      membership: { ...CTX.membership, userId: undefined },
+    } as MembershipContext
+    await sendAiRound(hireOnly, {
+      applicationId: IDS.application,
+      experience: '0-2',
+      duration: 15,
+    })
+    const document = mocks.roundCreate.mock.calls[0][0][0]
+    expect(document.createdByMemberId).toBe(IDS.member)
+    expect(document).not.toHaveProperty('createdBy')
+    expect(mocks.appendEvent.mock.calls.at(-1)?.[2]).not.toHaveProperty('actorUserId')
+  })
+
+  it('delegates to durable delivery and records honest delivery state', async () => {
+    const result = await sendAiRound(CTX, {
+      applicationId: IDS.application,
+      experience: '3-6',
+      duration: 15,
+    })
+    expect(mocks.deliverInvite).toHaveBeenCalledWith(CTX, expect.any(String))
+    expect(result.inviteUrl).toContain('#invite=')
+    expect(mocks.appendEvent).toHaveBeenCalledWith(
+      IDS.workspace,
+      IDS.application,
+      expect.objectContaining({
+        type: 'ai_round_sent',
+        actorMemberId: IDS.member,
+        actorName: 'HR One',
+        note: expect.stringContaining('invite sent'),
+      }),
+    )
+    expect(mocks.appendEvent.mock.calls.at(-1)?.[2].note).not.toContain(
+      'same-as-b2c@example.com',
+    )
+
+    mocks.deliverInvite.mockResolvedValueOnce({
+      emailSent: false,
+      view: { inviteUrl: 'https://hire.interviewprep.guru/candidate/round#invite=capability' },
+    })
+    const failed = await sendAiRound(CTX, {
+      applicationId: IDS.application,
+      experience: '3-6',
+      duration: 15,
+    })
+    expect(failed.emailSent).toBe(false)
+    expect(mocks.appendEvent.mock.calls.at(-1)?.[2].note).toContain(
+      'EMAIL DELIVERY FAILED',
+    )
+  })
+
+  it('rejects a closed job, an unreviewed requirement set, and an in-flight round', async () => {
+    mocks.jobFindOne.mockResolvedValueOnce({
+      _id: IDS.job,
+      title: 'Backend Engineer',
+      status: 'closed',
+    })
     await expect(
-      sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
+      sendAiRound(CTX, {
+        applicationId: IDS.application,
+        experience: '3-6',
+        duration: 15,
+      }),
+    ).rejects.toMatchObject({ code: 'JOB_NOT_OPEN' })
+
+    happyPath()
+    mocks.requirementFindOne.mockResolvedValueOnce(null)
+    await expect(
+      sendAiRound(CTX, {
+        applicationId: IDS.application,
+        experience: '3-6',
+        duration: 15,
+      }),
+    ).rejects.toMatchObject({ code: 'JOB_REQUIREMENTS_NOT_ACTIVE' })
+
+    happyPath()
+    mocks.roundFind.mockResolvedValueOnce([
+      {
+        _id: IDS.round,
+        status: 'invited',
+        inviteTokenExpiry: new Date(Date.now() + 60_000),
+      },
+    ])
+    await expect(
+      sendAiRound(CTX, {
+        applicationId: IDS.application,
+        experience: '3-6',
+        duration: 15,
+      }),
     ).rejects.toMatchObject({ code: 'ROUND_IN_FLIGHT', statusCode: 409 })
   })
 
-  it('emails the candidate and records the send in the application event log', async () => {
-    armHappyPath()
-    await sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
-    expect(mockSendEmail.mock.calls[0][0].to).toBe('jane@ex.com')
-    expect(mockAppendEvent).toHaveBeenCalledWith(
-      'ws-A',
-      'a1',
-      expect.objectContaining({ type: 'ai_round_sent', actorUserId: 'u1', actorName: 'HR One' })
+  it('revokes all control-plane guest capability before superseding an expired link', async () => {
+    mocks.roundFind.mockResolvedValueOnce([
+      {
+        _id: IDS.round,
+        workspaceId: IDS.workspace,
+        applicationId: IDS.application,
+        status: 'invited',
+        inviteTokenExpiry: new Date(Date.now() - 60_000),
+      },
+    ])
+    await sendAiRound(CTX, {
+      applicationId: IDS.application,
+      experience: '3-6',
+      duration: 15,
+    })
+    expect(mocks.roundUpdateOne).toHaveBeenCalledWith(
+      { _id: IDS.round, workspaceId: IDS.workspace },
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'revoked', revocationState: 'confirmed' }),
+        $unset: { live: 1 },
+      }),
+    )
+    expect(mocks.revokeGuestAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: IDS.workspace,
+        applicationId: IDS.application,
+        roundId: IDS.round,
+      }),
     )
   })
 
-  it('the audit log never claims delivery when the email failed', async () => {
-    armHappyPath()
-    mockSendEmail.mockResolvedValue({ ok: false })
-    const result = await sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
-    expect(result.emailSent).toBe(false)
-    const note = mockAppendEvent.mock.calls[0][2].note
-    expect(note).toContain('EMAIL DELIVERY FAILED')
-    expect(note).not.toContain('invite sent')
-  })
-
-  it('snapshots an otp workspace onto the round and into the invite copy', async () => {
-    armHappyPath()
-    const otpCtx = {
-      ...CTX,
-      workspace: { _id: 'ws-A', name: 'Acme', guestAuthMode: 'otp' },
-    } as unknown as typeof CTX
-    await sendAiRound(otpCtx, { applicationId: 'a1', experience: '3-6', duration: 15 })
-    expect(mockRound.create.mock.calls[0][0].authMode).toBe('otp')
-    // The invite email must explain the code step, not promise direct entry.
-    expect(mockSendEmail.mock.calls[0][0].html).toContain('6-digit code')
-  })
-
-  it('blocks a second live round (ROUND_IN_FLIGHT)', async () => {
-    armHappyPath()
-    mockRound.find.mockResolvedValue([
-      { _id: 'r0', status: 'invited', inviteTokenExpiry: new Date(Date.now() + 3600_000) },
-    ])
+  it('maps the partial-index race to the same in-flight conflict', async () => {
+    mocks.roundCreate.mockRejectedValueOnce(Object.assign(new Error('duplicate'), { code: 11000 }))
     await expect(
-      sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
-    ).rejects.toMatchObject({ code: 'ROUND_IN_FLIGHT' })
-    expect(mockRound.create).not.toHaveBeenCalled()
+      sendAiRound(CTX, {
+        applicationId: IDS.application,
+        experience: '3-6',
+        duration: 15,
+      }),
+    ).rejects.toMatchObject({ code: 'ROUND_IN_FLIGHT', statusCode: 409 })
   })
+})
 
-  it('supersedes an expired pre-auth round explicitly (revoke + audit event + resend)', async () => {
-    armHappyPath()
-    mockRound.find.mockResolvedValue([
-      { _id: 'r0', status: 'invited', inviteTokenExpiry: new Date(Date.now() - 3600_000) },
-    ])
-    await sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
-    const [filter, update] = mockRound.updateOne.mock.calls[0]
-    expect(filter).toMatchObject({ _id: 'r0', workspaceId: 'ws-A' })
-    expect(update.$set.status).toBe('revoked')
-    expect(update.$unset).toEqual({ live: 1 })
-    // The supersede is a witnessed action — it must appear in the audit log.
-    expect(mockAppendEvent).toHaveBeenCalledWith(
-      'ws-A',
-      'a1',
-      expect.objectContaining({ type: 'ai_round_revoked' })
-    )
-    expect(mockRound.create).toHaveBeenCalled()
-  })
-
-  it('refuses non-open jobs', async () => {
-    armHappyPath()
-    mockJob.findOne.mockResolvedValue({ _id: 'j1', status: 'on_hold', jdText: 'x', title: 't' })
-    await expect(
-      sendAiRound(CTX, { applicationId: 'a1', experience: '3-6', duration: 15 })
-    ).rejects.toMatchObject({ code: 'JOB_NOT_OPEN' })
+describe('buildJdSnapshot', () => {
+  it('is deterministic, versioned, and bounded to the unchanged engine contract', () => {
+    const input = {
+      proseJd: 'J'.repeat(49_950),
+      version: 7,
+      contentHash: 'ef'.repeat(32),
+      requirements: [
+        { id: 'must-1', text: 'A required skill', importance: 'must_have' },
+      ],
+    }
+    const first = buildJdSnapshot(input)
+    expect(first).toBe(buildJdSnapshot(input))
+    expect(first.length).toBeLessThanOrEqual(50_000)
+    expect(first).toContain('Requirement version: 7')
   })
 })
 
 describe('verifyRoundToken', () => {
-  it('queries by token hash, never the raw token', async () => {
-    mockRound.findOne.mockResolvedValue(null)
-    await verifyRoundToken(ROUND_ID, RAW_TOKEN)
-    expect(mockRound.findOne).toHaveBeenCalledWith({
-      _id: ROUND_ID,
+  it('hashes the credential and maps revoked, completed, expired, and live states', async () => {
+    mocks.roundFindOne.mockResolvedValueOnce(null)
+    await verifyRoundToken(IDS.round, INVITE_CAPABILITY)
+    expect(mocks.roundFindOne).toHaveBeenCalledWith({
+      _id: IDS.round,
+      workspaceId: IDS.workspace,
       inviteTokenHash: sha256(RAW_TOKEN),
     })
-  })
 
-  it('rejects malformed ids/tokens without touching the DB', async () => {
-    expect(await verifyRoundToken('nope', RAW_TOKEN)).toBeNull()
-    expect(await verifyRoundToken(ROUND_ID, 'short')).toBeNull()
-    expect(mockRound.findOne).not.toHaveBeenCalled()
-  })
-
-  it('maps round state: revoked > completed > expired > ok', async () => {
-    mockRound.findOne.mockResolvedValue({ revokedAt: new Date(), status: 'invited' })
-    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('revoked')
-
-    mockRound.findOne.mockResolvedValue({ status: 'completed' })
-    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('completed')
-
-    mockRound.findOne.mockResolvedValue({
+    mocks.roundFindOne.mockResolvedValueOnce({
+      workspaceId: IDS.workspace,
+      revokedAt: new Date(),
       status: 'invited',
-      inviteTokenExpiry: new Date(Date.now() - 1000),
     })
-    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('expired')
-
-    // The RAW link dies at expiry regardless of round status — a leaked
-    // link must never outlive its advertised deadline. Mid-flow resume
-    // happens through the authenticated /prepare path, not the raw token.
-    mockRound.findOne.mockResolvedValue({
+    expect((await verifyRoundToken(IDS.round, INVITE_CAPABILITY))?.state).toBe('revoked')
+    mocks.roundFindOne.mockResolvedValueOnce({ workspaceId: IDS.workspace, status: 'completed' })
+    expect((await verifyRoundToken(IDS.round, INVITE_CAPABILITY))?.state).toBe('completed')
+    mocks.roundFindOne.mockResolvedValueOnce({
       status: 'prepared',
-      inviteTokenExpiry: new Date(Date.now() - 1000),
+      workspaceId: IDS.workspace,
+      inviteTokenExpiry: new Date(Date.now() - 1),
     })
-    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('expired')
-
-    mockRound.findOne.mockResolvedValue({
-      status: 'prepared',
-      inviteTokenExpiry: new Date(Date.now() + 3600_000),
-    })
-    expect((await verifyRoundToken(ROUND_ID, RAW_TOKEN))?.state).toBe('ok')
-  })
-})
-
-describe('recordConsent', () => {
-  it('sets consent only once (first acceptance wins)', async () => {
-    mockRound.findOne.mockResolvedValue({
-      _id: ROUND_ID,
+    expect((await verifyRoundToken(IDS.round, INVITE_CAPABILITY))?.state).toBe('expired')
+    mocks.roundFindOne.mockResolvedValueOnce({
       status: 'invited',
-      inviteTokenExpiry: new Date(Date.now() + 3600_000),
+      workspaceId: IDS.workspace,
+      inviteTokenExpiry: new Date(Date.now() + 60_000),
     })
-    mockRound.findOneAndUpdate.mockResolvedValue({ _id: ROUND_ID, consentAt: new Date() })
-    await recordConsent(ROUND_ID, RAW_TOKEN, { userAgent: 'UA' })
-    const [filter, update] = mockRound.findOneAndUpdate.mock.calls[0]
-    expect(filter).toMatchObject({ _id: ROUND_ID, consentAt: { $exists: false } })
-    expect(update.$set.consentVersion).toBeTruthy()
-    expect(update.$set.status).toBe('consented')
+    expect((await verifyRoundToken(IDS.round, INVITE_CAPABILITY))?.state).toBe('ok')
   })
 
-  it('rejects invalid links with 410', async () => {
-    mockRound.findOne.mockResolvedValue(null)
-    await expect(recordConsent(ROUND_ID, RAW_TOKEN, {})).rejects.toMatchObject({
-      statusCode: 410,
-    })
-  })
-})
-
-describe('bindGuestUser', () => {
-  it('refuses to bind before consent is recorded — the gate holds for direct API callers', async () => {
-    mockRound.findOne.mockResolvedValue({
-      _id: ROUND_ID,
+  it('makes every unused invite token dead while its workspace is tombstoned', async () => {
+    mocks.roundFindOne.mockResolvedValueOnce({
+      workspaceId: IDS.workspace,
       status: 'invited',
-      inviteTokenExpiry: new Date(Date.now() + 3600_000),
-      consentAt: undefined,
+      inviteTokenExpiry: new Date(Date.now() + 60_000),
     })
-    await expect(bindGuestUser(ROUND_ID, RAW_TOKEN, 'guest-1')).rejects.toMatchObject({
-      code: 'CONSENT_REQUIRED',
-    })
-    expect(mockRound.findOneAndUpdate).not.toHaveBeenCalled()
-  })
-})
+    mocks.workspaceExists.mockResolvedValueOnce(null)
 
-describe('prepareRound', () => {
-  it('requires the round to be bound to the calling guest user', async () => {
-    mockRound.findOne.mockResolvedValue(null)
-    await expect(prepareRound(ROUND_ID, 'other-user')).rejects.toMatchObject({ statusCode: 404 })
-    expect(mockRound.findOne).toHaveBeenCalledWith({ _id: ROUND_ID, guestUserId: 'other-user' })
+    await expect(verifyRoundToken(IDS.round, INVITE_CAPABILITY)).resolves.toBeNull()
   })
 
-  it('returns the immutable jdSnapshot (not live job text) and opens the reconciliation window once', async () => {
-    const jdSnapshot = `The JD\n\n[Interview reference: HR-${ROUND_ID}]`
-    mockRound.findOne.mockResolvedValue({
-      _id: ROUND_ID,
-      workspaceId: 'ws-A',
-      jobId: 'j1',
-      status: 'auth_verified',
-      consentAt: new Date(),
-      inviteTokenExpiry: new Date(Date.now() + 3600_000),
-      jdSnapshot,
-      config: { role: 'Backend Engineer', interviewType: 'behavioral', experience: '3-6', duration: 15 },
-    })
-    mockWorkspaceModel.findById.mockResolvedValue({ name: 'Acme' })
-    mockRound.findOneAndUpdate.mockResolvedValue({ _id: ROUND_ID, preparedAt: new Date() })
-
-    const { config } = await prepareRound(ROUND_ID, 'guest-1')
-    expect(config).toEqual({
-      role: 'Backend Engineer',
-      interviewType: 'behavioral',
-      experience: '3-6',
-      duration: 15,
-      jobDescription: jdSnapshot,
-      targetCompany: 'Acme',
-    })
-    // The live HireJob is never consulted — a post-send JD edit can neither
-    // change the assessment nor break the reconciliation hash.
-    expect(mockJob.findOne).not.toHaveBeenCalled()
-    const [filter] = mockRound.findOneAndUpdate.mock.calls[0]
-    expect(filter).toMatchObject({ _id: ROUND_ID, preparedAt: { $exists: false } })
-  })
-
-  it('refuses revoked and unconsented rounds', async () => {
-    mockRound.findOne.mockResolvedValue({ _id: ROUND_ID, revokedAt: new Date() })
-    await expect(prepareRound(ROUND_ID, 'g')).rejects.toMatchObject({ statusCode: 410 })
-
-    mockRound.findOne.mockResolvedValue({ _id: ROUND_ID, status: 'auth_verified' })
-    await expect(prepareRound(ROUND_ID, 'g')).rejects.toMatchObject({ code: 'CONSENT_REQUIRED' })
-  })
-
-  it('enforces the post-auth grace ceiling — a lingering NextAuth session cannot re-prepare forever', async () => {
-    mockRound.findOne.mockResolvedValue({
-      _id: ROUND_ID,
-      status: 'prepared',
-      consentAt: new Date(),
-      inviteTokenExpiry: new Date(Date.now() - 15 * 24 * 3600 * 1000),
-      jdSnapshot: 'jd',
-      config: { role: 'R', interviewType: 'behavioral', experience: '3-6', duration: 15 },
-    })
-    await expect(prepareRound(ROUND_ID, 'guest-1')).rejects.toMatchObject({
-      statusCode: 410,
-      code: 'ROUND_LINK_INVALID',
-    })
+  it('rejects malformed ids and tokens before querying HireRound', async () => {
+    expect(await verifyRoundToken('bad', INVITE_CAPABILITY)).toBeNull()
+    expect(await verifyRoundToken(IDS.round, 'bad')).toBeNull()
+    expect(mocks.roundFindOne).not.toHaveBeenCalled()
   })
 })
 
 describe('revokeRound', () => {
-  it('is workspace-scoped and only touches non-terminal rounds', async () => {
-    mockRound.findOneAndUpdate.mockResolvedValue({ _id: ROUND_ID, applicationId: 'a1' })
-    await revokeRound(CTX, ROUND_ID)
-    const [filter, update] = mockRound.findOneAndUpdate.mock.calls[0]
-    expect(filter).toMatchObject({
-      _id: ROUND_ID,
-      workspaceId: 'ws-A',
-      status: { $nin: ['completed', 'revoked'] },
-    })
-    expect(update.$set.status).toBe('revoked')
-    expect(update.$set.revokedBy).toBe('u1')
-    expect(update.$unset).toEqual({ live: 1 })
-    expect(mockAppendEvent).toHaveBeenCalledWith(
-      'ws-A',
-      'a1',
-      expect.objectContaining({ type: 'ai_round_revoked' })
+  it('kills the control session, durably requests runtime revocation, and snapshots the Hire actor', async () => {
+    const revokedAt = new Date()
+    const round = {
+      _id: IDS.round,
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      revokedAt,
+    }
+    mocks.roundFindOneAndUpdate.mockResolvedValueOnce(round)
+    mocks.roundFindOne.mockResolvedValueOnce({ ...round, revocationState: 'confirmed' })
+
+    await revokeRound(CTX, IDS.round)
+
+    expect(mocks.roundFindOneAndUpdate).toHaveBeenCalledWith(
+      {
+        _id: IDS.round,
+        workspaceId: IDS.workspace,
+        status: { $nin: ['completed', 'revoked'] },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          revocationState: 'pending',
+          revokedByMemberId: IDS.member,
+          revokedByName: 'HR One',
+        }),
+        $unset: { live: 1 },
+      }),
+      { new: true },
+    )
+    expect(mocks.revokeGuestAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ roundId: IDS.round }),
+    )
+    expect(mocks.deliverRuntimeRevocation).toHaveBeenCalledWith(
+      IDS.workspace,
+      IDS.round,
+    )
+    expect(mocks.appendEvent).toHaveBeenCalledWith(
+      IDS.workspace,
+      IDS.application,
+      expect.objectContaining({
+        type: 'ai_round_revoked',
+        actorMemberId: IDS.member,
+        actorName: 'HR One',
+      }),
     )
   })
 })

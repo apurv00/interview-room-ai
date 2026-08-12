@@ -1,24 +1,12 @@
-/**
- * GET /api/workspace/applications/[appId] — the candidate card.
- *
- * Opening the card is the moment fresh results matter, so this read first
- * runs the completion-event reconciliation (roundLinkService — read-only
- * against the engine, atomic claim on the hire side), then returns the
- * application, candidate, job, rounds, and any transient activity
- * ("interview in progress right now").
- *
- * Guests whose round completed in this pass are RETIRED here (engine-run
- * budget → 0): the round is done, so neither retake farming nor the
- * engine's calendar-month counter reset can buy more runs on the same
- * invite (Codex P2 on #606). The B2C write lives in this app-layer route —
- * the hire module itself never writes B2C rows.
- */
-
 import { NextResponse } from 'next/server'
-import { composeApiRoute } from '@shared/middleware/composeApiRoute'
-import { connectDB } from '@shared/db/connection'
-import { User } from '@shared/db/models'
-import { requireMembership, getApplicationDetail, reconcileApplicationRounds } from '@hire'
+import {
+  HireInterviewAttempt,
+  HireInterviewResult,
+  HireMediaAsset,
+  requireMembership,
+  getApplicationDetail,
+  getAiInviteDeliveryViews,
+} from '@hire'
 import {
   serializeApplication,
   serializeCandidate,
@@ -26,30 +14,44 @@ import {
   serializeRound,
   resumeHashOf,
 } from '../../_lib/serialize'
+import { composeHireApiRoute } from '../../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
 
-export const GET = composeApiRoute({
+/** Candidate card reads only workspace-owned Hire projections and media ids. */
+export const GET = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-app' },
-  // Account-lifecycle egress fence: a deleted/deleting account with a
-  // still-valid JWT must not read or mutate hiring data (Codex P1 on #604).
-  requireActiveAccount: true,
   async handler(_req, { user, params }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email })
-    const { activity, completedGuestUserIds } = await reconcileApplicationRounds(
-      ctx.workspace._id.toString(),
-      params.appId
-    )
-    if (completedGuestUserIds.length > 0) {
-      await connectDB()
-      // Idempotent — completed guests are re-reported every pass, so a
-      // failed retirement heals on the next card load.
-      await User.updateMany(
-        { _id: { $in: completedGuestUserIds }, monthlyInterviewLimit: { $ne: 0 } },
-        { $set: { monthlyInterviewLimit: 0 } }
-      )
-    }
     const detail = await getApplicationDetail(ctx, params.appId)
+    const roundIds = detail.rounds.map((round) => round._id)
+    const scope = {
+      workspaceId: ctx.workspace._id,
+      applicationId: detail.application._id,
+      roundId: { $in: roundIds },
+    }
+    const [results, photos, attempts, inviteDeliveryByRound] = await Promise.all([
+      HireInterviewResult.find(scope)
+        .select(
+          'roundId attemptId numericSummary projection evidenceIndex completedAt piiPurgedAt',
+        )
+        .lean(),
+      HireMediaAsset.find({
+        ...scope,
+        kind: 'identity_photo',
+        state: 'ready',
+        active: true,
+      })
+        .select('_id roundId attemptId capturedAt')
+        .lean(),
+      HireInterviewAttempt.find(scope)
+        .select('roundId status startedAt completedAt sequence')
+        .lean(),
+      getAiInviteDeliveryViews(ctx, detail.rounds),
+    ])
+    const resultByRound = new Map(results.map((result) => [result.roundId.toString(), result]))
+    const photoByRound = new Map(photos.map((photo) => [photo.roundId.toString(), photo]))
+
     return NextResponse.json({
       application: serializeApplication(detail.application, {
         candidateResumeHash: resumeHashOf(detail.candidate.resumeText),
@@ -57,8 +59,28 @@ export const GET = composeApiRoute({
       }),
       candidate: serializeCandidate(detail.candidate, { includeResume: true }),
       job: serializeJob(detail.job, { includeJd: true }),
-      rounds: detail.rounds.map(serializeRound),
-      activity,
+      rounds: detail.rounds.map((round) => {
+        const serialized = serializeRound(round)
+        const result = resultByRound.get(round._id.toString())
+        const photo = photoByRound.get(round._id.toString())
+        return {
+          ...serialized,
+          inviteDelivery: inviteDeliveryByRound.get(round._id.toString()) ?? null,
+          assessment: result?.projection ?? null,
+          evidenceIndex: result?.evidenceIndex ?? [],
+          identityPhoto: photo
+            ? { assetId: photo._id.toString(), capturedAt: photo.capturedAt }
+            : null,
+          mediaPurged: Boolean(result?.piiPurgedAt),
+        }
+      }),
+      activity: attempts.map((attempt) => ({
+        roundId: attempt.roundId.toString(),
+        inProgress: attempt.status === 'in_progress' || attempt.status === 'processing',
+        status: attempt.status,
+      })),
+    }, {
+      headers: { 'Cache-Control': 'private, no-store' },
     })
   },
 })

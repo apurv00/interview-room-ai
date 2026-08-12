@@ -25,6 +25,7 @@ import {
 
 const USER_ID = '507f1f77bcf86cd799439011'
 const SESSION_ID = '507f1f77bcf86cd799439012'
+const ORGANIZATION_ID = '507f1f77bcf86cd799439013'
 
 describe('inviteTicketService', () => {
   beforeEach(() => {
@@ -54,6 +55,19 @@ describe('inviteTicketService', () => {
       mockRedisSet.mockRejectedValue(new Error('redis down'))
       const ticket = await issueAuthTicket(USER_ID, SESSION_ID)
       expect(ticket).toBeNull()
+    })
+
+    it('binds a runtime ticket to its exact organization when provided', async () => {
+      mockRedisSet.mockResolvedValue('OK')
+      const ticket = await issueAuthTicket(USER_ID, SESSION_ID, ORGANIZATION_ID)
+
+      const stored = JSON.parse(mockRedisSet.mock.calls[0][1] as string)
+      expect(stored).toEqual({
+        userId: USER_ID,
+        sessionId: SESSION_ID,
+        organizationId: ORGANIZATION_ID,
+      })
+      expect(ticket).toMatch(/^[0-9a-f]{64}$/)
     })
 
     it('generates a unique ticket per call', async () => {
@@ -102,6 +116,18 @@ describe('inviteTicketService', () => {
       expect(result).toBeNull()
       // DEL still runs because we delete before parsing — important for
       // single-use, even in the malformed-payload branch.
+      expect(mockRedisDel).toHaveBeenCalled()
+    })
+
+    it('rejects a malformed optional organization boundary', async () => {
+      mockRedisGet.mockResolvedValue(JSON.stringify({
+        userId: USER_ID,
+        sessionId: SESSION_ID,
+        organizationId: 'not-an-objectid',
+      }))
+      mockRedisDel.mockResolvedValue(1)
+
+      await expect(redeemAuthTicket('a'.repeat(64))).resolves.toBeNull()
       expect(mockRedisDel).toHaveBeenCalled()
     })
 

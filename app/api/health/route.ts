@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  currentDeploymentSurface,
+  hireDeploymentConfigurationIssues,
+} from '@shared/surfaces/hireDeploymentReadiness'
 import { deploymentCommitOf } from './deploymentIdentity'
 
 export const dynamic = 'force-dynamic'
@@ -19,6 +23,9 @@ export const dynamic = 'force-dynamic'
  */
 export async function HEAD() {
   try {
+    if (hireDeploymentConfigurationIssues().length > 0) {
+      return new NextResponse(null, { status: 503 })
+    }
     const { connectDB } = await import('@shared/db/connection')
     const mongoose = (await import('mongoose')).default
     await connectDB()
@@ -51,6 +58,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ status: 'ok' }, { status: 200 })
   }
   const checks: Record<string, 'ok' | 'error'> = {}
+  const configurationIssues = hireDeploymentConfigurationIssues()
+  checks.configuration = configurationIssues.length === 0 ? 'ok' : 'error'
 
   try {
     const { connectDB } = await import('@shared/db/connection')
@@ -75,6 +84,8 @@ export async function GET(req: NextRequest) {
     {
       status: allOk ? 'healthy' : 'degraded',
       checks,
+      surface: currentDeploymentSurface(),
+      configurationIssues,
       releaseGateAuthenticated,
       deploymentCommit: releaseGateAuthenticated ? deploymentCommitOf() : null,
       uptime: process.uptime(),

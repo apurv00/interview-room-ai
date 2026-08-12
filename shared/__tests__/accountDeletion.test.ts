@@ -21,6 +21,15 @@ vi.mock('@shared/services/usageBuffer', () => ({
     mockTombstoneAccountUsageBuffers(...args),
 }))
 
+const mockHireDeletionPreflight = vi.fn()
+const mockHireDeletionCommit = vi.fn()
+vi.mock('@shared/services/hireMemberDeletionBridgeClient', () => ({
+  preflightHireMemberForB2CAccountDeletion: (...args: unknown[]) =>
+    mockHireDeletionPreflight(...args),
+  commitHireMemberForB2CAccountDeletion: (...args: unknown[]) =>
+    mockHireDeletionCommit(...args),
+}))
+
 const mockSessionFindById = vi.fn()
 const mockSessionFindOneAndDelete = vi.fn()
 const mockSessionFind = vi.fn()
@@ -29,6 +38,7 @@ const mockUserFindOneAndUpdate = vi.fn()
 const mockUserFindById = vi.fn()
 const mockUserExists = vi.fn()
 const mockUserDeleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 })
+const mockUserUpdateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 })
 const mockServedProblemUpdateOne = vi.fn().mockResolvedValue({ acknowledged: true })
 const mockEvidenceDistinct = vi.fn()
 const mockEvidenceDeleteMany = vi.fn().mockResolvedValue({ deletedCount: 0 })
@@ -75,6 +85,7 @@ vi.mock('@shared/db/models/User', () => ({
     findById: (...args: unknown[]) => mockUserFindById(...args),
     exists: (...args: unknown[]) => mockUserExists(...args),
     deleteOne: (...args: unknown[]) => mockUserDeleteOne(...args),
+    updateOne: (...args: unknown[]) => mockUserUpdateOne(...args),
   },
 }))
 
@@ -92,6 +103,7 @@ vi.mock('@shared/db/models', () => {
       findById: (...args: unknown[]) => mockUserFindById(...args),
       exists: (...args: unknown[]) => mockUserExists(...args),
       deleteOne: (...args: unknown[]) => mockUserDeleteOne(...args),
+      updateOne: (...args: unknown[]) => mockUserUpdateOne(...args),
     },
     InterviewSession: {
       findById: (...args: unknown[]) => mockSessionFindById(...args),
@@ -592,6 +604,84 @@ describe('deleteUserAccount – R2 key coverage', () => {
     mockWaitlistDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockRawCollectionDeleteMany.mockResolvedValue({ deletedCount: 0 })
     mockTombstoneAccountUsageBuffers.mockResolvedValue(undefined)
+    mockHireDeletionPreflight.mockResolvedValue({
+      operationId: '123e4567-e89b-42d3-a456-426614174000',
+      result: { ok: true, action: 'not_linked' },
+    })
+    mockHireDeletionCommit.mockResolvedValue({ ok: true, action: 'not_linked' })
+    mockUserUpdateOne.mockResolvedValue({ modifiedCount: 1 })
+  })
+
+  it('preflights Hire before the B2C claim and commits before any personal-data sweep', async () => {
+    mockSessionFind.mockReturnValue({ lean: () => Promise.resolve([]) })
+
+    await deleteUserAccount('507f1f77bcf86cd799439011', {
+      workspaceConfirmationName: 'Acme',
+      acknowledgeWorkspaceDeletion: true,
+    })
+
+    expect(mockHireDeletionPreflight).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439011',
+      {
+        workspaceConfirmationName: 'Acme',
+        acknowledgeWorkspaceDeletion: true,
+      },
+    )
+    expect(mockHireDeletionCommit).toHaveBeenCalledWith(
+      '507f1f77bcf86cd799439011',
+      {
+        operationId: '123e4567-e89b-42d3-a456-426614174000',
+        workspaceConfirmationName: 'Acme',
+        acknowledgeWorkspaceDeletion: true,
+      },
+    )
+    expect(mockHireDeletionPreflight.mock.invocationCallOrder[0]).toBeLessThan(
+      mockUserFindOneAndUpdate.mock.invocationCallOrder[0],
+    )
+    expect(mockUserFindOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mockHireDeletionCommit.mock.invocationCallOrder[0],
+    )
+    expect(mockHireDeletionCommit.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSessionFind.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('does not mutate B2C state when the Hire preflight blocks deletion', async () => {
+    const blocked = new Error('transfer first')
+    mockHireDeletionPreflight.mockRejectedValueOnce(blocked)
+
+    await expect(
+      deleteUserAccount('507f1f77bcf86cd799439011'),
+    ).rejects.toBe(blocked)
+
+    expect(mockUserFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockHireDeletionCommit).not.toHaveBeenCalled()
+    expect(mockSessionDeleteMany).not.toHaveBeenCalled()
+  })
+
+  it('rolls back a fresh B2C lifecycle claim when the Hire commit loses an authority race', async () => {
+    const raced = new Error('member added concurrently')
+    mockHireDeletionCommit.mockRejectedValueOnce(raced)
+
+    await expect(
+      deleteUserAccount('507f1f77bcf86cd799439011'),
+    ).rejects.toBe(raced)
+
+    expect(mockUserUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: expect.anything(),
+        accountState: 'deleting',
+        accountDeletionRequestedAt: expect.any(Date),
+      },
+      {
+        $set: { accountState: 'active' },
+        $unset: { accountDeletionRequestedAt: 1 },
+        $inc: { jobsWriteRevision: 1 },
+      },
+      { writeConcern: { w: 'majority' } },
+    )
+    expect(mockSessionFind).not.toHaveBeenCalled()
+    expect(mockUserDeleteOne).not.toHaveBeenCalled()
   })
 
   it('collects the User resume plus every session R2 key and deletes them', async () => {

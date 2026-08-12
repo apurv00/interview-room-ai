@@ -1,15 +1,8 @@
 import type { Metadata, Viewport } from 'next'
-import { SpeedInsights } from '@vercel/speed-insights/next'
-import { GoogleAnalyticsScripts } from '@shared/analytics/GoogleAnalyticsScripts'
-import { AnalyticsProvider } from '@shared/analytics/AnalyticsProvider'
-import SessionProvider from '@shared/providers/SessionProvider'
-import { ThemeProvider } from '@shared/providers/ThemeProvider'
-import XpProvider from '@shared/providers/XpProvider'
-import { AuthGateProvider } from '@shared/providers/AuthGateProvider'
-import AppShell from '@shared/layout/AppShell'
+import RootSurfaceComposition from './_components/RootSurfaceComposition'
 import JsonLd from '@shared/seo/JsonLd'
 import { siteConfig } from '@shared/siteConfig'
-import { XpBadge, BadgeUnlockChecker } from '@learn'
+import { resolveDeploymentSurface } from '@shared/surfaces/hireSurfaceIsolation'
 import './globals.css'
 
 export const viewport: Viewport = {
@@ -66,9 +59,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const gaId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID
   const enableSpeedInsights =
     process.env.VERCEL === '1' || process.env.NEXT_PUBLIC_ENABLE_SPEED_INSIGHTS === 'true'
+  const deploymentSurface = resolveDeploymentSurface({
+    configuredSurface: process.env.IPG_SURFACE,
+  })
 
   return (
-    <html lang="en">
+    <html lang="en" data-ipg-surface={deploymentSurface}>
       <body className="min-h-screen bg-page text-[var(--foreground)] antialiased">
         <JsonLd
           data={{
@@ -103,24 +99,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             logo: `${siteConfig.url}/icon`,
           }}
         />
-        <SessionProvider>
-          <AnalyticsProvider>
-            <AuthGateProvider>
-              <ThemeProvider>
-                <XpProvider>
-                  <AppShell
-                    navAuthExtras={<XpBadge />}
-                    authedGlobalWidgets={<BadgeUnlockChecker />}
-                  >
-                    {children}
-                  </AppShell>
-                </XpProvider>
-              </ThemeProvider>
-            </AuthGateProvider>
-          </AnalyticsProvider>
-        </SessionProvider>
-        {enableSpeedInsights && <SpeedInsights />}
-        {gaId && <GoogleAnalyticsScripts gaId={gaId} />}
+        <RootSurfaceComposition
+          deploymentSurface={deploymentSurface}
+          gaId={gaId}
+          enableSpeedInsights={enableSpeedInsights}
+        >
+          {children}
+        </RootSurfaceComposition>
       </body>
     </html>
   )

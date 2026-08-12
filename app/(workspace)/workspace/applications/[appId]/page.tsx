@@ -16,6 +16,7 @@ import Button from '@shared/ui/Button'
 import Accordion from '@shared/ui/Accordion'
 import { ScoreBar, scoreBand } from '@shared/ui/ScoreBar'
 import StateView from '@shared/ui/StateView'
+import HireEvidenceAssessment from '@hire/components/HireEvidenceAssessment'
 
 // Canonical 75/55 bands (shared/ui/ScoreBar) — a 72 must never be green here
 // while amber in the adjacent ScoreBar (Codex on #603, same class as #498).
@@ -68,14 +69,79 @@ interface Round {
   config: { role: string; experience: string; duration: number }
   attemptCount: number | null
   results: RoundResults | null
+  assessment: {
+    overallScore: number | null
+    overallEvidenceIds: string[]
+    recommendation?: string
+    confidence?: string
+    dimensions: Array<{
+      key: string
+      label: string
+      score: number | null
+      evidenceIds: string[]
+    }>
+    findings: Array<{
+      kind: 'strength' | 'gap'
+      text: string
+      evidenceIds: string[]
+    }>
+    questions: Array<{
+      questionId: string
+      index: number
+      prompt: string
+      answer?: string
+      score: number | null
+      evidenceIds: string[]
+      questionStartedMs?: number
+      answerStartedMs?: number
+      answerEndedMs?: number
+    }>
+  } | null
+  evidenceIndex: Array<{
+    id: string
+    type: 'transcript_span' | 'recording_range' | 'integrity_observation' | 'identity_photo'
+    questionId?: string
+    startMs?: number
+    endMs?: number
+    mediaAssetId?: string
+    transcriptExcerpt?: string
+  }>
+  identityPhoto: { assetId: string; capturedAt: string } | null
+  mediaPurged: boolean
+  inviteDelivery: {
+    status: 'pending' | 'sending' | 'sent' | 'failed'
+    attempts: number
+    expiresAt: string
+    sentAt: string | null
+    lastError: string | null
+    inviteUrl: string | null
+    recoverable: boolean
+  } | null
 }
+
+type Stage =
+  | 'new'
+  | 'screened'
+  | 'interviewing'
+  | 'shortlist'
+  | 'offer'
+  | 'hired'
+  | 'rejected'
+  | 'withdrawn'
+type StageAction = 'advance' | 'reject' | 'withdraw' | 'offer_accepted' | 'offer_declined'
 
 interface CardData {
   application: {
     id: string
     jobId: string
-    stage: string
+    stage: Stage
     decisionNote: string | null
+    offerDecision: {
+      outcome: 'accepted' | 'declined'
+      actorName: string
+      note: string | null
+      at: string
+    } | null
     resumeMatch?: {
       score: number | null
       strengths: string[]
@@ -113,7 +179,8 @@ interface CardData {
   activity: Array<{ roundId: string; inProgress: boolean }>
 }
 
-const TERMINAL = ['hired', 'rejected']
+const TERMINAL: readonly Stage[] = ['hired', 'rejected', 'withdrawn']
+const ACTIVE_INTERVIEW_REFRESH_MS = 15_000
 
 export default function ApplicationCardPage({ params }: { params: { appId: string } }) {
   const [data, setData] = useState<CardData | null>(null)
@@ -124,8 +191,18 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
   const [experience, setExperience] = useState<'0-2' | '3-6' | '7+'>('3-6')
   const [inviteUrl, setInviteUrl] = useState<string | null>(null)
   const [emailSent, setEmailSent] = useState(true)
-  const [needNote, setNeedNote] = useState<'advance' | null>(null)
+  const [inviteCopied, setInviteCopied] = useState(false)
+  const [deliveryCopiedFor, setDeliveryCopiedFor] = useState<string | null>(null)
+  const [needNote, setNeedNote] = useState<{
+    expectedFrom: Stage
+    action: 'offer_accepted'
+  } | null>(null)
   const [note, setNote] = useState('')
+  const [stageCommand, setStageCommand] = useState<{
+    expectedFrom: Stage
+    action: StageAction
+    operationId: string
+  } | null>(null)
 
   const load = useCallback(async () => {
     setError(null)
@@ -143,6 +220,22 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
     void load()
   }, [load])
 
+  /**
+   * Runtime result publication is asynchronous. Keep this HR-facing card
+   * current while the control plane reports a live attempt, then stop as soon
+   * as the attempt reaches a terminal state. The detail endpoint is private
+   * and no-store, so this always retrieves the latest linked evidence.
+   */
+  const hasActiveInterview = data?.activity.some((activity) => activity.inProgress) ?? false
+  useEffect(() => {
+    if (!hasActiveInterview) return
+
+    const interval = window.setInterval(() => {
+      void load()
+    }, ACTIVE_INTERVIEW_REFRESH_MS)
+    return () => window.clearInterval(interval)
+  }, [hasActiveInterview, load])
+
   async function sendAiInterview(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
@@ -159,8 +252,50 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
         return
       }
       setInviteUrl(body.inviteUrl)
+      setInviteCopied(false)
       setEmailSent(body.emailSent)
       setShowSend(false)
+      await load()
+    } catch {
+      setActionError('Something went wrong. Check your connection.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function copyInviteLink() {
+    if (!inviteUrl) return
+    try {
+      await navigator.clipboard.writeText(inviteUrl)
+      setInviteCopied(true)
+    } catch {
+      setActionError('Clipboard access was blocked. Select and copy the link below.')
+    }
+  }
+
+  async function copyRecoveredInvite(roundId: string, url: string) {
+    try {
+      await navigator.clipboard.writeText(url)
+      setDeliveryCopiedFor(roundId)
+    } catch {
+      setActionError('Clipboard access was blocked. Select and copy the link below.')
+    }
+  }
+
+  async function retryInviteDelivery(roundId: string) {
+    setBusy(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/workspace/rounds/${roundId}/invite-delivery`, {
+        method: 'POST',
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setActionError(body.error || 'Could not retry the invitation email.')
+        return
+      }
+      setInviteUrl(body.delivery?.inviteUrl ?? null)
+      setEmailSent(body.emailSent === true)
       await load()
     } catch {
       setActionError('Something went wrong. Check your connection.')
@@ -188,19 +323,37 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
     }
   }
 
-  async function moveStage(action: 'advance' | 'reject', moveNote?: string) {
+  async function moveStage(
+    expectedFrom: Stage,
+    action: StageAction,
+    moveNote?: string,
+  ) {
+    if (action === 'offer_accepted' && !moveNote) {
+      setNeedNote({ expectedFrom, action })
+      return
+    }
     setBusy(true)
     setActionError(null)
     try {
+      const operationId =
+        stageCommand?.expectedFrom === expectedFrom && stageCommand.action === action
+          ? stageCommand.operationId
+          : crypto.randomUUID()
+      setStageCommand({ expectedFrom, action, operationId })
       const res = await fetch(`/api/workspace/applications/${params.appId}/stage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, ...(moveNote ? { note: moveNote } : {}) }),
+        body: JSON.stringify({
+          action,
+          expectedFrom,
+          operationId,
+          ...(moveNote ? { note: moveNote } : {}),
+        }),
       })
       const body = await res.json()
       if (!res.ok) {
         if (body.code === 'DECISION_NOTE_REQUIRED') {
-          setNeedNote('advance')
+          setNeedNote({ expectedFrom, action: 'offer_accepted' })
           return
         }
         setActionError(body.error || 'Could not move the candidate.')
@@ -208,6 +361,7 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
       }
       setNeedNote(null)
       setNote('')
+      setStageCommand(null)
       await load()
     } catch {
       setActionError('Something went wrong.')
@@ -269,11 +423,51 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
                   {showSend ? 'Cancel' : 'Send AI interview'}
                 </Button>
               )}
-              <Button variant="secondary" disabled={busy} onClick={() => void moveStage('advance')}>
-                Advance
-              </Button>
-              <Button variant="secondary" disabled={busy} onClick={() => void moveStage('reject')}>
-                Reject
+              {application.stage === 'offer' ? (
+                <>
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      setNeedNote({ expectedFrom: application.stage, action: 'offer_accepted' })
+                    }
+                  >
+                    Offer accepted
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      void moveStage(application.stage, 'offer_declined')
+                    }
+                  >
+                    Offer declined
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void moveStage(application.stage, 'advance')}
+                >
+                  Advance
+                </Button>
+              )}
+              {application.stage !== 'offer' && (
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void moveStage(application.stage, 'reject')}
+                >
+                  Reject
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={() => void moveStage(application.stage, 'withdraw')}
+              >
+                Withdraw
               </Button>
             </div>
           )}
@@ -281,11 +475,18 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
         {application.decisionNote && (
           <p className="mt-3 text-sm text-emerald-700">Decision: {application.decisionNote}</p>
         )}
+        {application.offerDecision && (
+          <p className="mt-2 text-xs text-[#536471]">
+            Offer {application.offerDecision.outcome} · recorded by{' '}
+            {application.offerDecision.actorName} ·{' '}
+            {new Date(application.offerDecision.at).toLocaleString()}
+          </p>
+        )}
         {actionError && <p className="mt-3 text-sm text-[#f4212e]">{actionError}</p>}
         {needNote && (
           <div className="mt-3 space-y-2">
             <p className="text-xs text-[#536471]">
-              A decision note is required to mark this candidate Hired.
+              Record why the candidate accepted the offer and should be hired.
             </p>
             <textarea
               value={note}
@@ -299,7 +500,9 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
               <Button
                 size="sm"
                 disabled={busy || note.trim().length === 0}
-                onClick={() => void moveStage('advance', note.trim())}
+                onClick={() =>
+                  void moveStage(needNote.expectedFrom, needNote.action, note.trim())
+                }
               >
                 Confirm hire
               </Button>
@@ -448,11 +651,14 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
       )}
 
       {inviteUrl && (
-        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 text-sm space-y-1">
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 text-sm space-y-3">
           <p className="text-indigo-900 font-medium">
             {emailSent ? 'Invite emailed.' : 'Email delivery unavailable — share this link directly:'}
           </p>
           <code className="block text-xs break-all text-indigo-800">{inviteUrl}</code>
+          <Button size="sm" variant="secondary" onClick={() => void copyInviteLink()}>
+            {inviteCopied ? 'Copied' : 'Copy interview link'}
+          </Button>
         </div>
       )}
 
@@ -484,12 +690,56 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
                 {round.revokedAt ? 'revoked' : round.status.replace('_', ' ')}
               </Badge>
               {!round.revokedAt && round.status !== 'completed' && (
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => void revoke(round.id)}>
-                  Revoke link
-                </Button>
+                <div className="text-right">
+                  <Button size="sm" variant="secondary" disabled={busy} onClick={() => void revoke(round.id)}>
+                    Revoke link
+                  </Button>
+                  <p className="mt-1 max-w-56 text-[11px] text-[#71767b]">
+                    The recovery link below remains available to signed-in members until expiry.
+                  </p>
+                </div>
               )}
             </div>
           </div>
+
+          {round.inviteDelivery?.recoverable && round.inviteDelivery.inviteUrl && (
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm space-y-2">
+              <p className="font-medium text-indigo-900">
+                {round.inviteDelivery.status === 'sent'
+                  ? 'Invitation email sent · recovery link available'
+                  : round.inviteDelivery.status === 'failed'
+                    ? 'Invitation email failed · copy the link or retry'
+                    : 'Invitation is saved · copy the link or retry delivery'}
+              </p>
+              <code className="block break-all text-xs text-indigo-800">
+                {round.inviteDelivery.inviteUrl}
+              </code>
+              {round.inviteDelivery.lastError && (
+                <p className="text-xs text-red-700">{round.inviteDelivery.lastError}</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    void copyRecoveredInvite(round.id, round.inviteDelivery!.inviteUrl!)
+                  }
+                >
+                  {deliveryCopiedFor === round.id ? 'Copied' : 'Copy interview link'}
+                </Button>
+                {round.inviteDelivery.status !== 'sent' && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => void retryInviteDelivery(round.id)}
+                  >
+                    {busy ? 'Retrying…' : 'Retry invitation email'}
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
 
           {round.results?.pending && (
             <p className="text-sm text-amber-600">
@@ -521,7 +771,17 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
             </p>
           )}
 
-          {round.results && (
+          {round.assessment && (
+            <HireEvidenceAssessment
+              applicationId={application.id}
+              assessment={round.assessment}
+              evidenceIndex={round.evidenceIndex}
+              identityPhoto={round.identityPhoto}
+              mediaPurged={round.mediaPurged}
+            />
+          )}
+
+          {!round.assessment && round.results && (
             <>
               <div className="grid md:grid-cols-3 gap-4">
                 {/* Never paint a missing score as a red 0 — while the report

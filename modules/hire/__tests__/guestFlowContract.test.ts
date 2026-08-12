@@ -1,135 +1,203 @@
 /**
- * Engine-seam contract tests (goal item 2).
+ * Contract proof for the only permitted interview-engine seam.
  *
- * The hire module consumes the interview engine WITHOUT modifying it, so the
- * seams live on conventions this suite pins. If the engine ever changes its
- * public contracts — the CreateSessionSchema config shape, the localStorage
- * key names, or the depth catalog — these tests fail loudly instead of the
- * guest flow silently breaking in production.
+ * The browser crosses from the Hire control plane to a physically isolated
+ * runtime using opaque coordinates and a frozen config. The unchanged engine
+ * still receives its existing CreateSessionSchema shape, while candidate PII
+ * and B2C account identifiers are rejected at the bridge boundary.
  */
 
-import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
-import { join } from 'path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
 import { CreateSessionSchema } from '@interview/validators/interview'
 import { isDepthAllowedForExperience } from '@interview'
 import {
-  INTERVIEW_ROLE_SLUG_MAX_CHARS,
   INTERVIEW_JOB_DESCRIPTION_MAX_CHARS,
+  INTERVIEW_ROLE_SLUG_MAX_CHARS,
 } from '@shared/interviewContract'
 import { STORAGE_KEYS } from '@shared/storageKeys'
 import {
+  HireEngineConfigSchema,
+  HireEngineHandoffEnvelopeSchema,
+  HireRuntimeBootstrapResponseSchema,
+} from '@shared/contracts/hireEngineBridge'
+import { runtimePrincipalEmail } from '../../hire-runtime/services/runtimePrincipalService'
+import {
   AI_ROUND_INTERVIEW_TYPE,
+  BuildJobDescriptionSchema,
+  CreateJobSchema,
   GuestBeginSchema,
   GuestVerifyCodeSchema,
-  CreateJobSchema,
   buildJdSnapshot,
-  guestEmailForRound,
 } from '..'
-import type { GuestInterviewConfig } from '../services/aiRoundService'
 
-describe('session-provisioning seam: the engine accepts the guest config', () => {
-  const guestConfig: GuestInterviewConfig = {
-    role: 'Backend Engineer',
-    interviewType: AI_ROUND_INTERVIEW_TYPE,
-    experience: '3-6',
-    duration: 15,
-    jobDescription: 'We are hiring a backend engineer to build our core platform APIs.',
-    targetCompany: 'Acme Inc.',
-  }
+const IDS = {
+  workspace: '111111111111111111111111',
+  application: '222222222222222222222222',
+  round: '333333333333333333333333',
+  principal: '444444444444444444444444',
+}
 
-  it("CreateSessionSchema (the engine's POST /api/interviews contract) parses it", () => {
-    const parsed = CreateSessionSchema.parse({ config: guestConfig })
-    expect(parsed.config.role).toBe('Backend Engineer')
-    expect(parsed.config.interviewType).toBe(AI_ROUND_INTERVIEW_TYPE)
-    expect(parsed.config.duration).toBe(15)
-    expect(parsed.config.jobDescription).toContain('backend engineer')
+const frozenJd = buildJdSnapshot({
+  proseJd: 'We are hiring a backend engineer to build production platform APIs.',
+  version: 3,
+  contentHash: 'ab'.repeat(32),
+  requirements: [
+    { id: 'must-1', text: 'Production TypeScript', importance: 'must_have' },
+  ],
+})
+
+const engineConfig = {
+  role: 'Backend Engineer',
+  interviewType: AI_ROUND_INTERVIEW_TYPE,
+  experience: '3-6' as const,
+  duration: 15,
+  jobDescription: frozenJd,
+  targetCompany: 'Acme Inc.',
+}
+
+const accepted = {
+  recording: true,
+  identityPhoto: true,
+  attentionMonitoring: true,
+  aiEvaluation: true,
+} as const
+
+describe('unchanged engine provisioning contract', () => {
+  it('accepts exactly the canonical config emitted by the Hire bridge', () => {
+    const bridgeConfig = HireEngineConfigSchema.parse(engineConfig)
+    const engineRequest = CreateSessionSchema.parse({ config: bridgeConfig })
+    expect(engineRequest.config).toMatchObject(engineConfig)
   })
 
-  it('both send-modal durations pass the engine contract', () => {
+  it('keeps title, duration, experience, and JD within both authorities', () => {
     for (const duration of [15, 30]) {
-      expect(() => CreateSessionSchema.parse({ config: { ...guestConfig, duration } })).not.toThrow()
+      expect(() =>
+        HireEngineConfigSchema.parse({ ...engineConfig, duration }),
+      ).not.toThrow()
+      expect(() =>
+        CreateSessionSchema.parse({ config: { ...engineConfig, duration } }),
+      ).not.toThrow()
     }
-  })
-
-  it('the fixed AI-round depth is allowed at every experience band', () => {
-    for (const experience of ['0-2', '3-6', '7+']) {
+    for (const experience of ['0-2', '3-6', '7+'] as const) {
       expect(isDepthAllowedForExperience(AI_ROUND_INTERVIEW_TYPE, experience)).toBe(true)
     }
+    expect(frozenJd.length).toBeLessThanOrEqual(INTERVIEW_JOB_DESCRIPTION_MAX_CHARS)
+    expect(engineConfig.role.length).toBeLessThanOrEqual(INTERVIEW_ROLE_SLUG_MAX_CHARS)
   })
 
-  it('every title CreateJobSchema accepts fits the engine role contract (boundary pinned)', () => {
-    const maxTitle = 'T'.repeat(INTERVIEW_ROLE_SLUG_MAX_CHARS)
-    expect(() => CreateJobSchema.parse({ title: maxTitle, jdText: 'x'.repeat(60) })).not.toThrow()
+  it('creates the prose and structured source before a job can become authoritative', () => {
+    const builderInput = {
+      title: 'Backend Engineer',
+      level: 'Senior',
+      mustHaves: ['Production TypeScript'],
+      niceToHaves: ['Distributed systems'],
+      location: 'Bengaluru, India',
+      workMode: 'hybrid' as const,
+      companyBlurb: 'Acme builds reliable tools for growing engineering teams.',
+    }
+    expect(BuildJobDescriptionSchema.parse(builderInput)).toEqual(builderInput)
     expect(() =>
-      CreateJobSchema.parse({ title: maxTitle + 'X', jdText: 'x'.repeat(60) })
+      CreateJobSchema.parse({
+        ...builderInput,
+        jdText: 'Too short',
+      }),
+    ).toThrow()
+  })
+})
+
+describe('identity-free bridge contract', () => {
+  const envelope = {
+    schemaVersion: 1 as const,
+    workspaceId: IDS.workspace,
+    applicationId: IDS.application,
+    roundId: IDS.round,
+    nonce: 'cd'.repeat(32),
+    issuedAt: '2026-08-10T00:00:00.000Z',
+    expiresAt: '2026-08-10T00:01:00.000Z',
+    inviteExpiresAt: '2026-08-17T00:00:00.000Z',
+    consentVersion: 'hire-ai-v1-2026-08-10',
+    consentAt: '2026-08-10T00:00:00.000Z',
+    config: engineConfig,
+  }
+
+  it('strictly rejects candidate email, name, and B2C user identifiers', () => {
+    expect(() =>
+      HireEngineHandoffEnvelopeSchema.parse({
+        ...envelope,
+        candidateEmail: 'same-as-b2c@example.com',
+      }),
     ).toThrow()
     expect(() =>
-      CreateSessionSchema.parse({ config: { ...guestConfig, role: maxTitle } })
-    ).not.toThrow()
+      HireRuntimeBootstrapResponseSchema.parse({
+        principalId: IDS.principal,
+        roundId: IDS.round,
+        config: engineConfig,
+        userId: IDS.principal,
+      }),
+    ).toThrow()
   })
 
-  it('the jdSnapshot (JD + round reference) never exceeds the engine JD contract', () => {
-    const roundId = 'a'.repeat(24)
-    const maxJd = 'J'.repeat(INTERVIEW_JOB_DESCRIPTION_MAX_CHARS)
-    const snapshot = buildJdSnapshot(maxJd, roundId)
-    expect(snapshot.length).toBeLessThanOrEqual(INTERVIEW_JOB_DESCRIPTION_MAX_CHARS)
-    expect(snapshot).toContain(`[Interview reference: HR-${roundId}]`)
-    expect(() =>
-      CreateSessionSchema.parse({ config: { ...guestConfig, jobDescription: snapshot } })
-    ).not.toThrow()
-    // Distinct rounds over an identical JD produce distinct match keys — the
-    // property the cross-tenant claim fix rests on.
-    expect(buildJdSnapshot('same jd', 'a'.repeat(24))).not.toBe(
-      buildJdSnapshot('same jd', 'b'.repeat(24))
-    )
+  it('derives one non-routable runtime principal from the round—not the candidate email', () => {
+    const principalEmail = runtimePrincipalEmail(IDS.round)
+    expect(principalEmail).toBe(`round-${IDS.round}@guests.interviewprep.internal`)
+    expect(principalEmail).not.toContain('same-as-b2c@example.com')
   })
-})
 
-describe('localStorage handoff contract (prepare page ↔ engine room)', () => {
-  it('pins the key names the engine room reads', () => {
-    // app/candidate/[roundId]/prepare/page.tsx writes these; the engine's
-    // /interview page reads them. A rename on either side must break here.
+  it('keeps runtime storage compatible while clearing/setting it only on the isolated host', () => {
     expect(STORAGE_KEYS.INTERVIEW_CONFIG).toBe('interviewConfig')
     expect(STORAGE_KEYS.INTERVIEW_ACTIVE_SESSION).toBe('interviewActiveSession')
-    expect(STORAGE_KEYS.PENDING_RETAKE_PARENT).toBe('pendingRetakeParent')
-    expect(STORAGE_KEYS.INTERVIEW_DATA).toBe('interviewData')
+    const handoffClient = readFileSync(
+      join(process.cwd(), 'app/handoff/handoff-client.tsx'),
+      'utf8',
+    )
+    expect(handoffClient).toContain('HireRuntimeBootstrapResponseSchema')
+    expect(handoffClient).toContain("router.replace('/lobby')")
+    expect(handoffClient).not.toMatch(/candidate(?:Email|Name)|@shared\/db\/models\/User/)
   })
 })
 
-describe('guest token contract (both verification modes)', () => {
-  it('accepts exactly 32-byte hex tokens', () => {
-    expect(() => GuestBeginSchema.parse({ token: 'ab'.repeat(32) })).not.toThrow()
-    expect(() => GuestBeginSchema.parse({ token: 'ab'.repeat(31) })).toThrow()
-    expect(() => GuestBeginSchema.parse({ token: 'zz'.repeat(32) })).toThrow()
+describe('candidate entry contract', () => {
+  it('requires all four literal acknowledgements in both auth modes', () => {
+    const capability = `${'1'.repeat(24)}.${'ab'.repeat(32)}`
+    expect(() =>
+      GuestBeginSchema.parse({ capability, accepted }),
+    ).not.toThrow()
+    expect(() =>
+      GuestVerifyCodeSchema.parse({
+        capability,
+        code: '123456',
+        accepted,
+      }),
+    ).not.toThrow()
+    expect(() =>
+      GuestBeginSchema.parse({
+        capability,
+        accepted: { ...accepted, identityPhoto: false },
+      }),
+    ).toThrow()
+    expect(() =>
+      GuestVerifyCodeSchema.parse({
+        capability,
+        code: '12345',
+        accepted,
+      }),
+    ).toThrow()
   })
 
-  it('otp mode requires a 6-digit numeric code', () => {
-    const base = { token: 'ab'.repeat(32) }
-    expect(() => GuestVerifyCodeSchema.parse({ ...base, code: '123456' })).not.toThrow()
-    expect(() => GuestVerifyCodeSchema.parse({ ...base, code: '12345' })).toThrow()
-    expect(() => GuestVerifyCodeSchema.parse({ ...base, code: 'abcdef' })).toThrow()
-  })
-
-  it('synthetic guest identities are per-round, deterministic, and never routable', () => {
-    const a = guestEmailForRound('a'.repeat(24))
-    const b = guestEmailForRound('b'.repeat(24))
-    expect(a).not.toBe(b)
-    expect(a).toBe(guestEmailForRound('A'.repeat(24)))
-    expect(a.endsWith('@guests.interviewprep.internal')).toBe(true)
-  })
-
-  it("the guest capability scope's domain matches guestEmailForRound", () => {
-    // shared/auth/guestScope.ts is Edge-safe and cannot import the hire
-    // module, so it carries the guest email domain as a literal. If
-    // guestEmailForRound's domain ever changes, this pin fails BEFORE
-    // guests silently gain full B2C session scope.
-    const scopeSrc = readFileSync(
-      join(process.cwd(), 'shared/auth/guestScope.ts'),
-      'utf8'
-    )
-    const domain = guestEmailForRound('a'.repeat(24)).split('@')[1]
-    expect(scopeSrc).toContain(`@${domain}`)
-    expect(scopeSrc).toContain("'/candidate/thank-you'")
+  it('contains no legacy synthetic-user/ticket/prepare path in the control plane', () => {
+    const sourcePaths = [
+      'app/api/candidate/[roundId]/begin/route.ts',
+      'app/api/candidate/[roundId]/verify/route.ts',
+      'app/api/candidate/[roundId]/start/route.ts',
+      'app/candidate/[roundId]/CandidateFlow.tsx',
+    ]
+    for (const sourcePath of sourcePaths) {
+      const source = readFileSync(join(process.cwd(), sourcePath), 'utf8')
+      expect(source).not.toMatch(/guestEmailForRound|ensureGuestUser|issueAuthTicket|signIn\(/)
+      expect(source).not.toMatch(/@shared\/db\/models(?:\/User)?/)
+      expect(source).not.toMatch(/\/candidate\/[^'"`]*\/prepare/)
+    }
   })
 })

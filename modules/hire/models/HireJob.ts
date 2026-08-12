@@ -3,6 +3,18 @@ import mongoose, { Schema, Document, Model } from 'mongoose'
 export const HIRE_JOB_STATUSES = ['open', 'on_hold', 'closed'] as const
 export type HireJobStatus = (typeof HIRE_JOB_STATUSES)[number]
 
+export interface IHireJobEvent {
+  type: 'status_change'
+  from: HireJobStatus
+  to: HireJobStatus
+  actorMemberId?: mongoose.Types.ObjectId
+  actorUserId?: mongoose.Types.ObjectId
+  actorName: string
+  note?: string
+  operationId?: string
+  at: Date
+}
+
 /**
  * A job requisition. The JD text is the grounding for AI interview rounds
  * (question generation + jd_match_score) — required at creation, immutable in
@@ -14,6 +26,9 @@ export interface IHireJob extends Document {
   workspaceId: mongoose.Types.ObjectId
   title: string
   jdText: string
+  /** Immutable scoring-contract revision used for new scoring/rounds. */
+  activeRequirementVersionId?: mongoose.Types.ObjectId
+  activeRequirementVersion?: number
   status: HireJobStatus
   /** Conflict-inducing counter for the in-transaction intake claim. */
   intakeWriteVersion?: number
@@ -28,10 +43,30 @@ export interface IHireJob extends Document {
   closeNote?: string
   closedAt?: Date
   closedBy?: mongoose.Types.ObjectId
-  createdBy: mongoose.Types.ObjectId
+  closedByMemberId?: mongoose.Types.ObjectId
+  closedByName?: string
+  events: IHireJobEvent[]
+  createdBy?: mongoose.Types.ObjectId
+  createdByMemberId?: mongoose.Types.ObjectId
+  createdByName?: string
   createdAt: Date
   updatedAt: Date
 }
+
+const HireJobEventSchema = new Schema<IHireJobEvent>(
+  {
+    type: { type: String, enum: ['status_change'], required: true },
+    from: { type: String, enum: HIRE_JOB_STATUSES, required: true },
+    to: { type: String, enum: HIRE_JOB_STATUSES, required: true },
+    actorMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },
+    actorUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    actorName: { type: String, required: true, maxlength: 120 },
+    note: { type: String, maxlength: 4000 },
+    operationId: { type: String, maxlength: 80 },
+    at: { type: Date, required: true },
+  },
+  { _id: false },
+)
 
 const HireJobSchema = new Schema<IHireJob>(
   {
@@ -43,6 +78,11 @@ const HireJobSchema = new Schema<IHireJob>(
     },
     title: { type: String, required: true, trim: true, maxlength: 200 },
     jdText: { type: String, required: true, maxlength: 50000 },
+    activeRequirementVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'HireJobRequirementVersion',
+    },
+    activeRequirementVersion: { type: Number, min: 1 },
     status: { type: String, enum: HIRE_JOB_STATUSES, default: 'open' },
     // Conflict-inducing counter for the in-transaction intake claim: intake
     // $incs it with `status: {$ne:'closed'}` in the filter so a concurrent
@@ -54,12 +94,20 @@ const HireJobSchema = new Schema<IHireJob>(
     closeNote: { type: String, maxlength: 4000 },
     closedAt: { type: Date },
     closedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    closedByMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },
+    closedByName: { type: String, maxlength: 120 },
+    events: { type: [HireJobEventSchema], default: [] },
+    // Legacy B2C actor pointer. New Hire work is attributed to the member
+    // id/name snapshot and does not require a User row.
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    createdByMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },
+    createdByName: { type: String, maxlength: 120 },
   },
   { timestamps: true }
 )
 
 HireJobSchema.index({ workspaceId: 1, status: 1, createdAt: -1 })
+HireJobSchema.index({ workspaceId: 1, 'events.operationId': 1 })
 // Public apply-page lookup: the ONLY query that finds a job without a
 // workspace id, and it needs the hash to be selective. Sparse — most jobs
 // never enable the page.

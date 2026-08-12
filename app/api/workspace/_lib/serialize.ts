@@ -15,6 +15,7 @@ import type {
   MembershipContext,
   JobListItem,
   PipelineEntry,
+  HireJobEmailDeliverySummary,
 } from '@hire'
 
 export function serializeMembership(ctx: MembershipContext) {
@@ -22,7 +23,12 @@ export function serializeMembership(ctx: MembershipContext) {
     workspace: {
       id: ctx.workspace._id.toString(),
       name: ctx.workspace.name,
+      companyBlurb: ctx.workspace.companyBlurb ?? null,
       guestAuthMode: ctx.workspace.guestAuthMode ?? 'magic_link',
+      lifecycleState: ctx.workspace.lifecycleState ?? 'active',
+      deletedAt: ctx.workspace.deletedAt ?? null,
+      purgeAfter: ctx.workspace.purgeAfter ?? null,
+      deletedByName: ctx.workspace.deletedByName ?? null,
       createdAt: ctx.workspace.createdAt,
     },
     membership: {
@@ -30,6 +36,7 @@ export function serializeMembership(ctx: MembershipContext) {
       role: ctx.membership.role,
       email: ctx.membership.email,
       name: ctx.membership.name ?? null,
+      directAccount: !!ctx.membership.passwordSetAt,
     },
   }
 }
@@ -41,6 +48,9 @@ export function serializeMember(m: IHireWorkspaceMember) {
     name: m.name ?? null,
     role: m.role,
     linked: !!m.userId,
+    authState: m.authState ?? 'active',
+    passwordSet: !!m.passwordSetAt,
+    removedAt: m.removedAt ?? null,
     addedAt: m.createdAt,
   }
 }
@@ -52,6 +62,8 @@ export function serializeJob(job: IHireJob, opts: { includeJd?: boolean } = {}) 
     status: job.status,
     closeNote: job.closeNote ?? null,
     closedAt: job.closedAt ?? null,
+    closedByName: job.closedByName ?? null,
+    activeRequirementVersion: job.activeRequirementVersion ?? null,
     createdAt: job.createdAt,
     // Whether the public apply page is live. The token itself is NEVER
     // serialized — only its hash is stored, and the raw value is shown
@@ -69,6 +81,23 @@ export function serializeJobListItem(item: JobListItem) {
   }
 }
 
+export function serializeJobEmailDelivery(summary: HireJobEmailDeliverySummary) {
+  return {
+    total: summary.total,
+    pending: summary.pending,
+    sending: summary.sending,
+    sent: summary.sent,
+    failed: summary.failed,
+    failures: summary.failures.map((failure) => ({
+      recipientEmail: failure.recipientEmail,
+      recipientName: failure.recipientName,
+      attempts: failure.attempts,
+      lastError: failure.lastError,
+      failedAt: failure.failedAt,
+    })),
+  }
+}
+
 export function serializeCandidate(c: IHireCandidate, opts: { includeResume?: boolean } = {}) {
   return {
     id: c._id.toString(),
@@ -78,6 +107,8 @@ export function serializeCandidate(c: IHireCandidate, opts: { includeResume?: bo
     hasResume: !!c.resumeText,
     resumeFileName: c.resumeFileName ?? null,
     source: c.source,
+    createdByMemberId: c.createdByMemberId?.toString() ?? null,
+    createdByName: c.createdByName ?? null,
     addedAt: c.createdAt,
     ...(opts.includeResume ? { resumeText: c.resumeText ?? null } : {}),
   }
@@ -113,6 +144,14 @@ export function serializeApplication(
     candidateId: a.candidateId.toString(),
     stage: a.stage,
     decisionNote: a.decisionNote ?? null,
+    offerDecision: a.offerDecision
+      ? {
+          outcome: a.offerDecision.outcome,
+          actorName: a.offerDecision.actorName,
+          note: a.offerDecision.note ?? null,
+          at: a.offerDecision.at,
+        }
+      : null,
     resumeMatch: a.resumeMatch
       ? {
           score: a.resumeMatch.score ?? null,
@@ -172,12 +211,14 @@ export function serializeRound(r: IHireRound) {
     invitedAt: r.invitedAt,
     inviteExpiresAt: r.inviteTokenExpiry,
     consentAt: r.consentAt ?? null,
-    authVerifiedAt: r.authVerifiedAt ?? null,
     preparedAt: r.preparedAt ?? null,
     linkedAt: r.linkedAt ?? null,
     revokedAt: r.revokedAt ?? null,
     config: r.config,
     attemptCount: r.attemptCount ?? null,
+    requirementVersion: r.requirementVersion ?? null,
+    requirementHash: r.requirementHash ?? null,
+    revocationState: r.revocationState ?? 'not_requested',
     results: r.results ?? null,
   }
 }

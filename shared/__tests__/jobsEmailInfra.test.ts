@@ -499,13 +499,14 @@ describe('sendEmail reshape (R31)', () => {
     const { sendEmail } = await import('../services/emailService')
     mockResendSend.mockResolvedValue({ data: { id: 'resend-123' }, error: null })
     const r = await sendEmail({
-      to: 'a@b.c', subject: 's', html: '<p/>',
+      to: 'a@b.c', subject: 's', html: '<p/>', text: 'plain',
       headers: { 'List-Unsubscribe': '<https://x/u>' },
       idempotencyKey: 'e2/app1:2026-07-20',
     })
     expect(r).toEqual({ ok: true, id: 'resend-123' })
     const [payload, opts] = mockResendSend.mock.calls[0]
     expect(payload.headers).toEqual({ 'List-Unsubscribe': '<https://x/u>' })
+    expect(payload.text).toBe('plain')
     expect(opts).toEqual({ idempotencyKey: 'e2/app1:2026-07-20' })
     vi.unstubAllEnvs()
   })
