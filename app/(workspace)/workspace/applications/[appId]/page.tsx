@@ -180,6 +180,7 @@ interface CardData {
 }
 
 const TERMINAL: readonly Stage[] = ['hired', 'rejected', 'withdrawn']
+const ACTIVE_INTERVIEW_REFRESH_MS = 15_000
 
 export default function ApplicationCardPage({ params }: { params: { appId: string } }) {
   const [data, setData] = useState<CardData | null>(null)
@@ -218,6 +219,22 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
   useEffect(() => {
     void load()
   }, [load])
+
+  /**
+   * Runtime result publication is asynchronous. Keep this HR-facing card
+   * current while the control plane reports a live attempt, then stop as soon
+   * as the attempt reaches a terminal state. The detail endpoint is private
+   * and no-store, so this always retrieves the latest linked evidence.
+   */
+  const hasActiveInterview = data?.activity.some((activity) => activity.inProgress) ?? false
+  useEffect(() => {
+    if (!hasActiveInterview) return
+
+    const interval = window.setInterval(() => {
+      void load()
+    }, ACTIVE_INTERVIEW_REFRESH_MS)
+    return () => window.clearInterval(interval)
+  }, [hasActiveInterview, load])
 
   async function sendAiInterview(e: React.FormEvent) {
     e.preventDefault()

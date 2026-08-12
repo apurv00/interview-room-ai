@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ApplicationCardPage from '../page'
 
@@ -18,7 +18,7 @@ function json(value: unknown, status = 200): Response {
 const INVITE_URL =
   'https://hire.interviewprep.guru/candidate/round-1#invite=111111111111111111111111.secret'
 
-function card(deliveryStatus: 'failed' | 'sent') {
+function card(deliveryStatus: 'failed' | 'sent', interviewInProgress = false) {
   return {
     application: {
       id: 'app-1',
@@ -64,11 +64,12 @@ function card(deliveryStatus: 'failed' | 'sent') {
         recoverable: true,
       },
     }],
-    activity: [],
+    activity: interviewInProgress ? [{ roundId: 'round-1', inProgress: true }] : [],
   }
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -112,5 +113,37 @@ describe('AI invitation delivery recovery UI', () => {
       { method: 'POST' },
     )
     expect(screen.queryByRole('button', { name: 'Retry invitation email' })).not.toBeInTheDocument()
+  })
+
+  it('refreshes until a published interview leaves the in-progress state', async () => {
+    vi.useFakeTimers()
+    let interviewInProgress = true
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('/api/workspace/applications/app-1')
+      return json(card('sent', interviewInProgress))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ApplicationCardPage params={{ appId: 'app-1' }} />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByText('Interview in progress')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    interviewInProgress = false
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+      await Promise.resolve()
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText('Interview in progress')).not.toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
