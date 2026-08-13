@@ -496,7 +496,7 @@ export async function prepareHirePhase2Indexes(argv: string[]): Promise<void> {
 
   if (mode === 'check') {
     assertEveryIndexExact(before)
-    console.log('\nCHECK PASSED — all 12 exact Phase 2 Hire-control indexes exist.')
+    console.log(`\nCHECK PASSED — all ${HIRE_PHASE2_INDEX_DEFINITIONS.length} exact Phase 2 Hire-control indexes exist.`)
     return
   }
 
@@ -516,7 +516,7 @@ export async function prepareHirePhase2Indexes(argv: string[]): Promise<void> {
 
   const after = inspectIndexes(await readIndexes(collections))
   assertEveryIndexExact(after)
-  console.log('\nAPPLY PASSED — all 12 exact indexes exist; no index was removed.')
+  console.log(`\nAPPLY PASSED — all ${HIRE_PHASE2_INDEX_DEFINITIONS.length} exact indexes exist; no index was removed.`)
 }
 
 async function main(): Promise<void> {

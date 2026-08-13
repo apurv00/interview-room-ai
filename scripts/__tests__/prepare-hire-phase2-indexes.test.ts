@@ -147,6 +147,9 @@ describe('Hire Phase 2 control index preparation', () => {
       expect(targetMocks[target].createIndex).not.toHaveBeenCalled()
     }
     expect(mocks.itemAggregate).not.toHaveBeenCalled()
+    expect(console.log).toHaveBeenCalledWith(
+      `\nCHECK PASSED — all ${HIRE_PHASE2_INDEX_DEFINITIONS.length} exact Phase 2 Hire-control indexes exist.`,
+    )
   })
 
   it('creates every missing exact index only after whole-rollout preflight', async () => {
@@ -182,6 +185,9 @@ describe('Hire Phase 2 control index preparation', () => {
     expect(mocks.itemCreateIndex).toHaveBeenCalledWith(
       { workspaceId: 1, roundId: 1 },
       { name: 'workspaceId_1_roundId_1', sparse: true },
+    )
+    expect(console.log).toHaveBeenCalledWith(
+      `\nAPPLY PASSED — all ${HIRE_PHASE2_INDEX_DEFINITIONS.length} exact indexes exist; no index was removed.`,
     )
   })
 
