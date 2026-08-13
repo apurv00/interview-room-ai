@@ -12,12 +12,19 @@ import { logger } from '@shared/logger'
 import { buildAiInviteEmail } from '../emails/aiInviteEmail'
 import {
   HireAiInviteDelivery,
+  HirePrivacyRequest,
   HireRound,
   type HireAiInviteDeliveryStatus,
   type IHireAiInviteDelivery,
   type IHireRound,
 } from '../models'
 import { connectHireControlDB } from './hireControlBoundary'
+import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
+import {
+  claimHireCandidatePiiWriteFence,
+  HireCandidatePiiTombstoneError,
+} from './hireCandidatePrivacyWriteFence'
+import { claimNonTerminalHireApplicationDispatchFence } from './hireApplicationDispatchFence'
 import type { MembershipContext } from './workspaceService'
 import { encodeWorkspaceCapability } from './workspaceCapability'
 
@@ -308,6 +315,135 @@ async function existingDeliveryResult(
 }
 
 /**
+ * Persist the authorization for one provider egress under the same candidate
+ * row fence used by verified privacy deletion. `sending + claimToken` is the
+ * durable authorization marker: it is committed before the provider sees an
+ * email, ties authorization to this exact lease, and is consumed by the
+ * existing post-provider state transition.
+ *
+ * We intentionally do not hold a database transaction across the provider
+ * call. The semantic boundary is the committed authorization marker: if a
+ * verified deletion wins first, the candidate fence/live privacy check makes
+ * authorization fail and no provider call is made. If authorization wins,
+ * the send was authorized before deletion; the deletion transaction removes
+ * the delivery record and prevents any recovery/retry egress afterwards.
+ */
+async function authorizeAiInviteDeliveryEgress(input: {
+  ctx: MembershipContext
+  round: IHireRound
+  now: Date
+  claimToken: string
+  manualRetry: boolean
+}): Promise<IHireAiInviteDelivery | null> {
+  try {
+    return await withActiveHireWorkspaceWriteTransaction(
+      input.ctx.workspace._id,
+      input.ctx.membership._id,
+      async (session) => {
+        const privacyRequest = await HirePrivacyRequest.exists({
+          workspaceId: input.ctx.workspace._id,
+          candidateId: input.round.candidateId,
+          live: true,
+        }).session(session)
+        if (privacyRequest) {
+          throw new AppError(
+            'A candidate privacy request is in progress',
+            409,
+            'CANDIDATE_PRIVACY_PENDING',
+          )
+        }
+
+        await claimHireCandidatePiiWriteFence({
+          workspaceId: input.ctx.workspace._id,
+          candidateId: input.round.candidateId,
+          session,
+        })
+
+        // An existing round is not itself permission to email. Reclaim the
+        // application under the same transaction as the delivery lease so a
+        // terminal stage decision that won after the round was created blocks
+        // provider egress as well.
+        await claimNonTerminalHireApplicationDispatchFence({
+          workspaceId: input.ctx.workspace._id,
+          applicationId: input.round.applicationId,
+          jobId: input.round.jobId,
+          candidateId: input.round.candidateId,
+          now: input.now,
+          session,
+        })
+
+        // Re-read the active round in this transaction. Privacy deletion
+        // revokes/un-lives rounds, so a stale preflight read cannot authorize
+        // a message after deletion has already committed.
+        const activeRound = await HireRound.exists({
+          _id: input.round._id,
+          workspaceId: input.ctx.workspace._id,
+          applicationId: input.round.applicationId,
+          jobId: input.round.jobId,
+          candidateId: input.round.candidateId,
+          live: true,
+          status: { $nin: ['completed', 'revoked'] },
+          revokedAt: { $exists: false },
+          inviteTokenExpiry: { $gt: input.now },
+        }).session(session)
+        if (!activeRound) {
+          throw new AppError(
+            'The interview invitation is no longer active',
+            410,
+            'ROUND_NOT_ACTIVE',
+          )
+        }
+
+        return HireAiInviteDelivery.findOneAndUpdate(
+          {
+            workspaceId: input.ctx.workspace._id,
+            roundId: input.round._id,
+            applicationId: input.round.applicationId,
+            jobId: input.round.jobId,
+            candidateId: input.round.candidateId,
+            expiresAt: { $gt: input.now },
+            $or: [
+              { status: { $in: ['pending', 'failed'] } },
+              { status: 'sending', leaseExpiresAt: { $lte: input.now } },
+            ],
+          },
+          {
+            $set: {
+              status: 'sending',
+              claimToken: input.claimToken,
+              leaseExpiresAt: new Date(input.now.getTime() + CLAIM_LEASE_MS),
+              ...(input.manualRetry
+                ? {
+                    lastManualRetryAt: input.now,
+                    lastManualRetryByMemberId: input.ctx.membership._id,
+                    lastManualRetryByName:
+                      input.ctx.membership.name || input.ctx.membership.email,
+                  }
+                : {}),
+            },
+            $inc: {
+              attempts: 1,
+              ...(input.manualRetry ? { manualRetryCount: 1 } : {}),
+            },
+            $unset: { lastError: 1 },
+          },
+          { new: true, session },
+        )
+      },
+    )
+  } catch (error) {
+    if (error instanceof HireCandidatePiiTombstoneError) {
+      throw new AppError(
+        'Candidate personal data is unavailable',
+        410,
+        'HIRE_CANDIDATE_PII_TOMBSTONED',
+      )
+    }
+    throw error
+  }
+}
+
+/**
  * Lease + stable provider key make retries safe across both pre-send and
  * post-provider-acceptance crashes. A recorded `sent` state is a no-op.
  */
@@ -328,37 +464,13 @@ export async function deliverAiInvite(
   }
 
   const claimToken = randomUUID()
-  const claimed = await HireAiInviteDelivery.findOneAndUpdate(
-    {
-      workspaceId: ctx.workspace._id,
-      roundId: round._id,
-      expiresAt: { $gt: now },
-      $or: [
-        { status: { $in: ['pending', 'failed'] } },
-        { status: 'sending', leaseExpiresAt: { $lte: now } },
-      ],
-    },
-    {
-      $set: {
-        status: 'sending',
-        claimToken,
-        leaseExpiresAt: new Date(now.getTime() + CLAIM_LEASE_MS),
-        ...(options.manualRetry
-          ? {
-              lastManualRetryAt: now,
-              lastManualRetryByMemberId: ctx.membership._id,
-              lastManualRetryByName: ctx.membership.name || ctx.membership.email,
-            }
-          : {}),
-      },
-      $inc: {
-        attempts: 1,
-        ...(options.manualRetry ? { manualRetryCount: 1 } : {}),
-      },
-      $unset: { lastError: 1 },
-    },
-    { new: true },
-  )
+  const claimed = await authorizeAiInviteDeliveryEgress({
+    ctx,
+    round,
+    now,
+    claimToken,
+    manualRetry: Boolean(options.manualRetry),
+  })
   if (!claimed) return existingDeliveryResult(ctx, round, now)
 
   let rawToken: string

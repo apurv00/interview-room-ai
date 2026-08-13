@@ -31,6 +31,7 @@ const control = {
   HIRE_ENGINE_RUNTIME_URL: 'https://engine.hire.interviewprep.guru',
   RESEND_API_KEY: 're_test',
   EMAIL_FROM: 'IPG Hire <hire@send.interviewprep.guru>',
+  HIRE_REENGAGEMENT_OPT_OUT_SECRET: 'o'.repeat(64),
   HIRE_INVITE_DELIVERY_KEY_ID: 'invite-delivery-2026-08',
   HIRE_INVITE_DELIVERY_KEY: Buffer.alloc(32, 7).toString('base64'),
   R2_ACCOUNT_ID: 'control-account',
@@ -198,5 +199,26 @@ describe('Hire deployment readiness', () => {
     expect(issues).toContain('missing:MONGODB_URI')
     expect(issues).toContain('missing:RESEND_API_KEY')
     expect(issues.join(' ')).not.toContain('mongodb://')
+  })
+
+  it('fails closed when the independent re-engagement opt-out secret is absent or weak', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_REENGAGEMENT_OPT_OUT_SECRET: undefined,
+    })).toEqual(expect.arrayContaining([
+      'missing:HIRE_REENGAGEMENT_OPT_OUT_SECRET',
+      'weak:HIRE_REENGAGEMENT_OPT_OUT_SECRET',
+    ]))
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_REENGAGEMENT_OPT_OUT_SECRET: 'short',
+    })).toContain('weak:HIRE_REENGAGEMENT_OPT_OUT_SECRET')
+  })
+
+  it('rejects an insecure optional public opt-out alias before mail dispatch', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_PUBLIC_ORIGIN: 'http://hire.example.test?capability=must-not-pass',
+    })).toContain('invalid:HIRE_PUBLIC_ORIGIN')
   })
 })

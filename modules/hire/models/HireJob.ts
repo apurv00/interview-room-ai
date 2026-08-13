@@ -16,6 +16,17 @@ export interface IHireJobEvent {
 }
 
 /**
+ * Optional, job-owned defaults for the Phase-2 screening gate. These are
+ * deliberately separate from the structured JD requirements: they describe
+ * only deterministic knockout checks, never a candidate identity or a B2C
+ * account.
+ */
+export interface IHireScreeningSettings {
+  location?: string
+  experienceFloorYears?: number
+}
+
+/**
  * A job requisition. The JD text is the grounding for AI interview rounds
  * (question generation + jd_match_score) — required at creation, immutable in
  * spirit after rounds are sent (enforced in pipelineService, not the schema,
@@ -40,6 +51,8 @@ export interface IHireJob extends Document {
   applyTokenHash?: string
   /** Recruiter switch; closing the job also stops applications. */
   applyPageEnabled?: boolean
+  /** Optional defaults copied into a confirmed screening-gate snapshot. */
+  screeningSettings?: IHireScreeningSettings
   closeNote?: string
   closedAt?: Date
   closedBy?: mongoose.Types.ObjectId
@@ -68,6 +81,14 @@ const HireJobEventSchema = new Schema<IHireJobEvent>(
   { _id: false },
 )
 
+const HireScreeningSettingsSchema = new Schema<IHireScreeningSettings>(
+  {
+    location: { type: String, trim: true, maxlength: 160 },
+    experienceFloorYears: { type: Number, min: 0, max: 50 },
+  },
+  { _id: false },
+)
+
 const HireJobSchema = new Schema<IHireJob>(
   {
     workspaceId: {
@@ -91,6 +112,7 @@ const HireJobSchema = new Schema<IHireJob>(
     intakeWriteVersion: { type: Number, default: 0 },
     applyTokenHash: { type: String, maxlength: 64 },
     applyPageEnabled: { type: Boolean, default: false },
+    screeningSettings: { type: HireScreeningSettingsSchema, default: undefined },
     closeNote: { type: String, maxlength: 4000 },
     closedAt: { type: Date },
     closedBy: { type: Schema.Types.ObjectId, ref: 'User' },

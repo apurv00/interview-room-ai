@@ -14,12 +14,16 @@ vi.mock('@shared/db/connection', () => ({
 }))
 
 const txMock = vi.fn()
+const candidateFence = vi.fn()
 vi.mock('../services/hireWorkspaceWriteFence', () => ({
   withActiveHireWorkspaceWriteTransaction: (
     workspaceId: string,
     memberId: string,
     work: (session: unknown) => Promise<unknown>,
   ) => txMock(workspaceId, memberId, work),
+}))
+vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
+  claimHireCandidatePiiWriteFence: (...args: unknown[]) => candidateFence(...args),
 }))
 
 const mockJob = { findOne: vi.fn(), find: vi.fn(), updateOne: vi.fn() }
@@ -123,6 +127,7 @@ beforeEach(() => {
   mockJob.find.mockReturnValue({ select: () => Promise.resolve([]) })
   mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
+  candidateFence.mockResolvedValue(undefined)
   mockApplication.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockApplication.find.mockReturnValue(findChain([]))
   mockApplication.updateMany.mockResolvedValue({ modifiedCount: 0 })
@@ -146,6 +151,11 @@ const BASE_INPUT = {
   source: 'bulk_upload' as const,
 }
 
+const SCREENING_PROFILE = {
+  location: 'Bengaluru',
+  experienceYears: 6,
+}
+
 describe('write authority (the deletion barrier)', () => {
   it('runs ALL writes inside the active Hire workspace/member fence', async () => {
     mockCandidate.findOne.mockReturnValue(inTx(null))
@@ -160,6 +170,11 @@ describe('write authority (the deletion barrier)', () => {
     // Every write op received the transaction session.
     expect(mockCandidate.create.mock.calls[0][1]).toEqual({ session: SESSION })
     expect(mockApplication.create.mock.calls[0][1]).toEqual({
+      session: SESSION,
+    })
+    expect(candidateFence).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      candidateId: 'cand-1',
       session: SESSION,
     })
   })
@@ -201,6 +216,25 @@ describe('creation path', () => {
       type: 'created',
       actorName: 'HR One',
       note: 'via bulk resume upload',
+    })
+  })
+
+  it('binds a screening profile to the exact current resume on creation', async () => {
+    mockCandidate.findOne.mockReturnValue(inTx(null))
+    mockCandidate.create.mockResolvedValue([{ _id: 'cand-1' }])
+    mockApplication.findOne.mockReturnValue(inTx(null))
+    mockApplication.create.mockResolvedValue([{ _id: 'app-1' }])
+
+    await intakeCandidate(CTX, {
+      ...BASE_INPUT,
+      screeningProfile: SCREENING_PROFILE,
+    })
+
+    expect(mockCandidate.create.mock.calls[0][0][0].screeningProfile).toMatchObject({
+      location: 'Bengaluru',
+      experienceYears: 6,
+      resumeHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      extractedAt: expect.any(Date),
     })
   })
 
@@ -260,6 +294,34 @@ describe('idempotency and merge', () => {
         },
         $inc: { __v: 1 },
       },
+      { session: SESSION, runValidators: true },
+    )
+  })
+
+  it('clears a stale screening profile when a newer resume could not be profiled', async () => {
+    const existing = candidateDoc({
+      name: 'Jane Doe',
+      resumeText: 'old resume',
+      screeningProfile: {
+        location: 'Pune',
+        experienceYears: 4,
+        resumeHash: 'a'.repeat(64),
+        extractedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(applicationDoc()))
+
+    await intakeCandidate(CTX, {
+      ...BASE_INPUT,
+      identityConfirmed: true,
+    })
+
+    expect(mockCandidate.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: 'ws-A', email: 'jane@example.com' }),
+      expect.objectContaining({
+        $unset: expect.objectContaining({ screeningProfile: 1 }),
+      }),
       { session: SESSION, runValidators: true },
     )
   })

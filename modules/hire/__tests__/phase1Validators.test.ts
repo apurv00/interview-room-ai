@@ -26,6 +26,24 @@ describe('Smart-JD validators', () => {
     ).toMatchObject(BUILDER)
   })
 
+  it('accepts bounded Hire-only screening defaults without widening the JD builder contract', () => {
+    expect(
+      CreateStructuredJobSchema.parse({
+        ...BUILDER,
+        jdText: 'A reviewed description '.repeat(4),
+        screeningSettings: { location: 'Bengaluru, India', experienceFloorYears: 3 },
+      }),
+    ).toMatchObject({
+      screeningSettings: { location: 'Bengaluru, India', experienceFloorYears: 3 },
+    })
+    expect(() =>
+      BuildJobDescriptionSchema.parse({
+        ...BUILDER,
+        screeningSettings: { experienceFloorYears: 3 },
+      }),
+    ).toThrow()
+  })
+
   it('rejects unknown fields and duplicates across importance groups', () => {
     expect(() => BuildJobDescriptionSchema.parse({ ...BUILDER, surprise: true })).toThrow()
     expect(() =>

@@ -19,6 +19,8 @@ const ResumeIntakeSchema = z.object({
   name: z.string().trim().min(1).max(120).nullable().catch(null),
   email: z.string().trim().toLowerCase().email().max(254).nullable().catch(null),
   phone: z.string().trim().min(5).max(32).nullable().catch(null),
+  location: z.string().trim().min(1).max(160).nullable().catch(null),
+  experience_years: z.number().min(0).max(50).nullable().catch(null),
   match_score: z.number().min(0).max(100).nullable().catch(null),
   strengths: z.array(z.string().trim().min(1).max(200)).max(5).catch([]),
   gaps: z.array(z.string().trim().min(1).max(200)).max(5).catch([]),
@@ -28,6 +30,8 @@ export interface ResumeIntakeAnalysis {
   name: string | null
   email: string | null
   phone: string | null
+  location: string | null
+  experienceYears: number | null
   matchScore: number | null
   strengths: string[]
   gaps: string[]
@@ -117,6 +121,8 @@ Return ONLY a JSON object, no prose, with exactly these keys:
   "name": string|null,        // candidate's full name as written on the resume
   "email": string|null,       // candidate's email address found on the resume
   "phone": string|null,       // candidate's phone number, digits and +- only
+  "location": string|null,    // candidate's current city/region, only when explicit in the resume
+  "experience_years": number|null, // total relevant professional experience, only when evidence supports it
   "match_score": number,      // 0-100: how well this resume matches the JD's requirements
   "strengths": string[],      // up to 4 short evidence bullets FROM THE RESUME that match JD requirements
   "gaps": string[]            // up to 4 short JD requirements this resume shows no evidence of
@@ -145,6 +151,8 @@ Scoring calibration: 80+ only when core requirements are clearly evidenced; 50-7
       name: parsed.data.name,
       email: parsed.data.email,
       phone: parsed.data.phone,
+      location: parsed.data.location,
+      experienceYears: parsed.data.experience_years,
       matchScore: parsed.data.match_score,
       strengths: parsed.data.strengths,
       gaps: parsed.data.gaps,

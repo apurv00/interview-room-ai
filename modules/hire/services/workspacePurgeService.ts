@@ -11,13 +11,18 @@ import {
   HireGuestSession,
   HireInterviewAttempt,
   HireInterviewResult,
+  HireIntakeTask,
+  HireInvitationBatch,
+  HireInvitationBatchItem,
   HireJob,
   HireJobRequirementVersion,
   HireMediaAsset,
   HireMemberSession,
   HireMemberSetup,
   HirePrivacyRequest,
+  HireReengagementOptOut,
   HireRound,
+  HireScreeningGate,
   HireWorkspace,
   HireWorkspaceMember,
   type IHireMediaAsset,
@@ -53,8 +58,13 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireMediaAsset',
   'HirePrivacyRequest',
   'HireEmailOutbox',
+  'HireReengagementOptOut',
   'HireAiInviteDelivery',
   'HireRound',
+  'HireIntakeTask',
+  'HireInvitationBatchItem',
+  'HireInvitationBatch',
+  'HireScreeningGate',
   'HireApplication',
   'HireCandidate',
   'HireJobRequirementVersion',
@@ -292,8 +302,18 @@ async function deleteWorkspaceGraphChildren(
   await HireMediaAsset.deleteMany({ workspaceId }, { session })
   await HirePrivacyRequest.deleteMany({ workspaceId }, { session })
   await HireEmailOutbox.deleteMany({ workspaceId }, { session })
+  await HireReengagementOptOut.deleteMany({ workspaceId }, { session })
   await HireAiInviteDelivery.deleteMany({ workspaceId }, { session })
   await HireRound.deleteMany({ workspaceId }, { session })
+  // Intake tasks can still hold the original resume payload and supplied
+  // contact details. Remove them before the candidate/application parents.
+  await HireIntakeTask.deleteMany({ workspaceId }, { session })
+  // A confirmed gate/batch holds only Hire-owned IDs and score snapshots,
+  // but those immutable records must not outlive the workspace they scope.
+  // Items first retain the application reservation, then their batch/gate.
+  await HireInvitationBatchItem.deleteMany({ workspaceId }, { session })
+  await HireInvitationBatch.deleteMany({ workspaceId }, { session })
+  await HireScreeningGate.deleteMany({ workspaceId }, { session })
   await HireApplication.deleteMany({ workspaceId }, { session })
   await HireCandidate.deleteMany({ workspaceId }, { session })
   await HireJobRequirementVersion.deleteMany({ workspaceId }, { session })

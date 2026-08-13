@@ -75,7 +75,11 @@ const BUDGETS = {
   // control/runtime, tenant, privacy, media, evidence, and delivery seams take
   // 62 files / ~12.9k LOC; 14k/66 leaves bounded near-term headroom without
   // folding those auditable boundaries into large files. See ADR 0029.
-  'modules/hire':      { maxLOC: 14_000, maxFiles: 66 },
+  // Bumped to 22k/80 for Phase 2's durable intake queue, screening-gate and
+  // invitation-batch control plane, talent-pool re-engagement/opt-out, and
+  // their privacy/lifecycle fences. Measured implementation is 76 files / ~20.4k
+  // LOC, so the remaining headroom is intentionally small. See ADR 0030.
+  'modules/hire':      { maxLOC: 22_000, maxFiles: 80 },
   // Bumped maxFiles 130 → 132 on 2026-05-23 (PR #402): added
   // shared/hooks/useOnboardingProfile.ts (cross-module client data
   // hook consumed by both @interview/InterviewSetupForm and

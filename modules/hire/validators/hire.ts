@@ -71,6 +71,13 @@ const jobDescriptionFields = {
     companyBlurb: z.string().trim().min(10).max(2000).optional(),
 } as const
 
+const screeningSettingsSchema = z
+  .object({
+    location: z.string().trim().min(1).max(160).optional(),
+    experienceFloorYears: z.number().finite().min(0).max(50).optional(),
+  })
+  .strict()
+
 function rejectDuplicateRequirements(
   value: { mustHaves: string[]; niceToHaves: string[] },
   ctx: z.RefinementCtx,
@@ -115,6 +122,7 @@ export const CreateStructuredJobSchema = z
   .object({
     ...jobDescriptionFields,
     jdText: z.string().trim().min(50, 'Job description is too short').max(50000),
+    screeningSettings: screeningSettingsSchema.optional(),
   })
   .strict()
   .superRefine(rejectDuplicateRequirements)
@@ -144,6 +152,58 @@ export const CreateApplicationSchema = z.object({
   jobId: objectIdSchema,
   candidateId: objectIdSchema,
 })
+
+/**
+ * Recruiter-only, job-scoped add flow. A source is intentionally implicit:
+ * an existing candidate id means talent-pool provenance, while a name/email
+ * pair means a manual entry that may merge with an existing workspace record.
+ */
+export const AddOrMergeJobCandidateSchema = z
+  .object({
+    candidateId: objectIdSchema.optional(),
+    name: z.string().trim().min(1).max(120).optional(),
+    email: z.string().trim().email().max(254).optional(),
+    phone: z.string().trim().max(32).optional(),
+    operationId: z.string().uuid(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.candidateId) {
+      if (value.name !== undefined || value.email !== undefined || value.phone !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['candidateId'],
+          message: 'Choose a talent-pool candidate or enter a new person, not both',
+        })
+      }
+      return
+    }
+    if (!value.name) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['name'],
+        message: 'Name is required when adding a person manually',
+      })
+    }
+    if (!value.email) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['email'],
+        message: 'Email is required when adding a person manually',
+      })
+    }
+  })
+
+/**
+ * Explicit HR confirmation for a read-only talent-pool suggestion. The
+ * candidate coordinate belongs in the path, while a fresh operation id makes
+ * retrying the confirmation safe without turning a listing into a mutation.
+ */
+export const ReengagePoolCandidateSchema = z
+  .object({
+    operationId: z.string().uuid(),
+  })
+  .strict()
 
 export const MoveStageSchema = z
   .object({
@@ -213,6 +273,8 @@ export type CreateJobPayload = z.infer<typeof CreateStructuredJobSchema>
 export type UpdateJobStatusPayload = z.infer<typeof UpdateJobStatusSchema>
 export type AddCandidatePayload = z.infer<typeof AddCandidateSchema>
 export type CreateApplicationPayload = z.infer<typeof CreateApplicationSchema>
+export type AddOrMergeJobCandidatePayload = z.infer<typeof AddOrMergeJobCandidateSchema>
+export type ReengagePoolCandidatePayload = z.infer<typeof ReengagePoolCandidateSchema>
 export type MoveStagePayload = z.infer<typeof MoveStageSchema>
 export type SendAiRoundPayload = z.infer<typeof SendAiRoundSchema>
 export type GuestBeginPayload = z.infer<typeof GuestBeginSchema>

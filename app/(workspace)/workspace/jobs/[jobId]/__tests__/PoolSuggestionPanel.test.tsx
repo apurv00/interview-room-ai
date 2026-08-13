@@ -1,0 +1,103 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import PoolSuggestionPanel from '../PoolSuggestionPanel'
+
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+const SUGGESTION = {
+  candidate: {
+    id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    name: 'Ada Lovelace',
+    email: 'ada@example.com',
+  },
+  matchScore: 75,
+  matchedRequirements: ['TypeScript', 'Distributed systems'],
+  previouslySeenIn: [
+    { jobId: 'bbbbbbbbbbbbbbbbbbbbbbbb', jobTitle: 'Platform Engineer', stage: 'rejected' },
+  ],
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('PoolSuggestionPanel', () => {
+  it('keeps suggestions read-only until a member explicitly confirms the re-engagement email', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/jobs/job-1/pool-suggestions') {
+        expect(init?.cache).toBe('no-store')
+        return json({ suggestions: [SUGGESTION] })
+      }
+      if (url === '/api/workspace/jobs/job-1/pool-suggestions/aaaaaaaaaaaaaaaaaaaaaaaa/reengage') {
+        expect(init?.method).toBe('POST')
+        expect(init?.headers).toEqual({ 'Content-Type': 'application/json' })
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          operationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        })
+        return json({
+          status: 'queued',
+          candidateId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+          applicationId: 'cccccccccccccccccccccccc',
+        }, 201)
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<PoolSuggestionPanel jobId="job-1" jobStatus="open" />)
+
+    await screen.findByText('Ada Lovelace')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Consider and email' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Add Ada Lovelace')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and queue email' }))
+    await screen.findByText('Added Ada Lovelace and queued a re-engagement email.')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText('ada@example.com')).not.toBeInTheDocument()
+  })
+
+  it('does not load or expose a confirmation action for a non-open job', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<PoolSuggestionPanel jobId="job-1" jobStatus="closed" />)
+
+    expect(screen.getByText('Suggestions are available only while this job is open.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Consider and email' })).not.toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the same in-memory operation id available for a network retry', async () => {
+    const operations: string[] = []
+    let calls = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/jobs/job-1/pool-suggestions') {
+        return json({ suggestions: [SUGGESTION] })
+      }
+      calls += 1
+      operations.push(JSON.parse(String(init?.body)).operationId)
+      if (calls === 1) throw new Error('offline')
+      return json({ status: 'queued' }, 201)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<PoolSuggestionPanel jobId="job-1" jobStatus="open" />)
+    await screen.findByText('Ada Lovelace')
+    fireEvent.click(screen.getByRole('button', { name: 'Consider and email' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and queue email' }))
+    await screen.findByText(/Network error/)
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and queue email' }))
+    await waitFor(() => expect(operations).toHaveLength(2))
+    expect(operations[1]).toBe(operations[0])
+  })
+})

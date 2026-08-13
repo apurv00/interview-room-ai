@@ -40,6 +40,10 @@ const { models, session } = vi.hoisted(() => {
       },
       HireEngineIngestionEvent: latestModel('hireengineingestionevents'),
       HireEmailOutbox: { deleteMany: vi.fn() },
+      HireReengagementOptOut: { deleteMany: vi.fn() },
+      HireIntakeTask: { deleteMany: vi.fn() },
+      HireInvitationBatchItem: { updateMany: vi.fn() },
+      HireScreeningGate: { updateMany: vi.fn() },
       HirePrivacyRequest: {
         exists: vi.fn(),
         deleteMany: vi.fn(),
@@ -63,7 +67,9 @@ import { addCalendarMonths } from '../services/mediaLifecycleService'
 
 const CANDIDATE_ID = new mongoose.Types.ObjectId('111111111111111111111111')
 const WORKSPACE_ID = new mongoose.Types.ObjectId('222222222222222222222222')
+const OTHER_WORKSPACE_ID = new mongoose.Types.ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa')
 const JOB_ID = new mongoose.Types.ObjectId('333333333333333333333333')
+const APPLICATION_ID = new mongoose.Types.ObjectId('444444444444444444444444')
 const LAST_ACTIVITY = new Date('2024-02-29T10:30:00.000Z')
 const NOW = new Date('2025-02-28T10:30:00.000Z')
 
@@ -112,7 +118,7 @@ beforeEach(() => {
   }))
   models.HirePrivacyRequest.exists.mockReturnValue(sessionValue(null))
   models.HireApplication.find.mockReturnValue(findMany([
-    { jobId: JOB_ID, stage: 'rejected', updatedAt: LAST_ACTIVITY },
+    { _id: APPLICATION_ID, jobId: JOB_ID, stage: 'rejected', updatedAt: LAST_ACTIVITY },
   ]))
   models.HireJob.find.mockReturnValue(findMany([
     { _id: JOB_ID, status: 'closed', closedAt: LAST_ACTIVITY },
@@ -132,6 +138,10 @@ beforeEach(() => {
   models.HireInterviewResult.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireConsentReceipt.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireEmailOutbox.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  models.HireReengagementOptOut.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  models.HireIntakeTask.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  models.HireInvitationBatchItem.updateMany.mockResolvedValue({ modifiedCount: 1 })
+  models.HireScreeningGate.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HirePrivacyRequest.deleteMany.mockResolvedValue({ deletedCount: 0 })
 })
 
@@ -168,7 +178,7 @@ describe('candidate PII retention', () => {
     ]))
   })
 
-  it('scrubs identity, resumes, contact snapshots, and textual evidence while retaining records', async () => {
+  it('scrubs identity, resumes, invitation coordinates, and textual evidence while retaining aggregates', async () => {
     const report = await anonymizeDueHireCandidates({
       workspaceId: WORKSPACE_ID.toString(),
       now: NOW,
@@ -218,6 +228,93 @@ describe('candidate PII retention', () => {
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       { session },
     )
+    expect(models.HireReengagementOptOut.deleteMany).toHaveBeenCalledWith(
+      { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+      { session },
+    )
+    expect(models.HireIntakeTask.deleteMany).toHaveBeenCalledWith(
+      { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+      { session },
+    )
+    expect(models.HireInvitationBatchItem.updateMany).toHaveBeenNthCalledWith(
+      1,
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      {
+        $set: { status: 'cancelled', cancelledAt: NOW },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
+      { session },
+    )
+    expect(models.HireScreeningGate.updateMany).toHaveBeenNthCalledWith(
+      1,
+      {
+        workspaceId: WORKSPACE_ID,
+        $or: [
+          { 'rankedApplications.candidateId': CANDIDATE_ID },
+          { 'rankedApplications.applicationId': { $in: [APPLICATION_ID] } },
+          { 'exceptions.applicationId': { $in: [APPLICATION_ID] } },
+        ],
+      },
+      {
+        $pull: {
+          rankedApplications: {
+            $or: [
+              { candidateId: CANDIDATE_ID },
+              { applicationId: { $in: [APPLICATION_ID] } },
+            ],
+          },
+          exceptions: { applicationId: { $in: [APPLICATION_ID] } },
+        },
+      },
+      { session, overwriteImmutable: true },
+    )
+    expect(models.HireScreeningGate.updateMany).toHaveBeenNthCalledWith(
+      2,
+      {
+        workspaceId: WORKSPACE_ID,
+        'cutLine.applicationId': { $in: [APPLICATION_ID] },
+      },
+      { $unset: { 'cutLine.applicationId': 1 } },
+      { session, overwriteImmutable: true },
+    )
+    expect(models.HireInvitationBatchItem.updateMany).toHaveBeenNthCalledWith(
+      2,
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        privacyRedactedAt: { $exists: false },
+      },
+      {
+        $set: { privacyRedactedAt: NOW },
+        $unset: {
+          applicationId: 1,
+          candidateId: 1,
+          roundId: 1,
+          inviteDeliveryId: 1,
+          deliveryStatus: 1,
+          providerMessageId: 1,
+          lastError: 1,
+          skipReason: 1,
+          claimToken: 1,
+          leaseExpiresAt: 1,
+        },
+      },
+      { session, overwriteImmutable: true },
+    )
+    for (const [filter] of models.HireScreeningGate.updateMany.mock.calls) {
+      expect(filter).toMatchObject({ workspaceId: WORKSPACE_ID })
+      expect(filter).not.toMatchObject({ workspaceId: OTHER_WORKSPACE_ID })
+    }
+    for (const [filter] of models.HireInvitationBatchItem.updateMany.mock.calls) {
+      expect(filter).toMatchObject({
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+      })
+    }
   })
 
   it('lets an in-flight verified deletion request win and releases the retention claim', async () => {

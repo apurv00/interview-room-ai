@@ -51,6 +51,8 @@ export default function JobsPage() {
   const [title, setTitle] = useState('')
   const [level, setLevel] = useState('')
   const [location, setLocation] = useState('')
+  const [screeningLocation, setScreeningLocation] = useState('')
+  const [experienceFloorYears, setExperienceFloorYears] = useState('')
   const [workMode, setWorkMode] = useState<WorkMode>('hybrid')
   const [compensation, setCompensation] = useState('')
   const [companyBlurb, setCompanyBlurb] = useState('')
@@ -110,6 +112,21 @@ export default function JobsPage() {
     }
   }
 
+  function screeningSettingsPayload() {
+    return {
+      ...(screeningLocation.trim() || experienceFloorYears.trim()
+        ? {
+            screeningSettings: {
+              ...(screeningLocation.trim() ? { location: screeningLocation.trim() } : {}),
+              ...(experienceFloorYears.trim()
+                ? { experienceFloorYears: Number(experienceFloorYears) }
+                : {}),
+            },
+        }
+        : {}),
+    }
+  }
+
   const currentBuilderSignature = JSON.stringify(builderPayload())
   const canGenerate =
     title.trim().length >= 2 &&
@@ -154,7 +171,11 @@ export default function JobsPage() {
       const res = await fetch('/api/workspace/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...builderPayload(), jdText: jdText.trim() }),
+        body: JSON.stringify({
+          ...builderPayload(),
+          ...screeningSettingsPayload(),
+          jdText: jdText.trim(),
+        }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -164,6 +185,8 @@ export default function JobsPage() {
       setTitle('')
       setLevel('')
       setLocation('')
+      setScreeningLocation('')
+      setExperienceFloorYears('')
       setWorkMode('hybrid')
       setCompensation('')
       setCompanyBlurb(savedCompanyBlurb)
@@ -298,6 +321,23 @@ export default function JobsPage() {
               onChange={(e) => setCompensation(e.target.value)}
               placeholder="₹30–40 LPA + ESOPs"
               maxLength={240}
+            />
+            <Input
+              label="Screening location (optional)"
+              value={screeningLocation}
+              onChange={(e) => setScreeningLocation(e.target.value)}
+              placeholder="Only set when location is a knockout rule"
+              maxLength={160}
+            />
+            <Input
+              label="Experience floor (years, optional)"
+              type="number"
+              min="0"
+              max="50"
+              step="1"
+              value={experienceFloorYears}
+              onChange={(e) => setExperienceFloorYears(e.target.value)}
+              placeholder="e.g. 3"
             />
           </div>
           <div className="space-y-1.5">

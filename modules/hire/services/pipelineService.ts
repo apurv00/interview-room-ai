@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
@@ -7,11 +8,14 @@ import {
   HireEngineHandoff,
   HireGuestSession,
   HireInterviewAttempt,
+  HireInvitationBatch,
+  HireInvitationBatchItem,
   HireJob,
   HireRound,
   HIRE_STAGES,
   TERMINAL_STAGES,
   type HireStage,
+  type HireCandidateProvenanceSource,
   type IHireApplication,
   type IHireCandidate,
   type IHireJob,
@@ -19,6 +23,8 @@ import {
 } from '../models'
 import {
   HireJobRequirementVersion,
+  type IHireJobBuilderInput,
+  type IHireStructuredRequirement,
   type HireWorkMode,
 } from '../models/HireJobRequirementVersion'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
@@ -30,6 +36,11 @@ import {
 } from './mediaLifecycleService'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
 import { deliverRuntimeRevocation } from './engineRevocationService'
+import { encodeWorkspaceCapability } from './workspaceCapability'
+import {
+  claimHireCandidatePiiWriteFence,
+  HireCandidatePiiTombstoneError,
+} from './hireCandidatePrivacyWriteFence'
 
 /**
  * Jobs, candidates, applications, and the fixed pipeline. Every query in this
@@ -75,6 +86,7 @@ export async function createJob(
     compensation?: string
     companyBlurb?: string
     jdText: string
+    screeningSettings?: IHireJob['screeningSettings']
   }
 ): Promise<IHireJob> {
   await connectDB()
@@ -103,6 +115,9 @@ export async function createJob(
           activeRequirementVersionId: requirementVersionId,
           activeRequirementVersion: 1,
           status: 'open',
+          ...(input.screeningSettings
+            ? { screeningSettings: cloneScreeningSettings(input.screeningSettings) }
+            : {}),
           ...(ctx.membership.userId ? { createdBy: ctx.membership.userId } : {}),
           createdByMemberId: ctx.membership._id,
           createdByName: actorName(ctx),
@@ -129,6 +144,165 @@ export async function createJob(
       { session },
     )
     return jobs[0]
+  })
+}
+
+export interface DuplicateJobResult {
+  job: IHireJob
+  /** A fresh workspace-scoped public apply capability, returned exactly once. */
+  capability: string
+}
+
+function cloneRequirementInput(input: IHireJobBuilderInput): IHireJobBuilderInput {
+  return {
+    role: input.role,
+    level: input.level,
+    mustHaves: [...input.mustHaves],
+    niceToHaves: [...input.niceToHaves],
+    location: input.location,
+    workMode: input.workMode,
+    ...(input.compensation !== undefined ? { compensation: input.compensation } : {}),
+    ...(input.companyBlurb !== undefined ? { companyBlurb: input.companyBlurb } : {}),
+  }
+}
+
+function cloneRequirements(
+  requirements: IHireStructuredRequirement[],
+): IHireStructuredRequirement[] {
+  return requirements.map((requirement) => ({
+    id: requirement.id,
+    text: requirement.text,
+    importance: requirement.importance,
+  }))
+}
+
+/**
+ * Screening settings are job-owned configuration, never a shared Mongoose
+ * subdocument. A duplicated requisition gets an independent plain-object
+ * copy so later gate defaults can diverge without mutating its source job.
+ */
+function cloneScreeningSettings(
+  settings: IHireJob['screeningSettings'],
+): IHireJob['screeningSettings'] {
+  if (!settings) return undefined
+  const plain = (
+    settings as unknown as {
+      location?: unknown
+      experienceFloorYears?: unknown
+      toObject?: () => { location?: unknown; experienceFloorYears?: unknown }
+    }
+  ).toObject?.() ?? settings
+  return {
+    ...(typeof plain.location === 'string' ? { location: plain.location } : {}),
+    ...(typeof plain.experienceFloorYears === 'number'
+      ? { experienceFloorYears: plain.experienceFloorYears }
+      : {}),
+  }
+}
+
+/**
+ * Create a fresh job requisition from the source job's active scoring
+ * contract. It deliberately copies configuration only: no candidates,
+ * applications, rounds, history, close state, or prior public-link secret
+ * crosses into the new job.
+ */
+export async function duplicateJob(
+  ctx: MembershipContext,
+  sourceJobId: string,
+): Promise<DuplicateJobResult> {
+  await connectDB()
+  const jobId = new mongoose.Types.ObjectId()
+  const requirementVersionId = new mongoose.Types.ObjectId()
+  const rawApplySecret = crypto.randomBytes(32).toString('hex')
+  const applyTokenHash = crypto
+    .createHash('sha256')
+    .update(rawApplySecret)
+    .digest('hex')
+  const capability = encodeWorkspaceCapability(
+    ctx.workspace._id.toString(),
+    rawApplySecret,
+  )
+
+  return withHireTransaction(ctx, async (session) => {
+    const sourceJob = await HireJob.findOne(
+      { _id: sourceJobId, workspaceId: ctx.workspace._id },
+      null,
+      { session },
+    )
+    if (!sourceJob) throw new NotFoundError('Job')
+    if (
+      !sourceJob.activeRequirementVersionId ||
+      !sourceJob.activeRequirementVersion
+    ) {
+      throw new AppError(
+        'The source job has no active requirement version to duplicate',
+        409,
+        'JOB_REQUIREMENT_VERSION_MISSING',
+      )
+    }
+
+    const sourceRequirement = await HireJobRequirementVersion.findOne(
+      {
+        _id: sourceJob.activeRequirementVersionId,
+        workspaceId: ctx.workspace._id,
+        jobId: sourceJob._id,
+        version: sourceJob.activeRequirementVersion,
+        state: 'active',
+      },
+      null,
+      { session },
+    )
+    if (!sourceRequirement) {
+      throw new AppError(
+        'The source job requirement version is no longer active',
+        409,
+        'JOB_REQUIREMENT_VERSION_INVALID',
+      )
+    }
+
+    const jobs = await HireJob.create(
+      [
+        {
+          _id: jobId,
+          workspaceId: ctx.workspace._id,
+          title: sourceJob.title,
+          jdText: sourceJob.jdText,
+          activeRequirementVersionId: requirementVersionId,
+          activeRequirementVersion: 1,
+          status: 'open',
+          intakeWriteVersion: 0,
+          applyTokenHash,
+          applyPageEnabled: true,
+          ...(sourceJob.screeningSettings
+            ? { screeningSettings: cloneScreeningSettings(sourceJob.screeningSettings) }
+            : {}),
+          events: [],
+          ...(ctx.membership.userId ? { createdBy: ctx.membership.userId } : {}),
+          createdByMemberId: ctx.membership._id,
+          createdByName: actorName(ctx),
+        },
+      ],
+      { session },
+    )
+    await HireJobRequirementVersion.create(
+      [
+        {
+          _id: requirementVersionId,
+          workspaceId: ctx.workspace._id,
+          jobId,
+          version: 1,
+          state: 'active',
+          input: cloneRequirementInput(sourceRequirement.input),
+          proseJd: sourceRequirement.proseJd,
+          requirements: cloneRequirements(sourceRequirement.requirements),
+          contentHash: sourceRequirement.contentHash,
+          createdByMemberId: ctx.membership._id,
+          createdByName: actorName(ctx),
+        },
+      ],
+      { session },
+    )
+    return { job: jobs[0], capability }
   })
 }
 
@@ -166,6 +340,24 @@ export interface PipelineEntry {
     IHireRound,
     '_id' | 'status' | 'invitedAt' | 'linkedAt' | 'results' | 'inviteTokenExpiry' | 'revokedAt'
   > | null
+  /**
+   * A JD-match result is only ranked when it still refers to a résumé we
+   * retain. Stale and unscored records remain visible below the fresh scored
+   * queue; neither is silently filtered or rejected.
+   */
+  scoreState: 'scored' | 'stale' | 'unscored'
+  /** One-based rank within the fresh, scored portion of this job's queue. */
+  rank: number | null
+  /**
+   * Other applications for this same workspace candidate. This is assembled
+   * in bulk in getJobPipeline so a board never performs an N+1 lookup and a
+   * candidate can never reveal another tenant's history.
+   */
+  previouslySeenIn: Array<{
+    jobId: string
+    jobTitle: string
+    stage: HireStage
+  }>
 }
 
 export interface JobPipeline {
@@ -196,15 +388,22 @@ export async function getJobPipeline(
   const applications = await HireApplication.find({
     workspaceId: ctx.workspace._id,
     jobId: job._id,
-  }).sort({ createdAt: -1 })
+  }).sort({ createdAt: 1, _id: 1 })
 
   const candidateIds = applications.map((a) => a.candidateId)
   const appIds = applications.map((a) => a._id)
-  const [candidates, rounds] = await Promise.all([
+  const [candidates, rounds, otherApplications] = await Promise.all([
     HireCandidate.find({ workspaceId: ctx.workspace._id, _id: { $in: candidateIds } }),
     HireRound.find({ workspaceId: ctx.workspace._id, applicationId: { $in: appIds } })
       .sort({ createdAt: -1 })
       .select('applicationId status invitedAt linkedAt results inviteTokenExpiry revokedAt'),
+    candidateIds.length > 0
+      ? HireApplication.find({
+          workspaceId: ctx.workspace._id,
+          candidateId: { $in: candidateIds },
+          jobId: { $ne: job._id },
+        }).select('candidateId jobId stage createdAt _id')
+      : Promise.resolve([]),
   ])
   const candidateById = new Map(candidates.map((c) => [String(c._id), c]))
   const latestRoundByApp = new Map<string, IHireRound>()
@@ -213,14 +412,113 @@ export async function getJobPipeline(
     if (!latestRoundByApp.has(key)) latestRoundByApp.set(key, r)
   }
 
+  const otherJobIds = Array.from(
+    new Set(otherApplications.map((application) => String(application.jobId))),
+  )
+  const otherJobs = otherJobIds.length > 0
+    ? await HireJob.find({
+        workspaceId: ctx.workspace._id,
+        _id: { $in: otherJobIds },
+      }).select('_id title')
+    : []
+  const otherJobTitleById = new Map(otherJobs.map((otherJob) => [
+    String(otherJob._id),
+    otherJob.title,
+  ]))
+  const previouslySeenByCandidateId = new Map<
+    string,
+    Array<{ jobId: string; jobTitle: string; stage: HireStage }>
+  >()
+  for (const otherApplication of otherApplications) {
+    const otherJobId = String(otherApplication.jobId)
+    const jobTitle = otherJobTitleById.get(otherJobId)
+    // A concurrently purged/hidden job must not produce an orphaned label.
+    if (!jobTitle) continue
+    const candidateKey = String(otherApplication.candidateId)
+    const current = previouslySeenByCandidateId.get(candidateKey) ?? []
+    current.push({
+      jobId: otherJobId,
+      jobTitle,
+      stage: otherApplication.stage,
+    })
+    previouslySeenByCandidateId.set(candidateKey, current)
+  }
+  for (const entries of Array.from(previouslySeenByCandidateId.values())) {
+    entries.sort((left, right) =>
+      left.jobTitle.localeCompare(right.jobTitle) || left.jobId.localeCompare(right.jobId),
+    )
+  }
+
+  const ranked = applications.map((application) => {
+    const candidate = candidateById.get(String(application.candidateId)) ?? null
+    return {
+      application,
+      candidate,
+      scoreState: pipelineScoreState(application, candidate, job.jdText),
+    }
+  })
+  ranked.sort(comparePipelineEntries)
+
+  let nextRank = 1
   return {
     job,
-    entries: applications.map((application) => ({
-      application,
-      candidate: candidateById.get(String(application.candidateId)) ?? null,
-      latestRound: latestRoundByApp.get(String(application._id)) ?? null,
-    })),
+    entries: ranked.map(({ application, candidate, scoreState }) => {
+      const rank = scoreState === 'scored' ? nextRank++ : null
+      return {
+        application,
+        candidate,
+        latestRound: latestRoundByApp.get(String(application._id)) ?? null,
+        scoreState,
+        rank,
+        previouslySeenIn: previouslySeenByCandidateId.get(String(application.candidateId)) ?? [],
+      }
+    }),
   }
+}
+
+function resumeHash(resumeText: string | undefined): string | null {
+  return resumeText
+    ? crypto.createHash('sha256').update(resumeText).digest('hex')
+    : null
+}
+
+function pipelineScoreState(
+  application: IHireApplication,
+  candidate: IHireCandidate | null,
+  currentJdText: string,
+): PipelineEntry['scoreState'] {
+  const match = application.resumeMatch
+  if (!match || match.score === null) return 'unscored'
+  if (match.jdHash !== resumeHash(currentJdText)) return 'stale'
+  const currentSources = [
+    resumeHash(candidate?.resumeText),
+    ...(application.applicantSubmissions ?? []).map((submission) => resumeHash(submission.resumeText)),
+  ].filter((hash): hash is string => hash !== null)
+  return currentSources.includes(match.resumeHash) ? 'scored' : 'stale'
+}
+
+function comparePipelineEntries(
+  left: {
+    application: IHireApplication
+    scoreState: PipelineEntry['scoreState']
+  },
+  right: {
+    application: IHireApplication
+    scoreState: PipelineEntry['scoreState']
+  },
+): number {
+  const bucket = (state: PipelineEntry['scoreState']) => state === 'scored' ? 0 : 1
+  const bucketDifference = bucket(left.scoreState) - bucket(right.scoreState)
+  if (bucketDifference !== 0) return bucketDifference
+
+  if (left.scoreState === 'scored' && right.scoreState === 'scored') {
+    const scoreDifference = (right.application.resumeMatch?.score ?? -1) -
+      (left.application.resumeMatch?.score ?? -1)
+    if (scoreDifference !== 0) return scoreDifference
+  }
+
+  const createdDifference = left.application.createdAt.getTime() - right.application.createdAt.getTime()
+  return createdDifference || String(left.application._id).localeCompare(String(right.application._id))
 }
 
 export async function updateJobStatus(
@@ -373,6 +671,40 @@ export async function updateJobStatus(
         status: { $ne: 'completed' },
       },
       { $set: { status: 'revoked' }, $unset: { live: 1 } },
+      { session },
+    )
+    // Screening confirmation is not a permission to mail after the human
+    // closes a requisition. Cancel every unsent reservation in the same job
+    // close transaction; a concurrently claimed worker also rechecks this
+    // open-job fence before it can create a round.
+    await HireInvitationBatchItem.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      {
+        $set: { status: 'cancelled', cancelledAt: now },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
+      { session },
+    )
+    await HireInvitationBatch.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        status: { $in: ['planned', 'scheduled', 'dispatching', 'failed'] },
+      },
+      {
+        $set: {
+          status: 'cancelled',
+          cancelledAt: now,
+          cancelledByMemberId: ctx.membership._id,
+          cancelledByName: actor.actorName,
+          cancelNote: 'Job closed before screening invitation dispatch',
+        },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
       { session },
     )
 
@@ -631,6 +963,359 @@ export async function createApplication(
     }
     throw err
   }
+}
+
+/**
+ * One transactional path for a recruiter adding someone to a specific job.
+ *
+ * This deliberately does not compose `addCandidate` and `createApplication`:
+ * those independent Phase 1 mutations left a race between the workspace email
+ * key and the per-job application key. Here both identities resolve under the
+ * same active-workspace transaction, so a retry or two recruiters acting at
+ * once cannot make a second card for the same person/job.
+ */
+export interface AddOrMergeJobCandidateInput {
+  /** Existing workspace-local talent-pool candidate. */
+  candidateId?: string
+  /** Manual entry; email is resolved only inside the current workspace. */
+  name?: string
+  email?: string
+  phone?: string
+  /** Client-generated idempotency key, retained on application audit events. */
+  operationId: string
+}
+
+export type AddOrMergeJobCandidateStatus =
+  | 'created'
+  | 'reapplied'
+  | 'already_considered'
+  | 'already_decided'
+
+export interface AddOrMergeJobCandidateResult {
+  candidate: IHireCandidate
+  application: IHireApplication
+  status: AddOrMergeJobCandidateStatus
+  createdCandidate: boolean
+  createdApplication: boolean
+  /** True only when a newly observed manual/pool source was persisted. */
+  sourceMerged: boolean
+}
+
+type RecruiterCandidateSource = Extract<HireCandidateProvenanceSource, 'manual' | 'pool'>
+
+function sourceLabel(source: RecruiterCandidateSource): string {
+  return source === 'pool' ? 'talent pool' : 'manual entry'
+}
+
+function hasDuplicateKeyError(error: unknown): boolean {
+  return !!(
+    error &&
+    typeof error === 'object' &&
+    (error as { code?: unknown }).code === 11000
+  )
+}
+
+function priorOperationForAdd(
+  application: IHireApplication,
+  operationId: string,
+): 'matching' | 'conflicting' | null {
+  const event = application.events.find((entry) => entry.operationId === operationId)
+  if (!event) return null
+  return ['created', 'reapplied', 'source_merged'].includes(event.type)
+    ? 'matching'
+    : 'conflicting'
+}
+
+/**
+ * Adds only missing provenance values. Existing candidates predating Phase 2
+ * have only `source`; that original value is folded into sourceHistory the
+ * first time we merge them so no historical provenance is lost.
+ */
+async function recordCandidateSourceProvenance(
+  candidate: IHireCandidate,
+  workspaceId: mongoose.Types.ObjectId,
+  source: RecruiterCandidateSource,
+  session: ClientSession,
+): Promise<boolean> {
+  const original = candidate.source ?? 'manual'
+  const history = new Set<HireCandidateProvenanceSource>(candidate.sourceHistory ?? [])
+  const known = new Set<HireCandidateProvenanceSource>([original, ...Array.from(history)])
+
+  // `source` is already represented on most legacy records. Do not write a
+  // no-op sourceHistory array merely because the Phase 2 field is absent.
+  if (known.has(source)) return false
+  const additions = [original, source].filter((value) => !history.has(value))
+
+  const updated = await HireCandidate.updateOne(
+    {
+      _id: candidate._id,
+      workspaceId,
+      piiAnonymizedAt: { $exists: false },
+    },
+    {
+      $addToSet: { sourceHistory: { $each: additions } },
+    },
+    { session, runValidators: true },
+  )
+  if (updated.matchedCount !== 1) {
+    throw new AppError(
+      'Candidate changed while recording source provenance; retry the add',
+      409,
+      'CANDIDATE_MERGE_RACE',
+    )
+  }
+  return true
+}
+
+function terminalAddResult(
+  candidate: IHireCandidate,
+  application: IHireApplication,
+  createdCandidate: boolean,
+): AddOrMergeJobCandidateResult {
+  return {
+    candidate,
+    application,
+    status: application.stage === 'rejected' ? 'already_considered' : 'already_decided',
+    createdCandidate,
+    createdApplication: false,
+    sourceMerged: false,
+  }
+}
+
+async function addOrMergeJobCandidateOnce(
+  ctx: MembershipContext,
+  jobId: string,
+  input: AddOrMergeJobCandidateInput,
+): Promise<AddOrMergeJobCandidateResult> {
+  const manual = !input.candidateId
+  if (manual && (!input.name?.trim() || !input.email?.trim())) {
+    throw new AppError('Name and email are required for a manual candidate', 422, 'CANDIDATE_REQUIRED')
+  }
+  const email = input.email?.trim().toLowerCase()
+
+  return withHireTransaction(ctx, async (session) => {
+    const job = await HireJob.findOne(
+      { _id: jobId, workspaceId: ctx.workspace._id },
+      null,
+      { session },
+    )
+    if (!job) throw new NotFoundError('Job')
+    if (job.status !== 'open') {
+      throw new AppError(
+        job.status === 'closed' ? 'This job is closed' : 'This job is on hold',
+        409,
+        job.status === 'closed' ? 'JOB_CLOSED' : 'JOB_ON_HOLD',
+      )
+    }
+
+    const source: RecruiterCandidateSource = input.candidateId ? 'pool' : 'manual'
+    let candidate: IHireCandidate | null
+    let createdCandidate = false
+    if (input.candidateId) {
+      candidate = await HireCandidate.findOne(
+        { _id: input.candidateId, workspaceId: ctx.workspace._id },
+        null,
+        { session },
+      )
+    } else {
+      candidate = await HireCandidate.findOne(
+        { workspaceId: ctx.workspace._id, email },
+        null,
+        { session },
+      )
+      if (!candidate) {
+        const created = await HireCandidate.create(
+          [
+            {
+              workspaceId: ctx.workspace._id,
+              name: input.name!.trim(),
+              email,
+              ...(input.phone?.trim() ? { phone: input.phone.trim() } : {}),
+              source,
+              sourceHistory: [source],
+              ...(ctx.membership.userId ? { createdBy: ctx.membership.userId } : {}),
+              createdByMemberId: ctx.membership._id,
+              createdByName: actorName(ctx),
+            },
+          ],
+          { session },
+        )
+        candidate = created[0]
+        createdCandidate = true
+      }
+    }
+    if (!candidate) throw new NotFoundError('Candidate')
+
+    const existingApplication = await HireApplication.findOne(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        candidateId: candidate._id,
+      },
+      null,
+      { session },
+    )
+    if (existingApplication && TERMINAL_STAGES.includes(existingApplication.stage)) {
+      // A recruiter must make an explicit stage decision to reinstate a
+      // terminal card. A duplicate manual form/pool click cannot revive it.
+      return terminalAddResult(candidate, existingApplication, createdCandidate)
+    }
+
+    if (existingApplication) {
+      const priorOperation = priorOperationForAdd(existingApplication, input.operationId)
+      if (priorOperation === 'conflicting') {
+        throw new AppError(
+          'This operation id belongs to a different candidate action',
+          409,
+          'OPERATION_ID_REUSED',
+        )
+      }
+      if (priorOperation === 'matching') {
+        return {
+          candidate,
+          application: existingApplication,
+          status: 'reapplied',
+          createdCandidate,
+          createdApplication: false,
+          sourceMerged: false,
+        }
+      }
+    }
+
+    // Claim the job only for a mutation. A terminal-safe response above does
+    // not bump write versions, and a close racing this add wins cleanly.
+    const jobClaim = await HireJob.updateOne(
+      { _id: job._id, workspaceId: ctx.workspace._id, status: 'open' },
+      { $inc: { intakeWriteVersion: 1 } },
+      { session },
+    )
+    if (jobClaim.matchedCount !== 1) {
+      throw new AppError('This job is no longer open', 409, 'JOB_NOT_OPEN')
+    }
+
+    try {
+      await claimHireCandidatePiiWriteFence({
+        workspaceId: ctx.workspace._id,
+        candidateId: candidate._id,
+        session,
+      })
+    } catch (error) {
+      if (error instanceof HireCandidatePiiTombstoneError) {
+        throw new AppError(
+          'Candidate personal data has been deleted and cannot be added',
+          409,
+          'CANDIDATE_DATA_DELETED',
+        )
+      }
+      throw error
+    }
+
+    const sourceMerged = createdCandidate
+      ? false
+      : await recordCandidateSourceProvenance(candidate, ctx.workspace._id, source, session)
+
+    if (!existingApplication) {
+      const created = await HireApplication.create(
+        [
+          {
+            workspaceId: ctx.workspace._id,
+            jobId: job._id,
+            candidateId: candidate._id,
+            stage: 'new',
+            events: [
+              {
+                type: 'created',
+                ...actorSnapshot(ctx),
+                note: `Added via ${sourceLabel(source)}`,
+                operationId: input.operationId,
+                at: new Date(),
+              },
+            ],
+            ...(ctx.membership.userId ? { createdBy: ctx.membership.userId } : {}),
+            createdByMemberId: ctx.membership._id,
+            createdByName: actorName(ctx),
+          },
+        ],
+        { session },
+      )
+      return {
+        candidate,
+        application: created[0],
+        status: 'created',
+        createdCandidate,
+        createdApplication: true,
+        sourceMerged,
+      }
+    }
+
+    const events = [
+      ...(sourceMerged
+        ? [
+            {
+              type: 'source_merged' as const,
+              ...actorSnapshot(ctx),
+              note: `Candidate source recorded: ${sourceLabel(source)}`,
+              operationId: input.operationId,
+              at: new Date(),
+            },
+          ]
+        : []),
+      {
+        type: 'reapplied' as const,
+        ...actorSnapshot(ctx),
+        note: `Candidate re-applied via ${sourceLabel(source)}`,
+        operationId: input.operationId,
+        at: new Date(),
+      },
+    ]
+    const updatedApplication = await HireApplication.findOneAndUpdate(
+      {
+        _id: existingApplication._id,
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        candidateId: candidate._id,
+        'events.operationId': { $ne: input.operationId },
+      },
+      { $push: { events: { $each: events } } },
+      { new: true, session, runValidators: true },
+    )
+    if (!updatedApplication) {
+      throw new AppError(
+        'This candidate changed while being re-added; retry the add',
+        409,
+        'APPLICATION_MERGE_RACE',
+      )
+    }
+    return {
+      candidate,
+      application: updatedApplication,
+      status: 'reapplied',
+      createdCandidate,
+      createdApplication: false,
+      sourceMerged,
+    }
+  })
+}
+
+export async function addOrMergeJobCandidate(
+  ctx: MembershipContext,
+  jobId: string,
+  input: AddOrMergeJobCandidateInput,
+): Promise<AddOrMergeJobCandidateResult> {
+  await connectDB()
+
+  // A Mongo duplicate-key race can occur only at the two workspace-unique
+  // identities below. One bounded replay reads the winner and returns the
+  // existing card; no unbounded retry loop can amplify a faulty client.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await addOrMergeJobCandidateOnce(ctx, jobId, input)
+    } catch (error) {
+      if (attempt === 0 && hasDuplicateKeyError(error)) continue
+      throw error
+    }
+  }
+  throw new AppError('Could not add this candidate; retry the request', 409, 'APPLICATION_MERGE_RACE')
 }
 
 export interface StageMoveInput {

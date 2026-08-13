@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@shared/db/connection', () => ({
@@ -23,9 +24,12 @@ const {
   mockInterviewAttempt,
   mockRequirementVersion,
   mockEmailOutbox,
+  mockInvitationBatch,
+  mockInvitationBatchItem,
   mockScheduleMediaPurge,
   mockCancelMediaPurge,
   mockDeliverRuntimeRevocation,
+  mockCandidatePiiFence,
 } = vi.hoisted(() => {
   const transactionSession = {
     withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
@@ -42,7 +46,7 @@ const {
       exists: vi.fn(),
       db: { startSession: vi.fn().mockResolvedValue(transactionSession) },
     },
-    mockCandidate: { create: vi.fn(), find: vi.fn(), findOne: vi.fn() },
+    mockCandidate: { create: vi.fn(), find: vi.fn(), findOne: vi.fn(), updateOne: vi.fn() },
     mockApplication: {
       create: vi.fn(),
       find: vi.fn(),
@@ -56,11 +60,14 @@ const {
     mockGuestSession: { updateMany: vi.fn() },
     mockEngineHandoff: { updateMany: vi.fn() },
     mockInterviewAttempt: { updateMany: vi.fn() },
-    mockRequirementVersion: { create: vi.fn() },
+    mockRequirementVersion: { create: vi.fn(), findOne: vi.fn() },
     mockEmailOutbox: { create: vi.fn(), find: vi.fn() },
+    mockInvitationBatch: { updateMany: vi.fn() },
+    mockInvitationBatchItem: { updateMany: vi.fn() },
     mockScheduleMediaPurge: vi.fn(),
     mockCancelMediaPurge: vi.fn(),
     mockDeliverRuntimeRevocation: vi.fn(),
+    mockCandidatePiiFence: vi.fn(),
   }
 })
 
@@ -91,6 +98,7 @@ vi.mock('../models', () => {
       create: (...args: unknown[]) => mockCandidate.create(...args),
       find: (...args: unknown[]) => mockCandidate.find(...args),
       findOne: (...args: unknown[]) => mockCandidate.findOne(...args),
+      updateOne: (...args: unknown[]) => mockCandidate.updateOne(...args),
     },
     HireApplication: {
       create: (...args: unknown[]) => mockApplication.create(...args),
@@ -114,12 +122,19 @@ vi.mock('../models', () => {
     HireInterviewAttempt: {
       updateMany: (...args: unknown[]) => mockInterviewAttempt.updateMany(...args),
     },
+    HireInvitationBatch: {
+      updateMany: (...args: unknown[]) => mockInvitationBatch.updateMany(...args),
+    },
+    HireInvitationBatchItem: {
+      updateMany: (...args: unknown[]) => mockInvitationBatchItem.updateMany(...args),
+    },
   }
 })
 
 vi.mock('../models/HireJobRequirementVersion', () => ({
   HireJobRequirementVersion: {
     create: (...args: unknown[]) => mockRequirementVersion.create(...args),
+    findOne: (...args: unknown[]) => mockRequirementVersion.findOne(...args),
   },
 }))
 
@@ -139,10 +154,18 @@ vi.mock('../services/engineRevocationService', () => ({
   deliverRuntimeRevocation: (...args: unknown[]) => mockDeliverRuntimeRevocation(...args),
 }))
 
+vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
+  claimHireCandidatePiiWriteFence: (...args: unknown[]) => mockCandidatePiiFence(...args),
+  HireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
+}))
+
 import {
   addCandidate,
+  addOrMergeJobCandidate,
   createApplication,
   createJob,
+  duplicateJob,
+  getJobPipeline,
   moveStage,
   updateJobStatus,
 } from '../services/pipelineService'
@@ -183,9 +206,13 @@ beforeEach(() => {
   mockGuestSession.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockEngineHandoff.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockInterviewAttempt.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockInvitationBatch.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockInvitationBatchItem.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockScheduleMediaPurge.mockResolvedValue({ purgeEligibleAt: new Date(), scheduled: 0 })
   mockCancelMediaPurge.mockResolvedValue(0)
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
+  mockCandidatePiiFence.mockResolvedValue(undefined)
+  mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockEmailOutbox.find.mockResolvedValue([])
 })
 
@@ -236,6 +263,170 @@ describe('createJob', () => {
     const jobDoc = mockJob.create.mock.calls[0][0][0]
     expect(jobDoc).not.toHaveProperty('createdBy')
     expect(jobDoc).toMatchObject({ createdByMemberId: 'm1', createdByName: 'HR One' })
+  })
+
+  it('persists an independent optional screening-default snapshot with the job', async () => {
+    mockJob.create.mockImplementation(async (docs: unknown[]) => docs)
+    mockRequirementVersion.create.mockResolvedValue([])
+    const screeningSettings = { location: 'Bengaluru, India', experienceFloorYears: 3 }
+
+    await createJob(CTX, { ...JOB_INPUT, screeningSettings })
+
+    const jobDocument = mockJob.create.mock.calls[0][0][0]
+    expect(jobDocument.screeningSettings).toEqual(screeningSettings)
+    expect(jobDocument.screeningSettings).not.toBe(screeningSettings)
+  })
+})
+
+describe('duplicateJob', () => {
+  const WORKSPACE_ID = '111111111111111111111111'
+  const SOURCE_JOB_ID = '222222222222222222222222'
+  const SOURCE_REQUIREMENT_ID = '333333333333333333333333'
+  const DUPLICATE_CTX = {
+    workspace: { _id: WORKSPACE_ID, name: 'Acme' },
+    membership: {
+      _id: '444444444444444444444444',
+      userId: '555555555555555555555555',
+      email: 'hr@acme.com',
+      name: 'HR One',
+      role: 'admin',
+    },
+  } as unknown as MembershipContext
+
+  function sourceJob() {
+    return {
+      _id: SOURCE_JOB_ID,
+      workspaceId: WORKSPACE_ID,
+      title: 'Backend Engineer',
+      jdText: '# Backend Engineer\n\nA reviewed job description.',
+      status: 'closed',
+      activeRequirementVersionId: SOURCE_REQUIREMENT_ID,
+      activeRequirementVersion: 3,
+      applyTokenHash: 'f'.repeat(64),
+      applyPageEnabled: false,
+      screeningSettings: {
+        location: 'Bengaluru, India',
+        experienceFloorYears: 5,
+      },
+      closeNote: 'Previous search closed.',
+      events: [{ type: 'status_change', from: 'open', to: 'closed' }],
+    }
+  }
+
+  function sourceRequirement() {
+    return {
+      _id: SOURCE_REQUIREMENT_ID,
+      workspaceId: WORKSPACE_ID,
+      jobId: SOURCE_JOB_ID,
+      version: 3,
+      state: 'active',
+      input: {
+        role: 'Backend Engineer',
+        level: 'Senior',
+        mustHaves: ['Production TypeScript'],
+        niceToHaves: ['Kafka'],
+        location: 'Bengaluru, India',
+        workMode: 'hybrid',
+        compensation: '₹30–40L',
+        companyBlurb: 'A focused product team.',
+      },
+      proseJd: '# Backend Engineer\n\nA reviewed job description.',
+      requirements: [
+        { id: 'must-1', text: 'Production TypeScript', importance: 'must_have' },
+        { id: 'nice-1', text: 'Kafka', importance: 'nice_to_have' },
+      ],
+      contentHash: 'a'.repeat(64),
+    }
+  }
+
+  it('copies only the source job configuration into a fresh open job and apply link', async () => {
+    const source = sourceJob()
+    const requirement = sourceRequirement()
+    mockJob.findOne.mockResolvedValue(source)
+    mockRequirementVersion.findOne.mockResolvedValue(requirement)
+    mockJob.create.mockImplementation(async (docs: unknown[]) => docs)
+    mockRequirementVersion.create.mockResolvedValue([])
+
+    const duplicated = await duplicateJob(DUPLICATE_CTX, SOURCE_JOB_ID)
+
+    const [sourceFilter, sourceProjection, sourceOptions] = mockJob.findOne.mock.calls[0]
+    expect(sourceFilter).toEqual({ _id: SOURCE_JOB_ID, workspaceId: WORKSPACE_ID })
+    expect(sourceProjection).toBeNull()
+    expect(sourceOptions).toEqual({ session })
+    expect(mockRequirementVersion.findOne).toHaveBeenCalledWith(
+      {
+        _id: SOURCE_REQUIREMENT_ID,
+        workspaceId: WORKSPACE_ID,
+        jobId: SOURCE_JOB_ID,
+        version: 3,
+        state: 'active',
+      },
+      null,
+      { session },
+    )
+
+    const [jobDocs, jobOptions] = mockJob.create.mock.calls[0]
+    const [versionDocs, versionOptions] = mockRequirementVersion.create.mock.calls[0]
+    const job = jobDocs[0]
+    const version = versionDocs[0]
+    const rawSecret = duplicated.capability.split('.')[1]
+
+    expect(duplicated.capability).toMatch(new RegExp(`^${WORKSPACE_ID}\\.[a-f0-9]{64}$`))
+    expect(jobOptions).toEqual({ session })
+    expect(versionOptions).toEqual({ session })
+    expect(job).toMatchObject({
+      workspaceId: WORKSPACE_ID,
+      title: source.title,
+      jdText: source.jdText,
+      activeRequirementVersion: 1,
+      status: 'open',
+      intakeWriteVersion: 0,
+      applyPageEnabled: true,
+      screeningSettings: source.screeningSettings,
+      events: [],
+      createdBy: '555555555555555555555555',
+      createdByMemberId: '444444444444444444444444',
+      createdByName: 'HR One',
+    })
+    expect(String(job._id)).not.toBe(SOURCE_JOB_ID)
+    expect(job.screeningSettings).not.toBe(source.screeningSettings)
+    expect(String(job.activeRequirementVersionId)).toBe(String(version._id))
+    expect(job).not.toHaveProperty('closeNote')
+    expect(job).not.toHaveProperty('closedAt')
+    expect(job.applyTokenHash).toBe(
+      createHash('sha256').update(rawSecret).digest('hex'),
+    )
+    expect(version).toMatchObject({
+      workspaceId: WORKSPACE_ID,
+      version: 1,
+      state: 'active',
+      input: requirement.input,
+      proseJd: requirement.proseJd,
+      requirements: requirement.requirements,
+      contentHash: requirement.contentHash,
+      createdByMemberId: '444444444444444444444444',
+      createdByName: 'HR One',
+    })
+    expect(String(version.jobId)).toBe(String(job._id))
+    expect(version.input).not.toBe(requirement.input)
+    expect(version.requirements).not.toBe(requirement.requirements)
+    expect(JSON.stringify([jobDocs, versionDocs])).not.toContain(rawSecret)
+    expect(mockCandidate.create).not.toHaveBeenCalled()
+    expect(mockCandidate.find).not.toHaveBeenCalled()
+    expect(mockApplication.create).not.toHaveBeenCalled()
+    expect(mockApplication.find).not.toHaveBeenCalled()
+  })
+
+  it('does not create a duplicate when the active source requirement is missing', async () => {
+    mockJob.findOne.mockResolvedValue(sourceJob())
+    mockRequirementVersion.findOne.mockResolvedValue(null)
+
+    await expect(duplicateJob(DUPLICATE_CTX, SOURCE_JOB_ID)).rejects.toMatchObject({
+      code: 'JOB_REQUIREMENT_VERSION_INVALID',
+    })
+
+    expect(mockJob.create).not.toHaveBeenCalled()
+    expect(mockRequirementVersion.create).not.toHaveBeenCalled()
   })
 })
 
@@ -489,6 +680,33 @@ describe('updateJobStatus', () => {
       expect.any(Object),
       { session },
     )
+    expect(mockInvitationBatchItem.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'cancelled' }),
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      }),
+      { session },
+    )
+    expect(mockInvitationBatch.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        status: { $in: ['planned', 'scheduled', 'dispatching', 'failed'] },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'cancelled',
+          cancelledByMemberId: 'm1',
+          cancelledByName: 'HR One',
+        }),
+      }),
+      { session },
+    )
     expect(mockScheduleMediaPurge).toHaveBeenCalledWith({
       workspaceId: 'ws-A',
       jobId: 'j1',
@@ -616,6 +834,427 @@ describe('createApplication', () => {
       createApplication(CTX, { jobId: 'j1', candidateId: 'c1' }),
     ).rejects.toMatchObject({ code: 'JOB_ON_HOLD' })
     expect(mockApplication.create).not.toHaveBeenCalled()
+  })
+})
+
+describe('getJobPipeline', () => {
+  it('ranks only fresh scores and batch-enriches same-workspace prior jobs', async () => {
+    const resumeHash = (value: string) => createHash('sha256').update(value).digest('hex')
+    const currentJd = 'Current reviewed job description'
+    const scoredAt = new Date('2026-08-12T00:00:00.000Z')
+    const applications = [
+      {
+        _id: 'a-low',
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        candidateId: 'c-low',
+        stage: 'new',
+        createdAt: new Date('2026-08-12T00:03:00.000Z'),
+        resumeMatch: {
+          score: 80,
+          strengths: [],
+          gaps: [],
+          scoredAt,
+          jdHash: resumeHash(currentJd),
+          resumeHash: resumeHash('low current'),
+        },
+      },
+      {
+        _id: 'a-high',
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        candidateId: 'c-high',
+        stage: 'screened',
+        createdAt: new Date('2026-08-12T00:04:00.000Z'),
+        resumeMatch: {
+          score: 95,
+          strengths: [],
+          gaps: [],
+          scoredAt,
+          jdHash: resumeHash(currentJd),
+          resumeHash: resumeHash('high current'),
+        },
+      },
+      {
+        _id: 'a-stale',
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        candidateId: 'c-stale',
+        stage: 'new',
+        createdAt: new Date('2026-08-12T00:01:00.000Z'),
+        resumeMatch: {
+          score: 100,
+          strengths: [],
+          gaps: [],
+          scoredAt,
+          jdHash: resumeHash(currentJd),
+          resumeHash: resumeHash('old resume'),
+        },
+      },
+      {
+        _id: 'a-unscored',
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        candidateId: 'c-unscored',
+        stage: 'new',
+        createdAt: new Date('2026-08-12T00:02:00.000Z'),
+      },
+    ]
+    mockJob.findOne.mockResolvedValue({ _id: 'j1', workspaceId: 'ws-A', jdText: currentJd })
+    mockApplication.find
+      .mockImplementationOnce(() => ({
+        sort: vi.fn().mockResolvedValue(applications),
+      }))
+      .mockImplementationOnce(() => ({
+        select: vi.fn().mockResolvedValue([
+          {
+            _id: 'past-low',
+            workspaceId: 'ws-A',
+            jobId: 'j-old',
+            candidateId: 'c-low',
+            stage: 'offer',
+          },
+          // This is intentionally an in-workspace row for another candidate;
+          // it must not leak onto c-low's card.
+          {
+            _id: 'past-high',
+            workspaceId: 'ws-A',
+            jobId: 'j-other',
+            candidateId: 'c-high',
+            stage: 'rejected',
+          },
+        ]),
+      }))
+    mockCandidate.find.mockResolvedValue([
+      { _id: 'c-low', workspaceId: 'ws-A', resumeText: 'low current' },
+      { _id: 'c-high', workspaceId: 'ws-A', resumeText: 'high current' },
+      { _id: 'c-stale', workspaceId: 'ws-A', resumeText: 'new resume' },
+      { _id: 'c-unscored', workspaceId: 'ws-A', resumeText: 'unscored current' },
+    ])
+    mockRound.find.mockReturnValue({
+      sort: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue([]) }),
+    })
+    mockJob.find.mockReturnValue({
+      select: vi.fn().mockResolvedValue([
+        { _id: 'j-old', workspaceId: 'ws-A', title: 'Earlier role' },
+        { _id: 'j-other', workspaceId: 'ws-A', title: 'Other role' },
+      ]),
+    })
+
+    const result = await getJobPipeline(CTX, 'j1')
+
+    expect(mockApplication.find.mock.calls[0][0]).toEqual({
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+    })
+    expect(mockApplication.find.mock.calls[1][0]).toEqual({
+      workspaceId: 'ws-A',
+      candidateId: { $in: ['c-low', 'c-high', 'c-stale', 'c-unscored'] },
+      jobId: { $ne: 'j1' },
+    })
+    expect(mockJob.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      _id: { $in: ['j-old', 'j-other'] },
+    })
+    expect(result.entries.map((entry) => entry.application._id)).toEqual([
+      'a-high',
+      'a-low',
+      'a-stale',
+      'a-unscored',
+    ])
+    expect(result.entries.map((entry) => [entry.scoreState, entry.rank])).toEqual([
+      ['scored', 1],
+      ['scored', 2],
+      ['stale', null],
+      ['unscored', null],
+    ])
+    expect(result.entries[1].previouslySeenIn).toEqual([
+      { jobId: 'j-old', jobTitle: 'Earlier role', stage: 'offer' },
+    ])
+    expect(result.entries[0].previouslySeenIn).toEqual([
+      { jobId: 'j-other', jobTitle: 'Other role', stage: 'rejected' },
+    ])
+    expect(result.entries[2].previouslySeenIn).toEqual([])
+  })
+})
+
+describe('addOrMergeJobCandidate', () => {
+  const OPEN_JOB = { _id: 'j1', workspaceId: 'ws-A', status: 'open' }
+  const EXISTING_CANDIDATE = {
+    _id: 'c1',
+    workspaceId: 'ws-A',
+    name: 'Jane Candidate',
+    email: 'jane@example.com',
+    source: 'apply_page',
+    sourceHistory: ['apply_page'],
+  }
+
+  function application(
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      _id: 'a1',
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+      candidateId: 'c1',
+      stage: 'screened',
+      events: [],
+      ...overrides,
+    }
+  }
+
+  function armManualExisting(
+    existingApplication: Record<string, unknown> | null,
+  ) {
+    mockJob.findOne.mockResolvedValue(OPEN_JOB)
+    mockCandidate.findOne.mockResolvedValue(EXISTING_CANDIDATE)
+    mockApplication.findOne.mockResolvedValue(existingApplication)
+    mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
+  }
+
+  it('does not disclose or accept a guessed cross-tenant pool candidate id', async () => {
+    mockJob.findOne.mockResolvedValue(OPEN_JOB)
+    mockCandidate.findOne.mockResolvedValue(null)
+
+    await expect(
+      addOrMergeJobCandidate(CTX, 'j1', {
+        candidateId: 'foreign-candidate',
+        operationId: OP_A,
+      }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'NOT_FOUND' })
+
+    expect(mockCandidate.findOne).toHaveBeenCalledWith(
+      { _id: 'foreign-candidate', workspaceId: 'ws-A' },
+      null,
+      { session },
+    )
+    expect(mockApplication.create).not.toHaveBeenCalled()
+  })
+
+  it('treats an email known only in another workspace as a new local candidate', async () => {
+    mockJob.findOne.mockResolvedValue(OPEN_JOB)
+    // This is what a cross-tenant email looks like here: the only lookup is
+    // workspace-scoped, so the foreign record is indistinguishable from none.
+    mockCandidate.findOne.mockResolvedValue(null)
+    mockCandidate.create.mockImplementation(async (docs: Array<Record<string, unknown>>) => [
+      { ...docs[0], _id: 'c-local' },
+    ])
+    mockApplication.findOne.mockResolvedValue(null)
+    mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
+    mockApplication.create.mockImplementation(async (docs: unknown[]) => docs)
+
+    const result = await addOrMergeJobCandidate(CTX, 'j1', {
+      name: 'Jane Candidate',
+      email: 'jane@example.com',
+      operationId: OP_A,
+    })
+
+    expect(result).toMatchObject({
+      status: 'created',
+      createdCandidate: true,
+      createdApplication: true,
+    })
+    expect(mockCandidate.findOne).toHaveBeenCalledWith(
+      { workspaceId: 'ws-A', email: 'jane@example.com' },
+      null,
+      { session },
+    )
+    expect(mockCandidate.create.mock.calls[0][0][0]).toMatchObject({
+      workspaceId: 'ws-A',
+      email: 'jane@example.com',
+      source: 'manual',
+      sourceHistory: ['manual'],
+    })
+  })
+
+  it('merges a same-workspace manual email into the same active card with provenance and actor snapshots', async () => {
+    const existing = application()
+    const updated = application({
+      events: [
+        {
+          type: 'source_merged',
+          actorMemberId: 'm1',
+          actorName: 'HR One',
+          operationId: OP_A,
+        },
+        {
+          type: 'reapplied',
+          actorMemberId: 'm1',
+          actorName: 'HR One',
+          operationId: OP_A,
+        },
+      ],
+    })
+    armManualExisting(existing)
+    mockApplication.findOneAndUpdate.mockResolvedValue(updated)
+
+    const result = await addOrMergeJobCandidate(CTX, 'j1', {
+      name: 'Jane Candidate',
+      email: 'JANE@example.com',
+      operationId: OP_A,
+    })
+
+    expect(result).toMatchObject({
+      status: 'reapplied',
+      createdCandidate: false,
+      createdApplication: false,
+      sourceMerged: true,
+    })
+    expect(mockCandidate.findOne).toHaveBeenCalledWith(
+      { workspaceId: 'ws-A', email: 'jane@example.com' },
+      null,
+      { session },
+    )
+    expect(mockCandidate.updateOne).toHaveBeenCalledWith(
+      {
+        _id: 'c1',
+        workspaceId: 'ws-A',
+        piiAnonymizedAt: { $exists: false },
+      },
+      { $addToSet: { sourceHistory: { $each: ['manual'] } } },
+      { session, runValidators: true },
+    )
+    expect(mockCandidatePiiFence).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      candidateId: 'c1',
+      session,
+    })
+    expect(mockApplication.create).not.toHaveBeenCalled()
+    const [filter, update, options] = mockApplication.findOneAndUpdate.mock.calls[0]
+    expect(filter).toEqual({
+      _id: 'a1',
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+      candidateId: 'c1',
+      'events.operationId': { $ne: OP_A },
+    })
+    expect(options).toMatchObject({ new: true, session, runValidators: true })
+    expect(update.$push.events.$each).toEqual([
+      expect.objectContaining({
+        type: 'source_merged',
+        actorMemberId: 'm1',
+        actorUserId: 'u1',
+        actorName: 'HR One',
+        note: 'Candidate source recorded: manual entry',
+        operationId: OP_A,
+      }),
+      expect.objectContaining({
+        type: 'reapplied',
+        actorMemberId: 'm1',
+        actorUserId: 'u1',
+        actorName: 'HR One',
+        note: 'Candidate re-applied via manual entry',
+        operationId: OP_A,
+      }),
+    ])
+  })
+
+  it('treats a same-operation retry as the existing application instead of appending another card/event', async () => {
+    const existing = application({
+      events: [{ type: 'reapplied', operationId: OP_A }],
+    })
+    armManualExisting(existing)
+
+    const result = await addOrMergeJobCandidate(CTX, 'j1', {
+      name: 'Jane Candidate',
+      email: 'jane@example.com',
+      operationId: OP_A,
+    })
+
+    expect(result).toMatchObject({
+      status: 'reapplied',
+      createdCandidate: false,
+      createdApplication: false,
+      sourceMerged: false,
+    })
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
+    expect(mockCandidate.updateOne).not.toHaveBeenCalled()
+    expect(mockApplication.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockApplication.create).not.toHaveBeenCalled()
+  })
+
+  it('recovers a concurrent per-job uniqueness race as the one existing application', async () => {
+    const winner = application()
+    mockJob.findOne.mockResolvedValue(OPEN_JOB)
+    mockCandidate.findOne.mockResolvedValue(EXISTING_CANDIDATE)
+    mockApplication.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(winner)
+    mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
+    mockApplication.create.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }))
+    mockApplication.findOneAndUpdate.mockResolvedValue(application({ events: [] }))
+
+    const result = await addOrMergeJobCandidate(CTX, 'j1', {
+      candidateId: 'c1',
+      operationId: OP_B,
+    })
+
+    expect(result).toMatchObject({
+      status: 'reapplied',
+      createdCandidate: false,
+      createdApplication: false,
+    })
+    expect(mockApplication.create).toHaveBeenCalledTimes(1)
+    expect(mockApplication.findOneAndUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses the workspace candidate on a different job and creates exactly one new application', async () => {
+    const secondJob = { ...OPEN_JOB, _id: 'j2' }
+    mockJob.findOne.mockResolvedValue(secondJob)
+    mockCandidate.findOne.mockResolvedValue(EXISTING_CANDIDATE)
+    mockApplication.findOne.mockResolvedValue(null)
+    mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
+    mockApplication.create.mockImplementation(async (docs: unknown[]) => docs)
+
+    const result = await addOrMergeJobCandidate(CTX, 'j2', {
+      name: 'Jane Candidate',
+      email: 'jane@example.com',
+      operationId: OP_A,
+    })
+
+    expect(result).toMatchObject({
+      status: 'created',
+      candidate: EXISTING_CANDIDATE,
+      createdCandidate: false,
+      createdApplication: true,
+      sourceMerged: true,
+    })
+    expect(mockCandidate.create).not.toHaveBeenCalled()
+    expect(mockApplication.create.mock.calls[0][0][0]).toMatchObject({
+      workspaceId: 'ws-A',
+      jobId: 'j2',
+      candidateId: 'c1',
+      createdByMemberId: 'm1',
+      createdByName: 'HR One',
+      events: [
+        expect.objectContaining({
+          type: 'created',
+          note: 'Added via manual entry',
+          operationId: OP_A,
+          actorMemberId: 'm1',
+        }),
+      ],
+    })
+  })
+
+  it('fails closed for a rejected candidate and never automatically revives the card', async () => {
+    const rejected = application({ stage: 'rejected' })
+    armManualExisting(rejected)
+
+    const result = await addOrMergeJobCandidate(CTX, 'j1', {
+      name: 'Jane Candidate',
+      email: 'jane@example.com',
+      operationId: OP_A,
+    })
+
+    expect(result).toMatchObject({
+      status: 'already_considered',
+      createdApplication: false,
+    })
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
+    expect(mockCandidate.updateOne).not.toHaveBeenCalled()
+    expect(mockApplication.create).not.toHaveBeenCalled()
+    expect(mockApplication.findOneAndUpdate).not.toHaveBeenCalled()
   })
 })
 

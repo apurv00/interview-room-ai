@@ -44,7 +44,14 @@ export {
   type IHireJobBuilderInput,
   type IHireJobRequirementVersion,
 } from './HireJobRequirementVersion'
-export { HireEmailOutbox, type IHireEmailOutbox } from './HireEmailOutbox'
+export {
+  HireEmailOutbox,
+  HIRE_EMAIL_OUTBOX_KINDS,
+  HIRE_EMAIL_OUTBOX_STATUSES,
+  type HireEmailOutboxKind,
+  type HireEmailOutboxStatus,
+  type IHireEmailOutbox,
+} from './HireEmailOutbox'
 export {
   HireAiInviteDelivery,
   HIRE_AI_INVITE_DELIVERY_STATUSES,
@@ -54,9 +61,12 @@ export {
 export {
   HireCandidate,
   HIRE_CANDIDATE_SOURCES,
+  HIRE_CANDIDATE_PROVENANCE_SOURCES,
   HIRE_CANDIDATE_ANONYMIZATION_REASONS,
   type HireCandidateSource,
+  type HireCandidateProvenanceSource,
   type HireCandidateAnonymizationReason,
+  type IHireCandidateScreeningProfile,
   type IHireCandidate,
 } from './HireCandidate'
 export {
@@ -72,6 +82,52 @@ export {
   type IHireApplicantSubmission,
   APPLICANT_SUBMISSION_CAP,
 } from './HireApplication'
+export {
+  HireIntakeTask,
+  HIRE_INTAKE_TASK_MAX_PAYLOAD_BYTES,
+  HIRE_INTAKE_TASK_SOURCES,
+  HIRE_INTAKE_TASK_STATUSES,
+  type HireIntakeTaskSource,
+  type HireIntakeTaskStatus,
+  type IHireIntakeTask,
+} from './HireIntakeTask'
+export {
+  HireScreeningGate,
+  HIRE_SCREENING_SELECTION_MODES,
+  HIRE_SCREENING_GATE_STATUSES,
+  HIRE_SCREENING_SCORE_STATES,
+  HIRE_SCREENING_KNOCKOUT_REASONS,
+  HIRE_SCREENING_SELECTION_REASONS,
+  HIRE_SCREENING_EXCEPTION_ACTIONS,
+  HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+  type HireScreeningSelectionMode,
+  type HireScreeningGateStatus,
+  type HireScreeningScoreState,
+  type HireScreeningKnockoutReason,
+  type HireScreeningSelectionReason,
+  type HireScreeningExceptionAction,
+  type IHireScreeningKnockoutSettings,
+  type IHireScreeningCutLine,
+  type IHireScreeningRankedApplication,
+  type IHireScreeningException,
+  type IHireScreeningGate,
+} from './HireScreeningGate'
+export {
+  HireInvitationBatch,
+  HIRE_INVITATION_BATCH_STATUSES,
+  type HireInvitationBatchStatus,
+  type IHireInvitationBatch,
+} from './HireInvitationBatch'
+export {
+  HireInvitationBatchItem,
+  HIRE_INVITATION_BATCH_ITEM_STATUSES,
+  HIRE_INVITATION_BATCH_ITEM_DELIVERY_STATUSES,
+  HIRE_INVITATION_BATCH_ITEM_SELECTION_REASONS,
+  type HireInvitationBatchItemStatus,
+  type HireInvitationBatchItemDeliveryStatus,
+  type HireInvitationBatchItemSelectionReason,
+  type IHireInvitationBatchItem,
+} from './HireInvitationBatchItem'
 export {
   HireRound,
   HIRE_ROUND_KINDS,
@@ -118,3 +174,7 @@ export {
   type IHireMediaAsset,
 } from './HireMediaAsset'
 export { HirePrivacyRequest, type IHirePrivacyRequest } from './HirePrivacyRequest'
+export {
+  HireReengagementOptOut,
+  type IHireReengagementOptOut,
+} from './HireReengagementOptOut'

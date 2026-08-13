@@ -1,58 +1,123 @@
 'use client'
 
 /**
- * Bulk resume upload (Phase 2 PR-2) — the client half of the per-file
- * atomic intake design: each file is ONE request to
- * /api/workspace/jobs/[jobId]/intake, fanned out at small concurrency with
- * individual retries, so a deploy mid-batch or one corrupt PDF costs
- * exactly that file (no Inngest by design — founder decision 2026-08-09).
- *
- * Per-file states mirror the endpoint's contract:
- *   - 422 NO_EMAIL → inline fix-up row (type the email, retry with override)
- *   - createdApplication:false → "already in pipeline" (idempotent re-upload)
- *   - seenBefore[] → chips linking the person's other applications
- *   - resumeMatch → JD-match score chip (null score = unscored, still added)
+ * Recruiter bulk-resume intake. Each browser request only stores one durable
+ * task; parsing, JD scoring, and candidate writes are performed by the Hire
+ * worker. The panel polls task state and can supply an email later without
+ * asking the recruiter to upload the document again.
  */
 
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Badge from '@shared/ui/Badge'
 import Button from '@shared/ui/Button'
-import { scoreBand } from '@shared/ui/ScoreBar'
 
-const MAX_BATCH = 20
-const CONCURRENCY = 3
+// Phase 2's operational target is a 50-resume screening batch. Uploads still
+// queue only three lightweight task writes at a time; parsing and scoring are
+// performed by the durable worker, not in the browser.
+const MAX_BATCH = 50
+const UPLOAD_CONCURRENCY = 3
+const STATUS_POLL_CONCURRENCY = 3
+const POLL_INTERVAL_MS = 3_000
 const ACCEPT = '.pdf,.docx,.txt'
 
-interface SeenBefore {
-  jobId: string
-  jobTitle: string
-  stage: string
+type IntakeTaskStatus =
+  | 'queued'
+  | 'processing'
+  | 'needs_identity'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+type FileRowStatus = IntakeTaskStatus | 'uploading' | 'error'
+
+interface IntakeTaskView {
+  taskId: string
+  status: IntakeTaskStatus
+  attempts: number
+  lastError?: string
+  candidateId?: string
+  applicationId?: string
 }
 
 interface FileRow {
   key: string
   file: File
-  status: 'queued' | 'uploading' | 'done' | 'needs_email' | 'error'
-  /** Server-extracted name shown on the fix-up row. */
-  extractedName?: string | null
-  /** IDENTITY_CONFLICT explanation — email belongs to someone else. */
-  conflictNote?: string
-  emailFix?: string
-  /** Override carried through the queue on a retry/fix-up submission. */
-  pendingOverride?: string
+  status: FileRowStatus
+  taskId?: string
+  attempts?: number
+  candidateId?: string
+  applicationId?: string
   error?: string
-  result?: {
-    candidateName: string
-    candidateEmail: string
-    createdApplication: boolean
-    score: number | null
-    seenBefore: SeenBefore[]
+  emailFix?: string
+  identitySubmitting?: boolean
+  identityError?: string
+}
+
+const TASK_STATUSES: IntakeTaskStatus[] = [
+  'queued',
+  'processing',
+  'needs_identity',
+  'completed',
+  'failed',
+  'cancelled',
+]
+
+function isTaskStatus(value: unknown): value is IntakeTaskStatus {
+  return typeof value === 'string' && TASK_STATUSES.includes(value as IntakeTaskStatus)
+}
+
+function isTerminal(status: FileRowStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'error'
+}
+
+/** A recruiter needs an up-to-date pipeline as soon as a task can affect it. */
+function isPipelineRefreshable(status: FileRowStatus): boolean {
+  return status === 'needs_identity' || isTerminal(status)
+}
+
+function isPollable(row: FileRow): boolean {
+  return Boolean(row.taskId) && (row.status === 'queued' || row.status === 'processing')
+}
+
+function readTask(value: unknown): IntakeTaskView | null {
+  if (!value || typeof value !== 'object') return null
+  const task = value as Record<string, unknown>
+  if (
+    typeof task.taskId !== 'string' ||
+    !isTaskStatus(task.status)
+  ) {
+    return null
+  }
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    // Enqueue responses deliberately expose only the opaque task id and
+    // status. The authenticated status endpoint adds worker attempt counts.
+    attempts: typeof task.attempts === 'number' ? task.attempts : 0,
+    ...(typeof task.lastError === 'string' ? { lastError: task.lastError } : {}),
+    ...(typeof task.candidateId === 'string' ? { candidateId: task.candidateId } : {}),
+    ...(typeof task.applicationId === 'string' ? { applicationId: task.applicationId } : {}),
   }
 }
 
-function scoreVariant(score: number): 'success' | 'caution' | 'danger' {
-  const band = scoreBand(score)
-  return band === 'strong' ? 'success' : band === 'ok' ? 'caution' : 'danger'
+function taskPatch(task: IntakeTaskView): Partial<FileRow> {
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    attempts: task.attempts,
+    ...(task.candidateId ? { candidateId: task.candidateId } : {}),
+    ...(task.applicationId ? { applicationId: task.applicationId } : {}),
+    ...(task.status === 'needs_identity' || task.status === 'failed' || task.status === 'cancelled'
+      ? { error: task.lastError }
+      : { error: undefined }),
+  }
+}
+
+function taskError(data: unknown, fallback: string): string {
+  if (data && typeof data === 'object' && typeof (data as { error?: unknown }).error === 'string') {
+    return (data as { error: string }).error
+  }
+  return fallback
 }
 
 export default function BulkUploadPanel({
@@ -60,148 +125,266 @@ export default function BulkUploadPanel({
   onSettled,
 }: {
   jobId: string
-  /** Called once when every file in the current batch reaches a terminal state. */
+  /** Called when a row reaches a state that can change the visible pipeline. */
   onSettled: () => void
 }) {
   const [rows, setRows] = useState<FileRow[]>([])
-  const inFlightRef = useRef(0)
-  const queueRef = useRef<FileRow[]>([])
-  // Mirror of `rows` for the batch-capacity check — synchronous, so two
-  // quick selections can't both read a pre-append count.
   const rowsRef = useRef<FileRow[]>([])
-  rowsRef.current = rows
+  const uploadQueueRef = useRef<FileRow[]>([])
+  const uploadingKeysRef = useRef(new Set<string>())
+  const uploadsInFlightRef = useRef(0)
+  const pollingRef = useRef(false)
+  const pollCursorRef = useRef(0)
+  // Keep the last notification per row so a polling repaint does not refetch
+  // the board. A retry clears this record when it returns to a queued state.
+  const notifiedRefreshStateRef = useRef(new Map<string, FileRowStatus>())
+  const onSettledRef = useRef(onSettled)
+  onSettledRef.current = onSettled
 
-  function patchRow(key: string, patch: Partial<FileRow>) {
-    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
-  }
+  const patchRow = useCallback((key: string, patch: Partial<FileRow>) => {
+    setRows((previous) => {
+      const next = previous.map((row) => (row.key === key ? { ...row, ...patch } : row))
+      rowsRef.current = next
+      return next
+    })
+  }, [])
 
-  async function uploadOne(row: FileRow, overrideEmail?: string) {
-    patchRow(row.key, { status: 'uploading', error: undefined })
+  async function uploadOne(row: FileRow) {
+    patchRow(row.key, { status: 'uploading', error: undefined, identityError: undefined })
     try {
-      const form = new FormData()
-      form.append('file', row.file)
-      if (overrideEmail) form.append('email', overrideEmail)
-      const res = await fetch(`/api/workspace/jobs/${jobId}/intake`, {
+      const formData = new FormData()
+      formData.append('file', row.file)
+      const response = await fetch(`/api/workspace/jobs/${jobId}/intake`, {
         method: 'POST',
-        body: form,
+        body: formData,
       })
-      const data = await res.json().catch(() => ({}))
-      if (res.status === 422 && data.code === 'NO_EMAIL') {
-        patchRow(row.key, { status: 'needs_email', extractedName: data.extractedName ?? null })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        patchRow(row.key, {
+          status: 'error',
+          error: taskError(data, `Upload failed (${response.status})`),
+        })
         return
       }
-      if (res.status === 422 && data.code === 'IDENTITY_CONFLICT') {
-        // The extracted email belongs to a different-looking person in the
-        // pool — typing the email again is the recruiter's confirmation.
-        patchRow(row.key, { status: 'needs_email', conflictNote: data.error })
+      const task = readTask((data as { task?: unknown } | null)?.task)
+      if (!task) {
+        patchRow(row.key, {
+          status: 'error',
+          error: 'The upload was accepted but returned an invalid task response. Retry upload.',
+        })
         return
       }
-      if (!res.ok) {
-        patchRow(row.key, { status: 'error', error: data.error || `Upload failed (${res.status})` })
-        return
-      }
-      patchRow(row.key, {
-        status: 'done',
-        result: {
-          candidateName: data.candidate?.name ?? row.file.name,
-          candidateEmail: data.candidate?.email ?? '',
-          createdApplication: data.createdApplication !== false,
-          score: data.resumeMatch?.score ?? null,
-          seenBefore: Array.isArray(data.seenBefore) ? data.seenBefore : [],
-        },
-      })
+      patchRow(row.key, taskPatch(task))
     } catch {
-      patchRow(row.key, { status: 'error', error: 'Network error — retry' })
+      patchRow(row.key, { status: 'error', error: 'Network error — retry upload.' })
     } finally {
-      inFlightRef.current -= 1
-      pump()
+      uploadsInFlightRef.current -= 1
+      uploadingKeysRef.current.delete(row.key)
+      pumpUploads()
     }
   }
 
-  /**
-   * Single fixed-concurrency pump — EVERY intake request (initial upload,
-   * retry, and fix-up submission) goes through here, so the cap of 3 holds
-   * no matter how many rows are resubmitted at once (Codex P2 on #613).
-   */
-  function pump() {
-    while (inFlightRef.current < CONCURRENCY && queueRef.current.length > 0) {
-      const next = queueRef.current.shift()!
-      inFlightRef.current += 1
-      void uploadOne(next, next.pendingOverride)
-    }
-    if (inFlightRef.current === 0 && queueRef.current.length === 0) {
-      onSettled()
+  function pumpUploads() {
+    while (
+      uploadsInFlightRef.current < UPLOAD_CONCURRENCY &&
+      uploadQueueRef.current.length > 0
+    ) {
+      const next = uploadQueueRef.current.shift()
+      if (!next) break
+      uploadsInFlightRef.current += 1
+      void uploadOne(next)
     }
   }
 
-  function enqueue(row: FileRow) {
-    queueRef.current.push(row)
-    pump()
+  function enqueueUpload(row: FileRow) {
+    // Prevent an accidental double-click from enqueuing the same local file
+    // twice before React has painted its new row status.
+    if (uploadingKeysRef.current.has(row.key)) return
+    uploadingKeysRef.current.add(row.key)
+    uploadQueueRef.current.push(row)
+    pumpUploads()
   }
 
-  function addFiles(list: FileList | null) {
-    if (!list) return
-    // Cap across the WHOLE active batch, not just this selection — picking a
-    // second group before the first settles must not exceed MAX_BATCH paid
-    // requests (Codex P2 on #613). rowsRef mirrors the current rows so the
-    // capacity check does not depend on a stale render.
+  function addFiles(fileList: FileList | null) {
+    if (!fileList) return
     const remaining = MAX_BATCH - rowsRef.current.length
     if (remaining <= 0) return
-    const fresh: FileRow[] = Array.from(list)
+    const fresh: FileRow[] = Array.from(fileList)
       .slice(0, remaining)
-      .map((file, i) => ({
-        key: `${Date.now()}-${i}-${file.name}`,
+      .map((file, index) => ({
+        key: `${Date.now()}-${index}-${file.name}`,
         file,
-        status: 'queued' as const,
+        status: 'queued',
       }))
     if (fresh.length === 0) return
-    // Update the ref synchronously too, so a second selection in the same
-    // tick sees the reduced remaining capacity before the re-render lands.
+
     rowsRef.current = [...rowsRef.current, ...fresh]
-    setRows((prev) => [...prev, ...fresh])
-    for (const row of fresh) enqueue(row)
+    setRows((previous) => [...previous, ...fresh])
+    for (const row of fresh) enqueueUpload(row)
   }
 
-  function retry(row: FileRow, overrideEmail?: string) {
-    // Back onto the queue with the override attached — never a direct
-    // uploadOne, which would dodge the concurrency cap (Codex P2 on #613).
-    // A generic Retry after a fix-up failed (network/5xx) carries NO new
-    // override, so fall back to the one already saved on the row —
-    // dropping it would resubmit the file that has no usable email and
-    // bounce straight back to needs_email (Codex P2 on #613 round 2).
-    const override = overrideEmail ?? row.pendingOverride
-    patchRow(row.key, { status: 'queued', pendingOverride: override, error: undefined })
-    enqueue({ ...row, status: 'queued', pendingOverride: override })
+  function retryUpload(row: FileRow) {
+    if (row.status === 'uploading') return
+    const retry: FileRow = {
+      ...row,
+      status: 'queued',
+      taskId: undefined,
+      attempts: undefined,
+      candidateId: undefined,
+      applicationId: undefined,
+      error: undefined,
+      identitySubmitting: false,
+      identityError: undefined,
+    }
+    patchRow(row.key, retry)
+    enqueueUpload(retry)
+  }
+
+  const pollTask = useCallback(async (row: FileRow) => {
+    if (!row.taskId) return
+    try {
+      const response = await fetch(`/api/workspace/jobs/${jobId}/intake/${row.taskId}`, {
+        cache: 'no-store',
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        // Transient status failures should not hide a task that is still
+        // safely queued in the server. Hard authorization/not-found results
+        // are terminal from this panel's perspective.
+        if ([401, 403, 404].includes(response.status)) {
+          patchRow(row.key, {
+            status: 'error',
+            error: taskError(data, 'The intake task is no longer available.'),
+          })
+        }
+        return
+      }
+      const task = readTask((data as { task?: unknown } | null)?.task)
+      if (!task || task.taskId !== row.taskId) return
+      patchRow(row.key, taskPatch(task))
+    } catch {
+      // Keep the last safe state and retry on the next polling interval.
+    }
+  }, [jobId, patchRow])
+
+  useEffect(() => {
+    let disposed = false
+
+    async function pollActiveTasks() {
+      if (disposed || pollingRef.current) return
+      const activeRows = rowsRef.current.filter(isPollable)
+      if (activeRows.length === 0) return
+      const pollCount = Math.min(STATUS_POLL_CONCURRENCY, activeRows.length)
+      const start = pollCursorRef.current % activeRows.length
+      const batch = Array.from(
+        { length: pollCount },
+        (_, index) => activeRows[(start + index) % activeRows.length],
+      )
+      pollCursorRef.current = (start + batch.length) % activeRows.length
+      pollingRef.current = true
+      try {
+        await Promise.all(batch.map((row) => pollTask(row)))
+      } finally {
+        pollingRef.current = false
+      }
+    }
+
+    void pollActiveTasks()
+    const interval = window.setInterval(() => void pollActiveTasks(), POLL_INTERVAL_MS)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+    }
+  }, [pollTask, rows])
+
+  useEffect(() => {
+    let shouldRefreshPipeline = false
+    for (const row of rows) {
+      if (!isPipelineRefreshable(row.status)) {
+        notifiedRefreshStateRef.current.delete(row.key)
+        continue
+      }
+      if (notifiedRefreshStateRef.current.get(row.key) !== row.status) {
+        notifiedRefreshStateRef.current.set(row.key, row.status)
+        shouldRefreshPipeline = true
+      }
+    }
+    if (shouldRefreshPipeline) {
+      onSettledRef.current()
+    }
+  }, [rows])
+
+  async function submitIdentity(row: FileRow) {
+    const email = row.emailFix?.trim()
+    if (!row.taskId || !email) {
+      patchRow(row.key, { identityError: 'Enter the candidate’s email address.' })
+      return
+    }
+    patchRow(row.key, { identitySubmitting: true, identityError: undefined })
+    try {
+      const response = await fetch(`/api/workspace/jobs/${jobId}/intake/${row.taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        patchRow(row.key, {
+          identitySubmitting: false,
+          identityError: taskError(data, `Could not save email (${response.status})`),
+        })
+        return
+      }
+      const task = readTask((data as { task?: unknown } | null)?.task)
+      if (!task || task.taskId !== row.taskId) {
+        patchRow(row.key, {
+          identitySubmitting: false,
+          identityError: 'The email was accepted but task status was unavailable. Try again.',
+        })
+        return
+      }
+      patchRow(row.key, { ...taskPatch(task), identitySubmitting: false, identityError: undefined })
+    } catch {
+      patchRow(row.key, {
+        identitySubmitting: false,
+        identityError: 'Network error — the saved resume is still waiting for an email.',
+      })
+    }
   }
 
   return (
     <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-4">
       <div>
         <p className="text-sm font-medium text-[#0f1419]">Bulk upload résumés</p>
-        <p className="text-xs text-[#71767b] mt-0.5">
-          PDF, DOCX or TXT — up to {MAX_BATCH} at a time, 10MB each. Each CV is parsed,
-          matched against the JD, and added to this job&apos;s pipeline. People already in
-          your workspace are merged by email, never duplicated.
+        <p id="bulk-upload-description" className="text-xs text-[#71767b] mt-0.5">
+          PDF, DOCX or TXT — up to {MAX_BATCH} at a time, 10MB each. Files are safely queued,
+          then parsed and matched against the JD in the background. Existing people are merged
+          by email within this workspace.
         </p>
       </div>
 
-      <label className="block border-2 border-dashed border-[#e1e8ed] rounded-2xl p-6 text-center cursor-pointer hover:border-[#2563eb]/40 transition-colors">
-        <input
-          type="file"
-          multiple
-          accept={ACCEPT}
-          className="hidden"
-          onChange={(e) => {
-            addFiles(e.target.files)
-            e.target.value = ''
-          }}
-        />
+      <input
+        id="hire-bulk-resume-files"
+        type="file"
+        multiple
+        accept={ACCEPT}
+        aria-describedby="bulk-upload-description"
+        className="sr-only"
+        onChange={(event) => {
+          addFiles(event.target.files)
+          event.target.value = ''
+        }}
+      />
+      <label
+        htmlFor="hire-bulk-resume-files"
+        className="block border-2 border-dashed border-[#e1e8ed] rounded-2xl p-6 text-center cursor-pointer hover:border-[#2563eb]/40 transition-colors"
+      >
         <span className="text-sm text-[#536471]">
-          Drop files here or <span className="text-[#2563eb] font-medium">browse</span>
+          Choose résumé files or <span className="text-[#2563eb] font-medium">browse</span>
         </span>
       </label>
 
-      {rows.length > 0 && (
+      {rows.length > 0 ? (
         <ul className="space-y-2">
           {rows.map((row) => (
             <li
@@ -211,78 +394,84 @@ export default function BulkUploadPanel({
               <div className="flex items-center gap-2 min-w-0">
                 <span className="truncate font-medium text-[#0f1419]">{row.file.name}</span>
                 <span className="ml-auto shrink-0">
-                  {row.status === 'queued' && <Badge>queued</Badge>}
-                  {row.status === 'uploading' && <Badge variant="caution">processing…</Badge>}
-                  {row.status === 'error' && <Badge variant="danger">failed</Badge>}
-                  {row.status === 'needs_email' && <Badge variant="caution">needs email</Badge>}
-                  {row.status === 'done' && row.result && (
-                    <span className="flex items-center gap-1.5">
-                      {row.result.score != null ? (
-                        <Badge variant={scoreVariant(row.result.score)} dot>
-                          JD match {row.result.score}
-                        </Badge>
-                      ) : (
-                        <Badge>unscored</Badge>
-                      )}
-                      {!row.result.createdApplication && <Badge>already in pipeline</Badge>}
-                    </span>
-                  )}
+                  {row.status === 'queued' ? <Badge>queued</Badge> : null}
+                  {row.status === 'uploading' ? <Badge variant="caution">uploading…</Badge> : null}
+                  {row.status === 'processing' ? <Badge variant="caution">processing…</Badge> : null}
+                  {row.status === 'needs_identity' ? <Badge variant="caution">needs email</Badge> : null}
+                  {row.status === 'completed' ? <Badge variant="success">added</Badge> : null}
+                  {row.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
+                  {row.status === 'cancelled' ? <Badge variant="danger">cancelled</Badge> : null}
+                  {row.status === 'error' ? <Badge variant="danger">upload failed</Badge> : null}
                 </span>
               </div>
 
-              {row.status === 'done' && row.result && (
-                <div className="text-xs text-[#71767b]">
-                  {row.result.candidateName} · {row.result.candidateEmail}
-                  {row.result.seenBefore.length > 0 && (
-                    <span className="ml-2">
-                      Seen before:{' '}
-                      {row.result.seenBefore.map((s) => `${s.jobTitle} (${s.stage})`).join(', ')}
-                    </span>
-                  )}
-                </div>
-              )}
+              {(row.status === 'queued' || row.status === 'processing') && row.attempts ? (
+                <p className="text-xs text-[#71767b]">
+                  Background attempt {row.attempts}; you can keep working while this finishes.
+                </p>
+              ) : null}
 
-              {row.status === 'error' && (
-                <div className="flex items-center gap-2 text-xs text-[#f4212e]">
-                  <span>{row.error}</span>
-                  <button
-                    type="button"
-                    onClick={() => retry(row)}
-                    className="text-[#2563eb] font-medium"
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
+              {row.status === 'completed' ? (
+                <p className="text-xs text-[#71767b]">
+                  Candidate and application saved. The ranked pipeline will refresh when this batch settles.
+                </p>
+              ) : null}
 
-              {row.status === 'needs_email' && (
+              {row.status === 'needs_identity' ? (
                 <form
-                  className="flex items-center gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault()
-                    if (row.emailFix?.trim()) retry(row, row.emailFix.trim())
+                  className="space-y-1.5"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void submitIdentity(row)
                   }}
                 >
-                  <span className="text-xs text-[#71767b] shrink-0">
-                    {row.conflictNote
-                      ? `${row.conflictNote} — confirm or correct:`
-                      : `No email found${row.extractedName ? ` for ${row.extractedName}` : ''} — add it:`}
-                  </span>
-                  <input
-                    type="email"
-                    required
-                    value={row.emailFix ?? ''}
-                    onChange={(e) => patchRow(row.key, { emailFix: e.target.value })}
-                    placeholder="candidate@email.com"
-                    className="flex-1 min-w-0 px-2 py-1 border border-[#e1e8ed] rounded-lg bg-[#f8fafc] text-xs"
-                  />
-                  <Button type="submit">Add</Button>
+                  <div className="flex items-center gap-2">
+                    <label className="sr-only" htmlFor={`${row.key}-email`}>
+                      Candidate email address
+                    </label>
+                    <input
+                      id={`${row.key}-email`}
+                      type="email"
+                      required
+                      value={row.emailFix ?? ''}
+                      onChange={(event) =>
+                        patchRow(row.key, {
+                          emailFix: event.target.value,
+                          identityError: undefined,
+                        })
+                      }
+                      placeholder="candidate@email.com"
+                      className="flex-1 min-w-0 px-2 py-1 border border-[#e1e8ed] rounded-lg bg-[#f8fafc] text-xs"
+                    />
+                    <Button type="submit" disabled={row.identitySubmitting}>
+                      {row.identitySubmitting ? 'Saving…' : 'Add email'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-[#71767b]">
+                    {row.error || 'No email was found. Add one to continue without re-uploading the résumé.'}
+                  </p>
+                  {row.identityError ? (
+                    <p className="text-xs text-[#f4212e]">{row.identityError}</p>
+                  ) : null}
                 </form>
-              )}
+              ) : null}
+
+              {row.status === 'error' || row.status === 'failed' || row.status === 'cancelled' ? (
+                <div className="flex items-center gap-2 text-xs text-[#f4212e]">
+                  <span>{row.error || 'This intake task did not complete.'}</span>
+                  <button
+                    type="button"
+                    onClick={() => retryUpload(row)}
+                    className="text-[#2563eb] font-medium"
+                  >
+                    Upload again
+                  </button>
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>
-      )}
+      ) : null}
     </div>
   )
 }
