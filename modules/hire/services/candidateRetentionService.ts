@@ -7,10 +7,13 @@ import {
   HireEmailOutbox,
   HireInterviewAttempt,
   HireInterviewResult,
+  HireIntakeTask,
+  HireInvitationBatchItem,
   HireJob,
   HireMediaAsset,
   HirePrivacyRequest,
   HireRound,
+  HireScreeningGate,
   HireWorkspace,
   TERMINAL_STAGES,
   type IHireCandidate,
@@ -424,6 +427,7 @@ async function anonymizeClaimedCandidate(input: {
             phone: 1,
             resumeText: 1,
             resumeFileName: 1,
+            screeningProfile: 1,
             anonymizationClaimToken: 1,
             anonymizationLeaseExpiresAt: 1,
             anonymizationLastError: 1,
@@ -436,6 +440,11 @@ async function anonymizeClaimedCandidate(input: {
       }
 
       const scope = { workspaceId: candidate.workspaceId, candidateId: candidate._id }
+      const applicationCoordinates = await HireApplication.find(scope)
+        .select('_id')
+        .session(session)
+        .lean()
+      const applicationIds = applicationCoordinates.map((application) => application._id)
       await HireApplication.updateMany(
         scope,
         {
@@ -495,6 +504,79 @@ async function anonymizeClaimedCandidate(input: {
       // Delivery contact snapshots are not funnel history and must not keep
       // an address alive beyond the candidate clock.
       await HireEmailOutbox.deleteMany(scope, { session })
+      // Intake tasks are transient, but an interrupted worker can retain the
+      // original resume payload and supplied contact fields. A retained
+      // candidate must never leave those task artifacts behind.
+      await HireIntakeTask.deleteMany(scope, { session })
+      await HireInvitationBatchItem.updateMany(
+        {
+          ...scope,
+          status: { $in: ['pending', 'sending', 'failed'] },
+        },
+        {
+          $set: { status: 'cancelled', cancelledAt: input.now },
+          $unset: { claimToken: 1, leaseExpiresAt: 1 },
+        },
+        { session },
+      )
+      // Retention anonymization has the same subject-level promise as a
+      // verified deletion. Keep gate-level aggregate audit facts, but erase
+      // every immutable snapshot coordinate that could re-identify this
+      // candidate or their applications.
+      await HireScreeningGate.updateMany(
+        {
+          workspaceId: candidate.workspaceId,
+          $or: [
+            { 'rankedApplications.candidateId': candidate._id },
+            { 'rankedApplications.applicationId': { $in: applicationIds } },
+            { 'exceptions.applicationId': { $in: applicationIds } },
+          ],
+        },
+        {
+          $pull: {
+            rankedApplications: {
+              $or: [
+                { candidateId: candidate._id },
+                { applicationId: { $in: applicationIds } },
+              ],
+            },
+            exceptions: { applicationId: { $in: applicationIds } },
+          },
+        },
+        { session, overwriteImmutable: true },
+      )
+      if (applicationIds.length > 0) {
+        await HireScreeningGate.updateMany(
+          {
+            workspaceId: candidate.workspaceId,
+            'cutLine.applicationId': { $in: applicationIds },
+          },
+          { $unset: { 'cutLine.applicationId': 1 } },
+          { session, overwriteImmutable: true },
+        )
+      }
+      // Cancel nonterminal work first, then make all durable items
+      // non-identifying. Sent/skipped/cancelled rows retain only aggregate
+      // operational facts and can no longer be joined to this person.
+      await HireInvitationBatchItem.updateMany(
+        { ...scope, privacyRedactedAt: { $exists: false } },
+        {
+          $set: { privacyRedactedAt: input.now },
+          $unset: {
+            applicationId: 1,
+            candidateId: 1,
+            roundId: 1,
+            inviteDeliveryId: 1,
+            deliveryStatus: 1,
+            providerMessageId: 1,
+            lastError: 1,
+            skipReason: 1,
+            claimToken: 1,
+            leaseExpiresAt: 1,
+          },
+        },
+        { session, overwriteImmutable: true },
+      )
       await HirePrivacyRequest.deleteMany(
         {
           ...scope,

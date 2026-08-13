@@ -199,4 +199,5 @@ describe('Hire deployment readiness', () => {
     expect(issues).toContain('missing:RESEND_API_KEY')
     expect(issues.join(' ')).not.toContain('mongodb://')
   })
+
 })

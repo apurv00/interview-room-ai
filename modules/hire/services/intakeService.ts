@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import mongoose, { type ClientSession, type UpdateQuery } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
@@ -8,12 +9,14 @@ import {
   type HireCandidateSource,
   type IHireApplication,
   type IHireCandidate,
+  type IHireCandidateScreeningProfile,
   type IHireJob,
   type IHireResumeMatch,
   APPLICANT_SUBMISSION_CAP,
 } from '../models'
 import type { MembershipContext } from './workspaceService'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
+import { claimHireCandidatePiiWriteFence } from './hireCandidatePrivacyWriteFence'
 
 /**
  * Phase 2 intake: idempotent candidate + application creation with
@@ -57,6 +60,16 @@ export interface IntakeInput {
   /** Resume-vs-JD analysis, when scoring succeeded (advisory). */
   resumeMatch?: IHireResumeMatch
   /**
+   * Bounded profile extracted from the same resume as `resumeMatch`. The
+   * write path binds it to `resumeText` itself before it ever reaches a
+   * candidate row, so a stale score/profile cannot silently become a
+   * knockout input for a newer CV.
+   */
+  screeningProfile?: {
+    location?: string | null
+    experienceYears?: number | null
+  }
+  /**
    * True when the identity email was explicitly supplied/confirmed by the
    * recruiter (override field), not extracted from the document. Bypasses
    * the identity-conflict guard below.
@@ -82,6 +95,35 @@ export interface IntakeResult {
 const SOURCE_LABEL: Record<IntakeInput['source'], string> = {
   bulk_upload: 'via bulk resume upload',
   apply_page: 'via public apply page',
+}
+
+function sha256(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex')
+}
+
+function profileForIntake(
+  input: IntakeInput,
+): IHireCandidateScreeningProfile | undefined {
+  if (!input.screeningProfile || !input.resumeText) return undefined
+  const rawLocation = input.screeningProfile.location
+  const location =
+    typeof rawLocation === 'string'
+      ? rawLocation.trim().replace(/\s+/g, ' ').slice(0, 160)
+      : undefined
+  const rawExperience = input.screeningProfile.experienceYears
+  const experienceYears =
+    typeof rawExperience === 'number' &&
+    Number.isFinite(rawExperience) &&
+    rawExperience >= 0 &&
+    rawExperience <= 50
+      ? rawExperience
+      : undefined
+  return {
+    ...(location ? { location } : {}),
+    ...(experienceYears !== undefined ? { experienceYears } : {}),
+    resumeHash: sha256(input.resumeText),
+    extractedAt: new Date(),
+  }
 }
 
 function versionConstraint(document: object): Record<string, unknown> {
@@ -314,6 +356,7 @@ async function writeIntake(
   // ── Candidate: find-or-create; merge on revisit ──
   let createdCandidate = false
   let resumeReplaced = false
+  const intakeProfile = profileForIntake(input)
   // Set when a public submission must not touch the shared pool résumé —
   // the file is APPENDED to the application instead of being discarded.
   let applicantSubmission:
@@ -337,6 +380,7 @@ async function writeIntake(
           phone: input.phone,
           resumeText: input.resumeText,
           resumeFileName: input.resumeFileName,
+          ...(intakeProfile ? { screeningProfile: intakeProfile } : {}),
           source: input.source,
           ...(actor.actorMemberId
             ? { createdByMemberId: actor.actorMemberId }
@@ -403,8 +447,18 @@ async function writeIntake(
         phone: candidate.phone,
         resumeText: candidate.resumeText,
         resumeFileName: candidate.resumeFileName,
+        screeningProfile: candidate.screeningProfile,
       }
       resumeReplaced = applyMerge(candidate, input)
+      // A profile is only useful while it is bound to the current resume.
+      // Fresh analysis can update an identical re-upload; a changed resume
+      // with no successful extraction clears the old profile rather than
+      // screening the new CV using stale location/experience evidence.
+      if (intakeProfile) {
+        candidate.screeningProfile = intakeProfile
+      } else if (resumeReplaced) {
+        candidate.screeningProfile = undefined
+      }
       const $set: Record<string, unknown> = {}
       const $unset: Record<string, 1> = {}
       if (candidate.name !== previous.name) $set.name = candidate.name
@@ -414,6 +468,10 @@ async function writeIntake(
       if (candidate.resumeFileName !== previous.resumeFileName) {
         if (candidate.resumeFileName === undefined) $unset.resumeFileName = 1
         else $set.resumeFileName = candidate.resumeFileName
+      }
+      if (candidate.screeningProfile !== previous.screeningProfile) {
+        if (candidate.screeningProfile === undefined) $unset.screeningProfile = 1
+        else $set.screeningProfile = candidate.screeningProfile
       }
       if (Object.keys($set).length > 0 || Object.keys($unset).length > 0) {
         await persistScopedCandidate(
@@ -430,6 +488,16 @@ async function writeIntake(
     // (apply_page deliberately falls through with NO candidate write: an
     // anonymous caller may create a candidate, never edit one.)
   }
+
+  // The same candidate-row fence used by media/result finalization makes an
+  // intake worker and a verified privacy erasure serialize at the one
+  // tenant-owned identity record. A tombstone that wins first means this
+  // transaction aborts before creating or modifying an application.
+  await claimHireCandidatePiiWriteFence({
+    workspaceId,
+    candidateId: candidate._id,
+    session,
+  })
 
   // ── Application: find-or-create; keep score coherent with the CV ──
   let createdApplication = false

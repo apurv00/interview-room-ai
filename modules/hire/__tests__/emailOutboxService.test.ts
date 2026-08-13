@@ -1,8 +1,10 @@
+import mongoose from 'mongoose'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   mockOutbox,
   mockJob,
+  mockWorkspace,
   mockWriteFence,
   mockSendEmail,
   mockConnectHireControlDB,
@@ -11,16 +13,27 @@ const {
 } = vi.hoisted(() => ({
   mockOutbox: {
     find: vi.fn(),
+    findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
     updateMany: vi.fn(),
     updateOne: vi.fn(),
   },
   mockJob: { exists: vi.fn() },
+  mockWorkspace: { findOneAndUpdate: vi.fn() },
   mockWriteFence: vi.fn(),
   mockSendEmail: vi.fn(),
   mockConnectHireControlDB: vi.fn(),
   mockWorkspaceIds: vi.fn(),
-  session: { id: 'session-1' },
+  session: (() => {
+    const value = {
+      id: 'session-1',
+      withTransaction: vi.fn(),
+      endSession: vi.fn(),
+    }
+    value.withTransaction.mockImplementation((work: (current: unknown) => unknown) => work(value))
+    value.endSession.mockResolvedValue(undefined)
+    return value
+  })(),
 }))
 
 vi.mock('../services/hireControlBoundary', () => ({
@@ -35,6 +48,7 @@ vi.mock('@shared/services/emailService', () => ({
 vi.mock('../models/HireEmailOutbox', () => ({
   HireEmailOutbox: {
     find: (...args: unknown[]) => mockOutbox.find(...args),
+    findOne: (...args: unknown[]) => mockOutbox.findOne(...args),
     findOneAndUpdate: (...args: unknown[]) => mockOutbox.findOneAndUpdate(...args),
     updateMany: (...args: unknown[]) => mockOutbox.updateMany(...args),
     updateOne: (...args: unknown[]) => mockOutbox.updateOne(...args),
@@ -42,6 +56,11 @@ vi.mock('../models/HireEmailOutbox', () => ({
 }))
 vi.mock('../models/HireJob', () => ({
   HireJob: { exists: (...args: unknown[]) => mockJob.exists(...args) },
+}))
+vi.mock('../models/HireWorkspace', () => ({
+  HireWorkspace: {
+    findOneAndUpdate: (...args: unknown[]) => mockWorkspace.findOneAndUpdate(...args),
+  },
 }))
 vi.mock('../services/hireWorkspaceWriteFence', () => ({
   withActiveHireWorkspaceWriteTransaction: (...args: unknown[]) => mockWriteFence(...args),
@@ -76,9 +95,17 @@ function outboxFind(rows: unknown[]) {
   }
 }
 
+function outboxFindOne(row: unknown) {
+  return { sort: vi.fn().mockResolvedValue(row) }
+}
+
 function outboxRow(attempts = 1) {
   return {
     _id: { toString: () => 'outbox-1' },
+    jobId: JOB_ID,
+    applicationId: 'd'.repeat(24),
+    candidateId: 'e'.repeat(24),
+    kind: 'job_close_rejection',
     recipientEmail: 'candidate@example.com',
     recipientName: 'Candidate One',
     payload: {
@@ -93,16 +120,21 @@ function outboxRow(attempts = 1) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  session.withTransaction.mockImplementation((work: (current: unknown) => unknown) => work(session))
+  session.endSession.mockResolvedValue(undefined)
   mockConnectHireControlDB.mockResolvedValue(undefined)
   mockWorkspaceIds.mockResolvedValue([WORKSPACE_ID])
   mockJob.exists.mockResolvedValue({ _id: JOB_ID })
   mockOutbox.find.mockReturnValue(outboxFind([]))
+  mockOutbox.findOne.mockReturnValue(outboxFindOne(outboxRow()))
   mockOutbox.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockOutbox.updateOne.mockResolvedValue({ matchedCount: 1 })
+  mockWorkspace.findOneAndUpdate.mockResolvedValue({ _id: WORKSPACE_ID })
   mockWriteFence.mockImplementation(
     async (_workspaceId: unknown, _memberId: unknown, work: (value: unknown) => unknown) =>
       work(session),
   )
+  vi.spyOn(mongoose, 'startSession').mockResolvedValue(session as never)
 })
 
 describe('job close rejection template', () => {
@@ -124,7 +156,7 @@ describe('job close rejection template', () => {
 
 describe('processNextHireEmail', () => {
   it('returns without a provider call when no due row can be claimed', async () => {
-    mockOutbox.findOneAndUpdate.mockResolvedValue(null)
+    mockOutbox.findOne.mockReturnValue(outboxFindOne(null))
     await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toEqual({ processed: false })
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
@@ -142,12 +174,21 @@ describe('processNextHireEmail', () => {
     const [claimFilter, claimUpdate] = mockOutbox.findOneAndUpdate.mock.calls[0]
     expect(claimFilter).toMatchObject({
       workspaceId: WORKSPACE_ID,
+      kind: 'job_close_rejection',
       attempts: { $lt: HIRE_EMAIL_MAX_ATTEMPTS },
       sendAfter: { $lte: NOW },
     })
     expect(claimUpdate.$set.status).toBe('sending')
     expect(claimUpdate.$set.claimToken).toMatch(/^[0-9a-f-]{36}$/)
     expect(claimUpdate.$inc).toEqual({ attempts: 1 })
+    expect(mockWorkspace.findOneAndUpdate).toHaveBeenCalledWith(
+      {
+        _id: WORKSPACE_ID,
+        $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],
+      },
+      { $inc: { writeFenceVersion: 1 } },
+      expect.objectContaining({ session }),
+    )
     expect(mockSendEmail).toHaveBeenCalledWith({
       to: 'candidate@example.com',
       subject: 'Acme: update on your Backend Engineer application',
@@ -167,6 +208,9 @@ describe('processNextHireEmail', () => {
   })
 
   it('reschedules provider failure with backoff and stops after the max attempt', async () => {
+    mockOutbox.findOne
+      .mockReturnValueOnce(outboxFindOne(outboxRow(2)))
+      .mockReturnValueOnce(outboxFindOne(outboxRow(HIRE_EMAIL_MAX_ATTEMPTS)))
     mockOutbox.findOneAndUpdate.mockResolvedValueOnce(outboxRow(2))
     mockSendEmail.mockResolvedValue({ ok: false })
 
@@ -192,13 +236,46 @@ describe('processNextHireEmail', () => {
     await expect(processNextHireEmail(WORKSPACE_ID, NOW)).rejects.toThrow(/lease was lost/)
   })
 
+  it('does not contact the provider for a deletion-pending workspace before a close-rejection claim', async () => {
+    mockWorkspace.findOneAndUpdate.mockResolvedValue(null)
+
+    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toEqual({
+      processed: true,
+      outboxId: 'outbox-1',
+      outcome: 'cancelled',
+    })
+
+    expect(mockWorkspace.findOneAndUpdate).toHaveBeenCalledWith(
+      {
+        _id: WORKSPACE_ID,
+        $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],
+      },
+      { $inc: { writeFenceVersion: 1 } },
+      expect.objectContaining({ session }),
+    )
+    expect(mockOutbox.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockOutbox.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: expect.anything(),
+        workspaceId: WORKSPACE_ID,
+        kind: 'job_close_rejection',
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'cancelled' }),
+      }),
+      expect.objectContaining({ session }),
+    )
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('drains each workspace through a scoped claim and continues after an idle tenant', async () => {
     const otherWorkspace = 'b'.repeat(24)
     mockWorkspaceIds.mockResolvedValue([WORKSPACE_ID, otherWorkspace])
-    mockOutbox.findOneAndUpdate
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(outboxRow())
-      .mockResolvedValueOnce(null)
+    mockOutbox.findOne
+      .mockReturnValueOnce(outboxFindOne(null))
+      .mockReturnValueOnce(outboxFindOne(outboxRow()))
+      .mockReturnValueOnce(outboxFindOne(null))
+    mockOutbox.findOneAndUpdate.mockResolvedValue(outboxRow())
     mockSendEmail.mockResolvedValue({ ok: true, id: 'resend-1' })
 
     await expect(processDueHireEmailsAcrossWorkspaces(5, NOW)).resolves.toEqual({
@@ -206,7 +283,7 @@ describe('processNextHireEmail', () => {
       failed: 0,
       workspaces: 2,
     })
-    expect(mockOutbox.findOneAndUpdate.mock.calls.map(([filter]) => filter.workspaceId)).toEqual([
+    expect(mockOutbox.findOne.mock.calls.map(([filter]) => filter.workspaceId)).toEqual([
       WORKSPACE_ID,
       otherWorkspace,
       otherWorkspace,

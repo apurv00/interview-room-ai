@@ -48,6 +48,8 @@ describe('analyzeResumeForJob', () => {
         name: 'Jane Doe',
         email: 'Jane@X.com',
         phone: '+91 12345 67890',
+        location: 'Bengaluru',
+        experience_years: 8,
         match_score: 74,
         strengths: ['8y Node.js matches core requirement'],
         gaps: ['No Kubernetes evidence'],
@@ -60,6 +62,8 @@ describe('analyzeResumeForJob', () => {
       name: 'Jane Doe',
       email: 'jane@x.com',
       phone: '+91 12345 67890',
+      location: 'Bengaluru',
+      experienceYears: 8,
       matchScore: 74,
       strengths: ['8y Node.js matches core requirement'],
       gaps: ['No Kubernetes evidence'],
@@ -75,6 +79,26 @@ describe('analyzeResumeForJob', () => {
     expect(result?.matchScore).toBe(55)
   })
 
+  it('keeps bounded profile inputs when the resume supports them', async () => {
+    completionMock.mockResolvedValue(
+      llmText({
+        name: 'Jane Doe',
+        email: 'jane@x.com',
+        phone: null,
+        location: '  Bengaluru, Karnataka  ',
+        experience_years: 8.5,
+        match_score: 72,
+        strengths: [],
+        gaps: [],
+      }),
+    )
+
+    await expect(analyzeResumeForJob(INPUT)).resolves.toMatchObject({
+      location: 'Bengaluru, Karnataka',
+      experienceYears: 8.5,
+    })
+  })
+
   it('field-level garbage degrades that field, not the row (catch semantics)', async () => {
     completionMock.mockResolvedValue(
       llmText({ name: 42, email: 'not-an-email', phone: null, match_score: 150, strengths: 'nope', gaps: [] }),
@@ -84,6 +108,8 @@ describe('analyzeResumeForJob', () => {
       name: null,
       email: null,
       phone: null,
+      location: null,
+      experienceYears: null,
       matchScore: null,
       strengths: [],
       gaps: [],

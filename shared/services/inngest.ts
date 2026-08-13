@@ -38,6 +38,24 @@ export const inngest = new Inngest({
  * Strongly-typed event names. Keep in sync with function event triggers.
  */
 export type InngestEvents = {
+  // Hire resume intake (Phase 2): opaque control-plane coordinates only.
+  // The worker reloads the select-hidden resume bytes and apply-token hash
+  // from the tenant-scoped HireIntakeTask; candidate PII never enters an
+  // Inngest event or a B2C identity lookup.
+  'hire/intake.requested': {
+    data: {
+      workspaceId: string
+      taskId: string
+    }
+  }
+  // Phase 2 screening invitations: durable item coordinates only. Recipient
+  // PII and invitation capability remain in Hire's encrypted delivery row.
+  'hire/screening-invitation.requested': {
+    data: {
+      workspaceId: string
+      itemId: string
+    }
+  }
   // Feedback enrichment (2026-07-17): full-quality ideal_answers + drills
   // generated off the request path. reason 'post-feedback' = new interview;
   // 'drill-backfill' = historical/partial-coverage session hit from a drill

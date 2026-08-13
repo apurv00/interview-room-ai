@@ -28,8 +28,12 @@ import {
   HireConsentReceipt,
   HireInterviewAttempt,
   HireInterviewResult,
+  HireIntakeTask,
+  HireInvitationBatch,
+  HireInvitationBatchItem,
   HireMediaAsset,
   HirePrivacyRequest,
+  HireScreeningGate,
 } from '../models'
 import type { Model } from 'mongoose'
 
@@ -50,6 +54,10 @@ const TENANT_SCOPED: Array<[string, Model<never>]> = [
   ['HireConsentReceipt', HireConsentReceipt as unknown as Model<never>],
   ['HireInterviewAttempt', HireInterviewAttempt as unknown as Model<never>],
   ['HireInterviewResult', HireInterviewResult as unknown as Model<never>],
+  ['HireIntakeTask', HireIntakeTask as unknown as Model<never>],
+  ['HireScreeningGate', HireScreeningGate as unknown as Model<never>],
+  ['HireInvitationBatch', HireInvitationBatch as unknown as Model<never>],
+  ['HireInvitationBatchItem', HireInvitationBatchItem as unknown as Model<never>],
   ['HireMediaAsset', HireMediaAsset as unknown as Model<never>],
   ['HirePrivacyRequest', HirePrivacyRequest as unknown as Model<never>],
 ]

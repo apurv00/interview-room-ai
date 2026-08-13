@@ -4,6 +4,7 @@ import mongoose from 'mongoose'
 import {
   HireGuestSession,
   HireEngineHandoff,
+  HireEmailOutbox,
   HireInterviewAttempt,
   HireJob,
   HireMemberSession,
@@ -677,6 +678,24 @@ export async function softDeleteWorkspace(
       await HireJob.updateMany(
         { workspaceId: ctx.workspace._id },
         { $set: { applyPageEnabled: false }, $unset: { applyTokenHash: 1 } },
+        { session },
+      )
+      // A deletion-pending workspace must have no recoverable email egress.
+      // This includes a currently leased row whose provider authorization
+      // lost the workspace-root write race and every failed row a member
+      // could otherwise retry after restore/purge.
+      await HireEmailOutbox.updateMany(
+        {
+          workspaceId: ctx.workspace._id,
+          status: { $in: ['pending', 'sending', 'failed'] },
+        },
+        {
+          $set: {
+            status: 'cancelled',
+            lastError: 'Workspace scheduled for deletion',
+          },
+          $unset: { claimToken: 1, leaseExpiresAt: 1 },
+        },
         { session },
       )
       await HireGuestSession.updateMany(

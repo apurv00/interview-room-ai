@@ -17,13 +17,15 @@ export default function ApplyClient() {
   const [capability, setCapability] = useState<string | null>(null)
   const [bootstrap, setBootstrap] = useState<ApplyBootstrap | null>(null)
   const [invalid, setInvalid] = useState(false)
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null)
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0)
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [done, setDone] = useState(false)
+  const [queued, setQueued] = useState(false)
 
   useEffect(() => {
     const fragment = new URLSearchParams(window.location.hash.slice(1))
@@ -41,34 +43,52 @@ export default function ApplyClient() {
       return
     }
     setCapability(raw)
+  }, [])
 
+  useEffect(() => {
+    if (!capability || invalid) return
     let cancelled = false
+    setBootstrapError(null)
     void fetch('/api/apply/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ capability: raw }),
+      body: JSON.stringify({ capability }),
       cache: 'no-store',
     })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as Partial<ApplyBootstrap>
         if (cancelled) return
-        if (!response.ok || !payload.jobTitle || !payload.workspaceName) {
-          setInvalid(true)
+        if (!response.ok) {
+          // A capability failure is deliberately indistinguishable from a
+          // closed/rotated link. Temporary route or rate-limit failures are
+          // not: candidates must be able to retry instead of losing access.
+          if (response.status === 400 || response.status === 404) {
+            setInvalid(true)
+          } else {
+            setBootstrapError('We could not open the application form. Please try again.')
+          }
           return
         }
+        if (!payload.jobTitle || !payload.workspaceName) {
+          setBootstrapError('We could not open the application form. Please try again.')
+          return
+        }
+        if (cancelled) return
         setBootstrap({
           jobTitle: payload.jobTitle,
           workspaceName: payload.workspaceName,
         })
       })
       .catch(() => {
-        if (!cancelled) setInvalid(true)
+        if (!cancelled) {
+          setBootstrapError('We could not open the application form. Please try again.')
+        }
       })
 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [bootstrapAttempt, capability, invalid])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -98,7 +118,7 @@ export default function ApplyClient() {
         setError(payload.error || 'We could not submit your application. Please try again.')
         return
       }
-      setDone(true)
+      setQueued(true)
     } catch {
       setError('We could not reach the server. Please check your connection and try again.')
     } finally {
@@ -106,7 +126,19 @@ export default function ApplyClient() {
     }
   }
 
-  if (!invalid && !bootstrap) {
+  if (invalid) {
+    return <InactiveApplyLink />
+  }
+
+  if (bootstrapError && capability) {
+    return (
+      <ApplyBootstrapError
+        onRetry={() => setBootstrapAttempt((attempt) => attempt + 1)}
+      />
+    )
+  }
+
+  if (!bootstrap || !capability) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#f8fafc] px-4">
         <p className="text-sm text-[#536471]" role="status">
@@ -114,10 +146,6 @@ export default function ApplyClient() {
         </p>
       </main>
     )
-  }
-
-  if (invalid || !bootstrap || !capability) {
-    return <InactiveApplyLink />
   }
 
   return (
@@ -133,13 +161,14 @@ export default function ApplyClient() {
           </p>
         </header>
 
-        {done ? (
+        {queued ? (
           <div className="space-y-3 rounded-2xl border border-[#e1e8ed] bg-white p-8 text-center">
             <div className="text-4xl">🎉</div>
-            <h2 className="text-lg font-bold text-[#0f1419]">Application received</h2>
+            <h2 className="text-lg font-bold text-[#0f1419]">Application queued</h2>
             <p className="text-sm leading-relaxed text-[#536471]">
-              Thanks! The hiring team has your details and will be in touch about next
-              steps. You can close this tab.
+              Thanks! We have received your application and will process your résumé
+              shortly. The hiring team will be in touch about next steps. You can close
+              this tab.
             </p>
           </div>
         ) : (
@@ -169,18 +198,26 @@ export default function ApplyClient() {
               maxLength={32}
             />
             <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-[#0f1419]">Résumé</label>
-              <label className="block cursor-pointer rounded-2xl border-2 border-dashed border-[#e1e8ed] p-5 text-center transition-colors hover:border-[#2563eb]/40">
-                <input
-                  type="file"
-                  accept={ACCEPT}
-                  className="hidden"
-                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                />
-                <span className="text-sm text-[#536471]">
-                  {file ? file.name : 'PDF, DOCX or TXT — up to 5MB'}
+              <input
+                id="hire-apply-resume"
+                type="file"
+                accept={ACCEPT}
+                aria-describedby="hire-apply-resume-help"
+                className="sr-only"
+                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+              />
+              <label
+                htmlFor="hire-apply-resume"
+                className="block cursor-pointer"
+              >
+                <span className="block text-sm font-medium text-[#0f1419]">Résumé</span>
+                <span className="mt-1.5 block rounded-2xl border-2 border-dashed border-[#e1e8ed] p-5 text-center text-sm text-[#536471] transition-colors hover:border-[#2563eb]/40">
+                  {file ? file.name : 'Choose a PDF, DOCX or TXT file — up to 5MB'}
                 </span>
               </label>
+              <p id="hire-apply-resume-help" className="sr-only">
+                Choose one résumé file in PDF, DOCX, or TXT format, up to 5MB.
+              </p>
             </div>
             {error ? (
               <p className="text-sm text-[#f4212e]" role="alert">
@@ -207,6 +244,24 @@ export default function ApplyClient() {
           </a>
           .
         </p>
+      </div>
+    </main>
+  )
+}
+
+function ApplyBootstrapError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#f8fafc] px-4">
+      <div className="w-full max-w-md space-y-4 rounded-2xl border border-[#e1e8ed] bg-white p-8 text-center">
+        <div role="alert">
+          <h1 className="text-lg font-semibold text-[#0f1419]">
+            We could not open the application form
+          </h1>
+          <p className="mt-2 text-sm text-[#536471]">
+            The application link may still be valid. Check your connection and try again.
+          </p>
+        </div>
+        <Button type="button" onClick={onRetry}>Try again</Button>
       </div>
     </main>
   )

@@ -16,10 +16,14 @@ const mocks = vi.hoisted(() => ({
   handoffUpdateMany: vi.fn(),
   mediaUpdateMany: vi.fn(),
   resultUpdateMany: vi.fn(),
+  intakeTaskDeleteMany: vi.fn(),
+  invitationBatchItemUpdateMany: vi.fn(),
+  screeningGateUpdateMany: vi.fn(),
   outboxBulkWrite: vi.fn(),
   inviteDeleteMany: vi.fn(),
   consentBulkWrite: vi.fn(),
   deliverRevocation: vi.fn(),
+  candidateFence: vi.fn(),
 }))
 
 vi.mock('../services/hireControlBoundary', () => ({
@@ -32,6 +36,9 @@ vi.mock('../services/workspaceCapability', () => ({
 }))
 vi.mock('../services/engineRevocationService', () => ({
   deliverRuntimeRevocation: mocks.deliverRevocation,
+}))
+vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
+  claimHireCandidatePiiWriteFence: mocks.candidateFence,
 }))
 vi.mock('../models/HirePrivacyRequest', () => ({
   HirePrivacyRequest: {
@@ -68,6 +75,15 @@ vi.mock('../models/HireMediaAsset', () => ({
 }))
 vi.mock('../models/HireInterviewResult', () => ({
   HireInterviewResult: { updateMany: mocks.resultUpdateMany },
+}))
+vi.mock('../models/HireIntakeTask', () => ({
+  HireIntakeTask: { deleteMany: mocks.intakeTaskDeleteMany },
+}))
+vi.mock('../models/HireInvitationBatchItem', () => ({
+  HireInvitationBatchItem: { updateMany: mocks.invitationBatchItemUpdateMany },
+}))
+vi.mock('../models/HireScreeningGate', () => ({
+  HireScreeningGate: { updateMany: mocks.screeningGateUpdateMany },
 }))
 vi.mock('../models/HireEmailOutbox', () => ({
   HireEmailOutbox: { bulkWrite: mocks.outboxBulkWrite },
@@ -153,6 +169,9 @@ beforeEach(() => {
     mocks.handoffUpdateMany,
     mocks.mediaUpdateMany,
     mocks.resultUpdateMany,
+    mocks.intakeTaskDeleteMany,
+    mocks.invitationBatchItemUpdateMany,
+    mocks.screeningGateUpdateMany,
     mocks.outboxBulkWrite,
     mocks.inviteDeleteMany,
     mocks.consentBulkWrite,
@@ -164,6 +183,7 @@ beforeEach(() => {
     })
   }
   mocks.deliverRevocation.mockResolvedValue(undefined)
+  mocks.candidateFence.mockResolvedValue(undefined)
 })
 
 describe('verified Hire candidate deletion', () => {
@@ -177,6 +197,15 @@ describe('verified Hire candidate deletion', () => {
       workspaceId: WORKSPACE_ID.toString(),
       candidateId: CANDIDATE_ID.toString(),
     })
+
+    expect(mocks.candidateFence).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: CANDIDATE_ID,
+      session: dbSession,
+    })
+    expect(mocks.candidateFence.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applicationFind.mock.invocationCallOrder[0],
+    )
 
     expect(mocks.outboxBulkWrite).toHaveBeenCalledWith(
       [APPLICATION_A, APPLICATION_B].map((applicationId) => ({
@@ -232,6 +261,79 @@ describe('verified Hire candidate deletion', () => {
         arrayFilters: [{ 'inviteEvent.type': 'ai_round_sent' }],
       },
     )
+    expect(mocks.intakeTaskDeleteMany).toHaveBeenCalledWith(
+      { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+      { session: dbSession },
+    )
+    expect(mocks.invitationBatchItemUpdateMany).toHaveBeenNthCalledWith(
+      1,
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      {
+        $set: { status: 'cancelled', cancelledAt: NOW },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
+      { session: dbSession },
+    )
+    expect(mocks.screeningGateUpdateMany).toHaveBeenNthCalledWith(
+      1,
+      {
+        workspaceId: WORKSPACE_ID,
+        $or: [
+          { 'rankedApplications.candidateId': CANDIDATE_ID },
+          { 'rankedApplications.applicationId': { $in: [APPLICATION_A, APPLICATION_B] } },
+          { 'exceptions.applicationId': { $in: [APPLICATION_A, APPLICATION_B] } },
+        ],
+      },
+      {
+        $pull: {
+          rankedApplications: {
+            $or: [
+              { candidateId: CANDIDATE_ID },
+              { applicationId: { $in: [APPLICATION_A, APPLICATION_B] } },
+            ],
+          },
+          exceptions: { applicationId: { $in: [APPLICATION_A, APPLICATION_B] } },
+        },
+      },
+      { session: dbSession, overwriteImmutable: true },
+    )
+    expect(mocks.screeningGateUpdateMany).toHaveBeenNthCalledWith(
+      2,
+      {
+        workspaceId: WORKSPACE_ID,
+        'cutLine.applicationId': { $in: [APPLICATION_A, APPLICATION_B] },
+      },
+      { $unset: { 'cutLine.applicationId': 1 } },
+      { session: dbSession, overwriteImmutable: true },
+    )
+    expect(mocks.invitationBatchItemUpdateMany).toHaveBeenNthCalledWith(
+      2,
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        privacyRedactedAt: { $exists: false },
+      },
+      {
+        $set: { privacyRedactedAt: NOW },
+        $unset: {
+          applicationId: 1,
+          candidateId: 1,
+          roundId: 1,
+          inviteDeliveryId: 1,
+          deliveryStatus: 1,
+          providerMessageId: 1,
+          lastError: 1,
+          skipReason: 1,
+          claimToken: 1,
+          leaseExpiresAt: 1,
+        },
+      },
+      { session: dbSession, overwriteImmutable: true },
+    )
 
     const destructiveFilters = [
       ...mocks.outboxBulkWrite.mock.calls[0][0].map(
@@ -243,6 +345,9 @@ describe('verified Hire candidate deletion', () => {
         (operation: { updateMany: { filter: Record<string, unknown> } }) =>
           operation.updateMany.filter,
       ),
+      mocks.intakeTaskDeleteMany.mock.calls[0][0],
+      mocks.invitationBatchItemUpdateMany.mock.calls[0][0],
+      mocks.invitationBatchItemUpdateMany.mock.calls[1][0],
     ]
     expect(destructiveFilters).not.toContainEqual(
       expect.objectContaining({ workspaceId: OTHER_WORKSPACE_ID }),
@@ -254,6 +359,10 @@ describe('verified Hire candidate deletion', () => {
           filter.candidateId === CANDIDATE_ID,
       ),
     ).toBe(true)
+    for (const [filter] of mocks.screeningGateUpdateMany.mock.calls) {
+      expect(filter).toMatchObject({ workspaceId: WORKSPACE_ID })
+      expect(filter).not.toMatchObject({ workspaceId: OTHER_WORKSPACE_ID })
+    }
   })
 
   it('does not resolve until the immediate transactional PII cleanup finishes', async () => {
@@ -284,5 +393,40 @@ describe('verified Hire candidate deletion', () => {
       candidateId: CANDIDATE_ID.toString(),
     })
     expect(mocks.consentBulkWrite).toHaveBeenCalledOnce()
+    expect(mocks.screeningGateUpdateMany).toHaveBeenCalledTimes(2)
+    expect(mocks.invitationBatchItemUpdateMany).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not report deletion complete before durable screening coordinates are redacted', async () => {
+    let releaseRedaction!: () => void
+    mocks.invitationBatchItemUpdateMany
+      .mockResolvedValueOnce({ modifiedCount: 1 })
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseRedaction = resolve
+          }),
+      )
+
+    let settled = false
+    const deletion = applyVerifiedHirePrivacyRequest({
+      requestCapability: CAPABILITY,
+      now: NOW,
+    }).then((value) => {
+      settled = true
+      return value
+    })
+
+    await vi.waitFor(() =>
+      expect(mocks.invitationBatchItemUpdateMany).toHaveBeenCalledTimes(2),
+    )
+    expect(mocks.screeningGateUpdateMany).toHaveBeenCalledTimes(2)
+    expect(settled).toBe(false)
+
+    releaseRedaction()
+    await expect(deletion).resolves.toEqual({
+      workspaceId: WORKSPACE_ID.toString(),
+      candidateId: CANDIDATE_ID.toString(),
+    })
   })
 })

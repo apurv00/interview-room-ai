@@ -11,6 +11,7 @@ import {
   HireRound,
   HireApplication,
   HireJobRequirementVersion,
+  HirePrivacyRequest,
   HireWorkspace,
   type IHireRound,
 } from '../models'
@@ -22,6 +23,11 @@ import {
   revokeControlPlaneGuestAccess,
 } from './engineRevocationService'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
+import {
+  claimHireCandidatePiiWriteFence,
+  HireCandidatePiiTombstoneError,
+} from './hireCandidatePrivacyWriteFence'
+import { claimNonTerminalHireApplicationDispatchFence } from './hireApplicationDispatchFence'
 import {
   decodeWorkspaceCapability,
 } from './workspaceCapability'
@@ -228,6 +234,39 @@ export async function sendAiRound(
         if (jobClaim.matchedCount !== 1) {
           throw new AppError('AI interviews can only be sent for open jobs', 409, 'JOB_NOT_OPEN')
         }
+        // This is the creation-side half of the stage/egress fence. The
+        // application was read before this transaction, so it must be
+        // conditionally claimed here rather than trusting that stale read.
+        await claimNonTerminalHireApplicationDispatchFence({
+          workspaceId: ctx.workspace._id,
+          applicationId: application._id,
+          jobId: job._id,
+          candidateId: candidate._id,
+          now,
+          session,
+        })
+        // The candidate row is the deletion/egress serialization point. A
+        // verified privacy deletion that commits first makes this transaction
+        // fail before it creates either a round or its encrypted delivery
+        // recovery record. A live request is also a hard stop: it avoids
+        // creating a fresh invitation while deletion is being verified.
+        const privacyRequest = await HirePrivacyRequest.exists({
+          workspaceId: ctx.workspace._id,
+          candidateId: candidate._id,
+          live: true,
+        }).session(session)
+        if (privacyRequest) {
+          throw new AppError(
+            'A candidate privacy request is in progress',
+            409,
+            'CANDIDATE_PRIVACY_PENDING',
+          )
+        }
+        await claimHireCandidatePiiWriteFence({
+          workspaceId: ctx.workspace._id,
+          candidateId: candidate._id,
+          session,
+        })
         const authMode = ctx.workspace.guestAuthMode === 'otp' ? 'otp' : 'magic_link'
         const created = await HireRound.create([{
           _id: roundId,
@@ -285,6 +324,13 @@ export async function sendAiRound(
       },
     )
   } catch (err: unknown) {
+    if (err instanceof HireCandidatePiiTombstoneError) {
+      throw new AppError(
+        'Candidate personal data is unavailable',
+        410,
+        'HIRE_CANDIDATE_PII_TOMBSTONED',
+      )
+    }
     // Partial unique index {workspaceId, applicationId, live:true}: a
     // concurrent send won the race — same outcome as the fast-path check.
     if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {

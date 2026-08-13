@@ -7,6 +7,10 @@ const {
   sourceValidateJob,
   trackerStatusSweepJob,
   hireLifecycleRetentionJob,
+  hireIntakeRequestedJob,
+  hireIntakeRecoveryJob,
+  hireScreeningInvitationRequestedJob,
+  hireScreeningInvitationRecoveryJob,
 } = vi.hoisted(() => ({
   mockServe: vi.fn(() => ({ GET: vi.fn(), POST: vi.fn(), PUT: vi.fn() })),
   paymentRecoveryJob: { id: 'payment-recovery-sentinel' },
@@ -14,6 +18,10 @@ const {
   sourceValidateJob: { id: 'source-validate-sentinel' },
   trackerStatusSweepJob: { id: 'tracker-status-sweep-sentinel' },
   hireLifecycleRetentionJob: { id: 'hire-lifecycle-retention-sentinel' },
+  hireIntakeRequestedJob: { id: 'hire-intake-requested-sentinel' },
+  hireIntakeRecoveryJob: { id: 'hire-intake-recovery-sentinel' },
+  hireScreeningInvitationRequestedJob: { id: 'hire-screening-invitation-requested-sentinel' },
+  hireScreeningInvitationRecoveryJob: { id: 'hire-screening-invitation-recovery-sentinel' },
 }))
 
 vi.mock('inngest/next', () => ({ serve: mockServe }))
@@ -52,6 +60,14 @@ vi.mock('@hire/jobs/emailOutboxJob', () => ({ hireEmailOutboxJob: { id: 'hire-em
 vi.mock('@hire/jobs/mediaRetentionJob', () => ({ hireMediaRetentionJob: { id: 'hire-media' } }))
 vi.mock('@hire/jobs/engineRevocationJob', () => ({ hireEngineRevocationJob: { id: 'hire-revoke' } }))
 vi.mock('@hire/jobs/lifecycleRetentionJob', () => ({ hireLifecycleRetentionJob }))
+vi.mock('@hire/jobs/intakeJob', () => ({
+  hireIntakeRequestedJob,
+  hireIntakeRecoveryJob,
+}))
+vi.mock('@hire/jobs/screeningInvitationJob', () => ({
+  hireScreeningInvitationRequestedJob,
+  hireScreeningInvitationRecoveryJob,
+}))
 vi.mock('@modules/hire-runtime/jobs/feedbackRecoveryJob', () => ({
   hireRuntimeFeedbackRecoveryJob: { id: 'hire-runtime-feedback' },
 }))
@@ -95,6 +111,10 @@ describe('Inngest route registration', () => {
       await import('../route')
       const options = mockServe.mock.calls[0][0] as { functions: unknown[] }
       expect(options.functions.filter((fn) => fn === hireLifecycleRetentionJob)).toHaveLength(1)
+      expect(options.functions.filter((fn) => fn === hireIntakeRequestedJob)).toHaveLength(1)
+      expect(options.functions.filter((fn) => fn === hireIntakeRecoveryJob)).toHaveLength(1)
+      expect(options.functions.filter((fn) => fn === hireScreeningInvitationRequestedJob)).toHaveLength(1)
+      expect(options.functions.filter((fn) => fn === hireScreeningInvitationRecoveryJob)).toHaveLength(1)
       expect(options.functions).not.toContain(retentionJob)
     } finally {
       if (previousSurface === undefined) delete process.env.IPG_SURFACE

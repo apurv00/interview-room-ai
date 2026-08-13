@@ -69,6 +69,10 @@ export function serializeJob(job: IHireJob, opts: { includeJd?: boolean } = {}) 
     // serialized — only its hash is stored, and the raw value is shown
     // once at mint time.
     applyPageEnabled: job.applyPageEnabled === true,
+    screeningSettings: {
+      location: job.screeningSettings?.location ?? null,
+      experienceFloorYears: job.screeningSettings?.experienceFloorYears ?? null,
+    },
     ...(opts.includeJd ? { jdText: job.jdText } : {}),
   }
 }
@@ -247,5 +251,14 @@ export function serializePipelineEntry(entry: PipelineEntry) {
           resultsUnscored: entry.latestRound.results?.unscored ?? false,
         }
       : null,
+    ranking: {
+      scoreState: entry.scoreState,
+      rank: entry.rank,
+    },
+    previouslySeenIn: entry.previouslySeenIn.map((seen) => ({
+      jobId: seen.jobId,
+      jobTitle: seen.jobTitle,
+      stage: seen.stage,
+    })),
   }
 }

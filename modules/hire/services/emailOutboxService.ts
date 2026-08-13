@@ -1,12 +1,18 @@
 import { randomUUID } from 'crypto'
+import mongoose from 'mongoose'
+import type { IHireEmailOutbox } from '../models/HireEmailOutbox'
 import { sendEmail } from '@shared/services/emailService'
 import { NotFoundError } from '@shared/errors'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
 import { HireJob } from '../models/HireJob'
+import { HireWorkspace } from '../models/HireWorkspace'
 import { buildJobCloseRejectionEmail } from '../emails/jobCloseRejectionEmail'
 import { connectHireControlDB } from './hireControlBoundary'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
-import type { MembershipContext } from './workspaceService'
+import {
+  activeHireWorkspaceLifecycleFilter,
+  type MembershipContext,
+} from './workspaceService'
 import { listHireWorkspaceIdsForSweep } from './workspaceSweepService'
 
 export const HIRE_EMAIL_MAX_ATTEMPTS = 5
@@ -15,7 +21,7 @@ const CLAIM_LEASE_MS = 5 * 60_000
 export interface HireEmailProcessResult {
   processed: boolean
   outboxId?: string
-  outcome?: 'sent' | 'retry_scheduled' | 'failed'
+  outcome?: 'sent' | 'retry_scheduled' | 'failed' | 'cancelled'
 }
 
 export interface HireJobEmailDeliveryFailure {
@@ -66,6 +72,8 @@ export async function getJobCloseEmailDelivery(
     failures: [],
   }
   for (const row of rows) {
+    // A cancelled legacy row cannot corrupt the close-email counters.
+    if (row.status === 'cancelled') continue
     summary[row.status] += 1
     if (row.status === 'failed') {
       summary.failures.push({
@@ -132,6 +140,130 @@ function nextRetryAt(now: Date, attempts: number): Date {
   return new Date(now.getTime() + delayMs)
 }
 
+function dueHireEmailFilter(workspaceId: string, now: Date) {
+  return {
+    workspaceId,
+    kind: 'job_close_rejection' as const,
+    attempts: { $lt: HIRE_EMAIL_MAX_ATTEMPTS },
+    sendAfter: { $lte: now },
+    $or: [
+      { status: 'pending' },
+      { status: 'sending', leaseExpiresAt: { $lte: now } },
+    ],
+  }
+}
+
+/**
+ * Workspace lifecycle is the egress authority for every Hire email kind.
+ * This must write, rather than merely read, the root row. That serializes a
+ * committed provider authorization with workspace deletion on the same
+ * document. Either authorization commits while active or deletion wins and
+ * the worker retries against the tombstone.
+ */
+async function claimActiveHireWorkspaceEmailEgressFence(input: {
+  workspaceId: string
+  session: mongoose.ClientSession
+}): Promise<boolean> {
+  const workspace = await HireWorkspace.findOneAndUpdate(
+    {
+      _id: input.workspaceId,
+      ...activeHireWorkspaceLifecycleFilter(),
+    },
+    { $inc: { writeFenceVersion: 1 } },
+    { new: false, session: input.session },
+  )
+  return Boolean(workspace)
+}
+
+/**
+ * The deletion transaction cancels all non-terminal rows. This is an exact,
+ * session-bound fallback for a row selected before a worker observes that the
+ * workspace is already deletion_pending.
+ */
+async function cancelDueEmailForWorkspaceDeletion(input: {
+  row: IHireEmailOutbox
+  workspaceId: string
+  now: Date
+  session: mongoose.ClientSession
+}): Promise<void> {
+  await HireEmailOutbox.updateOne(
+    {
+      ...dueHireEmailFilter(input.workspaceId, input.now),
+      _id: input.row._id,
+      jobId: input.row.jobId,
+      applicationId: input.row.applicationId,
+      candidateId: input.row.candidateId,
+      kind: input.row.kind,
+    },
+    {
+      $set: {
+        status: 'cancelled',
+        lastError: 'Workspace scheduled for deletion',
+      },
+      $unset: { claimToken: 1, leaseExpiresAt: 1 },
+    },
+    { session: input.session },
+  )
+}
+
+/**
+ * Close-rejection mail has no candidate-record read at egress, but it shares
+ * the same workspace lifecycle authority as every other Hire email.
+ */
+async function authorizeJobCloseRejectionEgress(input: {
+  row: IHireEmailOutbox
+  workspaceId: string
+  claimToken: string
+  now: Date
+}): Promise<IHireEmailOutbox | null> {
+  const { row, workspaceId, claimToken, now } = input
+  const session = await mongoose.startSession()
+  try {
+    let authorized: IHireEmailOutbox | null = null
+    await session.withTransaction(async () => {
+      // A transaction callback may retry. Only its final exact outbox claim
+      // is a valid provider authorization.
+      authorized = null
+      const workspaceActive = await claimActiveHireWorkspaceEmailEgressFence({
+        workspaceId,
+        session,
+      })
+      if (!workspaceActive) {
+        await cancelDueEmailForWorkspaceDeletion({
+          row,
+          workspaceId,
+          now,
+          session,
+        })
+        return
+      }
+
+      authorized = await HireEmailOutbox.findOneAndUpdate(
+        {
+          ...dueHireEmailFilter(workspaceId, now),
+          _id: row._id,
+          jobId: row.jobId,
+          applicationId: row.applicationId,
+          candidateId: row.candidateId,
+          kind: 'job_close_rejection',
+        },
+        {
+          $set: {
+            status: 'sending',
+            claimToken,
+            leaseExpiresAt: new Date(now.getTime() + CLAIM_LEASE_MS),
+          },
+          $inc: { attempts: 1 },
+        },
+        { new: true, session },
+      )
+    })
+    return authorized
+  } finally {
+    await session.endSession()
+  }
+}
+
 /**
  * Claim and deliver one due message. The lease recovers a worker crash; the
  * provider idempotency key covers a retry after Resend accepted the email but
@@ -142,28 +274,22 @@ export async function processNextHireEmail(
   now = new Date(),
 ): Promise<HireEmailProcessResult> {
   await connectHireControlDB()
+  const dueRow = await HireEmailOutbox.findOne(dueHireEmailFilter(workspaceId, now)).sort({
+    sendAfter: 1,
+    _id: 1,
+  })
+  if (!dueRow) return { processed: false }
+
   const claimToken = randomUUID()
-  const row = await HireEmailOutbox.findOneAndUpdate(
-    {
-      workspaceId,
-      attempts: { $lt: HIRE_EMAIL_MAX_ATTEMPTS },
-      sendAfter: { $lte: now },
-      $or: [
-        { status: 'pending' },
-        { status: 'sending', leaseExpiresAt: { $lte: now } },
-      ],
-    },
-    {
-      $set: {
-        status: 'sending',
-        claimToken,
-        leaseExpiresAt: new Date(now.getTime() + CLAIM_LEASE_MS),
-      },
-      $inc: { attempts: 1 },
-    },
-    { new: true, sort: { sendAfter: 1, _id: 1 } },
-  )
-  if (!row) return { processed: false }
+  const row = await authorizeJobCloseRejectionEgress({
+    row: dueRow,
+    workspaceId,
+    claimToken,
+    now,
+  })
+  if (!row) {
+    return { processed: true, outboxId: dueRow._id.toString(), outcome: 'cancelled' }
+  }
 
   const template = buildJobCloseRejectionEmail({
     candidateName: row.recipientName,
@@ -177,6 +303,19 @@ export async function processNextHireEmail(
     text: template.text,
     idempotencyKey: `hire-close-rejection:${row._id.toString()}`,
   })
+
+  return recordHireEmailDelivery({ row, workspaceId, claimToken, now, sent })
+}
+
+async function recordHireEmailDelivery(input: {
+  row: IHireEmailOutbox
+  workspaceId: string
+  claimToken: string
+  now: Date
+  sent: Awaited<ReturnType<typeof sendEmail>>
+}): Promise<HireEmailProcessResult> {
+  const { row, workspaceId, claimToken, now, sent } = input
+  if (!row) throw new Error('Cannot record an empty Hire email outbox row')
 
   if (sent.ok) {
     const recorded = await HireEmailOutbox.updateOne(

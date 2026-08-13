@@ -15,6 +15,8 @@ import Input from '@shared/ui/Input'
 import StateView from '@shared/ui/StateView'
 import { scoreBand } from '@shared/ui/ScoreBar'
 import BulkUploadPanel from './BulkUploadPanel'
+import PoolSuggestionPanel from './PoolSuggestionPanel'
+import ScreeningPanel from './ScreeningPanel'
 
 const STAGES = [
   'new',
@@ -51,6 +53,10 @@ interface Entry {
       note: string | null
       at: string
     } | null
+    resumeMatch: {
+      score: number | null
+      stale: boolean
+    } | null
     createdAt: string
   }
   candidate: { id: string; name: string; email: string } | null
@@ -65,6 +71,15 @@ interface Entry {
     resultsPending: boolean
     resultsUnscored: boolean
   } | null
+  ranking: {
+    scoreState: 'scored' | 'stale' | 'unscored'
+    rank: number | null
+  }
+  previouslySeenIn: Array<{
+    jobId: string
+    jobTitle: string
+    stage: Stage
+  }>
 }
 
 interface JobDetail {
@@ -76,6 +91,12 @@ interface JobDetail {
   jdText: string
   /** Public apply page live? The token itself is never sent to the client. */
   applyPageEnabled: boolean
+}
+
+interface DuplicatedJobNotice {
+  jobId: string
+  title: string
+  applyLink: string
 }
 
 interface PoolCandidate {
@@ -129,6 +150,25 @@ function roundChip(round: Entry['latestRound']): { label: string; variant: 'defa
   return { label: 'AI sent', variant: 'default' }
 }
 
+function rankingChip(entry: Entry): {
+  label: string
+  variant: 'default' | 'primary' | 'success' | 'caution'
+} {
+  const score = entry.application.resumeMatch?.score
+  if (entry.ranking.scoreState === 'scored') {
+    return {
+      label: entry.ranking.rank === null
+        ? `JD match ${score ?? '—'}`
+        : `Pool rank #${entry.ranking.rank} · ${score ?? '—'}`,
+      variant: 'success',
+    }
+  }
+  if (entry.ranking.scoreState === 'stale') {
+    return { label: 'JD match needs refresh', variant: 'caution' }
+  }
+  return { label: 'JD match pending', variant: 'default' }
+}
+
 export default function JobPipelinePage({ params }: { params: { jobId: string } }) {
   const [job, setJob] = useState<JobDetail | null>(null)
   const [entries, setEntries] = useState<Entry[] | null>(null)
@@ -143,9 +183,17 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const [showBulk, setShowBulk] = useState(false)
   const [applyLink, setApplyLink] = useState<string | null>(null)
   const [applyBusy, setApplyBusy] = useState(false)
+  const [showDuplicate, setShowDuplicate] = useState(false)
+  const [duplicateBusy, setDuplicateBusy] = useState(false)
+  const [duplicatedJob, setDuplicatedJob] = useState<DuplicatedJobNotice | null>(null)
+  const [duplicateLinkCopied, setDuplicateLinkCopied] = useState(false)
   const [addName, setAddName] = useState('')
   const [addEmail, setAddEmail] = useState('')
   const [selectedPoolId, setSelectedPoolId] = useState('')
+  const [addCommand, setAddCommand] = useState<{
+    key: string
+    operationId: string
+  } | null>(null)
   const [showClose, setShowClose] = useState(false)
   const [closeNote, setCloseNote] = useState('')
   const [noteFor, setNoteFor] = useState<{
@@ -226,38 +274,106 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
     }
   }
 
+  function openDuplicateDialog() {
+    setActionError(null)
+    setDuplicateLinkCopied(false)
+    setDuplicatedJob(null)
+    setShowDuplicate(true)
+  }
+
+  function dismissDuplicateDialog() {
+    // The public-apply capability is intentionally only held in component
+    // memory. Clearing this panel also removes it from the rendered DOM.
+    setDuplicateLinkCopied(false)
+    setDuplicatedJob(null)
+    setShowDuplicate(false)
+  }
+
+  async function duplicateCurrentJob() {
+    setDuplicateBusy(true)
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/workspace/jobs/${params.jobId}/duplicate`, {
+        method: 'POST',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || typeof data.capability !== 'string' || typeof data.job?.id !== 'string') {
+        setActionError(data.error || 'Could not duplicate this job.')
+        return
+      }
+      // This capability is shown in a transient, authenticated confirmation
+      // surface only. It is never placed in a query string or browser storage.
+      setDuplicatedJob({
+        jobId: data.job.id,
+        title: typeof data.job.title === 'string' ? data.job.title : 'New job',
+        applyLink: `${window.location.origin}/apply#apply=${encodeURIComponent(data.capability)}`,
+      })
+      setDuplicateLinkCopied(false)
+    } catch {
+      setActionError('Something went wrong. Check your connection.')
+    } finally {
+      setDuplicateBusy(false)
+    }
+  }
+
+  async function copyDuplicateApplyLink() {
+    if (!duplicatedJob) return
+    try {
+      await navigator.clipboard.writeText(duplicatedJob.applyLink)
+      setDuplicateLinkCopied(true)
+    } catch {
+      setActionError('Clipboard access was blocked. Select and copy the link below.')
+    }
+  }
+
   async function addToJob(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
     setActionError(null)
     try {
-      let candidateId = selectedPoolId
-      if (!candidateId) {
-        const res = await fetch('/api/workspace/candidates', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: addName.trim(), email: addEmail.trim() }),
-        })
-        const data = await res.json()
-        if (!res.ok) {
-          setActionError(data.error || 'Could not add the candidate.')
-          return
-        }
-        candidateId = data.candidate.id
-      }
-      const res = await fetch('/api/workspace/applications', {
+      const name = addName.trim()
+      const email = addEmail.trim()
+      const key = selectedPoolId
+        ? `pool:${selectedPoolId}`
+        : `manual:${name.toLowerCase()}:${email.toLowerCase()}`
+      // Keep one command id only while retrying the same intent. The server
+      // records it on the application event, preventing a network retry from
+      // producing another re-application event/card.
+      const operationId =
+        addCommand?.key === key ? addCommand.operationId : crypto.randomUUID()
+      setAddCommand({ key, operationId })
+      const res = await fetch(`/api/workspace/jobs/${params.jobId}/candidates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: params.jobId, candidateId }),
+        body: JSON.stringify(
+          selectedPoolId
+            ? { candidateId: selectedPoolId, operationId }
+            : { name, email, operationId },
+        ),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
+        if (data.status === 'already_considered') {
+          setActionError(
+            'This candidate has already been considered for this role. Reinstatement requires an explicit recruiter stage decision.',
+          )
+          setAddCommand(null)
+          return
+        }
+        if (data.status === 'already_decided') {
+          setActionError(
+            'This candidate already has a final decision for this role and cannot be added again automatically.',
+          )
+          setAddCommand(null)
+          return
+        }
         setActionError(data.error || 'Could not add the candidate to this job.')
         return
       }
       setAddName('')
       setAddEmail('')
       setSelectedPoolId('')
+      setAddCommand(null)
       setShowAdd(false)
       await load()
     } catch {
@@ -415,9 +531,16 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const availablePool = pool.filter(
     (c) => !entries.some((en) => en.candidate?.id === c.id)
   )
+  // Keep a single, compact visual ordering for the automatically ranked part
+  // of the pool. The detailed board below remains stage-based for operations,
+  // but it must not hide the low end of a 50-resume intake behind every other
+  // job-management panel or stage column.
+  const rankedEntries = entries
+    .filter((entry) => entry.ranking.scoreState === 'scored' && entry.ranking.rank !== null)
+    .sort((left, right) => (left.ranking.rank ?? Number.MAX_SAFE_INTEGER) - (right.ranking.rank ?? Number.MAX_SAFE_INTEGER))
 
   return (
-    <div className="space-y-6">
+    <div id="job-pipeline-top" className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <Link href="/workspace/jobs" className="text-xs text-[#71767b] hover:text-indigo-600">
@@ -436,6 +559,13 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
+          <Button
+            variant="secondary"
+            disabled={busy || duplicateBusy || Boolean(duplicatedJob)}
+            onClick={openDuplicateDialog}
+          >
+            Duplicate job
+          </Button>
           {job.status === 'open' && (
             <Button variant="secondary" disabled={busy} onClick={() => void changeJobStatus('on_hold')}>
               Put on hold
@@ -467,6 +597,78 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       </div>
 
       {actionError && <p className="text-sm text-[#f4212e]">{actionError}</p>}
+
+      {showDuplicate && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4"
+          role="presentation"
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="duplicate-job-title"
+            className="w-full max-w-lg rounded-2xl border border-[#e1e8ed] bg-white p-6 shadow-xl"
+          >
+            {!duplicatedJob ? (
+              <div className="space-y-4">
+                <div>
+                  <h2 id="duplicate-job-title" className="text-lg font-semibold text-[#0f1419]">
+                    Duplicate this job?
+                  </h2>
+                  <p className="mt-1 text-sm text-[#536471]">
+                    We&apos;ll copy the JD, structured requirements, and job settings into a
+                    new requisition. It starts with zero candidates and a fresh public apply
+                    link.
+                  </p>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="secondary" type="button" disabled={duplicateBusy} onClick={dismissDuplicateDialog}>
+                    Cancel
+                  </Button>
+                  <Button type="button" disabled={duplicateBusy} onClick={() => void duplicateCurrentJob()}>
+                    {duplicateBusy ? 'Duplicating…' : 'Create duplicate'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <h2 id="duplicate-job-title" className="text-lg font-semibold text-[#0f1419]">
+                    Job duplicated
+                  </h2>
+                  <p className="mt-1 text-sm text-[#536471]">
+                    <span className="font-medium text-[#0f1419]">{duplicatedJob.title}</span> is ready.
+                    Copy its fresh apply link before continuing — it is displayed only for
+                    this confirmation.
+                  </p>
+                </div>
+                <input
+                  aria-label="Fresh public apply link"
+                  readOnly
+                  value={duplicatedJob.applyLink}
+                  onFocus={(event) => event.currentTarget.select()}
+                  className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-xs font-mono"
+                />
+                <p className="text-xs text-[#f4212e]">
+                  Copy this now. Closing this confirmation removes the link from this screen.
+                </p>
+                <div className="flex justify-end gap-2 flex-wrap">
+                  <Button type="button" variant="secondary" onClick={() => void copyDuplicateApplyLink()}>
+                    {duplicateLinkCopied ? 'Copied' : 'Copy apply link'}
+                  </Button>
+                  <Link
+                    href={`/workspace/jobs/${duplicatedJob.jobId}`}
+                    onClick={dismissDuplicateDialog}
+                    className="inline-flex h-9 items-center justify-center rounded-full bg-[#2563eb] px-5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-[#1d4ed8] hover:shadow-md active:scale-[0.97]"
+                  >
+                    Continue to new job
+                  </Link>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
 
       {emailRetryNotice && (
         <p role="status" className="text-sm text-emerald-700">
@@ -512,9 +714,76 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
         </section>
       )}
 
+      {rankedEntries.length > 0 ? (
+        <>
+          <nav
+            aria-label="Ranked candidate queue"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm text-indigo-950"
+          >
+            <span className="font-medium">
+              {rankedEntries.length} fresh JD-match {rankedEntries.length === 1 ? 'score' : 'scores'} ranked
+            </span>
+            <a href="#ranked-queue" className="font-medium text-indigo-700 hover:underline">
+              View ranked queue
+            </a>
+            <a href="#ranked-queue-bottom" className="font-medium text-indigo-700 hover:underline">
+              Jump to rank #{rankedEntries.length}
+            </a>
+          </nav>
+
+          <section
+            id="ranked-queue"
+            aria-labelledby="ranked-queue-title"
+            className="scroll-mt-6 rounded-2xl border border-[#e1e8ed] bg-white p-5"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 id="ranked-queue-title" className="text-base font-semibold text-[#0f1419]">
+                  Ranked queue · {rankedEntries.length}
+                </h2>
+                <p className="mt-1 text-xs text-[#71767b]">
+                  Fresh JD-match scores, highest first. Use the direct jump above to reach the bottom-ranked candidate in a large batch.
+                </p>
+              </div>
+              <a href="#job-pipeline-top" className="text-sm font-medium text-indigo-600 hover:underline">
+                Back to job actions
+              </a>
+            </div>
+            <ol className="mt-4 divide-y divide-[#e1e8ed] rounded-xl border border-[#e1e8ed]">
+              {rankedEntries.map((entry, index) => {
+                const rank = entry.ranking.rank as number
+                const isLast = index === rankedEntries.length - 1
+                return (
+                  <li
+                    key={entry.application.id}
+                    id={isLast ? 'ranked-queue-bottom' : undefined}
+                    className="scroll-mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-sm"
+                  >
+                    <span className="font-semibold text-[#0f1419]">Rank #{rank}</span>
+                    <Link
+                      href={`/workspace/applications/${entry.application.id}`}
+                      className="min-w-0 flex-1 truncate font-medium text-indigo-700 hover:underline"
+                    >
+                      {entry.candidate?.name ?? 'Unknown candidate'}
+                    </Link>
+                    <span className="text-xs text-[#536471]">
+                      JD match {entry.application.resumeMatch?.score ?? '—'} · {STAGE_LABEL[entry.application.stage]}
+                    </span>
+                  </li>
+                )
+              })}
+            </ol>
+          </section>
+        </>
+      ) : null}
+
       {showBulk && job.status === 'open' && (
         <BulkUploadPanel jobId={params.jobId} onSettled={() => void load()} />
       )}
+
+      <PoolSuggestionPanel jobId={params.jobId} jobStatus={job.status} />
+
+      <ScreeningPanel jobId={params.jobId} jobStatus={job.status} />
 
       {job.status === 'open' && (
         <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
@@ -659,6 +928,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                 <div className="space-y-2">
                   {stageEntries.map((en) => {
                     const chip = roundChip(en.latestRound)
+                    const matchChip = rankingChip(en)
                     const terminal = stage === 'hired' || stage === 'rejected' || stage === 'withdrawn'
                     const needsNote = noteFor?.appId === en.application.id
                     return (
@@ -677,6 +947,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                             <p className="text-xs text-[#71767b] truncate">{en.candidate?.email}</p>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
+                            <Badge variant={matchChip.variant}>{matchChip.label}</Badge>
                             {chip && <Badge variant={chip.variant}>{chip.label}</Badge>}
                             <Link
                               href={`/workspace/applications/${en.application.id}`}
@@ -804,6 +1075,23 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                             Offer {en.application.offerDecision.outcome} · recorded by{' '}
                             {en.application.offerDecision.actorName} ·{' '}
                             {new Date(en.application.offerDecision.at).toLocaleString()}
+                          </p>
+                        )}
+                        {en.previouslySeenIn.length > 0 && (
+                          <p className="mt-2 text-xs text-indigo-700">
+                            Previously seen in{' '}
+                            {en.previouslySeenIn.map((seen, index) => (
+                              <span key={seen.jobId}>
+                                {index > 0 ? ', ' : ''}
+                                <Link
+                                  href={`/workspace/jobs/${seen.jobId}`}
+                                  className="font-medium hover:underline"
+                                >
+                                  {seen.jobTitle}
+                                </Link>
+                                {' '}({STAGE_LABEL[seen.stage]})
+                              </span>
+                            ))}
                           </p>
                         )}
                       </div>

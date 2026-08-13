@@ -24,6 +24,10 @@ export type HireOfferOutcome = (typeof HIRE_OFFER_OUTCOMES)[number]
 
 export const HIRE_EVENT_TYPES = [
   'created',
+  /** Existing non-terminal application was explicitly added again. */
+  'reapplied',
+  /** A manual/pool source was recorded on an already-known candidate. */
+  'source_merged',
   'stage_move',
   'ai_round_sent',
   'ai_round_revoked',

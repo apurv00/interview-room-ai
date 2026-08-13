@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   findOneAndUpdate: vi.fn(),
   updateOne: vi.fn(),
   roundFindOne: vi.fn(),
+  roundExists: vi.fn(),
+  applicationUpdateOne: vi.fn(),
+  privacyExists: vi.fn(),
+  candidateFence: vi.fn(),
   sendEmail: vi.fn(),
 }))
 
@@ -19,6 +23,22 @@ vi.mock('@shared/services/emailService', () => ({ sendEmail: mocks.sendEmail }))
 vi.mock('@shared/logger', () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
 }))
+vi.mock('../services/hireWorkspaceWriteFence', () => ({
+  withActiveHireWorkspaceWriteTransaction: (
+    _workspaceId: unknown,
+    _memberId: unknown,
+    work: (session: unknown) => Promise<unknown>,
+  ) => work({ id: 'egress-auth-tx' }),
+}))
+vi.mock('../services/hireCandidatePrivacyWriteFence', async () => {
+  const actual = await vi.importActual<typeof import('../services/hireCandidatePrivacyWriteFence')>(
+    '../services/hireCandidatePrivacyWriteFence',
+  )
+  return {
+    ...actual,
+    claimHireCandidatePiiWriteFence: mocks.candidateFence,
+  }
+})
 vi.mock('../models', () => ({
   HireAiInviteDelivery: {
     create: mocks.create,
@@ -27,7 +47,10 @@ vi.mock('../models', () => ({
     findOneAndUpdate: mocks.findOneAndUpdate,
     updateOne: mocks.updateOne,
   },
-  HireRound: { findOne: mocks.roundFindOne },
+  HireRound: { findOne: mocks.roundFindOne, exists: mocks.roundExists },
+  HireApplication: { updateOne: mocks.applicationUpdateOne },
+  HirePrivacyRequest: { exists: mocks.privacyExists },
+  TERMINAL_STAGES: ['hired', 'rejected', 'withdrawn'],
 }))
 
 import {
@@ -35,6 +58,7 @@ import {
   deliverAiInvite,
   getAiInviteDeliveryViews,
 } from '../services/aiInviteDeliveryService'
+import { HireCandidatePiiTombstoneError } from '../services/hireCandidatePrivacyWriteFence'
 import type { MembershipContext } from '../services/workspaceService'
 
 const IDS = {
@@ -66,6 +90,10 @@ function round(workspaceId = IDS.workspaceA) {
   return {
     _id: IDS.round,
     workspaceId,
+    applicationId: IDS.application,
+    jobId: IDS.job,
+    candidateId: IDS.candidate,
+    live: true,
     inviteTokenHash: createHash('sha256').update(RAW_TOKEN).digest('hex'),
     inviteTokenExpiry: EXPIRES,
     status: 'invited',
@@ -78,6 +106,10 @@ function applyUpdate(target: Record<string, unknown>, update: Record<string, any
     target[key] = Number(target[key] ?? 0) + Number(value)
   }
   for (const key of Object.keys(update.$unset ?? {})) delete target[key]
+}
+
+function sessionQuery<T>(value: T) {
+  return { session: vi.fn().mockResolvedValue(value) }
 }
 
 async function createRecord() {
@@ -130,6 +162,10 @@ describe('durable AI invite delivery', () => {
     })
     mocks.updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
     mocks.roundFindOne.mockResolvedValue(round())
+    mocks.roundExists.mockReturnValue(sessionQuery({ _id: IDS.round }))
+    mocks.applicationUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mocks.privacyExists.mockReturnValue(sessionQuery(null))
+    mocks.candidateFence.mockResolvedValue(undefined)
     mocks.sendEmail.mockResolvedValue({ ok: true, id: 'provider-1' })
   })
 
@@ -188,6 +224,128 @@ describe('durable AI invite delivery', () => {
       html: expect.stringContaining(`#invite=${IDS.workspaceA}.${RAW_TOKEN}`),
       idempotencyKey: `hire-ai-round:${IDS.round}`,
     }))
+  })
+
+  it('authorizes the exact delivery lease under the candidate privacy fence before provider egress', async () => {
+    await createRecord()
+    const order: string[] = []
+    mocks.candidateFence.mockImplementation(async () => {
+      order.push('candidate-fence')
+    })
+    mocks.applicationUpdateOne.mockImplementation(async (
+      filter: Record<string, unknown>,
+      update: Record<string, unknown>,
+      options: Record<string, unknown>,
+    ) => {
+      expect(filter).toEqual({
+        _id: IDS.application,
+        workspaceId: IDS.workspaceA,
+        jobId: IDS.job,
+        candidateId: IDS.candidate,
+        stage: { $nin: ['hired', 'rejected', 'withdrawn'] },
+      })
+      expect(update).toEqual({ $set: { updatedAt: NOW } })
+      expect(options).toEqual({ session: { id: 'egress-auth-tx' }, timestamps: false })
+      order.push('application-stage-fence')
+      return { matchedCount: 1 }
+    })
+    mocks.findOneAndUpdate.mockImplementation(async (
+      filter: Record<string, any>,
+      update: Record<string, any>,
+      options: Record<string, unknown>,
+    ) => {
+      if (!stored._id || String(filter.workspaceId) !== String(stored.workspaceId)) return null
+      if (filter.status === 'sending') {
+        expect(options).toMatchObject({ new: true })
+        if (stored.status !== 'sending' || stored.claimToken !== filter.claimToken) return null
+      } else if (stored.status === 'sent') {
+        return null
+      } else {
+        expect(options).toMatchObject({ new: true, session: { id: 'egress-auth-tx' } })
+        expect(filter).toMatchObject({
+          workspaceId: IDS.workspaceA,
+          roundId: IDS.round,
+          applicationId: IDS.application,
+          jobId: IDS.job,
+          candidateId: IDS.candidate,
+        })
+        expect(update.$set).toMatchObject({ status: 'sending' })
+      }
+      applyUpdate(stored, update)
+      order.push(filter.status === 'sending' ? 'recorded' : 'authorized')
+      return stored
+    })
+    mocks.sendEmail.mockImplementation(async () => {
+      order.push('provider')
+      return { ok: true, id: 'provider-1' }
+    })
+
+    await expect(deliverAiInvite(CTX_A, IDS.round, { now: NOW })).resolves.toMatchObject({
+      emailSent: true,
+    })
+
+    expect(mocks.privacyExists).toHaveBeenCalledWith({
+      workspaceId: IDS.workspaceA,
+      candidateId: IDS.candidate,
+      live: true,
+    })
+    expect(mocks.candidateFence).toHaveBeenCalledWith({
+      workspaceId: IDS.workspaceA,
+      candidateId: IDS.candidate,
+      session: { id: 'egress-auth-tx' },
+    })
+    expect(mocks.roundExists).toHaveBeenCalledWith(expect.objectContaining({
+      _id: IDS.round,
+      workspaceId: IDS.workspaceA,
+      applicationId: IDS.application,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+      live: true,
+    }))
+    expect(order).toEqual([
+      'candidate-fence',
+      'application-stage-fence',
+      'authorized',
+      'provider',
+      'recorded',
+    ])
+  })
+
+  it('does not authorize provider egress when a terminal stage move wins the race', async () => {
+    await createRecord()
+    // This is the retry-visible result of the same application document write
+    // performed by a terminal `moveStage` transaction.
+    mocks.applicationUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    await expect(deliverAiInvite(CTX_A, IDS.round, { now: NOW }))
+      .rejects.toMatchObject({ code: 'APPLICATION_NOT_ELIGIBLE', statusCode: 409 })
+
+    expect(mocks.roundExists).not.toHaveBeenCalled()
+    expect(mocks.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('fails closed without a provider call when verified deletion wins the candidate fence', async () => {
+    await createRecord()
+    mocks.candidateFence.mockRejectedValueOnce(new HireCandidatePiiTombstoneError())
+
+    await expect(deliverAiInvite(CTX_A, IDS.round, { now: NOW }))
+      .rejects.toMatchObject({ code: 'HIRE_CANDIDATE_PII_TOMBSTONED', statusCode: 410 })
+
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+    expect(mocks.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('fails closed without a provider call while a live privacy request exists', async () => {
+    await createRecord()
+    mocks.privacyExists.mockReturnValueOnce(sessionQuery({ _id: 'privacy-request' }))
+
+    await expect(deliverAiInvite(CTX_A, IDS.round, { now: NOW }))
+      .rejects.toMatchObject({ code: 'CANDIDATE_PRIVACY_PENDING', statusCode: 409 })
+
+    expect(mocks.candidateFence).not.toHaveBeenCalled()
+    expect(mocks.sendEmail).not.toHaveBeenCalled()
+    expect(mocks.findOneAndUpdate).not.toHaveBeenCalled()
   })
 
   it('fails closed on expiry, tampering, and cross-tenant lookup', async () => {

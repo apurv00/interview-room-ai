@@ -1,3 +1,4 @@
+import mongoose from 'mongoose'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -6,6 +7,13 @@ const mocks = vi.hoisted(() => ({
   candidateFindOne: vi.fn(),
   privacyFindOneAndUpdate: vi.fn(),
   privacyFindOne: vi.fn(),
+  privacyCreate: vi.fn(),
+  candidateFence: vi.fn(),
+  MockHireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
+  session: {
+    withTransaction: vi.fn(),
+    endSession: vi.fn(),
+  },
 }))
 
 vi.mock('../services/hireControlBoundary', () => ({
@@ -21,8 +29,12 @@ vi.mock('../models/HirePrivacyRequest', () => ({
   HirePrivacyRequest: {
     findOneAndUpdate: mocks.privacyFindOneAndUpdate,
     findOne: mocks.privacyFindOne,
-    create: vi.fn(),
+    create: mocks.privacyCreate,
   },
+}))
+vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
+  claimHireCandidatePiiWriteFence: mocks.candidateFence,
+  HireCandidatePiiTombstoneError: mocks.MockHireCandidatePiiTombstoneError,
 }))
 vi.mock('../models/HireApplication', () => ({ HireApplication: { updateMany: vi.fn() } }))
 vi.mock('../models/HireEngineHandoff', () => ({ HireEngineHandoff: { updateMany: vi.fn() } }))
@@ -59,21 +71,32 @@ beforeEach(() => {
       candidateId: IDS.candidate,
     }),
   })
-  mocks.candidateFindOne.mockReturnValue({
-    select: vi.fn().mockReturnValue({
-      lean: vi.fn().mockResolvedValue({
-        _id: IDS.candidate,
-        workspaceId: IDS.workspace,
-        email: EMAIL,
-      }),
+  const candidateQuery = {
+    select: vi.fn(),
+    session: vi.fn(),
+    lean: vi.fn().mockResolvedValue({
+      _id: IDS.candidate,
+      workspaceId: IDS.workspace,
+      email: EMAIL,
     }),
-  })
+  }
+  candidateQuery.select.mockReturnValue(candidateQuery)
+  candidateQuery.session.mockReturnValue(candidateQuery)
+  mocks.candidateFindOne.mockReturnValue(candidateQuery)
   mocks.privacyFindOneAndUpdate.mockResolvedValue({
     _id: IDS.request,
     workspaceId: IDS.workspace,
     candidateId: IDS.candidate,
     status: 'pending_verification',
   })
+  mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.session.withTransaction.mockImplementation(
+    async (work: () => Promise<unknown>) => work(),
+  )
+  mocks.session.endSession.mockResolvedValue(undefined)
+  vi.spyOn(mongoose, 'startSession').mockResolvedValue(
+    mocks.session as unknown as mongoose.ClientSession,
+  )
 })
 
 describe('privacy capability tenant scope', () => {
@@ -92,9 +115,54 @@ describe('privacy capability tenant scope', () => {
       workspaceId: IDS.workspace,
       candidateId: IDS.candidate,
     })
+    expect(mocks.candidateFence).toHaveBeenCalledWith({
+      workspaceId: IDS.workspace,
+      candidateId: IDS.candidate,
+      session: mocks.session,
+    })
+    expect(mocks.privacyFindOneAndUpdate.mock.calls[0][2]).toMatchObject({
+      new: true,
+      session: mocks.session,
+    })
     expect(result.requestCapability).toMatch(
       new RegExp(`^${IDS.workspace}\\.${IDS.request}\\.[a-f0-9]{64}$`),
     )
+  })
+
+  it('takes the candidate fence before creating the live privacy request', async () => {
+    const order: string[] = []
+    mocks.candidateFence.mockImplementation(async () => {
+      order.push('fence')
+    })
+    mocks.privacyFindOneAndUpdate.mockImplementation(async () => {
+      order.push('upsert')
+      return {
+        _id: IDS.request,
+        workspaceId: IDS.workspace,
+        candidateId: IDS.candidate,
+        status: 'pending_verification',
+      }
+    })
+
+    await createHirePrivacyRequestFromInvite({
+      roundId: IDS.round,
+      inviteCapability: `${IDS.workspace}.${INVITE_SECRET}`,
+    })
+
+    expect(order).toEqual(['fence', 'upsert'])
+    expect(mocks.session.withTransaction).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed without creating a live request when verified deletion wins the candidate fence', async () => {
+    mocks.candidateFence.mockRejectedValue(new mocks.MockHireCandidatePiiTombstoneError())
+
+    await expect(createHirePrivacyRequestFromInvite({
+      roundId: IDS.round,
+      inviteCapability: `${IDS.workspace}.${INVITE_SECRET}`,
+    })).rejects.toMatchObject({ code: 'PRIVACY_LINK_INVALID', status: 410 })
+
+    expect(mocks.privacyFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mocks.privacyCreate).not.toHaveBeenCalled()
   })
 
   it('scopes the verification-request lookup before resolving candidate email', async () => {

@@ -31,6 +31,7 @@ const mockMember = {
 const mockMemberSession = { updateMany: vi.fn() }
 const mockMemberSetup = { updateMany: vi.fn() }
 const mockJob = { updateMany: vi.fn() }
+const mockOutbox = { updateMany: vi.fn() }
 const mockGuestSession = { updateMany: vi.fn() }
 const mockRound = { find: vi.fn(), updateMany: vi.fn() }
 const mockHandoff = { updateMany: vi.fn() }
@@ -63,6 +64,9 @@ vi.mock('../models', () => ({
   },
   normalizeHireMemberEmail: (value: string) => value.trim().toLowerCase(),
   HireJob: { updateMany: (...a: unknown[]) => mockJob.updateMany(...a) },
+  HireEmailOutbox: {
+    updateMany: (...a: unknown[]) => mockOutbox.updateMany(...a),
+  },
   HireGuestSession: {
     updateMany: (...a: unknown[]) => mockGuestSession.updateMany(...a),
   },
@@ -137,6 +141,7 @@ beforeEach(() => {
   mockMember.exists.mockReturnValue({ session: () => Promise.resolve({ _id: 'm1' }) })
   mockMember.updateOne.mockResolvedValue({ modifiedCount: 1 })
   mockWorkspace.updateOne.mockResolvedValue({ matchedCount: 1 })
+  mockOutbox.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockMemberSession.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockMemberSetup.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockRound.find.mockResolvedValue([])
@@ -571,6 +576,20 @@ describe('workspace soft deletion', () => {
     expect(mockJob.updateMany).toHaveBeenCalledWith(
       { workspaceId: 'ws1' },
       { $set: { applyPageEnabled: false }, $unset: { applyTokenHash: 1 } },
+      { session: transactionSession },
+    )
+    expect(mockOutbox.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws1',
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      {
+        $set: {
+          status: 'cancelled',
+          lastError: 'Workspace scheduled for deletion',
+        },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
       { session: transactionSession },
     )
     expect(mockGuestSession.updateMany).toHaveBeenCalledWith(

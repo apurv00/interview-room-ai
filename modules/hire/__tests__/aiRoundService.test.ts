@@ -18,7 +18,10 @@ const mocks = vi.hoisted(() => ({
   requirementFindOne: vi.fn(),
   candidateFindOne: vi.fn(),
   applicationFindOne: vi.fn(),
+  applicationUpdateOne: vi.fn(),
   workspaceExists: vi.fn(),
+  privacyExists: vi.fn(),
+  candidateFence: vi.fn(),
 }))
 
 vi.mock('../services/hireControlBoundary', () => ({
@@ -44,6 +47,15 @@ vi.mock('../services/hireWorkspaceWriteFence', () => ({
     work: (session: unknown) => Promise<unknown>,
   ) => work({ id: 'hire-tx' }),
 }))
+vi.mock('../services/hireCandidatePrivacyWriteFence', async () => {
+  const actual = await vi.importActual<typeof import('../services/hireCandidatePrivacyWriteFence')>(
+    '../services/hireCandidatePrivacyWriteFence',
+  )
+  return {
+    ...actual,
+    claimHireCandidatePiiWriteFence: mocks.candidateFence,
+  }
+})
 vi.mock('../services/aiInviteDeliveryService', () => ({
   createAiInviteDeliveryRecord: (...args: unknown[]) => mocks.createInviteDelivery(...args),
   deliverAiInvite: (...args: unknown[]) => mocks.deliverInvite(...args),
@@ -59,8 +71,13 @@ vi.mock('../models', () => ({
   HireJob: { findOne: mocks.jobFindOne, updateOne: mocks.jobUpdateOne },
   HireJobRequirementVersion: { findOne: mocks.requirementFindOne },
   HireCandidate: { findOne: mocks.candidateFindOne },
-  HireApplication: { findOne: mocks.applicationFindOne },
+  HireApplication: {
+    findOne: mocks.applicationFindOne,
+    updateOne: mocks.applicationUpdateOne,
+  },
   HireWorkspace: { exists: mocks.workspaceExists },
+  HirePrivacyRequest: { exists: mocks.privacyExists },
+  TERMINAL_STAGES: ['hired', 'rejected', 'withdrawn'],
 }))
 
 import {
@@ -71,6 +88,7 @@ import {
   sha256,
   verifyRoundToken,
 } from '../services/aiRoundService'
+import { HireCandidatePiiTombstoneError } from '../services/hireCandidatePrivacyWriteFence'
 import type { MembershipContext } from '../services/workspaceService'
 
 const IDS = {
@@ -129,6 +147,10 @@ function happyPath() {
   mocks.roundCreate.mockImplementation(async (docs: Array<Record<string, unknown>>) => docs)
 }
 
+function sessionQuery<T>(value: T) {
+  return { session: vi.fn().mockResolvedValue(value) }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.connectHireControlDB.mockResolvedValue(undefined)
@@ -149,6 +171,9 @@ beforeEach(() => {
   mocks.deliverRuntimeRevocation.mockResolvedValue(undefined)
   mocks.workspaceExists.mockResolvedValue({ _id: IDS.workspace })
   mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.applicationUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.privacyExists.mockReturnValue(sessionQuery(null))
+  mocks.candidateFence.mockResolvedValue(undefined)
   happyPath()
 })
 
@@ -179,6 +204,58 @@ describe('sendAiRound', () => {
     )
     expect(url.search).toBe('')
     expect(rawCapability).toMatch(new RegExp(`^${IDS.workspace}\\.[a-f0-9]{64}$`))
+    expect(mocks.privacyExists).toHaveBeenCalledWith({
+      workspaceId: IDS.workspace,
+      candidateId: IDS.candidate,
+      live: true,
+    })
+    expect(mocks.candidateFence).toHaveBeenCalledWith({
+      workspaceId: IDS.workspace,
+      candidateId: IDS.candidate,
+      session: { id: 'hire-tx' },
+    })
+    expect(mocks.applicationUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: IDS.application,
+        workspaceId: IDS.workspace,
+        jobId: IDS.job,
+        candidateId: IDS.candidate,
+        stage: { $nin: ['hired', 'rejected', 'withdrawn'] },
+      },
+      { $set: { updatedAt: expect.any(Date) } },
+      { session: { id: 'hire-tx' }, timestamps: false },
+    )
+  })
+
+  it('does not create a round when a terminal stage move wins transaction serialization', async () => {
+    // This represents the retry after a concurrent terminal `moveStage`
+    // transaction committed. The conditional application write must miss.
+    mocks.applicationUpdateOne.mockResolvedValueOnce({ matchedCount: 0 })
+
+    await expect(sendAiRound(CTX, {
+      applicationId: IDS.application,
+      experience: '3-6',
+      duration: 15,
+    })).rejects.toMatchObject({ code: 'APPLICATION_NOT_ELIGIBLE', statusCode: 409 })
+
+    expect(mocks.roundCreate).not.toHaveBeenCalled()
+    expect(mocks.createInviteDelivery).not.toHaveBeenCalled()
+    expect(mocks.deliverInvite).not.toHaveBeenCalled()
+    expect(mocks.candidateFence).not.toHaveBeenCalled()
+  })
+
+  it('creates neither a round nor an encrypted delivery record when deletion wins the candidate fence', async () => {
+    mocks.candidateFence.mockRejectedValueOnce(new HireCandidatePiiTombstoneError())
+
+    await expect(sendAiRound(CTX, {
+      applicationId: IDS.application,
+      experience: '3-6',
+      duration: 15,
+    })).rejects.toMatchObject({ code: 'HIRE_CANDIDATE_PII_TOMBSTONED', statusCode: 410 })
+
+    expect(mocks.roundCreate).not.toHaveBeenCalled()
+    expect(mocks.createInviteDelivery).not.toHaveBeenCalled()
+    expect(mocks.deliverInvite).not.toHaveBeenCalled()
   })
 
   it('freezes the active structured requirement version into the engine config', async () => {

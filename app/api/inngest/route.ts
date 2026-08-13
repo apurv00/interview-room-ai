@@ -20,6 +20,14 @@ import { hireEmailOutboxJob } from '@hire/jobs/emailOutboxJob'
 import { hireMediaRetentionJob } from '@hire/jobs/mediaRetentionJob'
 import { hireEngineRevocationJob } from '@hire/jobs/engineRevocationJob'
 import { hireLifecycleRetentionJob } from '@hire/jobs/lifecycleRetentionJob'
+import {
+  hireIntakeRecoveryJob,
+  hireIntakeRequestedJob,
+} from '@hire/jobs/intakeJob'
+import {
+  hireScreeningInvitationRecoveryJob,
+  hireScreeningInvitationRequestedJob,
+} from '@hire/jobs/screeningInvitationJob'
 import { hireRuntimeFeedbackRecoveryJob } from '@modules/hire-runtime/jobs/feedbackRecoveryJob'
 import { hireRuntimeResultPublisherJob } from '@modules/hire-runtime/jobs/resultPublisherJob'
 
@@ -55,6 +63,10 @@ const functions =
           hireMediaRetentionJob,
           hireEngineRevocationJob,
           hireLifecycleRetentionJob,
+          hireIntakeRequestedJob,
+          hireIntakeRecoveryJob,
+          hireScreeningInvitationRequestedJob,
+          hireScreeningInvitationRecoveryJob,
         ]
       : b2cFunctions
 

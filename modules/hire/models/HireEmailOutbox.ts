@@ -1,9 +1,17 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
 
-export const HIRE_EMAIL_OUTBOX_KINDS = ['job_close_rejection'] as const
+export const HIRE_EMAIL_OUTBOX_KINDS = [
+  'job_close_rejection',
+] as const
 export type HireEmailOutboxKind = (typeof HIRE_EMAIL_OUTBOX_KINDS)[number]
 
-export const HIRE_EMAIL_OUTBOX_STATUSES = ['pending', 'sending', 'sent', 'failed'] as const
+export const HIRE_EMAIL_OUTBOX_STATUSES = [
+  'pending',
+  'sending',
+  'sent',
+  'failed',
+  'cancelled',
+] as const
 export type HireEmailOutboxStatus = (typeof HIRE_EMAIL_OUTBOX_STATUSES)[number]
 
 /** Durable, transactionally-created email work. A job is not considered
