@@ -20,7 +20,6 @@ import {
   HireMemberSession,
   HireMemberSetup,
   HirePrivacyRequest,
-  HireReengagementOptOut,
   HireRound,
   HireScreeningGate,
   HireWorkspace,
@@ -58,7 +57,6 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireMediaAsset',
   'HirePrivacyRequest',
   'HireEmailOutbox',
-  'HireReengagementOptOut',
   'HireAiInviteDelivery',
   'HireRound',
   'HireIntakeTask',
@@ -302,7 +300,6 @@ async function deleteWorkspaceGraphChildren(
   await HireMediaAsset.deleteMany({ workspaceId }, { session })
   await HirePrivacyRequest.deleteMany({ workspaceId }, { session })
   await HireEmailOutbox.deleteMany({ workspaceId }, { session })
-  await HireReengagementOptOut.deleteMany({ workspaceId }, { session })
   await HireAiInviteDelivery.deleteMany({ workspaceId }, { session })
   await HireRound.deleteMany({ workspaceId }, { session })
   // Intake tasks can still hold the original resume payload and supplied

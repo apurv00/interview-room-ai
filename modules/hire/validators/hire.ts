@@ -194,17 +194,6 @@ export const AddOrMergeJobCandidateSchema = z
     }
   })
 
-/**
- * Explicit HR confirmation for a read-only talent-pool suggestion. The
- * candidate coordinate belongs in the path, while a fresh operation id makes
- * retrying the confirmation safe without turning a listing into a mutation.
- */
-export const ReengagePoolCandidateSchema = z
-  .object({
-    operationId: z.string().uuid(),
-  })
-  .strict()
-
 export const MoveStageSchema = z
   .object({
     action: z.enum(['advance', 'reject', 'withdraw', 'offer_accepted', 'offer_declined']),
@@ -274,7 +263,6 @@ export type UpdateJobStatusPayload = z.infer<typeof UpdateJobStatusSchema>
 export type AddCandidatePayload = z.infer<typeof AddCandidateSchema>
 export type CreateApplicationPayload = z.infer<typeof CreateApplicationSchema>
 export type AddOrMergeJobCandidatePayload = z.infer<typeof AddOrMergeJobCandidateSchema>
-export type ReengagePoolCandidatePayload = z.infer<typeof ReengagePoolCandidateSchema>
 export type MoveStagePayload = z.infer<typeof MoveStageSchema>
 export type SendAiRoundPayload = z.infer<typeof SendAiRoundSchema>
 export type GuestBeginPayload = z.infer<typeof GuestBeginSchema>

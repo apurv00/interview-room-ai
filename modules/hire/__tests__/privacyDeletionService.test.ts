@@ -17,7 +17,6 @@ const mocks = vi.hoisted(() => ({
   mediaUpdateMany: vi.fn(),
   resultUpdateMany: vi.fn(),
   intakeTaskDeleteMany: vi.fn(),
-  reengagementOptOutDeleteMany: vi.fn(),
   invitationBatchItemUpdateMany: vi.fn(),
   screeningGateUpdateMany: vi.fn(),
   outboxBulkWrite: vi.fn(),
@@ -79,9 +78,6 @@ vi.mock('../models/HireInterviewResult', () => ({
 }))
 vi.mock('../models/HireIntakeTask', () => ({
   HireIntakeTask: { deleteMany: mocks.intakeTaskDeleteMany },
-}))
-vi.mock('../models/HireReengagementOptOut', () => ({
-  HireReengagementOptOut: { deleteMany: mocks.reengagementOptOutDeleteMany },
 }))
 vi.mock('../models/HireInvitationBatchItem', () => ({
   HireInvitationBatchItem: { updateMany: mocks.invitationBatchItemUpdateMany },
@@ -174,7 +170,6 @@ beforeEach(() => {
     mocks.mediaUpdateMany,
     mocks.resultUpdateMany,
     mocks.intakeTaskDeleteMany,
-    mocks.reengagementOptOutDeleteMany,
     mocks.invitationBatchItemUpdateMany,
     mocks.screeningGateUpdateMany,
     mocks.outboxBulkWrite,
@@ -267,10 +262,6 @@ describe('verified Hire candidate deletion', () => {
       },
     )
     expect(mocks.intakeTaskDeleteMany).toHaveBeenCalledWith(
-      { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
-      { session: dbSession },
-    )
-    expect(mocks.reengagementOptOutDeleteMany).toHaveBeenCalledWith(
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       { session: dbSession },
     )

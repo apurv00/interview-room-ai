@@ -5,19 +5,10 @@ import { sendEmail } from '@shared/services/emailService'
 import { NotFoundError } from '@shared/errors'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
 import { HireJob } from '../models/HireJob'
-import { HireCandidate } from '../models/HireCandidate'
-import { HirePrivacyRequest } from '../models/HirePrivacyRequest'
-import { HireReengagementOptOut } from '../models/HireReengagementOptOut'
 import { HireWorkspace } from '../models/HireWorkspace'
 import { buildJobCloseRejectionEmail } from '../emails/jobCloseRejectionEmail'
-import { buildJobReengagementEmail } from '../emails/jobReengagementEmail'
 import { connectHireControlDB } from './hireControlBoundary'
-import { buildHireReengagementOptOutUrl } from './reengagementOptOutService'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
-import {
-  claimHireCandidatePiiWriteFence,
-  HireCandidatePiiTombstoneError,
-} from './hireCandidatePrivacyWriteFence'
 import {
   activeHireWorkspaceLifecycleFilter,
   type MembershipContext,
@@ -81,9 +72,7 @@ export async function getJobCloseEmailDelivery(
     failures: [],
   }
   for (const row of rows) {
-    // `cancelled` is used only by talent-pool re-engagement mail and is not
-    // included in this close-email delivery summary. Keep this defensive
-    // branch so a legacy/misfiled row cannot corrupt numeric counters.
+    // A cancelled legacy row cannot corrupt the close-email counters.
     if (row.status === 'cancelled') continue
     summary[row.status] += 1
     if (row.status === 'failed') {
@@ -151,19 +140,10 @@ function nextRetryAt(now: Date, attempts: number): Date {
   return new Date(now.getTime() + delayMs)
 }
 
-interface ReengagementRecipient {
-  name: string
-  email: string
-}
-
-interface AuthorizedReengagementDelivery {
-  row: IHireEmailOutbox
-  recipient: ReengagementRecipient
-}
-
 function dueHireEmailFilter(workspaceId: string, now: Date) {
   return {
     workspaceId,
+    kind: 'job_close_rejection' as const,
     attempts: { $lt: HIRE_EMAIL_MAX_ATTEMPTS },
     sendAfter: { $lte: now },
     $or: [
@@ -220,179 +200,6 @@ async function cancelDueEmailForWorkspaceDeletion(input: {
         status: 'cancelled',
         lastError: 'Workspace scheduled for deletion',
       },
-      $unset: { claimToken: 1, leaseExpiresAt: 1 },
-    },
-    { session: input.session },
-  )
-}
-
-/**
- * This transaction creates the authorization boundary immediately before the
- * provider call. The scheduler can read a due re-engagement row first, but
- * only this candidate-fenced transaction may turn it into `sending`.
- *
- * `sending + claimToken` is durable authorization state. It is written under
- * the same candidate-row fence used by verified privacy deletion and opt-out.
- * If either action wins first, this returns null and no provider egress occurs.
- * If this transaction wins, the provider egress was authorized before that
- * later action; its cleanup removes/cancels every recovery path so the worker
- * can never retry it after the candidate's change takes effect.
- */
-async function authorizeReengagementEgress(input: {
-  row: IHireEmailOutbox
-  workspaceId: string
-  claimToken: string
-  now: Date
-}): Promise<AuthorizedReengagementDelivery | null> {
-  const { row, workspaceId, claimToken, now } = input
-  const session = await mongoose.startSession()
-  try {
-    let authorizedDelivery: AuthorizedReengagementDelivery | null = null
-    await session.withTransaction(async () => {
-      // `withTransaction` may rerun this callback on a transient conflict.
-      // Never carry an authorization produced by a failed/retried attempt to
-      // the final callback outcome.
-      authorizedDelivery = null
-      const workspaceActive = await claimActiveHireWorkspaceEmailEgressFence({
-        workspaceId,
-        session,
-      })
-      if (!workspaceActive) {
-        await cancelDueEmailForWorkspaceDeletion({
-          row,
-          workspaceId,
-          now,
-          session,
-        })
-        return
-      }
-      const scope = {
-        workspaceId,
-        candidateId: row.candidateId,
-      }
-
-      try {
-        await claimHireCandidatePiiWriteFence({ ...scope, session })
-      } catch (error) {
-        if (!(error instanceof HireCandidatePiiTombstoneError)) throw error
-        await cancelDueReengagement({
-          row,
-          workspaceId,
-          now,
-          reason: 'Candidate data is unavailable for talent-pool re-engagement',
-          session,
-        })
-        return
-      }
-
-      // Keep these session-bound operations sequential. Mongoose transactions
-      // explicitly prohibit Promise.all/parallel operations on one session.
-      const candidate = (await HireCandidate.findOne({
-        _id: row.candidateId,
-        workspaceId,
-        piiAnonymizedAt: { $exists: false },
-      })
-        .select('name email')
-        .session(session)
-        .lean()) as ReengagementRecipient | null
-      const privacyPending = await HirePrivacyRequest.exists({
-        ...scope,
-        live: true,
-        status: { $in: ['pending_verification', 'processing'] },
-      }).session(session)
-      const optedOut = await HireReengagementOptOut.exists(scope).session(session)
-
-      if (!candidate || privacyPending || optedOut) {
-        await cancelDueReengagement({
-          row,
-          workspaceId,
-          now,
-          reason: optedOut
-            ? 'Candidate opted out of talent-pool re-engagement'
-            : 'Candidate data is unavailable for talent-pool re-engagement',
-          session,
-        })
-        return
-      }
-
-      // This exact lease claim is the egress authorization. It must be both
-      // due and currently unclaimed/expired at commit time; a stale worker
-      // cannot reach the provider.
-      const authorized = await HireEmailOutbox.findOneAndUpdate(
-        {
-          ...dueHireEmailFilter(workspaceId, now),
-          _id: row._id,
-          jobId: row.jobId,
-          applicationId: row.applicationId,
-          candidateId: row.candidateId,
-          kind: 'job_reengagement',
-        },
-        {
-          $set: {
-            status: 'sending',
-            claimToken,
-            leaseExpiresAt: new Date(now.getTime() + CLAIM_LEASE_MS),
-          },
-          $inc: { attempts: 1 },
-        },
-        { new: true, session },
-      )
-      if (!authorized) return
-      authorizedDelivery = { row: authorized, recipient: candidate }
-    })
-    return authorizedDelivery
-  } finally {
-    await session.endSession()
-  }
-}
-
-async function cancelDueReengagement(input: {
-  row: IHireEmailOutbox
-  workspaceId: string
-  now: Date
-  reason: string
-  session: mongoose.ClientSession
-}): Promise<void> {
-  await HireEmailOutbox.updateOne(
-    {
-      ...dueHireEmailFilter(input.workspaceId, input.now),
-      _id: input.row._id,
-      jobId: input.row.jobId,
-      applicationId: input.row.applicationId,
-      candidateId: input.row.candidateId,
-      kind: 'job_reengagement',
-    },
-    {
-      $set: {
-        status: 'cancelled',
-        lastError: input.reason,
-      },
-      $unset: { claimToken: 1, leaseExpiresAt: 1 },
-    },
-    { session: input.session },
-  )
-}
-
-async function cancelClaimedReengagement(input: {
-  row: IHireEmailOutbox
-  workspaceId: string
-  claimToken: string
-  reason: string
-  session: mongoose.ClientSession
-}): Promise<void> {
-  await HireEmailOutbox.updateOne(
-    {
-      _id: input.row._id,
-      workspaceId: input.workspaceId,
-      jobId: input.row.jobId,
-      applicationId: input.row.applicationId,
-      candidateId: input.row.candidateId,
-      kind: 'job_reengagement',
-      status: 'sending',
-      claimToken: input.claimToken,
-    },
-    {
-      $set: { status: 'cancelled', lastError: input.reason },
       $unset: { claimToken: 1, leaseExpiresAt: 1 },
     },
     { session: input.session },
@@ -467,8 +274,6 @@ export async function processNextHireEmail(
   now = new Date(),
 ): Promise<HireEmailProcessResult> {
   await connectHireControlDB()
-  // Choosing a re-engagement row is deliberately read-only. Its only worker
-  // claim is made below inside the candidate-fenced authorization transaction.
   const dueRow = await HireEmailOutbox.findOne(dueHireEmailFilter(workspaceId, now)).sort({
     sendAfter: 1,
     _id: 1,
@@ -476,44 +281,6 @@ export async function processNextHireEmail(
   if (!dueRow) return { processed: false }
 
   const claimToken = randomUUID()
-  if (dueRow.kind === 'job_reengagement') {
-    const authorized = await authorizeReengagementEgress({
-      row: dueRow,
-      workspaceId,
-      claimToken,
-      now,
-    })
-    if (!authorized) {
-      return { processed: true, outboxId: dueRow._id.toString(), outcome: 'cancelled' }
-    }
-    const { row, recipient } = authorized
-
-    const optOutUrl = buildHireReengagementOptOutUrl({
-      workspaceId: workspaceId.toString(),
-      candidateId: row.candidateId.toString(),
-      outboxId: row._id.toString(),
-      now,
-    })
-    const template = buildJobReengagementEmail({
-      candidateName: recipient.name,
-      jobTitle: row.payload.jobTitle,
-      workspaceName: row.payload.workspaceName,
-      optOutUrl,
-    })
-    const sent = await sendEmail({
-      to: recipient.email,
-      subject: template.subject,
-      html: template.html,
-      text: template.text,
-      idempotencyKey: `hire-reengagement:${row._id.toString()}`,
-      headers: {
-        'List-Unsubscribe': `<${optOutUrl}>`,
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      },
-    })
-    return recordHireEmailDelivery({ row, workspaceId, claimToken, now, sent })
-  }
-
   const row = await authorizeJobCloseRejectionEgress({
     row: dueRow,
     workspaceId,
@@ -549,10 +316,6 @@ async function recordHireEmailDelivery(input: {
 }): Promise<HireEmailProcessResult> {
   const { row, workspaceId, claimToken, now, sent } = input
   if (!row) throw new Error('Cannot record an empty Hire email outbox row')
-
-  if (row.kind === 'job_reengagement') {
-    return recordReengagementEmailDelivery(input)
-  }
 
   if (sent.ok) {
     const recorded = await HireEmailOutbox.updateOne(
@@ -591,120 +354,6 @@ async function recordHireEmailDelivery(input: {
     processed: true,
     outboxId: row._id.toString(),
     outcome: terminal ? 'failed' : 'retry_scheduled',
-  }
-}
-
-/**
- * A re-engagement message may be retried only if the candidate remains
- * eligible after a provider rejection. The second candidate-fenced
- * transaction makes opt-out/deletion linearizable with requeueing: either the
- * settlement wins and a later opt-out cancels the newly pending row, or the
- * opt-out/deletion wins and this row is cancelled/deleted instead of retried.
- */
-async function recordReengagementEmailDelivery(input: {
-  row: IHireEmailOutbox
-  workspaceId: string
-  claimToken: string
-  now: Date
-  sent: Awaited<ReturnType<typeof sendEmail>>
-}): Promise<HireEmailProcessResult> {
-  const { row, workspaceId, claimToken, now, sent } = input
-  if (sent.ok) {
-    const recorded = await HireEmailOutbox.updateOne(
-      {
-        _id: row._id,
-        workspaceId,
-        candidateId: row.candidateId,
-        kind: 'job_reengagement',
-        status: 'sending',
-        claimToken,
-      },
-      {
-        $set: {
-          status: 'sent',
-          sentAt: now,
-          ...(sent.id ? { providerMessageId: sent.id } : {}),
-        },
-        $unset: { claimToken: 1, leaseExpiresAt: 1, lastError: 1 },
-      },
-    )
-    // A verified deletion can remove the row after its committed egress
-    // authorization but before this bookkeeping write. The provider call was
-    // pre-deletion authorized; returning cancelled rather than throwing keeps
-    // the deleted row from becoming an accidental recovery/retry path.
-    if (recorded.matchedCount !== 1) {
-      return { processed: true, outboxId: row._id.toString(), outcome: 'cancelled' }
-    }
-    return { processed: true, outboxId: row._id.toString(), outcome: 'sent' }
-  }
-
-  const session = await mongoose.startSession()
-  try {
-    let outcome: HireEmailProcessResult['outcome'] = 'cancelled'
-    await session.withTransaction(async () => {
-      // As above, reset between automatic transaction retries so a prior
-      // attempt cannot leak a retry outcome past a later opt-out/deletion.
-      outcome = 'cancelled'
-      const scope = { workspaceId, candidateId: row.candidateId }
-      try {
-        await claimHireCandidatePiiWriteFence({ ...scope, session })
-      } catch (error) {
-        if (!(error instanceof HireCandidatePiiTombstoneError)) throw error
-        await cancelClaimedReengagement({
-          row,
-          workspaceId,
-          claimToken,
-          reason: 'Candidate data is unavailable for talent-pool re-engagement',
-          session,
-        })
-        return
-      }
-
-      const privacyPending = await HirePrivacyRequest.exists({
-        ...scope,
-        live: true,
-        status: { $in: ['pending_verification', 'processing'] },
-      }).session(session)
-      const optedOut = await HireReengagementOptOut.exists(scope).session(session)
-      if (privacyPending || optedOut) {
-        await cancelClaimedReengagement({
-          row,
-          workspaceId,
-          claimToken,
-          reason: optedOut
-            ? 'Candidate opted out of talent-pool re-engagement'
-            : 'Candidate data is unavailable for talent-pool re-engagement',
-          session,
-        })
-        return
-      }
-
-      const terminal = row.attempts >= HIRE_EMAIL_MAX_ATTEMPTS
-      const recorded = await HireEmailOutbox.updateOne(
-        {
-          _id: row._id,
-          workspaceId,
-          candidateId: row.candidateId,
-          kind: 'job_reengagement',
-          status: 'sending',
-          claimToken,
-        },
-        {
-          $set: {
-            status: terminal ? 'failed' : 'pending',
-            lastError: 'Transactional email provider did not accept the message',
-            ...(terminal ? {} : { sendAfter: nextRetryAt(now, row.attempts) }),
-          },
-          $unset: { claimToken: 1, leaseExpiresAt: 1 },
-        },
-        { session },
-      )
-      if (recorded.matchedCount !== 1) return
-      outcome = terminal ? 'failed' : 'retry_scheduled'
-    })
-    return { processed: true, outboxId: row._id.toString(), outcome }
-  } finally {
-    await session.endSession()
   }
 }
 

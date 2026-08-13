@@ -133,9 +133,6 @@ export function hireDeploymentConfigurationIssues(
         'HIRE_ENGINE_RUNTIME_URL',
         'RESEND_API_KEY',
         'EMAIL_FROM',
-        // Re-engagement mail must not be sent unless it can carry an
-        // independently signed, Hire-only opt-out capability.
-        'HIRE_REENGAGEMENT_OPT_OUT_SECRET',
         'HIRE_INVITE_DELIVERY_KEY_ID',
         'HIRE_INVITE_DELIVERY_KEY',
         'INNGEST_EVENT_KEY',
@@ -152,9 +149,6 @@ export function hireDeploymentConfigurationIssues(
     )
     if ((env.NEXTAUTH_SECRET?.trim().length ?? 0) < 32) {
       issues.add('weak:NEXTAUTH_SECRET')
-    }
-    if ((env.HIRE_REENGAGEMENT_OPT_OUT_SECRET?.trim().length ?? 0) < 32) {
-      issues.add('weak:HIRE_REENGAGEMENT_OPT_OUT_SECRET')
     }
     if (!canonicalBase64Bytes(env.HIRE_INVITE_DELIVERY_KEY, 32)) {
       issues.add('invalid:HIRE_INVITE_DELIVERY_KEY')
@@ -178,9 +172,6 @@ export function hireDeploymentConfigurationIssues(
       issues.add('collision:invite-delivery-key-ids')
     }
     requireProductionHttpsUrl(env, 'HIRE_PUBLIC_URL', undefined, issues)
-    // Optional alias used only in re-engagement mail. When present it must
-    // remain a safe HTTPS public origin; otherwise dispatch fails closed.
-    requireProductionHttpsUrl(env, 'HIRE_PUBLIC_ORIGIN', undefined, issues)
     requireProductionHttpsUrl(
       env,
       'HIRE_ENGINE_RUNTIME_URL',

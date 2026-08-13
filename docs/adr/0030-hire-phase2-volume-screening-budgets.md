@@ -17,13 +17,11 @@ properties:
   exceptions against an immutable job requirement version;
 - invitation batches and batch items provide durable scheduling, retries,
   waterfall selection, and a one-application reservation;
-- talent-pool re-engagement has its own opt-out, provider-idempotent delivery,
-  and candidate-fenced authorization boundary; and
 - privacy deletion, retention, and workspace hard purge remove or redact each
   new artifact using exact workspace and candidate coordinates.
 
-At this decision, `modules/hire` measures 77 counted implementation files and
-20,805 counted lines. Combining these concerns into existing Phase 1 services
+At this decision, `modules/hire` measures 74 counted implementation files and
+19,795 counted lines. Combining these concerns into existing Phase 1 services
 would make the old budget pass only by hiding queue payload handling,
 candidate-fence transactions, and invitation lifecycle behavior inside broad
 files. That would weaken targeted review and recovery testing.
@@ -37,7 +35,7 @@ and Hire candidate identity is never resolved against B2C users.
 Raise only `modules/hire` from **14,000 LOC / 66 files** to **22,000 LOC / 80
 files**.
 
-This leaves roughly 1,195 lines and three files of headroom at the measured
+This leaves roughly 2,205 lines and six files of headroom at the measured
 Phase 2 implementation. It is a tripwire, not prepaid capacity: a later
 increase should first consider extracting a coherent operational boundary,
 such as intake processing or reporting, rather than coalescing or endlessly

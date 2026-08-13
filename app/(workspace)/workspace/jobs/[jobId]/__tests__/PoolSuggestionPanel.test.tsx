@@ -27,21 +27,22 @@ afterEach(() => {
 })
 
 describe('PoolSuggestionPanel', () => {
-  it('keeps suggestions read-only until a member explicitly confirms the re-engagement email', async () => {
+  it('keeps suggestions read-only until a member explicitly confirms adding the candidate', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === '/api/workspace/jobs/job-1/pool-suggestions') {
         expect(init?.cache).toBe('no-store')
         return json({ suggestions: [SUGGESTION] })
       }
-      if (url === '/api/workspace/jobs/job-1/pool-suggestions/aaaaaaaaaaaaaaaaaaaaaaaa/reengage') {
+      if (url === '/api/workspace/jobs/job-1/candidates') {
         expect(init?.method).toBe('POST')
         expect(init?.headers).toEqual({ 'Content-Type': 'application/json' })
-        expect(JSON.parse(String(init?.body))).toMatchObject({
+        expect(JSON.parse(String(init?.body))).toEqual({
+          candidateId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
           operationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         })
         return json({
-          status: 'queued',
+          status: 'created',
           candidateId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
           applicationId: 'cccccccccccccccccccccccc',
         }, 201)
@@ -55,12 +56,12 @@ describe('PoolSuggestionPanel', () => {
     await screen.findByText('Ada Lovelace')
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Consider and email' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add to job' }))
     expect(screen.getByRole('alertdialog')).toHaveTextContent('Add Ada Lovelace')
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm and queue email' }))
-    await screen.findByText('Added Ada Lovelace and queued a re-engagement email.')
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm add to job' }))
+    await screen.findByText('Added Ada Lovelace to this job.')
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(screen.queryByText('ada@example.com')).not.toBeInTheDocument()
   })
@@ -72,7 +73,7 @@ describe('PoolSuggestionPanel', () => {
     render(<PoolSuggestionPanel jobId="job-1" jobStatus="closed" />)
 
     expect(screen.getByText('Suggestions are available only while this job is open.')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Consider and email' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add to job' })).not.toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -93,10 +94,10 @@ describe('PoolSuggestionPanel', () => {
 
     render(<PoolSuggestionPanel jobId="job-1" jobStatus="open" />)
     await screen.findByText('Ada Lovelace')
-    fireEvent.click(screen.getByRole('button', { name: 'Consider and email' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm and queue email' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add to job' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm add to job' }))
     await screen.findByText(/Network error/)
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm and queue email' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm add to job' }))
     await waitFor(() => expect(operations).toHaveLength(2))
     expect(operations[1]).toBe(operations[0])
   })

@@ -7,8 +7,8 @@
  *   npm run prepare:hire-phase2-indexes -- --apply   # create only missing exact indexes
  *
  * This command is intentionally scoped to the Phase 2 Hire-control
- * collections introduced for intake, screening, invitation batches, and
- * talent-pool email suppression. It suppresses Mongoose schema initialization
+ * collections introduced for intake, screening, and invitation batches. It
+ * suppresses Mongoose schema initialization
  * and never calls syncIndexes or dropIndex.
  *
  * A prior rollout may have created a full unique
@@ -24,7 +24,6 @@ import {
   HireIntakeTask,
   HireInvitationBatch,
   HireInvitationBatchItem,
-  HireReengagementOptOut,
   HireScreeningGate,
 } from '../modules/hire/models'
 
@@ -37,7 +36,6 @@ type IndexTarget =
   | 'screening-gates'
   | 'invitation-batches'
   | 'invitation-batch-items'
-  | 'reengagement-opt-outs'
 
 export interface HirePhase2IndexDescription {
   name?: string
@@ -187,13 +185,6 @@ export const HIRE_PHASE2_INDEX_DEFINITIONS: readonly HirePhase2IndexDefinition[]
     unique: false,
     sparse: true,
     purpose: 'round-to-delivery recovery lookup without indexing redacted rows',
-  },
-  {
-    target: 'reengagement-opt-outs',
-    name: 'workspaceId_1_candidateId_1',
-    key: { workspaceId: 1, candidateId: 1 },
-    unique: true,
-    purpose: 'one workspace-scoped persistent re-engagement suppression choice',
   },
 ]
 
@@ -366,7 +357,6 @@ function collectionsByTarget(): Record<IndexTarget, IndexCollection> {
     'screening-gates': HireScreeningGate.collection as unknown as IndexCollection,
     'invitation-batches': HireInvitationBatch.collection as unknown as IndexCollection,
     'invitation-batch-items': HireInvitationBatchItem.collection as unknown as IndexCollection,
-    'reengagement-opt-outs': HireReengagementOptOut.collection as unknown as IndexCollection,
   }
 }
 
@@ -378,7 +368,6 @@ async function readIndexes(
     'screening-gates',
     'invitation-batches',
     'invitation-batch-items',
-    'reengagement-opt-outs',
   ]
   const result = {} as IndexesByTarget
   await Promise.all(targets.map(async (target) => {

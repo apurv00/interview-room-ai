@@ -33,7 +33,7 @@ interface PoolSuggestionsResponse {
   error?: unknown
 }
 
-interface ReengageResponse {
+interface AddPoolCandidateResponse {
   status?: unknown
   error?: unknown
 }
@@ -51,6 +51,10 @@ export interface PoolSuggestionPanelProps {
 
 function endpoint(jobId: string): string {
   return `/api/workspace/jobs/${encodeURIComponent(jobId)}/pool-suggestions`
+}
+
+function candidateEndpoint(jobId: string): string {
+  return `/api/workspace/jobs/${encodeURIComponent(jobId)}/candidates`
 }
 
 function responseError(value: unknown, fallback: string): string {
@@ -96,9 +100,7 @@ function operationId(): string {
 function statusMessage(status: unknown): string {
   if (status === 'already_considered') return 'This candidate is already being considered for this job.'
   if (status === 'already_decided') return 'This candidate already has a final decision for this job.'
-  if (status === 'opted_out') return 'This candidate opted out of talent-pool re-engagement.'
-  if (status === 'privacy_pending') return 'This candidate has a privacy request in progress.'
-  return 'This candidate could not be re-engaged.'
+  return 'This candidate could not be added to this job.'
 }
 
 export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestionPanelProps) {
@@ -143,26 +145,29 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
     return () => controller.abort()
   }, [jobStatus, load])
 
-  async function confirmReengagement() {
+  async function confirmAddToJob() {
     if (!confirmation || sending) return
     setSending(true)
     setNotice(null)
     try {
       const response = await fetch(
-        `${endpoint(jobId)}/${encodeURIComponent(confirmation.suggestion.candidate.id)}/reengage`,
+        candidateEndpoint(jobId),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ operationId: confirmation.operationId }),
+          body: JSON.stringify({
+            candidateId: confirmation.suggestion.candidate.id,
+            operationId: confirmation.operationId,
+          }),
         },
       )
-      const data = (await response.json().catch(() => null)) as ReengageResponse | null
-      if (response.ok && data?.status === 'queued') {
+      const data = (await response.json().catch(() => null)) as AddPoolCandidateResponse | null
+      if (response.ok && (data?.status === 'created' || data?.status === 'reapplied')) {
         setSuggestions((current) =>
           current?.filter((item) => item.candidate.id !== confirmation.suggestion.candidate.id) ?? current,
         )
         setConfirmation(null)
-        setNotice(`Added ${confirmation.suggestion.candidate.name} and queued a re-engagement email.`)
+        setNotice(`Added ${confirmation.suggestion.candidate.name} to this job.`)
         return
       }
       setNotice(responseError(data, statusMessage(data?.status)))
@@ -190,7 +195,7 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
         <div>
           <h2 id="pool-suggestions-heading" className="text-base font-semibold text-[#0f1419]">Past candidates who match this job</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[#536471]">
-            These are read-only, deterministic requirement-overlap suggestions from this workspace’s past candidates. Reviewing them does not add anyone or send email.
+            These are read-only, deterministic requirement-overlap suggestions from this workspace’s past candidates. Reviewing them does not add anyone or contact a candidate.
           </p>
         </div>
         <Button type="button" variant="secondary" onClick={() => void load()} disabled={suggestions === null && !loadError}>
@@ -228,7 +233,7 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
                     setConfirmation({ suggestion, operationId: operationId() })
                   }}
                 >
-                  Consider and email
+                  Add to job
                 </Button>
               </div>
               {suggestion.matchedRequirements.length > 0 ? (
@@ -248,13 +253,13 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
 
       {confirmation ? (
         <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-4" role="alertdialog" aria-modal="false" aria-labelledby="pool-confirm-heading">
-          <h3 id="pool-confirm-heading" className="font-semibold text-[#0f1419]">Confirm re-engagement</h3>
+          <h3 id="pool-confirm-heading" className="font-semibold text-[#0f1419]">Confirm candidate addition</h3>
           <p className="mt-2 text-sm leading-6 text-[#334155]">
-            Add {confirmation.suggestion.candidate.name} to this job and queue one re-engagement email? This is an HR action; it does not happen until you confirm.
+            Add {confirmation.suggestion.candidate.name} to this job? This is an HR action; it does not happen until you confirm and does not contact the candidate.
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
-            <Button type="button" onClick={() => void confirmReengagement()} disabled={sending}>
-              {sending ? 'Queuing…' : 'Confirm and queue email'}
+            <Button type="button" onClick={() => void confirmAddToJob()} disabled={sending}>
+              {sending ? 'Adding…' : 'Confirm add to job'}
             </Button>
             <Button type="button" variant="secondary" onClick={() => setConfirmation(null)} disabled={sending}>
               Cancel

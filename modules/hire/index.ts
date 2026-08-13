@@ -44,15 +44,11 @@ export {
   type AddOrMergeJobCandidateResult,
 } from './services/pipelineService'
 
-// Duplicate-job talent-pool review. Listing is read-only; adding a past
-// candidate and scheduling any re-engagement email requires an explicit HR
-// confirmation through `reengagePoolCandidate`.
+// Duplicate-job talent-pool review. Listing is read-only; an explicit member
+// action uses the existing recruiter-only job candidate command to add a card.
 export {
   listJobPoolSuggestions,
-  reengagePoolCandidate,
   type PoolSuggestion,
-  type ReengagePoolCandidateStatus,
-  type ReengagePoolCandidateResult,
 } from './services/duplicateJobPoolService'
 
 // AI rounds (engine-seam consumer)

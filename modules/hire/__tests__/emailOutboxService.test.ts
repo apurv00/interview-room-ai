@@ -4,14 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockOutbox,
   mockJob,
-  mockCandidate,
-  mockPrivacyRequest,
-  mockReengagementOptOut,
-  mockReengagementOptOutUrl,
   mockWorkspace,
   mockWriteFence,
-  mockCandidatePiiFence,
-  MockHireCandidatePiiTombstoneError,
   mockSendEmail,
   mockConnectHireControlDB,
   mockWorkspaceIds,
@@ -25,14 +19,8 @@ const {
     updateOne: vi.fn(),
   },
   mockJob: { exists: vi.fn() },
-  mockCandidate: { findOne: vi.fn() },
-  mockPrivacyRequest: { exists: vi.fn() },
-  mockReengagementOptOut: { exists: vi.fn() },
-  mockReengagementOptOutUrl: vi.fn(),
   mockWorkspace: { findOneAndUpdate: vi.fn() },
   mockWriteFence: vi.fn(),
-  mockCandidatePiiFence: vi.fn(),
-  MockHireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
   mockSendEmail: vi.fn(),
   mockConnectHireControlDB: vi.fn(),
   mockWorkspaceIds: vi.fn(),
@@ -69,33 +57,16 @@ vi.mock('../models/HireEmailOutbox', () => ({
 vi.mock('../models/HireJob', () => ({
   HireJob: { exists: (...args: unknown[]) => mockJob.exists(...args) },
 }))
-vi.mock('../models/HireCandidate', () => ({
-  HireCandidate: { findOne: (...args: unknown[]) => mockCandidate.findOne(...args) },
-}))
-vi.mock('../models/HirePrivacyRequest', () => ({
-  HirePrivacyRequest: { exists: (...args: unknown[]) => mockPrivacyRequest.exists(...args) },
-}))
-vi.mock('../models/HireReengagementOptOut', () => ({
-  HireReengagementOptOut: { exists: (...args: unknown[]) => mockReengagementOptOut.exists(...args) },
-}))
 vi.mock('../models/HireWorkspace', () => ({
   HireWorkspace: {
     findOneAndUpdate: (...args: unknown[]) => mockWorkspace.findOneAndUpdate(...args),
   },
 }))
-vi.mock('../services/reengagementOptOutService', () => ({
-  buildHireReengagementOptOutUrl: (...args: unknown[]) => mockReengagementOptOutUrl(...args),
-}))
 vi.mock('../services/hireWorkspaceWriteFence', () => ({
   withActiveHireWorkspaceWriteTransaction: (...args: unknown[]) => mockWriteFence(...args),
 }))
-vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
-  claimHireCandidatePiiWriteFence: (...args: unknown[]) => mockCandidatePiiFence(...args),
-  HireCandidatePiiTombstoneError: MockHireCandidatePiiTombstoneError,
-}))
 
 import { buildJobCloseRejectionEmail } from '../emails/jobCloseRejectionEmail'
-import { buildJobReengagementEmail } from '../emails/jobReengagementEmail'
 import {
   HIRE_EMAIL_MAX_ATTEMPTS,
   getJobCloseEmailDelivery,
@@ -147,21 +118,6 @@ function outboxRow(attempts = 1) {
   }
 }
 
-function candidateFind(value: unknown) {
-  const query = {
-    select: vi.fn(),
-    session: vi.fn(),
-    lean: vi.fn().mockResolvedValue(value),
-  }
-  query.select.mockReturnValue(query)
-  query.session.mockReturnValue(query)
-  return query
-}
-
-function sessionQuery(value: unknown) {
-  return { session: vi.fn().mockResolvedValue(value) }
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
   session.withTransaction.mockImplementation((work: (current: unknown) => unknown) => work(session))
@@ -173,19 +129,11 @@ beforeEach(() => {
   mockOutbox.findOne.mockReturnValue(outboxFindOne(outboxRow()))
   mockOutbox.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockOutbox.updateOne.mockResolvedValue({ matchedCount: 1 })
-  mockCandidate.findOne.mockReturnValue(candidateFind({
-    name: 'Candidate One',
-    email: 'candidate@example.com',
-  }))
-  mockPrivacyRequest.exists.mockImplementation(() => sessionQuery(null))
-  mockReengagementOptOut.exists.mockImplementation(() => sessionQuery(null))
-  mockReengagementOptOutUrl.mockReturnValue('https://hire.example/opt-out?capability=opaque')
   mockWorkspace.findOneAndUpdate.mockResolvedValue({ _id: WORKSPACE_ID })
   mockWriteFence.mockImplementation(
     async (_workspaceId: unknown, _memberId: unknown, work: (value: unknown) => unknown) =>
       work(session),
   )
-  mockCandidatePiiFence.mockResolvedValue(undefined)
   vi.spyOn(mongoose, 'startSession').mockResolvedValue(session as never)
 })
 
@@ -203,25 +151,6 @@ describe('job close rejection template', () => {
     expect(template.subject).not.toContain('\r')
     expect(template.subject).not.toContain('\n')
     expect(template).not.toHaveProperty('decisionNote')
-  })
-})
-
-describe('job re-engagement template', () => {
-  it('is transparent about prior consideration and escapes candidate-controlled values', () => {
-    const template = buildJobReengagementEmail({
-      candidateName: '<img src=x onerror=alert(1)> Ada',
-      jobTitle: '<script>Platform</script>',
-      workspaceName: 'Acme\r\nBcc: attacker@example.com',
-      optOutUrl: 'https://hire.example/opt-out?capability=<unsafe>',
-    })
-
-    expect(template.html).toContain('previously connected')
-    expect(template.html).toContain('Opt out here')
-    expect(template.html).not.toContain('<script>')
-    expect(template.html).not.toContain('<img src=x')
-    expect(template.html).toContain('&lt;script&gt;Platform&lt;/script&gt;')
-    expect(template.subject).not.toContain('\r')
-    expect(template.subject).not.toContain('\n')
   })
 })
 
@@ -245,6 +174,7 @@ describe('processNextHireEmail', () => {
     const [claimFilter, claimUpdate] = mockOutbox.findOneAndUpdate.mock.calls[0]
     expect(claimFilter).toMatchObject({
       workspaceId: WORKSPACE_ID,
+      kind: 'job_close_rejection',
       attempts: { $lt: HIRE_EMAIL_MAX_ATTEMPTS },
       sendAfter: { $lte: NOW },
     })
@@ -306,54 +236,6 @@ describe('processNextHireEmail', () => {
     await expect(processNextHireEmail(WORKSPACE_ID, NOW)).rejects.toThrow(/lease was lost/)
   })
 
-  it('sends a re-engagement message only after a tenant-scoped privacy and opt-out recheck', async () => {
-    const reengagement = {
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }
-    mockOutbox.findOne.mockReturnValue(outboxFindOne(reengagement))
-    mockOutbox.findOneAndUpdate.mockResolvedValue(reengagement)
-    mockSendEmail.mockResolvedValue({ ok: true, id: 'resend-2' })
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({
-      outcome: 'sent',
-    })
-
-    expect(mockCandidate.findOne).toHaveBeenCalledWith({
-      _id: 'candidate-1',
-      workspaceId: WORKSPACE_ID,
-      piiAnonymizedAt: { $exists: false },
-    })
-    expect(mockPrivacyRequest.exists).toHaveBeenCalledWith({
-      workspaceId: WORKSPACE_ID,
-      candidateId: 'candidate-1',
-      live: true,
-      status: { $in: ['pending_verification', 'processing'] },
-    })
-    expect(mockReengagementOptOut.exists).toHaveBeenCalledWith({
-      workspaceId: WORKSPACE_ID,
-      candidateId: 'candidate-1',
-    })
-    expect(mockReengagementOptOutUrl).toHaveBeenCalledWith({
-      workspaceId: WORKSPACE_ID,
-      candidateId: 'candidate-1',
-      outboxId: 'outbox-1',
-      now: NOW,
-    })
-    expect(mockSendEmail).toHaveBeenCalledWith({
-      to: 'candidate@example.com',
-      subject: 'Acme: an opportunity for Backend Engineer',
-      html: expect.any(String),
-      text: expect.any(String),
-      idempotencyKey: 'hire-reengagement:outbox-1',
-      headers: {
-        'List-Unsubscribe': '<https://hire.example/opt-out?capability=opaque>',
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      },
-    })
-  })
-
   it('does not contact the provider for a deletion-pending workspace before a close-rejection claim', async () => {
     mockWorkspace.findOneAndUpdate.mockResolvedValue(null)
 
@@ -383,260 +265,6 @@ describe('processNextHireEmail', () => {
       }),
       expect.objectContaining({ session }),
     )
-    expect(mockSendEmail).not.toHaveBeenCalled()
-  })
-
-  it('does not contact the provider for a deletion-pending workspace before a re-engagement claim', async () => {
-    mockOutbox.findOne.mockReturnValue(outboxFindOne({
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }))
-    mockWorkspace.findOneAndUpdate.mockResolvedValue(null)
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toEqual({
-      processed: true,
-      outboxId: 'outbox-1',
-      outcome: 'cancelled',
-    })
-
-    expect(mockWorkspace.findOneAndUpdate).toHaveBeenCalledWith(
-      {
-        _id: WORKSPACE_ID,
-        $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],
-      },
-      { $inc: { writeFenceVersion: 1 } },
-      expect.objectContaining({ session }),
-    )
-    expect(mockCandidatePiiFence).not.toHaveBeenCalled()
-    expect(mockOutbox.findOneAndUpdate).not.toHaveBeenCalled()
-    expect(mockOutbox.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        _id: expect.anything(),
-        workspaceId: WORKSPACE_ID,
-        kind: 'job_reengagement',
-      }),
-      expect.objectContaining({
-        $set: expect.objectContaining({ status: 'cancelled' }),
-      }),
-      expect.objectContaining({ session }),
-    )
-    expect(mockSendEmail).not.toHaveBeenCalled()
-  })
-
-  it('cancels a claimed re-engagement row without contacting the provider when that exact tenant opted out', async () => {
-    mockOutbox.findOne.mockReturnValue(outboxFindOne({
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }))
-    mockReengagementOptOut.exists.mockReturnValue(sessionQuery({ _id: 'optout-1' }))
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toEqual({
-      processed: true,
-      outboxId: 'outbox-1',
-      outcome: 'cancelled',
-    })
-
-    expect(mockReengagementOptOut.exists).toHaveBeenCalledWith({
-      workspaceId: WORKSPACE_ID,
-      candidateId: 'candidate-1',
-    })
-    expect(mockSendEmail).not.toHaveBeenCalled()
-    expect(mockOutbox.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ _id: expect.anything(), workspaceId: WORKSPACE_ID }),
-      expect.objectContaining({
-        $set: expect.objectContaining({ status: 'cancelled' }),
-      }),
-      expect.objectContaining({ session }),
-    )
-  })
-
-  it('does not contact the provider when an opt-out wins after selection but before the fenced egress claim', async () => {
-    const reengagement = {
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }
-    mockOutbox.findOne.mockReturnValue(outboxFindOne(reengagement))
-    mockCandidatePiiFence.mockImplementation(async () => {
-      // Deterministically model opt-out committing after the read-only worker
-      // selection and before this transaction's fresh suppression read.
-      mockReengagementOptOut.exists.mockReturnValue(sessionQuery({ _id: 'optout-1' }))
-    })
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({
-      outcome: 'cancelled',
-    })
-
-    expect(mockCandidatePiiFence).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: WORKSPACE_ID, candidateId: 'candidate-1' }),
-    )
-    expect(mockOutbox.findOneAndUpdate).not.toHaveBeenCalled()
-    expect(mockSendEmail).not.toHaveBeenCalled()
-  })
-
-  it('does not contact the provider when a live privacy request wins after selection but before the fenced egress claim', async () => {
-    const reengagement = {
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }
-    mockOutbox.findOne.mockReturnValue(outboxFindOne(reengagement))
-    mockOutbox.findOneAndUpdate.mockResolvedValue(reengagement)
-    let privacyChecks = 0
-    mockPrivacyRequest.exists.mockImplementation(() => {
-      privacyChecks += 1
-      return sessionQuery(privacyChecks === 1 ? null : { _id: 'privacy-1' })
-    })
-    // Model a write conflict with `createHirePrivacyRequestFromInvite`: the
-    // first authorization callback rolled back, then its retry observes the
-    // privacy creator's committed live request before it may call provider.
-    session.withTransaction.mockImplementation(async (work: (current: unknown) => unknown) => {
-      await work(session)
-      await work(session)
-    })
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({
-      outcome: 'cancelled',
-    })
-
-    expect(mockOutbox.findOneAndUpdate).toHaveBeenCalledTimes(1)
-    expect(mockSendEmail).not.toHaveBeenCalled()
-  })
-
-  it('does not contact the provider if the exact outbox claim is lost after all eligibility checks', async () => {
-    const reengagement = {
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }
-    mockOutbox.findOne.mockReturnValue(outboxFindOne(reengagement))
-    // Models deletion/revocation removing or reclaiming this exact item at
-    // the final authorization compare-and-set.
-    mockOutbox.findOneAndUpdate.mockResolvedValue(null)
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({
-      outcome: 'cancelled',
-    })
-
-    expect(mockOutbox.findOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        _id: reengagement._id,
-        workspaceId: WORKSPACE_ID,
-        kind: 'job_reengagement',
-      }),
-      expect.objectContaining({
-        $set: expect.objectContaining({ status: 'sending' }),
-      }),
-      expect.objectContaining({ new: true, session }),
-    )
-    expect(mockSendEmail).not.toHaveBeenCalled()
-  })
-
-  it('allows one provider call when authorization wins before a later live privacy request', async () => {
-    const reengagement = {
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }
-    const order: string[] = []
-    mockOutbox.findOne.mockReturnValue(outboxFindOne(reengagement))
-    mockCandidatePiiFence.mockImplementation(async () => {
-      order.push('fence')
-    })
-    mockPrivacyRequest.exists.mockImplementation(() => {
-      order.push('privacy-check')
-      return sessionQuery(null)
-    })
-    mockOutbox.findOneAndUpdate.mockImplementation(async () => {
-      order.push('authorized')
-      // The request is created after the committed authorization; that must
-      // not retroactively invalidate the already-authorized egress.
-      mockPrivacyRequest.exists.mockReturnValue(sessionQuery({ _id: 'privacy-1' }))
-      return reengagement
-    })
-    mockSendEmail.mockImplementation(async () => {
-      order.push('provider')
-      return { ok: true, id: 'resend-privacy-order' }
-    })
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({
-      outcome: 'sent',
-    })
-
-    expect(order).toEqual(['fence', 'privacy-check', 'authorized', 'provider'])
-    expect(mockSendEmail).toHaveBeenCalledTimes(1)
-  })
-
-  it('does not carry an authorization across a retried transaction callback', async () => {
-    const reengagement = {
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }
-    mockOutbox.findOne.mockReturnValue(outboxFindOne(reengagement))
-    mockOutbox.findOneAndUpdate
-      .mockResolvedValueOnce(reengagement)
-      .mockResolvedValueOnce(null)
-    // Model a driver retry after a transient conflict. The first callback's
-    // authorization was rolled back; only the second callback may decide
-    // whether provider egress is allowed.
-    session.withTransaction.mockImplementation(async (work: (current: unknown) => unknown) => {
-      await work(session)
-      await work(session)
-    })
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({
-      outcome: 'cancelled',
-    })
-
-    expect(mockOutbox.findOneAndUpdate).toHaveBeenCalledTimes(2)
-    expect(mockSendEmail).not.toHaveBeenCalled()
-  })
-
-  it('does not schedule a retry when opt-out wins after a pre-opt-out authorized provider rejection', async () => {
-    const reengagement = {
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }
-    mockOutbox.findOne.mockReturnValue(outboxFindOne(reengagement))
-    mockOutbox.findOneAndUpdate.mockResolvedValue({ ...reengagement, attempts: 2 })
-    mockSendEmail.mockImplementation(async () => {
-      // Provider rejection happens after authorization. The subsequent
-      // settlement transaction must observe this choice and cancel, not put
-      // the row back into pending for a later egress.
-      mockReengagementOptOut.exists.mockReturnValue(sessionQuery({ _id: 'optout-1' }))
-      return { ok: false }
-    })
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({
-      outcome: 'cancelled',
-    })
-
-    expect(mockSendEmail).toHaveBeenCalledTimes(1)
-    expect(mockOutbox.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'job_reengagement', claimToken: expect.any(String) }),
-      expect.objectContaining({ $set: expect.objectContaining({ status: 'cancelled' }) }),
-      expect.objectContaining({ session }),
-    )
-  })
-
-  it('does not contact the provider when verified deletion wins the candidate fence', async () => {
-    const reengagement = {
-      ...outboxRow(),
-      kind: 'job_reengagement',
-      candidateId: 'candidate-1',
-    }
-    mockOutbox.findOne.mockReturnValue(outboxFindOne(reengagement))
-    mockCandidatePiiFence.mockRejectedValue(new MockHireCandidatePiiTombstoneError())
-
-    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({
-      outcome: 'cancelled',
-    })
-
-    expect(mockOutbox.findOneAndUpdate).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 

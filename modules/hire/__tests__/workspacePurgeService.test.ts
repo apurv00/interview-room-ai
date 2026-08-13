@@ -26,7 +26,6 @@ const { models, session, mockDeliverRuntimeRevocation } = vi.hoisted(() => {
     HireMemberSession: child(),
     HireMemberSetup: child(),
     HirePrivacyRequest: child(),
-    HireReengagementOptOut: child(),
     HireRound: {
       ...child(),
       find: vi.fn(),
@@ -145,7 +144,6 @@ describe('workspace hard purge', () => {
       'HireMediaAsset',
       'HirePrivacyRequest',
       'HireEmailOutbox',
-      'HireReengagementOptOut',
       'HireAiInviteDelivery',
       'HireRound',
       'HireIntakeTask',

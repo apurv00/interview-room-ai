@@ -12,7 +12,6 @@ import {
   HireJob,
   HireMediaAsset,
   HirePrivacyRequest,
-  HireReengagementOptOut,
   HireRound,
   HireScreeningGate,
   HireWorkspace,
@@ -505,9 +504,6 @@ async function anonymizeClaimedCandidate(input: {
       // Delivery contact snapshots are not funnel history and must not keep
       // an address alive beyond the candidate clock.
       await HireEmailOutbox.deleteMany(scope, { session })
-      // Candidate-specific suppression is itself a retention-governed
-      // preference artifact and must not outlive the anonymized person.
-      await HireReengagementOptOut.deleteMany(scope, { session })
       // Intake tasks are transient, but an interrupted worker can retain the
       // original resume payload and supplied contact fields. A retained
       // candidate must never leave those task artifacts behind.

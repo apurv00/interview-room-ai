@@ -5,7 +5,6 @@ import { HireApplication } from '../models/HireApplication'
 import { HireCandidate } from '../models/HireCandidate'
 import { HireConsentReceipt } from '../models/HireConsentReceipt'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
-import { HireReengagementOptOut } from '../models/HireReengagementOptOut'
 import { HireEngineHandoff } from '../models/HireEngineHandoff'
 import { HireGuestSession } from '../models/HireGuestSession'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
@@ -111,9 +110,9 @@ export async function createHirePrivacyRequestFromInvite(input: {
       request = null
       candidateEmail = null
 
-      // This is the same row-level fence used at re-engagement provider
-      // authorization. A privacy request that commits first is therefore
-      // visible to a retried authorization before it can claim an outbox row.
+      // This is the same row-level fence used by Hire candidate-data writes.
+      // A privacy request that commits first is therefore visible to any
+      // retried candidate-authorized operation before it can write new data.
       await claimHireCandidatePiiWriteFence({
         ...coordinate,
         session: dbSession,
@@ -476,10 +475,6 @@ export async function applyVerifiedHirePrivacyRequest(input: {
         // Delete only the candidate's exact tenant-owned task coordinates as
         // part of the verified deletion transaction.
         () => HireIntakeTask.deleteMany(scope, { session: dbSession }),
-        // Re-engagement suppression is candidate-scoped preference data. It
-        // must not survive a verified deletion request or become a durable
-        // cross-record trace after the candidate has been anonymized.
-        () => HireReengagementOptOut.deleteMany(scope, { session: dbSession }),
         // A Phase-2 batch never stores recipient PII, but an unsent item
         // could otherwise resolve this candidate's now-anonymized email at
         // delivery time. Terminally cancel it in the same candidate fence

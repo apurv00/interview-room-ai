@@ -12,8 +12,6 @@ const mocks = vi.hoisted(() => ({
   itemIndexes: vi.fn(),
   itemAggregate: vi.fn(),
   itemDuplicateRows: vi.fn(),
-  optOutCreateIndex: vi.fn(),
-  optOutIndexes: vi.fn(),
 }))
 
 vi.mock('../../shared/db/connection', () => ({ connectDB: mocks.connectDB }))
@@ -33,9 +31,6 @@ vi.mock('../../modules/hire/models', () => ({
       indexes: mocks.itemIndexes,
       aggregate: mocks.itemAggregate,
     },
-  },
-  HireReengagementOptOut: {
-    collection: { createIndex: mocks.optOutCreateIndex, indexes: mocks.optOutIndexes },
   },
 }))
 
@@ -62,10 +57,6 @@ const targetMocks = {
   'invitation-batch-items': {
     createIndex: mocks.itemCreateIndex,
     indexes: mocks.itemIndexes,
-  },
-  'reengagement-opt-outs': {
-    createIndex: mocks.optOutCreateIndex,
-    indexes: mocks.optOutIndexes,
   },
 } as const
 
@@ -145,7 +136,7 @@ describe('Hire Phase 2 control index preparation', () => {
     }
   })
 
-  it('keeps --check read-only and verifies all 12 exact indexes', async () => {
+  it('keeps --check read-only and verifies all 11 exact indexes', async () => {
     setAllExactIndexes()
 
     await prepareHirePhase2Indexes(['--check'])
@@ -180,11 +171,6 @@ describe('Hire Phase 2 control index preparation', () => {
     expect(mocks.gateCreateIndex).toHaveBeenCalledTimes(2)
     expect(mocks.batchCreateIndex).toHaveBeenCalledTimes(3)
     expect(mocks.itemCreateIndex).toHaveBeenCalledTimes(4)
-    expect(mocks.optOutCreateIndex).toHaveBeenCalledTimes(1)
-    expect(mocks.optOutCreateIndex).toHaveBeenCalledWith(
-      { workspaceId: 1, candidateId: 1 },
-      { name: 'workspaceId_1_candidateId_1', unique: true },
-    )
     expect(mocks.itemCreateIndex).toHaveBeenCalledWith(
       { workspaceId: 1, applicationId: 1 },
       {

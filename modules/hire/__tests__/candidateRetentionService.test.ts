@@ -40,7 +40,6 @@ const { models, session } = vi.hoisted(() => {
       },
       HireEngineIngestionEvent: latestModel('hireengineingestionevents'),
       HireEmailOutbox: { deleteMany: vi.fn() },
-      HireReengagementOptOut: { deleteMany: vi.fn() },
       HireIntakeTask: { deleteMany: vi.fn() },
       HireInvitationBatchItem: { updateMany: vi.fn() },
       HireScreeningGate: { updateMany: vi.fn() },
@@ -138,7 +137,6 @@ beforeEach(() => {
   models.HireInterviewResult.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireConsentReceipt.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireEmailOutbox.deleteMany.mockResolvedValue({ deletedCount: 1 })
-  models.HireReengagementOptOut.deleteMany.mockResolvedValue({ deletedCount: 1 })
   models.HireIntakeTask.deleteMany.mockResolvedValue({ deletedCount: 1 })
   models.HireInvitationBatchItem.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireScreeningGate.updateMany.mockResolvedValue({ modifiedCount: 1 })
@@ -225,10 +223,6 @@ describe('candidate PII retention', () => {
       { session },
     )
     expect(models.HireEmailOutbox.deleteMany).toHaveBeenCalledWith(
-      { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
-      { session },
-    )
-    expect(models.HireReengagementOptOut.deleteMany).toHaveBeenCalledWith(
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       { session },
     )

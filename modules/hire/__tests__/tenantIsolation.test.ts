@@ -33,7 +33,6 @@ import {
   HireInvitationBatchItem,
   HireMediaAsset,
   HirePrivacyRequest,
-  HireReengagementOptOut,
   HireScreeningGate,
 } from '../models'
 import type { Model } from 'mongoose'
@@ -61,7 +60,6 @@ const TENANT_SCOPED: Array<[string, Model<never>]> = [
   ['HireInvitationBatchItem', HireInvitationBatchItem as unknown as Model<never>],
   ['HireMediaAsset', HireMediaAsset as unknown as Model<never>],
   ['HirePrivacyRequest', HirePrivacyRequest as unknown as Model<never>],
-  ['HireReengagementOptOut', HireReengagementOptOut as unknown as Model<never>],
 ]
 
 function indexes(model: Model<never>): Array<[Record<string, number>, Record<string, unknown>]> {
@@ -105,13 +103,6 @@ describe('uniqueness constraints', () => {
   it('one application per candidate per job', () => {
     const idx = indexes(HireApplication as unknown as Model<never>).find(
       ([spec]) => spec.workspaceId === 1 && spec.jobId === 1 && spec.candidateId === 1
-    )
-    expect(idx?.[1].unique).toBe(true)
-  })
-
-  it('one re-engagement opt-out per candidate per workspace', () => {
-    const idx = indexes(HireReengagementOptOut as unknown as Model<never>).find(
-      ([spec]) => spec.workspaceId === 1 && spec.candidateId === 1,
     )
     expect(idx?.[1].unique).toBe(true)
   })

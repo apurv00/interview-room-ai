@@ -174,7 +174,3 @@ export {
   type IHireMediaAsset,
 } from './HireMediaAsset'
 export { HirePrivacyRequest, type IHirePrivacyRequest } from './HirePrivacyRequest'
-export {
-  HireReengagementOptOut,
-  type IHireReengagementOptOut,
-} from './HireReengagementOptOut'
