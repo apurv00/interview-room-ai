@@ -36,6 +36,10 @@ const nextConfig = {
     outputFileTracingIncludes: {
       '/api/resume/pdf': ['./node_modules/@sparticuz/chromium/**'],
       '/api/resume-wizard/export': ['./node_modules/@sparticuz/chromium/**'],
+      // Hire assessment exports render through the Inngest control worker.
+      // Its renderer dynamically resolves Chromium, so trace the binary into
+      // the same serverless function rather than relying on a host browser.
+      '/api/inngest': ['./node_modules/@sparticuz/chromium/**'],
       // Interview skill files (modules/interview/skills/*.md) are read at runtime via a
       // DYNAMIC fs path in skillLoader (`${domain}-${depth}.md`). Next.js file-tracing
       // (nft) can't statically detect a dynamic read, so without these the .md files are

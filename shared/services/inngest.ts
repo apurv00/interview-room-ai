@@ -65,6 +65,15 @@ export type InngestEvents = {
       deliveryId: string
     }
   }
+  // Phase 4 assessment PDF export: only durable control-plane coordinates.
+  // The worker reloads the select-hidden safe snapshot and never receives a
+  // candidate contact field, résumé, media identifier, or object key here.
+  'hire/assessment-export.requested': {
+    data: {
+      workspaceId: string
+      exportId: string
+    }
+  }
   // Feedback enrichment (2026-07-17): full-quality ideal_answers + drills
   // generated off the request path. reason 'post-feedback' = new interview;
   // 'drill-backfill' = historical/partial-coverage session hit from a drill

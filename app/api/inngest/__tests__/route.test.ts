@@ -13,6 +13,8 @@ const {
   hireScreeningInvitationRecoveryJob,
   hireHumanKitDeliveryRequestedJob,
   hireHumanKitDeliveryRecoveryJob,
+  hireAssessmentExportRequestedJob,
+  hireAssessmentExportRecoveryJob,
 } = vi.hoisted(() => ({
   mockServe: vi.fn(() => ({ GET: vi.fn(), POST: vi.fn(), PUT: vi.fn() })),
   paymentRecoveryJob: { id: 'payment-recovery-sentinel' },
@@ -26,6 +28,8 @@ const {
   hireScreeningInvitationRecoveryJob: { id: 'hire-screening-invitation-recovery-sentinel' },
   hireHumanKitDeliveryRequestedJob: { id: 'hire-human-kit-delivery-requested-sentinel' },
   hireHumanKitDeliveryRecoveryJob: { id: 'hire-human-kit-delivery-recovery-sentinel' },
+  hireAssessmentExportRequestedJob: { id: 'hire-assessment-export-requested-sentinel' },
+  hireAssessmentExportRecoveryJob: { id: 'hire-assessment-export-recovery-sentinel' },
 }))
 
 vi.mock('inngest/next', () => ({ serve: mockServe }))
@@ -76,6 +80,10 @@ vi.mock('@hire/jobs/humanKitDeliveryJob', () => ({
   hireHumanKitDeliveryRequestedJob,
   hireHumanKitDeliveryRecoveryJob,
 }))
+vi.mock('@hire-decisions/jobs/hireAssessmentExportJob', () => ({
+  hireAssessmentExportRequestedJob,
+  hireAssessmentExportRecoveryJob,
+}))
 vi.mock('@modules/hire-runtime/jobs/feedbackRecoveryJob', () => ({
   hireRuntimeFeedbackRecoveryJob: { id: 'hire-runtime-feedback' },
 }))
@@ -125,6 +133,8 @@ describe('Inngest route registration', () => {
       expect(options.functions.filter((fn) => fn === hireScreeningInvitationRecoveryJob)).toHaveLength(1)
       expect(options.functions.filter((fn) => fn === hireHumanKitDeliveryRequestedJob)).toHaveLength(1)
       expect(options.functions.filter((fn) => fn === hireHumanKitDeliveryRecoveryJob)).toHaveLength(1)
+      expect(options.functions.filter((fn) => fn === hireAssessmentExportRequestedJob)).toHaveLength(1)
+      expect(options.functions.filter((fn) => fn === hireAssessmentExportRecoveryJob)).toHaveLength(1)
       expect(options.functions).not.toContain(retentionJob)
     } finally {
       if (previousSurface === undefined) delete process.env.IPG_SURFACE

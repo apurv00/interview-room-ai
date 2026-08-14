@@ -32,6 +32,16 @@ function isHireRuntimePathAllowed(pathname: string, method: string): boolean {
   ) {
     return false
   }
+  // Share packets are control-plane-only, sessionless capability pages.
+  // They must never fall through to the runtime's guest-session rules.
+  if (
+    pathname === '/share-packet' ||
+    pathname.startsWith('/share-packet/') ||
+    pathname === '/api/share-packet' ||
+    pathname.startsWith('/api/share-packet/')
+  ) {
+    return false
+  }
   if (
     pathname === '/handoff' ||
     pathname === '/handoff/complete' ||
@@ -57,6 +67,8 @@ function isHireControlPathAllowed(pathname: string): boolean {
     pathname.startsWith('/candidate/') ||
     pathname === '/interview-kit' ||
     pathname.startsWith('/interview-kit/') ||
+    pathname === '/share-packet' ||
+    pathname.startsWith('/share-packet/') ||
     pathname === '/apply' ||
     pathname.startsWith('/apply/') ||
     pathname.startsWith('/hire-signin') ||
@@ -64,6 +76,8 @@ function isHireControlPathAllowed(pathname: string): boolean {
     pathname.startsWith('/api/candidate/') ||
     pathname === '/api/interview-kit' ||
     pathname.startsWith('/api/interview-kit/') ||
+    pathname === '/api/share-packet' ||
+    pathname.startsWith('/api/share-packet/') ||
     pathname === '/api/apply' ||
     pathname.startsWith('/api/apply/') ||
     pathname.startsWith('/api/hire-auth/') ||
@@ -106,6 +120,15 @@ export default withAuth(
         pathname.startsWith('/api/interview-kit/')
       ) &&
         ['capability', 'invite', 'kit', 'secret', 'token'].some((key) =>
+          req.nextUrl.searchParams.has(key),
+        )) ||
+      ((
+        pathname === '/share-packet' ||
+        pathname.startsWith('/share-packet/') ||
+        pathname === '/api/share-packet' ||
+        pathname.startsWith('/api/share-packet/')
+      ) &&
+        ['capability', 'packet', 'secret', 'share', 'token'].some((key) =>
           req.nextUrl.searchParams.has(key),
         )) ||
       (pathname === '/hire-signin' && req.nextUrl.searchParams.has('setup')) ||
@@ -296,6 +319,9 @@ export default withAuth(
       // Human interviewer kits are a separate no-login public route, not a
       // workspace page. Keep the exact segment boundary just like candidate.
       !(pathname === '/interview-kit' || pathname.startsWith('/interview-kit/')) &&
+      // Share packets carry a fragment capability and stay outside the
+      // workspace rewrite just like interviewer kits.
+      !(pathname === '/share-packet' || pathname.startsWith('/share-packet/')) &&
       // Public apply page — a shared link must work on the hire host too,
       // where recruiters copy it from (segment-exact, like /candidate).
       !(pathname === '/apply' || pathname.startsWith('/apply/')) &&
@@ -352,10 +378,25 @@ export default withAuth(
       pathname === '/interview-kit' ||
       pathname.startsWith('/interview-kit/') ||
       pathname === '/api/interview-kit' ||
-      pathname.startsWith('/api/interview-kit/')
+      pathname.startsWith('/api/interview-kit/') ||
+      pathname === '/share-packet' ||
+      pathname.startsWith('/share-packet/') ||
+      pathname === '/api/share-packet' ||
+      pathname.startsWith('/api/share-packet/')
     ) {
       response.headers.set('Referrer-Policy', 'no-referrer')
       response.headers.set('X-Robots-Tag', 'noindex, nofollow')
+    }
+    if (
+      pathname === '/share-packet' ||
+      pathname.startsWith('/share-packet/') ||
+      pathname === '/api/share-packet' ||
+      pathname.startsWith('/api/share-packet/')
+    ) {
+      // The page itself contains only a fragment capability, but its rendered
+      // snapshot is still sensitive recruitment data. Do not let a browser
+      // or intermediary retain it after the tab closes.
+      response.headers.set('Cache-Control', 'private, no-store')
     }
     response.headers.set(
       'Permissions-Policy',
@@ -465,6 +506,12 @@ export default withAuth(
           pathname.startsWith('/interview-kit/') ||
           pathname === '/api/interview-kit' ||
           pathname.startsWith('/api/interview-kit/') ||
+          // Share packets use only fragment capability authority and their
+          // public handlers deliberately omit cookie/session reads.
+          pathname === '/share-packet' ||
+          pathname.startsWith('/share-packet/') ||
+          pathname === '/api/share-packet' ||
+          pathname.startsWith('/api/share-packet/') ||
           // Workspace routes carry their own dual-principal fence: either a
           // current B2C HR session or the dedicated Hire-member cookie. The
           // NextAuth middleware cannot decode the latter, so it must let the

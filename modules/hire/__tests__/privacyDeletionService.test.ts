@@ -26,6 +26,10 @@ const mocks = vi.hoisted(() => ({
   interviewKitDeleteMany: vi.fn(),
   humanScorecardDeleteMany: vi.fn(),
   humanRoundDeleteMany: vi.fn(),
+  sharePacketUpdateMany: vi.fn(),
+  externalVerdictUpdateMany: vi.fn(),
+  cancelAssessmentExports: vi.fn(),
+  deleteAssessmentExportObjects: vi.fn(),
   deliverRevocation: vi.fn(),
   candidateFence: vi.fn(),
 }))
@@ -109,6 +113,14 @@ vi.mock('../models/HireHumanScorecard', () => ({
 }))
 vi.mock('../models/HireHumanRound', () => ({
   HireHumanRound: { deleteMany: mocks.humanRoundDeleteMany },
+}))
+vi.mock('@hire-decisions/models', () => ({
+  HireSharePacket: { updateMany: mocks.sharePacketUpdateMany },
+  HireExternalVerdict: { updateMany: mocks.externalVerdictUpdateMany },
+}))
+vi.mock('../services/assessmentExportLifecycleService', () => ({
+  cancelHireAssessmentExports: (...args: unknown[]) => mocks.cancelAssessmentExports(...args),
+  deleteHireAssessmentExportObjects: (...args: unknown[]) => mocks.deleteAssessmentExportObjects(...args),
 }))
 
 import { applyVerifiedHirePrivacyRequest } from '../services/privacyService'
@@ -195,6 +207,8 @@ beforeEach(() => {
     mocks.interviewKitDeleteMany,
     mocks.humanScorecardDeleteMany,
     mocks.humanRoundDeleteMany,
+    mocks.sharePacketUpdateMany,
+    mocks.externalVerdictUpdateMany,
   ]) {
     operation.mockResolvedValue({
       acknowledged: true,
@@ -204,10 +218,23 @@ beforeEach(() => {
   }
   mocks.deliverRevocation.mockResolvedValue(undefined)
   mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.cancelAssessmentExports.mockResolvedValue([])
+  mocks.deleteAssessmentExportObjects.mockResolvedValue(undefined)
 })
 
 describe('verified Hire candidate deletion', () => {
   it('completes local PII cleanup before returning with exact tenant coordinates', async () => {
+    const assessmentExportTarget = {
+      key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
+      coordinate: {
+        workspaceId: WORKSPACE_ID.toString(),
+        jobId: APPLICATION_A.toString(),
+        applicationId: APPLICATION_A.toString(),
+        candidateId: CANDIDATE_ID.toString(),
+        exportId: REQUEST_ID,
+      },
+    }
+    mocks.cancelAssessmentExports.mockResolvedValueOnce([assessmentExportTarget])
     await expect(
       applyVerifiedHirePrivacyRequest({
         requestCapability: CAPABILITY,
@@ -308,6 +335,60 @@ describe('verified Hire candidate deletion', () => {
         { session: dbSession },
       )
     }
+    expect(mocks.sharePacketUpdateMany).toHaveBeenNthCalledWith(
+      1,
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          active: false,
+          status: 'revoked',
+          revokedAt: NOW,
+          revocationReason: 'Candidate privacy deletion request',
+        },
+      },
+      { session: dbSession },
+    )
+    expect(mocks.sharePacketUpdateMany).toHaveBeenNthCalledWith(
+      2,
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        privacyRedactedAt: { $exists: false },
+      },
+      {
+        $set: { privacyRedactedAt: NOW },
+        $unset: { secretHash: 1, snapshot: 1 },
+      },
+      { session: dbSession, overwriteImmutable: true },
+    )
+    expect(mocks.externalVerdictUpdateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        privacyRedactedAt: { $exists: false },
+      },
+      {
+        $set: { privacyRedactedAt: NOW },
+        $unset: { comment: 1 },
+      },
+      { session: dbSession, overwriteImmutable: true },
+    )
+    expect(mocks.cancelAssessmentExports).toHaveBeenCalledWith({
+      scope: { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+      cancelledAt: NOW,
+      privacyRedactedAt: NOW,
+      session: dbSession,
+    })
+    expect(mocks.deleteAssessmentExportObjects).toHaveBeenCalledWith([assessmentExportTarget])
+    expect(mocks.cancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.deleteAssessmentExportObjects.mock.invocationCallOrder[0],
+    )
     expect(mocks.invitationBatchItemUpdateMany).toHaveBeenNthCalledWith(
       1,
       {
@@ -393,6 +474,9 @@ describe('verified Hire candidate deletion', () => {
       mocks.interviewKitDeleteMany.mock.calls[0][0],
       mocks.humanScorecardDeleteMany.mock.calls[0][0],
       mocks.humanRoundDeleteMany.mock.calls[0][0],
+      mocks.sharePacketUpdateMany.mock.calls[0][0],
+      mocks.sharePacketUpdateMany.mock.calls[1][0],
+      mocks.externalVerdictUpdateMany.mock.calls[0][0],
       mocks.invitationBatchItemUpdateMany.mock.calls[0][0],
       mocks.invitationBatchItemUpdateMany.mock.calls[1][0],
     ]
@@ -440,6 +524,8 @@ describe('verified Hire candidate deletion', () => {
       candidateId: CANDIDATE_ID.toString(),
     })
     expect(mocks.consentBulkWrite).toHaveBeenCalledOnce()
+    expect(mocks.sharePacketUpdateMany).toHaveBeenCalledTimes(2)
+    expect(mocks.externalVerdictUpdateMany).toHaveBeenCalledOnce()
     expect(mocks.screeningGateUpdateMany).toHaveBeenCalledTimes(2)
     expect(mocks.invitationBatchItemUpdateMany).toHaveBeenCalledTimes(2)
   })

@@ -44,6 +44,9 @@
       "@feedback/*": ["./modules/feedback/*"],
       "@hire": ["./modules/hire"],
       "@hire/*": ["./modules/hire/*"],
+      "@hire-decision-boundary": ["./modules/hire/decisionBoundary"],
+      "@hire-decisions": ["./modules/hire-decisions"],
+      "@hire-decisions/*": ["./modules/hire-decisions/*"],
       "@jobs": ["./modules/jobs"],
       "@jobs/*": ["./modules/jobs/*"]
     }

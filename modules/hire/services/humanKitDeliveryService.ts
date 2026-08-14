@@ -33,14 +33,14 @@ import {
 } from './hireCandidatePrivacyWriteFence'
 import { claimNonTerminalHireApplicationDispatchFence } from './hireApplicationDispatchFence'
 import { encodeWorkspaceResourceCapability } from './workspaceCapability'
+import { HIRE_HUMAN_KIT_MAX_ATTEMPTS } from './hireHumanKitDeliveryPolicy'
 import type { MembershipContext } from './workspaceService'
 
 const AES_KEY_BYTES = 32
 const GCM_IV_BYTES = 12
 const CLAIM_LEASE_MS = 5 * 60_000
 const REMINDER_DELAY_MS = 24 * 60 * 60_000
-/** The durable cap shared by worker recovery and member-facing failure state. */
-export const HIRE_HUMAN_KIT_MAX_ATTEMPTS = 5
+export { HIRE_HUMAN_KIT_MAX_ATTEMPTS } from './hireHumanKitDeliveryPolicy'
 const RETRY_BASE_MS = 60_000
 const RETRY_MAX_MS = 60 * 60_000
 

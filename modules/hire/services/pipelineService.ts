@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
+import { HireSharePacket } from '@hire-decisions/models'
 import {
   HireApplication,
   HireCandidate,
@@ -35,6 +36,11 @@ import {
   type HireWorkMode,
 } from '../models/HireJobRequirementVersion'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
+import {
+  assertValidHireCloseEmailTemplate,
+  resolveJobCloseRejectionEmailSnapshot,
+  type JobCloseRejectionEmailTemplate,
+} from '../emails/jobCloseRejectionEmail'
 import { finalizeSmartJd } from './jdBuilderService'
 import type { MembershipContext } from './workspaceService'
 import {
@@ -48,6 +54,11 @@ import {
   claimHireCandidatePiiWriteFence,
   HireCandidatePiiTombstoneError,
 } from './hireCandidatePrivacyWriteFence'
+import {
+  cancelHireAssessmentExports,
+  deleteHireAssessmentExportObjects,
+  type HireAssessmentExportCleanupTarget,
+} from './assessmentExportLifecycleService'
 
 /**
  * Jobs, candidates, applications, and the fixed pipeline. Every query in this
@@ -584,6 +595,7 @@ export async function updateJobStatus(
     expectedStatus: IHireJob['status']
     operationId: string
     closeNote?: string
+    closeEmailTemplate?: JobCloseRejectionEmailTemplate
   }
 ): Promise<IHireJob> {
   await connectDB()
@@ -592,8 +604,21 @@ export async function updateJobStatus(
   if (input.status === 'closed' && !closeNote) {
     throw new AppError('A decision note is required when closing a job', 400, 'CLOSE_NOTE_REQUIRED')
   }
+  if (input.status !== 'closed' && input.closeEmailTemplate !== undefined) {
+    throw new AppError(
+      'An email template may only be supplied when closing a job',
+      400,
+      'CLOSE_EMAIL_TEMPLATE_NOT_ALLOWED',
+    )
+  }
+  // The HTTP validator supplies precise field errors. This duplicate service
+  // check protects any future internal caller from persisting malformed copy.
+  const closeEmailTemplate = input.closeEmailTemplate
+    ? assertValidHireCloseEmailTemplate(input.closeEmailTemplate)
+    : undefined
 
   let runtimeRoundIds: string[] = []
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   const updatedJob = await withHireTransaction(ctx, async (session) => {
     const prior = await HireJob.findOne(
       {
@@ -793,6 +818,37 @@ export async function updateJobStatus(
       },
       { session },
     )
+    // Share packets are independent possession capabilities. A closed job
+    // must invalidate every still-active packet in the same authority
+    // transaction, including packets whose expiry has not yet elapsed.
+    await HireSharePacket.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          active: false,
+          status: 'revoked',
+          revokedAt: now,
+          revokedByMemberId: ctx.membership._id,
+          revokedByName: actor.actorName,
+          revocationReason: 'Job closed by recruiter',
+        },
+      },
+      { session },
+    )
+    assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+      scope: {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+      },
+      cancelledAt: now,
+      session,
+    })
     // Screening confirmation is not a permission to mail after the human
     // closes a requisition. Cancel every unsent reservation in the same job
     // close transaction; a concurrently claimed worker also rechecks this
@@ -938,6 +994,17 @@ export async function updateJobStatus(
             payload: {
               jobTitle: job.title,
               workspaceName: ctx.workspace.name,
+              // Resolve from the candidate/job/workspace snapshots visible in
+              // THIS transaction. A later retry never consults mutable HR
+              // input or candidate records to change sent copy.
+              emailSnapshot: resolveJobCloseRejectionEmailSnapshot({
+                candidateName: candidate.name,
+                jobTitle: job.title,
+                workspaceName: ctx.workspace.name,
+                ...(closeEmailTemplate ? { template: closeEmailTemplate } : {}),
+              }),
+              // This remains internal audit evidence. It is deliberately not
+              // an argument to the candidate-facing email renderer.
               decisionNote: closeNote!,
               actorName: actor.actorName,
             },
@@ -953,6 +1020,7 @@ export async function updateJobStatus(
     }
     return job
   })
+  await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
   if (input.status === 'closed' && updatedJob.closedAt) {
     await scheduleHireJobMediaPurge({
       workspaceId: ctx.workspace._id.toString(),
@@ -1534,7 +1602,8 @@ export async function moveStage(
     }
   }
 
-  return withHireTransaction(ctx, async (session) => {
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
+  const result = await withHireTransaction(ctx, async (session) => {
     const jobClaim = await HireJob.updateOne(
       { _id: application.jobId, workspaceId: ctx.workspace._id, status: 'open' },
       { $inc: { intakeWriteVersion: 1 } },
@@ -1634,6 +1703,30 @@ export async function moveStage(
           },
           { session },
         )
+        await HireSharePacket.updateMany(
+          {
+            ...lifecycleScope,
+            active: true,
+            status: 'active',
+            revokedAt: { $exists: false },
+          },
+          {
+            $set: {
+              active: false,
+              status: 'revoked',
+              revokedAt: terminalAt,
+              revokedByMemberId: ctx.membership._id,
+              revokedByName: actorName(ctx),
+              revocationReason,
+            },
+          },
+          { session },
+        )
+        assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+          scope: lifecycleScope,
+          cancelledAt: terminalAt,
+          session,
+        })
       }
       return moved
     }
@@ -1650,6 +1743,8 @@ export async function moveStage(
     if (idempotent) return idempotent
     throw new AppError('The stage changed underneath you — refresh and retry', 409, 'STAGE_RACE')
   })
+  await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
+  return result
 }
 
 export interface ApplicationDetail {

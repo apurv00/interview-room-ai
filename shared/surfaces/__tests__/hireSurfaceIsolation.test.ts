@@ -38,6 +38,7 @@ describe('Hire path isolation', () => {
     '/candidate/round-1',
     '/apply/invite-secret',
     '/interview-kit/kit-id',
+    '/share-packet/packet-id',
     '/handoff',
     '/hire-signin',
   ])('isolates %s even when exercised on the shared B2C deployment', (pathname) => {
@@ -65,6 +66,7 @@ describe('Hire public capability session isolation', () => {
     '/apply/legacy-token',
     '/candidate/round-id',
     '/interview-kit/kit-id',
+    '/share-packet/packet-id',
   ])('does not hydrate a B2C session for %s', (pathname) => {
     expect(isHirePublicSessionlessPath(pathname)).toBe(true)
   })

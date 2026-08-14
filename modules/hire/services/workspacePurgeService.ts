@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import mongoose, { type ClientSession } from 'mongoose'
 import {
+  HireAssessmentExport,
+  HireExternalVerdict,
+  HireSharePacket,
+} from '@hire-decisions/models'
+import {
   HireApplication,
   HireAiInviteDelivery,
   HireCandidate,
@@ -38,6 +43,11 @@ import {
   type HireMediaCoordinate,
   type HireMediaStoragePort,
 } from './hireMediaStorage'
+import {
+  cancelHireAssessmentExports,
+  deleteHireAssessmentExportObjects,
+  type HireAssessmentExportCleanupTarget,
+} from './assessmentExportLifecycleService'
 
 const MEDIA_DELETE_BATCH_SIZE = 100
 const RUNTIME_PURGE_DELIVERY_BATCH_SIZE = 25
@@ -71,6 +81,9 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireInvitationBatchItem',
   'HireInvitationBatch',
   'HireScreeningGate',
+  'HireAssessmentExport',
+  'HireExternalVerdict',
+  'HireSharePacket',
   'HireApplication',
   'HireCandidate',
   'HireJobRequirementVersion',
@@ -294,7 +307,8 @@ async function requestAndConfirmWorkspaceRuntimePurge(
 async function deleteWorkspaceGraphChildren(
   workspaceId: mongoose.Types.ObjectId,
   session: ClientSession,
-): Promise<void> {
+  now: Date,
+): Promise<HireAssessmentExportCleanupTarget[]> {
   // Auth artifacts first, then evidence/edge records, then tenancy parents.
   // Mongo does not permit parallel operations on a transaction session.
   await HireMemberSetup.deleteMany({ workspaceId }, { session })
@@ -327,11 +341,23 @@ async function deleteWorkspaceGraphChildren(
   await HireInvitationBatchItem.deleteMany({ workspaceId }, { session })
   await HireInvitationBatch.deleteMany({ workspaceId }, { session })
   await HireScreeningGate.deleteMany({ workspaceId }, { session })
+  const assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+    scope: { workspaceId },
+    cancelledAt: now,
+    session,
+  })
+  await HireAssessmentExport.deleteMany({ workspaceId }, { session })
+  // Decision edges precede their application/candidate parents. An external
+  // verdict references a packet, and a packet carries immutable candidate
+  // snapshots, so purge verdicts before packets and both before Hire records.
+  await HireExternalVerdict.deleteMany({ workspaceId }, { session })
+  await HireSharePacket.deleteMany({ workspaceId }, { session })
   await HireApplication.deleteMany({ workspaceId }, { session })
   await HireCandidate.deleteMany({ workspaceId }, { session })
   await HireJobRequirementVersion.deleteMany({ workspaceId }, { session })
   await HireJob.deleteMany({ workspaceId }, { session })
   await HireWorkspaceMember.deleteMany({ workspaceId }, { session })
+  return assessmentExportCleanupTargets
 }
 
 async function deleteClaimedWorkspaceGraph(
@@ -340,6 +366,7 @@ async function deleteClaimedWorkspaceGraph(
   now: Date,
 ): Promise<void> {
   const session = await mongoose.startSession()
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   try {
     await session.withTransaction(async () => {
       const claimed = await HireWorkspace.exists({
@@ -370,7 +397,7 @@ async function deleteClaimedWorkspaceGraph(
         throw new Error('Isolated runtime personal-data purge is still pending')
       }
 
-      await deleteWorkspaceGraphChildren(workspaceId, session)
+      assessmentExportCleanupTargets = await deleteWorkspaceGraphChildren(workspaceId, session, now)
       const removed = await HireWorkspace.deleteOne(
         {
           _id: workspaceId,
@@ -385,6 +412,7 @@ async function deleteClaimedWorkspaceGraph(
         throw new Error('Workspace purge claim changed before root deletion')
       }
     })
+    await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
   } finally {
     await session.endSession()
   }

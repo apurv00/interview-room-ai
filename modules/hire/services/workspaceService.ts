@@ -1,5 +1,6 @@
 import { connectDB } from '@shared/db/connection'
 import { AppError, ForbiddenError, NotFoundError } from '@shared/errors'
+import { HireSharePacket } from '@hire-decisions/models'
 import mongoose from 'mongoose'
 import {
   HireGuestSession,
@@ -23,19 +24,17 @@ import {
 } from '../models'
 import { issueMemberSetup, type MemberSetupResult } from './memberAuthService'
 import { deliverRuntimeRevocation } from './engineRevocationService'
+import {
+  cancelHireAssessmentExports,
+  deleteHireAssessmentExportObjects,
+  type HireAssessmentExportCleanupTarget,
+} from './assessmentExportLifecycleService'
+import { activeHireWorkspaceLifecycleFilter } from './hireWorkspaceLifecycleFilter'
+
+export { activeHireWorkspaceLifecycleFilter } from './hireWorkspaceLifecycleFilter'
 
 export const HIRE_WORKSPACE_SOFT_DELETE_DAYS = 30
 const OPERATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-/**
- * Compatibility-safe lifecycle predicate for transactional Hire writes.
- * Workspaces created before Phase 1 have no lifecycleState and are active.
- */
-export function activeHireWorkspaceLifecycleFilter(): mongoose.QueryFilter<IHireWorkspace> {
-  return {
-    $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],
-  }
-}
 
 function workspaceLifecycleState(workspace: IHireWorkspace): 'active' | 'deletion_pending' {
   return workspace.lifecycleState ?? 'active'
@@ -610,6 +609,7 @@ export async function softDeleteWorkspace(
   const session = await mongoose.startSession()
   let deleted: IHireWorkspace | undefined
   let runtimeRoundIds: string[] = []
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   try {
     await session.withTransaction(async () => {
       const currentAdmin = await HireWorkspaceMember.exists({
@@ -735,6 +735,33 @@ export async function softDeleteWorkspace(
         },
         { session },
       )
+      // Share packets are public possession capabilities over a candidate
+      // snapshot. A deletion-pending workspace cannot leave any one usable,
+      // and restoration intentionally never revives these rows.
+      await HireSharePacket.updateMany(
+        {
+          workspaceId: ctx.workspace._id,
+          active: true,
+          status: 'active',
+          revokedAt: { $exists: false },
+        },
+        {
+          $set: {
+            active: false,
+            status: 'revoked',
+            revokedAt: deletedAt,
+            revokedByMemberId: ctx.membership._id,
+            revokedByName: memberActorName(ctx.membership),
+            revocationReason: 'Workspace scheduled for deletion',
+          },
+        },
+        { session },
+      )
+      assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+        scope: { workspaceId: ctx.workspace._id },
+        cancelledAt: deletedAt,
+        session,
+      })
       await HireHumanScorecard.updateMany(
         { workspaceId: ctx.workspace._id, status: 'draft' },
         { $set: { status: 'cancelled', cancelledAt: deletedAt } },
@@ -808,6 +835,7 @@ export async function softDeleteWorkspace(
     await session.endSession()
   }
   if (!deleted) throw new Error('Workspace deletion transaction completed without a result')
+  await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
   // The control-plane transaction makes every raw link/handoff unusable
   // immediately. Best-effort synchronous delivery also kills already-issued
   // runtime cookies; failures stay durable as pending/failed rounds for the

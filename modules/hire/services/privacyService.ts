@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import mongoose from 'mongoose'
+import { HireExternalVerdict, HireSharePacket } from '@hire-decisions/models'
 import { HireAiInviteDelivery } from '../models/HireAiInviteDelivery'
 import { HireApplication } from '../models/HireApplication'
 import { HireCandidate } from '../models/HireCandidate'
@@ -27,6 +28,11 @@ import {
   claimHireCandidatePiiWriteFence,
   HireCandidatePiiTombstoneError,
 } from './hireCandidatePrivacyWriteFence'
+import {
+  cancelHireAssessmentExports,
+  deleteHireAssessmentExportObjects,
+  type HireAssessmentExportCleanupTarget,
+} from './assessmentExportLifecycleService'
 import { deliverRuntimeRevocation } from './engineRevocationService'
 import {
   decodeWorkspaceCapability,
@@ -298,6 +304,7 @@ export async function applyVerifiedHirePrivacyRequest(input: {
   await connectHireControlDB()
   const now = input.now ?? new Date()
   const dbSession = await mongoose.startSession()
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   try {
     let output: { workspaceId: string; candidateId: string } | undefined
     await dbSession.withTransaction(async () => {
@@ -429,6 +436,52 @@ export async function applyVerifiedHirePrivacyRequest(input: {
         () => HireInterviewKit.deleteMany(scope, { session: dbSession }),
         () => HireHumanScorecard.deleteMany(scope, { session: dbSession }),
         () => HireHumanRound.deleteMany(scope, { session: dbSession }),
+        // Packets are possession capabilities over an immutable candidate
+        // snapshot. Revoke live capability rows first, then redact every
+        // packet snapshot and external free-text verdict in this verified
+        // privacy transaction. The immutable coordinate/audit fields remain
+        // tenant-scoped, like the other durable redacted records below.
+        () => HireSharePacket.updateMany(
+          {
+            ...scope,
+            active: true,
+            status: 'active',
+            revokedAt: { $exists: false },
+          },
+          {
+            $set: {
+              active: false,
+              status: 'revoked',
+              revokedAt: now,
+              revocationReason: 'Candidate privacy deletion request',
+            },
+          },
+          { session: dbSession },
+        ),
+        () => HireSharePacket.updateMany(
+          { ...scope, privacyRedactedAt: { $exists: false } },
+          {
+            $set: { privacyRedactedAt: now },
+            $unset: { secretHash: 1, snapshot: 1 },
+          },
+          { session: dbSession, overwriteImmutable: true },
+        ),
+        () => HireExternalVerdict.updateMany(
+          { ...scope, privacyRedactedAt: { $exists: false } },
+          {
+            $set: { privacyRedactedAt: now },
+            $unset: { comment: 1 },
+          },
+          { session: dbSession, overwriteImmutable: true },
+        ),
+        async () => {
+          assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+            scope,
+            cancelledAt: now,
+            privacyRedactedAt: now,
+            session: dbSession,
+          })
+        },
         () => HireGuestSession.updateMany(
           { ...scope, active: true },
           { $set: { revokedAt: now }, $unset: { active: 1 } },
@@ -647,6 +700,7 @@ export async function applyVerifiedHirePrivacyRequest(input: {
         await mutate()
       }
     })
+    await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
     if (!output) {
       throw new HirePrivacyError(
         'Privacy request could not be applied',

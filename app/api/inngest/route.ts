@@ -32,6 +32,10 @@ import {
   hireHumanKitDeliveryRecoveryJob,
   hireHumanKitDeliveryRequestedJob,
 } from '@hire/jobs/humanKitDeliveryJob'
+import {
+  hireAssessmentExportRecoveryJob,
+  hireAssessmentExportRequestedJob,
+} from '@hire-decisions/jobs/hireAssessmentExportJob'
 import { hireRuntimeFeedbackRecoveryJob } from '@modules/hire-runtime/jobs/feedbackRecoveryJob'
 import { hireRuntimeResultPublisherJob } from '@modules/hire-runtime/jobs/resultPublisherJob'
 
@@ -73,6 +77,8 @@ const functions =
           hireScreeningInvitationRecoveryJob,
           hireHumanKitDeliveryRequestedJob,
           hireHumanKitDeliveryRecoveryJob,
+          hireAssessmentExportRequestedJob,
+          hireAssessmentExportRecoveryJob,
         ]
       : b2cFunctions
 

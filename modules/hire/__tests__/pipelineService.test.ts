@@ -30,10 +30,13 @@ const {
   mockEmailOutbox,
   mockInvitationBatch,
   mockInvitationBatchItem,
+  mockSharePacket,
   mockScheduleMediaPurge,
   mockCancelMediaPurge,
   mockDeliverRuntimeRevocation,
   mockCandidatePiiFence,
+  mockCancelAssessmentExports,
+  mockDeleteAssessmentExports,
 } = vi.hoisted(() => {
   const transactionSession = {
     withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
@@ -72,10 +75,13 @@ const {
     mockEmailOutbox: { create: vi.fn(), find: vi.fn() },
     mockInvitationBatch: { updateMany: vi.fn() },
     mockInvitationBatchItem: { updateMany: vi.fn() },
+    mockSharePacket: { updateMany: vi.fn() },
     mockScheduleMediaPurge: vi.fn(),
     mockCancelMediaPurge: vi.fn(),
     mockDeliverRuntimeRevocation: vi.fn(),
     mockCandidatePiiFence: vi.fn(),
+    mockCancelAssessmentExports: vi.fn(),
+    mockDeleteAssessmentExports: vi.fn(),
   }
 })
 
@@ -168,6 +174,12 @@ vi.mock('../models/HireEmailOutbox', () => ({
   },
 }))
 
+vi.mock('@hire-decisions/models', () => ({
+  HireSharePacket: {
+    updateMany: (...args: unknown[]) => mockSharePacket.updateMany(...args),
+  },
+}))
+
 vi.mock('../services/mediaLifecycleService', () => ({
   scheduleHireJobMediaPurge: (...args: unknown[]) => mockScheduleMediaPurge(...args),
   cancelFutureHireJobMediaPurge: (...args: unknown[]) => mockCancelMediaPurge(...args),
@@ -180,6 +192,11 @@ vi.mock('../services/engineRevocationService', () => ({
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: (...args: unknown[]) => mockCandidatePiiFence(...args),
   HireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
+}))
+
+vi.mock('../services/assessmentExportLifecycleService', () => ({
+  cancelHireAssessmentExports: (...args: unknown[]) => mockCancelAssessmentExports(...args),
+  deleteHireAssessmentExportObjects: (...args: unknown[]) => mockDeleteAssessmentExports(...args),
 }))
 
 import {
@@ -238,10 +255,13 @@ beforeEach(() => {
   mockInterviewAttempt.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockInvitationBatch.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockInvitationBatchItem.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockSharePacket.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockScheduleMediaPurge.mockResolvedValue({ purgeEligibleAt: new Date(), scheduled: 0 })
   mockCancelMediaPurge.mockResolvedValue(0)
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
   mockCandidatePiiFence.mockResolvedValue(undefined)
+  mockCancelAssessmentExports.mockResolvedValue([])
+  mockDeleteAssessmentExports.mockResolvedValue(undefined)
   mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockEmailOutbox.find.mockResolvedValue([])
 })
@@ -558,6 +578,47 @@ describe('updateJobStatus', () => {
     expect(outboxDocs[1].sendAfter.getTime() - outboxDocs[0].sendAfter.getTime()).toBe(2_000)
   })
 
+  it('freezes a rendered custom close email for each recipient inside the outbox transaction', async () => {
+    mockJob.findOne.mockResolvedValue(null)
+    mockJob.findOneAndUpdate.mockResolvedValue({
+      _id: 'j1',
+      title: 'Backend Engineer',
+      status: 'closed',
+      events: [],
+    })
+    mockApplication.find.mockResolvedValue([
+      { _id: 'a1', candidateId: 'c1', stage: 'screened' },
+    ])
+    mockCandidate.find.mockResolvedValue([
+      { _id: 'c1', name: 'Ada Lovelace', email: 'ada@example.com' },
+    ])
+    mockApplication.bulkWrite.mockResolvedValue({ modifiedCount: 1 })
+    mockEmailOutbox.create.mockResolvedValue([])
+
+    await updateJobStatus(CTX, 'j1', {
+      status: 'closed',
+      expectedStatus: 'open',
+      operationId: OP_A,
+      closeNote: 'Internal: selected another candidate after panel review.',
+      closeEmailTemplate: {
+        subject: '{workspace_name}: update for {candidate_first_name}',
+        body: 'Hi {candidate_first_name},\n\n{job_title} at {workspace_name} has closed. <b>Thank you.</b>',
+      },
+    })
+
+    const [outboxDocs, outboxOptions] = mockEmailOutbox.create.mock.calls[0]
+    expect(outboxOptions).toEqual({ session })
+    expect(outboxDocs).toHaveLength(1)
+    expect(outboxDocs[0].payload).toMatchObject({
+      emailSnapshot: {
+        subject: 'Acme: update for Ada',
+        body: 'Hi Ada,\n\nBackend Engineer at Acme has closed. <b>Thank you.</b>',
+      },
+      decisionNote: 'Internal: selected another candidate after panel review.',
+    })
+    expect(outboxDocs[0].payload.emailSnapshot.body).not.toContain('selected another candidate')
+  })
+
   it('emails manually rejected candidates at close without rewriting their stage event', async () => {
     mockJob.findOne.mockResolvedValue(null)
     mockJob.findOneAndUpdate.mockResolvedValue({
@@ -658,6 +719,17 @@ describe('updateJobStatus', () => {
 
   it('revokes pending AI and guest authority in the close transaction and notifies runtime', async () => {
     const closedAt = new Date('2026-08-10T10:00:00.000Z')
+    const assessmentExportTarget = {
+      key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
+      coordinate: {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        applicationId: 'a1',
+        candidateId: 'c1',
+        exportId: 'e1',
+      },
+    }
+    mockCancelAssessmentExports.mockResolvedValueOnce([assessmentExportTarget])
     mockJob.findOne.mockResolvedValue(null)
     mockJob.findOneAndUpdate.mockResolvedValue({
       _id: 'j1',
@@ -755,6 +827,35 @@ describe('updateJobStatus', () => {
         }),
       }),
       { session },
+    )
+    expect(mockSharePacket.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          active: false,
+          status: 'revoked',
+          revokedAt: expect.any(Date),
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Job closed by recruiter',
+        },
+      },
+      { session },
+    )
+    expect(mockCancelAssessmentExports).toHaveBeenCalledWith({
+      scope: { workspaceId: 'ws-A', jobId: 'j1' },
+      cancelledAt: expect.any(Date),
+      session,
+    })
+    expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
+    expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteAssessmentExports.mock.invocationCallOrder[0],
     )
     expect(mockInvitationBatchItem.updateMany).toHaveBeenCalledWith(
       {
@@ -1563,6 +1664,17 @@ describe('moveStage', () => {
   it('atomically shuts down active human-kit lifecycle rows on a terminal stage', async () => {
     armApp('interviewing')
     mockApplication.findOneAndUpdate.mockResolvedValue({ _id: 'a1', stage: 'rejected' })
+    const assessmentExportTarget = {
+      key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
+      coordinate: {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        applicationId: 'a1',
+        candidateId: 'c1',
+        exportId: 'e1',
+      },
+    }
+    mockCancelAssessmentExports.mockResolvedValueOnce([assessmentExportTarget])
 
     await moveStage(CTX, 'a1', {
       action: 'reject',
@@ -1618,6 +1730,30 @@ describe('moveStage', () => {
       }),
       { session },
     )
+    expect(mockSharePacket.updateMany).toHaveBeenCalledWith(
+      {
+        ...scope,
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          active: false,
+          status: 'revoked',
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Application moved to terminal stage: rejected',
+        }),
+      }),
+      { session },
+    )
+    expect(mockCancelAssessmentExports).toHaveBeenCalledWith({
+      scope,
+      cancelledAt: expect.any(Date),
+      session,
+    })
+    expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
     expect(mockRound.updateMany).not.toHaveBeenCalled()
     expect(mockDeliverRuntimeRevocation).not.toHaveBeenCalled()
   })

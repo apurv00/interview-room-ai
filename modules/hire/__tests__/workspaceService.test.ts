@@ -40,7 +40,10 @@ const mockHumanScorecard = { updateMany: vi.fn() }
 const mockHumanKitDelivery = { updateMany: vi.fn() }
 const mockHandoff = { updateMany: vi.fn() }
 const mockAttempt = { updateMany: vi.fn() }
+const mockSharePacket = { updateMany: vi.fn() }
 const mockDeliverRuntimeRevocation = vi.fn()
+const mockCancelAssessmentExports = vi.fn()
+const mockDeleteAssessmentExports = vi.fn()
 vi.mock('../models', () => ({
   HireWorkspace: {
     create: (...a: unknown[]) => mockWorkspace.create(...a),
@@ -106,6 +109,17 @@ vi.mock('../services/engineRevocationService', () => ({
   deliverRuntimeRevocation: (...args: unknown[]) => mockDeliverRuntimeRevocation(...args),
 }))
 
+vi.mock('@hire-decisions/models', () => ({
+  HireSharePacket: {
+    updateMany: (...args: unknown[]) => mockSharePacket.updateMany(...args),
+  },
+}))
+
+vi.mock('../services/assessmentExportLifecycleService', () => ({
+  cancelHireAssessmentExports: (...args: unknown[]) => mockCancelAssessmentExports(...args),
+  deleteHireAssessmentExportObjects: (...args: unknown[]) => mockDeleteAssessmentExports(...args),
+}))
+
 import {
   createWorkspace,
   getWorkspaceForUser,
@@ -168,7 +182,10 @@ beforeEach(() => {
   mockHumanKitDelivery.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockHandoff.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockAttempt.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockSharePacket.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
+  mockCancelAssessmentExports.mockResolvedValue([])
+  mockDeleteAssessmentExports.mockResolvedValue(undefined)
 })
 
 describe('getWorkspaceForUser', () => {
@@ -551,6 +568,17 @@ describe('transferWorkspaceAdmin', () => {
 describe('workspace soft deletion', () => {
   it('tombstones for exactly 30 days and revokes links without deleting any data', async () => {
     const now = new Date('2026-08-10T12:00:00.000Z')
+    const assessmentExportTarget = {
+      key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
+      coordinate: {
+        workspaceId: 'ws1',
+        jobId: 'j1',
+        applicationId: 'a1',
+        candidateId: 'c1',
+        exportId: 'e1',
+      },
+    }
+    mockCancelAssessmentExports.mockResolvedValueOnce([assessmentExportTarget])
     const deleted = {
       _id: 'ws1',
       name: 'Acme',
@@ -640,6 +668,34 @@ describe('workspace soft deletion', () => {
         }),
       }),
       { session: transactionSession },
+    )
+    expect(mockSharePacket.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws1',
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          active: false,
+          status: 'revoked',
+          revokedAt: now,
+          revokedByMemberId: 'm1',
+          revokedByName: 'admin@acme.com',
+          revocationReason: 'Workspace scheduled for deletion',
+        },
+      },
+      { session: transactionSession },
+    )
+    expect(mockCancelAssessmentExports).toHaveBeenCalledWith({
+      scope: { workspaceId: 'ws1' },
+      cancelledAt: now,
+      session: transactionSession,
+    })
+    expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
+    expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteAssessmentExports.mock.invocationCallOrder[0],
     )
     expect(mockHumanScorecard.updateMany).toHaveBeenCalledWith(
       { workspaceId: 'ws1', status: 'draft' },

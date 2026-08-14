@@ -5,6 +5,7 @@ const ALWAYS_ISOLATED_PATH_PREFIXES = [
   '/candidate',
   '/apply',
   '/interview-kit',
+  '/share-packet',
   '/handoff',
   '/hire-signin',
 ] as const
@@ -80,6 +81,7 @@ export function isHireIsolatedSurface(input: {
 export function isHirePublicSessionlessPath(pathname: string): boolean {
   if (isPathAtOrBelow(pathname, '/apply')) return true
   if (isPathAtOrBelow(pathname, '/interview-kit')) return true
+  if (isPathAtOrBelow(pathname, '/share-packet')) return true
   return (
     isPathAtOrBelow(pathname, '/candidate') &&
     !isPathAtOrBelow(pathname, '/candidate/thank-you')

@@ -18,6 +18,8 @@ import { ScoreBar, scoreBand } from '@shared/ui/ScoreBar'
 import StateView from '@shared/ui/StateView'
 import HireEvidenceAssessment from '@hire/components/HireEvidenceAssessment'
 import HumanRoundsPanel, { type HumanRoundView } from './HumanRoundsPanel'
+import SharePacketsPanel from './SharePacketsPanel'
+import AssessmentExportsPanel from './AssessmentExportsPanel'
 
 // Canonical 75/55 bands (shared/ui/ScoreBar) — a 72 must never be green here
 // while amber in the adjacent ScoreBar (Codex on #603, same class as #498).
@@ -671,6 +673,18 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
         jobIsOpen={job.status === 'open'}
         terminal={terminal}
         onChanged={load}
+      />
+
+      <SharePacketsPanel
+        applicationId={application.id}
+        jobIsOpen={job.status === 'open'}
+        terminal={terminal}
+      />
+
+      <AssessmentExportsPanel
+        applicationId={application.id}
+        jobIsOpen={job.status === 'open'}
+        terminal={terminal}
       />
 
       {/* Rounds + evidence */}

@@ -10,6 +10,9 @@ describe('secret-path redaction (URLs that ARE credentials)', () => {
     expect(redactSecretPathSegments('/interview-kit/64f0c1a2b3c4d5e6f7a8b9c0')).toBe(
       '/interview-kit/[redacted]',
     )
+    expect(redactSecretPathSegments('/share-packet/64f0c1a2b3c4d5e6f7a8b9c0')).toBe(
+      '/share-packet/[redacted]',
+    )
     // Deeper segments are kept — only the secret itself is removed.
     expect(redactSecretPathSegments(`/candidate/abc/prepare`)).toBe('/candidate/[redacted]/prepare')
   })

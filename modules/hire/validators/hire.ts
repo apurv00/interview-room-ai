@@ -7,6 +7,11 @@ import {
   HIRE_HUMAN_SCORECARD_DIMENSIONS,
   HIRE_HUMAN_SCORECARD_RECOMMENDATIONS,
 } from '../models/HireHumanScorecard'
+import {
+  getHireCloseEmailTemplatePlaceholderError,
+  HIRE_CLOSE_EMAIL_TEMPLATE_BODY_MAX_CHARS,
+  HIRE_CLOSE_EMAIL_TEMPLATE_SUBJECT_MAX_CHARS,
+} from '../emails/jobCloseRejectionEmail'
 
 export const objectIdSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id')
 
@@ -131,17 +136,69 @@ export const CreateStructuredJobSchema = z
   .strict()
   .superRefine(rejectDuplicateRequirements)
 
+function validateCloseEmailTemplatePlaceholders(
+  value: string,
+  ctx: z.RefinementCtx,
+): void {
+  const error = getHireCloseEmailTemplatePlaceholderError(value)
+  if (error) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: error })
+  }
+}
+
+const closeEmailSubjectTemplateSchema = z
+  .string()
+  .max(HIRE_CLOSE_EMAIL_TEMPLATE_SUBJECT_MAX_CHARS)
+  .superRefine((value, ctx) => {
+    if (/[\r\n]/.test(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Email subject must not contain line breaks',
+      })
+    }
+    validateCloseEmailTemplatePlaceholders(value, ctx)
+  })
+  .transform((value) => value.trim())
+  .refine((value) => value.length > 0, 'Email subject is required')
+
+const closeEmailBodyTemplateSchema = z
+  .string()
+  .max(HIRE_CLOSE_EMAIL_TEMPLATE_BODY_MAX_CHARS)
+  .superRefine(validateCloseEmailTemplatePlaceholders)
+  .transform((value) => value.replace(/\r\n?/g, '\n').trim())
+  .refine((value) => value.length > 0, 'Email body is required')
+
+const closeEmailTemplateSchema = z
+  .object({
+    subject: closeEmailSubjectTemplateSchema,
+    body: closeEmailBodyTemplateSchema,
+  })
+  .strict()
+
 export const UpdateJobStatusSchema = z
   .object({
     status: z.enum(HIRE_JOB_STATUSES),
     expectedStatus: z.enum(HIRE_JOB_STATUSES),
     operationId: z.string().uuid(),
     closeNote: z.string().trim().min(5).max(4000).optional(),
+    closeEmailTemplate: closeEmailTemplateSchema.optional(),
   })
   .strict()
-  .refine((d) => d.status !== 'closed' || !!d.closeNote, {
-    message: 'A decision note is required when closing a job',
-    path: ['closeNote'],
+  .superRefine((value, ctx) => {
+    if (value.status === 'closed' && !value.closeNote) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A decision note is required when closing a job',
+        path: ['closeNote'],
+      })
+    }
+    if (value.status !== 'closed' && value.closeEmailTemplate !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'An email template may only be supplied when closing a job',
+        path: ['closeEmailTemplate'],
+      })
+    }
   })
 
 export const AddCandidateSchema = z.object({

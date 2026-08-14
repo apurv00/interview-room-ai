@@ -127,4 +127,19 @@ describe('Hire public interview-kit routing', () => {
     expect(response.headers.get('Referrer-Policy')).toBe('no-referrer')
     expect(response.headers.get('X-Robots-Tag')).toBe('noindex, nofollow')
   })
+
+  it('keeps the no-login share packet outside the hire workspace rewrite and sets no-referrer', () => {
+    const response = (middleware as unknown as (req: ReturnType<typeof request>) => {
+      kind: string
+      headers: Headers
+    })(
+      request(`https://hire.staging.interviewprep.guru/share-packet/${'b'.repeat(24)}`, null),
+    )
+
+    expect(response.kind).toBe('next')
+    expect(responseMocks.rewrite).not.toHaveBeenCalled()
+    expect(response.headers.get('Referrer-Policy')).toBe('no-referrer')
+    expect(response.headers.get('X-Robots-Tag')).toBe('noindex, nofollow')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+  })
 })

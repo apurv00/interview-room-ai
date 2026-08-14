@@ -80,6 +80,56 @@ describe('human decision command validators', () => {
     ).toThrow(/decision note/i)
   })
 
+  it('accepts fixed close-email placeholders and rejects header injection or malformed tokens', () => {
+    const close = {
+      status: 'closed' as const,
+      expectedStatus: 'open' as const,
+      operationId: '11111111-1111-4111-8111-111111111111',
+      closeNote: 'Role filled after panel review.',
+    }
+    expect(
+      UpdateJobStatusSchema.parse({
+        ...close,
+        closeEmailTemplate: {
+          subject: '{workspace_name}: update for {candidate_first_name}',
+          body: 'Hi {candidate_first_name},\r\n\r\n{job_title} has closed at {workspace_name}.',
+        },
+      }),
+    ).toMatchObject({
+      closeEmailTemplate: {
+        subject: '{workspace_name}: update for {candidate_first_name}',
+        body: 'Hi {candidate_first_name},\n\n{job_title} has closed at {workspace_name}.',
+      },
+    })
+    expect(() =>
+      UpdateJobStatusSchema.parse({
+        ...close,
+        closeEmailTemplate: {
+          subject: 'Update\r\nBcc: attacker@example.com',
+          body: 'Hi {candidate_first_name}',
+        },
+      }),
+    ).toThrow(/line breaks/i)
+    expect(() =>
+      UpdateJobStatusSchema.parse({
+        ...close,
+        closeEmailTemplate: {
+          subject: 'Update for {candidate_name}',
+          body: 'Hi {candidate_first_name}',
+        },
+      }),
+    ).toThrow(/Unsupported placeholder/i)
+    expect(() =>
+      UpdateJobStatusSchema.parse({
+        ...close,
+        closeEmailTemplate: {
+          subject: 'Update for {candidate_first_name',
+          body: 'Hi {candidate_first_name}',
+        },
+      }),
+    ).toThrow(/balanced braces/i)
+  })
+
   it('accepts every explicit Phase-1 pipeline outcome', () => {
     for (const action of ['advance', 'reject', 'withdraw', 'offer_declined'] as const) {
       expect(() =>

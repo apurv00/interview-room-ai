@@ -39,6 +39,11 @@ import {
   HirePrivacyRequest,
   HireScreeningGate,
 } from '../models'
+import {
+  HireAssessmentExport,
+  HireExternalVerdict,
+  HireSharePacket,
+} from '@hire-decisions/models'
 import type { Model } from 'mongoose'
 
 const TENANT_SCOPED: Array<[string, Model<never>]> = [
@@ -68,6 +73,9 @@ const TENANT_SCOPED: Array<[string, Model<never>]> = [
   ['HireInvitationBatchItem', HireInvitationBatchItem as unknown as Model<never>],
   ['HireMediaAsset', HireMediaAsset as unknown as Model<never>],
   ['HirePrivacyRequest', HirePrivacyRequest as unknown as Model<never>],
+  ['HireSharePacket', HireSharePacket as unknown as Model<never>],
+  ['HireExternalVerdict', HireExternalVerdict as unknown as Model<never>],
+  ['HireAssessmentExport', HireAssessmentExport as unknown as Model<never>],
 ]
 
 function indexes(model: Model<never>): Array<[Record<string, number>, Record<string, unknown>]> {

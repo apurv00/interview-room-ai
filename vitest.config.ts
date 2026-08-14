@@ -27,6 +27,8 @@ export default defineConfig({
       '@resume': path.resolve(__dirname, 'modules/resume'),
       '@feedback': path.resolve(__dirname, 'modules/feedback'),
       '@hire': path.resolve(__dirname, 'modules/hire'),
+      '@hire-decision-boundary': path.resolve(__dirname, 'modules/hire/decisionBoundary'),
+      '@hire-decisions': path.resolve(__dirname, 'modules/hire-decisions'),
       '@jobs': path.resolve(__dirname, 'modules/jobs'),
       '@payments/customer-billing-authority': path.resolve(
         __dirname,
