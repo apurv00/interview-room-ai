@@ -17,6 +17,7 @@ import Accordion from '@shared/ui/Accordion'
 import { ScoreBar, scoreBand } from '@shared/ui/ScoreBar'
 import StateView from '@shared/ui/StateView'
 import HireEvidenceAssessment from '@hire/components/HireEvidenceAssessment'
+import HumanRoundsPanel, { type HumanRoundView } from './HumanRoundsPanel'
 
 // Canonical 75/55 bands (shared/ui/ScoreBar) — a 72 must never be green here
 // while amber in the adjacent ScoreBar (Codex on #603, same class as #498).
@@ -176,6 +177,8 @@ interface CardData {
   }
   job: { id: string; title: string; status: string }
   rounds: Round[]
+  /** Human evidence has its own aggregate; never coerce it into an AI round. */
+  humanRounds?: HumanRoundView[]
   activity: Array<{ roundId: string; inProgress: boolean }>
 }
 
@@ -373,7 +376,7 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
   if (error) return <StateView state="error" error={error} onRetry={load} />
   if (!data) return <StateView state="loading" skeletonLayout="card" />
 
-  const { application, candidate, job, rounds, activity } = data
+  const { application, candidate, job, rounds, activity, humanRounds = [] } = data
   const latest = rounds[0] ?? null
   const results = latest?.results ?? null
   const inProgress = activity.some((a) => a.inProgress)
@@ -661,6 +664,14 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
           </Button>
         </div>
       )}
+
+      <HumanRoundsPanel
+        applicationId={application.id}
+        humanRounds={humanRounds}
+        jobIsOpen={job.status === 'open'}
+        terminal={terminal}
+        onChanged={load}
+      />
 
       {/* Rounds + evidence */}
       {rounds.map((round) => (

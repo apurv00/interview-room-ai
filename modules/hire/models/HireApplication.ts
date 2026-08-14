@@ -32,6 +32,13 @@ export const HIRE_EVENT_TYPES = [
   'ai_round_sent',
   'ai_round_revoked',
   'ai_result_linked',
+  /** Phase 3 human interview evidence — no engine/runtime dependency. */
+  'human_round_logged',
+  'human_kit_sent',
+  'human_kit_delivery_failed',
+  'human_kit_reminded',
+  'human_kit_revoked',
+  'human_scorecard_submitted',
 ] as const
 export type HireEventType = (typeof HIRE_EVENT_TYPES)[number]
 

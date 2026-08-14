@@ -11,6 +11,10 @@ import {
   HireGuestSession,
   HireInterviewAttempt,
   HireInterviewResult,
+  HireHumanKitDelivery,
+  HireHumanRound,
+  HireHumanScorecard,
+  HireInterviewKit,
   HireIntakeTask,
   HireInvitationBatch,
   HireInvitationBatchItem,
@@ -58,6 +62,10 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HirePrivacyRequest',
   'HireEmailOutbox',
   'HireAiInviteDelivery',
+  'HireHumanKitDelivery',
+  'HireInterviewKit',
+  'HireHumanScorecard',
+  'HireHumanRound',
   'HireRound',
   'HireIntakeTask',
   'HireInvitationBatchItem',
@@ -301,6 +309,14 @@ async function deleteWorkspaceGraphChildren(
   await HirePrivacyRequest.deleteMany({ workspaceId }, { session })
   await HireEmailOutbox.deleteMany({ workspaceId }, { session })
   await HireAiInviteDelivery.deleteMany({ workspaceId }, { session })
+  // Human-round capabilities and delivery recovery material are control-plane
+  // records only. Delete the egress/recovery edge before its kit, scorecard,
+  // and round parents; unlike AI rounds, none of these records has a runtime
+  // counterpart to revoke or await.
+  await HireHumanKitDelivery.deleteMany({ workspaceId }, { session })
+  await HireInterviewKit.deleteMany({ workspaceId }, { session })
+  await HireHumanScorecard.deleteMany({ workspaceId }, { session })
+  await HireHumanRound.deleteMany({ workspaceId }, { session })
   await HireRound.deleteMany({ workspaceId }, { session })
   // Intake tasks can still hold the original resume payload and supplied
   // contact details. Remove them before the candidate/application parents.

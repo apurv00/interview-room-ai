@@ -21,6 +21,10 @@ import {
   HireAiInviteDelivery,
   HireCandidate,
   HireApplication,
+  HireHumanKitDelivery,
+  HireHumanRound,
+  HireHumanScorecard,
+  HireInterviewKit,
   HireRound,
   HireEngineHandoff,
   HireEngineIngestionEvent,
@@ -47,6 +51,10 @@ const TENANT_SCOPED: Array<[string, Model<never>]> = [
   ['HireAiInviteDelivery', HireAiInviteDelivery as unknown as Model<never>],
   ['HireCandidate', HireCandidate as unknown as Model<never>],
   ['HireApplication', HireApplication as unknown as Model<never>],
+  ['HireHumanRound', HireHumanRound as unknown as Model<never>],
+  ['HireInterviewKit', HireInterviewKit as unknown as Model<never>],
+  ['HireHumanScorecard', HireHumanScorecard as unknown as Model<never>],
+  ['HireHumanKitDelivery', HireHumanKitDelivery as unknown as Model<never>],
   ['HireRound', HireRound as unknown as Model<never>],
   ['HireEngineHandoff', HireEngineHandoff as unknown as Model<never>],
   ['HireEngineIngestionEvent', HireEngineIngestionEvent as unknown as Model<never>],
@@ -150,6 +158,20 @@ describe('token storage', () => {
     expect(HireAiInviteDelivery.schema.path('rawToken')).toBeUndefined()
     expect(HireAiInviteDelivery.schema.path('inviteUrl')).toBeUndefined()
     const ttl = indexes(HireAiInviteDelivery as unknown as Model<never>).find(
+      ([spec]) => spec.expiresAt === 1,
+    )
+    expect(ttl?.[1].expireAfterSeconds).toBe(0)
+  })
+
+  it('human interview kits store only a hash, while delivery recovery is encrypted and bounded', () => {
+    expect(HireInterviewKit.schema.path('secretHash')).toBeDefined()
+    expect(HireInterviewKit.schema.path('secret')).toBeUndefined()
+    expect(HireInterviewKit.schema.path('kitUrl')).toBeUndefined()
+    expect(HireHumanKitDelivery.schema.path('ciphertext')).toBeDefined()
+    expect(HireHumanKitDelivery.schema.path('iv')).toBeDefined()
+    expect(HireHumanKitDelivery.schema.path('authTag')).toBeDefined()
+    expect(HireHumanKitDelivery.schema.path('rawToken')).toBeUndefined()
+    const ttl = indexes(HireHumanKitDelivery as unknown as Model<never>).find(
       ([spec]) => spec.expiresAt === 1,
     )
     expect(ttl?.[1].expireAfterSeconds).toBe(0)

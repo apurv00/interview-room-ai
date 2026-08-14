@@ -77,9 +77,12 @@ const BUDGETS = {
   // folding those auditable boundaries into large files. See ADR 0029.
   // Bumped to 22k/80 for Phase 2's durable intake queue, screening-gate and
   // invitation-batch control plane, and their privacy/lifecycle fences.
-  // Measured implementation is 74 files / ~19.8k LOC, with bounded headroom.
-  // See ADR 0030.
-  'modules/hire':      { maxLOC: 22_000, maxFiles: 80 },
+  // Phase 3 adds a distinct human-round aggregate, possession kit, encrypted
+  // initial/reminder delivery, and lifecycle/privacy fences. The measured
+  // implementation is 82 files / ~22.7k LOC, so 25k/90 preserves a bounded
+  // architectural tripwire instead of folding that state into AI-round code.
+  // See ADR 0031.
+  'modules/hire':      { maxLOC: 25_000, maxFiles: 90 },
   // Bumped maxFiles 130 → 132 on 2026-05-23 (PR #402): added
   // shared/hooks/useOnboardingProfile.ts (cross-module client data
   // hook consumed by both @interview/InterviewSetupForm and

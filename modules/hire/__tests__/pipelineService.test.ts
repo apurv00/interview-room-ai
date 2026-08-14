@@ -19,6 +19,10 @@ const {
   mockCandidate,
   mockApplication,
   mockRound,
+  mockHumanRound,
+  mockInterviewKit,
+  mockHumanScorecard,
+  mockHumanKitDelivery,
   mockGuestSession,
   mockEngineHandoff,
   mockInterviewAttempt,
@@ -57,6 +61,10 @@ const {
       bulkWrite: vi.fn(),
     },
     mockRound: { find: vi.fn(), updateMany: vi.fn() },
+    mockHumanRound: { find: vi.fn(), updateMany: vi.fn() },
+    mockInterviewKit: { updateMany: vi.fn() },
+    mockHumanScorecard: { find: vi.fn(), updateMany: vi.fn() },
+    mockHumanKitDelivery: { find: vi.fn(), updateMany: vi.fn() },
     mockGuestSession: { updateMany: vi.fn() },
     mockEngineHandoff: { updateMany: vi.fn() },
     mockInterviewAttempt: { updateMany: vi.fn() },
@@ -113,6 +121,21 @@ vi.mock('../models', () => {
       find: (...args: unknown[]) => mockRound.find(...args),
       updateMany: (...args: unknown[]) => mockRound.updateMany(...args),
     },
+    HireHumanRound: {
+      find: (...args: unknown[]) => mockHumanRound.find(...args),
+      updateMany: (...args: unknown[]) => mockHumanRound.updateMany(...args),
+    },
+    HireInterviewKit: {
+      updateMany: (...args: unknown[]) => mockInterviewKit.updateMany(...args),
+    },
+    HireHumanScorecard: {
+      find: (...args: unknown[]) => mockHumanScorecard.find(...args),
+      updateMany: (...args: unknown[]) => mockHumanScorecard.updateMany(...args),
+    },
+    HireHumanKitDelivery: {
+      find: (...args: unknown[]) => mockHumanKitDelivery.find(...args),
+      updateMany: (...args: unknown[]) => mockHumanKitDelivery.updateMany(...args),
+    },
     HireGuestSession: {
       updateMany: (...args: unknown[]) => mockGuestSession.updateMany(...args),
     },
@@ -165,6 +188,7 @@ import {
   createApplication,
   createJob,
   duplicateJob,
+  getApplicationDetail,
   getJobPipeline,
   moveStage,
   updateJobStatus,
@@ -203,6 +227,12 @@ beforeEach(() => {
   mockJob.exists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
   mockRound.find.mockResolvedValue([])
   mockRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockInterviewKit.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanScorecard.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanKitDelivery.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanScorecard.find.mockReturnValue({ select: vi.fn().mockResolvedValue([]) })
+  mockHumanKitDelivery.find.mockReturnValue({ select: vi.fn().mockResolvedValue([]) })
   mockGuestSession.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockEngineHandoff.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockInterviewAttempt.updateMany.mockResolvedValue({ modifiedCount: 0 })
@@ -680,6 +710,52 @@ describe('updateJobStatus', () => {
       expect.any(Object),
       { session },
     )
+    expect(mockHumanKitDelivery.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'cancelled' }),
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      }),
+      { session },
+    )
+    expect(mockInterviewKit.updateMany).toHaveBeenCalledWith(
+      { workspaceId: 'ws-A', jobId: 'j1', active: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          active: false,
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Job closed by recruiter',
+        }),
+      }),
+      { session },
+    )
+    expect(mockHumanScorecard.updateMany).toHaveBeenCalledWith(
+      { workspaceId: 'ws-A', jobId: 'j1', status: 'draft' },
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'cancelled' }) }),
+      { session },
+    )
+    expect(mockHumanRound.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        status: { $nin: ['completed', 'revoked'] },
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Job closed by recruiter',
+        }),
+      }),
+      { session },
+    )
     expect(mockInvitationBatchItem.updateMany).toHaveBeenCalledWith(
       {
         workspaceId: 'ws-A',
@@ -934,6 +1010,24 @@ describe('getJobPipeline', () => {
     mockRound.find.mockReturnValue({
       sort: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue([]) }),
     })
+    mockHumanRound.find.mockReturnValue({
+      sort: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue([
+        {
+          _id: 'human-1',
+          applicationId: 'a-low',
+          mode: 'guest_kit',
+          status: 'completed',
+          createdAt: new Date('2026-08-12T00:05:00.000Z'),
+        },
+        {
+          _id: 'human-2',
+          applicationId: 'a-low',
+          mode: 'member_room',
+          status: 'pending_scorecard',
+          createdAt: new Date('2026-08-12T00:06:00.000Z'),
+        },
+      ]) }),
+    })
     mockJob.find.mockReturnValue({
       select: vi.fn().mockResolvedValue([
         { _id: 'j-old', workspaceId: 'ws-A', title: 'Earlier role' },
@@ -975,6 +1069,105 @@ describe('getJobPipeline', () => {
       { jobId: 'j-other', jobTitle: 'Other role', stage: 'rejected' },
     ])
     expect(result.entries[2].previouslySeenIn).toEqual([])
+    expect(result.entries.find((entry) => entry.application._id === 'a-low')?.humanRoundSummary)
+      .toMatchObject({ total: 2, completed: 1, pendingScorecard: 1, revoked: 0 })
+    expect(result.entries.find((entry) => entry.application._id === 'a-low')?.humanRoundSummary.rounds)
+      .toHaveLength(2)
+    expect(result.entries.find((entry) => entry.application._id === 'a-high')?.humanRoundSummary)
+      .toMatchObject({ total: 0, completed: 0, pendingScorecard: 0, revoked: 0 })
+  })
+})
+
+describe('getApplicationDetail', () => {
+  it('returns human evidence separately from AI rounds with exact workspace coordinates and no delivery PII', async () => {
+    mockApplication.findOne.mockResolvedValue({
+      _id: 'app-1',
+      workspaceId: 'ws-A',
+      candidateId: 'candidate-1',
+      jobId: 'job-1',
+    })
+    mockCandidate.findOne.mockResolvedValue({ _id: 'candidate-1', workspaceId: 'ws-A' })
+    mockJob.findOne.mockResolvedValue({ _id: 'job-1', workspaceId: 'ws-A' })
+    mockRound.find.mockReturnValue({
+      sort: vi.fn().mockResolvedValue([{ _id: 'ai-1', applicationId: 'app-1' }]),
+    })
+    mockHumanRound.find.mockReturnValue({
+      sort: vi.fn().mockResolvedValue([
+        { _id: 'human-1', applicationId: 'app-1', mode: 'member_room' },
+      ]),
+    })
+    mockHumanScorecard.find.mockReturnValue({
+      select: vi.fn().mockResolvedValue([
+        {
+          humanRoundId: 'human-1',
+          reviewerKind: 'member',
+          reviewerName: 'HR One',
+          dimensions: [{ key: 'role_capability', rating: 4, evidence: 'Clear example' }],
+          recommendation: 'yes',
+          overallComment: 'Proceed.',
+          submittedAt: new Date('2026-08-13T01:00:00.000Z'),
+        },
+      ]),
+    })
+    mockHumanKitDelivery.find.mockReturnValue({
+      select: vi.fn().mockResolvedValue([
+        {
+          humanRoundId: 'human-1',
+          purpose: 'initial',
+          status: 'failed',
+          attempts: 5,
+          sentAt: undefined,
+          recipientEmail: 'must-not-project@example.com',
+          ciphertext: 'must-not-project',
+        },
+      ]),
+    })
+
+    const detail = await getApplicationDetail(CTX, 'app-1')
+
+    expect(detail.rounds).toEqual([{ _id: 'ai-1', applicationId: 'app-1' }])
+    expect(detail.humanRounds).toEqual([
+      {
+        round: { _id: 'human-1', applicationId: 'app-1', mode: 'member_room' },
+        scorecard: expect.objectContaining({
+          reviewerKind: 'member',
+          recommendation: 'yes',
+          overallComment: 'Proceed.',
+        }),
+        delivery: {
+          initial: {
+            status: 'failed',
+            attempts: 5,
+            sentAt: undefined,
+          },
+          reminder: null,
+        },
+      },
+    ])
+    expect(mockRound.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      applicationId: 'app-1',
+    })
+    expect(mockHumanRound.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      applicationId: 'app-1',
+    })
+    expect(mockHumanScorecard.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      applicationId: 'app-1',
+      jobId: 'job-1',
+      candidateId: 'candidate-1',
+      status: 'submitted',
+    })
+    expect(mockHumanKitDelivery.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      applicationId: 'app-1',
+      jobId: 'job-1',
+      candidateId: 'candidate-1',
+      purpose: { $in: ['initial', 'reminder'] },
+    })
+    expect(JSON.stringify(detail.humanRounds)).not.toContain('must-not-project@example.com')
+    expect(JSON.stringify(detail.humanRounds)).not.toContain('must-not-project')
   })
 })
 
@@ -1260,7 +1453,7 @@ describe('addOrMergeJobCandidate', () => {
 
 describe('moveStage', () => {
   function armApp(stage: string, events: unknown[] = []) {
-    mockApplication.findOne.mockResolvedValue({ _id: 'a1', jobId: 'j1', stage, events })
+    mockApplication.findOne.mockResolvedValue({ _id: 'a1', jobId: 'j1', candidateId: 'c1', stage, events })
     mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
   }
 
@@ -1367,6 +1560,68 @@ describe('moveStage', () => {
     ).rejects.toMatchObject({ code: 'STAGE_TERMINAL' })
   })
 
+  it('atomically shuts down active human-kit lifecycle rows on a terminal stage', async () => {
+    armApp('interviewing')
+    mockApplication.findOneAndUpdate.mockResolvedValue({ _id: 'a1', stage: 'rejected' })
+
+    await moveStage(CTX, 'a1', {
+      action: 'reject',
+      expectedFrom: 'interviewing',
+      operationId: OP_A,
+      note: 'Candidate withdrew from consideration.',
+    })
+
+    const scope = {
+      workspaceId: 'ws-A',
+      applicationId: 'a1',
+      jobId: 'j1',
+      candidateId: 'c1',
+    }
+    expect(mockHumanKitDelivery.updateMany).toHaveBeenCalledWith(
+      { ...scope, status: { $in: ['pending', 'sending', 'failed'] } },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'cancelled',
+          lastError: 'Application reached a terminal stage',
+        }),
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      }),
+      { session },
+    )
+    expect(mockInterviewKit.updateMany).toHaveBeenCalledWith(
+      { ...scope, active: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          active: false,
+          status: 'revoked',
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Application moved to terminal stage: rejected',
+        }),
+      }),
+      { session },
+    )
+    expect(mockHumanScorecard.updateMany).toHaveBeenCalledWith(
+      { ...scope, status: 'draft' },
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'cancelled' }) }),
+      { session },
+    )
+    expect(mockHumanRound.updateMany).toHaveBeenCalledWith(
+      { ...scope, status: { $nin: ['completed', 'revoked'] } },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Application moved to terminal stage: rejected',
+        }),
+      }),
+      { session },
+    )
+    expect(mockRound.updateMany).not.toHaveBeenCalled()
+    expect(mockDeliverRuntimeRevocation).not.toHaveBeenCalled()
+  })
+
   it('rejects stale expectedFrom and lost compare-and-set races', async () => {
     armApp('screened')
     await expect(
@@ -1380,6 +1635,10 @@ describe('moveStage', () => {
     await expect(
       moveStage(CTX, 'a1', { action: 'advance', expectedFrom: 'new', operationId: OP_B }),
     ).rejects.toMatchObject({ code: 'STAGE_RACE' })
+    expect(mockHumanKitDelivery.updateMany).not.toHaveBeenCalled()
+    expect(mockInterviewKit.updateMany).not.toHaveBeenCalled()
+    expect(mockHumanScorecard.updateMany).not.toHaveBeenCalled()
+    expect(mockHumanRound.updateMany).not.toHaveBeenCalled()
   })
 
   it('is idempotent only when operation id, from-stage, and target all match', async () => {

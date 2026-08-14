@@ -71,6 +71,22 @@ interface Entry {
     resultsPending: boolean
     resultsUnscored: boolean
   } | null
+  /** Separate from engine-backed latestRound; this is human evidence only. */
+  humanRoundSummary?: {
+    total: number
+    completed: number
+    pendingScorecard: number
+    revoked: number
+    rounds: Array<{
+      id: string
+      mode: 'guest_kit' | 'member_room'
+      status: 'pending_scorecard' | 'completed' | 'revoked'
+      openedAt: string | null
+      scorecardSubmittedAt: string | null
+      revokedAt: string | null
+      createdAt: string
+    }>
+  }
   ranking: {
     scoreState: 'scored' | 'stale' | 'unscored'
     rank: number | null
@@ -148,6 +164,26 @@ function roundChip(round: Entry['latestRound']): { label: string; variant: 'defa
   if (round.status === 'prepared' || round.status === 'auth_verified') return { label: 'AI in progress', variant: 'primary' }
   if (new Date(round.inviteExpiresAt) < new Date()) return { label: 'AI link expired', variant: 'caution' }
   return { label: 'AI sent', variant: 'default' }
+}
+
+function humanRoundChip(summary: Entry['humanRoundSummary']): {
+  label: string
+  variant: 'default' | 'success' | 'caution'
+} | null {
+  if (!summary || summary.total === 0) return null
+  if (summary.pendingScorecard > 0) {
+    return {
+      label: `${summary.pendingScorecard} human scorecard${summary.pendingScorecard === 1 ? '' : 's'} pending`,
+      variant: 'caution',
+    }
+  }
+  if (summary.completed > 0) {
+    return {
+      label: `${summary.completed} human scorecard${summary.completed === 1 ? '' : 's'} submitted`,
+      variant: 'success',
+    }
+  }
+  return { label: 'Human round revoked', variant: 'default' }
 }
 
 function rankingChip(entry: Entry): {
@@ -928,6 +964,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                 <div className="space-y-2">
                   {stageEntries.map((en) => {
                     const chip = roundChip(en.latestRound)
+                    const humanChip = humanRoundChip(en.humanRoundSummary)
                     const matchChip = rankingChip(en)
                     const terminal = stage === 'hired' || stage === 'rejected' || stage === 'withdrawn'
                     const needsNote = noteFor?.appId === en.application.id
@@ -949,6 +986,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                           <div className="flex items-center gap-2 shrink-0">
                             <Badge variant={matchChip.variant}>{matchChip.label}</Badge>
                             {chip && <Badge variant={chip.variant}>{chip.label}</Badge>}
+                            {humanChip && <Badge variant={humanChip.variant}>{humanChip.label}</Badge>}
                             <Link
                               href={`/workspace/applications/${en.application.id}`}
                               className="text-xs text-indigo-600 hover:underline"

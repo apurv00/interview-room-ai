@@ -7,7 +7,11 @@ import { HireConsentReceipt } from '../models/HireConsentReceipt'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
 import { HireEngineHandoff } from '../models/HireEngineHandoff'
 import { HireGuestSession } from '../models/HireGuestSession'
+import { HireHumanKitDelivery } from '../models/HireHumanKitDelivery'
+import { HireHumanRound } from '../models/HireHumanRound'
+import { HireHumanScorecard } from '../models/HireHumanScorecard'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
+import { HireInterviewKit } from '../models/HireInterviewKit'
 import { HireInterviewResult } from '../models/HireInterviewResult'
 import { HireIntakeTask } from '../models/HireIntakeTask'
 import { HireInvitationBatchItem } from '../models/HireInvitationBatchItem'
@@ -414,6 +418,17 @@ export async function applyVerifiedHirePrivacyRequest(input: {
       // transaction session. Execute each scoped mutation in order so the
       // candidate-row privacy fence is a real serialization point.
       for (const mutate of [
+        // A human interview kit is an interviewer capability over this
+        // candidate's brief. Verified deletion wins the same PII fence used
+        // by delivery authorization, so remove all recovery material, the
+        // public capability, scorecard prose, and round coordinates in this
+        // transaction before the candidate can be anonymized. These are
+        // deliberately separate from AI runtime objects: no runtime request
+        // is ever made for a human round.
+        () => HireHumanKitDelivery.deleteMany(scope, { session: dbSession }),
+        () => HireInterviewKit.deleteMany(scope, { session: dbSession }),
+        () => HireHumanScorecard.deleteMany(scope, { session: dbSession }),
+        () => HireHumanRound.deleteMany(scope, { session: dbSession }),
         () => HireGuestSession.updateMany(
           { ...scope, active: true },
           { $set: { revokedAt: now }, $unset: { active: 1 } },
@@ -557,12 +572,24 @@ export async function applyVerifiedHirePrivacyRequest(input: {
           {
             $unset: {
               applicantSubmissions: 1,
-              'events.$[inviteEvent].note': 1,
+              'events.$[sensitiveEvent].note': 1,
             },
           },
           {
             session: dbSession,
-            arrayFilters: [{ 'inviteEvent.type': 'ai_round_sent' }],
+            arrayFilters: [{
+              'sensitiveEvent.type': {
+                $in: [
+                  'ai_round_sent',
+                  'human_round_logged',
+                  'human_kit_sent',
+                  'human_kit_delivery_failed',
+                  'human_kit_reminded',
+                  'human_kit_revoked',
+                  'human_scorecard_submitted',
+                ],
+              },
+            }],
           },
         ),
         () => HireApplication.updateMany(

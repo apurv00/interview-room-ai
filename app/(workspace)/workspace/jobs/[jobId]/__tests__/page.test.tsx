@@ -329,3 +329,63 @@ describe('ranked pipeline visibility', () => {
     expect(document.getElementById('ranked-queue-bottom')).toHaveTextContent('Candidate 50')
   })
 })
+
+describe('human-round pipeline visibility', () => {
+  it('renders pending human scorecards as a separate chip from AI interview state', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/jobs/job-1/screening') return json({ gates: [] })
+      if (url === '/api/workspace/jobs/job-1/pool-suggestions') return json({ suggestions: [] })
+      if (url === '/api/workspace/jobs/job-1') {
+        return json({
+          job: {
+            id: 'job-1',
+            title: 'Backend Engineer',
+            status: 'open',
+            closeNote: null,
+            closedByName: null,
+            jdText: 'Build reliable systems.',
+            applyPageEnabled: false,
+          },
+          entries: [{
+            application: {
+              id: 'application-1',
+              stage: 'interviewing',
+              decisionNote: null,
+              offerDecision: null,
+              resumeMatch: null,
+              createdAt: '2026-08-13T00:00:00.000Z',
+            },
+            candidate: { id: 'candidate-1', name: 'Candidate One', email: 'candidate@example.com' },
+            latestRound: null,
+            humanRoundSummary: {
+              total: 1,
+              completed: 0,
+              pendingScorecard: 1,
+              revoked: 0,
+              rounds: [{
+                id: 'human-round-1',
+                mode: 'guest_kit',
+                status: 'pending_scorecard',
+                openedAt: null,
+                scorecardSubmittedAt: null,
+                revokedAt: null,
+                createdAt: '2026-08-13T00:00:00.000Z',
+              }],
+            },
+            ranking: { scoreState: 'unscored', rank: null },
+            previouslySeenIn: [],
+          }],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    expect(await screen.findByText('1 human scorecard pending')).toBeInTheDocument()
+    expect(screen.queryByText('AI in progress')).not.toBeInTheDocument()
+  })
+})

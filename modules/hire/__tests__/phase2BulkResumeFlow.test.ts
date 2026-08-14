@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   memberExists: vi.fn(),
   privacyExists: vi.fn(),
   roundFind: vi.fn(),
+  humanRoundFind: vi.fn(),
   loggerWarn: vi.fn(),
 }))
 
@@ -146,6 +147,7 @@ vi.mock('../models', () => ({
   },
   HirePrivacyRequest: { exists: (...args: unknown[]) => mocks.privacyExists(...args) },
   HireRound: { find: (...args: unknown[]) => mocks.roundFind(...args) },
+  HireHumanRound: { find: (...args: unknown[]) => mocks.humanRoundFind(...args) },
   HireEngineHandoff: { updateMany: vi.fn() },
   HireGuestSession: { updateMany: vi.fn() },
   HireInterviewAttempt: { updateMany: vi.fn() },
@@ -295,6 +297,7 @@ beforeEach(() => {
   mocks.jobExists.mockImplementation((filter: Record<string, unknown>) =>
     Promise.resolve([currentJob, earlierJob].find((job) => matches(job, filter)) ?? null),
   )
+  mocks.humanRoundFind.mockReturnValue(query([]))
 
   mocks.candidateFindOne.mockImplementation((filter: Record<string, unknown>) =>
     query(findCandidate(filter)),

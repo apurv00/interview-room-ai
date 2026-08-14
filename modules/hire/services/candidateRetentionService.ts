@@ -5,7 +5,11 @@ import {
   HireCandidate,
   HireConsentReceipt,
   HireEmailOutbox,
+  HireHumanKitDelivery,
+  HireHumanRound,
+  HireHumanScorecard,
   HireInterviewAttempt,
+  HireInterviewKit,
   HireInterviewResult,
   HireIntakeTask,
   HireInvitationBatchItem,
@@ -44,7 +48,14 @@ interface RetentionEligibility {
   eligible: boolean
   lastActivityAt?: Date
   retentionEligibleAt?: Date
-  reason?: 'no_applications' | 'live_application' | 'open_job' | 'privacy_request' | 'not_due'
+  reason?:
+    | 'no_applications'
+    | 'live_application'
+    | 'open_job'
+    | 'privacy_request'
+    | 'live_human_round'
+    | 'live_human_kit'
+    | 'not_due'
 }
 
 function latestDate(values: Array<Date | null | undefined>): Date | undefined {
@@ -101,6 +112,10 @@ export function buildHireCandidateRetentionPipeline(
     '$latestResults',
     '$latestMedia',
     '$latestConsents',
+    '$latestHumanRounds',
+    '$latestHumanKits',
+    '$latestHumanScorecards',
+    '$latestHumanKitDeliveries',
   ].map((input) => ({
     $map: {
       input,
@@ -212,6 +227,30 @@ export function buildHireCandidateRetentionPipeline(
       as: 'latestConsents',
       activityExpression: '$acceptedAt',
     }),
+    // Human rounds deliberately remain outside the engine-bound HireRound
+    // graph. Their own timestamps count as subject activity for retention;
+    // otherwise a freshly submitted human scorecard could be anonymized on
+    // the older AI-only clock.
+    activityLookup({
+      from: HireHumanRound.collection.name,
+      as: 'latestHumanRounds',
+      activityExpression: { $max: ['$createdAt', '$updatedAt'] },
+    }),
+    activityLookup({
+      from: HireInterviewKit.collection.name,
+      as: 'latestHumanKits',
+      activityExpression: { $max: ['$createdAt', '$updatedAt'] },
+    }),
+    activityLookup({
+      from: HireHumanScorecard.collection.name,
+      as: 'latestHumanScorecards',
+      activityExpression: { $max: ['$createdAt', '$updatedAt'] },
+    }),
+    activityLookup({
+      from: HireHumanKitDelivery.collection.name,
+      as: 'latestHumanKitDeliveries',
+      activityExpression: { $max: ['$createdAt', '$updatedAt'] },
+    }),
     {
       $set: {
         activityDates: {
@@ -303,6 +342,26 @@ async function evaluateRetentionEligibility(
     return { eligible: false, reason: 'open_job' }
   }
 
+  const activeHumanRound = await HireHumanRound.exists({
+    ...scope,
+    status: 'pending_scorecard',
+    revokedAt: { $exists: false },
+  }).session(session)
+  if (activeHumanRound) return { eligible: false, reason: 'live_human_round' }
+
+  // A human-kit capability can expose a candidate brief without an account.
+  // Job close normally revokes it, but retain this explicit fence so a data
+  // cleanup never races a still-live capability left by an interrupted
+  // lifecycle transition.
+  const activeHumanKit = await HireInterviewKit.exists({
+    ...scope,
+    active: true,
+    status: 'active',
+    revokedAt: { $exists: false },
+    expiresAt: { $gt: now },
+  }).session(session)
+  if (activeHumanKit) return { eligible: false, reason: 'live_human_kit' }
+
   const round = await HireRound.findOne(scope)
     .sort({ linkedAt: -1, consentAt: -1, invitedAt: -1 })
     .select('invitedAt consentAt linkedAt')
@@ -328,6 +387,26 @@ async function evaluateRetentionEligibility(
     .select('acceptedAt')
     .session(session)
     .lean()
+  const humanRound = await HireHumanRound.findOne(scope)
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt')
+    .session(session)
+    .lean()
+  const humanKit = await HireInterviewKit.findOne(scope)
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt')
+    .session(session)
+    .lean()
+  const humanScorecard = await HireHumanScorecard.findOne(scope)
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt')
+    .session(session)
+    .lean()
+  const humanKitDelivery = await HireHumanKitDelivery.findOne(scope)
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt')
+    .session(session)
+    .lean()
   const lastActivityAt = latestDate([
     candidate.updatedAt,
     ...applications.map((application) => application.updatedAt),
@@ -346,6 +425,22 @@ async function evaluateRetentionEligibility(
     ...activityFromDocument(result as Record<string, unknown> | null, ['completedAt']),
     ...activityFromDocument(media as Record<string, unknown> | null, ['capturedAt']),
     ...activityFromDocument(consent as Record<string, unknown> | null, ['acceptedAt']),
+    ...activityFromDocument(humanRound as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+    ]),
+    ...activityFromDocument(humanKit as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+    ]),
+    ...activityFromDocument(humanScorecard as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+    ]),
+    ...activityFromDocument(humanKitDelivery as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+    ]),
   ])
   if (!lastActivityAt) return { eligible: false, reason: 'not_due' }
   const retentionEligibleAt = addCalendarMonths(
@@ -450,12 +545,24 @@ async function anonymizeClaimedCandidate(input: {
         {
           $unset: {
             applicantSubmissions: 1,
-            'events.$[inviteEvent].note': 1,
+            'events.$[sensitiveEvent].note': 1,
           },
         },
         {
           session,
-          arrayFilters: [{ 'inviteEvent.type': 'ai_round_sent' }],
+          arrayFilters: [{
+            'sensitiveEvent.type': {
+              $in: [
+                'ai_round_sent',
+                'human_round_logged',
+                'human_kit_sent',
+                'human_kit_delivery_failed',
+                'human_kit_reminded',
+                'human_kit_revoked',
+                'human_scorecard_submitted',
+              ],
+            },
+          }],
         },
       )
       await HireApplication.updateMany(
@@ -504,6 +611,14 @@ async function anonymizeClaimedCandidate(input: {
       // Delivery contact snapshots are not funnel history and must not keep
       // an address alive beyond the candidate clock.
       await HireEmailOutbox.deleteMany(scope, { session })
+      // Human-kit delivery rows contain interviewer contact/recovery material
+      // and the scorecard holds free-text candidate evidence. Retention has
+      // no Phase-3 aggregate artifact to preserve, so erase this distinct
+      // human-side graph rather than overloading AI-runtime tombstones.
+      await HireHumanKitDelivery.deleteMany(scope, { session })
+      await HireInterviewKit.deleteMany(scope, { session })
+      await HireHumanScorecard.deleteMany(scope, { session })
+      await HireHumanRound.deleteMany(scope, { session })
       // Intake tasks are transient, but an interrupted worker can retain the
       // original resume payload and supplied contact fields. A retained
       // candidate must never leave those task artifacts behind.

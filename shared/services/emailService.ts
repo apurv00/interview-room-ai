@@ -20,6 +20,12 @@ interface EmailOptions {
   /** Resend-side dedupe (EMAILS.md §2 transactional discipline). Only
    *  meaningful within Resend's 24h idempotency window. */
   idempotencyKey?: string
+  /**
+   * Omit recipient, subject, and provider payloads from service logs. Public
+   * possession-capability mail uses this mode so an interviewer address can
+   * never be reconstructed from application logs.
+   */
+  privacySafeLog?: boolean
 }
 
 export interface SendEmailResult {
@@ -28,7 +34,16 @@ export interface SendEmailResult {
   id?: string
 }
 
-export async function sendEmail({ to, subject, html, text, headers, replyTo, idempotencyKey }: EmailOptions): Promise<SendEmailResult> {
+export async function sendEmail({
+  to,
+  subject,
+  html,
+  text,
+  headers,
+  replyTo,
+  idempotencyKey,
+  privacySafeLog = false,
+}: EmailOptions): Promise<SendEmailResult> {
   if (!resend) {
     logger.warn('RESEND_API_KEY not configured, skipping email')
     return { ok: false }
@@ -41,14 +56,29 @@ export async function sendEmail({ to, subject, html, text, headers, replyTo, ide
     )
 
     if (error) {
-      logger.error({ error, to, subject }, 'Failed to send email')
+      logger.error(
+        privacySafeLog
+          ? { privacySafeLog: true, providerRejected: true }
+          : { error, to, subject },
+        'Failed to send email',
+      )
       return { ok: false }
     }
 
-    logger.info({ to, subject, id: data?.id }, 'Email sent successfully')
+    logger.info(
+      privacySafeLog
+        ? { privacySafeLog: true, providerAccepted: true }
+        : { to, subject, id: data?.id },
+      'Email sent successfully',
+    )
     return { ok: true, id: data?.id }
   } catch (err) {
-    logger.error({ err, to, subject }, 'Email service error')
+    logger.error(
+      privacySafeLog
+        ? { privacySafeLog: true, providerErrored: true }
+        : { err, to, subject },
+      'Email service error',
+    )
     return { ok: false }
   }
 }

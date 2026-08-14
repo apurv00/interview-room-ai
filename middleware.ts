@@ -21,6 +21,17 @@ function isHireRuntimePathAllowed(pathname: string, method: string): boolean {
   ) {
     return false
   }
+  // Human interview kits are a control-plane-only, sessionless capability
+  // surface. They must never fall through to the engine's guest-session
+  // rules or expose their fixed scorecard APIs on the runtime host.
+  if (
+    pathname === '/interview-kit' ||
+    pathname.startsWith('/interview-kit/') ||
+    pathname === '/api/interview-kit' ||
+    pathname.startsWith('/api/interview-kit/')
+  ) {
+    return false
+  }
   if (
     pathname === '/handoff' ||
     pathname === '/handoff/complete' ||
@@ -44,11 +55,15 @@ function isHireControlPathAllowed(pathname: string): boolean {
     pathname === '/' ||
     pathname.startsWith('/workspace') ||
     pathname.startsWith('/candidate/') ||
+    pathname === '/interview-kit' ||
+    pathname.startsWith('/interview-kit/') ||
     pathname === '/apply' ||
     pathname.startsWith('/apply/') ||
     pathname.startsWith('/hire-signin') ||
     pathname.startsWith('/api/workspace') ||
     pathname.startsWith('/api/candidate/') ||
+    pathname === '/api/interview-kit' ||
+    pathname.startsWith('/api/interview-kit/') ||
     pathname === '/api/apply' ||
     pathname.startsWith('/api/apply/') ||
     pathname.startsWith('/api/hire-auth/') ||
@@ -84,12 +99,25 @@ export default withAuth(
       (pathname.startsWith('/api/apply/') && pathname !== '/api/apply/resolve') ||
       pathname.startsWith('/candidate/privacy/') ||
       (pathname.startsWith('/candidate/') && req.nextUrl.searchParams.has('token')) ||
+      ((
+        pathname === '/interview-kit' ||
+        pathname.startsWith('/interview-kit/') ||
+        pathname === '/api/interview-kit' ||
+        pathname.startsWith('/api/interview-kit/')
+      ) &&
+        ['capability', 'invite', 'kit', 'secret', 'token'].some((key) =>
+          req.nextUrl.searchParams.has(key),
+        )) ||
       (pathname === '/hire-signin' && req.nextUrl.searchParams.has('setup')) ||
       (pathname === '/handoff' && req.nextUrl.searchParams.has('code'))
     if (legacyHireCredentialTransport) {
       return new NextResponse('This link format is no longer active', {
         status: 410,
-        headers: { 'Cache-Control': 'private, no-store' },
+        headers: {
+          'Cache-Control': 'private, no-store',
+          'Referrer-Policy': 'no-referrer',
+          'X-Robots-Tag': 'noindex, nofollow',
+        },
       })
     }
 
@@ -265,6 +293,9 @@ export default withAuth(
       // Guest surface only — segment-exact so the PLURAL /candidates (the
       // workspace clean URL) still rewrites (Codex P2 on #605).
       !(pathname === '/candidate' || pathname.startsWith('/candidate/')) &&
+      // Human interviewer kits are a separate no-login public route, not a
+      // workspace page. Keep the exact segment boundary just like candidate.
+      !(pathname === '/interview-kit' || pathname.startsWith('/interview-kit/')) &&
       // Public apply page — a shared link must work on the hire host too,
       // where recruiters copy it from (segment-exact, like /candidate).
       !(pathname === '/apply' || pathname.startsWith('/apply/')) &&
@@ -317,6 +348,15 @@ export default withAuth(
     response.headers.set('X-Content-Type-Options', 'nosniff')
     response.headers.set('X-Frame-Options', 'DENY')
     response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+    if (
+      pathname === '/interview-kit' ||
+      pathname.startsWith('/interview-kit/') ||
+      pathname === '/api/interview-kit' ||
+      pathname.startsWith('/api/interview-kit/')
+    ) {
+      response.headers.set('Referrer-Policy', 'no-referrer')
+      response.headers.set('X-Robots-Tag', 'noindex, nofollow')
+    }
     response.headers.set(
       'Permissions-Policy',
       'geolocation=(), payment=(self "https://api.razorpay.com"), usb=()',
@@ -419,6 +459,12 @@ export default withAuth(
           // (checked in-route).
           pathname.startsWith('/candidate/') ||
           pathname.startsWith('/api/candidate/') ||
+          // Human interviewer kit: its fragment capability is the only
+          // authority. These routes never use a B2C or Hire-member cookie.
+          pathname === '/interview-kit' ||
+          pathname.startsWith('/interview-kit/') ||
+          pathname === '/api/interview-kit' ||
+          pathname.startsWith('/api/interview-kit/') ||
           // Workspace routes carry their own dual-principal fence: either a
           // current B2C HR session or the dedicated Hire-member cookie. The
           // NextAuth middleware cannot decode the latter, so it must let the

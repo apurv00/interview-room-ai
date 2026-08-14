@@ -3,9 +3,13 @@ import { AppError, ForbiddenError, NotFoundError } from '@shared/errors'
 import mongoose from 'mongoose'
 import {
   HireGuestSession,
+  HireHumanKitDelivery,
+  HireHumanRound,
+  HireHumanScorecard,
   HireEngineHandoff,
   HireEmailOutbox,
   HireInterviewAttempt,
+  HireInterviewKit,
   HireJob,
   HireMemberSession,
   HireMemberSetup,
@@ -695,6 +699,61 @@ export async function softDeleteWorkspace(
             lastError: 'Workspace scheduled for deletion',
           },
           $unset: { claimToken: 1, leaseExpiresAt: 1 },
+        },
+        { session },
+      )
+      // Human interview kits are possession capabilities with their own
+      // delivery queue. Cancel recovery/reminder egress and revoke active
+      // kits in the tombstone transaction; restoration never revives either.
+      // These records must not be added to the AI runtime revocation path.
+      await HireHumanKitDelivery.updateMany(
+        {
+          workspaceId: ctx.workspace._id,
+          status: { $in: ['pending', 'sending', 'failed'] },
+        },
+        {
+          $set: {
+            status: 'cancelled',
+            cancelledAt: deletedAt,
+            lastError: 'Workspace scheduled for deletion',
+          },
+          $unset: { claimToken: 1, leaseExpiresAt: 1 },
+        },
+        { session },
+      )
+      await HireInterviewKit.updateMany(
+        { workspaceId: ctx.workspace._id, active: true },
+        {
+          $set: {
+            status: 'revoked',
+            active: false,
+            revokedAt: deletedAt,
+            revokedByMemberId: ctx.membership._id,
+            revokedByName: memberActorName(ctx.membership),
+            revocationReason: 'Workspace scheduled for deletion',
+          },
+        },
+        { session },
+      )
+      await HireHumanScorecard.updateMany(
+        { workspaceId: ctx.workspace._id, status: 'draft' },
+        { $set: { status: 'cancelled', cancelledAt: deletedAt } },
+        { session },
+      )
+      await HireHumanRound.updateMany(
+        {
+          workspaceId: ctx.workspace._id,
+          status: { $nin: ['completed', 'revoked'] },
+          revokedAt: { $exists: false },
+        },
+        {
+          $set: {
+            status: 'revoked',
+            revokedAt: deletedAt,
+            revokedByMemberId: ctx.membership._id,
+            revokedByName: memberActorName(ctx.membership),
+            revocationReason: 'Workspace scheduled for deletion',
+          },
         },
         { session },
       )

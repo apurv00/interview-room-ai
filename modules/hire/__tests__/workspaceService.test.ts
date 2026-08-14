@@ -34,6 +34,10 @@ const mockJob = { updateMany: vi.fn() }
 const mockOutbox = { updateMany: vi.fn() }
 const mockGuestSession = { updateMany: vi.fn() }
 const mockRound = { find: vi.fn(), updateMany: vi.fn() }
+const mockHumanRound = { updateMany: vi.fn() }
+const mockInterviewKit = { updateMany: vi.fn() }
+const mockHumanScorecard = { updateMany: vi.fn() }
+const mockHumanKitDelivery = { updateMany: vi.fn() }
 const mockHandoff = { updateMany: vi.fn() }
 const mockAttempt = { updateMany: vi.fn() }
 const mockDeliverRuntimeRevocation = vi.fn()
@@ -73,6 +77,18 @@ vi.mock('../models', () => ({
   HireRound: {
     find: (...a: unknown[]) => mockRound.find(...a),
     updateMany: (...a: unknown[]) => mockRound.updateMany(...a),
+  },
+  HireHumanRound: {
+    updateMany: (...a: unknown[]) => mockHumanRound.updateMany(...a),
+  },
+  HireInterviewKit: {
+    updateMany: (...a: unknown[]) => mockInterviewKit.updateMany(...a),
+  },
+  HireHumanScorecard: {
+    updateMany: (...a: unknown[]) => mockHumanScorecard.updateMany(...a),
+  },
+  HireHumanKitDelivery: {
+    updateMany: (...a: unknown[]) => mockHumanKitDelivery.updateMany(...a),
   },
   HireEngineHandoff: {
     updateMany: (...a: unknown[]) => mockHandoff.updateMany(...a),
@@ -146,6 +162,10 @@ beforeEach(() => {
   mockMemberSetup.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockRound.find.mockResolvedValue([])
   mockRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockInterviewKit.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanScorecard.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanKitDelivery.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockHandoff.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockAttempt.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
@@ -590,6 +610,57 @@ describe('workspace soft deletion', () => {
         },
         $unset: { claimToken: 1, leaseExpiresAt: 1 },
       },
+      { session: transactionSession },
+    )
+    expect(mockHumanKitDelivery.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws1',
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      {
+        $set: {
+          status: 'cancelled',
+          cancelledAt: now,
+          lastError: 'Workspace scheduled for deletion',
+        },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
+      { session: transactionSession },
+    )
+    expect(mockInterviewKit.updateMany).toHaveBeenCalledWith(
+      { workspaceId: 'ws1', active: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          active: false,
+          revokedAt: now,
+          revokedByMemberId: 'm1',
+          revokedByName: 'admin@acme.com',
+          revocationReason: 'Workspace scheduled for deletion',
+        }),
+      }),
+      { session: transactionSession },
+    )
+    expect(mockHumanScorecard.updateMany).toHaveBeenCalledWith(
+      { workspaceId: 'ws1', status: 'draft' },
+      { $set: { status: 'cancelled', cancelledAt: now } },
+      { session: transactionSession },
+    )
+    expect(mockHumanRound.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws1',
+        status: { $nin: ['completed', 'revoked'] },
+        revokedAt: { $exists: false },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          revokedAt: now,
+          revokedByMemberId: 'm1',
+          revokedByName: 'admin@acme.com',
+          revocationReason: 'Workspace scheduled for deletion',
+        }),
+      }),
       { session: transactionSession },
     )
     expect(mockGuestSession.updateMany).toHaveBeenCalledWith(

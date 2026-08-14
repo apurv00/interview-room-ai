@@ -22,6 +22,10 @@ const mocks = vi.hoisted(() => ({
   outboxBulkWrite: vi.fn(),
   inviteDeleteMany: vi.fn(),
   consentBulkWrite: vi.fn(),
+  humanKitDeliveryDeleteMany: vi.fn(),
+  interviewKitDeleteMany: vi.fn(),
+  humanScorecardDeleteMany: vi.fn(),
+  humanRoundDeleteMany: vi.fn(),
   deliverRevocation: vi.fn(),
   candidateFence: vi.fn(),
 }))
@@ -93,6 +97,18 @@ vi.mock('../models/HireAiInviteDelivery', () => ({
 }))
 vi.mock('../models/HireConsentReceipt', () => ({
   HireConsentReceipt: { bulkWrite: mocks.consentBulkWrite },
+}))
+vi.mock('../models/HireHumanKitDelivery', () => ({
+  HireHumanKitDelivery: { deleteMany: mocks.humanKitDeliveryDeleteMany },
+}))
+vi.mock('../models/HireInterviewKit', () => ({
+  HireInterviewKit: { deleteMany: mocks.interviewKitDeleteMany },
+}))
+vi.mock('../models/HireHumanScorecard', () => ({
+  HireHumanScorecard: { deleteMany: mocks.humanScorecardDeleteMany },
+}))
+vi.mock('../models/HireHumanRound', () => ({
+  HireHumanRound: { deleteMany: mocks.humanRoundDeleteMany },
 }))
 
 import { applyVerifiedHirePrivacyRequest } from '../services/privacyService'
@@ -175,6 +191,10 @@ beforeEach(() => {
     mocks.outboxBulkWrite,
     mocks.inviteDeleteMany,
     mocks.consentBulkWrite,
+    mocks.humanKitDeliveryDeleteMany,
+    mocks.interviewKitDeleteMany,
+    mocks.humanScorecardDeleteMany,
+    mocks.humanRoundDeleteMany,
   ]) {
     operation.mockResolvedValue({
       acknowledged: true,
@@ -253,18 +273,41 @@ describe('verified Hire candidate deletion', () => {
       {
         $unset: {
           applicantSubmissions: 1,
-          'events.$[inviteEvent].note': 1,
+          'events.$[sensitiveEvent].note': 1,
         },
       },
       {
         session: dbSession,
-        arrayFilters: [{ 'inviteEvent.type': 'ai_round_sent' }],
+        arrayFilters: [{
+          'sensitiveEvent.type': {
+            $in: [
+              'ai_round_sent',
+              'human_round_logged',
+              'human_kit_sent',
+              'human_kit_delivery_failed',
+              'human_kit_reminded',
+              'human_kit_revoked',
+              'human_scorecard_submitted',
+            ],
+          },
+        }],
       },
     )
     expect(mocks.intakeTaskDeleteMany).toHaveBeenCalledWith(
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       { session: dbSession },
     )
+    for (const operation of [
+      mocks.humanKitDeliveryDeleteMany,
+      mocks.interviewKitDeleteMany,
+      mocks.humanScorecardDeleteMany,
+      mocks.humanRoundDeleteMany,
+    ]) {
+      expect(operation).toHaveBeenCalledWith(
+        { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+        { session: dbSession },
+      )
+    }
     expect(mocks.invitationBatchItemUpdateMany).toHaveBeenNthCalledWith(
       1,
       {
@@ -346,6 +389,10 @@ describe('verified Hire candidate deletion', () => {
           operation.updateMany.filter,
       ),
       mocks.intakeTaskDeleteMany.mock.calls[0][0],
+      mocks.humanKitDeliveryDeleteMany.mock.calls[0][0],
+      mocks.interviewKitDeleteMany.mock.calls[0][0],
+      mocks.humanScorecardDeleteMany.mock.calls[0][0],
+      mocks.humanRoundDeleteMany.mock.calls[0][0],
       mocks.invitationBatchItemUpdateMany.mock.calls[0][0],
       mocks.invitationBatchItemUpdateMany.mock.calls[1][0],
     ]

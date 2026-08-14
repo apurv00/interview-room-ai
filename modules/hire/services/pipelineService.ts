@@ -7,7 +7,11 @@ import {
   HireCandidate,
   HireEngineHandoff,
   HireGuestSession,
+  HireHumanKitDelivery,
+  HireHumanRound,
+  HireHumanScorecard,
   HireInterviewAttempt,
+  HireInterviewKit,
   HireInvitationBatch,
   HireInvitationBatchItem,
   HireJob,
@@ -18,6 +22,9 @@ import {
   type HireCandidateProvenanceSource,
   type IHireApplication,
   type IHireCandidate,
+  type IHireHumanKitDelivery,
+  type IHireHumanRound,
+  type IHireHumanScorecard,
   type IHireJob,
   type IHireRound,
 } from '../models'
@@ -341,6 +348,12 @@ export interface PipelineEntry {
     '_id' | 'status' | 'invitedAt' | 'linkedAt' | 'results' | 'inviteTokenExpiry' | 'revokedAt'
   > | null
   /**
+   * Human-side evidence stays separate from engine-backed `latestRound`.
+   * The board gets enough state to render R1/R2 chips without pretending a
+   * scorecard is an AI result or calculating a Phase-4 aggregate verdict.
+   */
+  humanRoundSummary: HumanRoundSummary
+  /**
    * A JD-match result is only ranked when it still refers to a résumé we
    * retain. Stale and unscored records remain visible below the fresh scored
    * queue; neither is silently filtered or rejected.
@@ -360,9 +373,36 @@ export interface PipelineEntry {
   }>
 }
 
+export interface HumanRoundSummary {
+  total: number
+  completed: number
+  pendingScorecard: number
+  revoked: number
+  rounds: Array<Pick<
+    IHireHumanRound,
+    | '_id'
+    | 'mode'
+    | 'status'
+    | 'openedAt'
+    | 'scorecardSubmittedAt'
+    | 'revokedAt'
+    | 'createdAt'
+  >>
+}
+
 export interface JobPipeline {
   job: IHireJob
   entries: PipelineEntry[]
+}
+
+function summarizeHumanRounds(rounds: IHireHumanRound[]): HumanRoundSummary {
+  return {
+    total: rounds.length,
+    completed: rounds.filter((round) => round.status === 'completed').length,
+    pendingScorecard: rounds.filter((round) => round.status === 'pending_scorecard').length,
+    revoked: rounds.filter((round) => round.status === 'revoked').length,
+    rounds,
+  }
 }
 
 function assertJobStatusTransition(
@@ -392,11 +432,16 @@ export async function getJobPipeline(
 
   const candidateIds = applications.map((a) => a.candidateId)
   const appIds = applications.map((a) => a._id)
-  const [candidates, rounds, otherApplications] = await Promise.all([
+  const [candidates, rounds, humanRounds, otherApplications] = await Promise.all([
     HireCandidate.find({ workspaceId: ctx.workspace._id, _id: { $in: candidateIds } }),
     HireRound.find({ workspaceId: ctx.workspace._id, applicationId: { $in: appIds } })
       .sort({ createdAt: -1 })
       .select('applicationId status invitedAt linkedAt results inviteTokenExpiry revokedAt'),
+    HireHumanRound.find({ workspaceId: ctx.workspace._id, applicationId: { $in: appIds } })
+      .sort({ createdAt: 1, _id: 1 })
+      .select(
+        'applicationId mode status openedAt scorecardSubmittedAt revokedAt createdAt',
+      ),
     candidateIds.length > 0
       ? HireApplication.find({
           workspaceId: ctx.workspace._id,
@@ -410,6 +455,13 @@ export async function getJobPipeline(
   for (const r of rounds) {
     const key = String(r.applicationId)
     if (!latestRoundByApp.has(key)) latestRoundByApp.set(key, r)
+  }
+  const humanRoundsByApp = new Map<string, IHireHumanRound[]>()
+  for (const round of humanRounds) {
+    const key = String(round.applicationId)
+    const current = humanRoundsByApp.get(key) ?? []
+    current.push(round)
+    humanRoundsByApp.set(key, current)
   }
 
   const otherJobIds = Array.from(
@@ -468,6 +520,9 @@ export async function getJobPipeline(
         application,
         candidate,
         latestRound: latestRoundByApp.get(String(application._id)) ?? null,
+        humanRoundSummary: summarizeHumanRounds(
+          humanRoundsByApp.get(String(application._id)) ?? [],
+        ),
         scoreState,
         rank,
         previouslySeenIn: previouslySeenByCandidateId.get(String(application.candidateId)) ?? [],
@@ -671,6 +726,71 @@ export async function updateJobStatus(
         status: { $ne: 'completed' },
       },
       { $set: { status: 'revoked' }, $unset: { live: 1 } },
+      { session },
+    )
+    // Human rounds deliberately have no engine/runtime counterpart. Closing a
+    // job therefore revokes their possession capabilities and cancels all
+    // pending delivery work in this same authority transaction, without ever
+    // adding their IDs to `runtimeRoundIds` below.
+    await HireHumanKitDelivery.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      {
+        $set: {
+          status: 'cancelled',
+          cancelledAt: now,
+          lastError: 'Job closed before interview-kit delivery',
+        },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
+      { session },
+    )
+    await HireInterviewKit.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        active: true,
+      },
+      {
+        $set: {
+          status: 'revoked',
+          active: false,
+          revokedAt: now,
+          revokedByMemberId: ctx.membership._id,
+          revokedByName: actor.actorName,
+          revocationReason: 'Job closed by recruiter',
+        },
+      },
+      { session },
+    )
+    await HireHumanScorecard.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        status: 'draft',
+      },
+      { $set: { status: 'cancelled', cancelledAt: now } },
+      { session },
+    )
+    await HireHumanRound.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        status: { $nin: ['completed', 'revoked'] },
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          status: 'revoked',
+          revokedAt: now,
+          revokedByMemberId: ctx.membership._id,
+          revokedByName: actor.actorName,
+          revocationReason: 'Job closed by recruiter',
+        },
+      },
       { session },
     )
     // Screening confirmation is not a permission to mail after the human
@@ -1447,7 +1567,76 @@ export async function moveStage(
       },
       { new: true, session },
     )
-    if (moved) return moved
+    if (moved) {
+      // Human interview kits are independent from AI HireRounds and their
+      // runtime authority. A terminal pipeline decision must nevertheless
+      // invalidate their public capability and any mutable human evidence in
+      // the same transaction as the stage transition.
+      if (TERMINAL_STAGES.includes(to)) {
+        const terminalAt = new Date()
+        const lifecycleScope = {
+          workspaceId: ctx.workspace._id,
+          applicationId: application._id,
+          jobId: application.jobId,
+          candidateId: application.candidateId,
+        }
+        const revocationReason = `Application moved to terminal stage: ${to}`
+        // Keep each operation sequential: MongoDB transactions do not support
+        // parallel operations on the same session.
+        await HireHumanKitDelivery.updateMany(
+          {
+            ...lifecycleScope,
+            status: { $in: ['pending', 'sending', 'failed'] },
+          },
+          {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: terminalAt,
+              lastError: 'Application reached a terminal stage',
+            },
+            $unset: { claimToken: 1, leaseExpiresAt: 1 },
+          },
+          { session },
+        )
+        await HireInterviewKit.updateMany(
+          { ...lifecycleScope, active: true },
+          {
+            // Do not unset `active`: the schema default could rehydrate it.
+            $set: {
+              active: false,
+              status: 'revoked',
+              revokedAt: terminalAt,
+              revokedByMemberId: ctx.membership._id,
+              revokedByName: actorName(ctx),
+              revocationReason,
+            },
+          },
+          { session },
+        )
+        await HireHumanScorecard.updateMany(
+          { ...lifecycleScope, status: 'draft' },
+          { $set: { status: 'cancelled', cancelledAt: terminalAt } },
+          { session },
+        )
+        await HireHumanRound.updateMany(
+          {
+            ...lifecycleScope,
+            status: { $nin: ['completed', 'revoked'] },
+          },
+          {
+            $set: {
+              status: 'revoked',
+              revokedAt: terminalAt,
+              revokedByMemberId: ctx.membership._id,
+              revokedByName: actorName(ctx),
+              revocationReason,
+            },
+          },
+          { session },
+        )
+      }
+      return moved
+    }
 
     const idempotent = await HireApplication.findOne(
       {
@@ -1468,6 +1657,29 @@ export interface ApplicationDetail {
   candidate: IHireCandidate
   job: IHireJob
   rounds: IHireRound[]
+  humanRounds: HumanRoundDetail[]
+}
+
+/**
+ * Authenticated member projection for a human round. It intentionally omits
+ * kit hash/capability, delivery recipient PII, ciphertext, provider response,
+ * and raw failure details while retaining the fixed submitted evidence.
+ */
+export interface HumanRoundDetail {
+  round: IHireHumanRound
+  scorecard: Pick<
+    IHireHumanScorecard,
+    | 'reviewerKind'
+    | 'reviewerName'
+    | 'dimensions'
+    | 'recommendation'
+    | 'overallComment'
+    | 'submittedAt'
+  > | null
+  delivery: {
+    initial: Pick<IHireHumanKitDelivery, 'status' | 'attempts' | 'sentAt'> | null
+    reminder: Pick<IHireHumanKitDelivery, 'status' | 'sentAt'> | null
+  }
 }
 
 export async function getApplicationDetail(
@@ -1481,15 +1693,72 @@ export async function getApplicationDetail(
   })
   if (!application) throw new NotFoundError('Application')
 
-  const [candidate, job, rounds] = await Promise.all([
+  const [candidate, job, rounds, humanRounds, submittedHumanScorecards, humanDeliveries] = await Promise.all([
     HireCandidate.findOne({ _id: application.candidateId, workspaceId: ctx.workspace._id }),
     HireJob.findOne({ _id: application.jobId, workspaceId: ctx.workspace._id }),
     HireRound.find({ workspaceId: ctx.workspace._id, applicationId: application._id }).sort({
       createdAt: -1,
     }),
+    HireHumanRound.find({
+      workspaceId: ctx.workspace._id,
+      applicationId: application._id,
+    }).sort({ createdAt: 1, _id: 1 }),
+    HireHumanScorecard.find({
+      workspaceId: ctx.workspace._id,
+      applicationId: application._id,
+      jobId: application.jobId,
+      candidateId: application.candidateId,
+      status: 'submitted',
+    }).select(
+      'humanRoundId reviewerKind reviewerName dimensions recommendation overallComment submittedAt',
+    ),
+    HireHumanKitDelivery.find({
+      workspaceId: ctx.workspace._id,
+      applicationId: application._id,
+      jobId: application.jobId,
+      candidateId: application.candidateId,
+      purpose: { $in: ['initial', 'reminder'] },
+    }).select('humanRoundId purpose status attempts sentAt'),
   ])
   if (!candidate || !job) throw new NotFoundError('Application')
-  return { application, candidate, job, rounds }
+  const scorecardByRoundId = new Map(
+    submittedHumanScorecards.map((scorecard) => [scorecard.humanRoundId.toString(), scorecard]),
+  )
+  const deliveriesByRoundId = new Map<
+    string,
+    {
+      initial: Pick<IHireHumanKitDelivery, 'status' | 'attempts' | 'sentAt'> | null
+      reminder: Pick<IHireHumanKitDelivery, 'status' | 'sentAt'> | null
+    }
+  >()
+  for (const delivery of humanDeliveries) {
+    const roundId = delivery.humanRoundId.toString()
+    const current = deliveriesByRoundId.get(roundId) ?? { initial: null, reminder: null }
+    if (delivery.purpose === 'initial') {
+      current.initial = {
+        status: delivery.status,
+        attempts: delivery.attempts,
+        sentAt: delivery.sentAt,
+      }
+    } else {
+      current.reminder = {
+        status: delivery.status,
+        sentAt: delivery.sentAt,
+      }
+    }
+    deliveriesByRoundId.set(roundId, current)
+  }
+  return {
+    application,
+    candidate,
+    job,
+    rounds,
+    humanRounds: humanRounds.map((round) => ({
+      round,
+      scorecard: scorecardByRoundId.get(round._id.toString()) ?? null,
+      delivery: deliveriesByRoundId.get(round._id.toString()) ?? { initial: null, reminder: null },
+    })),
+  }
 }
 
 /** Append an event to an application — used by round send/revoke/link flows. */
@@ -1497,7 +1766,16 @@ export async function appendApplicationEvent(
   workspaceId: mongoose.Types.ObjectId | string,
   applicationId: mongoose.Types.ObjectId | string,
   event: {
-    type: 'ai_round_sent' | 'ai_round_revoked' | 'ai_result_linked'
+    type:
+      | 'ai_round_sent'
+      | 'ai_round_revoked'
+      | 'ai_result_linked'
+      | 'human_round_logged'
+      | 'human_kit_sent'
+      | 'human_kit_delivery_failed'
+      | 'human_kit_revoked'
+      | 'human_scorecard_submitted'
+      | 'human_kit_reminded'
     actorUserId?: mongoose.Types.ObjectId | string
     actorMemberId?: mongoose.Types.ObjectId | string
     actorName: string

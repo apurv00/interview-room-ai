@@ -30,6 +30,7 @@ function request(url: string, role: Role) {
     },
     nextUrl: {
       pathname: parsed.pathname,
+      searchParams: parsed.searchParams,
       clone: () => new URL(parsed),
     },
     url: parsed.toString(),
@@ -105,5 +106,25 @@ describe('CMS middleware authorization', () => {
       kind: 'redirect',
       url: 'https://cms.example.test/signin',
     })
+  })
+})
+
+describe('Hire public interview-kit routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('keeps the no-login kit page outside the hire workspace rewrite and sets no-referrer', () => {
+    const response = (middleware as unknown as (req: ReturnType<typeof request>) => {
+      kind: string
+      headers: Headers
+    })(
+      request(`https://hire.staging.interviewprep.guru/interview-kit/${'a'.repeat(24)}`, null),
+    )
+
+    expect(response.kind).toBe('next')
+    expect(responseMocks.rewrite).not.toHaveBeenCalled()
+    expect(response.headers.get('Referrer-Policy')).toBe('no-referrer')
+    expect(response.headers.get('X-Robots-Tag')).toBe('noindex, nofollow')
   })
 })

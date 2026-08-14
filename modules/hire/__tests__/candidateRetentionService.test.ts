@@ -28,6 +28,24 @@ const { models, session } = vi.hoisted(() => {
         ...latestModel('hirerounds'),
         updateMany: vi.fn(),
       },
+      HireHumanRound: {
+        ...latestModel('hirehumanrounds'),
+        exists: vi.fn(),
+        deleteMany: vi.fn(),
+      },
+      HireInterviewKit: {
+        ...latestModel('hireinterviewkits'),
+        exists: vi.fn(),
+        deleteMany: vi.fn(),
+      },
+      HireHumanScorecard: {
+        ...latestModel('hirehumanscorecards'),
+        deleteMany: vi.fn(),
+      },
+      HireHumanKitDelivery: {
+        ...latestModel('hirehumankitdeliveries'),
+        deleteMany: vi.fn(),
+      },
       HireInterviewAttempt: latestModel('hireinterviewattempts'),
       HireInterviewResult: {
         ...latestModel('hireinterviewresults'),
@@ -116,6 +134,8 @@ beforeEach(() => {
     updatedAt: LAST_ACTIVITY,
   }))
   models.HirePrivacyRequest.exists.mockReturnValue(sessionValue(null))
+  models.HireHumanRound.exists.mockReturnValue(sessionValue(null))
+  models.HireInterviewKit.exists.mockReturnValue(sessionValue(null))
   models.HireApplication.find.mockReturnValue(findMany([
     { _id: APPLICATION_ID, jobId: JOB_ID, stage: 'rejected', updatedAt: LAST_ACTIVITY },
   ]))
@@ -129,6 +149,10 @@ beforeEach(() => {
     models.HireMediaAsset,
     models.HireConsentReceipt,
     models.HireEngineIngestionEvent,
+    models.HireHumanRound,
+    models.HireInterviewKit,
+    models.HireHumanScorecard,
+    models.HireHumanKitDelivery,
   ]) {
     model.findOne.mockReturnValue(findLatest(null))
   }
@@ -137,6 +161,10 @@ beforeEach(() => {
   models.HireInterviewResult.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireConsentReceipt.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireEmailOutbox.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  models.HireHumanRound.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  models.HireInterviewKit.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  models.HireHumanScorecard.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  models.HireHumanKitDelivery.deleteMany.mockResolvedValue({ deletedCount: 1 })
   models.HireIntakeTask.deleteMany.mockResolvedValue({ deletedCount: 1 })
   models.HireInvitationBatchItem.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireScreeningGate.updateMany.mockResolvedValue({ modifiedCount: 1 })
@@ -174,6 +202,12 @@ describe('candidate PII retention', () => {
       }),
       { $limit: 25 },
     ]))
+    expect(pipeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({ $lookup: expect.objectContaining({ from: 'hirehumanrounds' }) }),
+      expect.objectContaining({ $lookup: expect.objectContaining({ from: 'hireinterviewkits' }) }),
+      expect.objectContaining({ $lookup: expect.objectContaining({ from: 'hirehumanscorecards' }) }),
+      expect.objectContaining({ $lookup: expect.objectContaining({ from: 'hirehumankitdeliveries' }) }),
+    ]))
   })
 
   it('scrubs identity, resumes, invitation coordinates, and textual evidence while retaining aggregates', async () => {
@@ -206,12 +240,24 @@ describe('candidate PII retention', () => {
       {
         $unset: {
           applicantSubmissions: 1,
-          'events.$[inviteEvent].note': 1,
+          'events.$[sensitiveEvent].note': 1,
         },
       },
       {
         session,
-        arrayFilters: [{ 'inviteEvent.type': 'ai_round_sent' }],
+        arrayFilters: [{
+          'sensitiveEvent.type': {
+            $in: [
+              'ai_round_sent',
+              'human_round_logged',
+              'human_kit_sent',
+              'human_kit_delivery_failed',
+              'human_kit_reminded',
+              'human_kit_revoked',
+              'human_scorecard_submitted',
+            ],
+          },
+        }],
       },
     )
     expect(models.HireInterviewResult.updateMany).toHaveBeenCalledWith(
@@ -226,6 +272,17 @@ describe('candidate PII retention', () => {
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       { session },
     )
+    for (const model of [
+      models.HireHumanKitDelivery,
+      models.HireInterviewKit,
+      models.HireHumanScorecard,
+      models.HireHumanRound,
+    ]) {
+      expect(model.deleteMany).toHaveBeenCalledWith(
+        { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+        { session },
+      )
+    }
     expect(models.HireIntakeTask.deleteMany).toHaveBeenCalledWith(
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       { session },
@@ -331,6 +388,49 @@ describe('candidate PII retention', () => {
       }),
       { timestamps: false },
     )
+  })
+
+  it('does not anonymize while a pending human round or active kit can still expose a brief', async () => {
+    models.HireHumanRound.exists.mockReturnValue(sessionValue({ _id: 'human-round' }))
+
+    const report = await anonymizeDueHireCandidates({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+    })
+
+    expect(report).toEqual({ scanned: 1, claimed: 1, anonymized: 0, skipped: 1, failed: 0 })
+    expect(models.HireInterviewKit.exists).not.toHaveBeenCalled()
+    expect(models.HireHumanKitDelivery.deleteMany).not.toHaveBeenCalled()
+    expect(models.HireCandidate.updateOne).toHaveBeenLastCalledWith(
+      expect.objectContaining({ anonymizationClaimToken: expect.any(String) }),
+      expect.objectContaining({
+        $unset: expect.objectContaining({
+          anonymizationClaimToken: 1,
+          anonymizationLeaseExpiresAt: 1,
+        }),
+      }),
+      { timestamps: false },
+    )
+  })
+
+  it('requires a currently active kit before treating it as a retention fence', async () => {
+    models.HireInterviewKit.exists.mockReturnValue(sessionValue({ _id: 'active-kit' }))
+
+    const report = await anonymizeDueHireCandidates({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+    })
+
+    expect(report).toEqual({ scanned: 1, claimed: 1, anonymized: 0, skipped: 1, failed: 0 })
+    expect(models.HireInterviewKit.exists).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: CANDIDATE_ID,
+      active: true,
+      status: 'active',
+      revokedAt: { $exists: false },
+      expiresAt: { $gt: NOW },
+    })
+    expect(models.HireHumanKitDelivery.deleteMany).not.toHaveBeenCalled()
   })
 
   it('records a retryable failure without marking the candidate anonymized', async () => {

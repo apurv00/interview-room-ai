@@ -83,6 +83,8 @@
     "check:hire-member-email-uniqueness": "tsx -r dotenv/config scripts/prepare-hire-member-email-uniqueness.ts --check",
     "prepare:hire-phase2-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase2-indexes.ts",
     "check:hire-phase2-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase2-indexes.ts --check",
+    "prepare:hire-phase3-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase3-indexes.ts",
+    "check:hire-phase3-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase3-indexes.ts --check",
     "check:jobs-source-control": "tsx scripts/check-jobs-source-control.ts",
     "report:jobs-discovery-quality": "tsx -r dotenv/config scripts/report-jobs-discovery-quality.ts",
     "smoke:jobs-source-control": "tsx scripts/smoke-jobs-source-control.ts"

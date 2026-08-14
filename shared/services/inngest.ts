@@ -56,6 +56,15 @@ export type InngestEvents = {
       itemId: string
     }
   }
+  // Phase 3 human interview kits: opaque durable delivery coordinates only.
+  // The worker reloads recipient contact data and the encrypted capability
+  // envelope from the Hire-control database before egress.
+  'hire/human-kit.requested': {
+    data: {
+      workspaceId: string
+      deliveryId: string
+    }
+  }
   // Feedback enrichment (2026-07-17): full-quality ideal_answers + drills
   // generated off the request path. reason 'post-feedback' = new interview;
   // 'drill-backfill' = historical/partial-coverage session hit from a drill

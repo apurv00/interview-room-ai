@@ -150,7 +150,7 @@ function dispatchToGa(
  * apply page). Redact before ANY emission, including the automatic
  * $current_url / $pathname / referrer properties.
  */
-const SECRET_PATH_RE = /^\/(apply|scorecard|candidate)\/[^/]+/
+const SECRET_PATH_RE = /^\/(apply|scorecard|candidate|interview-kit)\/[^/]+/
 
 export function redactSecretPathSegments(pathname: string): string {
   return pathname.replace(SECRET_PATH_RE, (_m, prefix: string) => `/${prefix}/[redacted]`)
