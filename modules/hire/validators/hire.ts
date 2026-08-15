@@ -3,6 +3,15 @@ import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 import { HIRE_STAGES } from '../models/HireApplication'
 import { HIRE_JOB_STATUSES } from '../models/HireJob'
 import { HIRE_WORK_MODES } from '../models/HireJobRequirementVersion'
+import {
+  HIRE_HUMAN_SCORECARD_DIMENSIONS,
+  HIRE_HUMAN_SCORECARD_RECOMMENDATIONS,
+} from '../models/HireHumanScorecard'
+import {
+  getHireCloseEmailTemplatePlaceholderError,
+  HIRE_CLOSE_EMAIL_TEMPLATE_BODY_MAX_CHARS,
+  HIRE_CLOSE_EMAIL_TEMPLATE_SUBJECT_MAX_CHARS,
+} from '../emails/jobCloseRejectionEmail'
 
 export const objectIdSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id')
 
@@ -127,17 +136,69 @@ export const CreateStructuredJobSchema = z
   .strict()
   .superRefine(rejectDuplicateRequirements)
 
+function validateCloseEmailTemplatePlaceholders(
+  value: string,
+  ctx: z.RefinementCtx,
+): void {
+  const error = getHireCloseEmailTemplatePlaceholderError(value)
+  if (error) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: error })
+  }
+}
+
+const closeEmailSubjectTemplateSchema = z
+  .string()
+  .max(HIRE_CLOSE_EMAIL_TEMPLATE_SUBJECT_MAX_CHARS)
+  .superRefine((value, ctx) => {
+    if (/[\r\n]/.test(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Email subject must not contain line breaks',
+      })
+    }
+    validateCloseEmailTemplatePlaceholders(value, ctx)
+  })
+  .transform((value) => value.trim())
+  .refine((value) => value.length > 0, 'Email subject is required')
+
+const closeEmailBodyTemplateSchema = z
+  .string()
+  .max(HIRE_CLOSE_EMAIL_TEMPLATE_BODY_MAX_CHARS)
+  .superRefine(validateCloseEmailTemplatePlaceholders)
+  .transform((value) => value.replace(/\r\n?/g, '\n').trim())
+  .refine((value) => value.length > 0, 'Email body is required')
+
+const closeEmailTemplateSchema = z
+  .object({
+    subject: closeEmailSubjectTemplateSchema,
+    body: closeEmailBodyTemplateSchema,
+  })
+  .strict()
+
 export const UpdateJobStatusSchema = z
   .object({
     status: z.enum(HIRE_JOB_STATUSES),
     expectedStatus: z.enum(HIRE_JOB_STATUSES),
     operationId: z.string().uuid(),
     closeNote: z.string().trim().min(5).max(4000).optional(),
+    closeEmailTemplate: closeEmailTemplateSchema.optional(),
   })
   .strict()
-  .refine((d) => d.status !== 'closed' || !!d.closeNote, {
-    message: 'A decision note is required when closing a job',
-    path: ['closeNote'],
+  .superRefine((value, ctx) => {
+    if (value.status === 'closed' && !value.closeNote) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A decision note is required when closing a job',
+        path: ['closeNote'],
+      })
+    }
+    if (value.status !== 'closed' && value.closeEmailTemplate !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'An email template may only be supplied when closing a job',
+        path: ['closeEmailTemplate'],
+      })
+    }
   })
 
 export const AddCandidateSchema = z.object({
@@ -217,6 +278,58 @@ export const SendAiRoundSchema = z.object({
   duration: z.union([z.literal(15), z.literal(30)]).default(15),
 })
 
+/**
+ * The authenticated HR surface chooses the human-round mode explicitly.
+ * Guest-kit recipients are supplied by HR; a member-run round deliberately
+ * carries no guest credential, email, or engine configuration.
+ */
+export const CreateHumanRoundSchema = z.discriminatedUnion('mode', [
+  z
+    .object({
+      mode: z.literal('guest_kit'),
+      interviewerName: z.string().trim().min(1).max(120),
+      interviewerEmail: z.string().trim().email().max(254),
+      operationId: z.string().uuid(),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal('member_room'),
+      operationId: z.string().uuid(),
+    })
+    .strict(),
+])
+
+const HumanScorecardDimensionSchema = z
+  .object({
+    key: z.enum(HIRE_HUMAN_SCORECARD_DIMENSIONS),
+    rating: z.number().int().min(1).max(5),
+    evidence: z.string().trim().min(1).max(2000),
+  })
+  .strict()
+
+/** The fixed, ordered Phase-3 rubric prevents per-interviewer score drift. */
+export const SubmitHumanRoundScorecardSchema = z
+  .object({
+    dimensions: z
+      .array(HumanScorecardDimensionSchema)
+      .length(HIRE_HUMAN_SCORECARD_DIMENSIONS.length)
+      .superRefine((dimensions, ctx) => {
+        dimensions.forEach((dimension, index) => {
+          if (dimension.key !== HIRE_HUMAN_SCORECARD_DIMENSIONS[index]) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [index, 'key'],
+              message: `Expected ${HIRE_HUMAN_SCORECARD_DIMENSIONS[index]}`,
+            })
+          }
+        })
+      }),
+    recommendation: z.enum(HIRE_HUMAN_SCORECARD_RECOMMENDATIONS),
+    overallComment: z.string().trim().min(1).max(4000),
+  })
+  .strict()
+
 /** Authenticated workspace coordinate plus a 32-byte invite secret. */
 const inviteCapabilitySchema = z
   .string()
@@ -265,5 +378,7 @@ export type CreateApplicationPayload = z.infer<typeof CreateApplicationSchema>
 export type AddOrMergeJobCandidatePayload = z.infer<typeof AddOrMergeJobCandidateSchema>
 export type MoveStagePayload = z.infer<typeof MoveStageSchema>
 export type SendAiRoundPayload = z.infer<typeof SendAiRoundSchema>
+export type CreateHumanRoundPayload = z.infer<typeof CreateHumanRoundSchema>
+export type SubmitHumanRoundScorecardPayload = z.infer<typeof SubmitHumanRoundScorecardSchema>
 export type GuestBeginPayload = z.infer<typeof GuestBeginSchema>
 export type GuestVerifyCodePayload = z.infer<typeof GuestVerifyCodeSchema>

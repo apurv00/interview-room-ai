@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import mongoose from 'mongoose'
+import { HireExternalVerdict, HireSharePacket } from '@hire-decisions/models'
 import { HireAiInviteDelivery } from '../models/HireAiInviteDelivery'
 import { HireApplication } from '../models/HireApplication'
 import { HireCandidate } from '../models/HireCandidate'
@@ -7,7 +8,11 @@ import { HireConsentReceipt } from '../models/HireConsentReceipt'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
 import { HireEngineHandoff } from '../models/HireEngineHandoff'
 import { HireGuestSession } from '../models/HireGuestSession'
+import { HireHumanKitDelivery } from '../models/HireHumanKitDelivery'
+import { HireHumanRound } from '../models/HireHumanRound'
+import { HireHumanScorecard } from '../models/HireHumanScorecard'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
+import { HireInterviewKit } from '../models/HireInterviewKit'
 import { HireInterviewResult } from '../models/HireInterviewResult'
 import { HireIntakeTask } from '../models/HireIntakeTask'
 import { HireInvitationBatchItem } from '../models/HireInvitationBatchItem'
@@ -23,7 +28,15 @@ import {
   claimHireCandidatePiiWriteFence,
   HireCandidatePiiTombstoneError,
 } from './hireCandidatePrivacyWriteFence'
+import {
+  cancelHireAssessmentExports,
+  deleteHireAssessmentExportObjects,
+  type HireAssessmentExportCleanupTarget,
+} from './assessmentExportLifecycleService'
+import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
 import { deliverRuntimeRevocation } from './engineRevocationService'
+import { revokeCandidateStatusLinksForScope } from '../../hire-status/services/candidateStatusLinkService'
+import { invalidateHireDigestAggregateSnapshotsForPrivacy } from '../../hire-digest/services/hireDigestService'
 import {
   decodeWorkspaceCapability,
   decodeWorkspaceResourceCapability,
@@ -133,6 +146,24 @@ export async function createHirePrivacyRequestFromInvite(input: {
           410,
         )
       }
+
+      // Snapshot creation and exact digest egress claim this same workspace
+      // row. Advance its aggregate/privacy epoch before this live request is
+      // committed so a pre-request aggregate cannot be inserted or sent after
+      // the candidate begins the deletion flow.
+      await invalidateHireDigestAggregateSnapshotsForPrivacy({
+        workspaceId: round.workspaceId,
+        now,
+        session: dbSession,
+      })
+      // Pipeline reports are aggregate-only and do not retain this candidate
+      // ID, so their lifecycle cancellation is workspace-wide. The same
+      // candidate scope continues to cancel only the affected closeout rows.
+      await cancelHireReportExportsForLifecycle({
+        scope: coordinate,
+        cancelledAt: now,
+        session: dbSession,
+      })
 
       candidateEmail = candidate.email
       request = await HirePrivacyRequest.findOneAndUpdate(
@@ -294,6 +325,7 @@ export async function applyVerifiedHirePrivacyRequest(input: {
   await connectHireControlDB()
   const now = input.now ?? new Date()
   const dbSession = await mongoose.startSession()
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   try {
     let output: { workspaceId: string; candidateId: string } | undefined
     await dbSession.withTransaction(async () => {
@@ -348,6 +380,16 @@ export async function applyVerifiedHirePrivacyRequest(input: {
       await claimHireCandidatePiiWriteFence({
         workspaceId: request.workspaceId,
         candidateId: request.candidateId,
+        session: dbSession,
+      })
+
+      // The live request normally fenced the day it started, but verified
+      // deletion changes the stored aggregates themselves. Advance and cancel
+      // again in this exact deletion transaction so privacy wins any digest
+      // claimed before egress but not yet authorized.
+      await invalidateHireDigestAggregateSnapshotsForPrivacy({
+        workspaceId: request.workspaceId,
+        now,
         session: dbSession,
       })
 
@@ -414,6 +456,76 @@ export async function applyVerifiedHirePrivacyRequest(input: {
       // transaction session. Execute each scoped mutation in order so the
       // candidate-row privacy fence is a real serialization point.
       for (const mutate of [
+        // A human interview kit is an interviewer capability over this
+        // candidate's brief. Verified deletion wins the same PII fence used
+        // by delivery authorization, so remove all recovery material, the
+        // public capability, scorecard prose, and round coordinates in this
+        // transaction before the candidate can be anonymized. These are
+        // deliberately separate from AI runtime objects: no runtime request
+        // is ever made for a human round.
+        () => HireHumanKitDelivery.deleteMany(scope, { session: dbSession }),
+        () => HireInterviewKit.deleteMany(scope, { session: dbSession }),
+        () => HireHumanScorecard.deleteMany(scope, { session: dbSession }),
+        () => HireHumanRound.deleteMany(scope, { session: dbSession }),
+        // Status capabilities are candidate-facing possession links. Revoke
+        // and erase each hash before the PII fence releases anonymization.
+        () => revokeCandidateStatusLinksForScope({
+          ...scope,
+          reason: 'Candidate privacy deletion request',
+          at: now,
+          session: dbSession,
+        }),
+        // Packets are possession capabilities over an immutable candidate
+        // snapshot. Revoke live capability rows first, then redact every
+        // packet snapshot and external free-text verdict in this verified
+        // privacy transaction. The immutable coordinate/audit fields remain
+        // tenant-scoped, like the other durable redacted records below.
+        () => HireSharePacket.updateMany(
+          {
+            ...scope,
+            active: true,
+            status: 'active',
+            revokedAt: { $exists: false },
+          },
+          {
+            $set: {
+              active: false,
+              status: 'revoked',
+              revokedAt: now,
+              revocationReason: 'Candidate privacy deletion request',
+            },
+          },
+          { session: dbSession },
+        ),
+        () => HireSharePacket.updateMany(
+          { ...scope, privacyRedactedAt: { $exists: false } },
+          {
+            $set: { privacyRedactedAt: now },
+            $unset: { secretHash: 1, snapshot: 1 },
+          },
+          { session: dbSession, overwriteImmutable: true },
+        ),
+        () => HireExternalVerdict.updateMany(
+          { ...scope, privacyRedactedAt: { $exists: false } },
+          {
+            $set: { privacyRedactedAt: now },
+            $unset: { comment: 1 },
+          },
+          { session: dbSession, overwriteImmutable: true },
+        ),
+        async () => {
+          assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+            scope,
+            cancelledAt: now,
+            privacyRedactedAt: now,
+            session: dbSession,
+          })
+        },
+        () => cancelHireReportExportsForLifecycle({
+          scope,
+          cancelledAt: now,
+          session: dbSession,
+        }),
         () => HireGuestSession.updateMany(
           { ...scope, active: true },
           { $set: { revokedAt: now }, $unset: { active: 1 } },
@@ -557,12 +669,24 @@ export async function applyVerifiedHirePrivacyRequest(input: {
           {
             $unset: {
               applicantSubmissions: 1,
-              'events.$[inviteEvent].note': 1,
+              'events.$[sensitiveEvent].note': 1,
             },
           },
           {
             session: dbSession,
-            arrayFilters: [{ 'inviteEvent.type': 'ai_round_sent' }],
+            arrayFilters: [{
+              'sensitiveEvent.type': {
+                $in: [
+                  'ai_round_sent',
+                  'human_round_logged',
+                  'human_kit_sent',
+                  'human_kit_delivery_failed',
+                  'human_kit_reminded',
+                  'human_kit_revoked',
+                  'human_scorecard_submitted',
+                ],
+              },
+            }],
           },
         ),
         () => HireApplication.updateMany(
@@ -620,6 +744,7 @@ export async function applyVerifiedHirePrivacyRequest(input: {
         await mutate()
       }
     })
+    await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
     if (!output) {
       throw new HirePrivacyError(
         'Privacy request could not be applied',

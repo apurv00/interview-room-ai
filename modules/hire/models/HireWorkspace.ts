@@ -53,6 +53,12 @@ export interface IHireWorkspace extends Document {
   authorityVersion: number
   /** Transactional write conflict target for Hire-owned personal-data writes. */
   writeFenceVersion: number
+  /**
+   * Invalidates immutable aggregate snapshots when a candidate becomes
+   * privacy-pending or is anonymized. Aggregate workers capture and match
+   * this value at their exact provider-authorization boundary.
+   */
+  privacyAggregateFenceVersion: number
   deletedAt?: Date
   purgeAfter?: Date
   deletedByMemberId?: mongoose.Types.ObjectId
@@ -122,6 +128,7 @@ const HireWorkspaceSchema = new Schema<IHireWorkspace>(
     },
     authorityVersion: { type: Number, default: 1, min: 1 },
     writeFenceVersion: { type: Number, default: 0, min: 0 },
+    privacyAggregateFenceVersion: { type: Number, default: 0, min: 0 },
     deletedAt: { type: Date },
     purgeAfter: { type: Date },
     deletedByMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },

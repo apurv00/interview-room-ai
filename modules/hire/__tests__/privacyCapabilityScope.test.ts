@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   privacyFindOne: vi.fn(),
   privacyCreate: vi.fn(),
   candidateFence: vi.fn(),
+  invalidateDigestSnapshots: vi.fn(),
+  cancelReportExports: vi.fn(),
   MockHireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
   session: {
     withTransaction: vi.fn(),
@@ -35,6 +37,12 @@ vi.mock('../models/HirePrivacyRequest', () => ({
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: mocks.candidateFence,
   HireCandidatePiiTombstoneError: mocks.MockHireCandidatePiiTombstoneError,
+}))
+vi.mock('../../hire-digest/services/hireDigestService', () => ({
+  invalidateHireDigestAggregateSnapshotsForPrivacy: (...args: unknown[]) => mocks.invalidateDigestSnapshots(...args),
+}))
+vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
+  cancelHireReportExportsForLifecycle: (...args: unknown[]) => mocks.cancelReportExports(...args),
 }))
 vi.mock('../models/HireApplication', () => ({ HireApplication: { updateMany: vi.fn() } }))
 vi.mock('../models/HireEngineHandoff', () => ({ HireEngineHandoff: { updateMany: vi.fn() } }))
@@ -90,6 +98,8 @@ beforeEach(() => {
     status: 'pending_verification',
   })
   mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.invalidateDigestSnapshots.mockResolvedValue(undefined)
+  mocks.cancelReportExports.mockResolvedValue(0)
   mocks.session.withTransaction.mockImplementation(
     async (work: () => Promise<unknown>) => work(),
   )
@@ -120,6 +130,16 @@ describe('privacy capability tenant scope', () => {
       candidateId: IDS.candidate,
       session: mocks.session,
     })
+    expect(mocks.invalidateDigestSnapshots).toHaveBeenCalledWith({
+      workspaceId: IDS.workspace,
+      now: expect.any(Date),
+      session: mocks.session,
+    })
+    expect(mocks.cancelReportExports).toHaveBeenCalledWith({
+      scope: { workspaceId: IDS.workspace, candidateId: IDS.candidate },
+      cancelledAt: expect.any(Date),
+      session: mocks.session,
+    })
     expect(mocks.privacyFindOneAndUpdate.mock.calls[0][2]).toMatchObject({
       new: true,
       session: mocks.session,
@@ -133,6 +153,13 @@ describe('privacy capability tenant scope', () => {
     const order: string[] = []
     mocks.candidateFence.mockImplementation(async () => {
       order.push('fence')
+    })
+    mocks.invalidateDigestSnapshots.mockImplementation(async () => {
+      order.push('digest-fence')
+    })
+    mocks.cancelReportExports.mockImplementation(async () => {
+      order.push('report-cancel')
+      return 0
     })
     mocks.privacyFindOneAndUpdate.mockImplementation(async () => {
       order.push('upsert')
@@ -149,7 +176,7 @@ describe('privacy capability tenant scope', () => {
       inviteCapability: `${IDS.workspace}.${INVITE_SECRET}`,
     })
 
-    expect(order).toEqual(['fence', 'upsert'])
+    expect(order).toEqual(['fence', 'digest-fence', 'report-cancel', 'upsert'])
     expect(mocks.session.withTransaction).toHaveBeenCalledOnce()
   })
 

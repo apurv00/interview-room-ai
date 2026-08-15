@@ -17,6 +17,7 @@ import {
 import type { MembershipContext } from './workspaceService'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
 import { claimHireCandidatePiiWriteFence } from './hireCandidatePrivacyWriteFence'
+import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
 
 /**
  * Phase 2 intake: idempotent candidate + application creation with
@@ -328,6 +329,11 @@ async function writeIntake(
   createdCandidate: boolean
   createdApplication: boolean
 }> {
+  await assertHireOnboardingTestDriveWriteIsolation({
+    workspaceId,
+    jobId: input.jobId,
+    session,
+  })
   // In-transaction job claim (self-review on #612): the pre-transaction
   // status check is a fast-path only — snapshot reads do not serialize
   // against a concurrent close, so the authority is this conflict-inducing
@@ -370,6 +376,13 @@ async function writeIntake(
   let candidate = await HireCandidate.findOne({ workspaceId, email }).session(
     session,
   )
+  if (candidate) {
+    await assertHireOnboardingTestDriveWriteIsolation({
+      workspaceId,
+      candidateId: candidate._id,
+      session,
+    })
+  }
   if (!candidate) {
     const created = await HireCandidate.create(
       [

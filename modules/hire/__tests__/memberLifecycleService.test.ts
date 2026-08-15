@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   workspaceUpdateOne: vi.fn(),
   sessionUpdateMany: vi.fn(),
   setupUpdateMany: vi.fn(),
+  disableDigestDelivery: vi.fn(),
+  cancelTestDrivesForMember: vi.fn(),
+  deliverTestDriveRuntimeRevocations: vi.fn(),
+  kickDueTestDriveCleanups: vi.fn(),
   softDeleteWorkspace: vi.fn(),
   getWorkspaceForUser: vi.fn(),
 }))
@@ -39,6 +43,19 @@ vi.mock('../models', () => ({
   HireMemberSetup: {
     updateMany: (...args: unknown[]) => mocks.setupUpdateMany(...args),
   },
+}))
+
+vi.mock('../../hire-digest/services/hireDigestService', () => ({
+  disableHireDigestDeliveryForScope: (...args: unknown[]) => mocks.disableDigestDelivery(...args),
+}))
+
+vi.mock('../../hire-onboarding/services/testDriveLifecycleService', () => ({
+  cancelHireOnboardingTestDrivesForMember: (...args: unknown[]) =>
+    mocks.cancelTestDrivesForMember(...args),
+  deliverHireOnboardingTestDriveRuntimeRevocations: (...args: unknown[]) =>
+    mocks.deliverTestDriveRuntimeRevocations(...args),
+  kickDueHireOnboardingTestDriveCleanups: (...args: unknown[]) =>
+    mocks.kickDueTestDriveCleanups(...args),
 }))
 
 import {
@@ -97,6 +114,10 @@ beforeEach(() => {
   mocks.memberUpdateOne.mockResolvedValue({ modifiedCount: 1 })
   mocks.sessionUpdateMany.mockResolvedValue({ modifiedCount: 2 })
   mocks.setupUpdateMany.mockResolvedValue({ modifiedCount: 1 })
+  mocks.disableDigestDelivery.mockResolvedValue(undefined)
+  mocks.cancelTestDrivesForMember.mockResolvedValue({ marked: 0, runtimeRoundIds: [] })
+  mocks.deliverTestDriveRuntimeRevocations.mockResolvedValue({ requested: 0, confirmed: 0 })
+  mocks.kickDueTestDriveCleanups.mockResolvedValue({ discovered: 0, dispatched: 0 })
   mocks.memberExists.mockResolvedValue(null)
   mocks.getWorkspaceForUser.mockResolvedValue(null)
 })
@@ -122,10 +143,36 @@ describe('selfDeleteHireMember', () => {
       },
       {
         $set: { authState: 'removed', removedAt: NOW },
-        $inc: { sessionVersion: 1 },
+        $inc: { sessionVersion: 1, digestEgressFenceVersion: 1 },
         $unset: { passwordHash: 1, passwordSetAt: 1, userId: 1 },
       },
       { session: transactionSession },
+    )
+    expect(mocks.disableDigestDelivery).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      memberId: MEMBER_ID,
+      now: NOW,
+      session: transactionSession,
+    })
+    expect(mocks.cancelTestDrivesForMember).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      memberId: MEMBER_ID,
+      at: NOW,
+      cleanupAfter: NOW,
+      reason: 'Workspace member removed',
+      actor: { memberId: MEMBER_ID, name: 'Alex' },
+      session: transactionSession,
+    })
+    expect(mocks.deliverTestDriveRuntimeRevocations).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID.toString(),
+      roundIds: [],
+    })
+    expect(mocks.kickDueTestDriveCleanups).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+    })
+    expect(mocks.cancelTestDrivesForMember.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.kickDueTestDriveCleanups.mock.invocationCallOrder[0],
     )
     expect(mocks.sessionUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({ memberId: MEMBER_ID, revokedAt: { $exists: false } }),

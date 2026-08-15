@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { isHireIsolatedSurface, resolveDeploymentSurface } from '../hireSurfaceIsolation'
+import {
+  isHireIsolatedSurface,
+  isHirePublicSessionlessPath,
+  resolveDeploymentSurface,
+} from '../hireSurfaceIsolation'
 
 describe('Hire deployment resolution', () => {
   it('treats the explicit control and runtime roles as authoritative', () => {
@@ -33,6 +37,9 @@ describe('Hire path isolation', () => {
     '/workspace/jobs/123',
     '/candidate/round-1',
     '/apply/invite-secret',
+    '/interview-kit/kit-id',
+    '/share-packet/packet-id',
+    '/candidate-status/link-id',
     '/handoff',
     '/hire-signin',
   ])('isolates %s even when exercised on the shared B2C deployment', (pathname) => {
@@ -52,4 +59,21 @@ describe('Hire path isolation', () => {
       expect(isHireIsolatedSurface({ deploymentSurface: 'hire-runtime', pathname })).toBe(true)
     },
   )
+})
+
+describe('Hire public capability session isolation', () => {
+  it.each([
+    '/apply',
+    '/apply/legacy-token',
+    '/candidate/round-id',
+    '/interview-kit/kit-id',
+    '/share-packet/packet-id',
+    '/candidate-status/link-id',
+  ])('does not hydrate a B2C session for %s', (pathname) => {
+    expect(isHirePublicSessionlessPath(pathname)).toBe(true)
+  })
+
+  it('keeps the legacy candidate thank-you page session-backed', () => {
+    expect(isHirePublicSessionlessPath('/candidate/thank-you')).toBe(false)
+  })
 })

@@ -34,9 +34,23 @@ const mockJob = { updateMany: vi.fn() }
 const mockOutbox = { updateMany: vi.fn() }
 const mockGuestSession = { updateMany: vi.fn() }
 const mockRound = { find: vi.fn(), updateMany: vi.fn() }
+const mockHumanRound = { updateMany: vi.fn() }
+const mockInterviewKit = { updateMany: vi.fn() }
+const mockHumanScorecard = { updateMany: vi.fn() }
+const mockHumanKitDelivery = { updateMany: vi.fn() }
 const mockHandoff = { updateMany: vi.fn() }
 const mockAttempt = { updateMany: vi.fn() }
+const mockSharePacket = { updateMany: vi.fn() }
 const mockDeliverRuntimeRevocation = vi.fn()
+const mockCancelAssessmentExports = vi.fn()
+const mockDeleteAssessmentExports = vi.fn()
+const mockCancelReportExports = vi.fn()
+const mockRevokeStatusLinksForWorkspace = vi.fn()
+const mockDisableDigestDelivery = vi.fn()
+const mockCancelTestDrivesForMember = vi.fn()
+const mockCancelTestDrivesForWorkspace = vi.fn()
+const mockDeliverTestDriveRuntimeRevocations = vi.fn()
+const mockKickDueTestDriveCleanups = vi.fn()
 vi.mock('../models', () => ({
   HireWorkspace: {
     create: (...a: unknown[]) => mockWorkspace.create(...a),
@@ -74,6 +88,18 @@ vi.mock('../models', () => ({
     find: (...a: unknown[]) => mockRound.find(...a),
     updateMany: (...a: unknown[]) => mockRound.updateMany(...a),
   },
+  HireHumanRound: {
+    updateMany: (...a: unknown[]) => mockHumanRound.updateMany(...a),
+  },
+  HireInterviewKit: {
+    updateMany: (...a: unknown[]) => mockInterviewKit.updateMany(...a),
+  },
+  HireHumanScorecard: {
+    updateMany: (...a: unknown[]) => mockHumanScorecard.updateMany(...a),
+  },
+  HireHumanKitDelivery: {
+    updateMany: (...a: unknown[]) => mockHumanKitDelivery.updateMany(...a),
+  },
   HireEngineHandoff: {
     updateMany: (...a: unknown[]) => mockHandoff.updateMany(...a),
   },
@@ -88,6 +114,41 @@ vi.mock('../services/memberAuthService', () => ({
 
 vi.mock('../services/engineRevocationService', () => ({
   deliverRuntimeRevocation: (...args: unknown[]) => mockDeliverRuntimeRevocation(...args),
+}))
+
+vi.mock('@hire-decisions/models', () => ({
+  HireSharePacket: {
+    updateMany: (...args: unknown[]) => mockSharePacket.updateMany(...args),
+  },
+}))
+
+vi.mock('../services/assessmentExportLifecycleService', () => ({
+  cancelHireAssessmentExports: (...args: unknown[]) => mockCancelAssessmentExports(...args),
+  deleteHireAssessmentExportObjects: (...args: unknown[]) => mockDeleteAssessmentExports(...args),
+}))
+
+vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
+  cancelHireReportExportsForLifecycle: (...args: unknown[]) => mockCancelReportExports(...args),
+}))
+
+vi.mock('../../hire-status/services/candidateStatusLinkService', () => ({
+  revokeCandidateStatusLinksForWorkspace: (...args: unknown[]) =>
+    mockRevokeStatusLinksForWorkspace(...args),
+}))
+
+vi.mock('../../hire-digest/services/hireDigestService', () => ({
+  disableHireDigestDeliveryForScope: (...args: unknown[]) => mockDisableDigestDelivery(...args),
+}))
+
+vi.mock('../../hire-onboarding/services/testDriveLifecycleService', () => ({
+  cancelHireOnboardingTestDrivesForMember: (...args: unknown[]) =>
+    mockCancelTestDrivesForMember(...args),
+  cancelHireOnboardingTestDrivesForWorkspace: (...args: unknown[]) =>
+    mockCancelTestDrivesForWorkspace(...args),
+  deliverHireOnboardingTestDriveRuntimeRevocations: (...args: unknown[]) =>
+    mockDeliverTestDriveRuntimeRevocations(...args),
+  kickDueHireOnboardingTestDriveCleanups: (...args: unknown[]) =>
+    mockKickDueTestDriveCleanups(...args),
 }))
 
 import {
@@ -146,9 +207,23 @@ beforeEach(() => {
   mockMemberSetup.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockRound.find.mockResolvedValue([])
   mockRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockInterviewKit.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanScorecard.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanKitDelivery.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockHandoff.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockAttempt.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockSharePacket.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
+  mockCancelAssessmentExports.mockResolvedValue([])
+  mockDeleteAssessmentExports.mockResolvedValue(undefined)
+  mockCancelReportExports.mockResolvedValue(0)
+  mockRevokeStatusLinksForWorkspace.mockResolvedValue(undefined)
+  mockDisableDigestDelivery.mockResolvedValue(undefined)
+  mockCancelTestDrivesForMember.mockResolvedValue({ marked: 0, runtimeRoundIds: [] })
+  mockCancelTestDrivesForWorkspace.mockResolvedValue({ marked: 0, runtimeRoundIds: [] })
+  mockDeliverTestDriveRuntimeRevocations.mockResolvedValue({ requested: 0, confirmed: 0 })
+  mockKickDueTestDriveCleanups.mockResolvedValue({ discovered: 0, dispatched: 0 })
 })
 
 describe('getWorkspaceForUser', () => {
@@ -460,6 +535,37 @@ describe('removeMember', () => {
       code: 'CANNOT_REMOVE_ADMIN',
     })
   })
+
+  it('marks a removed member\'s practice graph in the same transaction and delivers only committed runtime revocations', async () => {
+    mockMember.findOne.mockResolvedValue({ _id: 'm2', role: 'member' })
+    mockCancelTestDrivesForMember.mockResolvedValue({
+      marked: 1,
+      runtimeRoundIds: ['222222222222222222222222'],
+    })
+
+    await removeMember(ctxWith('admin'), 'm2')
+
+    expect(mockCancelTestDrivesForMember).toHaveBeenCalledWith({
+      workspaceId: 'ws1',
+      memberId: 'm2',
+      at: expect.any(Date),
+      cleanupAfter: expect.any(Date),
+      reason: 'Workspace member removed',
+      actor: { memberId: 'm1', name: 'admin@acme.com' },
+      session: transactionSession,
+    })
+    expect(mockDeliverTestDriveRuntimeRevocations).toHaveBeenCalledWith({
+      workspaceId: 'ws1',
+      roundIds: ['222222222222222222222222'],
+    })
+    expect(mockKickDueTestDriveCleanups).toHaveBeenCalledWith({
+      workspaceId: 'ws1',
+      now: expect.any(Date),
+    })
+    expect(mockCancelTestDrivesForMember.mock.invocationCallOrder[0]).toBeLessThan(
+      mockKickDueTestDriveCleanups.mock.invocationCallOrder[0],
+    )
+  })
 })
 
 describe('transferWorkspaceAdmin', () => {
@@ -531,6 +637,17 @@ describe('transferWorkspaceAdmin', () => {
 describe('workspace soft deletion', () => {
   it('tombstones for exactly 30 days and revokes links without deleting any data', async () => {
     const now = new Date('2026-08-10T12:00:00.000Z')
+    const assessmentExportTarget = {
+      key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
+      coordinate: {
+        workspaceId: 'ws1',
+        jobId: 'j1',
+        applicationId: 'a1',
+        candidateId: 'c1',
+        exportId: 'e1',
+      },
+    }
+    mockCancelAssessmentExports.mockResolvedValueOnce([assessmentExportTarget])
     const deleted = {
       _id: 'ws1',
       name: 'Acme',
@@ -590,6 +707,119 @@ describe('workspace soft deletion', () => {
         },
         $unset: { claimToken: 1, leaseExpiresAt: 1 },
       },
+      { session: transactionSession },
+    )
+    expect(mockDisableDigestDelivery).toHaveBeenCalledWith({
+      workspaceId: 'ws1',
+      now,
+      session: transactionSession,
+    })
+    expect(mockHumanKitDelivery.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws1',
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      {
+        $set: {
+          status: 'cancelled',
+          cancelledAt: now,
+          lastError: 'Workspace scheduled for deletion',
+        },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
+      { session: transactionSession },
+    )
+    expect(mockInterviewKit.updateMany).toHaveBeenCalledWith(
+      { workspaceId: 'ws1', active: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          active: false,
+          revokedAt: now,
+          revokedByMemberId: 'm1',
+          revokedByName: 'admin@acme.com',
+          revocationReason: 'Workspace scheduled for deletion',
+        }),
+      }),
+      { session: transactionSession },
+    )
+    expect(mockSharePacket.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws1',
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          active: false,
+          status: 'revoked',
+          revokedAt: now,
+          revokedByMemberId: 'm1',
+          revokedByName: 'admin@acme.com',
+          revocationReason: 'Workspace scheduled for deletion',
+        },
+      },
+      { session: transactionSession },
+    )
+    expect(mockRevokeStatusLinksForWorkspace).toHaveBeenCalledWith({
+      workspaceId: 'ws1',
+      reason: 'Workspace scheduled for deletion',
+      at: now,
+      session: transactionSession,
+    })
+    expect(mockCancelTestDrivesForWorkspace).toHaveBeenCalledWith({
+      workspaceId: 'ws1',
+      at: now,
+      cleanupAfter: new Date('2026-09-09T12:00:00.000Z'),
+      reason: 'Workspace scheduled for deletion',
+      actor: { memberId: 'm1', name: 'admin@acme.com' },
+      revokeRounds: false,
+      session: transactionSession,
+    })
+    expect(mockRevokeStatusLinksForWorkspace.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancelTestDrivesForWorkspace.mock.invocationCallOrder[0],
+    )
+    expect(mockCancelTestDrivesForWorkspace.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancelAssessmentExports.mock.invocationCallOrder[0],
+    )
+    expect(mockCancelAssessmentExports).toHaveBeenCalledWith({
+      scope: { workspaceId: 'ws1' },
+      cancelledAt: now,
+      session: transactionSession,
+    })
+    expect(mockCancelReportExports).toHaveBeenCalledWith({
+      scope: { workspaceId: 'ws1' },
+      cancelledAt: now,
+      session: transactionSession,
+    })
+    expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancelReportExports.mock.invocationCallOrder[0],
+    )
+    expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
+    expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteAssessmentExports.mock.invocationCallOrder[0],
+    )
+    expect(mockHumanScorecard.updateMany).toHaveBeenCalledWith(
+      { workspaceId: 'ws1', status: 'draft' },
+      { $set: { status: 'cancelled', cancelledAt: now } },
+      { session: transactionSession },
+    )
+    expect(mockHumanRound.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws1',
+        status: { $nin: ['completed', 'revoked'] },
+        revokedAt: { $exists: false },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          revokedAt: now,
+          revokedByMemberId: 'm1',
+          revokedByName: 'admin@acme.com',
+          revocationReason: 'Workspace scheduled for deletion',
+        }),
+      }),
       { session: transactionSession },
     )
     expect(mockGuestSession.updateMany).toHaveBeenCalledWith(

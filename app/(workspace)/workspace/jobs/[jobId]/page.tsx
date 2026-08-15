@@ -71,6 +71,22 @@ interface Entry {
     resultsPending: boolean
     resultsUnscored: boolean
   } | null
+  /** Separate from engine-backed latestRound; this is human evidence only. */
+  humanRoundSummary?: {
+    total: number
+    completed: number
+    pendingScorecard: number
+    revoked: number
+    rounds: Array<{
+      id: string
+      mode: 'guest_kit' | 'member_room'
+      status: 'pending_scorecard' | 'completed' | 'revoked'
+      openedAt: string | null
+      scorecardSubmittedAt: string | null
+      revokedAt: string | null
+      createdAt: string
+    }>
+  }
   ranking: {
     scoreState: 'scored' | 'stale' | 'unscored'
     rank: number | null
@@ -150,6 +166,26 @@ function roundChip(round: Entry['latestRound']): { label: string; variant: 'defa
   return { label: 'AI sent', variant: 'default' }
 }
 
+function humanRoundChip(summary: Entry['humanRoundSummary']): {
+  label: string
+  variant: 'default' | 'success' | 'caution'
+} | null {
+  if (!summary || summary.total === 0) return null
+  if (summary.pendingScorecard > 0) {
+    return {
+      label: `${summary.pendingScorecard} human scorecard${summary.pendingScorecard === 1 ? '' : 's'} pending`,
+      variant: 'caution',
+    }
+  }
+  if (summary.completed > 0) {
+    return {
+      label: `${summary.completed} human scorecard${summary.completed === 1 ? '' : 's'} submitted`,
+      variant: 'success',
+    }
+  }
+  return { label: 'Human round revoked', variant: 'default' }
+}
+
 function rankingChip(entry: Entry): {
   label: string
   variant: 'default' | 'primary' | 'success' | 'caution'
@@ -196,6 +232,9 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   } | null>(null)
   const [showClose, setShowClose] = useState(false)
   const [closeNote, setCloseNote] = useState('')
+  const [useCustomCloseEmail, setUseCustomCloseEmail] = useState(false)
+  const [closeEmailSubject, setCloseEmailSubject] = useState('')
+  const [closeEmailBody, setCloseEmailBody] = useState('')
   const [noteFor, setNoteFor] = useState<{
     appId: string
     expectedFrom: Stage
@@ -449,6 +488,14 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
           expectedStatus: job.status,
           operationId,
           closeNote: closeNote.trim(),
+          ...(useCustomCloseEmail
+            ? {
+                closeEmailTemplate: {
+                  subject: closeEmailSubject,
+                  body: closeEmailBody,
+                },
+              }
+            : {}),
         }),
       })
       const data = await res.json()
@@ -458,6 +505,9 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       }
       setShowClose(false)
       setCloseOperationId(null)
+      setUseCustomCloseEmail(false)
+      setCloseEmailSubject('')
+      setCloseEmailBody('')
       await load()
     } catch {
       setActionError('Something went wrong. Check your connection.')
@@ -551,6 +601,12 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
             <Badge variant={job.status === 'open' ? 'success' : job.status === 'on_hold' ? 'caution' : 'default'}>
               {job.status.replace('_', ' ')}
             </Badge>
+            <Link
+              href={`/workspace/jobs/${job.id}/decision`}
+              className="text-xs font-medium text-indigo-600 hover:underline"
+            >
+              Decision workspace
+            </Link>
             {job.closeNote && (
               <span className="text-xs text-[#71767b]">
                 Decision{job.closedByName ? ` by ${job.closedByName}` : ''}: {job.closeNote}
@@ -848,7 +904,63 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
             placeholder="e.g. Hired Jane Doe — strongest system-design evidence of the pool."
             className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-sm"
           />
-          <Button type="submit" disabled={busy || closeNote.trim().length < 5}>
+          <p className="text-xs text-[#71767b]">
+            This decision note stays internal and is never included in candidate email.
+          </p>
+          <label className="flex items-center gap-2 text-sm text-[#0f1419]">
+            <input
+              type="checkbox"
+              checked={useCustomCloseEmail}
+              onChange={(e) => setUseCustomCloseEmail(e.target.checked)}
+            />
+            Customize the candidate rejection email
+          </label>
+          {useCustomCloseEmail && (
+            <div className="space-y-3 rounded-xl border border-[#e1e8ed] bg-[#f8fafc] p-3">
+              <p className="text-xs text-[#71767b]">
+                Plain text only. You may use {'{candidate_first_name}'}, {'{job_title}'},
+                and {'{workspace_name}'}. Each recipient gets an immutable copy when the
+                job closes.
+              </p>
+              <div>
+                <label htmlFor="close-email-subject" className="mb-1 block text-xs font-medium text-[#0f1419]">
+                  Candidate email subject
+                </label>
+                <input
+                  id="close-email-subject"
+                  value={closeEmailSubject}
+                  onChange={(e) => setCloseEmailSubject(e.target.value)}
+                  required
+                  maxLength={200}
+                  placeholder="Update on your {job_title} application"
+                  className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white text-sm"
+                />
+              </div>
+              <div>
+                <label htmlFor="close-email-body" className="mb-1 block text-xs font-medium text-[#0f1419]">
+                  Candidate email body
+                </label>
+                <textarea
+                  id="close-email-body"
+                  value={closeEmailBody}
+                  onChange={(e) => setCloseEmailBody(e.target.value)}
+                  required
+                  maxLength={4000}
+                  rows={6}
+                  placeholder={'Hi {candidate_first_name},\n\nThank you for your time interviewing for {job_title}.'}
+                  className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-white text-sm"
+                />
+              </div>
+            </div>
+          )}
+          <Button
+            type="submit"
+            disabled={
+              busy ||
+              closeNote.trim().length < 5 ||
+              (useCustomCloseEmail && (!closeEmailSubject.trim() || !closeEmailBody.trim()))
+            }
+          >
             {busy ? 'Closing…' : 'Close job'}
           </Button>
         </form>
@@ -928,6 +1040,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                 <div className="space-y-2">
                   {stageEntries.map((en) => {
                     const chip = roundChip(en.latestRound)
+                    const humanChip = humanRoundChip(en.humanRoundSummary)
                     const matchChip = rankingChip(en)
                     const terminal = stage === 'hired' || stage === 'rejected' || stage === 'withdrawn'
                     const needsNote = noteFor?.appId === en.application.id
@@ -949,6 +1062,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                           <div className="flex items-center gap-2 shrink-0">
                             <Badge variant={matchChip.variant}>{matchChip.label}</Badge>
                             {chip && <Badge variant={chip.variant}>{chip.label}</Badge>}
+                            {humanChip && <Badge variant={humanChip.variant}>{humanChip.label}</Badge>}
                             <Link
                               href={`/workspace/applications/${en.application.id}`}
                               className="text-xs text-indigo-600 hover:underline"

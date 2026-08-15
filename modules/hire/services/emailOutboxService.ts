@@ -5,9 +5,17 @@ import { sendEmail } from '@shared/services/emailService'
 import { NotFoundError } from '@shared/errors'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
 import { HireJob } from '../models/HireJob'
+import { HirePrivacyRequest } from '../models/HirePrivacyRequest'
 import { HireWorkspace } from '../models/HireWorkspace'
-import { buildJobCloseRejectionEmail } from '../emails/jobCloseRejectionEmail'
+import {
+  buildJobCloseRejectionEmail,
+  buildJobCloseRejectionEmailFromSnapshot,
+} from '../emails/jobCloseRejectionEmail'
 import { connectHireControlDB } from './hireControlBoundary'
+import {
+  claimHireCandidatePiiWriteFence,
+  HireCandidatePiiTombstoneError,
+} from './hireCandidatePrivacyWriteFence'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
 import {
   activeHireWorkspaceLifecycleFilter,
@@ -238,6 +246,30 @@ async function authorizeJobCloseRejectionEgress(input: {
         return
       }
 
+      // A close-rejection row carries recipient PII and frozen copy. Claim
+      // the same candidate document that verified privacy deletion writes,
+      // then re-read a live deletion request before the exact outbox lease is
+      // committed. That gives privacy and provider authorization one
+      // transaction-bound linearization point: if deletion wins, this worker
+      // never reaches the provider; if this claim wins, its send was already
+      // authorized before deletion can remove future egress material.
+      try {
+        await claimHireCandidatePiiWriteFence({
+          workspaceId,
+          candidateId: row.candidateId,
+          session,
+        })
+      } catch (error) {
+        if (error instanceof HireCandidatePiiTombstoneError) return
+        throw error
+      }
+      const privacy = await HirePrivacyRequest.exists({
+        workspaceId,
+        candidateId: row.candidateId,
+        live: true,
+      }).session(session)
+      if (privacy) return
+
       authorized = await HireEmailOutbox.findOneAndUpdate(
         {
           ...dueHireEmailFilter(workspaceId, now),
@@ -291,17 +323,30 @@ export async function processNextHireEmail(
     return { processed: true, outboxId: dueRow._id.toString(), outcome: 'cancelled' }
   }
 
-  const template = buildJobCloseRejectionEmail({
-    candidateName: row.recipientName,
-    jobTitle: row.payload.jobTitle,
-    workspaceName: row.payload.workspaceName,
-  })
+  const snapshot = row.payload.emailSnapshot
+  // Phase 4 rows carry final recipient-specific copy. Existing rows keep the
+  // Phase 1–3 renderer, so a zero-downtime deploy never dead-letters mail
+  // that was already queued before the new snapshot fields existed.
+  const template = snapshot &&
+    typeof snapshot.subject === 'string' &&
+    typeof snapshot.body === 'string' &&
+    snapshot.subject.trim().length > 0 &&
+    snapshot.body.length > 0 &&
+    !/[\r\n]/.test(snapshot.subject)
+    ? buildJobCloseRejectionEmailFromSnapshot(snapshot)
+    : buildJobCloseRejectionEmail({
+      candidateName: row.recipientName,
+      jobTitle: row.payload.jobTitle,
+      workspaceName: row.payload.workspaceName,
+    })
   const sent = await sendEmail({
     to: row.recipientEmail,
     subject: template.subject,
     html: template.html,
     text: template.text,
     idempotencyKey: `hire-close-rejection:${row._id.toString()}`,
+    // Candidate contact data and rendered copy are not operational log data.
+    privacySafeLog: true,
   })
 
   return recordHireEmailDelivery({ row, workspaceId, claimToken, now, sent })

@@ -141,8 +141,8 @@ function dispatchToGa(
 }
 
 /**
- * Some URLs ARE credentials: /apply/<token>, /scorecard/<token> and
- * /candidate/<roundId> carry a secret in the path whose server-side value
+ * Some URLs ARE credentials: /apply/<token>, /scorecard/<token>,
+ * /share-packet/<id>, /candidate-status/<id>, and /candidate/<roundId> carry a secret in the path whose server-side value
  * is stored only as a hash. Shipping the raw path to PostHog or GA would
  * put a working credential in a third party's logs in cleartext and defeat
  * hash-at-rest entirely — anyone with analytics access could open a
@@ -150,7 +150,8 @@ function dispatchToGa(
  * apply page). Redact before ANY emission, including the automatic
  * $current_url / $pathname / referrer properties.
  */
-const SECRET_PATH_RE = /^\/(apply|scorecard|candidate)\/[^/]+/
+const SECRET_PATH_RE =
+  /^\/(apply|scorecard|candidate|interview-kit|share-packet|candidate-status)\/[^/]+/
 
 export function redactSecretPathSegments(pathname: string): string {
   return pathname.replace(SECRET_PATH_RE, (_m, prefix: string) => `/${prefix}/[redacted]`)

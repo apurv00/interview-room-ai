@@ -2,7 +2,7 @@ import mongoose, { type ClientSession } from 'mongoose'
 import { AppError } from '@shared/errors'
 import { HireWorkspace, HireWorkspaceMember } from '../models'
 import { connectHireControlDB } from './hireControlBoundary'
-import { activeHireWorkspaceLifecycleFilter } from './workspaceService'
+import { activeHireWorkspaceLifecycleFilter } from './hireWorkspaceLifecycleFilter'
 
 /**
  * Race-free write authority for Hire-owned personal data.

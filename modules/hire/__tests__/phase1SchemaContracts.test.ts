@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Model } from 'mongoose'
+import mongoose, { type Model } from 'mongoose'
 import { HireApplication } from '../models/HireApplication'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
 import { HireJob } from '../models/HireJob'
@@ -73,5 +73,41 @@ describe('Phase-1 decision and close durability', () => {
     expect(
       (HireEmailOutbox.schema.path('workspaceId').options as { immutable?: boolean }).immutable,
     ).toBe(true)
+  })
+
+  it('keeps Phase-4 rendered recipient copy immutable while accepting legacy rows without it', () => {
+    const snapshotPath = HireEmailOutbox.schema.path('payload.emailSnapshot')
+    expect(snapshotPath).toBeDefined()
+    expect((snapshotPath.options as { immutable?: boolean }).immutable).toBe(true)
+    expect(HireEmailOutbox.schema.path('payload.emailSnapshot.subject')).toBeDefined()
+    expect(HireEmailOutbox.schema.path('payload.emailSnapshot.body')).toBeDefined()
+
+    const legacy = new HireEmailOutbox({
+      workspaceId: new mongoose.Types.ObjectId(),
+      jobId: new mongoose.Types.ObjectId(),
+      applicationId: new mongoose.Types.ObjectId(),
+      candidateId: new mongoose.Types.ObjectId(),
+      kind: 'job_close_rejection',
+      operationId: '11111111-1111-4111-8111-111111111111',
+      recipientEmail: 'candidate@example.com',
+      recipientName: 'Candidate One',
+      payload: {
+        jobTitle: 'Backend Engineer',
+        workspaceName: 'Acme',
+        decisionNote: 'Internal only',
+        actorName: 'HR One',
+      },
+      sendAfter: new Date('2026-08-14T00:00:00.000Z'),
+    })
+    expect(legacy.validateSync()).toBeUndefined()
+
+    const malformedSnapshot = new HireEmailOutbox({
+      ...legacy.toObject(),
+      payload: {
+        ...legacy.payload,
+        emailSnapshot: { subject: 'Update\r\nBcc: attacker@example.com', body: 'Hi there' },
+      },
+    }).validateSync()
+    expect(malformedSnapshot?.errors['payload.emailSnapshot.subject']).toBeDefined()
   })
 })

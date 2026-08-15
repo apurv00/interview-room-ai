@@ -1,5 +1,12 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
 
+// Rendered copy can be longer than the bounded authoring template after
+// placeholders resolve against a real title/workspace/candidate. These caps
+// leave room for that deterministic expansion while keeping the durable row
+// finite (and the default worst-case subject below the snapshot cap).
+const HIRE_CLOSE_EMAIL_SNAPSHOT_SUBJECT_MAX_CHARS = 2_000
+const HIRE_CLOSE_EMAIL_SNAPSHOT_BODY_MAX_CHARS = 40_000
+
 export const HIRE_EMAIL_OUTBOX_KINDS = [
   'job_close_rejection',
 ] as const
@@ -31,6 +38,14 @@ export interface IHireEmailOutbox extends Document {
     workspaceName: string
     decisionNote: string
     actorName: string
+    /**
+     * Recipient-specific copy frozen inside the close transaction. Optional
+     * only for rows created before Phase 4, which retain the legacy fallback.
+     */
+    emailSnapshot?: {
+      subject: string
+      body: string
+    }
   }
   status: HireEmailOutboxStatus
   sendAfter: Date
@@ -47,6 +62,26 @@ export interface IHireEmailOutbox extends Document {
   createdAt: Date
   updatedAt: Date
 }
+
+const HireEmailSnapshotSchema = new Schema(
+  {
+    subject: {
+      type: String,
+      required: true,
+      trim: true,
+      minlength: 1,
+      maxlength: HIRE_CLOSE_EMAIL_SNAPSHOT_SUBJECT_MAX_CHARS,
+      match: /^[^\r\n]*$/,
+    },
+    body: {
+      type: String,
+      required: true,
+      minlength: 1,
+      maxlength: HIRE_CLOSE_EMAIL_SNAPSHOT_BODY_MAX_CHARS,
+    },
+  },
+  { _id: false },
+)
 
 const HireEmailOutboxSchema = new Schema<IHireEmailOutbox>(
   {
@@ -90,6 +125,10 @@ const HireEmailOutboxSchema = new Schema<IHireEmailOutbox>(
       workspaceName: { type: String, required: true, maxlength: 120 },
       decisionNote: { type: String, required: true, maxlength: 4000 },
       actorName: { type: String, required: true, maxlength: 120 },
+      // Never mutate retry copy. The only writer is the close transaction,
+      // which resolves the optional HR template separately for each recipient.
+      // Legacy Phase 1–3 rows intentionally omit this nested snapshot.
+      emailSnapshot: { type: HireEmailSnapshotSchema, immutable: true },
     },
     status: { type: String, enum: HIRE_EMAIL_OUTBOX_STATUSES, default: 'pending' },
     sendAfter: { type: Date, required: true },

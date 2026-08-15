@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   writeFence: vi.fn(),
   candidateFence: vi.fn(),
+  onboardingFence: vi.fn(),
+  isOnboardingTestDriveCoordinate: vi.fn(),
   eventSend: vi.fn(),
   loggerWarn: vi.fn(),
   sendAiRound: vi.fn(),
@@ -42,6 +44,12 @@ vi.mock('../services/hireWorkspaceWriteFence', () => ({
 }))
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: mocks.candidateFence,
+}))
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    mocks.onboardingFence(...args),
+  isHireOnboardingTestDriveCoordinate: (...args: unknown[]) =>
+    mocks.isOnboardingTestDriveCoordinate(...args),
 }))
 vi.mock('../services/workspaceService', () => ({
   activeHireWorkspaceLifecycleFilter: () => ({ lifecycleState: 'active' }),
@@ -172,6 +180,8 @@ beforeEach(() => {
   mocks.writeFence.mockImplementation(
     async (_workspaceId: unknown, _memberId: unknown, work: (session: unknown) => unknown) => work(SESSION),
   )
+  mocks.onboardingFence.mockResolvedValue(undefined)
+  mocks.isOnboardingTestDriveCoordinate.mockResolvedValue(false)
   mocks.eventSend.mockResolvedValue(undefined)
   mocks.itemUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.batchUpdateOne.mockResolvedValue({ matchedCount: 1 })
@@ -244,6 +254,28 @@ describe('screening invitation dispatch', () => {
       outcome: 'skipped',
       itemId: IDS.item,
       reason: 'Candidate personal data was deleted before invitation delivery',
+    })
+
+    expect(mocks.workspaceFindOne).not.toHaveBeenCalled()
+    expect(mocks.sendAiRound).not.toHaveBeenCalled()
+    expect(mocks.deliverAiInvite).not.toHaveBeenCalled()
+    expect(mocks.itemUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: id('workspace'), status: 'sending' }),
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'skipped' }) }),
+    )
+  })
+
+  it('skips a legacy synthetic item before it can create or deliver an AI invite', async () => {
+    mocks.itemFindOneAndUpdate.mockResolvedValue(invitationItem())
+    mocks.isOnboardingTestDriveCoordinate.mockResolvedValue(true)
+    mocks.itemFind.mockReturnValue(query([]))
+
+    await expect(
+      processHireScreeningInvitationItem({ workspaceId: IDS.workspace, itemId: IDS.item, now: NOW }),
+    ).resolves.toMatchObject({
+      outcome: 'skipped',
+      itemId: IDS.item,
+      reason: 'Practice interview data is isolated from screening delivery',
     })
 
     expect(mocks.workspaceFindOne).not.toHaveBeenCalled()
@@ -376,6 +408,32 @@ describe('screening invitation dispatch', () => {
       data: { workspaceId: IDS.workspace, itemId: IDS.item },
     })
     expect(mocks.eventSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not requeue or waterfall a synthetic screening job', async () => {
+    mocks.onboardingFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(
+      retryFailedHireScreeningInvitationBatch(CTX, {
+        jobId: IDS.job,
+        batchId: IDS.batch,
+        now: NOW,
+      }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+    await expect(
+      createHireScreeningInvitationWaterfall(CTX, {
+        jobId: IDS.job,
+        gateId: IDS.gate,
+        count: 1,
+        now: NOW,
+      }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+
+    expect(mocks.itemUpdateOne).not.toHaveBeenCalled()
+    expect(mocks.itemCreate).not.toHaveBeenCalled()
+    expect(mocks.eventSend).not.toHaveBeenCalled()
   })
 
   it('never lets waterfall undo a documented manual exclusion', async () => {

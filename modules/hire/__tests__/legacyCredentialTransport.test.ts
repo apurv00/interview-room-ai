@@ -36,12 +36,16 @@ describe('legacy Hire request-target credentials', () => {
     `/api/apply/${'a'.repeat(64)}`,
     `/candidate/${'b'.repeat(24)}?token=${'a'.repeat(64)}`,
     `/candidate/privacy/${'a'.repeat(64)}`,
+    `/interview-kit/${'b'.repeat(24)}?kit=${'1'.repeat(24)}.${'b'.repeat(24)}.${'a'.repeat(64)}`,
+    `/interview-kit/${'b'.repeat(24)}?token=${'a'.repeat(64)}`,
+    `/api/interview-kit/${'b'.repeat(24)}/bootstrap?capability=${'a'.repeat(64)}`,
     `/hire-signin?setup=${'a'.repeat(64)}`,
     `/handoff?code=${'a'.repeat(64)}`,
   ])('returns HTTP 410 for %s without reflecting the secret', async (path) => {
     const response = await hireMiddleware(request(path))
     expect(response.status).toBe(410)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
     const body = await response.text()
     expect(body).toBe('This link format is no longer active')
     expect(body).not.toContain('a'.repeat(64))
@@ -52,6 +56,8 @@ describe('legacy Hire request-target credentials', () => {
     '/api/apply',
     '/api/apply/resolve',
     `/candidate/${'b'.repeat(24)}`,
+    `/interview-kit/${'b'.repeat(24)}`,
+    `/api/interview-kit/${'b'.repeat(24)}/bootstrap`,
     '/hire-signin',
     '/handoff',
   ])('keeps the fixed fragment/body entry point %s reachable', async (path) => {

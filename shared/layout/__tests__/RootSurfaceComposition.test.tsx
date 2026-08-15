@@ -90,7 +90,13 @@ describe('RootSurfaceComposition', () => {
     expect(screen.getByTestId('session-provider')).toBeTruthy()
   })
 
-  it.each(['/candidate/round-id', '/candidate/privacy/opaque', '/apply/token']) (
+  it.each([
+    '/candidate/round-id',
+    '/candidate/privacy/opaque',
+    '/apply/token',
+    '/interview-kit/kit-id',
+    '/candidate-status/link-id',
+  ])(
     'does not hydrate any B2C session on public Hire capability path %s',
     (pathname) => {
       navigation.pathname = pathname

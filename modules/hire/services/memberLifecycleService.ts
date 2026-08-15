@@ -8,6 +8,12 @@ import {
   type IHireWorkspace,
 } from '../models'
 import { connectHireControlDB } from './hireControlBoundary'
+import { disableHireDigestDeliveryForScope } from '../../hire-digest/services/hireDigestService'
+import {
+  cancelHireOnboardingTestDrivesForMember,
+  deliverHireOnboardingTestDriveRuntimeRevocations,
+  kickDueHireOnboardingTestDriveCleanups,
+} from '../../hire-onboarding/services/testDriveLifecycleService'
 import {
   getWorkspaceForUser,
   softDeleteWorkspace,
@@ -43,8 +49,10 @@ async function deactivateMemberAccess(input: {
   workspaceId: mongoose.Types.ObjectId
   memberId: mongoose.Types.ObjectId
   expectedRole: 'admin' | 'member'
+  actorName: string
   now: Date
 }): Promise<void> {
+  let testDriveRuntimeRoundIds: string[] = []
   const session = await mongoose.startSession()
   try {
     await session.withTransaction(async () => {
@@ -67,7 +75,7 @@ async function deactivateMemberAccess(input: {
         },
         {
           $set: { authState: 'removed', removedAt: input.now },
-          $inc: { sessionVersion: 1 },
+          $inc: { sessionVersion: 1, digestEgressFenceVersion: 1 },
           $unset: { passwordHash: 1, passwordSetAt: 1, userId: 1 },
         },
         { session },
@@ -97,10 +105,34 @@ async function deactivateMemberAccess(input: {
         { $set: { consumedAt: input.now } },
         { session },
       )
+      await disableHireDigestDeliveryForScope({
+        workspaceId: input.workspaceId,
+        memberId: input.memberId,
+        now: input.now,
+        session,
+      })
+      const testDriveCancellation = await cancelHireOnboardingTestDrivesForMember({
+        workspaceId: input.workspaceId,
+        memberId: input.memberId,
+        at: input.now,
+        cleanupAfter: input.now,
+        reason: 'Workspace member removed',
+        actor: { memberId: input.memberId, name: input.actorName },
+        session,
+      })
+      testDriveRuntimeRoundIds = testDriveCancellation.runtimeRoundIds
     })
   } finally {
     await session.endSession()
   }
+  await kickDueHireOnboardingTestDriveCleanups({
+    workspaceId: input.workspaceId.toString(),
+    now: input.now,
+  })
+  await deliverHireOnboardingTestDriveRuntimeRevocations({
+    workspaceId: input.workspaceId.toString(),
+    roundIds: testDriveRuntimeRoundIds,
+  })
 }
 
 /**
@@ -165,6 +197,7 @@ export async function selfDeleteHireMember(
     workspaceId: workspace._id,
     memberId: membership._id,
     expectedRole: membership.role,
+    actorName: membership.name || membership.email,
     now,
   })
   return {

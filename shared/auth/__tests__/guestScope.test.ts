@@ -97,9 +97,16 @@ describe('the interview flow keeps working', () => {
   })
 
   it('allows the pages the flow navigates through', () => {
-    for (const page of ['/lobby', '/interview', '/candidate/x', '/candidate/thank-you']) {
+    for (const page of ['/lobby', '/interview', '/candidate/x', '/candidate/thank-you', '/candidate-status/link-id']) {
       expect(evaluateGuestAccess(page, 'GET').allowed).toBe(true)
     }
+  })
+
+  it('allows only the exact status bootstrap mutation-free public endpoint', () => {
+    const linkId = 'a'.repeat(24)
+    expect(evaluateGuestAccess(`/api/candidate-status/${linkId}/bootstrap`, 'POST').allowed).toBe(true)
+    expect(evaluateGuestAccess(`/api/candidate-status/${linkId}/bootstrap`, 'GET').allowed).toBe(false)
+    expect(evaluateGuestAccess(`/api/candidate-status/${linkId}/revoke`, 'POST').allowed).toBe(false)
   })
 })
 

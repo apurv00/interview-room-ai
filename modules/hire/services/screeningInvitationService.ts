@@ -29,6 +29,10 @@ import {
   activeHireWorkspaceLifecycleFilter,
   type MembershipContext,
 } from './workspaceService'
+import {
+  assertHireOnboardingTestDriveWriteIsolation,
+  isHireOnboardingTestDriveCoordinate,
+} from '@hire-onboarding-boundary'
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i
 const ITEM_CLAIM_LEASE_MS = 5 * 60_000
@@ -610,6 +614,21 @@ export async function processHireScreeningInvitationItem(input: {
 
   const { item, claimToken } = claimed
   try {
+    // A pre-fence legacy item can still be replayed by Inngest. Its immutable
+    // coordinates are sufficient to suppress delivery before any candidate
+    // or encrypted-invite work is read/created.
+    if (
+      await isHireOnboardingTestDriveCoordinate({
+        workspaceId: item.workspaceId,
+        jobId: item.jobId,
+        ...(item.candidateId ? { candidateId: item.candidateId } : {}),
+        ...(item.applicationId ? { applicationId: item.applicationId } : {}),
+      })
+    ) {
+      const reason = 'Practice interview data is isolated from screening delivery'
+      await markItemSkipped({ item, claimToken, now, reason })
+      return { outcome: 'skipped', itemId: item._id.toString(), reason }
+    }
     // Privacy/retention cancellation normally prevents this claim entirely.
     // Keep this defensive guard for an item loaded from a legacy/migrating
     // collection where the identity coordinates have already been redacted.
@@ -704,6 +723,11 @@ export async function retryFailedHireScreeningInvitationBatch(
     ctx.workspace._id,
     ctx.membership._id,
     async (session) => {
+      await assertHireOnboardingTestDriveWriteIsolation({
+        workspaceId: ctx.workspace._id,
+        jobId,
+        session,
+      })
       const job = await HireJob.findOne({
         _id: jobId,
         workspaceId: ctx.workspace._id,
@@ -841,6 +865,11 @@ export async function createHireScreeningInvitationWaterfall(
       ctx.workspace._id,
       ctx.membership._id,
       async (session) => {
+      await assertHireOnboardingTestDriveWriteIsolation({
+        workspaceId: ctx.workspace._id,
+        jobId,
+        session,
+      })
       const jobClaim = await HireJob.updateOne(
         { _id: jobId, workspaceId: ctx.workspace._id, status: 'open' },
         { $inc: { intakeWriteVersion: 1 } },

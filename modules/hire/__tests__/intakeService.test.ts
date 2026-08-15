@@ -8,6 +8,7 @@
  * retry, and the seen-before signal.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { AppError } from '@shared/errors'
 
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
@@ -15,6 +16,7 @@ vi.mock('@shared/db/connection', () => ({
 
 const txMock = vi.fn()
 const candidateFence = vi.fn()
+const onboardingTestDriveFence = vi.fn()
 vi.mock('../services/hireWorkspaceWriteFence', () => ({
   withActiveHireWorkspaceWriteTransaction: (
     workspaceId: string,
@@ -24,6 +26,9 @@ vi.mock('../services/hireWorkspaceWriteFence', () => ({
 }))
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: (...args: unknown[]) => candidateFence(...args),
+}))
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) => onboardingTestDriveFence(...args),
 }))
 
 const mockJob = { findOne: vi.fn(), find: vi.fn(), updateOne: vi.fn() }
@@ -128,6 +133,7 @@ beforeEach(() => {
   mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
   candidateFence.mockResolvedValue(undefined)
+  onboardingTestDriveFence.mockResolvedValue(undefined)
   mockApplication.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockApplication.find.mockReturnValue(findChain([]))
   mockApplication.updateMany.mockResolvedValue({ modifiedCount: 0 })
@@ -177,6 +183,19 @@ describe('write authority (the deletion barrier)', () => {
       candidateId: 'cand-1',
       session: SESSION,
     })
+  })
+
+  it('rejects a synthetic practice job before it claims or creates intake records', async () => {
+    onboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(intakeCandidate(CTX, BASE_INPUT)).rejects.toMatchObject({
+      code: 'ONBOARDING_TEST_DRIVE_ISOLATED',
+    })
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
+    expect(mockCandidate.create).not.toHaveBeenCalled()
+    expect(mockApplication.create).not.toHaveBeenCalled()
   })
 
   it('propagates the barrier rejection (deletion in progress) without writing', async () => {

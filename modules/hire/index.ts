@@ -38,6 +38,8 @@ export {
   type DuplicateJobResult,
   type JobPipeline,
   type PipelineEntry,
+  type HumanRoundSummary,
+  type HumanRoundDetail,
   type StageMoveInput,
   type ApplicationDetail,
   type AddOrMergeJobCandidateInput,
@@ -148,6 +150,39 @@ export {
   type HireJobEmailDeliveryFailure,
   type HireJobEmailDeliverySummary,
 } from './services/emailOutboxService'
+
+// Phase 3 human rounds deliberately stay outside the AI/engine `HireRound`
+// aggregate. Public kit capability operations return only least-disclosure
+// views and are consumed by the sessionless `/interview-kit` routes.
+export {
+  createGuestHumanRound,
+  createMemberHumanRound,
+  submitMemberHumanRoundScorecard,
+  revokeHumanInterviewKit,
+  bootstrapHumanInterviewKit,
+  submitHumanInterviewKitScorecard,
+  HUMAN_INTERVIEW_KIT_EXPIRY_DAYS,
+  type CreateGuestHumanRoundInput,
+  type CreateGuestHumanRoundResult,
+  type CreateMemberHumanRoundInput,
+  type SubmitMemberHumanRoundScorecardInput,
+  type HumanKitBootstrapView,
+  type SubmitHumanInterviewKitScorecardInput,
+} from './services/humanRoundService'
+export {
+  createHumanInterviewKitDelivery,
+  deliverHumanInterviewKit,
+  listDueHumanInterviewKitDeliveryIds,
+  processHumanInterviewKitDelivery,
+  HIRE_HUMAN_KIT_MAX_ATTEMPTS,
+  HIRE_HUMAN_KIT_RECOVERY_LIMIT_PER_WORKSPACE,
+  type HumanInterviewKitDeliveryResult,
+  type HumanInterviewKitDeliveryView,
+} from './services/humanKitDeliveryService'
+export {
+  buildHumanInterviewKitEmail,
+  type HumanInterviewKitEmailParams,
+} from './emails/humanInterviewKitEmail'
 
 // Validators
 export * from './validators/hire'

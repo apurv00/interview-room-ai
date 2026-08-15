@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   extractEmails: vi.fn(),
   workspaceTransaction: vi.fn(),
   candidateFence: vi.fn(),
+  onboardingTestDriveFence: vi.fn(),
   jobFindOne: vi.fn(),
   jobFind: vi.fn(),
   jobUpdateOne: vi.fn(),
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => ({
   memberExists: vi.fn(),
   privacyExists: vi.fn(),
   roundFind: vi.fn(),
+  humanRoundFind: vi.fn(),
   loggerWarn: vi.fn(),
 }))
 
@@ -79,6 +81,10 @@ vi.mock('../services/hireWorkspaceWriteFence', () => ({
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: (...args: unknown[]) => mocks.candidateFence(...args),
   HireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
+}))
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    mocks.onboardingTestDriveFence(...args),
 }))
 vi.mock('../services/workspaceService', () => ({
   activeHireWorkspaceLifecycleFilter: () => ({ lifecycleState: 'active' }),
@@ -146,6 +152,7 @@ vi.mock('../models', () => ({
   },
   HirePrivacyRequest: { exists: (...args: unknown[]) => mocks.privacyExists(...args) },
   HireRound: { find: (...args: unknown[]) => mocks.roundFind(...args) },
+  HireHumanRound: { find: (...args: unknown[]) => mocks.humanRoundFind(...args) },
   HireEngineHandoff: { updateMany: vi.fn() },
   HireGuestSession: { updateMany: vi.fn() },
   HireInterviewAttempt: { updateMany: vi.fn() },
@@ -285,6 +292,7 @@ beforeEach(() => {
       work(session),
   )
   mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.onboardingTestDriveFence.mockResolvedValue(undefined)
   mocks.jobFindOne.mockImplementation((filter: Record<string, unknown>) =>
     query([currentJob, earlierJob].find((job) => matches(job, filter)) ?? null),
   )
@@ -295,6 +303,7 @@ beforeEach(() => {
   mocks.jobExists.mockImplementation((filter: Record<string, unknown>) =>
     Promise.resolve([currentJob, earlierJob].find((job) => matches(job, filter)) ?? null),
   )
+  mocks.humanRoundFind.mockReturnValue(query([]))
 
   mocks.candidateFindOne.mockImplementation((filter: Record<string, unknown>) =>
     query(findCandidate(filter)),

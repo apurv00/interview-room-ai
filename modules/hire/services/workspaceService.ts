@@ -1,11 +1,16 @@
 import { connectDB } from '@shared/db/connection'
 import { AppError, ForbiddenError, NotFoundError } from '@shared/errors'
+import { HireSharePacket } from '@hire-decisions/models'
 import mongoose from 'mongoose'
 import {
   HireGuestSession,
+  HireHumanKitDelivery,
+  HireHumanRound,
+  HireHumanScorecard,
   HireEngineHandoff,
   HireEmailOutbox,
   HireInterviewAttempt,
+  HireInterviewKit,
   HireJob,
   HireMemberSession,
   HireMemberSetup,
@@ -19,19 +24,26 @@ import {
 } from '../models'
 import { issueMemberSetup, type MemberSetupResult } from './memberAuthService'
 import { deliverRuntimeRevocation } from './engineRevocationService'
+import {
+  cancelHireAssessmentExports,
+  deleteHireAssessmentExportObjects,
+  type HireAssessmentExportCleanupTarget,
+} from './assessmentExportLifecycleService'
+import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
+import { activeHireWorkspaceLifecycleFilter } from './hireWorkspaceLifecycleFilter'
+import { revokeCandidateStatusLinksForWorkspace } from '../../hire-status/services/candidateStatusLinkService'
+import { disableHireDigestDeliveryForScope } from '../../hire-digest/services/hireDigestService'
+import {
+  cancelHireOnboardingTestDrivesForMember,
+  cancelHireOnboardingTestDrivesForWorkspace,
+  deliverHireOnboardingTestDriveRuntimeRevocations,
+  kickDueHireOnboardingTestDriveCleanups,
+} from '../../hire-onboarding/services/testDriveLifecycleService'
+
+export { activeHireWorkspaceLifecycleFilter } from './hireWorkspaceLifecycleFilter'
 
 export const HIRE_WORKSPACE_SOFT_DELETE_DAYS = 30
 const OPERATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-/**
- * Compatibility-safe lifecycle predicate for transactional Hire writes.
- * Workspaces created before Phase 1 have no lifecycleState and are active.
- */
-export function activeHireWorkspaceLifecycleFilter(): mongoose.QueryFilter<IHireWorkspace> {
-  return {
-    $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],
-  }
-}
 
 function workspaceLifecycleState(workspace: IHireWorkspace): 'active' | 'deletion_pending' {
   return workspace.lifecycleState ?? 'active'
@@ -389,6 +401,7 @@ export async function removeMember(ctx: MembershipContext, memberId: string): Pr
     throw new AppError('The workspace admin cannot be removed', 400, 'CANNOT_REMOVE_ADMIN')
   }
   const removedAt = new Date()
+  let testDriveRuntimeRoundIds: string[] = []
   const session = await mongoose.startSession()
   try {
     await session.withTransaction(async () => {
@@ -401,7 +414,10 @@ export async function removeMember(ctx: MembershipContext, memberId: string): Pr
         },
         {
           $set: { authState: 'removed', removedAt },
-          $inc: { sessionVersion: 1 },
+          // The digest worker writes the same member row immediately before
+          // provider egress. Bumping its dedicated fence makes removal and
+          // egress serialize even if a stale worker still holds a lease.
+          $inc: { sessionVersion: 1, digestEgressFenceVersion: 1 },
           $unset: { passwordHash: 1, passwordSetAt: 1, userId: 1 },
         },
         { session },
@@ -427,10 +443,37 @@ export async function removeMember(ctx: MembershipContext, memberId: string): Pr
         { $set: { consumedAt: removedAt } },
         { session },
       )
+      await disableHireDigestDeliveryForScope({
+        workspaceId: ctx.workspace._id,
+        memberId: target._id,
+        now: removedAt,
+        session,
+      })
+      const testDriveCancellation = await cancelHireOnboardingTestDrivesForMember({
+        workspaceId: ctx.workspace._id,
+        memberId: target._id,
+        at: removedAt,
+        cleanupAfter: removedAt,
+        reason: 'Workspace member removed',
+        actor: {
+          memberId: ctx.membership._id,
+          name: memberActorName(ctx.membership),
+        },
+        session,
+      })
+      testDriveRuntimeRoundIds = testDriveCancellation.runtimeRoundIds
     })
   } finally {
     await session.endSession()
   }
+  await kickDueHireOnboardingTestDriveCleanups({
+    workspaceId: ctx.workspace._id.toString(),
+    now: removedAt,
+  })
+  await deliverHireOnboardingTestDriveRuntimeRevocations({
+    workspaceId: ctx.workspace._id.toString(),
+    roundIds: testDriveRuntimeRoundIds,
+  })
 }
 
 export async function transferWorkspaceAdmin(
@@ -606,6 +649,7 @@ export async function softDeleteWorkspace(
   const session = await mongoose.startSession()
   let deleted: IHireWorkspace | undefined
   let runtimeRoundIds: string[] = []
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   try {
     await session.withTransaction(async () => {
       const currentAdmin = await HireWorkspaceMember.exists({
@@ -698,6 +742,124 @@ export async function softDeleteWorkspace(
         },
         { session },
       )
+      // Digest rows carry an immutable member recipient snapshot. A
+      // deletion-pending workspace must revoke that egress before restore or
+      // a delayed worker can send it.
+      await disableHireDigestDeliveryForScope({
+        workspaceId: ctx.workspace._id,
+        now: deletedAt,
+        session,
+      })
+      // Human interview kits are possession capabilities with their own
+      // delivery queue. Cancel recovery/reminder egress and revoke active
+      // kits in the tombstone transaction; restoration never revives either.
+      // These records must not be added to the AI runtime revocation path.
+      await HireHumanKitDelivery.updateMany(
+        {
+          workspaceId: ctx.workspace._id,
+          status: { $in: ['pending', 'sending', 'failed'] },
+        },
+        {
+          $set: {
+            status: 'cancelled',
+            cancelledAt: deletedAt,
+            lastError: 'Workspace scheduled for deletion',
+          },
+          $unset: { claimToken: 1, leaseExpiresAt: 1 },
+        },
+        { session },
+      )
+      await HireInterviewKit.updateMany(
+        { workspaceId: ctx.workspace._id, active: true },
+        {
+          $set: {
+            status: 'revoked',
+            active: false,
+            revokedAt: deletedAt,
+            revokedByMemberId: ctx.membership._id,
+            revokedByName: memberActorName(ctx.membership),
+            revocationReason: 'Workspace scheduled for deletion',
+          },
+        },
+        { session },
+      )
+      // Share packets are public possession capabilities over a candidate
+      // snapshot. A deletion-pending workspace cannot leave any one usable,
+      // and restoration intentionally never revives these rows.
+      await HireSharePacket.updateMany(
+        {
+          workspaceId: ctx.workspace._id,
+          active: true,
+          status: 'active',
+          revokedAt: { $exists: false },
+        },
+        {
+          $set: {
+            active: false,
+            status: 'revoked',
+            revokedAt: deletedAt,
+            revokedByMemberId: ctx.membership._id,
+            revokedByName: memberActorName(ctx.membership),
+            revocationReason: 'Workspace scheduled for deletion',
+          },
+        },
+        { session },
+      )
+      // Candidate-status possession links are revoked in the same workspace
+      // tombstone transaction. Restoration never restores their hash.
+      await revokeCandidateStatusLinksForWorkspace({
+        workspaceId: ctx.workspace._id,
+        reason: 'Workspace scheduled for deletion',
+        at: deletedAt,
+        session,
+      })
+      // Keep the durable synthetic-graph marker through the 30-day recovery
+      // window. The workspace-wide revocation loop below remains the single
+      // authority for runtime delivery; this call only cancels the marker.
+      await cancelHireOnboardingTestDrivesForWorkspace({
+        workspaceId: ctx.workspace._id,
+        at: deletedAt,
+        cleanupAfter: purgeAfter,
+        reason: 'Workspace scheduled for deletion',
+        actor: {
+          memberId: ctx.membership._id,
+          name: memberActorName(ctx.membership),
+        },
+        revokeRounds: false,
+        session,
+      })
+      assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+        scope: { workspaceId: ctx.workspace._id },
+        cancelledAt: deletedAt,
+        session,
+      })
+      await cancelHireReportExportsForLifecycle({
+        scope: { workspaceId: ctx.workspace._id },
+        cancelledAt: deletedAt,
+        session,
+      })
+      await HireHumanScorecard.updateMany(
+        { workspaceId: ctx.workspace._id, status: 'draft' },
+        { $set: { status: 'cancelled', cancelledAt: deletedAt } },
+        { session },
+      )
+      await HireHumanRound.updateMany(
+        {
+          workspaceId: ctx.workspace._id,
+          status: { $nin: ['completed', 'revoked'] },
+          revokedAt: { $exists: false },
+        },
+        {
+          $set: {
+            status: 'revoked',
+            revokedAt: deletedAt,
+            revokedByMemberId: ctx.membership._id,
+            revokedByName: memberActorName(ctx.membership),
+            revocationReason: 'Workspace scheduled for deletion',
+          },
+        },
+        { session },
+      )
       await HireGuestSession.updateMany(
         { workspaceId: ctx.workspace._id, active: true },
         { $set: { revokedAt: deletedAt }, $unset: { active: 1 } },
@@ -749,6 +911,7 @@ export async function softDeleteWorkspace(
     await session.endSession()
   }
   if (!deleted) throw new Error('Workspace deletion transaction completed without a result')
+  await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
   // The control-plane transaction makes every raw link/handoff unusable
   // immediately. Best-effort synchronous delivery also kills already-issued
   // runtime cookies; failures stay durable as pending/failed rounds for the

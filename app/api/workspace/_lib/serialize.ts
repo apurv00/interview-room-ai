@@ -6,15 +6,19 @@
  */
 
 import { createHash } from 'crypto'
+import { HIRE_HUMAN_KIT_MAX_ATTEMPTS } from '@hire'
 import type {
   IHireApplication,
   IHireCandidate,
+  IHireHumanRound,
+  HumanRoundDetail,
   IHireJob,
   IHireRound,
   IHireWorkspaceMember,
   MembershipContext,
   JobListItem,
   PipelineEntry,
+  HumanRoundSummary,
   HireJobEmailDeliverySummary,
 } from '@hire'
 
@@ -227,6 +231,78 @@ export function serializeRound(r: IHireRound) {
   }
 }
 
+type HumanRoundView = Pick<
+  IHireHumanRound,
+  | '_id'
+  | 'mode'
+  | 'status'
+  | 'openedAt'
+  | 'scorecardSubmittedAt'
+  | 'revokedAt'
+  | 'createdAt'
+>
+
+/**
+ * Human rounds intentionally do not flow through `serializeRound`: that
+ * response is AI-engine specific and includes engine configuration/results.
+ * A member already receives candidate and job records from the card route;
+ * expose only the round lifecycle needed to render its evidence chip.
+ */
+export function serializeHumanRound(round: HumanRoundView) {
+  return {
+    id: round._id.toString(),
+    mode: round.mode,
+    status: round.status,
+    openedAt: round.openedAt ?? null,
+    scorecardSubmittedAt: round.scorecardSubmittedAt ?? null,
+    revokedAt: round.revokedAt ?? null,
+    createdAt: round.createdAt,
+  }
+}
+
+/** Safe authenticated-card projection; never emit kit/delivery secrets or PII. */
+export function serializeHumanRoundDetail(detail: HumanRoundDetail) {
+  const initial = detail.delivery.initial
+  const reminder = detail.delivery.reminder
+  return {
+    ...serializeHumanRound(detail.round),
+    scorecard: detail.scorecard
+      ? {
+          reviewerKind: detail.scorecard.reviewerKind,
+          reviewerName: detail.scorecard.reviewerName,
+          dimensions: detail.scorecard.dimensions ?? [],
+          recommendation: detail.scorecard.recommendation ?? null,
+          overallComment: detail.scorecard.overallComment ?? null,
+          submittedAt: detail.scorecard.submittedAt ?? null,
+        }
+      : null,
+    delivery: {
+      initial: initial
+        ? {
+            status: initial.status,
+            attempts: initial.attempts,
+            sentAt: initial.sentAt ?? null,
+            terminalFailure:
+              initial.status === 'failed' && initial.attempts >= HIRE_HUMAN_KIT_MAX_ATTEMPTS,
+          }
+        : null,
+      reminder: reminder
+        ? { status: reminder.status, sentAt: reminder.sentAt ?? null }
+        : null,
+    },
+  }
+}
+
+export function serializeHumanRoundSummary(summary: HumanRoundSummary) {
+  return {
+    total: summary.total,
+    completed: summary.completed,
+    pendingScorecard: summary.pendingScorecard,
+    revoked: summary.revoked,
+    rounds: summary.rounds.map(serializeHumanRound),
+  }
+}
+
 /** sha256 of the candidate's current resume — read-time staleness anchor. */
 export function resumeHashOf(resumeText: string | null | undefined): string | null {
   return resumeText ? createHash('sha256').update(resumeText).digest('hex') : null
@@ -251,6 +327,7 @@ export function serializePipelineEntry(entry: PipelineEntry) {
           resultsUnscored: entry.latestRound.results?.unscored ?? false,
         }
       : null,
+    humanRoundSummary: serializeHumanRoundSummary(entry.humanRoundSummary),
     ranking: {
       scoreState: entry.scoreState,
       rank: entry.rank,

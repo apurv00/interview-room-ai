@@ -27,6 +27,8 @@ const {
   mockFind,
   mockFindById,
   mockResendSend,
+  mockLoggerInfo,
+  mockLoggerError,
 } = vi.hoisted(() => ({
   mockRequireCurrentPlatformAdmin: vi.fn(),
   mockCheckJobsRateLimit: vi.fn(),
@@ -40,6 +42,8 @@ const {
   mockFind: vi.fn(),
   mockFindById: vi.fn(),
   mockResendSend: vi.fn(),
+  mockLoggerInfo: vi.fn(),
+  mockLoggerError: vi.fn(),
 }))
 
 vi.mock('@jobs/services/adminAuth', () => ({
@@ -67,7 +71,7 @@ vi.mock('resend', () => ({
     emails = { send: mockResendSend }
   },
 }))
-vi.mock('@shared/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
+vi.mock('@shared/logger', () => ({ logger: { info: mockLoggerInfo, warn: vi.fn(), error: mockLoggerError } }))
 
 import { GET, PATCH, POST } from '../../app/api/cms/jobs-ingest/email/route'
 import { JOBS_EMAIL_DEFAULTS } from '../db/models/JobsEmailConfig'
@@ -522,6 +526,42 @@ describe('sendEmail reshape (R31)', () => {
     vi.resetModules()
     const { sendEmail: sendNoKey } = await import('../services/emailService')
     expect(await sendNoKey({ to: 'a@b.c', subject: 's', html: 'h' })).toEqual({ ok: false })
+    vi.unstubAllEnvs()
+  })
+
+  it('uses the opt-in privacy-safe log shape without recipient or provider payloads', async () => {
+    vi.stubEnv('RESEND_API_KEY', 'k')
+    vi.resetModules()
+    const { sendEmail } = await import('../services/emailService')
+    mockResendSend.mockResolvedValue({ data: null, error: { email: 'interviewer@example.test', detail: 'provider detail' } })
+
+    await expect(sendEmail({
+      to: 'interviewer@example.test',
+      subject: 'Acme interview kit',
+      html: '<p>kit</p>',
+      privacySafeLog: true,
+    })).resolves.toEqual({ ok: false })
+
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      { privacySafeLog: true, providerRejected: true },
+      'Failed to send email',
+    )
+    expect(JSON.stringify(mockLoggerError.mock.calls)).not.toContain('interviewer@example.test')
+    expect(JSON.stringify(mockLoggerError.mock.calls)).not.toContain('provider detail')
+
+    mockResendSend.mockResolvedValueOnce({ data: { id: 'provider-private-id' }, error: null })
+    await expect(sendEmail({
+      to: 'interviewer@example.test',
+      subject: 'Acme interview kit',
+      html: '<p>kit</p>',
+      privacySafeLog: true,
+    })).resolves.toEqual({ ok: true, id: 'provider-private-id' })
+    expect(mockLoggerInfo).toHaveBeenCalledWith(
+      { privacySafeLog: true, providerAccepted: true },
+      'Email sent successfully',
+    )
+    expect(JSON.stringify(mockLoggerInfo.mock.calls)).not.toContain('interviewer@example.test')
+    expect(JSON.stringify(mockLoggerInfo.mock.calls)).not.toContain('provider-private-id')
     vi.unstubAllEnvs()
   })
 })

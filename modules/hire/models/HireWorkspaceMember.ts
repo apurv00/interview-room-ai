@@ -42,6 +42,14 @@ export interface IHireWorkspaceMember extends Document {
   passwordHash?: string
   passwordSetAt?: Date
   sessionVersion: number
+  /**
+   * Monotonic member-owned egress fence for Hire operational mail. A digest
+   * worker increments this in the same transaction as its exact outbox claim,
+   * while member removal changes this document. That gives removal and email
+   * authorization one concrete serialization point without changing a login
+   * session version merely to send operational mail.
+   */
+  digestEgressFenceVersion: number
   removedAt?: Date
   addedBy?: mongoose.Types.ObjectId
   addedByMemberId?: mongoose.Types.ObjectId
@@ -83,6 +91,7 @@ const HireWorkspaceMemberSchema = new Schema<IHireWorkspaceMember>(
     passwordHash: { type: String, select: false },
     passwordSetAt: { type: Date },
     sessionVersion: { type: Number, default: 1, min: 1 },
+    digestEgressFenceVersion: { type: Number, default: 0, min: 0 },
     removedAt: { type: Date },
     // Legacy B2C actor pointer retained for historical compatibility only.
     // Hire-owned actorMemberId/name snapshots are authoritative for new work.

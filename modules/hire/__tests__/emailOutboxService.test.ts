@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockOutbox,
   mockJob,
+  mockPrivacy,
   mockWorkspace,
+  mockCandidatePiiFence,
+  CandidatePiiTombstoneError,
   mockWriteFence,
   mockSendEmail,
   mockConnectHireControlDB,
@@ -19,7 +22,10 @@ const {
     updateOne: vi.fn(),
   },
   mockJob: { exists: vi.fn() },
+  mockPrivacy: { exists: vi.fn() },
   mockWorkspace: { findOneAndUpdate: vi.fn() },
+  mockCandidatePiiFence: vi.fn(),
+  CandidatePiiTombstoneError: class CandidatePiiTombstoneError extends Error {},
   mockWriteFence: vi.fn(),
   mockSendEmail: vi.fn(),
   mockConnectHireControlDB: vi.fn(),
@@ -57,6 +63,9 @@ vi.mock('../models/HireEmailOutbox', () => ({
 vi.mock('../models/HireJob', () => ({
   HireJob: { exists: (...args: unknown[]) => mockJob.exists(...args) },
 }))
+vi.mock('../models/HirePrivacyRequest', () => ({
+  HirePrivacyRequest: { exists: (...args: unknown[]) => mockPrivacy.exists(...args) },
+}))
 vi.mock('../models/HireWorkspace', () => ({
   HireWorkspace: {
     findOneAndUpdate: (...args: unknown[]) => mockWorkspace.findOneAndUpdate(...args),
@@ -65,8 +74,21 @@ vi.mock('../models/HireWorkspace', () => ({
 vi.mock('../services/hireWorkspaceWriteFence', () => ({
   withActiveHireWorkspaceWriteTransaction: (...args: unknown[]) => mockWriteFence(...args),
 }))
+vi.mock('../services/workspaceService', () => ({
+  activeHireWorkspaceLifecycleFilter: () => ({
+    $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],
+  }),
+}))
+vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
+  claimHireCandidatePiiWriteFence: (...args: unknown[]) => mockCandidatePiiFence(...args),
+  HireCandidatePiiTombstoneError: CandidatePiiTombstoneError,
+}))
 
-import { buildJobCloseRejectionEmail } from '../emails/jobCloseRejectionEmail'
+import {
+  buildJobCloseRejectionEmail,
+  buildJobCloseRejectionEmailFromSnapshot,
+  resolveJobCloseRejectionEmailSnapshot,
+} from '../emails/jobCloseRejectionEmail'
 import {
   HIRE_EMAIL_MAX_ATTEMPTS,
   getJobCloseEmailDelivery,
@@ -97,6 +119,10 @@ function outboxFind(rows: unknown[]) {
 
 function outboxFindOne(row: unknown) {
   return { sort: vi.fn().mockResolvedValue(row) }
+}
+
+function privacyExists(value: unknown) {
+  return { session: vi.fn().mockResolvedValue(value) }
 }
 
 function outboxRow(attempts = 1) {
@@ -130,6 +156,8 @@ beforeEach(() => {
   mockOutbox.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockOutbox.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockWorkspace.findOneAndUpdate.mockResolvedValue({ _id: WORKSPACE_ID })
+  mockCandidatePiiFence.mockResolvedValue(undefined)
+  mockPrivacy.exists.mockReturnValue(privacyExists(null))
   mockWriteFence.mockImplementation(
     async (_workspaceId: unknown, _memberId: unknown, work: (value: unknown) => unknown) =>
       work(session),
@@ -151,6 +179,26 @@ describe('job close rejection template', () => {
     expect(template.subject).not.toContain('\r')
     expect(template.subject).not.toContain('\n')
     expect(template).not.toHaveProperty('decisionNote')
+  })
+
+  it('resolves only the fixed placeholders and escapes custom plain-text copy for HTML', () => {
+    const snapshot = resolveJobCloseRejectionEmailSnapshot({
+      candidateName: '<img src=x onerror=alert(1)> Person',
+      jobTitle: '<script>Backend</script>',
+      workspaceName: 'Acme\r\nBcc: attacker@example.com',
+      template: {
+        subject: '{workspace_name}: {candidate_first_name} — {job_title}',
+        body: 'Hi {candidate_first_name},\n\n<script>unsafe</script> for {job_title}.',
+      },
+    })
+    const email = buildJobCloseRejectionEmailFromSnapshot(snapshot)
+
+    expect(snapshot.subject).toBe('Acme Bcc: attacker@example.com: <img — <script>Backend</script>')
+    expect(snapshot.body).not.toContain('Hired Jane')
+    expect(email.html).toContain('&lt;script&gt;unsafe&lt;/script&gt;')
+    expect(email.html).not.toContain('<script>unsafe</script>')
+    expect(email.html).not.toContain('<img')
+    expect(email.text).toBe(snapshot.body)
   })
 })
 
@@ -189,12 +237,23 @@ describe('processNextHireEmail', () => {
       { $inc: { writeFenceVersion: 1 } },
       expect.objectContaining({ session }),
     )
+    expect(mockCandidatePiiFence).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: 'e'.repeat(24),
+      session,
+    })
+    expect(mockPrivacy.exists).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: 'e'.repeat(24),
+      live: true,
+    })
     expect(mockSendEmail).toHaveBeenCalledWith({
       to: 'candidate@example.com',
       subject: 'Acme: update on your Backend Engineer application',
       html: expect.any(String),
       text: expect.any(String),
       idempotencyKey: 'hire-close-rejection:outbox-1',
+      privacySafeLog: true,
     })
     const [, sentUpdate] = mockOutbox.updateOne.mock.calls[0]
     expect(mockOutbox.updateOne.mock.calls[0][0]).toMatchObject({
@@ -205,6 +264,35 @@ describe('processNextHireEmail', () => {
       sentAt: NOW,
       providerMessageId: 'resend-1',
     })
+  })
+
+  it('uses the immutable per-recipient snapshot rather than re-rendering a retry', async () => {
+    const legacyPayload = outboxRow().payload
+    const row = {
+      ...outboxRow(),
+      recipientName: 'Changed after close',
+      payload: {
+        ...legacyPayload,
+        jobTitle: 'Changed after close',
+        workspaceName: 'Changed workspace',
+        emailSnapshot: {
+          subject: 'Frozen subject for Candidate One',
+          body: 'Hi Candidate One,\n\nWe recorded this <script>as text</script>.',
+        },
+      },
+    }
+    mockOutbox.findOne.mockReturnValue(outboxFindOne(row))
+    mockOutbox.findOneAndUpdate.mockResolvedValue(row)
+    mockSendEmail.mockResolvedValue({ ok: true, id: 'resend-1' })
+
+    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toMatchObject({ outcome: 'sent' })
+
+    expect(mockSendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      subject: 'Frozen subject for Candidate One',
+      text: 'Hi Candidate One,\n\nWe recorded this <script>as text</script>.',
+      html: expect.stringContaining('&lt;script&gt;as text&lt;/script&gt;'),
+    }))
+    expect(mockSendEmail.mock.calls[0][0].text).not.toContain('Hired Jane')
   })
 
   it('reschedules provider failure with backoff and stops after the max attempt', async () => {
@@ -265,6 +353,48 @@ describe('processNextHireEmail', () => {
       }),
       expect.objectContaining({ session }),
     )
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('does not contact the provider when privacy deletion wins after due-row selection and before egress authorization', async () => {
+    // The worker has already read a due outbox row. Simulate verified privacy
+    // deletion becoming live immediately before the in-transaction candidate
+    // fence/claim, the only point at which a provider send is authorized.
+    mockCandidatePiiFence.mockImplementation(async () => {
+      mockPrivacy.exists.mockReturnValue(privacyExists({ _id: 'privacy-request-1' }))
+    })
+
+    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toEqual({
+      processed: true,
+      outboxId: 'outbox-1',
+      outcome: 'cancelled',
+    })
+
+    expect(mockCandidatePiiFence).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: 'e'.repeat(24),
+      session,
+    })
+    expect(mockPrivacy.exists).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: 'e'.repeat(24),
+      live: true,
+    })
+    expect(mockOutbox.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('does not contact the provider when the candidate PII fence is already tombstoned', async () => {
+    mockCandidatePiiFence.mockRejectedValue(new CandidatePiiTombstoneError())
+
+    await expect(processNextHireEmail(WORKSPACE_ID, NOW)).resolves.toEqual({
+      processed: true,
+      outboxId: 'outbox-1',
+      outcome: 'cancelled',
+    })
+
+    expect(mockOutbox.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockPrivacy.exists).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 

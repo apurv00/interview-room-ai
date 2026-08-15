@@ -93,6 +93,77 @@ describe('job close-rejection email delivery', () => {
       ).not.toBeInTheDocument()
     })
   })
+
+  it('submits an optional plain-text rejection template only with the close command', async () => {
+    const operationId = '11111111-1111-4111-8111-111111111111'
+    vi.stubGlobal('crypto', { randomUUID: () => operationId })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/jobs/job-1' && init?.method === 'PATCH') {
+        expect(JSON.parse(String(init.body))).toEqual({
+          status: 'closed',
+          expectedStatus: 'open',
+          operationId,
+          closeNote: 'Role filled after panel review.',
+          closeEmailTemplate: {
+            subject: '{workspace_name}: update for {candidate_first_name}',
+            body: 'Hi {candidate_first_name},\n\n{job_title} has closed.',
+          },
+        })
+        return json({
+          job: {
+            id: 'job-1',
+            title: 'Backend Engineer',
+            status: 'closed',
+            closeNote: 'Role filled after panel review.',
+            closedByName: 'HR One',
+            jdText: 'Build reliable systems.',
+            applyPageEnabled: false,
+          },
+        })
+      }
+      if (url === '/api/workspace/jobs/job-1') {
+        return json({
+          job: {
+            id: 'job-1',
+            title: 'Backend Engineer',
+            status: 'open',
+            closeNote: null,
+            closedByName: null,
+            jdText: 'Build reliable systems.',
+            applyPageEnabled: false,
+          },
+          entries: [],
+        })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Close job' }))
+    fireEvent.change(screen.getByPlaceholderText(/Hired Jane Doe/i), {
+      target: { value: 'Role filled after panel review.' },
+    })
+    fireEvent.click(screen.getByLabelText('Customize the candidate rejection email'))
+    expect(screen.getByText(/This decision note stays internal/i)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Candidate email subject'), {
+      target: { value: '{workspace_name}: update for {candidate_first_name}' },
+    })
+    fireEvent.change(screen.getByLabelText('Candidate email body'), {
+      target: { value: 'Hi {candidate_first_name},\n\n{job_title} has closed.' },
+    })
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close job' })[1])
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/workspace/jobs/job-1',
+        expect.objectContaining({ method: 'PATCH' }),
+      )
+    })
+  })
 })
 
 describe('job duplication UI', () => {
@@ -327,5 +398,65 @@ describe('ranked pipeline visibility', () => {
     )
     expect(document.getElementById('ranked-queue-bottom')).toHaveTextContent('Rank #50')
     expect(document.getElementById('ranked-queue-bottom')).toHaveTextContent('Candidate 50')
+  })
+})
+
+describe('human-round pipeline visibility', () => {
+  it('renders pending human scorecards as a separate chip from AI interview state', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/jobs/job-1/screening') return json({ gates: [] })
+      if (url === '/api/workspace/jobs/job-1/pool-suggestions') return json({ suggestions: [] })
+      if (url === '/api/workspace/jobs/job-1') {
+        return json({
+          job: {
+            id: 'job-1',
+            title: 'Backend Engineer',
+            status: 'open',
+            closeNote: null,
+            closedByName: null,
+            jdText: 'Build reliable systems.',
+            applyPageEnabled: false,
+          },
+          entries: [{
+            application: {
+              id: 'application-1',
+              stage: 'interviewing',
+              decisionNote: null,
+              offerDecision: null,
+              resumeMatch: null,
+              createdAt: '2026-08-13T00:00:00.000Z',
+            },
+            candidate: { id: 'candidate-1', name: 'Candidate One', email: 'candidate@example.com' },
+            latestRound: null,
+            humanRoundSummary: {
+              total: 1,
+              completed: 0,
+              pendingScorecard: 1,
+              revoked: 0,
+              rounds: [{
+                id: 'human-round-1',
+                mode: 'guest_kit',
+                status: 'pending_scorecard',
+                openedAt: null,
+                scorecardSubmittedAt: null,
+                revokedAt: null,
+                createdAt: '2026-08-13T00:00:00.000Z',
+              }],
+            },
+            ranking: { scoreState: 'unscored', rank: null },
+            previouslySeenIn: [],
+          }],
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    expect(await screen.findByText('1 human scorecard pending')).toBeInTheDocument()
+    expect(screen.queryByText('AI in progress')).not.toBeInTheDocument()
   })
 })

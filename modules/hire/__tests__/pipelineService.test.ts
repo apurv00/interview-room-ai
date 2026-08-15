@@ -1,24 +1,22 @@
 import { createHash } from 'crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { AppError } from '@shared/errors'
 
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('../services/hireWorkspaceWriteFence', () => ({
-  withActiveHireWorkspaceWriteTransaction: (
-    _workspaceId: unknown,
-    _memberId: unknown,
-    work: (session: unknown) => Promise<unknown>,
-  ) => work(session),
-}))
-
 const {
   session,
+  mockWorkspaceWriteFence,
   mockJob,
   mockCandidate,
   mockApplication,
   mockRound,
+  mockHumanRound,
+  mockInterviewKit,
+  mockHumanScorecard,
+  mockHumanKitDelivery,
   mockGuestSession,
   mockEngineHandoff,
   mockInterviewAttempt,
@@ -26,10 +24,18 @@ const {
   mockEmailOutbox,
   mockInvitationBatch,
   mockInvitationBatchItem,
+  mockSharePacket,
   mockScheduleMediaPurge,
   mockCancelMediaPurge,
   mockDeliverRuntimeRevocation,
   mockCandidatePiiFence,
+  mockOnboardingTestDriveFence,
+  mockCancelAssessmentExports,
+  mockDeleteAssessmentExports,
+  mockCancelPipelineReports,
+  mockCancelDigestOutboxes,
+  mockCreateCloseoutReport,
+  mockKickReportExport,
 } = vi.hoisted(() => {
   const transactionSession = {
     withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
@@ -37,6 +43,7 @@ const {
   }
   return {
     session: transactionSession,
+    mockWorkspaceWriteFence: vi.fn(),
     mockJob: {
       create: vi.fn(),
       find: vi.fn(),
@@ -57,6 +64,10 @@ const {
       bulkWrite: vi.fn(),
     },
     mockRound: { find: vi.fn(), updateMany: vi.fn() },
+    mockHumanRound: { find: vi.fn(), updateMany: vi.fn() },
+    mockInterviewKit: { updateMany: vi.fn() },
+    mockHumanScorecard: { find: vi.fn(), updateMany: vi.fn() },
+    mockHumanKitDelivery: { find: vi.fn(), updateMany: vi.fn() },
     mockGuestSession: { updateMany: vi.fn() },
     mockEngineHandoff: { updateMany: vi.fn() },
     mockInterviewAttempt: { updateMany: vi.fn() },
@@ -64,12 +75,24 @@ const {
     mockEmailOutbox: { create: vi.fn(), find: vi.fn() },
     mockInvitationBatch: { updateMany: vi.fn() },
     mockInvitationBatchItem: { updateMany: vi.fn() },
+    mockSharePacket: { updateMany: vi.fn() },
     mockScheduleMediaPurge: vi.fn(),
     mockCancelMediaPurge: vi.fn(),
     mockDeliverRuntimeRevocation: vi.fn(),
     mockCandidatePiiFence: vi.fn(),
+    mockOnboardingTestDriveFence: vi.fn(),
+    mockCancelAssessmentExports: vi.fn(),
+    mockDeleteAssessmentExports: vi.fn(),
+    mockCancelPipelineReports: vi.fn(),
+    mockCancelDigestOutboxes: vi.fn(),
+    mockCreateCloseoutReport: vi.fn(),
+    mockKickReportExport: vi.fn(),
   }
 })
+
+vi.mock('../services/hireWorkspaceWriteFence', () => ({
+  withActiveHireWorkspaceWriteTransaction: (...args: unknown[]) => mockWorkspaceWriteFence(...args),
+}))
 
 vi.mock('../models', () => {
   return {
@@ -113,6 +136,21 @@ vi.mock('../models', () => {
       find: (...args: unknown[]) => mockRound.find(...args),
       updateMany: (...args: unknown[]) => mockRound.updateMany(...args),
     },
+    HireHumanRound: {
+      find: (...args: unknown[]) => mockHumanRound.find(...args),
+      updateMany: (...args: unknown[]) => mockHumanRound.updateMany(...args),
+    },
+    HireInterviewKit: {
+      updateMany: (...args: unknown[]) => mockInterviewKit.updateMany(...args),
+    },
+    HireHumanScorecard: {
+      find: (...args: unknown[]) => mockHumanScorecard.find(...args),
+      updateMany: (...args: unknown[]) => mockHumanScorecard.updateMany(...args),
+    },
+    HireHumanKitDelivery: {
+      find: (...args: unknown[]) => mockHumanKitDelivery.find(...args),
+      updateMany: (...args: unknown[]) => mockHumanKitDelivery.updateMany(...args),
+    },
     HireGuestSession: {
       updateMany: (...args: unknown[]) => mockGuestSession.updateMany(...args),
     },
@@ -145,6 +183,12 @@ vi.mock('../models/HireEmailOutbox', () => ({
   },
 }))
 
+vi.mock('@hire-decisions/models', () => ({
+  HireSharePacket: {
+    updateMany: (...args: unknown[]) => mockSharePacket.updateMany(...args),
+  },
+}))
+
 vi.mock('../services/mediaLifecycleService', () => ({
   scheduleHireJobMediaPurge: (...args: unknown[]) => mockScheduleMediaPurge(...args),
   cancelFutureHireJobMediaPurge: (...args: unknown[]) => mockCancelMediaPurge(...args),
@@ -159,12 +203,36 @@ vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   HireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
 }))
 
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    mockOnboardingTestDriveFence(...args),
+}))
+
+vi.mock('../services/assessmentExportLifecycleService', () => ({
+  cancelHireAssessmentExports: (...args: unknown[]) => mockCancelAssessmentExports(...args),
+  deleteHireAssessmentExportObjects: (...args: unknown[]) => mockDeleteAssessmentExports(...args),
+}))
+
+vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
+  cancelHirePipelineStatusReportsForTerminalTransition: (...args: unknown[]) => mockCancelPipelineReports(...args),
+  createHireJobCloseoutReportForLifecycle: (...args: unknown[]) => mockCreateCloseoutReport(...args),
+}))
+
+vi.mock('../../hire-reports/services/hireReportExportService', () => ({
+  kickHireReportExport: (...args: unknown[]) => mockKickReportExport(...args),
+}))
+
+vi.mock('../../hire-digest/services/hireDigestService', () => ({
+  cancelHireDigestOutboxesForScope: (...args: unknown[]) => mockCancelDigestOutboxes(...args),
+}))
+
 import {
   addCandidate,
   addOrMergeJobCandidate,
   createApplication,
   createJob,
   duplicateJob,
+  getApplicationDetail,
   getJobPipeline,
   moveStage,
   updateJobStatus,
@@ -197,21 +265,39 @@ const JOB_INPUT = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockWorkspaceWriteFence.mockImplementation(
+    async (_workspaceId: unknown, _memberId: unknown, work: (transactionSession: unknown) => Promise<unknown>) =>
+      session.withTransaction(() => work(session)),
+  )
   session.withTransaction.mockImplementation(async (work: () => Promise<void>) => work())
   session.endSession.mockResolvedValue(undefined)
   mockJob.db.startSession.mockResolvedValue(session)
   mockJob.exists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
   mockRound.find.mockResolvedValue([])
   mockRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockInterviewKit.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanScorecard.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanKitDelivery.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockHumanScorecard.find.mockReturnValue({ select: vi.fn().mockResolvedValue([]) })
+  mockHumanKitDelivery.find.mockReturnValue({ select: vi.fn().mockResolvedValue([]) })
   mockGuestSession.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockEngineHandoff.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockInterviewAttempt.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockInvitationBatch.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockInvitationBatchItem.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockSharePacket.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockOnboardingTestDriveFence.mockResolvedValue(undefined)
   mockScheduleMediaPurge.mockResolvedValue({ purgeEligibleAt: new Date(), scheduled: 0 })
   mockCancelMediaPurge.mockResolvedValue(0)
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
   mockCandidatePiiFence.mockResolvedValue(undefined)
+  mockCancelAssessmentExports.mockResolvedValue([])
+  mockDeleteAssessmentExports.mockResolvedValue(undefined)
+  mockCancelPipelineReports.mockResolvedValue(0)
+  mockCancelDigestOutboxes.mockResolvedValue(undefined)
+  mockCreateCloseoutReport.mockResolvedValue(null)
+  mockKickReportExport.mockResolvedValue(undefined)
   mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockEmailOutbox.find.mockResolvedValue([])
 })
@@ -442,6 +528,104 @@ describe('updateJobStatus', () => {
     expect(mockJob.findOneAndUpdate).not.toHaveBeenCalled()
   })
 
+  it('rejects a synthetic practice job before it can create close-email work', async () => {
+    mockOnboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(
+      updateJobStatus(CTX, 'j1', {
+        status: 'closed',
+        expectedStatus: 'open',
+        operationId: OP_A,
+        closeNote: 'This must not create a practice-email delivery.',
+      }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+
+    expect(mockJob.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockEmailOutbox.create).not.toHaveBeenCalled()
+    expect(mockCreateCloseoutReport).not.toHaveBeenCalled()
+  })
+
+  it('persists one closeout report inside the close transaction and kicks it only after commit', async () => {
+    const closedAt = new Date('2026-08-10T10:00:00.000Z')
+    let terminalWorkspaceFenceHeld = false
+    mockWorkspaceWriteFence.mockImplementation(
+      async (_workspaceId: unknown, _memberId: unknown, work: (transactionSession: unknown) => Promise<unknown>) => {
+        terminalWorkspaceFenceHeld = true
+        try {
+          return await session.withTransaction(() => work(session))
+        } finally {
+          terminalWorkspaceFenceHeld = false
+        }
+      },
+    )
+    mockJob.findOne.mockResolvedValue(null)
+    mockJob.findOneAndUpdate.mockResolvedValue({
+      _id: 'j1',
+      title: 'Backend Engineer',
+      status: 'closed',
+      createdAt: new Date('2026-08-01T00:00:00.000Z'),
+      closedAt,
+      closeNote: 'Role filled after review.',
+      events: [],
+    })
+    mockApplication.find.mockResolvedValue([])
+    mockCreateCloseoutReport.mockResolvedValue({
+      export: { id: 'report-1' },
+      created: true,
+    })
+    mockCancelDigestOutboxes.mockImplementation(async () => {
+      expect(terminalWorkspaceFenceHeld).toBe(true)
+    })
+    session.withTransaction.mockImplementation(async (work: () => Promise<unknown>) => {
+      const result = await work()
+      expect(mockKickReportExport).not.toHaveBeenCalled()
+      return result
+    })
+
+    await updateJobStatus(CTX, 'j1', {
+      status: 'closed',
+      expectedStatus: 'open',
+      operationId: OP_A,
+      closeNote: 'Role filled after review.',
+    })
+
+    expect(mockCreateCloseoutReport).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: 'ws-A',
+      job: expect.objectContaining({ _id: 'j1', status: 'closed' }),
+      operationId: OP_A,
+      requestedBy: { memberId: 'm1', name: 'HR One' },
+      session,
+    }))
+    expect(mockCreateCloseoutReport).toHaveBeenCalledTimes(1)
+    expect(mockCancelPipelineReports).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+      cancelledAt: expect.any(Date),
+      session,
+    })
+    expect(mockCancelDigestOutboxes).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      now: expect.any(Date),
+      session,
+    })
+    expect(mockWorkspaceWriteFence).toHaveBeenCalledWith('ws-A', 'm1', expect.any(Function))
+    expect(mockCancelPipelineReports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCreateCloseoutReport.mock.invocationCallOrder[0],
+    )
+    expect(mockCancelDigestOutboxes.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCreateCloseoutReport.mock.invocationCallOrder[0],
+    )
+    expect(mockKickReportExport).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      exportId: 'report-1',
+    })
+    expect(mockCreateCloseoutReport.mock.invocationCallOrder[0]).toBeLessThan(
+      mockKickReportExport.mock.invocationCallOrder[0],
+    )
+  })
+
   it('atomically rejects live applications and creates one staggered outbox row each', async () => {
     const applications = [
       { _id: 'a1', candidateId: 'c1', stage: 'screened' },
@@ -526,6 +710,47 @@ describe('updateJobStatus', () => {
       payload: expect.objectContaining({ workspaceName: 'Acme' }),
     })
     expect(outboxDocs[1].sendAfter.getTime() - outboxDocs[0].sendAfter.getTime()).toBe(2_000)
+  })
+
+  it('freezes a rendered custom close email for each recipient inside the outbox transaction', async () => {
+    mockJob.findOne.mockResolvedValue(null)
+    mockJob.findOneAndUpdate.mockResolvedValue({
+      _id: 'j1',
+      title: 'Backend Engineer',
+      status: 'closed',
+      events: [],
+    })
+    mockApplication.find.mockResolvedValue([
+      { _id: 'a1', candidateId: 'c1', stage: 'screened' },
+    ])
+    mockCandidate.find.mockResolvedValue([
+      { _id: 'c1', name: 'Ada Lovelace', email: 'ada@example.com' },
+    ])
+    mockApplication.bulkWrite.mockResolvedValue({ modifiedCount: 1 })
+    mockEmailOutbox.create.mockResolvedValue([])
+
+    await updateJobStatus(CTX, 'j1', {
+      status: 'closed',
+      expectedStatus: 'open',
+      operationId: OP_A,
+      closeNote: 'Internal: selected another candidate after panel review.',
+      closeEmailTemplate: {
+        subject: '{workspace_name}: update for {candidate_first_name}',
+        body: 'Hi {candidate_first_name},\n\n{job_title} at {workspace_name} has closed. <b>Thank you.</b>',
+      },
+    })
+
+    const [outboxDocs, outboxOptions] = mockEmailOutbox.create.mock.calls[0]
+    expect(outboxOptions).toEqual({ session })
+    expect(outboxDocs).toHaveLength(1)
+    expect(outboxDocs[0].payload).toMatchObject({
+      emailSnapshot: {
+        subject: 'Acme: update for Ada',
+        body: 'Hi Ada,\n\nBackend Engineer at Acme has closed. <b>Thank you.</b>',
+      },
+      decisionNote: 'Internal: selected another candidate after panel review.',
+    })
+    expect(outboxDocs[0].payload.emailSnapshot.body).not.toContain('selected another candidate')
   })
 
   it('emails manually rejected candidates at close without rewriting their stage event', async () => {
@@ -628,6 +853,17 @@ describe('updateJobStatus', () => {
 
   it('revokes pending AI and guest authority in the close transaction and notifies runtime', async () => {
     const closedAt = new Date('2026-08-10T10:00:00.000Z')
+    const assessmentExportTarget = {
+      key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
+      coordinate: {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        applicationId: 'a1',
+        candidateId: 'c1',
+        exportId: 'e1',
+      },
+    }
+    mockCancelAssessmentExports.mockResolvedValueOnce([assessmentExportTarget])
     mockJob.findOne.mockResolvedValue(null)
     mockJob.findOneAndUpdate.mockResolvedValue({
       _id: 'j1',
@@ -679,6 +915,81 @@ describe('updateJobStatus', () => {
       expect.objectContaining({ workspaceId: 'ws-A', jobId: 'j1', live: true }),
       expect.any(Object),
       { session },
+    )
+    expect(mockHumanKitDelivery.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({ status: 'cancelled' }),
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      }),
+      { session },
+    )
+    expect(mockInterviewKit.updateMany).toHaveBeenCalledWith(
+      { workspaceId: 'ws-A', jobId: 'j1', active: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          active: false,
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Job closed by recruiter',
+        }),
+      }),
+      { session },
+    )
+    expect(mockHumanScorecard.updateMany).toHaveBeenCalledWith(
+      { workspaceId: 'ws-A', jobId: 'j1', status: 'draft' },
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'cancelled' }) }),
+      { session },
+    )
+    expect(mockHumanRound.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        status: { $nin: ['completed', 'revoked'] },
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Job closed by recruiter',
+        }),
+      }),
+      { session },
+    )
+    expect(mockSharePacket.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          active: false,
+          status: 'revoked',
+          revokedAt: expect.any(Date),
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Job closed by recruiter',
+        },
+      },
+      { session },
+    )
+    expect(mockCancelAssessmentExports).toHaveBeenCalledWith({
+      scope: { workspaceId: 'ws-A', jobId: 'j1' },
+      cancelledAt: expect.any(Date),
+      session,
+    })
+    expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
+    expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteAssessmentExports.mock.invocationCallOrder[0],
     )
     expect(mockInvitationBatchItem.updateMany).toHaveBeenCalledWith(
       {
@@ -732,6 +1043,8 @@ describe('updateJobStatus', () => {
       }),
     ).resolves.toBe(prior)
     expect(mockJob.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockCreateCloseoutReport).not.toHaveBeenCalled()
+    expect(mockKickReportExport).not.toHaveBeenCalled()
 
     prior.events[0].to = 'on_hold'
     await expect(
@@ -825,6 +1138,26 @@ describe('createApplication', () => {
       actorMemberId: 'm1',
       actorName: 'HR One',
     })
+    expect(mockOnboardingTestDriveFence).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+      candidateId: 'c1',
+      session,
+    })
+  })
+
+  it('rejects a synthetic practice coordinate before creating an ordinary application', async () => {
+    mockJob.findOne.mockResolvedValue({ _id: 'j1', status: 'open' })
+    mockCandidate.findOne.mockResolvedValue({ _id: 'c1' })
+    mockOnboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(
+      createApplication(CTX, { jobId: 'j1', candidateId: 'c1' }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
+    expect(mockApplication.create).not.toHaveBeenCalled()
   })
 
   it('rejects intake on held jobs before writing', async () => {
@@ -934,6 +1267,24 @@ describe('getJobPipeline', () => {
     mockRound.find.mockReturnValue({
       sort: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue([]) }),
     })
+    mockHumanRound.find.mockReturnValue({
+      sort: vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue([
+        {
+          _id: 'human-1',
+          applicationId: 'a-low',
+          mode: 'guest_kit',
+          status: 'completed',
+          createdAt: new Date('2026-08-12T00:05:00.000Z'),
+        },
+        {
+          _id: 'human-2',
+          applicationId: 'a-low',
+          mode: 'member_room',
+          status: 'pending_scorecard',
+          createdAt: new Date('2026-08-12T00:06:00.000Z'),
+        },
+      ]) }),
+    })
     mockJob.find.mockReturnValue({
       select: vi.fn().mockResolvedValue([
         { _id: 'j-old', workspaceId: 'ws-A', title: 'Earlier role' },
@@ -975,6 +1326,105 @@ describe('getJobPipeline', () => {
       { jobId: 'j-other', jobTitle: 'Other role', stage: 'rejected' },
     ])
     expect(result.entries[2].previouslySeenIn).toEqual([])
+    expect(result.entries.find((entry) => entry.application._id === 'a-low')?.humanRoundSummary)
+      .toMatchObject({ total: 2, completed: 1, pendingScorecard: 1, revoked: 0 })
+    expect(result.entries.find((entry) => entry.application._id === 'a-low')?.humanRoundSummary.rounds)
+      .toHaveLength(2)
+    expect(result.entries.find((entry) => entry.application._id === 'a-high')?.humanRoundSummary)
+      .toMatchObject({ total: 0, completed: 0, pendingScorecard: 0, revoked: 0 })
+  })
+})
+
+describe('getApplicationDetail', () => {
+  it('returns human evidence separately from AI rounds with exact workspace coordinates and no delivery PII', async () => {
+    mockApplication.findOne.mockResolvedValue({
+      _id: 'app-1',
+      workspaceId: 'ws-A',
+      candidateId: 'candidate-1',
+      jobId: 'job-1',
+    })
+    mockCandidate.findOne.mockResolvedValue({ _id: 'candidate-1', workspaceId: 'ws-A' })
+    mockJob.findOne.mockResolvedValue({ _id: 'job-1', workspaceId: 'ws-A' })
+    mockRound.find.mockReturnValue({
+      sort: vi.fn().mockResolvedValue([{ _id: 'ai-1', applicationId: 'app-1' }]),
+    })
+    mockHumanRound.find.mockReturnValue({
+      sort: vi.fn().mockResolvedValue([
+        { _id: 'human-1', applicationId: 'app-1', mode: 'member_room' },
+      ]),
+    })
+    mockHumanScorecard.find.mockReturnValue({
+      select: vi.fn().mockResolvedValue([
+        {
+          humanRoundId: 'human-1',
+          reviewerKind: 'member',
+          reviewerName: 'HR One',
+          dimensions: [{ key: 'role_capability', rating: 4, evidence: 'Clear example' }],
+          recommendation: 'yes',
+          overallComment: 'Proceed.',
+          submittedAt: new Date('2026-08-13T01:00:00.000Z'),
+        },
+      ]),
+    })
+    mockHumanKitDelivery.find.mockReturnValue({
+      select: vi.fn().mockResolvedValue([
+        {
+          humanRoundId: 'human-1',
+          purpose: 'initial',
+          status: 'failed',
+          attempts: 5,
+          sentAt: undefined,
+          recipientEmail: 'must-not-project@example.com',
+          ciphertext: 'must-not-project',
+        },
+      ]),
+    })
+
+    const detail = await getApplicationDetail(CTX, 'app-1')
+
+    expect(detail.rounds).toEqual([{ _id: 'ai-1', applicationId: 'app-1' }])
+    expect(detail.humanRounds).toEqual([
+      {
+        round: { _id: 'human-1', applicationId: 'app-1', mode: 'member_room' },
+        scorecard: expect.objectContaining({
+          reviewerKind: 'member',
+          recommendation: 'yes',
+          overallComment: 'Proceed.',
+        }),
+        delivery: {
+          initial: {
+            status: 'failed',
+            attempts: 5,
+            sentAt: undefined,
+          },
+          reminder: null,
+        },
+      },
+    ])
+    expect(mockRound.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      applicationId: 'app-1',
+    })
+    expect(mockHumanRound.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      applicationId: 'app-1',
+    })
+    expect(mockHumanScorecard.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      applicationId: 'app-1',
+      jobId: 'job-1',
+      candidateId: 'candidate-1',
+      status: 'submitted',
+    })
+    expect(mockHumanKitDelivery.find).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      applicationId: 'app-1',
+      jobId: 'job-1',
+      candidateId: 'candidate-1',
+      purpose: { $in: ['initial', 'reminder'] },
+    })
+    expect(JSON.stringify(detail.humanRounds)).not.toContain('must-not-project@example.com')
+    expect(JSON.stringify(detail.humanRounds)).not.toContain('must-not-project')
   })
 })
 
@@ -1028,6 +1478,24 @@ describe('addOrMergeJobCandidate', () => {
       null,
       { session },
     )
+    expect(mockApplication.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects a synthetic job before it can create or attach a real candidate', async () => {
+    mockJob.findOne.mockResolvedValue(OPEN_JOB)
+    mockOnboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(
+      addOrMergeJobCandidate(CTX, 'j1', {
+        name: 'Real candidate',
+        email: 'real@example.com',
+        operationId: OP_A,
+      }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+    expect(mockCandidate.findOne).not.toHaveBeenCalled()
+    expect(mockCandidate.create).not.toHaveBeenCalled()
     expect(mockApplication.create).not.toHaveBeenCalled()
   })
 
@@ -1260,7 +1728,7 @@ describe('addOrMergeJobCandidate', () => {
 
 describe('moveStage', () => {
   function armApp(stage: string, events: unknown[] = []) {
-    mockApplication.findOne.mockResolvedValue({ _id: 'a1', jobId: 'j1', stage, events })
+    mockApplication.findOne.mockResolvedValue({ _id: 'a1', jobId: 'j1', candidateId: 'c1', stage, events })
     mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
   }
 
@@ -1367,6 +1835,122 @@ describe('moveStage', () => {
     ).rejects.toMatchObject({ code: 'STAGE_TERMINAL' })
   })
 
+  it('atomically shuts down active human-kit lifecycle rows on a terminal stage', async () => {
+    armApp('interviewing')
+    mockApplication.findOneAndUpdate.mockResolvedValue({ _id: 'a1', stage: 'rejected' })
+    const assessmentExportTarget = {
+      key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
+      coordinate: {
+        workspaceId: 'ws-A',
+        jobId: 'j1',
+        applicationId: 'a1',
+        candidateId: 'c1',
+        exportId: 'e1',
+      },
+    }
+    mockCancelAssessmentExports.mockResolvedValueOnce([assessmentExportTarget])
+
+    await moveStage(CTX, 'a1', {
+      action: 'reject',
+      expectedFrom: 'interviewing',
+      operationId: OP_A,
+      note: 'Candidate withdrew from consideration.',
+    })
+
+    const scope = {
+      workspaceId: 'ws-A',
+      applicationId: 'a1',
+      jobId: 'j1',
+      candidateId: 'c1',
+    }
+    expect(mockHumanKitDelivery.updateMany).toHaveBeenCalledWith(
+      { ...scope, status: { $in: ['pending', 'sending', 'failed'] } },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'cancelled',
+          lastError: 'Application reached a terminal stage',
+        }),
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      }),
+      { session },
+    )
+    expect(mockInterviewKit.updateMany).toHaveBeenCalledWith(
+      { ...scope, active: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          active: false,
+          status: 'revoked',
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Application moved to terminal stage: rejected',
+        }),
+      }),
+      { session },
+    )
+    expect(mockHumanScorecard.updateMany).toHaveBeenCalledWith(
+      { ...scope, status: 'draft' },
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'cancelled' }) }),
+      { session },
+    )
+    expect(mockHumanRound.updateMany).toHaveBeenCalledWith(
+      { ...scope, status: { $nin: ['completed', 'revoked'] } },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'revoked',
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Application moved to terminal stage: rejected',
+        }),
+      }),
+      { session },
+    )
+    expect(mockSharePacket.updateMany).toHaveBeenCalledWith(
+      {
+        ...scope,
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          active: false,
+          status: 'revoked',
+          revokedByMemberId: 'm1',
+          revokedByName: 'HR One',
+          revocationReason: 'Application moved to terminal stage: rejected',
+        }),
+      }),
+      { session },
+    )
+    expect(mockCancelAssessmentExports).toHaveBeenCalledWith({
+      scope,
+      cancelledAt: expect.any(Date),
+      session,
+    })
+    expect(mockCancelPipelineReports).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+      cancelledAt: expect.any(Date),
+      session,
+    })
+    expect(mockCancelDigestOutboxes).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      now: expect.any(Date),
+      session,
+    })
+    expect(mockWorkspaceWriteFence).toHaveBeenCalledWith('ws-A', 'm1', expect.any(Function))
+    expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancelPipelineReports.mock.invocationCallOrder[0],
+    )
+    expect(mockCancelPipelineReports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancelDigestOutboxes.mock.invocationCallOrder[0],
+    )
+    expect(mockCreateCloseoutReport).not.toHaveBeenCalled()
+    expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
+    expect(mockRound.updateMany).not.toHaveBeenCalled()
+    expect(mockDeliverRuntimeRevocation).not.toHaveBeenCalled()
+  })
+
   it('rejects stale expectedFrom and lost compare-and-set races', async () => {
     armApp('screened')
     await expect(
@@ -1380,6 +1964,10 @@ describe('moveStage', () => {
     await expect(
       moveStage(CTX, 'a1', { action: 'advance', expectedFrom: 'new', operationId: OP_B }),
     ).rejects.toMatchObject({ code: 'STAGE_RACE' })
+    expect(mockHumanKitDelivery.updateMany).not.toHaveBeenCalled()
+    expect(mockInterviewKit.updateMany).not.toHaveBeenCalled()
+    expect(mockHumanScorecard.updateMany).not.toHaveBeenCalled()
+    expect(mockHumanRound.updateMany).not.toHaveBeenCalled()
   })
 
   it('is idempotent only when operation id, from-stage, and target all match', async () => {
@@ -1394,6 +1982,8 @@ describe('moveStage', () => {
       moveStage(CTX, 'a1', { action: 'advance', expectedFrom: 'new', operationId: OP_A }),
     ).resolves.toMatchObject({ stage: 'screened' })
     expect(mockJob.updateOne).not.toHaveBeenCalled()
+    expect(mockCancelPipelineReports).not.toHaveBeenCalled()
+    expect(mockCancelDigestOutboxes).not.toHaveBeenCalled()
 
     event.to = 'rejected'
     await expect(

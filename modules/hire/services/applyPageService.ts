@@ -9,10 +9,15 @@ import {
   type IHireJob,
 } from '../models'
 import type { MembershipContext } from './workspaceService'
+import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
 import {
   decodeWorkspaceCapability,
   encodeWorkspaceCapability,
 } from './workspaceCapability'
+import {
+  assertHireOnboardingTestDriveWriteIsolation,
+  isHireOnboardingTestDriveCoordinate,
+} from '@hire-onboarding-boundary'
 
 /**
  * Public apply page: a per-job shareable link that lets candidates submit
@@ -41,36 +46,51 @@ export async function issueApplyLink(
   jobId: string,
 ): Promise<ApplyLinkResult> {
   await connectDB()
-  const job = await HireJob.findOne({
-    _id: jobId,
-    workspaceId: ctx.workspace._id,
-  })
-  if (!job) throw new NotFoundError('Job')
-  if (job.status === 'closed') {
-    throw new AppError('This job is closed', 409, 'JOB_CLOSED')
-  }
   const token = crypto.randomBytes(32).toString('hex')
-  const update = await HireJob.updateOne(
-    {
-      _id: jobId,
-      workspaceId: ctx.workspace._id,
-      status: { $ne: 'closed' },
+  return withActiveHireWorkspaceWriteTransaction(
+    ctx.workspace._id,
+    ctx.membership._id,
+    async (session) => {
+      await assertHireOnboardingTestDriveWriteIsolation({
+        workspaceId: ctx.workspace._id,
+        jobId,
+        session,
+      })
+      const job = await HireJob.findOne(
+        {
+          _id: jobId,
+          workspaceId: ctx.workspace._id,
+        },
+        null,
+        { session },
+      )
+      if (!job) throw new NotFoundError('Job')
+      if (job.status === 'closed') {
+        throw new AppError('This job is closed', 409, 'JOB_CLOSED')
+      }
+      const update = await HireJob.updateOne(
+        {
+          _id: jobId,
+          workspaceId: ctx.workspace._id,
+          status: { $ne: 'closed' },
+        },
+        {
+          $set: {
+            applyTokenHash: sha256(token),
+            applyPageEnabled: true,
+          },
+        },
+        { runValidators: true, session },
+      )
+      if (update.matchedCount !== 1) {
+        throw new AppError('This job is closed', 409, 'JOB_CLOSED')
+      }
+      return {
+        capability: encodeWorkspaceCapability(ctx.workspace._id.toString(), token),
+        enabled: true,
+      }
     },
-    {
-      $set: {
-        applyTokenHash: sha256(token),
-        applyPageEnabled: true,
-      },
-    },
-    { runValidators: true },
   )
-  if (update.matchedCount !== 1) {
-    throw new AppError('This job is closed', 409, 'JOB_CLOSED')
-  }
-  return {
-    capability: encodeWorkspaceCapability(ctx.workspace._id.toString(), token),
-    enabled: true,
-  }
 }
 
 /** Turn the page off. The hash is cleared so the old link cannot resume. */
@@ -122,6 +142,14 @@ export async function resolveApplyToken(
     status: { $ne: 'closed' },
   })
   if (!job) return null
+  if (
+    await isHireOnboardingTestDriveCoordinate({
+      workspaceId: job.workspaceId,
+      jobId: job._id,
+    })
+  ) {
+    return null
+  }
   const workspace = await HireWorkspace.findOne({
     _id: job.workspaceId,
     $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],

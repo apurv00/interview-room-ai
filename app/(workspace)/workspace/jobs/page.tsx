@@ -13,6 +13,7 @@ import Button from '@shared/ui/Button'
 import Input from '@shared/ui/Input'
 import StateView from '@shared/ui/StateView'
 import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
+import InterviewYourselfCta from './InterviewYourselfCta'
 
 interface JobRow {
   id: string
@@ -258,6 +259,8 @@ export default function JobsPage() {
           {showForm ? 'Cancel' : 'New job'}
         </Button>
       </div>
+
+      <InterviewYourselfCta priority={welcome} />
 
       {showForm && (
         <form

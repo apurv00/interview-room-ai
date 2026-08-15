@@ -10,6 +10,7 @@ import {
 import {
   serializeApplication,
   serializeCandidate,
+  serializeHumanRoundDetail,
   serializeJob,
   serializeRound,
   resumeHashOf,
@@ -74,6 +75,10 @@ export const GET = composeHireApiRoute({
           mediaPurged: Boolean(result?.piiPurgedAt),
         }
       }),
+      // Human rounds use a separate aggregate from engine-backed `rounds`.
+      // The detail serializer intentionally excludes kits, capability hashes,
+      // recovery envelopes, recipient data, and provider errors.
+      humanRounds: detail.humanRounds.map(serializeHumanRoundDetail),
       activity: attempts.map((attempt) => ({
         roundId: attempt.roundId.toString(),
         inProgress: attempt.status === 'in_progress' || attempt.status === 'processing',

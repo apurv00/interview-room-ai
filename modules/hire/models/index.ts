@@ -138,6 +138,42 @@ export {
   type HireRoundResults,
   type HireRoundPerQuestion,
 } from './HireRound'
+export {
+  HireHumanRound,
+  HIRE_HUMAN_ROUND_MODES,
+  HIRE_HUMAN_ROUND_STATUSES,
+  type HireHumanRoundMode,
+  type HireHumanRoundStatus,
+  type IHireHumanRoundBrief,
+  type IHireHumanRound,
+} from './HireHumanRound'
+export {
+  HireInterviewKit,
+  HIRE_INTERVIEW_KIT_STATUSES,
+  type HireInterviewKitStatus,
+  type IHireInterviewKit,
+} from './HireInterviewKit'
+export {
+  HireHumanScorecard,
+  HIRE_HUMAN_SCORECARD_DIMENSIONS,
+  HIRE_HUMAN_SCORECARD_RECOMMENDATIONS,
+  HIRE_HUMAN_SCORECARD_STATUSES,
+  HIRE_HUMAN_SCORECARD_REVIEWER_KINDS,
+  type HireHumanScorecardDimensionKey,
+  type HireHumanScorecardRecommendation,
+  type HireHumanScorecardStatus,
+  type HireHumanScorecardReviewerKind,
+  type IHireHumanScorecardDimension,
+  type IHireHumanScorecard,
+} from './HireHumanScorecard'
+export {
+  HireHumanKitDelivery,
+  HIRE_HUMAN_KIT_DELIVERY_PURPOSES,
+  HIRE_HUMAN_KIT_DELIVERY_STATUSES,
+  type HireHumanKitDeliveryPurpose,
+  type HireHumanKitDeliveryStatus,
+  type IHireHumanKitDelivery,
+} from './HireHumanKitDelivery'
 export { HireEngineHandoff, type IHireEngineHandoff } from './HireEngineHandoff'
 export {
   HireEngineIngestionEvent,

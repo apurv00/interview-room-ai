@@ -5,7 +5,19 @@ vi.mock('../services/hireControlBoundary', () => ({
   connectHireControlDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-const { models, session, mockDeliverRuntimeRevocation } = vi.hoisted(() => {
+const {
+  models,
+  decisionModels,
+  digestModels,
+  statusModels,
+  onboardingModels,
+  reportModels,
+  session,
+  mockDeliverRuntimeRevocation,
+  mockCancelAssessmentExports,
+  mockDeleteAssessmentExports,
+  mockCancelReportExports,
+} = vi.hoisted(() => {
   const child = () => ({ deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }) })
   const modelMap = {
     HireApplication: child(),
@@ -18,6 +30,10 @@ const { models, session, mockDeliverRuntimeRevocation } = vi.hoisted(() => {
     HireGuestSession: child(),
     HireInterviewAttempt: child(),
     HireInterviewResult: child(),
+    HireHumanKitDelivery: child(),
+    HireHumanRound: child(),
+    HireHumanScorecard: child(),
+    HireInterviewKit: child(),
     HireIntakeTask: child(),
     HireInvitationBatch: child(),
     HireInvitationBatchItem: child(),
@@ -50,17 +66,50 @@ const { models, session, mockDeliverRuntimeRevocation } = vi.hoisted(() => {
   }
   return {
     models: modelMap,
+    decisionModels: {
+      HireAssessmentExport: child(),
+      HireExternalVerdict: child(),
+      HireSharePacket: child(),
+    },
+    digestModels: {
+      HireDigestOutbox: child(),
+      HireDigestPreference: child(),
+    },
+    statusModels: {
+      HireCandidateStatusLink: child(),
+    },
+    onboardingModels: {
+      HireOnboardingTestDrive: child(),
+    },
+    reportModels: {
+      HireReportExport: child(),
+    },
     session: {
       withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
       endSession: vi.fn().mockResolvedValue(undefined),
     },
     mockDeliverRuntimeRevocation: vi.fn(),
+    mockCancelAssessmentExports: vi.fn(),
+    mockDeleteAssessmentExports: vi.fn(),
+    mockCancelReportExports: vi.fn(),
   }
 })
 
 vi.mock('../models', () => models)
+vi.mock('@hire-decisions/models', () => decisionModels)
+vi.mock('../../hire-digest/models', () => digestModels)
+vi.mock('../../hire-status/models', () => statusModels)
+vi.mock('../../hire-onboarding/models', () => onboardingModels)
 vi.mock('../services/engineRevocationService', () => ({
   deliverRuntimeRevocation: (...args: unknown[]) => mockDeliverRuntimeRevocation(...args),
+}))
+vi.mock('../services/assessmentExportLifecycleService', () => ({
+  cancelHireAssessmentExports: (...args: unknown[]) => mockCancelAssessmentExports(...args),
+  deleteHireAssessmentExportObjects: (...args: unknown[]) => mockDeleteAssessmentExports(...args),
+}))
+vi.mock('../../hire-reports/models/HireReportExport', () => reportModels)
+vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
+  cancelHireReportExportsForLifecycle: (...args: unknown[]) => mockCancelReportExports(...args),
 }))
 
 import {
@@ -123,6 +172,12 @@ beforeEach(() => {
   models.HireRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
   models.HireRound.exists.mockReturnValue(sessionResult(null))
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
+  mockCancelAssessmentExports.mockResolvedValue([])
+  mockDeleteAssessmentExports.mockResolvedValue(undefined)
+  mockCancelReportExports.mockResolvedValue(0)
+  reportModels.HireReportExport.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  statusModels.HireCandidateStatusLink.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  onboardingModels.HireOnboardingTestDrive.deleteMany.mockResolvedValue({ deletedCount: 1 })
   for (const model of Object.values(models)) {
     if ('deleteMany' in model) {
       model.deleteMany.mockResolvedValue({ deletedCount: 1 })
@@ -144,20 +199,33 @@ describe('workspace hard purge', () => {
       'HireMediaAsset',
       'HirePrivacyRequest',
       'HireEmailOutbox',
+      'HireDigestOutbox',
+      'HireDigestPreference',
       'HireAiInviteDelivery',
+      'HireHumanKitDelivery',
+      'HireInterviewKit',
+      'HireHumanScorecard',
+      'HireHumanRound',
       'HireRound',
       'HireIntakeTask',
       'HireInvitationBatchItem',
       'HireInvitationBatch',
       'HireScreeningGate',
+      'HireAssessmentExport',
+      'HireReportExport',
+      'HireExternalVerdict',
+      'HireSharePacket',
+      'HireCandidateStatusLink',
       'HireApplication',
       'HireCandidate',
       'HireJobRequirementVersion',
       'HireJob',
+      'HireOnboardingTestDrive',
       'HireWorkspaceMember',
       'HireWorkspace',
     ])
     expect(HIRE_WORKSPACE_PURGE_COLLECTIONS.join(' ')).not.toMatch(/Runtime/)
+    expect(HIRE_WORKSPACE_PURGE_COLLECTIONS).not.toContain('HireReportExportCleanup')
   })
 
   it('acknowledges private object deletion before removing the full graph', async () => {
@@ -173,6 +241,17 @@ describe('workspace hard purge', () => {
       .mockReturnValueOnce(mediaQuery([asset]))
       .mockReturnValueOnce(mediaQuery([]))
     const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn().mockResolvedValue(undefined) }
+    const assessmentExportTarget = {
+      key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
+      coordinate: {
+        workspaceId: WORKSPACE_ID.toString(),
+        jobId: '222222222222222222222222',
+        applicationId: '333333333333333333333333',
+        candidateId: '444444444444444444444444',
+        exportId: '555555555555555555555555',
+      },
+    }
+    mockCancelAssessmentExports.mockResolvedValueOnce([assessmentExportTarget])
 
     const report = await purgeDueHireWorkspaces({
       workspaceId: WORKSPACE_ID.toString(),
@@ -203,6 +282,77 @@ describe('workspace hard purge', () => {
         { session },
       )
     }
+    for (const [name, model] of Object.entries(decisionModels)) {
+      expect(model.deleteMany, name).toHaveBeenCalledWith(
+        { workspaceId: WORKSPACE_ID },
+        { session },
+      )
+    }
+    expect(reportModels.HireReportExport.deleteMany).toHaveBeenCalledWith(
+      { workspaceId: WORKSPACE_ID },
+      { session },
+    )
+    for (const [name, model] of Object.entries(digestModels)) {
+      expect(model.deleteMany, name).toHaveBeenCalledWith(
+        { workspaceId: WORKSPACE_ID },
+        { session },
+      )
+    }
+    expect(statusModels.HireCandidateStatusLink.deleteMany).toHaveBeenCalledWith(
+      { workspaceId: WORKSPACE_ID },
+      { session },
+    )
+    expect(onboardingModels.HireOnboardingTestDrive.deleteMany).toHaveBeenCalledWith(
+      { workspaceId: WORKSPACE_ID },
+      { session },
+    )
+    expect(mockCancelAssessmentExports).toHaveBeenCalledWith({
+      scope: { workspaceId: WORKSPACE_ID },
+      cancelledAt: NOW,
+      session,
+    })
+    expect(mockCancelReportExports).toHaveBeenCalledWith({
+      scope: { workspaceId: WORKSPACE_ID },
+      cancelledAt: NOW,
+      session,
+    })
+    expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
+    expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      decisionModels.HireAssessmentExport.deleteMany.mock.invocationCallOrder[0],
+    )
+    expect(mockCancelReportExports.mock.invocationCallOrder[0]).toBeLessThan(
+      reportModels.HireReportExport.deleteMany.mock.invocationCallOrder[0],
+    )
+    expect(decisionModels.HireAssessmentExport.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteAssessmentExports.mock.invocationCallOrder[0],
+    )
+    expect(
+      decisionModels.HireExternalVerdict.deleteMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(decisionModels.HireSharePacket.deleteMany.mock.invocationCallOrder[0])
+    expect(
+      decisionModels.HireSharePacket.deleteMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(statusModels.HireCandidateStatusLink.deleteMany.mock.invocationCallOrder[0])
+    expect(
+      statusModels.HireCandidateStatusLink.deleteMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(models.HireApplication.deleteMany.mock.invocationCallOrder[0])
+    expect(models.HireRound.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireApplication.deleteMany.mock.invocationCallOrder[0],
+    )
+    expect(models.HireApplication.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireCandidate.deleteMany.mock.invocationCallOrder[0],
+    )
+    expect(models.HireCandidate.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireJobRequirementVersion.deleteMany.mock.invocationCallOrder[0],
+    )
+    expect(models.HireJobRequirementVersion.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireJob.deleteMany.mock.invocationCallOrder[0],
+    )
+    expect(models.HireJob.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      onboardingModels.HireOnboardingTestDrive.deleteMany.mock.invocationCallOrder[0],
+    )
+    expect(onboardingModels.HireOnboardingTestDrive.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireWorkspaceMember.deleteMany.mock.invocationCallOrder[0],
+    )
     expect(models.HireWorkspace.deleteOne).toHaveBeenCalledWith(
       expect.objectContaining({
         _id: WORKSPACE_ID,

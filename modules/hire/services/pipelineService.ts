@@ -2,12 +2,17 @@ import crypto from 'crypto'
 import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { AppError, NotFoundError } from '@shared/errors'
+import { HireSharePacket } from '@hire-decisions/models'
 import {
   HireApplication,
   HireCandidate,
   HireEngineHandoff,
   HireGuestSession,
+  HireHumanKitDelivery,
+  HireHumanRound,
+  HireHumanScorecard,
   HireInterviewAttempt,
+  HireInterviewKit,
   HireInvitationBatch,
   HireInvitationBatchItem,
   HireJob,
@@ -18,6 +23,9 @@ import {
   type HireCandidateProvenanceSource,
   type IHireApplication,
   type IHireCandidate,
+  type IHireHumanKitDelivery,
+  type IHireHumanRound,
+  type IHireHumanScorecard,
   type IHireJob,
   type IHireRound,
 } from '../models'
@@ -28,6 +36,11 @@ import {
   type HireWorkMode,
 } from '../models/HireJobRequirementVersion'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
+import {
+  assertValidHireCloseEmailTemplate,
+  resolveJobCloseRejectionEmailSnapshot,
+  type JobCloseRejectionEmailTemplate,
+} from '../emails/jobCloseRejectionEmail'
 import { finalizeSmartJd } from './jdBuilderService'
 import type { MembershipContext } from './workspaceService'
 import {
@@ -41,6 +54,21 @@ import {
   claimHireCandidatePiiWriteFence,
   HireCandidatePiiTombstoneError,
 } from './hireCandidatePrivacyWriteFence'
+import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
+import {
+  cancelHireAssessmentExports,
+  deleteHireAssessmentExportObjects,
+  type HireAssessmentExportCleanupTarget,
+} from './assessmentExportLifecycleService'
+import {
+  cancelHirePipelineStatusReportsForTerminalTransition,
+  createHireJobCloseoutReportForLifecycle,
+} from '../../hire-reports/services/hireReportLifecycleService'
+import {
+  kickHireReportExport,
+  type HireReportExportRequestResult,
+} from '../../hire-reports/services/hireReportExportService'
+import { cancelHireDigestOutboxesForScope } from '../../hire-digest/services/hireDigestService'
 
 /**
  * Jobs, candidates, applications, and the fixed pipeline. Every query in this
@@ -341,6 +369,12 @@ export interface PipelineEntry {
     '_id' | 'status' | 'invitedAt' | 'linkedAt' | 'results' | 'inviteTokenExpiry' | 'revokedAt'
   > | null
   /**
+   * Human-side evidence stays separate from engine-backed `latestRound`.
+   * The board gets enough state to render R1/R2 chips without pretending a
+   * scorecard is an AI result or calculating a Phase-4 aggregate verdict.
+   */
+  humanRoundSummary: HumanRoundSummary
+  /**
    * A JD-match result is only ranked when it still refers to a résumé we
    * retain. Stale and unscored records remain visible below the fresh scored
    * queue; neither is silently filtered or rejected.
@@ -360,9 +394,36 @@ export interface PipelineEntry {
   }>
 }
 
+export interface HumanRoundSummary {
+  total: number
+  completed: number
+  pendingScorecard: number
+  revoked: number
+  rounds: Array<Pick<
+    IHireHumanRound,
+    | '_id'
+    | 'mode'
+    | 'status'
+    | 'openedAt'
+    | 'scorecardSubmittedAt'
+    | 'revokedAt'
+    | 'createdAt'
+  >>
+}
+
 export interface JobPipeline {
   job: IHireJob
   entries: PipelineEntry[]
+}
+
+function summarizeHumanRounds(rounds: IHireHumanRound[]): HumanRoundSummary {
+  return {
+    total: rounds.length,
+    completed: rounds.filter((round) => round.status === 'completed').length,
+    pendingScorecard: rounds.filter((round) => round.status === 'pending_scorecard').length,
+    revoked: rounds.filter((round) => round.status === 'revoked').length,
+    rounds,
+  }
 }
 
 function assertJobStatusTransition(
@@ -392,11 +453,16 @@ export async function getJobPipeline(
 
   const candidateIds = applications.map((a) => a.candidateId)
   const appIds = applications.map((a) => a._id)
-  const [candidates, rounds, otherApplications] = await Promise.all([
+  const [candidates, rounds, humanRounds, otherApplications] = await Promise.all([
     HireCandidate.find({ workspaceId: ctx.workspace._id, _id: { $in: candidateIds } }),
     HireRound.find({ workspaceId: ctx.workspace._id, applicationId: { $in: appIds } })
       .sort({ createdAt: -1 })
       .select('applicationId status invitedAt linkedAt results inviteTokenExpiry revokedAt'),
+    HireHumanRound.find({ workspaceId: ctx.workspace._id, applicationId: { $in: appIds } })
+      .sort({ createdAt: 1, _id: 1 })
+      .select(
+        'applicationId mode status openedAt scorecardSubmittedAt revokedAt createdAt',
+      ),
     candidateIds.length > 0
       ? HireApplication.find({
           workspaceId: ctx.workspace._id,
@@ -410,6 +476,13 @@ export async function getJobPipeline(
   for (const r of rounds) {
     const key = String(r.applicationId)
     if (!latestRoundByApp.has(key)) latestRoundByApp.set(key, r)
+  }
+  const humanRoundsByApp = new Map<string, IHireHumanRound[]>()
+  for (const round of humanRounds) {
+    const key = String(round.applicationId)
+    const current = humanRoundsByApp.get(key) ?? []
+    current.push(round)
+    humanRoundsByApp.set(key, current)
   }
 
   const otherJobIds = Array.from(
@@ -468,6 +541,9 @@ export async function getJobPipeline(
         application,
         candidate,
         latestRound: latestRoundByApp.get(String(application._id)) ?? null,
+        humanRoundSummary: summarizeHumanRounds(
+          humanRoundsByApp.get(String(application._id)) ?? [],
+        ),
         scoreState,
         rank,
         previouslySeenIn: previouslySeenByCandidateId.get(String(application.candidateId)) ?? [],
@@ -529,6 +605,7 @@ export async function updateJobStatus(
     expectedStatus: IHireJob['status']
     operationId: string
     closeNote?: string
+    closeEmailTemplate?: JobCloseRejectionEmailTemplate
   }
 ): Promise<IHireJob> {
   await connectDB()
@@ -537,9 +614,35 @@ export async function updateJobStatus(
   if (input.status === 'closed' && !closeNote) {
     throw new AppError('A decision note is required when closing a job', 400, 'CLOSE_NOTE_REQUIRED')
   }
+  if (input.status !== 'closed' && input.closeEmailTemplate !== undefined) {
+    throw new AppError(
+      'An email template may only be supplied when closing a job',
+      400,
+      'CLOSE_EMAIL_TEMPLATE_NOT_ALLOWED',
+    )
+  }
+  // The HTTP validator supplies precise field errors. This duplicate service
+  // check protects any future internal caller from persisting malformed copy.
+  const closeEmailTemplate = input.closeEmailTemplate
+    ? assertValidHireCloseEmailTemplate(input.closeEmailTemplate)
+    : undefined
 
   let runtimeRoundIds: string[] = []
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
+  const closeoutReportResult: { value: HireReportExportRequestResult | null } = { value: null }
   const updatedJob = await withHireTransaction(ctx, async (session) => {
+    // A transaction callback can retry after an aborted attempt. Keep only the
+    // durable result from its final callback execution for the post-commit kick.
+    closeoutReportResult.value = null
+    // Closing a synthetic practice job would otherwise create candidate PII
+    // email-outbox rows and lifecycle work that do not belong to onboarding.
+    // The marker remains a fence in every retained state until the dedicated
+    // cleanup has removed its graph.
+    await assertHireOnboardingTestDriveWriteIsolation({
+      workspaceId: ctx.workspace._id,
+      jobId,
+      session,
+    })
     const prior = await HireJob.findOne(
       {
         _id: jobId,
@@ -673,6 +776,120 @@ export async function updateJobStatus(
       { $set: { status: 'revoked' }, $unset: { live: 1 } },
       { session },
     )
+    // Human rounds deliberately have no engine/runtime counterpart. Closing a
+    // job therefore revokes their possession capabilities and cancels all
+    // pending delivery work in this same authority transaction, without ever
+    // adding their IDs to `runtimeRoundIds` below.
+    await HireHumanKitDelivery.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        status: { $in: ['pending', 'sending', 'failed'] },
+      },
+      {
+        $set: {
+          status: 'cancelled',
+          cancelledAt: now,
+          lastError: 'Job closed before interview-kit delivery',
+        },
+        $unset: { claimToken: 1, leaseExpiresAt: 1 },
+      },
+      { session },
+    )
+    await HireInterviewKit.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        active: true,
+      },
+      {
+        $set: {
+          status: 'revoked',
+          active: false,
+          revokedAt: now,
+          revokedByMemberId: ctx.membership._id,
+          revokedByName: actor.actorName,
+          revocationReason: 'Job closed by recruiter',
+        },
+      },
+      { session },
+    )
+    await HireHumanScorecard.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        status: 'draft',
+      },
+      { $set: { status: 'cancelled', cancelledAt: now } },
+      { session },
+    )
+    await HireHumanRound.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        status: { $nin: ['completed', 'revoked'] },
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          status: 'revoked',
+          revokedAt: now,
+          revokedByMemberId: ctx.membership._id,
+          revokedByName: actor.actorName,
+          revocationReason: 'Job closed by recruiter',
+        },
+      },
+      { session },
+    )
+    // Share packets are independent possession capabilities. A closed job
+    // must invalidate every still-active packet in the same authority
+    // transaction, including packets whose expiry has not yet elapsed.
+    await HireSharePacket.updateMany(
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        active: true,
+        status: 'active',
+        revokedAt: { $exists: false },
+      },
+      {
+        $set: {
+          active: false,
+          status: 'revoked',
+          revokedAt: now,
+          revokedByMemberId: ctx.membership._id,
+          revokedByName: actor.actorName,
+          revocationReason: 'Job closed by recruiter',
+        },
+      },
+      { session },
+    )
+    assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+      scope: {
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+      },
+      cancelledAt: now,
+      session,
+    })
+    // A close changes the aggregate projection for both the workspace-wide
+    // pipeline report and this job's report. Preserve prior closeout history;
+    // the one new closeout obligation is created below after the final stage
+    // writes have committed inside this transaction.
+    await cancelHirePipelineStatusReportsForTerminalTransition({
+      workspaceId: ctx.workspace._id,
+      jobId: job._id,
+      cancelledAt: now,
+      session,
+    })
+    // A daily digest snapshot is workspace-aggregate only. Keep member opt-in
+    // unchanged, but cancel any unfinished stale aggregate before its exact
+    // provider-authorization transaction can race this job close.
+    await cancelHireDigestOutboxesForScope({
+      workspaceId: ctx.workspace._id,
+      now,
+      session,
+    })
     // Screening confirmation is not a permission to mail after the human
     // closes a requisition. Cancel every unsent reservation in the same job
     // close transaction; a concurrently claimed worker also rechecks this
@@ -720,7 +937,17 @@ export async function updateJobStatus(
       null,
       { session },
     )
-    if (applications.length === 0) return job
+    if (applications.length === 0) {
+      closeoutReportResult.value = await createHireJobCloseoutReportForLifecycle({
+        workspaceId: ctx.workspace._id,
+        job,
+        operationId: input.operationId,
+        requestedBy: { memberId: ctx.membership._id.toString(), name: actor.actorName },
+        session,
+        now,
+      })
+      return job
+    }
 
     const undecidedApplications = applications.filter(
       (application) => application.stage !== 'rejected',
@@ -818,6 +1045,17 @@ export async function updateJobStatus(
             payload: {
               jobTitle: job.title,
               workspaceName: ctx.workspace.name,
+              // Resolve from the candidate/job/workspace snapshots visible in
+              // THIS transaction. A later retry never consults mutable HR
+              // input or candidate records to change sent copy.
+              emailSnapshot: resolveJobCloseRejectionEmailSnapshot({
+                candidateName: candidate.name,
+                jobTitle: job.title,
+                workspaceName: ctx.workspace.name,
+                ...(closeEmailTemplate ? { template: closeEmailTemplate } : {}),
+              }),
+              // This remains internal audit evidence. It is deliberately not
+              // an argument to the candidate-facing email renderer.
               decisionNote: closeNote!,
               actorName: actor.actorName,
             },
@@ -831,8 +1069,24 @@ export async function updateJobStatus(
         { session },
       )
     }
+    closeoutReportResult.value = await createHireJobCloseoutReportForLifecycle({
+      workspaceId: ctx.workspace._id,
+      job,
+      operationId: input.operationId,
+      requestedBy: { memberId: ctx.membership._id.toString(), name: actor.actorName },
+      session,
+      now,
+    })
     return job
   })
+  const closeoutReportExport = closeoutReportResult.value
+  if (closeoutReportExport?.created) {
+    await kickHireReportExport({
+      workspaceId: ctx.workspace._id.toString(),
+      exportId: closeoutReportExport.export.id,
+    })
+  }
+  await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
   if (input.status === 'closed' && updatedJob.closedAt) {
     await scheduleHireJobMediaPurge({
       workspaceId: ctx.workspace._id.toString(),
@@ -926,6 +1180,12 @@ export async function createApplication(
 
   try {
     return await withHireTransaction(ctx, async (session) => {
+      await assertHireOnboardingTestDriveWriteIsolation({
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        candidateId: candidate._id,
+        session,
+      })
       const claim = await HireJob.updateOne(
         { _id: job._id, workspaceId: ctx.workspace._id, status: 'open' },
         { $inc: { intakeWriteVersion: 1 } },
@@ -1107,6 +1367,11 @@ async function addOrMergeJobCandidateOnce(
         job.status === 'closed' ? 'JOB_CLOSED' : 'JOB_ON_HOLD',
       )
     }
+    await assertHireOnboardingTestDriveWriteIsolation({
+      workspaceId: ctx.workspace._id,
+      jobId: job._id,
+      session,
+    })
 
     const source: RecruiterCandidateSource = input.candidateId ? 'pool' : 'manual'
     let candidate: IHireCandidate | null
@@ -1145,6 +1410,11 @@ async function addOrMergeJobCandidateOnce(
       }
     }
     if (!candidate) throw new NotFoundError('Candidate')
+    await assertHireOnboardingTestDriveWriteIsolation({
+      workspaceId: ctx.workspace._id,
+      candidateId: candidate._id,
+      session,
+    })
 
     const existingApplication = await HireApplication.findOne(
       {
@@ -1414,7 +1684,8 @@ export async function moveStage(
     }
   }
 
-  return withHireTransaction(ctx, async (session) => {
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
+  const result = await withHireTransaction(ctx, async (session) => {
     const jobClaim = await HireJob.updateOne(
       { _id: application.jobId, workspaceId: ctx.workspace._id, status: 'open' },
       { $inc: { intakeWriteVersion: 1 } },
@@ -1447,7 +1718,117 @@ export async function moveStage(
       },
       { new: true, session },
     )
-    if (moved) return moved
+    if (moved) {
+      // Human interview kits are independent from AI HireRounds and their
+      // runtime authority. A terminal pipeline decision must nevertheless
+      // invalidate their public capability and any mutable human evidence in
+      // the same transaction as the stage transition.
+      if (TERMINAL_STAGES.includes(to)) {
+        const terminalAt = new Date()
+        const lifecycleScope = {
+          workspaceId: ctx.workspace._id,
+          applicationId: application._id,
+          jobId: application.jobId,
+          candidateId: application.candidateId,
+        }
+        const revocationReason = `Application moved to terminal stage: ${to}`
+        // Keep each operation sequential: MongoDB transactions do not support
+        // parallel operations on the same session.
+        await HireHumanKitDelivery.updateMany(
+          {
+            ...lifecycleScope,
+            status: { $in: ['pending', 'sending', 'failed'] },
+          },
+          {
+            $set: {
+              status: 'cancelled',
+              cancelledAt: terminalAt,
+              lastError: 'Application reached a terminal stage',
+            },
+            $unset: { claimToken: 1, leaseExpiresAt: 1 },
+          },
+          { session },
+        )
+        await HireInterviewKit.updateMany(
+          { ...lifecycleScope, active: true },
+          {
+            // Do not unset `active`: the schema default could rehydrate it.
+            $set: {
+              active: false,
+              status: 'revoked',
+              revokedAt: terminalAt,
+              revokedByMemberId: ctx.membership._id,
+              revokedByName: actorName(ctx),
+              revocationReason,
+            },
+          },
+          { session },
+        )
+        await HireHumanScorecard.updateMany(
+          { ...lifecycleScope, status: 'draft' },
+          { $set: { status: 'cancelled', cancelledAt: terminalAt } },
+          { session },
+        )
+        await HireHumanRound.updateMany(
+          {
+            ...lifecycleScope,
+            status: { $nin: ['completed', 'revoked'] },
+          },
+          {
+            $set: {
+              status: 'revoked',
+              revokedAt: terminalAt,
+              revokedByMemberId: ctx.membership._id,
+              revokedByName: actorName(ctx),
+              revocationReason,
+            },
+          },
+          { session },
+        )
+        await HireSharePacket.updateMany(
+          {
+            ...lifecycleScope,
+            active: true,
+            status: 'active',
+            revokedAt: { $exists: false },
+          },
+          {
+            $set: {
+              active: false,
+              status: 'revoked',
+              revokedAt: terminalAt,
+              revokedByMemberId: ctx.membership._id,
+              revokedByName: actorName(ctx),
+              revocationReason,
+            },
+          },
+          { session },
+        )
+        assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+          scope: lifecycleScope,
+          cancelledAt: terminalAt,
+          session,
+        })
+        // The terminal stage changes one job's aggregate counts. Invalidate
+        // only that job's and the workspace-wide pipeline exports; closeout
+        // exports remain historical records and are not part of this policy.
+        await cancelHirePipelineStatusReportsForTerminalTransition({
+          workspaceId: ctx.workspace._id,
+          jobId: application.jobId,
+          cancelledAt: terminalAt,
+          session,
+        })
+        // The digest is an immutable workspace aggregate, so its unfinished
+        // rows must not email a pre-terminal snapshot. This does not disable
+        // the member's opt-in for future periods.
+        await cancelHireDigestOutboxesForScope({
+          workspaceId: ctx.workspace._id,
+          now: terminalAt,
+          session,
+        })
+      }
+      return moved
+    }
 
     const idempotent = await HireApplication.findOne(
       {
@@ -1461,6 +1842,8 @@ export async function moveStage(
     if (idempotent) return idempotent
     throw new AppError('The stage changed underneath you — refresh and retry', 409, 'STAGE_RACE')
   })
+  await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
+  return result
 }
 
 export interface ApplicationDetail {
@@ -1468,6 +1851,29 @@ export interface ApplicationDetail {
   candidate: IHireCandidate
   job: IHireJob
   rounds: IHireRound[]
+  humanRounds: HumanRoundDetail[]
+}
+
+/**
+ * Authenticated member projection for a human round. It intentionally omits
+ * kit hash/capability, delivery recipient PII, ciphertext, provider response,
+ * and raw failure details while retaining the fixed submitted evidence.
+ */
+export interface HumanRoundDetail {
+  round: IHireHumanRound
+  scorecard: Pick<
+    IHireHumanScorecard,
+    | 'reviewerKind'
+    | 'reviewerName'
+    | 'dimensions'
+    | 'recommendation'
+    | 'overallComment'
+    | 'submittedAt'
+  > | null
+  delivery: {
+    initial: Pick<IHireHumanKitDelivery, 'status' | 'attempts' | 'sentAt'> | null
+    reminder: Pick<IHireHumanKitDelivery, 'status' | 'sentAt'> | null
+  }
 }
 
 export async function getApplicationDetail(
@@ -1481,15 +1887,72 @@ export async function getApplicationDetail(
   })
   if (!application) throw new NotFoundError('Application')
 
-  const [candidate, job, rounds] = await Promise.all([
+  const [candidate, job, rounds, humanRounds, submittedHumanScorecards, humanDeliveries] = await Promise.all([
     HireCandidate.findOne({ _id: application.candidateId, workspaceId: ctx.workspace._id }),
     HireJob.findOne({ _id: application.jobId, workspaceId: ctx.workspace._id }),
     HireRound.find({ workspaceId: ctx.workspace._id, applicationId: application._id }).sort({
       createdAt: -1,
     }),
+    HireHumanRound.find({
+      workspaceId: ctx.workspace._id,
+      applicationId: application._id,
+    }).sort({ createdAt: 1, _id: 1 }),
+    HireHumanScorecard.find({
+      workspaceId: ctx.workspace._id,
+      applicationId: application._id,
+      jobId: application.jobId,
+      candidateId: application.candidateId,
+      status: 'submitted',
+    }).select(
+      'humanRoundId reviewerKind reviewerName dimensions recommendation overallComment submittedAt',
+    ),
+    HireHumanKitDelivery.find({
+      workspaceId: ctx.workspace._id,
+      applicationId: application._id,
+      jobId: application.jobId,
+      candidateId: application.candidateId,
+      purpose: { $in: ['initial', 'reminder'] },
+    }).select('humanRoundId purpose status attempts sentAt'),
   ])
   if (!candidate || !job) throw new NotFoundError('Application')
-  return { application, candidate, job, rounds }
+  const scorecardByRoundId = new Map(
+    submittedHumanScorecards.map((scorecard) => [scorecard.humanRoundId.toString(), scorecard]),
+  )
+  const deliveriesByRoundId = new Map<
+    string,
+    {
+      initial: Pick<IHireHumanKitDelivery, 'status' | 'attempts' | 'sentAt'> | null
+      reminder: Pick<IHireHumanKitDelivery, 'status' | 'sentAt'> | null
+    }
+  >()
+  for (const delivery of humanDeliveries) {
+    const roundId = delivery.humanRoundId.toString()
+    const current = deliveriesByRoundId.get(roundId) ?? { initial: null, reminder: null }
+    if (delivery.purpose === 'initial') {
+      current.initial = {
+        status: delivery.status,
+        attempts: delivery.attempts,
+        sentAt: delivery.sentAt,
+      }
+    } else {
+      current.reminder = {
+        status: delivery.status,
+        sentAt: delivery.sentAt,
+      }
+    }
+    deliveriesByRoundId.set(roundId, current)
+  }
+  return {
+    application,
+    candidate,
+    job,
+    rounds,
+    humanRounds: humanRounds.map((round) => ({
+      round,
+      scorecard: scorecardByRoundId.get(round._id.toString()) ?? null,
+      delivery: deliveriesByRoundId.get(round._id.toString()) ?? { initial: null, reminder: null },
+    })),
+  }
 }
 
 /** Append an event to an application — used by round send/revoke/link flows. */
@@ -1497,7 +1960,16 @@ export async function appendApplicationEvent(
   workspaceId: mongoose.Types.ObjectId | string,
   applicationId: mongoose.Types.ObjectId | string,
   event: {
-    type: 'ai_round_sent' | 'ai_round_revoked' | 'ai_result_linked'
+    type:
+      | 'ai_round_sent'
+      | 'ai_round_revoked'
+      | 'ai_result_linked'
+      | 'human_round_logged'
+      | 'human_kit_sent'
+      | 'human_kit_delivery_failed'
+      | 'human_kit_revoked'
+      | 'human_scorecard_submitted'
+      | 'human_kit_reminded'
     actorUserId?: mongoose.Types.ObjectId | string
     actorMemberId?: mongoose.Types.ObjectId | string
     actorName: string

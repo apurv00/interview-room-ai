@@ -49,6 +49,11 @@ describe('isolated Hire control route fence', () => {
     ['/api/workspace', 'GET'],
     ['/candidate/round-id', 'GET'],
     ['/api/candidate/round-id/begin', 'POST'],
+    ['/interview-kit/kit-id', 'GET'],
+    ['/api/interview-kit/kit-id/bootstrap', 'POST'],
+    ['/api/interview-kit/kit-id/scorecard', 'POST'],
+    ['/candidate-status/link-id', 'GET'],
+    [`/api/candidate-status/${'a'.repeat(24)}/bootstrap`, 'POST'],
     ['/hire-signin', 'GET'],
     ['/api/hire-auth/session', 'GET'],
     ['/api/internal/hire/engine/results', 'POST'],
@@ -59,6 +64,15 @@ describe('isolated Hire control route fence', () => {
     const response = await controlMiddleware(request(path, method))
     expect(response.status).toBe(200)
     expect(response.headers.get('x-middleware-next')).toBe('1')
+    if (
+      path.startsWith('/interview-kit') ||
+      path.startsWith('/api/interview-kit') ||
+      path.startsWith('/candidate-status') ||
+      path.startsWith('/api/candidate-status')
+    ) {
+      expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+      expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow')
+    }
   })
 
   it('rewrites only the control root to the workspace', async () => {

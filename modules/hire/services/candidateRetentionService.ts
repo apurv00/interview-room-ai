@@ -1,11 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import mongoose, { type ClientSession, type PipelineStage } from 'mongoose'
 import {
+  HireAssessmentExport,
+  HireExternalVerdict,
+  HireSharePacket,
+} from '@hire-decisions/models'
+import {
   HireApplication,
   HireCandidate,
   HireConsentReceipt,
   HireEmailOutbox,
+  HireHumanKitDelivery,
+  HireHumanRound,
+  HireHumanScorecard,
   HireInterviewAttempt,
+  HireInterviewKit,
   HireInterviewResult,
   HireIntakeTask,
   HireInvitationBatchItem,
@@ -20,6 +29,14 @@ import {
 } from '../models'
 import { connectHireControlDB } from './hireControlBoundary'
 import { addCalendarMonths } from './mediaLifecycleService'
+import {
+  cancelHireAssessmentExports,
+  deleteHireAssessmentExportObjects,
+  type HireAssessmentExportCleanupTarget,
+} from './assessmentExportLifecycleService'
+import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
+import { revokeCandidateStatusLinksForScope } from '../../hire-status/services/candidateStatusLinkService'
+import { invalidateHireDigestAggregateSnapshotsForPrivacy } from '../../hire-digest/services/hireDigestService'
 
 const DEFAULT_CANDIDATE_BATCH_SIZE = 100
 const ANONYMIZATION_LEASE_MS = 15 * 60 * 1000
@@ -44,7 +61,16 @@ interface RetentionEligibility {
   eligible: boolean
   lastActivityAt?: Date
   retentionEligibleAt?: Date
-  reason?: 'no_applications' | 'live_application' | 'open_job' | 'privacy_request' | 'not_due'
+  reason?:
+    | 'no_applications'
+    | 'live_application'
+    | 'open_job'
+    | 'privacy_request'
+    | 'live_human_round'
+    | 'live_human_kit'
+    | 'live_share_packet'
+    | 'live_assessment_export'
+    | 'not_due'
 }
 
 function latestDate(values: Array<Date | null | undefined>): Date | undefined {
@@ -101,6 +127,13 @@ export function buildHireCandidateRetentionPipeline(
     '$latestResults',
     '$latestMedia',
     '$latestConsents',
+    '$latestHumanRounds',
+    '$latestHumanKits',
+    '$latestHumanScorecards',
+    '$latestHumanKitDeliveries',
+    '$latestSharePackets',
+    '$latestExternalVerdicts',
+    '$latestAssessmentExports',
   ].map((input) => ({
     $map: {
       input,
@@ -212,6 +245,52 @@ export function buildHireCandidateRetentionPipeline(
       as: 'latestConsents',
       activityExpression: '$acceptedAt',
     }),
+    // Human rounds deliberately remain outside the engine-bound HireRound
+    // graph. Their own timestamps count as subject activity for retention;
+    // otherwise a freshly submitted human scorecard could be anonymized on
+    // the older AI-only clock.
+    activityLookup({
+      from: HireHumanRound.collection.name,
+      as: 'latestHumanRounds',
+      activityExpression: { $max: ['$createdAt', '$updatedAt'] },
+    }),
+    activityLookup({
+      from: HireInterviewKit.collection.name,
+      as: 'latestHumanKits',
+      activityExpression: { $max: ['$createdAt', '$updatedAt'] },
+    }),
+    activityLookup({
+      from: HireHumanScorecard.collection.name,
+      as: 'latestHumanScorecards',
+      activityExpression: { $max: ['$createdAt', '$updatedAt'] },
+    }),
+    activityLookup({
+      from: HireHumanKitDelivery.collection.name,
+      as: 'latestHumanKitDeliveries',
+      activityExpression: { $max: ['$createdAt', '$updatedAt'] },
+    }),
+    // Share packets and external verdicts are candidate-facing decision
+    // artifacts in the same Hire control plane. Their creation, revocation,
+    // and submitted verdict times must advance the subject retention clock.
+    activityLookup({
+      from: HireSharePacket.collection.name,
+      as: 'latestSharePackets',
+      activityExpression: {
+        $max: ['$createdAt', '$updatedAt', '$verdictSubmittedAt', '$revokedAt'],
+      },
+    }),
+    activityLookup({
+      from: HireExternalVerdict.collection.name,
+      as: 'latestExternalVerdicts',
+      activityExpression: { $max: ['$createdAt', '$updatedAt', '$submittedAt'] },
+    }),
+    activityLookup({
+      from: HireAssessmentExport.collection.name,
+      as: 'latestAssessmentExports',
+      activityExpression: {
+        $max: ['$requestedAt', '$createdAt', '$updatedAt', '$readyAt', '$failedAt', '$cancelledAt'],
+      },
+    }),
     {
       $set: {
         activityDates: {
@@ -303,6 +382,49 @@ async function evaluateRetentionEligibility(
     return { eligible: false, reason: 'open_job' }
   }
 
+  const activeHumanRound = await HireHumanRound.exists({
+    ...scope,
+    status: 'pending_scorecard',
+    revokedAt: { $exists: false },
+  }).session(session)
+  if (activeHumanRound) return { eligible: false, reason: 'live_human_round' }
+
+  // A human-kit capability can expose a candidate brief without an account.
+  // Job close normally revokes it, but retain this explicit fence so a data
+  // cleanup never races a still-live capability left by an interrupted
+  // lifecycle transition.
+  const activeHumanKit = await HireInterviewKit.exists({
+    ...scope,
+    active: true,
+    status: 'active',
+    revokedAt: { $exists: false },
+    expiresAt: { $gt: now },
+  }).session(session)
+  if (activeHumanKit) return { eligible: false, reason: 'live_human_kit' }
+
+  // A valid share packet grants an unauthenticated recipient access to a
+  // candidate snapshot. Retention must not race that possession capability;
+  // terminal/job/workspace lifecycle hooks normally revoke it first, and the
+  // explicit fence covers interrupted or legacy lifecycle transitions.
+  const activeSharePacket = await HireSharePacket.exists({
+    ...scope,
+    active: true,
+    status: 'active',
+    revokedAt: { $exists: false },
+    expiresAt: { $gt: now },
+  }).session(session)
+  if (activeSharePacket) return { eligible: false, reason: 'live_share_packet' }
+
+  // Assessment exports are member-authorized rather than public URLs, but a
+  // live row still holds a candidate-bearing PDF/snapshot. Do not anonymize
+  // until it has expired or the lifecycle can cancel and redact it.
+  const activeAssessmentExport = await HireAssessmentExport.exists({
+    ...scope,
+    status: { $ne: 'cancelled' },
+    expiresAt: { $gt: now },
+  }).session(session)
+  if (activeAssessmentExport) return { eligible: false, reason: 'live_assessment_export' }
+
   const round = await HireRound.findOne(scope)
     .sort({ linkedAt: -1, consentAt: -1, invitedAt: -1 })
     .select('invitedAt consentAt linkedAt')
@@ -328,6 +450,48 @@ async function evaluateRetentionEligibility(
     .select('acceptedAt')
     .session(session)
     .lean()
+  const humanRound = await HireHumanRound.findOne(scope)
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt')
+    .session(session)
+    .lean()
+  const humanKit = await HireInterviewKit.findOne(scope)
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt')
+    .session(session)
+    .lean()
+  const humanScorecard = await HireHumanScorecard.findOne(scope)
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt')
+    .session(session)
+    .lean()
+  const humanKitDelivery = await HireHumanKitDelivery.findOne(scope)
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt')
+    .session(session)
+    .lean()
+  const sharePacket = await HireSharePacket.findOne(scope)
+    .sort({ updatedAt: -1, verdictSubmittedAt: -1, revokedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt verdictSubmittedAt revokedAt')
+    .session(session)
+    .lean()
+  const externalVerdict = await HireExternalVerdict.findOne(scope)
+    .sort({ submittedAt: -1, updatedAt: -1, createdAt: -1 })
+    .select('createdAt updatedAt submittedAt')
+    .session(session)
+    .lean()
+  const assessmentExport = await HireAssessmentExport.findOne(scope)
+    .sort({
+      updatedAt: -1,
+      readyAt: -1,
+      failedAt: -1,
+      cancelledAt: -1,
+      requestedAt: -1,
+      createdAt: -1,
+    })
+    .select('requestedAt createdAt updatedAt readyAt failedAt cancelledAt')
+    .session(session)
+    .lean()
   const lastActivityAt = latestDate([
     candidate.updatedAt,
     ...applications.map((application) => application.updatedAt),
@@ -346,6 +510,41 @@ async function evaluateRetentionEligibility(
     ...activityFromDocument(result as Record<string, unknown> | null, ['completedAt']),
     ...activityFromDocument(media as Record<string, unknown> | null, ['capturedAt']),
     ...activityFromDocument(consent as Record<string, unknown> | null, ['acceptedAt']),
+    ...activityFromDocument(humanRound as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+    ]),
+    ...activityFromDocument(humanKit as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+    ]),
+    ...activityFromDocument(humanScorecard as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+    ]),
+    ...activityFromDocument(humanKitDelivery as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+    ]),
+    ...activityFromDocument(sharePacket as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+      'verdictSubmittedAt',
+      'revokedAt',
+    ]),
+    ...activityFromDocument(externalVerdict as Record<string, unknown> | null, [
+      'createdAt',
+      'updatedAt',
+      'submittedAt',
+    ]),
+    ...activityFromDocument(assessmentExport as Record<string, unknown> | null, [
+      'requestedAt',
+      'createdAt',
+      'updatedAt',
+      'readyAt',
+      'failedAt',
+      'cancelledAt',
+    ]),
   ])
   if (!lastActivityAt) return { eligible: false, reason: 'not_due' }
   const retentionEligibleAt = addCalendarMonths(
@@ -394,6 +593,7 @@ async function anonymizeClaimedCandidate(input: {
   now: Date
 }): Promise<'anonymized' | 'skipped'> {
   const session = await mongoose.startSession()
+  let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   try {
     let outcome: 'anonymized' | 'skipped' = 'skipped'
     await session.withTransaction(async () => {
@@ -407,6 +607,15 @@ async function anonymizeClaimedCandidate(input: {
 
       const eligibility = await evaluateRetentionEligibility(candidate, input.now, session)
       if (!eligibility.eligible) return
+
+      // Retention anonymization changes the aggregate's subject set. This
+      // transaction shares the workspace fence with snapshot creation and
+      // exact egress, so a pre-anonymization digest cannot send after commit.
+      await invalidateHireDigestAggregateSnapshotsForPrivacy({
+        workspaceId: candidate.workspaceId,
+        now: input.now,
+        session,
+      })
 
       const anonymizedEmail = `retained-${candidate._id.toString()}@privacy.invalid`
       const changed = await HireCandidate.updateOne(
@@ -450,12 +659,24 @@ async function anonymizeClaimedCandidate(input: {
         {
           $unset: {
             applicantSubmissions: 1,
-            'events.$[inviteEvent].note': 1,
+            'events.$[sensitiveEvent].note': 1,
           },
         },
         {
           session,
-          arrayFilters: [{ 'inviteEvent.type': 'ai_round_sent' }],
+          arrayFilters: [{
+            'sensitiveEvent.type': {
+              $in: [
+                'ai_round_sent',
+                'human_round_logged',
+                'human_kit_sent',
+                'human_kit_delivery_failed',
+                'human_kit_reminded',
+                'human_kit_revoked',
+                'human_scorecard_submitted',
+              ],
+            },
+          }],
         },
       )
       await HireApplication.updateMany(
@@ -504,6 +725,70 @@ async function anonymizeClaimedCandidate(input: {
       // Delivery contact snapshots are not funnel history and must not keep
       // an address alive beyond the candidate clock.
       await HireEmailOutbox.deleteMany(scope, { session })
+      // Human-kit delivery rows contain interviewer contact/recovery material
+      // and the scorecard holds free-text candidate evidence. Retention has
+      // no Phase-3 aggregate artifact to preserve, so erase this distinct
+      // human-side graph rather than overloading AI-runtime tombstones.
+      await HireHumanKitDelivery.deleteMany(scope, { session })
+      await HireInterviewKit.deleteMany(scope, { session })
+      await HireHumanScorecard.deleteMany(scope, { session })
+      await HireHumanRound.deleteMany(scope, { session })
+      // Retention is the final PII boundary. Any residual capability becomes
+      // uniformly inactive and its digest is removed in this transaction.
+      await revokeCandidateStatusLinksForScope({
+        ...scope,
+        reason: 'Candidate retained and anonymized',
+        at: input.now,
+        session,
+      })
+      // A claimed candidate was fenced against currently valid share
+      // capabilities above. Revoke any residual active packet defensively,
+      // then remove all immutable snapshot content and external verdict prose
+      // before the anonymized candidate transaction commits.
+      await HireSharePacket.updateMany(
+        {
+          ...scope,
+          active: true,
+          status: 'active',
+          revokedAt: { $exists: false },
+        },
+        {
+          $set: {
+            active: false,
+            status: 'revoked',
+            revokedAt: input.now,
+            revocationReason: 'Candidate retained and anonymized',
+          },
+        },
+        { session },
+      )
+      await HireSharePacket.updateMany(
+        { ...scope, privacyRedactedAt: { $exists: false } },
+        {
+          $set: { privacyRedactedAt: input.now },
+          $unset: { secretHash: 1, snapshot: 1 },
+        },
+        { session, overwriteImmutable: true },
+      )
+      await HireExternalVerdict.updateMany(
+        { ...scope, privacyRedactedAt: { $exists: false } },
+        {
+          $set: { privacyRedactedAt: input.now },
+          $unset: { comment: 1 },
+        },
+        { session, overwriteImmutable: true },
+      )
+      assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+        scope,
+        cancelledAt: input.now,
+        privacyRedactedAt: input.now,
+        session,
+      })
+      await cancelHireReportExportsForLifecycle({
+        scope,
+        cancelledAt: input.now,
+        session,
+      })
       // Intake tasks are transient, but an interrupted worker can retain the
       // original resume payload and supplied contact fields. A retained
       // candidate must never leave those task artifacts behind.
@@ -589,6 +874,7 @@ async function anonymizeClaimedCandidate(input: {
       )
       outcome = 'anonymized'
     })
+    await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
     return outcome
   } finally {
     await session.endSession()

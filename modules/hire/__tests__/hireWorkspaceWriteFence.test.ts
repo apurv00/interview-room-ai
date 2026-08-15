@@ -20,7 +20,7 @@ vi.mock('../models', () => ({
   HireWorkspace: { updateOne: mocks.workspaceUpdate },
 }))
 
-vi.mock('../services/workspaceService', () => ({
+vi.mock('../services/hireWorkspaceLifecycleFilter', () => ({
   activeHireWorkspaceLifecycleFilter: () => ({
     $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],
   }),

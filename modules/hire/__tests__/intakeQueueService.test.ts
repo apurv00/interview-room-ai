@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   extractEmails: vi.fn(),
   writeFence: vi.fn(),
   candidateFence: vi.fn(),
+  onboardingTestDriveFence: vi.fn(),
   jobFindOne: vi.fn(),
   jobUpdateOne: vi.fn(),
   candidateFindOne: vi.fn(),
@@ -66,6 +67,10 @@ vi.mock('../services/hireWorkspaceWriteFence', () => ({
 }))
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: (...args: unknown[]) => mocks.candidateFence(...args),
+}))
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    mocks.onboardingTestDriveFence(...args),
 }))
 vi.mock('../services/aiRoundService', () => ({ sha256: (value: string) => `hash:${value}` }))
 vi.mock('../models', () => ({
@@ -173,10 +178,12 @@ beforeEach(() => {
     async (_workspaceId: unknown, _memberId: unknown, work: (session: unknown) => unknown) => work(SESSION),
   )
   mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.onboardingTestDriveFence.mockResolvedValue(undefined)
   mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.candidateFindOne.mockReturnValue(query(null))
   mocks.privacyExists.mockReturnValue(query(null))
   mocks.taskUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.taskFindOne.mockReturnValue(query(null))
   mocks.taskExists.mockReturnValue(query({ _id: IDS.task }))
   mocks.jobExists.mockReturnValue(query({ _id: IDS.job }))
   mocks.workspaceExists.mockReturnValue(query({ _id: IDS.workspace }))
@@ -246,6 +253,31 @@ describe('durable member enqueue', () => {
     })
     expect(mocks.taskCreate.mock.calls[0][0][0].candidateId.toString()).toBe(IDS.candidate)
   })
+
+  it('blocks a synthetic candidate association before raw intake task creation', async () => {
+    mocks.jobFindOne.mockReturnValue(query({ status: 'open' }))
+    mocks.candidateFindOne.mockReturnValue(query({
+      _id: new mongoose.Types.ObjectId(IDS.candidate),
+      piiAnonymizedAt: undefined,
+    }))
+    mocks.onboardingTestDriveFence
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(
+        new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+      )
+
+    await expect(enqueueMemberResumeIntake(CTX, {
+      jobId: IDS.job,
+      fileName: 'ada.pdf',
+      contentType: 'application/pdf',
+      payload: Buffer.from('resume body'),
+      suppliedEmail: 'ada@example.com',
+    })).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+
+    expect(mocks.candidateFence).not.toHaveBeenCalled()
+    expect(mocks.taskCreate).not.toHaveBeenCalled()
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
 })
 
 describe('public enqueue boundary', () => {
@@ -262,9 +294,71 @@ describe('public enqueue boundary', () => {
     expect(mocks.taskCreate).not.toHaveBeenCalled()
     expect(mocks.send).not.toHaveBeenCalled()
   })
+
+  it('returns null uniformly when a legacy synthetic candidate would be attached to a public task', async () => {
+    mocks.resolveApplyToken.mockResolvedValue({
+      job: {
+        _id: new mongoose.Types.ObjectId(IDS.job),
+        workspaceId: new mongoose.Types.ObjectId(IDS.workspace),
+      },
+      applyTokenHash: 'a'.repeat(64),
+    })
+    mocks.resolveAuthority.mockResolvedValue(new mongoose.Types.ObjectId(IDS.member))
+    mocks.candidateFindOne.mockReturnValue(query({
+      _id: new mongoose.Types.ObjectId(IDS.candidate),
+      piiAnonymizedAt: undefined,
+    }))
+    mocks.onboardingTestDriveFence
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(
+        new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+      )
+
+    await expect(enqueuePublicApplyIntake({
+      capability: `${IDS.workspace}.${'1'.repeat(64)}`,
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+      fileName: 'ada.pdf',
+      contentType: 'application/pdf',
+      payload: Buffer.from('resume body'),
+    })).resolves.toBeNull()
+
+    expect(mocks.candidateFence).not.toHaveBeenCalled()
+    expect(mocks.taskCreate).not.toHaveBeenCalled()
+    expect(mocks.send).not.toHaveBeenCalled()
+  })
 })
 
 describe('worker ownership and recoverability', () => {
+  it('cancels and scrubs a legacy synthetic task before parsing its raw resume', async () => {
+    const task = queuedTask({ attempts: 1 })
+    mocks.taskFindOneAndUpdate.mockReturnValue(query(task))
+    mocks.jobFindOne.mockResolvedValue({
+      _id: task.jobId,
+      workspaceId: task.workspaceId,
+      jdText: 'backend role',
+      status: 'open',
+    })
+    mocks.workspaceFindOne.mockResolvedValue({ _id: task.workspaceId })
+    mocks.memberFindOne.mockResolvedValue({ _id: task.actorMemberId })
+    mocks.onboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(processHireIntakeTask({ workspaceId: IDS.workspace, taskId: IDS.task }))
+      .resolves.toEqual({ outcome: 'cancelled' })
+
+    expect(mocks.parseDocument).not.toHaveBeenCalled()
+    expect(mocks.analyzeResume).not.toHaveBeenCalled()
+    expect(mocks.intakeCandidate).not.toHaveBeenCalled()
+    const update = mocks.taskUpdateOne.mock.calls.at(-1)?.[1]
+    expect(update.$set).toMatchObject({
+      status: 'cancelled',
+      lastError: 'Practice interview data is isolated from recruiting intake',
+    })
+    expect(update.$unset).toHaveProperty('payload')
+  })
+
   it('moves a claimed no-email resume to needs_identity without dropping its recovery payload', async () => {
     const task = queuedTask({ attempts: 1 })
     mocks.taskFindOneAndUpdate.mockReturnValue(query(task))
@@ -581,6 +675,21 @@ describe('member task views and recovery', () => {
       name: 'hire/intake.requested',
       data: { workspaceId: IDS.workspace, taskId: IDS.task },
     })
+  })
+
+  it('fails closed rather than requeueing a practice-coordinate identity task', async () => {
+    mocks.onboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(supplyHireIntakeIdentity(CTX, {
+      jobId: IDS.job,
+      taskId: IDS.task,
+      email: 'ada@example.com',
+    })).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+
+    expect(mocks.taskFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mocks.send).not.toHaveBeenCalled()
   })
 })
 
