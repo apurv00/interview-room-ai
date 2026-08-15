@@ -95,6 +95,7 @@ describe('RootSurfaceComposition', () => {
     '/candidate/privacy/opaque',
     '/apply/token',
     '/interview-kit/kit-id',
+    '/candidate-status/link-id',
   ])(
     'does not hydrate any B2C session on public Hire capability path %s',
     (pathname) => {

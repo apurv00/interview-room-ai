@@ -61,6 +61,7 @@ export function isGuestEmailForRound(email: unknown, roundId: string): boolean {
  */
 const ALLOWED_PAGE_PREFIXES = [
   '/candidate', // the guest surface itself (consent, prepare, thank-you)
+  '/candidate-status', // separate fragment-only application-status capability
   '/lobby', // engine: device checks
   '/interview', // engine: the interview room
 ]
@@ -142,6 +143,11 @@ function isInterviewSessionWrite(pathname: string, method: string): boolean {
   )
 }
 
+/** The status capability has one fixed public mutation-free bootstrap call. */
+function isCandidateStatusBootstrap(pathname: string, method: string): boolean {
+  return method === 'POST' && /^\/api\/candidate-status\/[a-f0-9]{24}\/bootstrap$/i.test(pathname)
+}
+
 export interface GuestAccessDecision {
   allowed: boolean
   /** Set when the guest should be redirected instead of hard-denied. */
@@ -172,6 +178,7 @@ export function evaluateGuestAccess(pathname: string, method: string): GuestAcce
   if (methods?.includes(method)) return { allowed: true }
   if (DENIED_API_PREFIXES.some((p) => pathname.startsWith(p))) return { allowed: false }
   if (ALLOWED_API_PREFIXES.some((p) => pathname.startsWith(p))) return { allowed: true }
+  if (isCandidateStatusBootstrap(pathname, method)) return { allowed: true }
   if (isInterviewSessionWrite(pathname, method)) return { allowed: true }
 
   return { allowed: false }

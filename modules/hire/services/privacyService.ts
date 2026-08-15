@@ -33,7 +33,10 @@ import {
   deleteHireAssessmentExportObjects,
   type HireAssessmentExportCleanupTarget,
 } from './assessmentExportLifecycleService'
+import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
 import { deliverRuntimeRevocation } from './engineRevocationService'
+import { revokeCandidateStatusLinksForScope } from '../../hire-status/services/candidateStatusLinkService'
+import { invalidateHireDigestAggregateSnapshotsForPrivacy } from '../../hire-digest/services/hireDigestService'
 import {
   decodeWorkspaceCapability,
   decodeWorkspaceResourceCapability,
@@ -143,6 +146,24 @@ export async function createHirePrivacyRequestFromInvite(input: {
           410,
         )
       }
+
+      // Snapshot creation and exact digest egress claim this same workspace
+      // row. Advance its aggregate/privacy epoch before this live request is
+      // committed so a pre-request aggregate cannot be inserted or sent after
+      // the candidate begins the deletion flow.
+      await invalidateHireDigestAggregateSnapshotsForPrivacy({
+        workspaceId: round.workspaceId,
+        now,
+        session: dbSession,
+      })
+      // Pipeline reports are aggregate-only and do not retain this candidate
+      // ID, so their lifecycle cancellation is workspace-wide. The same
+      // candidate scope continues to cancel only the affected closeout rows.
+      await cancelHireReportExportsForLifecycle({
+        scope: coordinate,
+        cancelledAt: now,
+        session: dbSession,
+      })
 
       candidateEmail = candidate.email
       request = await HirePrivacyRequest.findOneAndUpdate(
@@ -362,6 +383,16 @@ export async function applyVerifiedHirePrivacyRequest(input: {
         session: dbSession,
       })
 
+      // The live request normally fenced the day it started, but verified
+      // deletion changes the stored aggregates themselves. Advance and cancel
+      // again in this exact deletion transaction so privacy wins any digest
+      // claimed before egress but not yet authorized.
+      await invalidateHireDigestAggregateSnapshotsForPrivacy({
+        workspaceId: request.workspaceId,
+        now,
+        session: dbSession,
+      })
+
       // Deletion-request PII cleanup is part of the verified transaction, not
       // a later retention sweep. Enumerate the candidate's tenant-owned
       // coordinates first so every destructive write carries the complete
@@ -436,6 +467,14 @@ export async function applyVerifiedHirePrivacyRequest(input: {
         () => HireInterviewKit.deleteMany(scope, { session: dbSession }),
         () => HireHumanScorecard.deleteMany(scope, { session: dbSession }),
         () => HireHumanRound.deleteMany(scope, { session: dbSession }),
+        // Status capabilities are candidate-facing possession links. Revoke
+        // and erase each hash before the PII fence releases anonymization.
+        () => revokeCandidateStatusLinksForScope({
+          ...scope,
+          reason: 'Candidate privacy deletion request',
+          at: now,
+          session: dbSession,
+        }),
         // Packets are possession capabilities over an immutable candidate
         // snapshot. Revoke live capability rows first, then redact every
         // packet snapshot and external free-text verdict in this verified
@@ -482,6 +521,11 @@ export async function applyVerifiedHirePrivacyRequest(input: {
             session: dbSession,
           })
         },
+        () => cancelHireReportExportsForLifecycle({
+          scope,
+          cancelledAt: now,
+          session: dbSession,
+        }),
         () => HireGuestSession.updateMany(
           { ...scope, active: true },
           { $set: { revokedAt: now }, $unset: { active: 1 } },

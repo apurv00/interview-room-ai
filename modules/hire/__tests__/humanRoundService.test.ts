@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   connect: vi.fn().mockResolvedValue(undefined),
   resolveAuthority: vi.fn(),
+  onboardingFence: vi.fn(),
   transact: vi.fn(),
   candidateFence: vi.fn().mockResolvedValue(undefined),
   applicationFence: vi.fn().mockResolvedValue(undefined),
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   applicationExists: vi.fn(),
   applicationFindOne: vi.fn(),
   applicationUpdateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+  candidateFindOne: vi.fn(),
   privacyExists: vi.fn(),
   kitFindOne: vi.fn(),
   kitUpdateOne: vi.fn(),
@@ -43,6 +45,10 @@ vi.mock('../services/hireCandidatePrivacyWriteFence', async () => {
 vi.mock('../services/hireApplicationDispatchFence', () => ({
   claimNonTerminalHireApplicationDispatchFence: mocks.applicationFence,
 }))
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    mocks.onboardingFence(...args),
+}))
 vi.mock('../services/pipelineService', () => ({ appendApplicationEvent: mocks.append }))
 vi.mock('../services/humanKitDeliveryService', () => ({
   createHumanInterviewKitDelivery: mocks.deliveryCreate,
@@ -54,7 +60,7 @@ vi.mock('../models', () => ({
     findOne: mocks.applicationFindOne,
     updateOne: mocks.applicationUpdateOne,
   },
-  HireCandidate: { findOne: vi.fn() },
+  HireCandidate: { findOne: mocks.candidateFindOne },
   HireHumanKitDelivery: {
     findOne: mocks.deliveryFindOne,
     updateMany: mocks.deliveryUpdateMany,
@@ -79,6 +85,7 @@ vi.mock('../models', () => ({
 
 import {
   bootstrapHumanInterviewKit,
+  createGuestHumanRound,
   submitHumanInterviewKitScorecard,
 } from '../services/humanRoundService'
 
@@ -143,11 +150,13 @@ beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(NOW)
   mocks.resolveAuthority.mockResolvedValue(IDS.member)
+  mocks.onboardingFence.mockResolvedValue(undefined)
   mocks.workspaceExists.mockReturnValue(sessionValue({ _id: IDS.workspace }))
   mocks.workspaceFindOne.mockReturnValue({ select: vi.fn().mockReturnThis(), lean: vi.fn().mockResolvedValue({ name: 'Acme' }) })
   mocks.jobExists.mockReturnValue(sessionValue({ _id: IDS.job }))
   mocks.jobFindOne.mockReturnValue({ select: vi.fn().mockReturnThis(), lean: vi.fn().mockResolvedValue({ title: 'Engineer' }) })
   mocks.applicationExists.mockReturnValue(sessionValue({ _id: IDS.application }))
+  mocks.candidateFindOne.mockResolvedValue({ _id: IDS.candidate, name: 'Ada' })
   mocks.privacyExists.mockReturnValue(sessionValue(null))
   mocks.kitFindOne.mockReturnValue({ select: vi.fn().mockResolvedValue(kit()) })
   mocks.roundFindOne.mockResolvedValue(round())
@@ -230,5 +239,49 @@ describe('public human interview kit service', () => {
     expect(mocks.scorecardCreate).not.toHaveBeenCalled()
     expect(mocks.roundUpdateOne).not.toHaveBeenCalled()
     expect(mocks.applicationUpdateOne).not.toHaveBeenCalled()
+  })
+})
+
+describe('guest human-kit creation isolation', () => {
+  it('rejects a practice application before it creates a round, kit, or delivery email', async () => {
+    mocks.applicationFindOne.mockResolvedValue({
+      _id: IDS.application,
+      workspaceId: IDS.workspace,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+    })
+    mocks.jobFindOne.mockResolvedValue({
+      _id: IDS.job,
+      workspaceId: IDS.workspace,
+      title: 'Engineer',
+      status: 'open',
+    })
+    mocks.candidateFindOne.mockResolvedValue({
+      _id: IDS.candidate,
+      workspaceId: IDS.workspace,
+      name: 'Ada',
+      email: 'ada@example.com',
+    })
+    mocks.onboardingFence.mockRejectedValue(
+      Object.assign(new Error('Practice interviews are isolated'), {
+        code: 'ONBOARDING_TEST_DRIVE_ISOLATED',
+        statusCode: 409,
+      }),
+    )
+
+    await expect(createGuestHumanRound({
+      workspace: { _id: IDS.workspace, name: 'Acme' },
+      membership: { _id: IDS.member, name: 'Recruiter', email: 'hr@acme.example' },
+    } as never, {
+      applicationId: IDS.application,
+      interviewerName: 'Jordan Interviewer',
+      interviewerEmail: 'jordan@example.com',
+      operationId: '123e4567-e89b-42d3-a456-426614174000',
+    })).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+
+    expect(mocks.jobUpdateOne).not.toHaveBeenCalled()
+    expect(mocks.roundCreate).not.toHaveBeenCalled()
+    expect(mocks.deliveryCreate).not.toHaveBeenCalled()
+    expect(mocks.deliver).not.toHaveBeenCalled()
   })
 })

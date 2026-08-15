@@ -5,7 +5,7 @@ vi.mock('../services/hireControlBoundary', () => ({
   connectHireControlDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-const { models, decisionModels, session, lifecycle } = vi.hoisted(() => {
+const { models, decisionModels, session, lifecycle, statusLifecycle } = vi.hoisted(() => {
   const collection = (name: string) => ({ name })
   const latestModel = (name: string) => ({ collection: collection(name), findOne: vi.fn() })
   return {
@@ -89,6 +89,11 @@ const { models, decisionModels, session, lifecycle } = vi.hoisted(() => {
     lifecycle: {
       cancelAssessmentExports: vi.fn(),
       deleteAssessmentExportObjects: vi.fn(),
+      cancelReportExports: vi.fn(),
+      invalidateDigestSnapshots: vi.fn(),
+    },
+    statusLifecycle: {
+      revokeStatusLinks: vi.fn(),
     },
   }
 })
@@ -98,6 +103,16 @@ vi.mock('@hire-decisions/models', () => decisionModels)
 vi.mock('../services/assessmentExportLifecycleService', () => ({
   cancelHireAssessmentExports: (...args: unknown[]) => lifecycle.cancelAssessmentExports(...args),
   deleteHireAssessmentExportObjects: (...args: unknown[]) => lifecycle.deleteAssessmentExportObjects(...args),
+}))
+vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
+  cancelHireReportExportsForLifecycle: (...args: unknown[]) => lifecycle.cancelReportExports(...args),
+}))
+vi.mock('../../hire-digest/services/hireDigestService', () => ({
+  invalidateHireDigestAggregateSnapshotsForPrivacy: (...args: unknown[]) => lifecycle.invalidateDigestSnapshots(...args),
+}))
+vi.mock('../../hire-status/services/candidateStatusLinkService', () => ({
+  revokeCandidateStatusLinksForScope: (...args: unknown[]) =>
+    statusLifecycle.revokeStatusLinks(...args),
 }))
 
 import {
@@ -204,6 +219,9 @@ beforeEach(() => {
   decisionModels.HireAssessmentExport.updateMany.mockResolvedValue({ modifiedCount: 1 })
   lifecycle.cancelAssessmentExports.mockResolvedValue([])
   lifecycle.deleteAssessmentExportObjects.mockResolvedValue(undefined)
+  lifecycle.cancelReportExports.mockResolvedValue(0)
+  lifecycle.invalidateDigestSnapshots.mockResolvedValue(undefined)
+  statusLifecycle.revokeStatusLinks.mockResolvedValue(undefined)
 })
 
 describe('candidate PII retention', () => {
@@ -284,6 +302,14 @@ describe('candidate PII retention', () => {
       }),
       { session },
     )
+    expect(lifecycle.invalidateDigestSnapshots).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      now: NOW,
+      session,
+    })
+    expect(lifecycle.invalidateDigestSnapshots.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireCandidate.updateOne.mock.invocationCallOrder[1],
+    )
     expect(models.HireApplication.updateMany).toHaveBeenCalledWith(
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       {
@@ -332,6 +358,16 @@ describe('candidate PII retention', () => {
         { session },
       )
     }
+    expect(statusLifecycle.revokeStatusLinks).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: CANDIDATE_ID,
+      reason: 'Candidate retained and anonymized',
+      at: NOW,
+      session,
+    })
+    expect(statusLifecycle.revokeStatusLinks.mock.invocationCallOrder[0]).toBeLessThan(
+      decisionModels.HireSharePacket.updateMany.mock.invocationCallOrder[0],
+    )
     expect(decisionModels.HireSharePacket.updateMany).toHaveBeenNthCalledWith(
       1,
       {
@@ -382,6 +418,14 @@ describe('candidate PII retention', () => {
       privacyRedactedAt: NOW,
       session,
     })
+    expect(lifecycle.cancelReportExports).toHaveBeenCalledWith({
+      scope: { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+      cancelledAt: NOW,
+      session,
+    })
+    expect(lifecycle.cancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      lifecycle.cancelReportExports.mock.invocationCallOrder[0],
+    )
     expect(lifecycle.deleteAssessmentExportObjects).toHaveBeenCalledWith([assessmentExportTarget])
     expect(lifecycle.cancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
       lifecycle.deleteAssessmentExportObjects.mock.invocationCallOrder[0],
@@ -481,6 +525,7 @@ describe('candidate PII retention', () => {
 
     expect(report).toEqual({ scanned: 1, claimed: 1, anonymized: 0, skipped: 1, failed: 0 })
     expect(models.HireApplication.updateMany).not.toHaveBeenCalled()
+    expect(statusLifecycle.revokeStatusLinks).not.toHaveBeenCalled()
     expect(models.HireCandidate.updateOne).toHaveBeenLastCalledWith(
       expect.objectContaining({ anonymizationClaimToken: expect.any(String) }),
       expect.objectContaining({

@@ -18,6 +18,7 @@ import { ScoreBar, scoreBand } from '@shared/ui/ScoreBar'
 import StateView from '@shared/ui/StateView'
 import HireEvidenceAssessment from '@hire/components/HireEvidenceAssessment'
 import HumanRoundsPanel, { type HumanRoundView } from './HumanRoundsPanel'
+import CandidateStatusLinksPanel from './CandidateStatusLinksPanel'
 import SharePacketsPanel from './SharePacketsPanel'
 import AssessmentExportsPanel from './AssessmentExportsPanel'
 
@@ -674,6 +675,8 @@ export default function ApplicationCardPage({ params }: { params: { appId: strin
         terminal={terminal}
         onChanged={load}
       />
+
+      <CandidateStatusLinksPanel applicationId={application.id} />
 
       <SharePacketsPanel
         applicationId={application.id}

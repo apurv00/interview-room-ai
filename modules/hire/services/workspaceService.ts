@@ -29,7 +29,16 @@ import {
   deleteHireAssessmentExportObjects,
   type HireAssessmentExportCleanupTarget,
 } from './assessmentExportLifecycleService'
+import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
 import { activeHireWorkspaceLifecycleFilter } from './hireWorkspaceLifecycleFilter'
+import { revokeCandidateStatusLinksForWorkspace } from '../../hire-status/services/candidateStatusLinkService'
+import { disableHireDigestDeliveryForScope } from '../../hire-digest/services/hireDigestService'
+import {
+  cancelHireOnboardingTestDrivesForMember,
+  cancelHireOnboardingTestDrivesForWorkspace,
+  deliverHireOnboardingTestDriveRuntimeRevocations,
+  kickDueHireOnboardingTestDriveCleanups,
+} from '../../hire-onboarding/services/testDriveLifecycleService'
 
 export { activeHireWorkspaceLifecycleFilter } from './hireWorkspaceLifecycleFilter'
 
@@ -392,6 +401,7 @@ export async function removeMember(ctx: MembershipContext, memberId: string): Pr
     throw new AppError('The workspace admin cannot be removed', 400, 'CANNOT_REMOVE_ADMIN')
   }
   const removedAt = new Date()
+  let testDriveRuntimeRoundIds: string[] = []
   const session = await mongoose.startSession()
   try {
     await session.withTransaction(async () => {
@@ -404,7 +414,10 @@ export async function removeMember(ctx: MembershipContext, memberId: string): Pr
         },
         {
           $set: { authState: 'removed', removedAt },
-          $inc: { sessionVersion: 1 },
+          // The digest worker writes the same member row immediately before
+          // provider egress. Bumping its dedicated fence makes removal and
+          // egress serialize even if a stale worker still holds a lease.
+          $inc: { sessionVersion: 1, digestEgressFenceVersion: 1 },
           $unset: { passwordHash: 1, passwordSetAt: 1, userId: 1 },
         },
         { session },
@@ -430,10 +443,37 @@ export async function removeMember(ctx: MembershipContext, memberId: string): Pr
         { $set: { consumedAt: removedAt } },
         { session },
       )
+      await disableHireDigestDeliveryForScope({
+        workspaceId: ctx.workspace._id,
+        memberId: target._id,
+        now: removedAt,
+        session,
+      })
+      const testDriveCancellation = await cancelHireOnboardingTestDrivesForMember({
+        workspaceId: ctx.workspace._id,
+        memberId: target._id,
+        at: removedAt,
+        cleanupAfter: removedAt,
+        reason: 'Workspace member removed',
+        actor: {
+          memberId: ctx.membership._id,
+          name: memberActorName(ctx.membership),
+        },
+        session,
+      })
+      testDriveRuntimeRoundIds = testDriveCancellation.runtimeRoundIds
     })
   } finally {
     await session.endSession()
   }
+  await kickDueHireOnboardingTestDriveCleanups({
+    workspaceId: ctx.workspace._id.toString(),
+    now: removedAt,
+  })
+  await deliverHireOnboardingTestDriveRuntimeRevocations({
+    workspaceId: ctx.workspace._id.toString(),
+    roundIds: testDriveRuntimeRoundIds,
+  })
 }
 
 export async function transferWorkspaceAdmin(
@@ -702,6 +742,14 @@ export async function softDeleteWorkspace(
         },
         { session },
       )
+      // Digest rows carry an immutable member recipient snapshot. A
+      // deletion-pending workspace must revoke that egress before restore or
+      // a delayed worker can send it.
+      await disableHireDigestDeliveryForScope({
+        workspaceId: ctx.workspace._id,
+        now: deletedAt,
+        session,
+      })
       // Human interview kits are possession capabilities with their own
       // delivery queue. Cancel recovery/reminder egress and revoke active
       // kits in the tombstone transaction; restoration never revives either.
@@ -757,7 +805,35 @@ export async function softDeleteWorkspace(
         },
         { session },
       )
+      // Candidate-status possession links are revoked in the same workspace
+      // tombstone transaction. Restoration never restores their hash.
+      await revokeCandidateStatusLinksForWorkspace({
+        workspaceId: ctx.workspace._id,
+        reason: 'Workspace scheduled for deletion',
+        at: deletedAt,
+        session,
+      })
+      // Keep the durable synthetic-graph marker through the 30-day recovery
+      // window. The workspace-wide revocation loop below remains the single
+      // authority for runtime delivery; this call only cancels the marker.
+      await cancelHireOnboardingTestDrivesForWorkspace({
+        workspaceId: ctx.workspace._id,
+        at: deletedAt,
+        cleanupAfter: purgeAfter,
+        reason: 'Workspace scheduled for deletion',
+        actor: {
+          memberId: ctx.membership._id,
+          name: memberActorName(ctx.membership),
+        },
+        revokeRounds: false,
+        session,
+      })
       assessmentExportCleanupTargets = await cancelHireAssessmentExports({
+        scope: { workspaceId: ctx.workspace._id },
+        cancelledAt: deletedAt,
+        session,
+      })
+      await cancelHireReportExportsForLifecycle({
         scope: { workspaceId: ctx.workspace._id },
         cancelledAt: deletedAt,
         session,

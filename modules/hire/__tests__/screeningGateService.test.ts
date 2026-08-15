@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import mongoose from 'mongoose'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { AppError } from '@shared/errors'
 
 const mocks = vi.hoisted(() => {
   const chain = <T>(value: T) => {
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => {
         work({ id: 'screening-session' }),
     ),
     claimCandidateFence: vi.fn().mockResolvedValue(undefined),
+    onboardingFence: vi.fn().mockResolvedValue(undefined),
     job: { findOne: vi.fn(), updateOne: vi.fn(), exists: vi.fn() },
     requirement: { findOne: vi.fn() },
     application: { find: vi.fn(), updateOne: vi.fn() },
@@ -43,6 +45,11 @@ vi.mock('../services/hireWorkspaceWriteFence', () => ({
 
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: mocks.claimCandidateFence,
+}))
+
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    mocks.onboardingFence(...args),
 }))
 
 vi.mock('../models', () => ({
@@ -189,6 +196,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   setCurrentRows()
   mocks.job.updateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.onboardingFence.mockResolvedValue(undefined)
   mocks.job.exists.mockImplementation(() => mocks.chain(true))
   mocks.gate.create.mockImplementation(async (docs: unknown[]) => docs)
   mocks.batch.create.mockImplementation(async (docs: unknown[]) => docs)
@@ -298,6 +306,24 @@ describe('screeningGateService', () => {
       version: 2,
       contentHash: 'c'.repeat(64),
     })
+  })
+
+  it('rejects a synthetic practice job before creating a gate or invitation batch', async () => {
+    mocks.onboardingFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(
+      confirmJobScreeningGate(CTX, JOB_ID.toString(), {
+        ...request,
+        previewFingerprint: 'a'.repeat(64),
+      }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+
+    expect(mocks.job.updateOne).not.toHaveBeenCalled()
+    expect(mocks.gate.create).not.toHaveBeenCalled()
+    expect(mocks.batch.create).not.toHaveBeenCalled()
+    expect(mocks.item.create).not.toHaveBeenCalled()
   })
 
   it('rejects a changed queue before creating a gate or batch', async () => {

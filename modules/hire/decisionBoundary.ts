@@ -13,7 +13,7 @@ export { HireHumanRound } from './models/HireHumanRound'
 export { HireHumanScorecard } from './models/HireHumanScorecard'
 export { HireInterviewResult } from './models/HireInterviewResult'
 export { HireJob } from './models/HireJob'
-export { HirePrivacyRequest } from './models/HirePrivacyRequest'
+export { HirePrivacyRequest, activeHirePrivacyRequestFilter } from './models/HirePrivacyRequest'
 export { HireWorkspace } from './models/HireWorkspace'
 
 export { connectHireControlDB } from './services/hireControlBoundary'

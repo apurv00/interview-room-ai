@@ -34,6 +34,9 @@ import {
   deleteHireAssessmentExportObjects,
   type HireAssessmentExportCleanupTarget,
 } from './assessmentExportLifecycleService'
+import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
+import { revokeCandidateStatusLinksForScope } from '../../hire-status/services/candidateStatusLinkService'
+import { invalidateHireDigestAggregateSnapshotsForPrivacy } from '../../hire-digest/services/hireDigestService'
 
 const DEFAULT_CANDIDATE_BATCH_SIZE = 100
 const ANONYMIZATION_LEASE_MS = 15 * 60 * 1000
@@ -605,6 +608,15 @@ async function anonymizeClaimedCandidate(input: {
       const eligibility = await evaluateRetentionEligibility(candidate, input.now, session)
       if (!eligibility.eligible) return
 
+      // Retention anonymization changes the aggregate's subject set. This
+      // transaction shares the workspace fence with snapshot creation and
+      // exact egress, so a pre-anonymization digest cannot send after commit.
+      await invalidateHireDigestAggregateSnapshotsForPrivacy({
+        workspaceId: candidate.workspaceId,
+        now: input.now,
+        session,
+      })
+
       const anonymizedEmail = `retained-${candidate._id.toString()}@privacy.invalid`
       const changed = await HireCandidate.updateOne(
         {
@@ -721,6 +733,14 @@ async function anonymizeClaimedCandidate(input: {
       await HireInterviewKit.deleteMany(scope, { session })
       await HireHumanScorecard.deleteMany(scope, { session })
       await HireHumanRound.deleteMany(scope, { session })
+      // Retention is the final PII boundary. Any residual capability becomes
+      // uniformly inactive and its digest is removed in this transaction.
+      await revokeCandidateStatusLinksForScope({
+        ...scope,
+        reason: 'Candidate retained and anonymized',
+        at: input.now,
+        session,
+      })
       // A claimed candidate was fenced against currently valid share
       // capabilities above. Revoke any residual active packet defensively,
       // then remove all immutable snapshot content and external verdict prose
@@ -762,6 +782,11 @@ async function anonymizeClaimedCandidate(input: {
         scope,
         cancelledAt: input.now,
         privacyRedactedAt: input.now,
+        session,
+      })
+      await cancelHireReportExportsForLifecycle({
+        scope,
+        cancelledAt: input.now,
         session,
       })
       // Intake tasks are transient, but an interrupted worker can retain the

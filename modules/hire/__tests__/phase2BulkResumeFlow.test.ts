@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   extractEmails: vi.fn(),
   workspaceTransaction: vi.fn(),
   candidateFence: vi.fn(),
+  onboardingTestDriveFence: vi.fn(),
   jobFindOne: vi.fn(),
   jobFind: vi.fn(),
   jobUpdateOne: vi.fn(),
@@ -80,6 +81,10 @@ vi.mock('../services/hireWorkspaceWriteFence', () => ({
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: (...args: unknown[]) => mocks.candidateFence(...args),
   HireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
+}))
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    mocks.onboardingTestDriveFence(...args),
 }))
 vi.mock('../services/workspaceService', () => ({
   activeHireWorkspaceLifecycleFilter: () => ({ lifecycleState: 'active' }),
@@ -287,6 +292,7 @@ beforeEach(() => {
       work(session),
   )
   mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.onboardingTestDriveFence.mockResolvedValue(undefined)
   mocks.jobFindOne.mockImplementation((filter: Record<string, unknown>) =>
     query([currentJob, earlierJob].find((job) => matches(job, filter)) ?? null),
   )

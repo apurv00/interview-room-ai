@@ -1,12 +1,24 @@
-import { withAuth } from 'next-auth/middleware'
-import { NextResponse } from 'next/server'
-import { isHireGuestEmail, evaluateGuestAccess, guestRoundIdFromEmail } from '@shared/auth/guestScope'
+import { withAuth, type NextRequestWithAuth } from 'next-auth/middleware'
+import {
+  NextResponse,
+  type NextFetchEvent,
+  type NextRequest,
+} from 'next/server'
+import {
+  isHireGuestEmail,
+  evaluateGuestAccess,
+  guestRoundIdFromEmail,
+} from '@shared/auth/guestScope'
 import { runtimeWriteDrainMs } from '@shared/contracts/hireRuntimeWriteFence'
 
 const isHireRuntimeSurface = process.env.IPG_SURFACE === 'hire-engine'
 const isHireControlSurface = process.env.IPG_SURFACE === 'hire-control'
 const HIRE_RUNTIME_FENCE_BYPASS_HEADER = 'x-ipg-hire-runtime-fence-bypass'
-const HIRE_CONTROL_PUBLIC_POLICY_PATHS = new Set(['/privacy', '/terms', '/contact'])
+const HIRE_CONTROL_PUBLIC_POLICY_PATHS = new Set([
+  '/privacy',
+  '/terms',
+  '/contact',
+])
 
 function isHireRuntimePathAllowed(pathname: string, method: string): boolean {
   // Candidate consent, OTP, photo, privacy, and handoff issuance belong to
@@ -42,6 +54,16 @@ function isHireRuntimePathAllowed(pathname: string, method: string): boolean {
   ) {
     return false
   }
+  // Candidate-status pages are control-plane-only, sessionless capability
+  // pages. They never share the interview runtime or its guest-session rules.
+  if (
+    pathname === '/candidate-status' ||
+    pathname.startsWith('/candidate-status/') ||
+    pathname === '/api/candidate-status' ||
+    pathname.startsWith('/api/candidate-status/')
+  ) {
+    return false
+  }
   if (
     pathname === '/handoff' ||
     pathname === '/handoff/complete' ||
@@ -69,6 +91,8 @@ function isHireControlPathAllowed(pathname: string): boolean {
     pathname.startsWith('/interview-kit/') ||
     pathname === '/share-packet' ||
     pathname.startsWith('/share-packet/') ||
+    pathname === '/candidate-status' ||
+    pathname.startsWith('/candidate-status/') ||
     pathname === '/apply' ||
     pathname.startsWith('/apply/') ||
     pathname.startsWith('/hire-signin') ||
@@ -78,6 +102,8 @@ function isHireControlPathAllowed(pathname: string): boolean {
     pathname.startsWith('/api/interview-kit/') ||
     pathname === '/api/share-packet' ||
     pathname.startsWith('/api/share-packet/') ||
+    pathname === '/api/candidate-status' ||
+    pathname.startsWith('/api/candidate-status/') ||
     pathname === '/api/apply' ||
     pathname.startsWith('/api/apply/') ||
     pathname.startsWith('/api/hire-auth/') ||
@@ -100,8 +126,68 @@ function isHireControlPathAllowed(pathname: string): boolean {
   )
 }
 
-export default withAuth(
-  function middleware(req) {
+function isCandidateStatusSessionlessPath(pathname: string): boolean {
+  return (
+    pathname === '/candidate-status' ||
+    pathname.startsWith('/candidate-status/') ||
+    pathname === '/api/candidate-status' ||
+    pathname.startsWith('/api/candidate-status/')
+  )
+}
+
+function candidateStatusLegacyCredentialTransport(req: NextRequest): boolean {
+  const pathname = req.nextUrl.pathname
+  return (
+    isCandidateStatusSessionlessPath(pathname) &&
+    ['capability', 'status', 'secret', 'token'].some((key) =>
+      req.nextUrl.searchParams.has(key),
+    )
+  )
+}
+
+/**
+ * Candidate-status is a fragment-only possession surface. This handler stays
+ * outside `withAuth`: next-auth reads and decodes its session cookie before
+ * its authorization callback runs, which would violate the no-session/no-
+ * cookie contract even when the callback ultimately permits the route.
+ */
+function candidateStatusSessionlessMiddleware(req: NextRequest): NextResponse {
+  if (candidateStatusLegacyCredentialTransport(req)) {
+    return new NextResponse('This link format is no longer active', {
+      status: 410,
+      headers: {
+        'Cache-Control': 'private, no-store',
+        Pragma: 'no-cache',
+        'Referrer-Policy': 'no-referrer',
+        'X-Robots-Tag': 'noindex, nofollow',
+      },
+    })
+  }
+  // Candidate status belongs to the control plane. A runtime deployment must
+  // not serve the public capability page merely because middleware skipped
+  // NextAuth for it.
+  if (isHireRuntimeSurface)
+    return new NextResponse('Not found', { status: 404 })
+
+  const response = NextResponse.next()
+  response.headers.set(
+    'x-request-id',
+    req.headers.get('x-request-id') || crypto.randomUUID(),
+  )
+  response.headers.set('X-Content-Type-Options', 'nosniff')
+  response.headers.set('X-Frame-Options', 'DENY')
+  response.headers.set('Referrer-Policy', 'no-referrer')
+  response.headers.set('X-Robots-Tag', 'noindex, nofollow')
+  response.headers.set('Cache-Control', 'private, no-store')
+  response.headers.set(
+    'Permissions-Policy',
+    'geolocation=(), payment=(self "https://api.razorpay.com"), usb=()',
+  )
+  return response
+}
+
+const authenticatedMiddleware = withAuth(
+  function authenticatedHireMiddleware(req) {
     const { pathname } = req.nextUrl
     const token = req.nextauth.token
 
@@ -110,25 +196,30 @@ export default withAuth(
     // means an old or copied-incorrectly link. Do not read or echo the value.
     const legacyHireCredentialTransport =
       pathname.startsWith('/apply/') ||
-      (pathname.startsWith('/api/apply/') && pathname !== '/api/apply/resolve') ||
+      (pathname.startsWith('/api/apply/') &&
+        pathname !== '/api/apply/resolve') ||
       pathname.startsWith('/candidate/privacy/') ||
-      (pathname.startsWith('/candidate/') && req.nextUrl.searchParams.has('token')) ||
-      ((
-        pathname === '/interview-kit' ||
+      (pathname.startsWith('/candidate/') &&
+        req.nextUrl.searchParams.has('token')) ||
+      ((pathname === '/interview-kit' ||
         pathname.startsWith('/interview-kit/') ||
         pathname === '/api/interview-kit' ||
-        pathname.startsWith('/api/interview-kit/')
-      ) &&
+        pathname.startsWith('/api/interview-kit/')) &&
         ['capability', 'invite', 'kit', 'secret', 'token'].some((key) =>
           req.nextUrl.searchParams.has(key),
         )) ||
-      ((
-        pathname === '/share-packet' ||
+      ((pathname === '/share-packet' ||
         pathname.startsWith('/share-packet/') ||
         pathname === '/api/share-packet' ||
-        pathname.startsWith('/api/share-packet/')
-      ) &&
+        pathname.startsWith('/api/share-packet/')) &&
         ['capability', 'packet', 'secret', 'share', 'token'].some((key) =>
+          req.nextUrl.searchParams.has(key),
+        )) ||
+      ((pathname === '/candidate-status' ||
+        pathname.startsWith('/candidate-status/') ||
+        pathname === '/api/candidate-status' ||
+        pathname.startsWith('/api/candidate-status/')) &&
+        ['capability', 'status', 'secret', 'token'].some((key) =>
           req.nextUrl.searchParams.has(key),
         )) ||
       (pathname === '/hire-signin' && req.nextUrl.searchParams.has('setup')) ||
@@ -193,9 +284,10 @@ export default withAuth(
       // runtime's transient (never shared-cache) provider boundary.
       if (pathname === '/api/tts' || pathname === '/api/tts/stream') {
         const url = req.nextUrl.clone()
-        url.pathname = pathname === '/api/tts/stream'
-          ? '/api/hire-engine/tts/stream'
-          : '/api/hire-engine/tts'
+        url.pathname =
+          pathname === '/api/tts/stream'
+            ? '/api/hire-engine/tts/stream'
+            : '/api/hire-engine/tts'
         return NextResponse.rewrite(url)
       }
       if (!isHireRuntimePathAllowed(pathname, req.method)) {
@@ -234,7 +326,11 @@ export default withAuth(
     // GDPR export, account, resumes, history, learn, jobs, and any future
     // authed surface — is denied by default, never patched away one door at
     // a time. Authority + rationale: shared/auth/guestScope.ts.
-    if (!isHireRuntimeSurface && !isHireControlSurface && isHireGuestEmail(token?.email)) {
+    if (
+      !isHireRuntimeSurface &&
+      !isHireControlSurface &&
+      isHireGuestEmail(token?.email)
+    ) {
       const decision = evaluateGuestAccess(pathname, req.method)
       if (!decision.allowed) {
         if (decision.redirectTo) {
@@ -248,8 +344,11 @@ export default withAuth(
           return NextResponse.redirect(url)
         }
         return NextResponse.json(
-          { error: 'Not available for interview candidates', code: 'GUEST_SCOPE' },
-          { status: 403 }
+          {
+            error: 'Not available for interview candidates',
+            code: 'GUEST_SCOPE',
+          },
+          { status: 403 },
         )
       }
     }
@@ -263,7 +362,9 @@ export default withAuth(
 
     const redirectToPrimaryApp = () => {
       const configuredAppUrl = process.env.APP_URL || process.env.NEXTAUTH_URL
-      const url = configuredAppUrl ? new URL('/', configuredAppUrl) : req.nextUrl.clone()
+      const url = configuredAppUrl
+        ? new URL('/', configuredAppUrl)
+        : req.nextUrl.clone()
       url.pathname = configuredAppUrl ? '/' : '/signin'
       url.search = ''
       return NextResponse.redirect(url)
@@ -318,10 +419,20 @@ export default withAuth(
       !(pathname === '/candidate' || pathname.startsWith('/candidate/')) &&
       // Human interviewer kits are a separate no-login public route, not a
       // workspace page. Keep the exact segment boundary just like candidate.
-      !(pathname === '/interview-kit' || pathname.startsWith('/interview-kit/')) &&
+      !(
+        pathname === '/interview-kit' || pathname.startsWith('/interview-kit/')
+      ) &&
       // Share packets carry a fragment capability and stay outside the
       // workspace rewrite just like interviewer kits.
-      !(pathname === '/share-packet' || pathname.startsWith('/share-packet/')) &&
+      !(
+        pathname === '/share-packet' || pathname.startsWith('/share-packet/')
+      ) &&
+      // Candidate status links are fragment-only public paths and must never
+      // be rewritten into the authenticated workspace tree.
+      !(
+        pathname === '/candidate-status' ||
+        pathname.startsWith('/candidate-status/')
+      ) &&
       // Public apply page — a shared link must work on the hire host too,
       // where recruiters copy it from (segment-exact, like /candidate).
       !(pathname === '/apply' || pathname.startsWith('/apply/')) &&
@@ -382,7 +493,11 @@ export default withAuth(
       pathname === '/share-packet' ||
       pathname.startsWith('/share-packet/') ||
       pathname === '/api/share-packet' ||
-      pathname.startsWith('/api/share-packet/')
+      pathname.startsWith('/api/share-packet/') ||
+      pathname === '/candidate-status' ||
+      pathname.startsWith('/candidate-status/') ||
+      pathname === '/api/candidate-status' ||
+      pathname.startsWith('/api/candidate-status/')
     ) {
       response.headers.set('Referrer-Policy', 'no-referrer')
       response.headers.set('X-Robots-Tag', 'noindex, nofollow')
@@ -391,7 +506,11 @@ export default withAuth(
       pathname === '/share-packet' ||
       pathname.startsWith('/share-packet/') ||
       pathname === '/api/share-packet' ||
-      pathname.startsWith('/api/share-packet/')
+      pathname.startsWith('/api/share-packet/') ||
+      pathname === '/candidate-status' ||
+      pathname.startsWith('/candidate-status/') ||
+      pathname === '/api/candidate-status' ||
+      pathname.startsWith('/api/candidate-status/')
     ) {
       // The page itself contains only a fragment capability, but its rendered
       // snapshot is still sensitive recruitment data. Do not let a browser
@@ -454,7 +573,10 @@ export default withAuth(
           pathname === '/jobs' ||
           pathname.startsWith('/jobs/') ||
           pathname === '/api/jobs/feed' ||
-          (pathname.startsWith('/api/jobs/') && !pathname.startsWith('/api/jobs/admin') && !pathname.endsWith('/save') && !pathname.endsWith('/apply-click')) ||
+          (pathname.startsWith('/api/jobs/') &&
+            !pathname.startsWith('/api/jobs/admin') &&
+            !pathname.endsWith('/save') &&
+            !pathname.endsWith('/apply-click')) ||
           pathname.startsWith('/api/resume/tailor') ||
           pathname.startsWith('/api/resume/ats-check') ||
           pathname.startsWith('/pricing') ||
@@ -512,6 +634,12 @@ export default withAuth(
           pathname.startsWith('/share-packet/') ||
           pathname === '/api/share-packet' ||
           pathname.startsWith('/api/share-packet/') ||
+          // Candidate status is a public fragment capability. It may be
+          // opened from any browser without creating or reading a session.
+          pathname === '/candidate-status' ||
+          pathname.startsWith('/candidate-status/') ||
+          pathname === '/api/candidate-status' ||
+          pathname.startsWith('/api/candidate-status/') ||
           // Workspace routes carry their own dual-principal fence: either a
           // current B2C HR session or the dedicated Hire-member cookie. The
           // NextAuth middleware cannot decode the latter, so it must let the
@@ -525,20 +653,30 @@ export default withAuth(
           pathname.startsWith('/apply/') ||
           pathname === '/api/apply' ||
           pathname.startsWith('/api/apply/') ||
-          pathname.startsWith('/api/qa/automation-login')
-          || pathname === '/api/billing/catalog'
-          || pathname === '/api/billing/analytics/checkout-observation'
+          pathname.startsWith('/api/qa/automation-login') ||
+          pathname === '/api/billing/catalog' ||
+          pathname === '/api/billing/analytics/checkout-observation' ||
           // Razorpay has no NextAuth session. This exact route authenticates
           // the raw request body with the mode-specific webhook HMAC secret.
-          || pathname === '/api/billing/webhooks/razorpay'
+          pathname === '/api/billing/webhooks/razorpay'
         ) {
           return true
         }
         return !!token
       },
     },
-  }
+  },
 )
+
+export default function middleware(req: NextRequest, event: NextFetchEvent) {
+  if (isCandidateStatusSessionlessPath(req.nextUrl.pathname)) {
+    return candidateStatusSessionlessMiddleware(req)
+  }
+  // The wrapped implementation adds `nextauth` before it invokes the
+  // authenticated handler. The public candidate-status branch above never
+  // reaches this cast or asks next-auth to inspect a cookie.
+  return authenticatedMiddleware(req as NextRequestWithAuth, event)
+}
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],

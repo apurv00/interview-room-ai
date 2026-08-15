@@ -5,6 +5,8 @@ import {
   HireExternalVerdict,
   HireSharePacket,
 } from '@hire-decisions/models'
+import { HireDigestOutbox, HireDigestPreference } from '../../hire-digest/models'
+import { HireCandidateStatusLink } from '../../hire-status/models'
 import {
   HireApplication,
   HireAiInviteDelivery,
@@ -48,6 +50,9 @@ import {
   deleteHireAssessmentExportObjects,
   type HireAssessmentExportCleanupTarget,
 } from './assessmentExportLifecycleService'
+import { HireReportExport } from '../../hire-reports/models/HireReportExport'
+import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
+import { HireOnboardingTestDrive } from '../../hire-onboarding/models'
 
 const MEDIA_DELETE_BATCH_SIZE = 100
 const RUNTIME_PURGE_DELIVERY_BATCH_SIZE = 25
@@ -71,6 +76,8 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireMediaAsset',
   'HirePrivacyRequest',
   'HireEmailOutbox',
+  'HireDigestOutbox',
+  'HireDigestPreference',
   'HireAiInviteDelivery',
   'HireHumanKitDelivery',
   'HireInterviewKit',
@@ -82,12 +89,15 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireInvitationBatch',
   'HireScreeningGate',
   'HireAssessmentExport',
+  'HireReportExport',
   'HireExternalVerdict',
   'HireSharePacket',
+  'HireCandidateStatusLink',
   'HireApplication',
   'HireCandidate',
   'HireJobRequirementVersion',
   'HireJob',
+  'HireOnboardingTestDrive',
   'HireWorkspaceMember',
   'HireWorkspace',
 ] as const
@@ -322,6 +332,10 @@ async function deleteWorkspaceGraphChildren(
   await HireMediaAsset.deleteMany({ workspaceId }, { session })
   await HirePrivacyRequest.deleteMany({ workspaceId }, { session })
   await HireEmailOutbox.deleteMany({ workspaceId }, { session })
+  // Member operational-mail rows include a private recipient snapshot. They
+  // must precede both membership rows and the workspace root during purge.
+  await HireDigestOutbox.deleteMany({ workspaceId }, { session })
+  await HireDigestPreference.deleteMany({ workspaceId }, { session })
   await HireAiInviteDelivery.deleteMany({ workspaceId }, { session })
   // Human-round capabilities and delivery recovery material are control-plane
   // records only. Delete the egress/recovery edge before its kit, scorecard,
@@ -347,15 +361,28 @@ async function deleteWorkspaceGraphChildren(
     session,
   })
   await HireAssessmentExport.deleteMany({ workspaceId }, { session })
+  await cancelHireReportExportsForLifecycle({
+    scope: { workspaceId },
+    cancelledAt: now,
+    session,
+  })
+  await HireReportExport.deleteMany({ workspaceId }, { session })
+  // `HireReportExportCleanup` intentionally survives this graph deletion. Its
+  // immutable, deletion-only tombstone is the recovery coordinate for a late
+  // upload that races the final hard-purge transaction.
   // Decision edges precede their application/candidate parents. An external
   // verdict references a packet, and a packet carries immutable candidate
   // snapshots, so purge verdicts before packets and both before Hire records.
   await HireExternalVerdict.deleteMany({ workspaceId }, { session })
   await HireSharePacket.deleteMany({ workspaceId }, { session })
+  await HireCandidateStatusLink.deleteMany({ workspaceId }, { session })
   await HireApplication.deleteMany({ workspaceId }, { session })
   await HireCandidate.deleteMany({ workspaceId }, { session })
   await HireJobRequirementVersion.deleteMany({ workspaceId }, { session })
   await HireJob.deleteMany({ workspaceId }, { session })
+  // The marker is last among the synthetic graph parents. It remains an
+  // aggregate-exclusion/recovery coordinate until every child is gone.
+  await HireOnboardingTestDrive.deleteMany({ workspaceId }, { session })
   await HireWorkspaceMember.deleteMany({ workspaceId }, { session })
   return assessmentExportCleanupTargets
 }

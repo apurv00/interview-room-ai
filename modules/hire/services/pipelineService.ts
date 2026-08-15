@@ -54,11 +54,21 @@ import {
   claimHireCandidatePiiWriteFence,
   HireCandidatePiiTombstoneError,
 } from './hireCandidatePrivacyWriteFence'
+import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
 import {
   cancelHireAssessmentExports,
   deleteHireAssessmentExportObjects,
   type HireAssessmentExportCleanupTarget,
 } from './assessmentExportLifecycleService'
+import {
+  cancelHirePipelineStatusReportsForTerminalTransition,
+  createHireJobCloseoutReportForLifecycle,
+} from '../../hire-reports/services/hireReportLifecycleService'
+import {
+  kickHireReportExport,
+  type HireReportExportRequestResult,
+} from '../../hire-reports/services/hireReportExportService'
+import { cancelHireDigestOutboxesForScope } from '../../hire-digest/services/hireDigestService'
 
 /**
  * Jobs, candidates, applications, and the fixed pipeline. Every query in this
@@ -619,7 +629,20 @@ export async function updateJobStatus(
 
   let runtimeRoundIds: string[] = []
   let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
+  const closeoutReportResult: { value: HireReportExportRequestResult | null } = { value: null }
   const updatedJob = await withHireTransaction(ctx, async (session) => {
+    // A transaction callback can retry after an aborted attempt. Keep only the
+    // durable result from its final callback execution for the post-commit kick.
+    closeoutReportResult.value = null
+    // Closing a synthetic practice job would otherwise create candidate PII
+    // email-outbox rows and lifecycle work that do not belong to onboarding.
+    // The marker remains a fence in every retained state until the dedicated
+    // cleanup has removed its graph.
+    await assertHireOnboardingTestDriveWriteIsolation({
+      workspaceId: ctx.workspace._id,
+      jobId,
+      session,
+    })
     const prior = await HireJob.findOne(
       {
         _id: jobId,
@@ -849,6 +872,24 @@ export async function updateJobStatus(
       cancelledAt: now,
       session,
     })
+    // A close changes the aggregate projection for both the workspace-wide
+    // pipeline report and this job's report. Preserve prior closeout history;
+    // the one new closeout obligation is created below after the final stage
+    // writes have committed inside this transaction.
+    await cancelHirePipelineStatusReportsForTerminalTransition({
+      workspaceId: ctx.workspace._id,
+      jobId: job._id,
+      cancelledAt: now,
+      session,
+    })
+    // A daily digest snapshot is workspace-aggregate only. Keep member opt-in
+    // unchanged, but cancel any unfinished stale aggregate before its exact
+    // provider-authorization transaction can race this job close.
+    await cancelHireDigestOutboxesForScope({
+      workspaceId: ctx.workspace._id,
+      now,
+      session,
+    })
     // Screening confirmation is not a permission to mail after the human
     // closes a requisition. Cancel every unsent reservation in the same job
     // close transaction; a concurrently claimed worker also rechecks this
@@ -896,7 +937,17 @@ export async function updateJobStatus(
       null,
       { session },
     )
-    if (applications.length === 0) return job
+    if (applications.length === 0) {
+      closeoutReportResult.value = await createHireJobCloseoutReportForLifecycle({
+        workspaceId: ctx.workspace._id,
+        job,
+        operationId: input.operationId,
+        requestedBy: { memberId: ctx.membership._id.toString(), name: actor.actorName },
+        session,
+        now,
+      })
+      return job
+    }
 
     const undecidedApplications = applications.filter(
       (application) => application.stage !== 'rejected',
@@ -1018,8 +1069,23 @@ export async function updateJobStatus(
         { session },
       )
     }
+    closeoutReportResult.value = await createHireJobCloseoutReportForLifecycle({
+      workspaceId: ctx.workspace._id,
+      job,
+      operationId: input.operationId,
+      requestedBy: { memberId: ctx.membership._id.toString(), name: actor.actorName },
+      session,
+      now,
+    })
     return job
   })
+  const closeoutReportExport = closeoutReportResult.value
+  if (closeoutReportExport?.created) {
+    await kickHireReportExport({
+      workspaceId: ctx.workspace._id.toString(),
+      exportId: closeoutReportExport.export.id,
+    })
+  }
   await deleteHireAssessmentExportObjects(assessmentExportCleanupTargets)
   if (input.status === 'closed' && updatedJob.closedAt) {
     await scheduleHireJobMediaPurge({
@@ -1114,6 +1180,12 @@ export async function createApplication(
 
   try {
     return await withHireTransaction(ctx, async (session) => {
+      await assertHireOnboardingTestDriveWriteIsolation({
+        workspaceId: ctx.workspace._id,
+        jobId: job._id,
+        candidateId: candidate._id,
+        session,
+      })
       const claim = await HireJob.updateOne(
         { _id: job._id, workspaceId: ctx.workspace._id, status: 'open' },
         { $inc: { intakeWriteVersion: 1 } },
@@ -1295,6 +1367,11 @@ async function addOrMergeJobCandidateOnce(
         job.status === 'closed' ? 'JOB_CLOSED' : 'JOB_ON_HOLD',
       )
     }
+    await assertHireOnboardingTestDriveWriteIsolation({
+      workspaceId: ctx.workspace._id,
+      jobId: job._id,
+      session,
+    })
 
     const source: RecruiterCandidateSource = input.candidateId ? 'pool' : 'manual'
     let candidate: IHireCandidate | null
@@ -1333,6 +1410,11 @@ async function addOrMergeJobCandidateOnce(
       }
     }
     if (!candidate) throw new NotFoundError('Candidate')
+    await assertHireOnboardingTestDriveWriteIsolation({
+      workspaceId: ctx.workspace._id,
+      candidateId: candidate._id,
+      session,
+    })
 
     const existingApplication = await HireApplication.findOne(
       {
@@ -1725,6 +1807,23 @@ export async function moveStage(
         assessmentExportCleanupTargets = await cancelHireAssessmentExports({
           scope: lifecycleScope,
           cancelledAt: terminalAt,
+          session,
+        })
+        // The terminal stage changes one job's aggregate counts. Invalidate
+        // only that job's and the workspace-wide pipeline exports; closeout
+        // exports remain historical records and are not part of this policy.
+        await cancelHirePipelineStatusReportsForTerminalTransition({
+          workspaceId: ctx.workspace._id,
+          jobId: application.jobId,
+          cancelledAt: terminalAt,
+          session,
+        })
+        // The digest is an immutable workspace aggregate, so its unfinished
+        // rows must not email a pre-terminal snapshot. This does not disable
+        // the member's opt-in for future periods.
+        await cancelHireDigestOutboxesForScope({
+          workspaceId: ctx.workspace._id,
+          now: terminalAt,
           session,
         })
       }

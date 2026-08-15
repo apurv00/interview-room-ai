@@ -1,4 +1,4 @@
-'use client'
+"use client";
 
 /**
  * IPG Hire v2 member shell — sidebar layout for the workspace surface
@@ -9,55 +9,64 @@
  * membership is enforced per-request by the API layer (requireMembership).
  */
 
-import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
-import { signOut, useSession } from 'next-auth/react'
-import { clearAllInterviewStorage } from '@shared/storageKeys'
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { signOut, useSession } from "next-auth/react";
+import { clearAllInterviewStorage } from "@shared/storageKeys";
 
 interface HireMemberSessionView {
-  authenticated: boolean
-  member?: { name: string; email: string; role: 'admin' | 'member' }
+  authenticated: boolean;
+  member?: { name: string; email: string; role: "admin" | "member" };
 }
 
 const NAV = [
-  { href: '/workspace/jobs', label: 'Jobs', icon: '📋' },
-  { href: '/workspace/candidates', label: 'Candidates', icon: '👥' },
-  { href: '/workspace/members', label: 'Team', icon: '🧑‍💼' },
-]
+  { href: "/workspace/overview", label: "Overview", icon: "◫" },
+  { href: "/workspace/audit", label: "Audit", icon: "◷" },
+  { href: "/workspace/reports", label: "Reports", icon: "▤" },
+  { href: "/workspace/jobs", label: "Jobs", icon: "📋" },
+  { href: "/workspace/candidates", label: "Candidates", icon: "👥" },
+  { href: "/workspace/members", label: "Team", icon: "🧑‍💼" },
+];
 
-export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname()
-  const router = useRouter()
-  const { data: session, status } = useSession()
-  const [hireSession, setHireSession] = useState<HireMemberSessionView | null>(null)
-  const [mobileOpen, setMobileOpen] = useState(false)
+export default function WorkspaceLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { data: session, status } = useSession();
+  const [hireSession, setHireSession] = useState<HireMemberSessionView | null>(
+    null,
+  );
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
-    let live = true
-    void fetch('/api/hire-auth/session', { cache: 'no-store' })
+    let live = true;
+    void fetch("/api/hire-auth/session", { cache: "no-store" })
       .then((response) => response.json())
       .then((value: HireMemberSessionView) => {
-        if (live) setHireSession(value)
+        if (live) setHireSession(value);
       })
       .catch(() => {
-        if (live) setHireSession({ authenticated: false })
-      })
+        if (live) setHireSession({ authenticated: false });
+      });
     return () => {
-      live = false
-    }
-  }, [])
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
-    if (status === 'unauthenticated' && hireSession?.authenticated === false) {
-      router.replace('/hire-signin')
+    if (status === "unauthenticated" && hireSession?.authenticated === false) {
+      router.replace("/hire-signin");
     }
-  }, [status, hireSession, router, pathname])
+  }, [status, hireSession, router, pathname]);
 
   const nav = (
     <nav className="flex-1 px-3 py-4 space-y-1">
       {NAV.map((item) => {
-        const active = pathname?.startsWith(item.href)
+        const active = pathname?.startsWith(item.href);
         return (
           <Link
             key={item.href}
@@ -65,43 +74,45 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
             onClick={() => setMobileOpen(false)}
             className={`flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
               active
-                ? 'bg-indigo-50 text-indigo-700'
-                : 'text-[#536471] hover:bg-gray-50 hover:text-[#0f1419]'
+                ? "bg-indigo-50 text-indigo-700"
+                : "text-[#536471] hover:bg-gray-50 hover:text-[#0f1419]"
             }`}
           >
             <span aria-hidden>{item.icon}</span>
             {item.label}
           </Link>
-        )
+        );
       })}
     </nav>
-  )
+  );
 
   const brand = (
     <div className="px-5 py-5 border-b border-[#e1e8ed]">
-      <Link href="/workspace" className="block">
+      <Link href="/workspace/overview" className="block">
         <span className="text-lg font-bold text-[#0f1419]">IPG Hire</span>
         <span className="block text-xs text-[#71767b]">Hiring workspace</span>
       </Link>
     </div>
-  )
+  );
 
   const userBlock = (
     <div className="px-5 py-4 border-t border-[#e1e8ed] text-sm">
       <p className="truncate text-[#0f1419]">
-        {hireSession?.member?.email ?? session?.user?.email ?? ''}
+        {hireSession?.member?.email ?? session?.user?.email ?? ""}
       </p>
       <button
         onClick={async () => {
           // Shared-browser privacy: scrub account-bound state BEFORE the
           // session ends (same contract as AppShell/Resume; pinned by
           // shared/layout/__tests__/signOutStorage.test.tsx).
-          await clearAllInterviewStorage()
-          await fetch('/api/hire-auth/signout', { method: 'POST' }).catch(() => undefined)
+          await clearAllInterviewStorage();
+          await fetch("/api/hire-auth/signout", { method: "POST" }).catch(
+            () => undefined,
+          );
           if (session?.user) {
-            await signOut({ callbackUrl: '/hire-signin' })
+            await signOut({ callbackUrl: "/hire-signin" });
           } else {
-            window.location.assign('/hire-signin')
+            window.location.assign("/hire-signin");
           }
         }}
         className="mt-1 text-xs text-[#71767b] hover:text-[#f4212e] transition-colors"
@@ -109,7 +120,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         Sign out
       </button>
     </div>
-  )
+  );
 
   return (
     <div className="min-h-screen bg-[#f8fafc]">
@@ -122,7 +133,7 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
 
       {/* Mobile header + drawer */}
       <div className="md:hidden sticky top-0 z-30 bg-white border-b border-[#e1e8ed] flex items-center justify-between px-4 py-3">
-        <Link href="/workspace" className="font-bold text-[#0f1419]">
+        <Link href="/workspace/overview" className="font-bold text-[#0f1419]">
           IPG Hire
         </Link>
         <button
@@ -144,5 +155,5 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         <div className="p-4 md:p-8 max-w-5xl">{children}</div>
       </main>
     </div>
-  )
+  );
 }

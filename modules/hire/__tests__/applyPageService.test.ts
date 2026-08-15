@@ -5,9 +5,30 @@
  * employers or jobs exist.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { AppError } from '@shared/errors'
+
+const onboarding = vi.hoisted(() => ({
+  writeIsolation: vi.fn(),
+  isTestDriveCoordinate: vi.fn(),
+}))
 
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('../services/hireWorkspaceWriteFence', () => ({
+  withActiveHireWorkspaceWriteTransaction: async (
+    _workspaceId: unknown,
+    _memberId: unknown,
+    work: (session: unknown) => Promise<unknown>,
+  ) => work({ id: 'apply-link-session' }),
+}))
+
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    onboarding.writeIsolation(...args),
+  isHireOnboardingTestDriveCoordinate: (...args: unknown[]) =>
+    onboarding.isTestDriveCoordinate(...args),
 }))
 
 const mockJob = { findOne: vi.fn(), updateOne: vi.fn() }
@@ -67,6 +88,8 @@ function jobDoc(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  onboarding.writeIsolation.mockResolvedValue(undefined)
+  onboarding.isTestDriveCoordinate.mockResolvedValue(false)
   mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockWorkspace.findOne.mockReturnValue({
     select: () => Promise.resolve({ name: 'Acme' }),
@@ -92,6 +115,11 @@ describe('issueApplyLink', () => {
     })
     // The raw value must never be persisted anywhere on the document.
     expect(JSON.stringify(mockJob.updateOne.mock.calls[0])).not.toContain(token)
+    expect(onboarding.writeIsolation).toHaveBeenCalledWith({
+      workspaceId: '111111111111111111111111',
+      jobId: 'job-1',
+      session: { id: 'apply-link-session' },
+    })
   })
 
   it('rotating issues a DIFFERENT token, which is what kills the old link', async () => {
@@ -117,9 +145,12 @@ describe('issueApplyLink', () => {
     mockJob.findOne.mockResolvedValue(jobDoc())
     await issueApplyLink(CTX, 'job-1')
     expect(mockJob.findOne).toHaveBeenCalledWith({
-      _id: 'job-1',
-      workspaceId: '111111111111111111111111',
-    })
+        _id: 'job-1',
+        workspaceId: '111111111111111111111111',
+      },
+      null,
+      { session: { id: 'apply-link-session' } },
+    )
     expect(mockJob.updateOne).toHaveBeenCalledWith(
       {
         _id: 'job-1',
@@ -127,7 +158,7 @@ describe('issueApplyLink', () => {
         status: { $ne: 'closed' },
       },
       expect.any(Object),
-      { runValidators: true },
+      { runValidators: true, session: { id: 'apply-link-session' } },
     )
   })
 
@@ -138,6 +169,18 @@ describe('issueApplyLink', () => {
     await expect(issueApplyLink(CTX, 'job-1')).rejects.toMatchObject({
       code: 'JOB_CLOSED',
     })
+  })
+
+  it('rejects a synthetic practice job before persisting an apply capability', async () => {
+    onboarding.writeIsolation.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(issueApplyLink(CTX, 'job-1')).rejects.toMatchObject({
+      code: 'ONBOARDING_TEST_DRIVE_ISOLATED',
+    })
+    expect(mockJob.findOne).not.toHaveBeenCalled()
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
   })
 })
 
@@ -194,6 +237,18 @@ describe('resolveApplyToken — uniform failure (no enumeration)', () => {
       select: () => Promise.resolve(null),
     })
     expect(await resolveApplyToken(CAPABILITY)).toBe(null)
+  })
+
+  it('returns null for a retained synthetic practice marker without probing the workspace', async () => {
+    mockJob.findOne.mockResolvedValue(jobDoc({ applyPageEnabled: true }))
+    onboarding.isTestDriveCoordinate.mockResolvedValue(true)
+
+    await expect(resolveApplyToken(CAPABILITY)).resolves.toBeNull()
+    expect(onboarding.isTestDriveCoordinate).toHaveBeenCalledWith({
+      workspaceId: '111111111111111111111111',
+      jobId: 'job-1',
+    })
+    expect(mockWorkspace.findOne).not.toHaveBeenCalled()
   })
 
   it('requires an active workspace, including compatibility for legacy rows', async () => {

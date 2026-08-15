@@ -30,6 +30,7 @@ import {
 import type { MembershipContext } from './workspaceService'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
 import { claimHireCandidatePiiWriteFence } from './hireCandidatePrivacyWriteFence'
+import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
 
 /**
  * Durable screening gate orchestration.
@@ -506,6 +507,11 @@ export async function confirmJobScreeningGate(
       ctx.workspace._id,
       ctx.membership._id,
       async (session) => {
+        await assertHireOnboardingTestDriveWriteIsolation({
+          workspaceId: ctx.workspace._id,
+          jobId: normalizedJobId,
+          session,
+        })
         const jobClaim = await HireJob.updateOne(
           {
             _id: normalizedJobId,

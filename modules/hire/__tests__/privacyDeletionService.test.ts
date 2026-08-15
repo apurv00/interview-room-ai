@@ -30,8 +30,11 @@ const mocks = vi.hoisted(() => ({
   externalVerdictUpdateMany: vi.fn(),
   cancelAssessmentExports: vi.fn(),
   deleteAssessmentExportObjects: vi.fn(),
+  cancelReportExports: vi.fn(),
   deliverRevocation: vi.fn(),
   candidateFence: vi.fn(),
+  revokeStatusLinks: vi.fn(),
+  invalidateDigestSnapshots: vi.fn(),
 }))
 
 vi.mock('../services/hireControlBoundary', () => ({
@@ -47,6 +50,9 @@ vi.mock('../services/engineRevocationService', () => ({
 }))
 vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: mocks.candidateFence,
+}))
+vi.mock('../../hire-status/services/candidateStatusLinkService', () => ({
+  revokeCandidateStatusLinksForScope: (...args: unknown[]) => mocks.revokeStatusLinks(...args),
 }))
 vi.mock('../models/HirePrivacyRequest', () => ({
   HirePrivacyRequest: {
@@ -121,6 +127,12 @@ vi.mock('@hire-decisions/models', () => ({
 vi.mock('../services/assessmentExportLifecycleService', () => ({
   cancelHireAssessmentExports: (...args: unknown[]) => mocks.cancelAssessmentExports(...args),
   deleteHireAssessmentExportObjects: (...args: unknown[]) => mocks.deleteAssessmentExportObjects(...args),
+}))
+vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
+  cancelHireReportExportsForLifecycle: (...args: unknown[]) => mocks.cancelReportExports(...args),
+}))
+vi.mock('../../hire-digest/services/hireDigestService', () => ({
+  invalidateHireDigestAggregateSnapshotsForPrivacy: (...args: unknown[]) => mocks.invalidateDigestSnapshots(...args),
 }))
 
 import { applyVerifiedHirePrivacyRequest } from '../services/privacyService'
@@ -218,8 +230,11 @@ beforeEach(() => {
   }
   mocks.deliverRevocation.mockResolvedValue(undefined)
   mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.invalidateDigestSnapshots.mockResolvedValue(undefined)
+  mocks.revokeStatusLinks.mockResolvedValue(undefined)
   mocks.cancelAssessmentExports.mockResolvedValue([])
   mocks.deleteAssessmentExportObjects.mockResolvedValue(undefined)
+  mocks.cancelReportExports.mockResolvedValue(0)
 })
 
 describe('verified Hire candidate deletion', () => {
@@ -251,6 +266,14 @@ describe('verified Hire candidate deletion', () => {
       session: dbSession,
     })
     expect(mocks.candidateFence.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applicationFind.mock.invocationCallOrder[0],
+    )
+    expect(mocks.invalidateDigestSnapshots).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      now: NOW,
+      session: dbSession,
+    })
+    expect(mocks.invalidateDigestSnapshots.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.applicationFind.mock.invocationCallOrder[0],
     )
 
@@ -335,6 +358,16 @@ describe('verified Hire candidate deletion', () => {
         { session: dbSession },
       )
     }
+    expect(mocks.revokeStatusLinks).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: CANDIDATE_ID,
+      reason: 'Candidate privacy deletion request',
+      at: NOW,
+      session: dbSession,
+    })
+    expect(mocks.revokeStatusLinks.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sharePacketUpdateMany.mock.invocationCallOrder[0],
+    )
     expect(mocks.sharePacketUpdateMany).toHaveBeenNthCalledWith(
       1,
       {
@@ -385,6 +418,14 @@ describe('verified Hire candidate deletion', () => {
       privacyRedactedAt: NOW,
       session: dbSession,
     })
+    expect(mocks.cancelReportExports).toHaveBeenCalledWith({
+      scope: { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+      cancelledAt: NOW,
+      session: dbSession,
+    })
+    expect(mocks.cancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.cancelReportExports.mock.invocationCallOrder[0],
+    )
     expect(mocks.deleteAssessmentExportObjects).toHaveBeenCalledWith([assessmentExportTarget])
     expect(mocks.cancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.deleteAssessmentExportObjects.mock.invocationCallOrder[0],

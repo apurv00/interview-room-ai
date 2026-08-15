@@ -36,6 +36,7 @@ import { activeHireWorkspaceLifecycleFilter } from './workspaceService'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
 import { claimHireCandidatePiiWriteFence } from './hireCandidatePrivacyWriteFence'
 import { sha256 } from './aiRoundService'
+import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
 
 /**
  * Durable Phase 2 resume-intake queue.
@@ -347,6 +348,11 @@ export async function enqueueMemberResumeIntake(
     workspaceId,
     ctx.membership._id,
     async (session) => {
+      await assertHireOnboardingTestDriveWriteIsolation({
+        workspaceId,
+        jobId: normalized.jobId,
+        session,
+      })
       // Claim the job in the same transaction as the task. A close that
       // wins first prevents the task from being accepted at all.
       const jobClaim = await HireJob.updateOne(
@@ -373,6 +379,12 @@ export async function enqueueMemberResumeIntake(
         )
       }
       if (existingCandidate.candidateId) {
+        await assertHireOnboardingTestDriveWriteIsolation({
+          workspaceId,
+          jobId: normalized.jobId,
+          candidateId: existingCandidate.candidateId,
+          session,
+        })
         await claimHireCandidatePiiWriteFence({
           workspaceId,
           candidateId: existingCandidate.candidateId,
@@ -444,6 +456,11 @@ export async function enqueuePublicApplyIntake(
       view.job.workspaceId,
       authorityMemberId,
       async (session) => {
+        await assertHireOnboardingTestDriveWriteIsolation({
+          workspaceId: view.job.workspaceId,
+          jobId: view.job._id,
+          session,
+        })
         // Recheck exactly the hash resolved from the raw capability. A link
         // rotation/disable racing this request wins and no task is accepted.
         const jobClaim = await HireJob.updateOne(
@@ -472,6 +489,12 @@ export async function enqueuePublicApplyIntake(
           )
         }
         if (existingCandidate.candidateId) {
+          await assertHireOnboardingTestDriveWriteIsolation({
+            workspaceId: view.job.workspaceId,
+            jobId: normalized.jobId,
+            candidateId: existingCandidate.candidateId,
+            session,
+          })
           await claimHireCandidatePiiWriteFence({
             workspaceId: view.job.workspaceId,
             candidateId: existingCandidate.candidateId,
@@ -517,6 +540,7 @@ export async function enqueuePublicApplyIntake(
         'MEMBER_REMOVED',
         'WORKSPACE_DELETION_PENDING',
         'CANDIDATE_PRIVACY_PENDING',
+        'ONBOARDING_TEST_DRIVE_ISOLATED',
       ].includes(
         error.code,
       )
@@ -581,6 +605,30 @@ export async function supplyHireIntakeIdentity(
     ctx.workspace._id,
     ctx.membership._id,
     async (session) => {
+      await assertHireOnboardingTestDriveWriteIsolation({
+        workspaceId: ctx.workspace._id,
+        jobId,
+        session,
+      })
+      const pendingTask = await HireIntakeTask.findOne({
+        _id: taskId,
+        workspaceId: ctx.workspace._id,
+        jobId,
+        source: 'bulk_upload',
+        ...liveRawPayloadFilter(now),
+        status: 'needs_identity',
+      })
+        .select('jobId candidateId applicationId')
+        .session(session)
+      if (pendingTask) {
+        await assertHireOnboardingTestDriveWriteIsolation({
+          workspaceId: ctx.workspace._id,
+          jobId: pendingTask.jobId,
+          ...(pendingTask.candidateId ? { candidateId: pendingTask.candidateId } : {}),
+          ...(pendingTask.applicationId ? { applicationId: pendingTask.applicationId } : {}),
+          session,
+        })
+      }
       const existingCandidate = await existingCandidateState({
         workspaceId: ctx.workspace._id,
         email,
@@ -595,6 +643,12 @@ export async function supplyHireIntakeIdentity(
         )
       }
       if (existingCandidate.candidateId) {
+        await assertHireOnboardingTestDriveWriteIsolation({
+          workspaceId: ctx.workspace._id,
+          jobId,
+          candidateId: existingCandidate.candidateId,
+          session,
+        })
         await claimHireCandidatePiiWriteFence({
           workspaceId: ctx.workspace._id,
           candidateId: existingCandidate.candidateId,
@@ -1124,6 +1178,47 @@ async function resolveWorkerJob(task: ClaimedTask) {
   })
 }
 
+/**
+ * Legacy tasks may predate the request-path fence. Recheck the immutable
+ * task coordinates under an active workspace/member transaction before
+ * parsing raw bytes, then terminally scrub a marked task rather than ever
+ * retrying it into ordinary recruiting intake.
+ */
+async function cancelClaimedOnboardingTestDriveTaskIfNeeded(input: {
+  task: ClaimedTask
+  claimToken: string
+  authorityMemberId: mongoose.Types.ObjectId
+  now: Date
+}): Promise<boolean> {
+  try {
+    await withActiveHireWorkspaceWriteTransaction(
+      input.task.workspaceId,
+      input.authorityMemberId,
+      async (session) => {
+        await assertHireOnboardingTestDriveWriteIsolation({
+          workspaceId: input.task.workspaceId,
+          jobId: input.task.jobId,
+          ...(input.task.candidateId ? { candidateId: input.task.candidateId } : {}),
+          ...(input.task.applicationId ? { applicationId: input.task.applicationId } : {}),
+          session,
+        })
+      },
+    )
+    return false
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'ONBOARDING_TEST_DRIVE_ISOLATED') {
+      throw error
+    }
+    await cancelClaimedTask({
+      task: input.task,
+      claimToken: input.claimToken,
+      now: input.now,
+      message: 'Practice interview data is isolated from recruiting intake',
+    })
+    return true
+  }
+}
+
 function isTerminalAuthorityError(error: unknown): boolean {
   return (
     error instanceof AppError &&
@@ -1132,6 +1227,7 @@ function isTerminalAuthorityError(error: unknown): boolean {
       'MEMBER_REMOVED',
       'WORKSPACE_DELETION_PENDING',
       'HIRE_CANDIDATE_PII_TOMBSTONED',
+      'ONBOARDING_TEST_DRIVE_ISOLATED',
     ].includes(error.code)
   )
 }
@@ -1183,6 +1279,20 @@ export async function processHireIntakeTask(input: {
         now,
         message: 'The workspace member authority is no longer active',
       })
+      return { outcome: 'cancelled' }
+    }
+
+    const authorityMemberId = task.source === 'bulk_upload'
+      ? (workerMemberContext as MembershipContext).membership._id
+      : publicAuthorityMemberId as mongoose.Types.ObjectId
+    if (
+      await cancelClaimedOnboardingTestDriveTaskIfNeeded({
+        task,
+        claimToken,
+        authorityMemberId,
+        now,
+      })
+    ) {
       return { outcome: 'cancelled' }
     }
 

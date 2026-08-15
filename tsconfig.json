@@ -44,9 +44,16 @@
       "@feedback/*": ["./modules/feedback/*"],
       "@hire": ["./modules/hire"],
       "@hire/*": ["./modules/hire/*"],
+      "@hire-onboarding-boundary": ["./modules/hire/onboardingBoundary"],
       "@hire-decision-boundary": ["./modules/hire/decisionBoundary"],
       "@hire-decisions": ["./modules/hire-decisions"],
       "@hire-decisions/*": ["./modules/hire-decisions/*"],
+      "@hire-operations-boundary": ["./modules/hire/operationsBoundary"],
+      "@hire-operations": ["./modules/hire-operations"],
+      "@hire-operations/*": ["./modules/hire-operations/*"],
+      "@hire-digest-boundary": ["./modules/hire/digestBoundary"],
+      "@hire-digest": ["./modules/hire-digest"],
+      "@hire-digest/*": ["./modules/hire-digest/*"],
       "@jobs": ["./modules/jobs"],
       "@jobs/*": ["./modules/jobs/*"]
     }

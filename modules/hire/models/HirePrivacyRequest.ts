@@ -28,6 +28,28 @@ export interface IHirePrivacyRequest extends Document {
   updatedAt: Date
 }
 
+/**
+ * Privacy requests are active while verified deletion is processing, or while
+ * the candidate can still verify a pending request. A stale unverified row
+ * deliberately remains auditable, but must not indefinitely suppress safe
+ * aggregate/read-model work after its capability expires.
+ */
+export function activeHirePrivacyRequestFilter(now: Date): {
+  live: true
+  $or: [
+    { status: 'processing' },
+    { status: 'pending_verification'; verificationExpiresAt: { $gt: Date } },
+  ]
+} {
+  return {
+    live: true,
+    $or: [
+      { status: 'processing' },
+      { status: 'pending_verification', verificationExpiresAt: { $gt: now } },
+    ],
+  }
+}
+
 const HirePrivacyRequestSchema = new Schema<IHirePrivacyRequest>(
   {
     workspaceId: { type: Schema.Types.ObjectId, ref: 'HireWorkspace', required: true, immutable: true },

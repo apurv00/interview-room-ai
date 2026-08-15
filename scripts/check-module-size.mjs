@@ -89,6 +89,23 @@ const BUDGETS = {
   // records, and their tests without authorizing unrelated reporting/UI work.
   // See ADR 0032.
   'modules/hire-decisions': { maxLOC: 5_000, maxFiles: 20 },
+  // Phase 5 report artifacts have a distinct security/lifecycle boundary from
+  // the operational read model: immutable aggregate snapshots, private object
+  // storage, bounded export workers, and deletion-only cleanup tombstones.
+  // 10k/30 leaves room for those auditable controls without turning either
+  // modules/hire or modules/hire-operations into a general export surface.
+  // See ADR 0034.
+  'modules/hire-reports': { maxLOC: 10_000, maxFiles: 30 },
+  // Phase 5 begins a distinct, member-only operational read-model boundary.
+  // Its tight initial envelope permits fixed batch aggregates and typed route
+  // contracts without turning it into a reporting/export or pipeline-write
+  // module. See ADR 0033.
+  'modules/hire-operations': { maxLOC: 3_000, maxFiles: 12 },
+  // Phase 5 daily operational mail is deliberately independent of the
+  // candidate close-email outbox and the disabled B2C digest. This bounded
+  // outbox/preference/egress-fence module owns only Hire-member summaries.
+  // See ADR 0035.
+  'modules/hire-digest': { maxLOC: 5_000, maxFiles: 18 },
   // Bumped maxFiles 130 → 132 on 2026-05-23 (PR #402): added
   // shared/hooks/useOnboardingProfile.ts (cross-module client data
   // hook consumed by both @interview/InterviewSetupForm and

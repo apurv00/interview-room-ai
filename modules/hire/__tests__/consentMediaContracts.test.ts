@@ -7,7 +7,10 @@ import { HireGuestSession } from '../models/HireGuestSession'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
 import { HireInterviewResult } from '../models/HireInterviewResult'
 import { HireMediaAsset } from '../models/HireMediaAsset'
-import { HirePrivacyRequest } from '../models/HirePrivacyRequest'
+import {
+  HirePrivacyRequest,
+  activeHirePrivacyRequestFilter,
+} from '../models/HirePrivacyRequest'
 import {
   HIRE_AI_CONSENT_VERSION,
   HIRE_AI_DISCLOSURE_DIGEST,
@@ -88,6 +91,21 @@ describe('Hire AI consent contract', () => {
 })
 
 describe('Hire-owned schema boundaries', () => {
+  it('treats only processing or unexpired verification requests as active', () => {
+    const now = new Date('2026-08-15T12:00:00.000Z')
+
+    expect(activeHirePrivacyRequestFilter(now)).toEqual({
+      live: true,
+      $or: [
+        { status: 'processing' },
+        {
+          status: 'pending_verification',
+          verificationExpiresAt: { $gt: now },
+        },
+      ],
+    })
+  })
+
   it.each([
     HireConsentReceipt,
     HireGuestSession,

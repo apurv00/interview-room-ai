@@ -1,20 +1,14 @@
 import { createHash } from 'crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { AppError } from '@shared/errors'
 
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('../services/hireWorkspaceWriteFence', () => ({
-  withActiveHireWorkspaceWriteTransaction: (
-    _workspaceId: unknown,
-    _memberId: unknown,
-    work: (session: unknown) => Promise<unknown>,
-  ) => work(session),
-}))
-
 const {
   session,
+  mockWorkspaceWriteFence,
   mockJob,
   mockCandidate,
   mockApplication,
@@ -35,8 +29,13 @@ const {
   mockCancelMediaPurge,
   mockDeliverRuntimeRevocation,
   mockCandidatePiiFence,
+  mockOnboardingTestDriveFence,
   mockCancelAssessmentExports,
   mockDeleteAssessmentExports,
+  mockCancelPipelineReports,
+  mockCancelDigestOutboxes,
+  mockCreateCloseoutReport,
+  mockKickReportExport,
 } = vi.hoisted(() => {
   const transactionSession = {
     withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
@@ -44,6 +43,7 @@ const {
   }
   return {
     session: transactionSession,
+    mockWorkspaceWriteFence: vi.fn(),
     mockJob: {
       create: vi.fn(),
       find: vi.fn(),
@@ -80,10 +80,19 @@ const {
     mockCancelMediaPurge: vi.fn(),
     mockDeliverRuntimeRevocation: vi.fn(),
     mockCandidatePiiFence: vi.fn(),
+    mockOnboardingTestDriveFence: vi.fn(),
     mockCancelAssessmentExports: vi.fn(),
     mockDeleteAssessmentExports: vi.fn(),
+    mockCancelPipelineReports: vi.fn(),
+    mockCancelDigestOutboxes: vi.fn(),
+    mockCreateCloseoutReport: vi.fn(),
+    mockKickReportExport: vi.fn(),
   }
 })
+
+vi.mock('../services/hireWorkspaceWriteFence', () => ({
+  withActiveHireWorkspaceWriteTransaction: (...args: unknown[]) => mockWorkspaceWriteFence(...args),
+}))
 
 vi.mock('../models', () => {
   return {
@@ -194,9 +203,27 @@ vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   HireCandidatePiiTombstoneError: class HireCandidatePiiTombstoneError extends Error {},
 }))
 
+vi.mock('@hire-onboarding-boundary', () => ({
+  assertHireOnboardingTestDriveWriteIsolation: (...args: unknown[]) =>
+    mockOnboardingTestDriveFence(...args),
+}))
+
 vi.mock('../services/assessmentExportLifecycleService', () => ({
   cancelHireAssessmentExports: (...args: unknown[]) => mockCancelAssessmentExports(...args),
   deleteHireAssessmentExportObjects: (...args: unknown[]) => mockDeleteAssessmentExports(...args),
+}))
+
+vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
+  cancelHirePipelineStatusReportsForTerminalTransition: (...args: unknown[]) => mockCancelPipelineReports(...args),
+  createHireJobCloseoutReportForLifecycle: (...args: unknown[]) => mockCreateCloseoutReport(...args),
+}))
+
+vi.mock('../../hire-reports/services/hireReportExportService', () => ({
+  kickHireReportExport: (...args: unknown[]) => mockKickReportExport(...args),
+}))
+
+vi.mock('../../hire-digest/services/hireDigestService', () => ({
+  cancelHireDigestOutboxesForScope: (...args: unknown[]) => mockCancelDigestOutboxes(...args),
 }))
 
 import {
@@ -238,6 +265,10 @@ const JOB_INPUT = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockWorkspaceWriteFence.mockImplementation(
+    async (_workspaceId: unknown, _memberId: unknown, work: (transactionSession: unknown) => Promise<unknown>) =>
+      session.withTransaction(() => work(session)),
+  )
   session.withTransaction.mockImplementation(async (work: () => Promise<void>) => work())
   session.endSession.mockResolvedValue(undefined)
   mockJob.db.startSession.mockResolvedValue(session)
@@ -256,12 +287,17 @@ beforeEach(() => {
   mockInvitationBatch.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockInvitationBatchItem.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockSharePacket.updateMany.mockResolvedValue({ modifiedCount: 0 })
+  mockOnboardingTestDriveFence.mockResolvedValue(undefined)
   mockScheduleMediaPurge.mockResolvedValue({ purgeEligibleAt: new Date(), scheduled: 0 })
   mockCancelMediaPurge.mockResolvedValue(0)
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
   mockCandidatePiiFence.mockResolvedValue(undefined)
   mockCancelAssessmentExports.mockResolvedValue([])
   mockDeleteAssessmentExports.mockResolvedValue(undefined)
+  mockCancelPipelineReports.mockResolvedValue(0)
+  mockCancelDigestOutboxes.mockResolvedValue(undefined)
+  mockCreateCloseoutReport.mockResolvedValue(null)
+  mockKickReportExport.mockResolvedValue(undefined)
   mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockEmailOutbox.find.mockResolvedValue([])
 })
@@ -490,6 +526,104 @@ describe('updateJobStatus', () => {
       }),
     ).rejects.toMatchObject({ code: 'CLOSE_NOTE_REQUIRED' })
     expect(mockJob.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a synthetic practice job before it can create close-email work', async () => {
+    mockOnboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(
+      updateJobStatus(CTX, 'j1', {
+        status: 'closed',
+        expectedStatus: 'open',
+        operationId: OP_A,
+        closeNote: 'This must not create a practice-email delivery.',
+      }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+
+    expect(mockJob.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockEmailOutbox.create).not.toHaveBeenCalled()
+    expect(mockCreateCloseoutReport).not.toHaveBeenCalled()
+  })
+
+  it('persists one closeout report inside the close transaction and kicks it only after commit', async () => {
+    const closedAt = new Date('2026-08-10T10:00:00.000Z')
+    let terminalWorkspaceFenceHeld = false
+    mockWorkspaceWriteFence.mockImplementation(
+      async (_workspaceId: unknown, _memberId: unknown, work: (transactionSession: unknown) => Promise<unknown>) => {
+        terminalWorkspaceFenceHeld = true
+        try {
+          return await session.withTransaction(() => work(session))
+        } finally {
+          terminalWorkspaceFenceHeld = false
+        }
+      },
+    )
+    mockJob.findOne.mockResolvedValue(null)
+    mockJob.findOneAndUpdate.mockResolvedValue({
+      _id: 'j1',
+      title: 'Backend Engineer',
+      status: 'closed',
+      createdAt: new Date('2026-08-01T00:00:00.000Z'),
+      closedAt,
+      closeNote: 'Role filled after review.',
+      events: [],
+    })
+    mockApplication.find.mockResolvedValue([])
+    mockCreateCloseoutReport.mockResolvedValue({
+      export: { id: 'report-1' },
+      created: true,
+    })
+    mockCancelDigestOutboxes.mockImplementation(async () => {
+      expect(terminalWorkspaceFenceHeld).toBe(true)
+    })
+    session.withTransaction.mockImplementation(async (work: () => Promise<unknown>) => {
+      const result = await work()
+      expect(mockKickReportExport).not.toHaveBeenCalled()
+      return result
+    })
+
+    await updateJobStatus(CTX, 'j1', {
+      status: 'closed',
+      expectedStatus: 'open',
+      operationId: OP_A,
+      closeNote: 'Role filled after review.',
+    })
+
+    expect(mockCreateCloseoutReport).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: 'ws-A',
+      job: expect.objectContaining({ _id: 'j1', status: 'closed' }),
+      operationId: OP_A,
+      requestedBy: { memberId: 'm1', name: 'HR One' },
+      session,
+    }))
+    expect(mockCreateCloseoutReport).toHaveBeenCalledTimes(1)
+    expect(mockCancelPipelineReports).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+      cancelledAt: expect.any(Date),
+      session,
+    })
+    expect(mockCancelDigestOutboxes).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      now: expect.any(Date),
+      session,
+    })
+    expect(mockWorkspaceWriteFence).toHaveBeenCalledWith('ws-A', 'm1', expect.any(Function))
+    expect(mockCancelPipelineReports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCreateCloseoutReport.mock.invocationCallOrder[0],
+    )
+    expect(mockCancelDigestOutboxes.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCreateCloseoutReport.mock.invocationCallOrder[0],
+    )
+    expect(mockKickReportExport).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      exportId: 'report-1',
+    })
+    expect(mockCreateCloseoutReport.mock.invocationCallOrder[0]).toBeLessThan(
+      mockKickReportExport.mock.invocationCallOrder[0],
+    )
   })
 
   it('atomically rejects live applications and creates one staggered outbox row each', async () => {
@@ -909,6 +1043,8 @@ describe('updateJobStatus', () => {
       }),
     ).resolves.toBe(prior)
     expect(mockJob.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(mockCreateCloseoutReport).not.toHaveBeenCalled()
+    expect(mockKickReportExport).not.toHaveBeenCalled()
 
     prior.events[0].to = 'on_hold'
     await expect(
@@ -1002,6 +1138,26 @@ describe('createApplication', () => {
       actorMemberId: 'm1',
       actorName: 'HR One',
     })
+    expect(mockOnboardingTestDriveFence).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+      candidateId: 'c1',
+      session,
+    })
+  })
+
+  it('rejects a synthetic practice coordinate before creating an ordinary application', async () => {
+    mockJob.findOne.mockResolvedValue({ _id: 'j1', status: 'open' })
+    mockCandidate.findOne.mockResolvedValue({ _id: 'c1' })
+    mockOnboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(
+      createApplication(CTX, { jobId: 'j1', candidateId: 'c1' }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
+    expect(mockApplication.create).not.toHaveBeenCalled()
   })
 
   it('rejects intake on held jobs before writing', async () => {
@@ -1322,6 +1478,24 @@ describe('addOrMergeJobCandidate', () => {
       null,
       { session },
     )
+    expect(mockApplication.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects a synthetic job before it can create or attach a real candidate', async () => {
+    mockJob.findOne.mockResolvedValue(OPEN_JOB)
+    mockOnboardingTestDriveFence.mockRejectedValue(
+      new AppError('Practice interviews are isolated', 409, 'ONBOARDING_TEST_DRIVE_ISOLATED'),
+    )
+
+    await expect(
+      addOrMergeJobCandidate(CTX, 'j1', {
+        name: 'Real candidate',
+        email: 'real@example.com',
+        operationId: OP_A,
+      }),
+    ).rejects.toMatchObject({ code: 'ONBOARDING_TEST_DRIVE_ISOLATED' })
+    expect(mockCandidate.findOne).not.toHaveBeenCalled()
+    expect(mockCandidate.create).not.toHaveBeenCalled()
     expect(mockApplication.create).not.toHaveBeenCalled()
   })
 
@@ -1753,6 +1927,25 @@ describe('moveStage', () => {
       cancelledAt: expect.any(Date),
       session,
     })
+    expect(mockCancelPipelineReports).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      jobId: 'j1',
+      cancelledAt: expect.any(Date),
+      session,
+    })
+    expect(mockCancelDigestOutboxes).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      now: expect.any(Date),
+      session,
+    })
+    expect(mockWorkspaceWriteFence).toHaveBeenCalledWith('ws-A', 'm1', expect.any(Function))
+    expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancelPipelineReports.mock.invocationCallOrder[0],
+    )
+    expect(mockCancelPipelineReports.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancelDigestOutboxes.mock.invocationCallOrder[0],
+    )
+    expect(mockCreateCloseoutReport).not.toHaveBeenCalled()
     expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
     expect(mockRound.updateMany).not.toHaveBeenCalled()
     expect(mockDeliverRuntimeRevocation).not.toHaveBeenCalled()
@@ -1789,6 +1982,8 @@ describe('moveStage', () => {
       moveStage(CTX, 'a1', { action: 'advance', expectedFrom: 'new', operationId: OP_A }),
     ).resolves.toMatchObject({ stage: 'screened' })
     expect(mockJob.updateOne).not.toHaveBeenCalled()
+    expect(mockCancelPipelineReports).not.toHaveBeenCalled()
+    expect(mockCancelDigestOutboxes).not.toHaveBeenCalled()
 
     event.to = 'rejected'
     await expect(

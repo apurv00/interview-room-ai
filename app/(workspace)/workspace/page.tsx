@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * Workspace entry: members land on Jobs; a user with no workspace gets the
+ * Workspace entry: established members land on Overview; a user with no workspace gets the
  * create form (the creator becomes the single admin — build plan §Permission
  * model). Empty states are designed first: creating a workspace drops you
  * straight into creating your first job.
@@ -30,7 +30,7 @@ export default function WorkspaceEntryPage() {
       const data = await res.json()
       if (data.workspace) {
         setHasWorkspace(true)
-        router.replace('/workspace/jobs')
+        router.replace('/workspace/overview')
         return
       }
       setHasWorkspace(false)

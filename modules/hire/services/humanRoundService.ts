@@ -33,6 +33,7 @@ import {
   createHumanInterviewKitDelivery,
   kickHumanInterviewKitDelivery,
 } from './humanKitDeliveryService'
+import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
 
 export const HUMAN_INTERVIEW_KIT_EXPIRY_DAYS = 7
 
@@ -161,6 +162,16 @@ export async function createGuestHumanRound(
       ctx.workspace._id,
       ctx.membership._id,
       async (session) => {
+        // A guest kit is an external email/possession capability. Practice
+        // coordinates must not create one, including for a legacy marker that
+        // was removed but is still retained for aggregate exclusion/cleanup.
+        await assertHireOnboardingTestDriveWriteIsolation({
+          workspaceId: ctx.workspace._id,
+          applicationId: application._id,
+          jobId: job._id,
+          candidateId: candidate._id,
+          session,
+        })
         const jobClaim = await HireJob.updateOne(
           { _id: job._id, workspaceId: ctx.workspace._id, status: 'open' },
           { $inc: { intakeWriteVersion: 1 } },
