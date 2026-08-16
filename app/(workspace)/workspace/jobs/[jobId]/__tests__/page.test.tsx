@@ -2,12 +2,21 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import JobPipelinePage from '../page'
 
+const router = vi.hoisted(() => ({
+  replace: vi.fn(),
+  refresh: vi.fn(),
+}))
+
 vi.mock('next/link', () => ({
   default: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={String(href)} {...props}>
       {children}
     </a>
   ),
+}))
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => router,
 }))
 
 function json(value: unknown, status = 200): Response {
@@ -19,6 +28,8 @@ function json(value: unknown, status = 200): Response {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  router.replace.mockReset()
+  router.refresh.mockReset()
 })
 
 describe('job close-rejection email delivery', () => {
@@ -559,5 +570,141 @@ describe('human-round pipeline visibility', () => {
 
     expect(await screen.findByText('1 human scorecard pending')).toBeInTheDocument()
     expect(screen.queryByText('AI in progress')).not.toBeInTheDocument()
+  })
+})
+
+describe('empty-job deletion UI', () => {
+  function emptyJobResponse({ applyPageEnabled = false }: { applyPageEnabled?: boolean } = {}) {
+    return json({
+      job: {
+        id: 'job-1',
+        departmentId: 'department-1',
+        title: 'Backend Engineer',
+        status: 'open',
+        closeNote: null,
+        closedByName: null,
+        jdText: 'Build reliable systems.',
+        applyPageEnabled,
+      },
+      entries: [],
+    })
+  }
+
+  it('keeps deletion admin-only and requires the exact title plus acknowledgement', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'member' } })
+      if (url === '/api/workspace/jobs/job-1') return emptyJobResponse()
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+    await screen.findByRole('heading', { name: 'Backend Engineer' })
+    expect(screen.queryByRole('button', { name: 'Delete empty job' })).not.toBeInTheDocument()
+  })
+
+  it('requires the public apply link to be turned off before deletion can be opened', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'admin' } })
+      if (url === '/api/workspace/jobs/job-1') return emptyJobResponse({ applyPageEnabled: true })
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    const deleteButton = await screen.findByRole('button', { name: 'Delete empty job' })
+    expect(deleteButton).toBeDisabled()
+    expect(deleteButton).toHaveAttribute(
+      'title',
+      'Turn off the public apply link before deleting this job.',
+    )
+  })
+
+  it('submits one guarded DELETE command and redirects only after server confirmation', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'admin' } })
+      if (url === '/api/workspace/jobs/job-1' && init?.method === 'DELETE') {
+        expect(JSON.parse(String(init.body))).toEqual({
+          confirmationTitle: 'Backend Engineer',
+          acknowledgeEmptyJobDeletion: true,
+        })
+        return json({ deleted: true, jobId: 'job-1' })
+      }
+      if (url === '/api/workspace/jobs/job-1') return emptyJobResponse()
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete empty job' }))
+
+    expect(screen.getByRole('dialog', { name: 'Delete this empty job?' })).toBeInTheDocument()
+    const deleteButton = screen.getByRole('button', { name: 'Delete job permanently' })
+    expect(deleteButton).toBeDisabled()
+    fireEvent.change(screen.getByLabelText(/Type Backend Engineer to confirm/), {
+      target: { value: 'Backend Engineer' },
+    })
+    expect(deleteButton).toBeDisabled()
+    fireEvent.click(screen.getByLabelText(/I understand that this permanently deletes/i))
+    expect(deleteButton).toBeEnabled()
+    fireEvent.click(deleteButton)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspace/jobs/job-1', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmationTitle: 'Backend Engineer',
+          acknowledgeEmptyJobDeletion: true,
+        }),
+      })
+    })
+    expect(router.replace).toHaveBeenCalledWith('/workspace/jobs')
+    expect(router.refresh).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the dialog open and shows the server safety block', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'admin' } })
+      if (url === '/api/workspace/jobs/job-1' && init?.method === 'DELETE') {
+        return json({ error: 'This job has hiring activity and cannot be deleted. Close the job instead.' }, 409)
+      }
+      if (url === '/api/workspace/jobs/job-1') return emptyJobResponse()
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete empty job' }))
+    fireEvent.change(screen.getByLabelText(/Type Backend Engineer to confirm/), {
+      target: { value: 'Backend Engineer' },
+    })
+    fireEvent.click(screen.getByLabelText(/I understand that this permanently deletes/i))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete job permanently' }))
+
+    expect(await screen.findByText(/This job has hiring activity/i)).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Delete this empty job?' })).toBeInTheDocument()
+    expect(router.replace).not.toHaveBeenCalled()
   })
 })
