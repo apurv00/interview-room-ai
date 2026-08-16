@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import Badge from '@shared/ui/Badge'
 import Button from '@shared/ui/Button'
 import Input from '@shared/ui/Input'
@@ -220,6 +221,7 @@ function selectableDepartments(departments: DepartmentRow[]): DepartmentRow[] {
 }
 
 export default function JobPipelinePage({ params }: { params: { jobId: string } }) {
+  const router = useRouter()
   const [job, setJob] = useState<JobDetail | null>(null)
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [pool, setPool] = useState<PoolCandidate[]>([])
@@ -251,6 +253,10 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
     operationId: string
   } | null>(null)
   const [showClose, setShowClose] = useState(false)
+  const [showDelete, setShowDelete] = useState(false)
+  const [deleteConfirmationTitle, setDeleteConfirmationTitle] = useState('')
+  const [deleteAcknowledged, setDeleteAcknowledged] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const [closeNote, setCloseNote] = useState('')
   const [useCustomCloseEmail, setUseCustomCloseEmail] = useState(false)
   const [closeEmailSubject, setCloseEmailSubject] = useState('')
@@ -605,6 +611,46 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
     }
   }
 
+  function openDeleteDialog() {
+    setActionError(null)
+    setDeleteConfirmationTitle('')
+    setDeleteAcknowledged(false)
+    setShowDelete(true)
+  }
+
+  function dismissDeleteDialog() {
+    setShowDelete(false)
+    setDeleteConfirmationTitle('')
+    setDeleteAcknowledged(false)
+  }
+
+  async function deleteEmptyJob() {
+    if (!job) return
+    setDeleteBusy(true)
+    setActionError(null)
+    try {
+      const response = await fetch(`/api/workspace/jobs/${params.jobId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmationTitle: deleteConfirmationTitle,
+          acknowledgeEmptyJobDeletion: true,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setActionError(data.error || 'Could not delete this job.')
+        return
+      }
+      router.replace('/workspace/jobs')
+      router.refresh()
+    } catch {
+      setActionError('Something went wrong. Check your connection.')
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
   async function changeJobStatus(status: 'open' | 'on_hold') {
     if (!job || status === job.status) return
     const command =
@@ -680,6 +726,13 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const assignableDepartments = selectableDepartments(departments)
   const departmentName = departments.find((department) => department.id === job.departmentId)?.name
     ?? 'Department unavailable'
+  const canAttemptDelete =
+    workspaceRole === 'admin' &&
+    job.status !== 'closed' &&
+    !job.applyPageEnabled &&
+    entries.length === 0
+  const deleteConfirmationMatches =
+    deleteConfirmationTitle.normalize('NFKC').trim() === job.title.normalize('NFKC').trim()
 
   return (
     <div id="job-pipeline-top" className="space-y-6">
@@ -753,6 +806,23 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                 Close job
               </Button>
             </>
+          )}
+          {workspaceRole === 'admin' && job.status !== 'closed' && (
+            <Button
+              type="button"
+              variant="danger"
+              disabled={!canAttemptDelete || deleteBusy}
+              title={
+                job.applyPageEnabled
+                  ? 'Turn off the public apply link before deleting this job.'
+                  : entries.length > 0
+                  ? 'Jobs with candidates must be closed instead of deleted.'
+                  : undefined
+              }
+              onClick={openDeleteDialog}
+            >
+              Delete empty job
+            </Button>
           )}
         </div>
       </div>
@@ -924,6 +994,81 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                 </div>
               </div>
             )}
+          </section>
+        </div>
+      )}
+
+      {showDelete && workspaceRole === 'admin' && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4"
+          role="presentation"
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-empty-job-title"
+            className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 shadow-xl"
+          >
+            <form
+              className="space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void deleteEmptyJob()
+              }}
+            >
+              <div>
+                <h2 id="delete-empty-job-title" className="text-lg font-semibold text-[#0f1419]">
+                  Delete this empty job?
+                </h2>
+                <p className="mt-1 text-sm text-[#536471]">
+                  This permanently removes the requisition and its job-description revisions.
+                  It will not delete candidate, interview, report, or media data. If any hiring
+                  activity exists, the server will stop this action and you should close the job instead.
+                </p>
+              </div>
+              <div>
+                <label
+                  htmlFor="delete-empty-job-confirmation"
+                  className="block text-sm font-medium text-[#0f1419]"
+                >
+                  Type <span className="font-semibold">{job.title}</span> to confirm
+                </label>
+                <input
+                  id="delete-empty-job-confirmation"
+                  value={deleteConfirmationTitle}
+                  onChange={(event) => setDeleteConfirmationTitle(event.target.value)}
+                  autoComplete="off"
+                  disabled={deleteBusy}
+                  className="mt-1 w-full rounded-xl border border-[#e1e8ed] bg-[#f8fafc] px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                />
+              </div>
+              <label className="flex items-start gap-2 text-sm text-[#0f1419]">
+                <input
+                  type="checkbox"
+                  checked={deleteAcknowledged}
+                  onChange={(event) => setDeleteAcknowledged(event.target.checked)}
+                  disabled={deleteBusy}
+                />
+                <span>I understand that this permanently deletes an empty requisition.</span>
+              </label>
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={deleteBusy}
+                  onClick={dismissDeleteDialog}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="danger"
+                  disabled={deleteBusy || !deleteAcknowledged || !deleteConfirmationMatches}
+                >
+                  {deleteBusy ? 'Deleting…' : 'Delete job permanently'}
+                </Button>
+              </div>
+            </form>
           </section>
         </div>
       )}
