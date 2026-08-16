@@ -35,7 +35,11 @@ export const POST = composeHireApiRoute<CreateWorkspacePayload>({
   async handler(_req, { user, body }) {
     const ctx = await createWorkspace(
       { userId: user.id, email: user.email },
-      { name: body.name, guestAuthMode: body.guestAuthMode }
+      {
+        name: body.name,
+        companyDescription: body.companyDescription,
+        guestAuthMode: body.guestAuthMode,
+      }
     )
     return NextResponse.json(serializeMembership(ctx), { status: 201 })
   },

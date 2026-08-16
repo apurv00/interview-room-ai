@@ -11,6 +11,7 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024
 interface ApplyBootstrap {
   jobTitle: string
   workspaceName: string
+  companyDescription?: string | null
 }
 
 export default function ApplyClient() {
@@ -69,7 +70,13 @@ export default function ApplyClient() {
           }
           return
         }
-        if (!payload.jobTitle || !payload.workspaceName) {
+        if (
+          !payload.jobTitle ||
+          !payload.workspaceName ||
+          (payload.companyDescription !== undefined &&
+            payload.companyDescription !== null &&
+            typeof payload.companyDescription !== 'string')
+        ) {
           setBootstrapError('We could not open the application form. Please try again.')
           return
         }
@@ -77,6 +84,7 @@ export default function ApplyClient() {
         setBootstrap({
           jobTitle: payload.jobTitle,
           workspaceName: payload.workspaceName,
+          companyDescription: payload.companyDescription ?? null,
         })
       })
       .catch(() => {
@@ -156,6 +164,11 @@ export default function ApplyClient() {
             {bootstrap.workspaceName}
           </p>
           <h1 className="text-xl font-bold text-[#0f1419]">{bootstrap.jobTitle}</h1>
+          {bootstrap.companyDescription ? (
+            <p className="mx-auto max-w-md pt-2 text-sm leading-6 text-[#536471]">
+              {bootstrap.companyDescription}
+            </p>
+          ) : null}
           <p className="text-sm text-[#536471]">
             Apply with your résumé — it takes a minute.
           </p>

@@ -10,7 +10,8 @@ import { buildSmartJd, finalizeSmartJd } from '../services/jdBuilderService'
 
 const INPUT = {
   role: 'Platform Engineer',
-  level: 'Senior',
+  level: 'manager',
+  targetExperienceRange: { minYears: 5, maxYears: 8 },
   mustHaves: ['Production TypeScript', 'Distributed systems design'],
   niceToHaves: ['Kafka operations'],
   location: 'Bengaluru, India',
@@ -46,6 +47,8 @@ describe('buildSmartJd', () => {
     expect(artifact.jdText).toContain('- Production TypeScript')
     expect(artifact.jdText).toContain('- Distributed systems design')
     expect(artifact.jdText).toContain('- Kafka operations')
+    expect(artifact.jdText).toContain('Level: manager')
+    expect(artifact.jdText).toContain('Target experience: 5–8 years')
     expect(artifact.contentHash).toMatch(/^[a-f0-9]{64}$/)
 
     const request = mockCompletion.mock.calls[0][0]
@@ -109,5 +112,22 @@ describe('finalizeSmartJd', () => {
     expect(edited.requirements).toEqual(initial.requirements)
     expect(edited.contentHash).not.toBe(initial.contentHash)
     expect(edited.jdText).toBe('B'.repeat(60))
+  })
+
+  it('preserves a pasted JD while adding immutable role context for matching', () => {
+    const pasted = 'This is the existing job description supplied by the hiring team. '.repeat(3)
+    const artifact = finalizeSmartJd(
+      { ...INPUT, jdSource: 'manual' },
+      pasted,
+    )
+
+    expect(artifact.jdText).toContain('# Platform Engineer')
+    expect(artifact.jdText).toContain('Level: manager')
+    expect(artifact.jdText).toContain('Target experience: 5–8 years')
+    expect(artifact.jdText).toContain('## Job description')
+    expect(artifact.jdText).toContain(pasted.trim())
+    expect(artifact.contentHash).not.toBe(
+      finalizeSmartJd({ ...INPUT, jdSource: 'manual' }, `${pasted} amended`).contentHash,
+    )
   })
 })

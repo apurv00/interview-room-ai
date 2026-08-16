@@ -10,7 +10,8 @@ import {
 
 const BUILDER = {
   title: 'Backend Engineer',
-  level: 'Senior',
+  level: 'manager',
+  targetExperienceRange: { minYears: 3, maxYears: 8 },
   mustHaves: ['Production TypeScript'],
   niceToHaves: ['Kafka'],
   location: 'Bengaluru, India',
@@ -56,6 +57,32 @@ describe('Smart-JD validators', () => {
         niceToHaves: [' production   typescript '],
       }),
     ).toThrow(/Duplicate requirement/)
+  })
+
+  it('keeps level and experience range separate, and rejects a per-job company override', () => {
+    expect(() =>
+      BuildJobDescriptionSchema.parse({ ...BUILDER, level: 'Senior · 3–8 years' }),
+    ).toThrow()
+    expect(() =>
+      BuildJobDescriptionSchema.parse({
+        ...BUILDER,
+        targetExperienceRange: { minYears: 8, maxYears: 3 },
+      }),
+    ).toThrow(/Minimum experience/)
+    expect(() =>
+      CreateStructuredJobSchema.parse({
+        ...BUILDER,
+        departmentId: '111111111111111111111111',
+        jdText: 'A reviewed description '.repeat(4),
+        companyBlurb: 'A client must not override workspace company context.',
+      }),
+    ).toThrow()
+    expect(() =>
+      BuildJobDescriptionSchema.parse({
+        ...BUILDER,
+        companyBlurb: 'A client must not override workspace company context.',
+      }),
+    ).toThrow()
   })
 
   it('requires a department only for the persisted job command, not Smart-JD generation', () => {

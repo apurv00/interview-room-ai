@@ -33,7 +33,11 @@ export async function POST(req: NextRequest) {
       )
     }
     return NextResponse.json(
-      { jobTitle: view.job.title, workspaceName: view.workspaceName },
+      {
+        jobTitle: view.job.title,
+        workspaceName: view.workspaceName,
+        companyDescription: view.companyDescription,
+      },
       { headers: { 'Cache-Control': 'private, no-store' } },
     )
   } catch (error) {

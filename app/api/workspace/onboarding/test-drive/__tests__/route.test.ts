@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   requireMembership: vi.fn(),
   get: vi.fn(),
-  start: vi.fn(),
   remove: vi.fn(),
 }))
 
@@ -21,11 +20,7 @@ vi.mock('@hire/services/workspaceService', () => ({
 }))
 vi.mock('@/modules/hire-onboarding/services/testDriveService', () => ({
   getHireOnboardingTestDrive: mocks.get,
-  startHireOnboardingTestDrive: mocks.start,
   removeHireOnboardingTestDrive: mocks.remove,
-}))
-vi.mock('@/modules/hire-onboarding/validators/hireOnboarding', () => ({
-  StartHireOnboardingTestDriveSchema: {},
 }))
 
 import { DELETE, GET, POST } from '../route'
@@ -50,12 +45,6 @@ beforeEach(() => {
     membership: { _id: { toString: () => 'member-1' }, name: 'Hiring manager' },
   })
   mocks.get.mockResolvedValue(null)
-  mocks.start.mockResolvedValue({
-    testDrive: view,
-    inviteUrl: 'https://hire.example/interview/round-1#invite=one-time-capability',
-    created: true,
-    emailSent: true,
-  })
   mocks.remove.mockResolvedValue({ ...view, state: 'removed', removedAt: new Date() })
 })
 
@@ -75,7 +64,7 @@ describe('member onboarding test-drive route', () => {
     await expect(response.json()).resolves.toEqual({ testDrive: null })
   })
 
-  it('allows one initial raw invite response while the service owns tenant scope and idempotency', async () => {
+  it('rejects new practice creation while preserving member-only response headers', async () => {
     const response = await POST(
       new Request('https://hire.example/api/workspace/onboarding/test-drive', {
         method: 'POST',
@@ -83,44 +72,16 @@ describe('member onboarding test-drive route', () => {
         body: JSON.stringify({ operationId: '11111111-1111-4111-8111-111111111111' }),
       }) as never,
     )
-    const body = await response.json()
 
-    expect(mocks.start).toHaveBeenCalledWith(
-      expect.objectContaining({ workspace: expect.anything(), membership: expect.anything() }),
-      { operationId: '11111111-1111-4111-8111-111111111111' },
-    )
-    expect(response.status).toBe(201)
+    expect(response.status).toBe(410)
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-    expect(body).toMatchObject({
-      testDrive: { id: 'test-drive-1', applicationId: 'application-1' },
-      created: true,
-      inviteUrl: expect.stringContaining('#invite='),
+    expect(response.headers.get('Referrer-Policy')).toBe('no-referrer')
+    await expect(response.json()).resolves.toEqual({
+      error: 'Hire practice interviews have been retired.',
     })
-    expect(JSON.stringify(body)).not.toContain('candidateEmail')
-    expect(JSON.stringify(body)).not.toContain('delivery')
-  })
-
-  it('returns no raw capability on an idempotent retry', async () => {
-    mocks.start.mockResolvedValueOnce({
-      testDrive: view,
-      inviteUrl: null,
-      created: false,
-      emailSent: null,
-    })
-
-    const response = await POST(
-      new Request('https://hire.example/api/workspace/onboarding/test-drive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operationId: '11111111-1111-4111-8111-111111111111' }),
-      }) as never,
-    )
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({
-      created: false,
-      inviteUrl: null,
-      emailSent: null,
+    expect(mocks.requireMembership).toHaveBeenCalledWith({
+      userId: 'member-user',
+      email: 'hr@example.com',
     })
   })
 

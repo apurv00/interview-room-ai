@@ -28,12 +28,22 @@ type IntakeTaskStatus =
   | 'failed'
   | 'cancelled'
 
+type IntakeDispatchStatus = 'pending' | 'dispatched' | 'failed'
+
 type FileRowStatus = IntakeTaskStatus | 'uploading' | 'error'
+
+interface IntakeDispatchView {
+  status: IntakeDispatchStatus
+  attempts: number
+  /** A controlled queue-delivery code; never an upstream exception string. */
+  lastErrorCode?: 'inngest_dispatch_unavailable'
+}
 
 interface IntakeTaskView {
   taskId: string
   status: IntakeTaskStatus
   attempts: number
+  dispatch: IntakeDispatchView
   lastError?: string
   candidateId?: string
   applicationId?: string
@@ -45,6 +55,7 @@ interface FileRow {
   status: FileRowStatus
   taskId?: string
   attempts?: number
+  dispatch?: IntakeDispatchView
   candidateId?: string
   applicationId?: string
   error?: string
@@ -64,6 +75,23 @@ const TASK_STATUSES: IntakeTaskStatus[] = [
 
 function isTaskStatus(value: unknown): value is IntakeTaskStatus {
   return typeof value === 'string' && TASK_STATUSES.includes(value as IntakeTaskStatus)
+}
+
+function readDispatch(value: unknown): IntakeDispatchView {
+  if (!value || typeof value !== 'object') return { status: 'pending', attempts: 0 }
+  const dispatch = value as Record<string, unknown>
+  const status: IntakeDispatchStatus = dispatch.status === 'dispatched' || dispatch.status === 'failed'
+    ? dispatch.status
+    : 'pending'
+  return {
+    status,
+    attempts: typeof dispatch.attempts === 'number' && dispatch.attempts >= 0
+      ? dispatch.attempts
+      : 0,
+    ...(dispatch.lastErrorCode === 'inngest_dispatch_unavailable'
+      ? { lastErrorCode: dispatch.lastErrorCode }
+      : {}),
+  }
 }
 
 function isTerminal(status: FileRowStatus): boolean {
@@ -92,8 +120,10 @@ function readTask(value: unknown): IntakeTaskView | null {
     taskId: task.taskId,
     status: task.status,
     // Enqueue responses deliberately expose only the opaque task id and
-    // status. The authenticated status endpoint adds worker attempt counts.
+    // status plus safe dispatch state. The authenticated status endpoint adds
+    // worker attempt counts and the eventual application coordinate.
     attempts: typeof task.attempts === 'number' ? task.attempts : 0,
+    dispatch: readDispatch(task.dispatch),
     ...(typeof task.lastError === 'string' ? { lastError: task.lastError } : {}),
     ...(typeof task.candidateId === 'string' ? { candidateId: task.candidateId } : {}),
     ...(typeof task.applicationId === 'string' ? { applicationId: task.applicationId } : {}),
@@ -105,6 +135,7 @@ function taskPatch(task: IntakeTaskView): Partial<FileRow> {
     taskId: task.taskId,
     status: task.status,
     attempts: task.attempts,
+    dispatch: task.dispatch,
     ...(task.candidateId ? { candidateId: task.candidateId } : {}),
     ...(task.applicationId ? { applicationId: task.applicationId } : {}),
     ...(task.status === 'needs_identity' || task.status === 'failed' || task.status === 'cancelled'
@@ -230,6 +261,7 @@ export default function BulkUploadPanel({
       status: 'queued',
       taskId: undefined,
       attempts: undefined,
+      dispatch: undefined,
       candidateId: undefined,
       applicationId: undefined,
       error: undefined,
@@ -408,6 +440,24 @@ export default function BulkUploadPanel({
               {(row.status === 'queued' || row.status === 'processing') && row.attempts ? (
                 <p className="text-xs text-[#71767b]">
                   Background attempt {row.attempts}; you can keep working while this finishes.
+                </p>
+              ) : null}
+
+              {row.status === 'queued' && row.dispatch?.status === 'failed' ? (
+                <p className="text-xs text-[#a16207]">
+                  Saved. The queue handoff is delayed; automatic recovery will retry.
+                </p>
+              ) : null}
+
+              {row.status === 'queued' && row.dispatch?.status !== 'failed' ? (
+                <p className="text-xs text-[#71767b]">
+                  Queued for parsing and JD scoring.
+                </p>
+              ) : null}
+
+              {row.status === 'processing' ? (
+                <p className="text-xs text-[#71767b]">
+                  Parsing the résumé and scoring it against this job description.
                 </p>
               ) : null}
 

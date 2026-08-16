@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { HireWorkspace, HireWorkspaceMember } from '../models'
 import {
+  CreateWorkspaceSchema,
   RestoreWorkspaceSchema,
   SoftDeleteWorkspaceSchema,
   TransferWorkspaceAdminSchema,
@@ -64,9 +65,16 @@ describe('workspace lifecycle validators', () => {
       .toBe(false)
   })
 
-  it('accepts a bounded optional Smart-JD company blurb', () => {
+  it('requires a canonical company description at onboarding and accepts a bounded legacy migration write', () => {
+    expect(CreateWorkspaceSchema.parse({
+      name: 'Acme',
+      companyDescription: 'Acme builds reliable hiring tools for growing teams.',
+    })).toMatchObject({ name: 'Acme' })
+    expect(CreateWorkspaceSchema.safeParse({ name: 'Acme' }).success).toBe(false)
     expect(UpdateWorkspaceSettingsSchema.parse({ companyBlurb: 'About Acme' }))
       .toEqual({ companyBlurb: 'About Acme' })
+    expect(UpdateWorkspaceSettingsSchema.parse({ companyDescription: 'About Acme' }))
+      .toEqual({ companyDescription: 'About Acme' })
     expect(UpdateWorkspaceSettingsSchema.safeParse({ companyBlurb: 'x'.repeat(2001) }).success)
       .toBe(false)
     expect(UpdateWorkspaceSettingsSchema.safeParse({}).success).toBe(false)

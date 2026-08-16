@@ -35,18 +35,30 @@ afterEach(() => {
 
 describe("WorkspaceLayout navigation", () => {
   it("adds Overview as the member landing navigation item", async () => {
+    let brand = {
+      name: "Acme Hiring",
+      companyLogo: { updatedAt: "2026-08-16T12:00:00.000Z" },
+    };
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            authenticated: true,
-            member: {
-              name: "Hiring Admin",
-              email: "member@example.com",
-              role: "admin",
-            },
-          }),
+      vi.fn((url: string) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify(
+              url === "/api/workspace"
+                ? {
+                    workspace: brand,
+                  }
+                : {
+                    authenticated: true,
+                    member: {
+                      name: "Hiring Admin",
+                      email: "member@example.com",
+                      role: "admin",
+                    },
+                  },
+            ),
+          ),
         ),
       ),
     );
@@ -71,7 +83,25 @@ describe("WorkspaceLayout navigation", () => {
       screen.getAllByRole("link", { name: /Departments/ })[0],
     ).toHaveAttribute("href", "/workspace/departments");
     expect(
-      screen.getAllByRole("link", { name: /IPG Hire/ })[0],
+      screen.getAllByRole("link", { name: /Acme Hiring/ })[0],
     ).toHaveAttribute("href", "/workspace/overview");
+    expect(screen.getByAltText("Acme Hiring logo")).toHaveAttribute(
+      "src",
+      "/api/workspace/branding/logo?v=2026-08-16T12%3A00%3A00.000Z",
+    );
+
+    brand = {
+      name: "Acme Operations",
+      companyLogo: { updatedAt: "2026-08-16T13:00:00.000Z" },
+    };
+    window.dispatchEvent(new Event("hire-workspace-brand-updated"));
+
+    await waitFor(() =>
+      expect(screen.getAllByRole("link", { name: /Acme Operations/ })[0]).toBeTruthy(),
+    );
+    expect(screen.getByAltText("Acme Operations logo")).toHaveAttribute(
+      "src",
+      "/api/workspace/branding/logo?v=2026-08-16T13%3A00%3A00.000Z",
+    );
   });
 });

@@ -46,6 +46,11 @@ import {
   type HireMediaStoragePort,
 } from './hireMediaStorage'
 import {
+  hireWorkspaceBrandingStorage,
+  hireWorkspaceLogoKey,
+  type HireWorkspaceBrandingStoragePort,
+} from '@hire-branding/services/workspaceBrandingStorage'
+import {
   cancelHireAssessmentExports,
   deleteHireAssessmentExportObjects,
   type HireAssessmentExportCleanupTarget,
@@ -256,6 +261,18 @@ async function deleteWorkspaceMedia(
   }
 }
 
+/**
+ * Workspace branding is a single deterministic object, separate from
+ * candidate media. Delete it under the same hard-purge lease so a soft-deleted
+ * workspace cannot strand an R2 logo if an upload raced the lifecycle fence.
+ */
+async function deleteWorkspaceLogo(
+  workspaceId: mongoose.Types.ObjectId,
+  storage: HireWorkspaceBrandingStoragePort,
+): Promise<void> {
+  await storage.delete({ key: hireWorkspaceLogoKey(workspaceId.toString()) })
+}
+
 async function requestAndConfirmWorkspaceRuntimePurge(
   workspaceId: mongoose.Types.ObjectId,
   claimToken: string,
@@ -454,12 +471,14 @@ export async function purgeDueHireWorkspaces(input: {
   workspaceId: string
   now?: Date
   storage?: HireMediaStoragePort
+  brandingStorage?: HireWorkspaceBrandingStoragePort
   clock?: () => Date
 }): Promise<HireWorkspacePurgeReport> {
   await connectHireControlDB()
   const now = input.now ?? new Date()
   const workspaceId = new mongoose.Types.ObjectId(input.workspaceId)
   const storage = input.storage ?? hireMediaStorage
+  const brandingStorage = input.brandingStorage ?? hireWorkspaceBrandingStorage
   const clock = input.clock ?? (() => new Date())
   const due = await HireWorkspace.find({
     _id: workspaceId,
@@ -497,6 +516,8 @@ export async function purgeDueHireWorkspaces(input: {
         storage,
         clock,
       )
+      await deleteWorkspaceLogo(claim.workspace._id, brandingStorage)
+      await renewWorkspacePurgeLease(claim.workspace._id, claim.claimToken, clock())
       await deleteClaimedWorkspaceGraph(claim.workspace._id, claim.claimToken, now)
       purged += 1
     } catch (error) {
@@ -523,5 +544,6 @@ export const __workspacePurge = {
   RUNTIME_PURGE_DELIVERY_BATCH_SIZE,
   PURGE_LEASE_MS,
   mediaCoordinate,
+  deleteWorkspaceLogo,
   purgeFailureMessage,
 }

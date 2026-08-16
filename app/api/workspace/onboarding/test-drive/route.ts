@@ -1,7 +1,9 @@
 /**
- * Member-only "Interview yourself" practice flow. The one raw invite URL is
- * returned only by the initial successful POST and is never accepted back as
- * input or included in the durable test-drive record.
+ * Member-only cleanup/read endpoint for the retired Hire practice flow.
+ *
+ * New practice graphs must never be created again. Existing graphs retain
+ * their bounded member-cleanup and lifecycle paths until production drain is
+ * complete, so retiring the product surface cannot strand personal data.
  */
 
 import { NextResponse } from 'next/server'
@@ -9,12 +11,7 @@ import { requireMembership } from '@hire/services/workspaceService'
 import {
   getHireOnboardingTestDrive,
   removeHireOnboardingTestDrive,
-  startHireOnboardingTestDrive,
 } from '@/modules/hire-onboarding/services/testDriveService'
-import {
-  StartHireOnboardingTestDriveSchema,
-  type StartHireOnboardingTestDrivePayload,
-} from '@/modules/hire-onboarding/validators/hireOnboarding'
 import { composeHireApiRoute } from '../../_lib/composeHireApiRoute'
 
 export const dynamic = 'force-dynamic'
@@ -34,23 +31,13 @@ export const GET = composeHireApiRoute({
   },
 })
 
-export const POST = composeHireApiRoute<StartHireOnboardingTestDrivePayload>({
-  schema: StartHireOnboardingTestDriveSchema,
+export const POST = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 10, keyPrefix: 'rl:hire-test-drive-start' },
-  async handler(_req, { user, body }) {
-    const ctx = await requireMembership({ userId: user.id, email: user.email })
-    const result = await startHireOnboardingTestDrive(ctx, body)
+  async handler(_req, { user }) {
+    await requireMembership({ userId: user.id, email: user.email })
     return NextResponse.json(
-      {
-        testDrive: result.testDrive,
-        inviteUrl: result.inviteUrl,
-        created: result.created,
-        emailSent: result.emailSent,
-      },
-      {
-        status: result.created ? 201 : 200,
-        headers: MEMBER_PRIVATE_HEADERS,
-      },
+      { error: 'Hire practice interviews have been retired.' },
+      { status: 410, headers: MEMBER_PRIVATE_HEADERS },
     )
   },
 })

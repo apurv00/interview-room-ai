@@ -308,15 +308,19 @@ describe('requireMembership', () => {
 })
 
 describe('createWorkspace', () => {
-  it('creates the workspace (guest verification defaults to magic_link) and an admin membership', async () => {
+  it('creates the workspace with its canonical onboarding company description and admin membership', async () => {
     mockMember.findOne.mockResolvedValue(null)
     mockMember.findOneAndUpdate.mockResolvedValue(null)
     mockWorkspace.create.mockResolvedValue({ _id: 'ws-new', name: 'Acme' })
     mockMember.create.mockResolvedValue({ _id: 'm-new', role: 'admin' })
 
-    await createWorkspace(ACTOR, { name: 'Acme' })
+    await createWorkspace(ACTOR, {
+      name: 'Acme',
+      companyDescription: 'Acme builds reliable workflow software for operations teams.',
+    })
     expect(mockWorkspace.create).toHaveBeenCalledWith({
       name: 'Acme',
+      companyDescription: 'Acme builds reliable workflow software for operations teams.',
       guestAuthMode: 'magic_link',
       createdBy: ACTOR.userId,
     })
@@ -332,7 +336,11 @@ describe('createWorkspace', () => {
     mockWorkspace.create.mockResolvedValue({ _id: 'ws-new' })
     mockMember.create.mockResolvedValue({ _id: 'm-new' })
 
-    await createWorkspace(ACTOR, { name: 'Acme', guestAuthMode: 'otp' })
+    await createWorkspace(ACTOR, {
+      name: 'Acme',
+      companyDescription: 'Acme builds reliable workflow software for operations teams.',
+      guestAuthMode: 'otp',
+    })
     expect(mockWorkspace.create.mock.calls[0][0].guestAuthMode).toBe('otp')
   })
 
@@ -343,7 +351,10 @@ describe('createWorkspace', () => {
     })
     mockMember.findOne.mockResolvedValue({ workspaceId })
     mockWorkspace.findOne.mockResolvedValue({ _id: workspaceId })
-    await expect(createWorkspace(ACTOR, { name: 'Other' })).rejects.toMatchObject({
+    await expect(createWorkspace(ACTOR, {
+      name: 'Other',
+      companyDescription: 'Other builds reliable workflow software for operations teams.',
+    })).rejects.toMatchObject({
       statusCode: 409,
       code: 'WORKSPACE_EXISTS',
     })
@@ -369,17 +380,22 @@ describe('updateWorkspaceSettings', () => {
     expect(update).toEqual({ $set: { guestAuthMode: 'otp' } })
   })
 
-  it('saves or clears the optional Smart-JD company blurb', async () => {
+  it('writes the canonical company description and migrates a legacy browser write', async () => {
     mockWorkspace.findOneAndUpdate.mockResolvedValue({ _id: 'ws1' })
 
-    await updateWorkspaceSettings(ctxWith('admin'), { companyBlurb: '  We build tools.  ' })
+    await updateWorkspaceSettings(ctxWith('admin'), { companyDescription: '  We build tools.  ' })
     expect(mockWorkspace.findOneAndUpdate.mock.calls[0][1]).toEqual({
-      $set: { companyBlurb: 'We build tools.' },
+      $set: { companyDescription: 'We build tools.' },
     })
 
-    await updateWorkspaceSettings(ctxWith('admin'), { companyBlurb: '  ' })
+    await updateWorkspaceSettings(ctxWith('admin'), { companyBlurb: '  Legacy browser copy.  ' })
     expect(mockWorkspace.findOneAndUpdate.mock.calls[1][1]).toEqual({
-      $unset: { companyBlurb: 1 },
+      $set: { companyDescription: 'Legacy browser copy.' },
+    })
+
+    await updateWorkspaceSettings(ctxWith('admin'), { companyDescription: '  ' })
+    expect(mockWorkspace.findOneAndUpdate.mock.calls[2][1]).toEqual({
+      $unset: { companyDescription: 1, companyBlurb: 1 },
     })
   })
 })

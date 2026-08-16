@@ -103,6 +103,7 @@ vi.mock('../models', () => ({
 
 import {
   cleanupExpiredHireIntakeRawPayloadTasks,
+  dispatchHireIntakeTask,
   enqueueMemberResumeIntake,
   enqueuePublicApplyIntake,
   getHireIntakeTask,
@@ -203,7 +204,11 @@ describe('durable member enqueue', () => {
       contentType: 'application/pdf',
       payload: Buffer.from('resume body'),
       suppliedEmail: 'ADA@EXAMPLE.COM',
-    })).resolves.toEqual({ taskId: IDS.task, status: 'queued' })
+    })).resolves.toMatchObject({
+      taskId: IDS.task,
+      status: 'queued',
+      dispatch: { status: 'dispatched', attempts: 1 },
+    })
 
     expect(mocks.writeFence).toHaveBeenCalledWith(
       CTX.workspace._id,
@@ -222,8 +227,51 @@ describe('durable member enqueue', () => {
       name: 'hire/intake.requested',
       data: { workspaceId: IDS.workspace, taskId: IDS.task },
     })
+    expect(mocks.taskUpdateOne).toHaveBeenCalledWith(
+      { _id: IDS.task, workspaceId: IDS.workspace },
+      expect.objectContaining({
+        $set: expect.objectContaining({ dispatchStatus: 'dispatched' }),
+        $inc: { dispatchAttempts: 1 },
+      }),
+    )
     expect(JSON.stringify(mocks.send.mock.calls[0])).not.toContain('resume body')
     expect(JSON.stringify(mocks.send.mock.calls[0])).not.toContain('ada@example.com')
+  })
+
+  it('persists a controlled queue-delivery failure without retaining the Inngest exception', async () => {
+    mocks.jobFindOne.mockReturnValue(query({ status: 'open' }))
+    mocks.taskCreate.mockResolvedValue([queuedTask()])
+    mocks.send.mockRejectedValue(new Error('Bearer provider-secret was rejected'))
+
+    const result = await enqueueMemberResumeIntake(CTX, {
+      jobId: IDS.job,
+      fileName: 'ada.pdf',
+      contentType: 'application/pdf',
+      payload: Buffer.from('resume body'),
+      suppliedEmail: 'ada@example.com',
+    })
+
+    expect(result).toMatchObject({
+      taskId: IDS.task,
+      status: 'queued',
+      dispatch: {
+        status: 'failed',
+        attempts: 1,
+        lastErrorCode: 'inngest_dispatch_unavailable',
+      },
+    })
+    const dispatchWrite = mocks.taskUpdateOne.mock.calls.at(-1)
+    expect(dispatchWrite?.[0]).toEqual({ _id: IDS.task, workspaceId: IDS.workspace })
+    expect(dispatchWrite?.[1]).toMatchObject({
+      $set: {
+        dispatchStatus: 'failed',
+        lastDispatchErrorCode: 'inngest_dispatch_unavailable',
+        lastDispatchErrorAt: expect.any(Date),
+      },
+      $inc: { dispatchAttempts: 1 },
+    })
+    expect(JSON.stringify({ result, dispatchWrite, logs: mocks.loggerWarn.mock.calls }))
+      .not.toContain('provider-secret')
   })
 
   it('associates an already-known Hire candidate and claims its privacy fence without B2C lookup', async () => {
@@ -281,6 +329,54 @@ describe('durable member enqueue', () => {
 })
 
 describe('public enqueue boundary', () => {
+  it('keeps an accepted public application durable and returns controlled dispatch recovery state', async () => {
+    mocks.resolveApplyToken.mockResolvedValue({
+      job: {
+        _id: new mongoose.Types.ObjectId(IDS.job),
+        workspaceId: new mongoose.Types.ObjectId(IDS.workspace),
+      },
+      applyTokenHash: 'a'.repeat(64),
+    })
+    mocks.resolveAuthority.mockResolvedValue(new mongoose.Types.ObjectId(IDS.member))
+    mocks.taskCreate.mockResolvedValue([queuedTask({ source: 'apply_page' })])
+    mocks.send.mockRejectedValue(new Error('public-provider-secret'))
+
+    const result = await enqueuePublicApplyIntake({
+      capability: `${IDS.workspace}.${'1'.repeat(64)}`,
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+      fileName: 'ada.pdf',
+      contentType: 'application/pdf',
+      payload: Buffer.from('resume body'),
+    })
+
+    expect(result).toMatchObject({
+      taskId: IDS.task,
+      status: 'queued',
+      dispatch: {
+        status: 'failed',
+        attempts: 1,
+        lastErrorCode: 'inngest_dispatch_unavailable',
+      },
+    })
+    expect(mocks.taskCreate.mock.calls[0][0][0]).toMatchObject({
+      source: 'apply_page',
+      dispatchStatus: 'pending',
+      dispatchAttempts: 0,
+    })
+    expect(mocks.taskUpdateOne).toHaveBeenCalledWith(
+      { _id: IDS.task, workspaceId: IDS.workspace },
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          dispatchStatus: 'failed',
+          lastDispatchErrorCode: 'inngest_dispatch_unavailable',
+        }),
+        $inc: { dispatchAttempts: 1 },
+      }),
+    )
+    expect(JSON.stringify({ result, logs: mocks.loggerWarn.mock.calls })).not.toContain('public-provider-secret')
+  })
+
   it('returns null uniformly for an invalid/revoked public capability without creating a task', async () => {
     mocks.resolveApplyToken.mockResolvedValue(null)
     await expect(enqueuePublicApplyIntake({
@@ -625,17 +721,53 @@ describe('worker ownership and recoverability', () => {
 })
 
 describe('member task views and recovery', () => {
+  it('records a successful durable recovery dispatch separately from worker attempts', async () => {
+    await expect(dispatchHireIntakeTask({
+      workspaceId: IDS.workspace,
+      taskId: IDS.task,
+    })).resolves.toBeUndefined()
+
+    expect(mocks.send).toHaveBeenCalledWith({
+      name: 'hire/intake.requested',
+      data: { workspaceId: IDS.workspace, taskId: IDS.task },
+    })
+    expect(mocks.taskUpdateOne).toHaveBeenCalledWith(
+      { _id: IDS.task, workspaceId: IDS.workspace },
+      expect.objectContaining({
+        $set: expect.objectContaining({ dispatchStatus: 'dispatched' }),
+        $inc: { dispatchAttempts: 1 },
+        $unset: expect.objectContaining({
+          lastDispatchErrorCode: 1,
+          lastDispatchErrorAt: 1,
+        }),
+      }),
+    )
+  })
+
   it('returns a safe task view without payload, supplied identity, or capability hash', async () => {
     const task = queuedTask({
       suppliedEmail: 'ada@example.com',
       payload: Buffer.from('do not expose'),
       applyTokenHash: 'a'.repeat(64),
+      dispatchStatus: 'failed',
+      dispatchAttempts: 2,
+      lastDispatchErrorCode: 'inngest_dispatch_unavailable',
+      lastDispatchErrorAt: new Date('2026-08-12T10:01:00.000Z'),
     })
     mocks.taskFindOne.mockReturnValue(query(task))
 
     const result = await getHireIntakeTask(CTX, { jobId: IDS.job, taskId: IDS.task })
 
-    expect(result).toMatchObject({ taskId: IDS.task, status: 'queued', fileName: 'ada.pdf' })
+    expect(result).toMatchObject({
+      taskId: IDS.task,
+      status: 'queued',
+      fileName: 'ada.pdf',
+      dispatch: {
+        status: 'failed',
+        attempts: 2,
+        lastErrorCode: 'inngest_dispatch_unavailable',
+      },
+    })
     expect(JSON.stringify(result)).not.toContain('ada@example.com')
     expect(JSON.stringify(result)).not.toContain('do not expose')
     expect(JSON.stringify(result)).not.toContain('a'.repeat(64))

@@ -150,7 +150,7 @@ export async function requireWorkspaceLifecycleMembership(
 
 export async function createWorkspace(
   actor: WorkspaceActor,
-  input: { name: string; guestAuthMode?: GuestAuthMode }
+  input: { name: string; companyDescription: string; guestAuthMode?: GuestAuthMode }
 ): Promise<MembershipContext> {
   await connectDB()
 
@@ -161,6 +161,7 @@ export async function createWorkspace(
 
   const workspace = await HireWorkspace.create({
     name: input.name,
+    companyDescription: input.companyDescription,
     guestAuthMode: input.guestAuthMode ?? 'magic_link',
     createdBy: actor.userId,
   })
@@ -209,19 +210,29 @@ export async function createWorkspace(
  */
 export async function updateWorkspaceSettings(
   ctx: MembershipContext,
-  input: { guestAuthMode?: GuestAuthMode; companyBlurb?: string },
+  input: {
+    guestAuthMode?: GuestAuthMode
+    companyDescription?: string
+    /** @deprecated accepted only to migrate an in-flight legacy browser. */
+    companyBlurb?: string
+  },
 ): Promise<IHireWorkspace> {
   if (ctx.membership.role !== 'admin') {
     throw new ForbiddenError('Only the workspace admin can change settings')
   }
   await connectDB()
-  const $set: { guestAuthMode?: GuestAuthMode; companyBlurb?: string } = {}
-  const $unset: { companyBlurb?: 1 } = {}
+  const $set: { guestAuthMode?: GuestAuthMode; companyDescription?: string } = {}
+  const $unset: { companyDescription?: 1; companyBlurb?: 1 } = {}
   if (input.guestAuthMode !== undefined) $set.guestAuthMode = input.guestAuthMode
-  if (input.companyBlurb !== undefined) {
-    const companyBlurb = input.companyBlurb.trim()
-    if (companyBlurb) $set.companyBlurb = companyBlurb
-    else $unset.companyBlurb = 1
+  const suppliedDescription = input.companyDescription ?? input.companyBlurb
+  if (suppliedDescription !== undefined) {
+    const companyDescription = suppliedDescription.trim()
+    if (companyDescription) $set.companyDescription = companyDescription
+    else {
+      // Clearing the canonical value must not reveal a stale legacy value.
+      $unset.companyDescription = 1
+      $unset.companyBlurb = 1
+    }
   }
   const workspace = await HireWorkspace.findOneAndUpdate(
     { _id: ctx.workspace._id, ...activeHireWorkspaceLifecycleFilter() },

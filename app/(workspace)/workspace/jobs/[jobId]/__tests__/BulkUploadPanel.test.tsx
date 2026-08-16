@@ -136,6 +136,46 @@ describe('BulkUploadPanel', () => {
       .not.toBeInTheDocument()
   })
 
+  it('shows a safe recovery cue when the durable task was saved but its event handoff failed', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/jobs/job-1/intake') {
+        return json({
+          task: {
+            taskId: 'task-queue-failure',
+            status: 'queued',
+            dispatch: {
+              status: 'failed',
+              attempts: 1,
+              lastErrorCode: 'inngest_dispatch_unavailable',
+            },
+          },
+        }, 202)
+      }
+      if (url === '/api/workspace/jobs/job-1/intake/task-queue-failure') {
+        return json({
+          task: {
+            taskId: 'task-queue-failure',
+            status: 'queued',
+            dispatch: {
+              status: 'failed',
+              attempts: 1,
+              lastErrorCode: 'inngest_dispatch_unavailable',
+            },
+          },
+        })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<BulkUploadPanel jobId="job-1" onSettled={vi.fn()} />)
+    upload()
+
+    expect(await screen.findByText(/automatic recovery will retry/i)).toBeInTheDocument()
+    expect(screen.queryByText(/provider-secret/i)).not.toBeInTheDocument()
+  })
+
   it('accepts a fifty-resume Phase 2 batch and leaves any excess file out of the queue', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)

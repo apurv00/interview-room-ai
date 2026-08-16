@@ -2,7 +2,11 @@ import { z } from 'zod'
 import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
 import { HIRE_STAGES } from '../models/HireApplication'
 import { HIRE_JOB_STATUSES } from '../models/HireJob'
-import { HIRE_WORK_MODES } from '../models/HireJobRequirementVersion'
+import {
+  HIRE_JOB_DESCRIPTION_SOURCES,
+  HIRE_JOB_LEVELS,
+  HIRE_WORK_MODES,
+} from '../models/HireJobRequirementVersion'
 import {
   HIRE_HUMAN_SCORECARD_DIMENSIONS,
   HIRE_HUMAN_SCORECARD_RECOMMENDATIONS,
@@ -17,17 +21,30 @@ export const objectIdSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id')
 
 export const CreateWorkspaceSchema = z.object({
   name: z.string().trim().min(2).max(120),
+  companyDescription: z.string().trim().min(10).max(2000),
   guestAuthMode: z.enum(['magic_link', 'otp']).optional(),
 })
 
 export const UpdateWorkspaceSettingsSchema = z
   .object({
     guestAuthMode: z.enum(['magic_link', 'otp']).optional(),
+    companyDescription: z
+      .string()
+      .trim()
+      .max(2000)
+      .refine((value) => value.length === 0 || value.length >= 10, 'Company description is too short')
+      .optional(),
+    // Temporary request compatibility for an already-deployed browser. New
+    // responses and all new UI use `companyDescription`; a legacy write is
+    // migrated into the canonical workspace field by the service.
     companyBlurb: z.string().trim().max(2000).optional(),
   })
   .strict()
   .refine(
-    (value) => value.guestAuthMode !== undefined || value.companyBlurb !== undefined,
+    (value) =>
+      value.guestAuthMode !== undefined ||
+      value.companyDescription !== undefined ||
+      value.companyBlurb !== undefined,
     'Provide at least one workspace setting',
   )
 
@@ -71,13 +88,33 @@ const jobDescriptionFields = {
     // contract caps role at 100 chars, so a longer title must be rejected at
     // authoring time, not dead-end the candidate mid-flow.
     title: z.string().trim().min(2).max(INTERVIEW_ROLE_SLUG_MAX_CHARS),
-    level: z.string().trim().min(1).max(80),
+    // Seniority and experience are deliberately independent. Restrict new
+    // writes to the reporting taxonomy while legacy requirement versions keep
+    // their historical free-text strings in storage.
+    level: z.enum(HIRE_JOB_LEVELS),
+    // This range is matching context rendered into the JD, not a deterministic
+    // screening rule. The optional `screeningSettings.experienceFloorYears`
+    // below remains the only hard-exclusion setting.
+    targetExperienceRange: z
+      .object({
+        minYears: z.number().finite().min(0).max(50),
+        maxYears: z.number().finite().min(0).max(50),
+      })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.minYears > value.maxYears) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['minYears'],
+            message: 'Minimum experience cannot exceed maximum experience',
+          })
+        }
+      }),
     mustHaves: z.array(requirementItemSchema).min(1).max(20),
     niceToHaves: z.array(requirementItemSchema).max(20).default([]),
     location: z.string().trim().min(2).max(160),
     workMode: z.enum(HIRE_WORK_MODES),
     compensation: z.string().trim().min(2).max(240).optional(),
-    companyBlurb: z.string().trim().min(10).max(2000).optional(),
 } as const
 
 const screeningSettingsSchema = z
@@ -135,6 +172,8 @@ export const CreateStructuredJobSchema = z
     // change the immutable scoring contract or require a new JD generation.
     departmentId: objectIdSchema,
     jdText: z.string().trim().min(50, 'Job description is too short').max(50000),
+    /** Explicit provenance for the immutable requirement version. */
+    jdSource: z.enum(HIRE_JOB_DESCRIPTION_SOURCES).default('ai_generated'),
     screeningSettings: screeningSettingsSchema.optional(),
   })
   .strict()

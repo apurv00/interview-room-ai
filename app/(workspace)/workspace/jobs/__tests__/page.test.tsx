@@ -13,8 +13,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('Smart JD workspace company blurb', () => {
-  it('prefills the saved workspace default and lets an admin update it explicitly', async () => {
+describe('workspace company description', () => {
+  it('shows onboarding-owned company context without offering a per-job override', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === '/api/workspace/jobs') return json({ jobs: [] })
@@ -25,17 +25,9 @@ describe('Smart JD workspace company blurb', () => {
           ],
         })
       }
-      if (url === '/api/workspace' && init?.method === 'PATCH') {
-        expect(JSON.parse(String(init.body))).toEqual({
-          companyBlurb: 'We build trustworthy hiring tools.',
-        })
-        return json({
-          workspace: { companyBlurb: 'We build trustworthy hiring tools.' },
-        })
-      }
       if (url === '/api/workspace') {
         return json({
-          workspace: { companyBlurb: 'Saved Acme company context.' },
+          workspace: { companyDescription: 'Saved Acme company context.' },
           membership: { role: 'admin' },
         })
       }
@@ -47,22 +39,35 @@ describe('Smart JD workspace company blurb', () => {
     await screen.findByText('No jobs yet')
     fireEvent.click(screen.getAllByRole('button', { name: 'New job' })[0])
 
-    const blurb = screen.getByLabelText('Company blurb (optional)')
-    expect(blurb).toHaveValue('Saved Acme company context.')
-    fireEvent.change(blurb, {
-      target: { value: 'We build trustworthy hiring tools.' },
-    })
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Save workspace default' }),
+    expect(screen.getByText('Saved Acme company context.')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/company blurb/i)).not.toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/workspace',
+      expect.objectContaining({ method: 'PATCH' }),
     )
+  })
 
-    await screen.findByText('Saved as the workspace default.')
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/workspace',
-        expect.objectContaining({ method: 'PATCH' }),
-      )
+  it('holds new job authoring until a legacy workspace completes onboarding', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/jobs') return json({ jobs: [] })
+      if (url === '/api/workspace/departments') {
+        return json({
+          departments: [
+            { id: 'department-1', name: 'Engineering', status: 'active', kind: 'standard' },
+          ],
+        })
+      }
+      if (url === '/api/workspace') return json({ workspace: {}, membership: { role: 'admin' } })
+      throw new Error(`Unexpected request: ${url}`)
     })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobsPage />)
+    fireEvent.click((await screen.findAllByRole('button', { name: 'New job' }))[0])
+
+    expect(screen.getByText(/Complete onboarding before creating a job/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Generate JD' })).toBeDisabled()
   })
 })
 
@@ -84,7 +89,7 @@ describe('mandatory job departments', () => {
       }
       if (url === '/api/workspace') {
         return json({
-          workspace: { companyBlurb: '' },
+          workspace: { companyDescription: 'Acme builds trustworthy hiring tools.' },
           membership: { role: 'admin' },
         })
       }
@@ -94,7 +99,8 @@ describe('mandatory job departments', () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             title: 'Backend Engineer',
-            level: 'Senior',
+            level: 'manager',
+            targetExperienceRange: { minYears: 3, maxYears: 8 },
             mustHaves: ['Strong TypeScript'],
             niceToHaves: [],
             location: 'Remote',
@@ -106,13 +112,15 @@ describe('mandatory job departments', () => {
       if (url === '/api/workspace/jobs' && init?.method === 'POST') {
         expect(JSON.parse(String(init.body))).toEqual({
           title: 'Backend Engineer',
-          level: 'Senior',
+          level: 'manager',
+          targetExperienceRange: { minYears: 3, maxYears: 8 },
           mustHaves: ['Strong TypeScript'],
           niceToHaves: [],
           location: 'Remote',
           workMode: 'hybrid',
           departmentId: 'department-1',
           jdText,
+          jdSource: 'ai_generated',
         })
         return json({
           job: {
@@ -135,14 +143,16 @@ describe('mandatory job departments', () => {
     expect(screen.queryByRole('option', { name: 'Practice records' })).not.toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'department-1' } })
     fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'Backend Engineer' } })
-    fireEvent.change(screen.getByLabelText('Level'), { target: { value: 'Senior' } })
+    fireEvent.change(screen.getByLabelText('Level'), { target: { value: 'manager' } })
     fireEvent.change(screen.getByLabelText('Location'), { target: { value: 'Remote' } })
+    fireEvent.change(screen.getByLabelText('Minimum years'), { target: { value: '3' } })
+    fireEvent.change(screen.getByLabelText('Maximum years'), { target: { value: '8' } })
     fireEvent.change(screen.getByLabelText('Must-haves · one per line'), {
       target: { value: 'Strong TypeScript' },
     })
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate JD' }))
-    await screen.findByLabelText('Reviewed prose JD')
+    await screen.findByLabelText('Reviewed AI-generated JD')
     fireEvent.click(screen.getByRole('button', { name: 'Create job' }))
 
     await waitFor(() => {
@@ -164,7 +174,10 @@ describe('mandatory job departments', () => {
         }, 201)
       }
       if (url === '/api/workspace') {
-        return json({ workspace: { companyBlurb: '' }, membership: { role: 'admin' } })
+        return json({
+          workspace: { companyDescription: 'Acme builds trustworthy hiring tools.' },
+          membership: { role: 'admin' },
+        })
       }
       throw new Error(`Unexpected request: ${url}`)
     })
@@ -178,5 +191,71 @@ describe('mandatory job departments', () => {
 
     await screen.findByText('Department “Engineering” added and selected.')
     expect(screen.getByLabelText('Department')).toHaveValue('department-1')
+  })
+
+  it('creates a job from a pasted JD without invoking the AI builder', async () => {
+    const pastedJd = 'Own the backend platform roadmap and deliver reliable services with the engineering team.'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/jobs' && !init?.method) return json({ jobs: [] })
+      if (url === '/api/workspace/departments') {
+        return json({
+          departments: [
+            { id: 'department-1', name: 'Engineering', status: 'active', kind: 'standard' },
+          ],
+        })
+      }
+      if (url === '/api/workspace') {
+        return json({
+          workspace: { companyDescription: 'Acme builds trustworthy hiring tools.' },
+          membership: { role: 'admin' },
+        })
+      }
+      if (url === '/api/workspace/jobs/jd-builder') {
+        throw new Error('Manual JD must not call the AI builder')
+      }
+      if (url === '/api/workspace/jobs' && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toEqual({
+          title: 'Platform Manager',
+          level: 'manager',
+          targetExperienceRange: { minYears: 5, maxYears: 9 },
+          mustHaves: ['Production TypeScript'],
+          niceToHaves: [],
+          location: 'Remote',
+          workMode: 'hybrid',
+          departmentId: 'department-1',
+          jdText: pastedJd,
+          jdSource: 'manual',
+        })
+        return json({ job: { id: 'job-1', departmentId: 'department-1', title: 'Platform Manager' } }, 201)
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobsPage />)
+    fireEvent.click((await screen.findAllByRole('button', { name: 'New job' }))[0])
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'department-1' } })
+    fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'Platform Manager' } })
+    fireEvent.change(screen.getByLabelText('Level'), { target: { value: 'manager' } })
+    fireEvent.change(screen.getByLabelText('Location'), { target: { value: 'Remote' } })
+    fireEvent.change(screen.getByLabelText('Minimum years'), { target: { value: '5' } })
+    fireEvent.change(screen.getByLabelText('Maximum years'), { target: { value: '9' } })
+    fireEvent.change(screen.getByLabelText('Must-haves · one per line'), {
+      target: { value: 'Production TypeScript' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Paste existing JD' }))
+    fireEvent.change(screen.getByLabelText('Existing job description'), { target: { value: pastedJd } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create job' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspace/jobs', expect.objectContaining({
+        method: 'POST',
+      }))
+    })
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/workspace/jobs/jd-builder',
+      expect.anything(),
+    )
   })
 })
