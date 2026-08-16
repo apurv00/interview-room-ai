@@ -56,6 +56,33 @@ describe('Phase-1 scoring contract schema', () => {
       partialFilterExpression: { state: 'active' },
     })
   })
+
+  it('keeps legacy free-text levels and versions without an experience range valid', () => {
+    const legacy = new HireJobRequirementVersion({
+      workspaceId: new mongoose.Types.ObjectId(),
+      jobId: new mongoose.Types.ObjectId(),
+      version: 1,
+      state: 'active',
+      input: {
+        role: 'Backend Engineer',
+        level: 'Senior',
+        mustHaves: ['Production TypeScript'],
+        niceToHaves: [],
+        location: 'Remote',
+        workMode: 'hybrid',
+        companyBlurb: 'Acme builds reliable hiring tools.',
+      },
+      proseJd: 'A reviewed job description that remains valid for historical scoring.',
+      requirements: [
+        { id: 'must-typescript', text: 'Production TypeScript', importance: 'must_have' },
+      ],
+      contentHash: 'a'.repeat(64),
+      createdByMemberId: new mongoose.Types.ObjectId(),
+      createdByName: 'HR One',
+    })
+
+    expect(legacy.validateSync()).toBeUndefined()
+  })
 })
 
 describe('Phase-1 decision and close durability', () => {

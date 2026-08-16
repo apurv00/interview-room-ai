@@ -6,7 +6,10 @@ import { AppError } from '@shared/errors'
 import type {
   IHireJobBuilderInput,
   IHireStructuredRequirement,
+  IHireTargetExperienceRange,
 } from '../models/HireJobRequirementVersion'
+
+const MAX_PERSISTED_JD_CHARS = 50000
 
 const GeneratedNarrativeSchema = z
   .object({
@@ -42,6 +45,26 @@ function extractJsonObject(text: string): unknown {
   return JSON.parse(text.slice(first, last + 1))
 }
 
+function formatTargetExperienceRange(
+  targetExperienceRange: IHireTargetExperienceRange | undefined,
+): string | null {
+  if (!targetExperienceRange) return null
+  const { minYears, maxYears } = targetExperienceRange
+  const range = minYears === maxYears ? `${minYears}` : `${minYears}\u2013${maxYears}`
+  return `Target experience: ${range} year${maxYears === 1 && minYears === 1 ? '' : 's'}`
+}
+
+function roleContextLines(input: IHireJobBuilderInput): string[] {
+  const targetExperience = formatTargetExperienceRange(input.targetExperienceRange)
+  return [
+    ...(input.companyBlurb ? [input.companyBlurb, ''] : []),
+    `Level: ${input.level}`,
+    ...(targetExperience ? [targetExperience] : []),
+    `Location: ${input.location} (${input.workMode.replace('_', ' ')})`,
+    ...(input.compensation ? [`Compensation: ${input.compensation}`] : []),
+  ]
+}
+
 function renderJd(
   input: IHireJobBuilderInput,
   narrative: z.infer<typeof GeneratedNarrativeSchema>,
@@ -49,10 +72,7 @@ function renderJd(
   const lines = [
     `# ${input.role}`,
     '',
-    ...(input.companyBlurb ? [input.companyBlurb, ''] : []),
-    `Level: ${input.level}`,
-    `Location: ${input.location} (${input.workMode.replace('_', ' ')})`,
-    ...(input.compensation ? [`Compensation: ${input.compensation}`] : []),
+    ...roleContextLines(input),
     '',
     '## Role overview',
     narrative.overview,
@@ -67,6 +87,34 @@ function renderJd(
       : []),
   ]
   return lines.join('\n').trim()
+}
+
+/**
+ * Preserve an HR-authored JD verbatim while adding the role context that must
+ * travel with every candidate match. This keeps manual and AI-authored JDs
+ * comparable without silently asking a model to rewrite the existing JD.
+ */
+function renderManualJd(input: IHireJobBuilderInput, jdText: string): string {
+  return [
+    `# ${input.role}`,
+    '',
+    ...roleContextLines(input),
+    '',
+    '## Job description',
+    jdText.trim(),
+  ]
+    .join('\n')
+    .trim()
+}
+
+function assertPersistableJdLength(jdText: string): void {
+  if (jdText.length > MAX_PERSISTED_JD_CHARS) {
+    throw new AppError(
+      'The job description and its role context exceed 50,000 characters.',
+      400,
+      'JD_TOO_LONG',
+    )
+  }
 }
 
 export function smartJdContentHash(
@@ -116,7 +164,7 @@ Schema:
     const narrative = GeneratedNarrativeSchema.parse(extractJsonObject(response.text))
     const requirements = normalizedRequirements(input)
     const jdText = renderJd(input, narrative)
-    if (jdText.length < 50 || jdText.length > 50000) {
+    if (jdText.length < 50 || jdText.length > MAX_PERSISTED_JD_CHARS) {
       throw new Error('Rendered JD length is outside the persisted contract')
     }
     return {
@@ -142,9 +190,12 @@ export function finalizeSmartJd(
   jdText: string,
 ): SmartJdArtifact {
   const requirements = normalizedRequirements(input)
+  const normalizedJdText =
+    input.jdSource === 'manual' ? renderManualJd(input, jdText) : jdText.trim()
+  assertPersistableJdLength(normalizedJdText)
   return {
-    jdText,
+    jdText: normalizedJdText,
     requirements,
-    contentHash: smartJdContentHash(input, jdText, requirements),
+    contentHash: smartJdContentHash(input, normalizedJdText, requirements),
   }
 }

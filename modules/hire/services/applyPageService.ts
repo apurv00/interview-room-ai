@@ -119,6 +119,8 @@ export async function disableApplyLink(
 export interface PublicJobView {
   job: IHireJob
   workspaceName: string
+  /** Company-authored context, disclosed only after a valid apply capability. */
+  companyDescription: string | null
   applyTokenHash: string
 }
 
@@ -153,9 +155,14 @@ export async function resolveApplyToken(
   const workspace = await HireWorkspace.findOne({
     _id: job.workspaceId,
     $or: [{ lifecycleState: 'active' }, { lifecycleState: { $exists: false } }],
-  }).select('name')
+  }).select('name companyDescription companyBlurb')
   if (!workspace) return null
-  return { job, workspaceName: workspace.name, applyTokenHash }
+  return {
+    job,
+    workspaceName: workspace.name,
+    companyDescription: workspace.companyDescription ?? workspace.companyBlurb ?? null,
+    applyTokenHash,
+  }
 }
 
 /**

@@ -21,7 +21,11 @@ describe('safe public apply bootstrap', () => {
   it('scrubs the fragment and never puts the capability in a request target or DOM', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
-        JSON.stringify({ jobTitle: 'Backend Engineer', workspaceName: 'Acme' }),
+        JSON.stringify({
+          jobTitle: 'Backend Engineer',
+          workspaceName: 'Acme',
+          companyDescription: 'Acme builds reliable workflow software for operations teams.',
+        }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
     )
@@ -32,6 +36,9 @@ describe('safe public apply bootstrap', () => {
     expect(await screen.findByRole('heading', { name: 'Backend Engineer' })).toBeTruthy()
     expect(window.location.hash).toBe('')
     expect(window.location.pathname).toBe('/apply')
+    expect(
+      await screen.findByText('Acme builds reliable workflow software for operations teams.'),
+    ).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/apply/resolve',
       expect.objectContaining({

@@ -83,6 +83,10 @@ const BUDGETS = {
   // architectural tripwire instead of folding that state into AI-round code.
   // See ADR 0031.
   'modules/hire':      { maxLOC: 25_000, maxFiles: 90 },
+  // Private workspace identity assets have a distinct object-storage and
+  // lifecycle boundary from candidate media. Keep this deliberately small so
+  // it cannot become a general asset service; see ADR 0038.
+  'modules/hire-branding': { maxLOC: 2_000, maxFiles: 8 },
   // Department is a required job-classification catalog with its own
   // migration, archive policy, and narrow control-plane boundary. It stays
   // outside the full Hire command module, which is already at its deliberate

@@ -37,6 +37,24 @@ export interface IHireWorkspaceAdminTransferEvent {
   at: Date
 }
 
+export const HIRE_WORKSPACE_LOGO_CONTENT_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+] as const
+export type HireWorkspaceLogoContentType = (typeof HIRE_WORKSPACE_LOGO_CONTENT_TYPES)[number]
+
+/**
+ * Publicly harmless metadata for the one private dashboard logo object. The
+ * bytes themselves never live in Mongo and are only released through the
+ * member-authenticated branding route.
+ */
+export interface IHireWorkspaceLogo {
+  contentType: HireWorkspaceLogoContentType
+  byteSize: number
+  updatedAt: Date
+}
+
 /**
  * IPG Hire v2 workspace — one workspace = one company (build plan §Permission
  * model). Flat permissions: exactly one admin role distinction, held on the
@@ -46,7 +64,15 @@ export interface IHireWorkspaceAdminTransferEvent {
 export interface IHireWorkspace extends Document {
   _id: mongoose.Types.ObjectId
   name: string
+  /** Canonical workspace-level company context for new job/JD creation. */
+  companyDescription?: string
+  /**
+   * Legacy workspace default retained only so existing workspaces and their
+   * historic Smart-JD snapshots remain readable during the transition to
+   * `companyDescription`.
+   */
   companyBlurb?: string
+  companyLogo?: IHireWorkspaceLogo
   guestAuthMode: GuestAuthMode
   lifecycleState: HireWorkspaceLifecycleState
   /** Serializes admin transfer against lifecycle actions. */
@@ -116,10 +142,25 @@ const HireWorkspaceAdminTransferEventSchema = new Schema<IHireWorkspaceAdminTran
   { _id: false },
 )
 
+const HireWorkspaceLogoSchema = new Schema<IHireWorkspaceLogo>(
+  {
+    contentType: {
+      type: String,
+      enum: HIRE_WORKSPACE_LOGO_CONTENT_TYPES,
+      required: true,
+    },
+    byteSize: { type: Number, required: true, min: 1, max: 512 * 1024 },
+    updatedAt: { type: Date, required: true },
+  },
+  { _id: false },
+)
+
 const HireWorkspaceSchema = new Schema<IHireWorkspace>(
   {
     name: { type: String, required: true, trim: true, maxlength: 120 },
+    companyDescription: { type: String, trim: true, maxlength: 2000 },
     companyBlurb: { type: String, trim: true, maxlength: 2000 },
+    companyLogo: { type: HireWorkspaceLogoSchema },
     guestAuthMode: { type: String, enum: GUEST_AUTH_MODES, default: 'magic_link' },
     lifecycleState: {
       type: String,

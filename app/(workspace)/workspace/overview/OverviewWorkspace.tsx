@@ -11,6 +11,7 @@ import {
   readOperationsResponse,
 } from "../_operations/operationsView";
 import DigestPreferenceControl from "./DigestPreferenceControl";
+import CompanyIdentityCard from "./CompanyIdentityCard";
 
 function pluralize(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -101,6 +102,8 @@ export default function OverviewWorkspace() {
           </a>
         </div>
       </header>
+
+      <CompanyIdentityCard />
 
       <section
         aria-label="Hiring key performance indicators"

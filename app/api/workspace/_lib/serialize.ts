@@ -27,7 +27,14 @@ export function serializeMembership(ctx: MembershipContext) {
     workspace: {
       id: ctx.workspace._id.toString(),
       name: ctx.workspace.name,
-      companyBlurb: ctx.workspace.companyBlurb ?? null,
+      // The workspace description has one canonical owner. Older workspaces
+      // still read their stored default until they are next updated, while
+      // immutable requirement-version `companyBlurb` snapshots are untouched.
+      companyDescription:
+        ctx.workspace.companyDescription ?? ctx.workspace.companyBlurb ?? null,
+      companyLogo: ctx.workspace.companyLogo
+        ? { updatedAt: ctx.workspace.companyLogo.updatedAt }
+        : null,
       guestAuthMode: ctx.workspace.guestAuthMode ?? 'magic_link',
       lifecycleState: ctx.workspace.lifecycleState ?? 'active',
       deletedAt: ctx.workspace.deletedAt ?? null,

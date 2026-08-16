@@ -21,6 +21,27 @@ export const HIRE_INTAKE_TASK_STATUSES = [
 export type HireIntakeTaskStatus = (typeof HIRE_INTAKE_TASK_STATUSES)[number]
 
 /**
+ * Event delivery is advisory: the task itself is the durable source of
+ * truth, while the recovery worker can pick up a queued task if Inngest is
+ * temporarily unavailable. Keep this status separate from task processing so
+ * recruiters can distinguish "saved" from "the worker started".
+ */
+export const HIRE_INTAKE_TASK_DISPATCH_STATUSES = [
+  'pending',
+  'dispatched',
+  'failed',
+] as const
+export type HireIntakeTaskDispatchStatus =
+  (typeof HIRE_INTAKE_TASK_DISPATCH_STATUSES)[number]
+
+/** Only controlled, non-secret delivery failures may be persisted or shown. */
+export const HIRE_INTAKE_TASK_DISPATCH_ERROR_CODES = [
+  'inngest_dispatch_unavailable',
+] as const
+export type HireIntakeTaskDispatchErrorCode =
+  (typeof HIRE_INTAKE_TASK_DISPATCH_ERROR_CODES)[number]
+
+/**
  * Durable, Hire-owned intake work for exactly one submitted resume.
  *
  * The queue event carries only this task id. The worker re-reads this record
@@ -55,6 +76,15 @@ export interface IHireIntakeTask extends Document {
   status: HireIntakeTaskStatus
   /** Increments once for each worker claim, including retry claims. */
   attempts: number
+  /**
+   * Best-effort event-delivery observability. Legacy rows may not have these
+   * fields, so consumers must treat their absence as an initial pending state.
+   */
+  dispatchStatus?: HireIntakeTaskDispatchStatus
+  dispatchAttempts?: number
+  lastDispatchErrorCode?: HireIntakeTaskDispatchErrorCode
+  lastDispatchErrorAt?: Date
+  lastDispatchedAt?: Date
   claimToken?: string
   claimedAt?: Date
   leaseExpiresAt?: Date
@@ -188,6 +218,19 @@ const HireIntakeTaskSchema = new Schema<IHireIntakeTask>(
       default: 'queued',
     },
     attempts: { type: Number, required: true, default: 0, min: 0 },
+    dispatchStatus: {
+      type: String,
+      enum: HIRE_INTAKE_TASK_DISPATCH_STATUSES,
+      required: true,
+      default: 'pending',
+    },
+    dispatchAttempts: { type: Number, required: true, default: 0, min: 0 },
+    lastDispatchErrorCode: {
+      type: String,
+      enum: HIRE_INTAKE_TASK_DISPATCH_ERROR_CODES,
+    },
+    lastDispatchErrorAt: { type: Date },
+    lastDispatchedAt: { type: Date },
     claimToken: { type: String, maxlength: 80 },
     claimedAt: { type: Date },
     leaseExpiresAt: { type: Date },

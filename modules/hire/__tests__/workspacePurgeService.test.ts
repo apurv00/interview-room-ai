@@ -18,6 +18,7 @@ const {
   mockCancelAssessmentExports,
   mockDeleteAssessmentExports,
   mockCancelReportExports,
+  mockBrandingDelete,
 } = vi.hoisted(() => {
   const child = () => ({ deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }) })
   const modelMap = {
@@ -96,6 +97,7 @@ const {
     mockCancelAssessmentExports: vi.fn(),
     mockDeleteAssessmentExports: vi.fn(),
     mockCancelReportExports: vi.fn(),
+    mockBrandingDelete: vi.fn(),
   }
 })
 
@@ -115,6 +117,12 @@ vi.mock('../services/assessmentExportLifecycleService', () => ({
 vi.mock('../../hire-reports/models/HireReportExport', () => reportModels)
 vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
   cancelHireReportExportsForLifecycle: (...args: unknown[]) => mockCancelReportExports(...args),
+}))
+vi.mock('@hire-branding/services/workspaceBrandingStorage', () => ({
+  hireWorkspaceBrandingStorage: {
+    delete: (...args: unknown[]) => mockBrandingDelete(...args),
+  },
+  hireWorkspaceLogoKey: (workspaceId: string) => `hire-workspace-branding/${workspaceId}/logo`,
 }))
 
 import {
@@ -180,6 +188,7 @@ beforeEach(() => {
   mockCancelAssessmentExports.mockResolvedValue([])
   mockDeleteAssessmentExports.mockResolvedValue(undefined)
   mockCancelReportExports.mockResolvedValue(0)
+  mockBrandingDelete.mockResolvedValue(undefined)
   reportModels.HireReportExport.deleteMany.mockResolvedValue({ deletedCount: 1 })
   statusModels.HireCandidateStatusLink.deleteMany.mockResolvedValue({ deletedCount: 1 })
   onboardingModels.HireOnboardingTestDrive.deleteMany.mockResolvedValue({ deletedCount: 1 })
@@ -278,6 +287,9 @@ describe('workspace hard purge', () => {
       expect.objectContaining({ _id: WORKSPACE_ID }),
     )
     expect(storage.delete).toHaveBeenCalledOnce()
+    expect(mockBrandingDelete).toHaveBeenCalledWith({
+      key: `hire-workspace-branding/${WORKSPACE_ID.toString()}/logo`,
+    })
     expect(models.HireMediaAsset.updateOne).toHaveBeenCalledWith(
       expect.objectContaining({ _id: ASSET_ID, workspaceId: WORKSPACE_ID }),
       expect.objectContaining({ $set: { state: 'purged', purgedAt: NOW } }),
@@ -374,6 +386,9 @@ describe('workspace hard purge', () => {
         purgeAfter: { $lte: NOW },
       }),
       { session },
+    )
+    expect(mockBrandingDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireWorkspace.deleteOne.mock.invocationCallOrder[0],
     )
   })
 

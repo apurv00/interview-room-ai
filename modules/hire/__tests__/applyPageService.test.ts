@@ -92,7 +92,10 @@ beforeEach(() => {
   onboarding.isTestDriveCoordinate.mockResolvedValue(false)
   mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockWorkspace.findOne.mockReturnValue({
-    select: () => Promise.resolve({ name: 'Acme' }),
+    select: () => Promise.resolve({
+      name: 'Acme',
+      companyDescription: 'Acme builds reliable workflow software for operations teams.',
+    }),
   })
   mockWorkspace.exists.mockResolvedValue({ _id: '111111111111111111111111' })
 })
@@ -263,11 +266,14 @@ describe('resolveApplyToken — uniform failure (no enumeration)', () => {
     })
   })
 
-  it('resolves a live link to its job + employer name', async () => {
+  it('resolves a live link to its job + canonical company identity context', async () => {
     mockJob.findOne.mockResolvedValue(jobDoc({ applyPageEnabled: true }))
     const view = await resolveApplyToken(CAPABILITY)
     expect(view?.job.title).toBe('Backend Engineer')
     expect(view?.workspaceName).toBe('Acme')
+    expect(view?.companyDescription).toBe(
+      'Acme builds reliable workflow software for operations teams.',
+    )
   })
 })
 

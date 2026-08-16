@@ -13,7 +13,6 @@ import Button from '@shared/ui/Button'
 import Input from '@shared/ui/Input'
 import StateView from '@shared/ui/StateView'
 import { INTERVIEW_ROLE_SLUG_MAX_CHARS } from '@shared/interviewContract'
-import InterviewYourselfCta from './InterviewYourselfCta'
 
 interface JobRow {
   id: string
@@ -34,6 +33,15 @@ interface DepartmentRow {
 }
 
 type WorkMode = 'onsite' | 'hybrid' | 'remote'
+type JobDescriptionSource = 'ai_generated' | 'manual'
+
+const JOB_LEVEL_OPTIONS = [
+  { value: 'ic', label: 'Individual contributor (IC)' },
+  { value: 'manager', label: 'Manager' },
+  { value: 'senior_manager', label: 'Senior manager' },
+  { value: 'director', label: 'Director' },
+  { value: 'executive', label: 'Executive' },
+] as const
 
 const STATUS_VARIANT: Record<JobRow['status'], 'success' | 'caution' | 'default'> = {
   open: 'success',
@@ -72,17 +80,17 @@ export default function JobsPage() {
   const [level, setLevel] = useState('')
   const [location, setLocation] = useState('')
   const [screeningLocation, setScreeningLocation] = useState('')
-  const [experienceFloorYears, setExperienceFloorYears] = useState('')
+  const [screeningExperienceFloorYears, setScreeningExperienceFloorYears] = useState('')
+  const [targetExperienceMinYears, setTargetExperienceMinYears] = useState('')
+  const [targetExperienceMaxYears, setTargetExperienceMaxYears] = useState('')
   const [workMode, setWorkMode] = useState<WorkMode>('hybrid')
   const [compensation, setCompensation] = useState('')
-  const [companyBlurb, setCompanyBlurb] = useState('')
-  const [savedCompanyBlurb, setSavedCompanyBlurb] = useState('')
+  const [companyDescription, setCompanyDescription] = useState('')
   const [canEditWorkspace, setCanEditWorkspace] = useState(false)
-  const [savingCompanyBlurb, setSavingCompanyBlurb] = useState(false)
-  const [companyBlurbStatus, setCompanyBlurbStatus] = useState<string | null>(null)
   const [mustHavesText, setMustHavesText] = useState('')
   const [niceToHavesText, setNiceToHavesText] = useState('')
   const [jdText, setJdText] = useState('')
+  const [jdSource, setJdSource] = useState<JobDescriptionSource>('ai_generated')
   const [generatedFor, setGeneratedFor] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -120,9 +128,9 @@ export default function JobsPage() {
       }
       setJobs(jobsData.jobs)
       setDepartments(sortDepartments(departmentsData.departments as DepartmentRow[]))
-      const defaultBlurb = workspaceData.workspace?.companyBlurb || ''
-      setSavedCompanyBlurb(defaultBlurb)
-      setCompanyBlurb((current) => current || defaultBlurb)
+      const onboardingDescription =
+        workspaceData.workspace?.companyDescription ?? workspaceData.workspace?.companyBlurb ?? ''
+      setCompanyDescription(onboardingDescription)
       setCanEditWorkspace(workspaceData.membership?.role === 'admin')
     } catch {
       setError('Could not load jobs.')
@@ -137,23 +145,26 @@ export default function JobsPage() {
     return {
       title: title.trim(),
       level: level.trim(),
+      targetExperienceRange: {
+        minYears: Number(targetExperienceMinYears),
+        maxYears: Number(targetExperienceMaxYears),
+      },
       mustHaves: lines(mustHavesText),
       niceToHaves: lines(niceToHavesText),
       location: location.trim(),
       workMode,
       ...(compensation.trim() ? { compensation: compensation.trim() } : {}),
-      ...(companyBlurb.trim() ? { companyBlurb: companyBlurb.trim() } : {}),
     }
   }
 
   function screeningSettingsPayload() {
     return {
-      ...(screeningLocation.trim() || experienceFloorYears.trim()
+      ...(screeningLocation.trim() || screeningExperienceFloorYears.trim()
         ? {
             screeningSettings: {
               ...(screeningLocation.trim() ? { location: screeningLocation.trim() } : {}),
-              ...(experienceFloorYears.trim()
-                ? { experienceFloorYears: Number(experienceFloorYears) }
+              ...(screeningExperienceFloorYears.trim()
+                ? { experienceFloorYears: Number(screeningExperienceFloorYears) }
                 : {}),
             },
         }
@@ -162,13 +173,29 @@ export default function JobsPage() {
   }
 
   const currentBuilderSignature = JSON.stringify(builderPayload())
+  const targetExperienceMin = Number(targetExperienceMinYears)
+  const targetExperienceMax = Number(targetExperienceMaxYears)
+  const hasValidTargetExperienceRange =
+    targetExperienceMinYears.trim().length > 0 &&
+    targetExperienceMaxYears.trim().length > 0 &&
+    Number.isFinite(targetExperienceMin) &&
+    Number.isFinite(targetExperienceMax) &&
+    targetExperienceMin >= 0 &&
+    targetExperienceMax <= 50 &&
+    targetExperienceMin <= targetExperienceMax
+  const hasCompanyDescription = companyDescription.trim().length >= 10
   const canGenerate =
+    hasCompanyDescription &&
     departmentId.length > 0 &&
     title.trim().length >= 2 &&
     level.trim().length > 0 &&
+    hasValidTargetExperienceRange &&
     location.trim().length >= 2 &&
     lines(mustHavesText).length > 0
-  const previewIsCurrent = generatedFor === currentBuilderSignature && jdText.trim().length >= 50
+  const previewIsCurrent =
+    canGenerate &&
+    jdText.trim().length >= 50 &&
+    (jdSource === 'manual' || generatedFor === currentBuilderSignature)
 
   async function generateJd() {
     setGenerating(true)
@@ -196,8 +223,16 @@ export default function JobsPage() {
 
   async function createJob(e: React.FormEvent) {
     e.preventDefault()
+    if (!hasCompanyDescription) {
+      setFormError('Complete the company profile from onboarding before creating a job.')
+      return
+    }
     if (!previewIsCurrent) {
-      setFormError('Generate or refresh the JD after changing the requirement fields.')
+      setFormError(
+        jdSource === 'manual'
+          ? 'Complete the required role fields and add the existing job description.'
+          : 'Generate or refresh the JD after changing the requirement fields.',
+      )
       return
     }
     setSaving(true)
@@ -211,6 +246,7 @@ export default function JobsPage() {
           ...screeningSettingsPayload(),
           departmentId,
           jdText: jdText.trim(),
+          jdSource,
         }),
       })
       const data = await res.json()
@@ -223,13 +259,15 @@ export default function JobsPage() {
       setLevel('')
       setLocation('')
       setScreeningLocation('')
-      setExperienceFloorYears('')
+      setScreeningExperienceFloorYears('')
+      setTargetExperienceMinYears('')
+      setTargetExperienceMaxYears('')
       setWorkMode('hybrid')
       setCompensation('')
-      setCompanyBlurb(savedCompanyBlurb)
       setMustHavesText('')
       setNiceToHavesText('')
       setJdText('')
+      setJdSource('ai_generated')
       setGeneratedFor(null)
       setShowForm(false)
       await load()
@@ -237,33 +275,6 @@ export default function JobsPage() {
       setFormError('Could not create the job. Check your connection.')
     } finally {
       setSaving(false)
-    }
-  }
-
-  async function saveCompanyBlurb() {
-    setSavingCompanyBlurb(true)
-    setCompanyBlurbStatus(null)
-    setFormError(null)
-    try {
-      const value = companyBlurb.trim()
-      const response = await fetch('/api/workspace', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyBlurb: value }),
-      })
-      const data = await response.json()
-      if (!response.ok) {
-        setFormError(data.details?.[0]?.message || data.error || 'Could not save the company blurb.')
-        return
-      }
-      const saved = data.workspace?.companyBlurb || ''
-      setSavedCompanyBlurb(saved)
-      setCompanyBlurb(saved)
-      setCompanyBlurbStatus(saved ? 'Saved as the workspace default.' : 'Workspace default cleared.')
-    } catch {
-      setFormError('Could not save the company blurb. Check your connection.')
-    } finally {
-      setSavingCompanyBlurb(false)
     }
   }
 
@@ -334,18 +345,16 @@ export default function JobsPage() {
         </Button>
       </div>
 
-      <InterviewYourselfCta priority={welcome} />
-
       {showForm && (
         <form
           onSubmit={createJob}
           className="bg-white border border-[#e1e8ed] rounded-2xl p-6 space-y-5"
         >
           <div>
-            <p className="font-semibold text-[#0f1419]">Smart JD</p>
+            <p className="font-semibold text-[#0f1419]">Job requirements</p>
             <p className="text-xs text-[#71767b] mt-1">
-              Requirements are the scoring contract. The generated prose can be edited,
-              but it never changes which items are must-have or nice-to-have.
+              Seniority, experience range, and requirements are separate parts of the
+              scoring contract. Choose AI drafting or paste an existing JD below.
             </p>
           </div>
           <div className="grid md:grid-cols-2 gap-4">
@@ -382,19 +391,36 @@ export default function JobsPage() {
               label="Role"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Senior Backend Engineer"
+              placeholder="Backend Engineer"
               required
               minLength={2}
               maxLength={INTERVIEW_ROLE_SLUG_MAX_CHARS}
             />
-            <Input
-              label="Level"
-              value={level}
-              onChange={(e) => setLevel(e.target.value)}
-              placeholder="Senior · 5–8 years"
-              required
-              maxLength={80}
-            />
+            <div className="space-y-1.5">
+              <label
+                htmlFor="hire-level"
+                className="text-sm font-medium text-[#0f1419] block"
+              >
+                Level
+              </label>
+              <select
+                id="hire-level"
+                value={level}
+                onChange={(event) => setLevel(event.target.value)}
+                required
+                className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-sm"
+              >
+                <option value="">Select a level</option>
+                {JOB_LEVEL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-[#71767b]">
+                Choose seniority only; set experience separately below.
+              </p>
+            </div>
             <Input
               label="Location"
               value={location}
@@ -428,23 +454,75 @@ export default function JobsPage() {
               placeholder="₹30–40 LPA + ESOPs"
               maxLength={240}
             />
-            <Input
-              label="Screening location (optional)"
-              value={screeningLocation}
-              onChange={(e) => setScreeningLocation(e.target.value)}
-              placeholder="Only set when location is a knockout rule"
-              maxLength={160}
-            />
-            <Input
-              label="Experience floor (years, optional)"
-              type="number"
-              min="0"
-              max="50"
-              step="1"
-              value={experienceFloorYears}
-              onChange={(e) => setExperienceFloorYears(e.target.value)}
-              placeholder="e.g. 3"
-            />
+            <div className="md:col-span-2 rounded-xl border border-[#e1e8ed] bg-[#f8fafc] p-4 space-y-3">
+              <div>
+                <p className="text-sm font-medium text-[#0f1419]">Target experience range</p>
+                <p className="text-xs text-[#71767b] mt-1">
+                  Used as JD-match context. It helps rank fit and does not automatically
+                  reject candidates above or below the range.
+                </p>
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
+                <Input
+                  label="Minimum years"
+                  type="number"
+                  min="0"
+                  max="50"
+                  step="0.5"
+                  value={targetExperienceMinYears}
+                  onChange={(event) => setTargetExperienceMinYears(event.target.value)}
+                  placeholder="e.g. 3"
+                  required
+                />
+                <Input
+                  label="Maximum years"
+                  type="number"
+                  min="0"
+                  max="50"
+                  step="0.5"
+                  value={targetExperienceMaxYears}
+                  onChange={(event) => setTargetExperienceMaxYears(event.target.value)}
+                  placeholder="e.g. 8"
+                  required
+                />
+              </div>
+              {targetExperienceMinYears &&
+                targetExperienceMaxYears &&
+                !hasValidTargetExperienceRange && (
+                  <p className="text-xs text-[#f4212e]">
+                    Enter values between 0 and 50, with the minimum no greater than the maximum.
+                  </p>
+                )}
+            </div>
+            <div className="md:col-span-2 rounded-xl border border-[#e1e8ed] bg-[#f8fafc] p-4 space-y-3">
+              <div>
+                <p className="text-sm font-medium text-[#0f1419]">
+                  Optional hard screening rules
+                </p>
+                <p className="text-xs text-[#71767b] mt-1">
+                  Leave these blank unless they should exclude a candidate from a screening gate.
+                </p>
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
+                <Input
+                  label="Screening location"
+                  value={screeningLocation}
+                  onChange={(e) => setScreeningLocation(e.target.value)}
+                  placeholder="Only set when location is a knockout rule"
+                  maxLength={160}
+                />
+                <Input
+                  label="Screening experience floor (years)"
+                  type="number"
+                  min="0"
+                  max="50"
+                  step="1"
+                  value={screeningExperienceFloorYears}
+                  onChange={(e) => setScreeningExperienceFloorYears(e.target.value)}
+                  placeholder="Only set when it is a knockout rule"
+                />
+              </div>
+            </div>
           </div>
           {selectable.length === 0 && (
             <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
@@ -507,47 +585,18 @@ export default function JobsPage() {
               {departmentNotice}
             </p>
           )}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between gap-3">
-              <label
-                htmlFor="hire-company-blurb"
-                className="text-sm font-medium text-[#0f1419] block"
-              >
-                Company blurb (optional)
-              </label>
-              {canEditWorkspace && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={
-                    savingCompanyBlurb || companyBlurb.trim() === savedCompanyBlurb
-                  }
-                  onClick={() => void saveCompanyBlurb()}
-                >
-                  {savingCompanyBlurb ? 'Saving…' : 'Save workspace default'}
-                </Button>
-              )}
-            </div>
-            <textarea
-              id="hire-company-blurb"
-              value={companyBlurb}
-              onChange={(e) => {
-                setCompanyBlurb(e.target.value)
-                setCompanyBlurbStatus(null)
-              }}
-              rows={3}
-              minLength={10}
-              maxLength={2000}
-              placeholder="What the company builds, who it serves, and why the role matters."
-              className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-sm"
-            />
+          <div className="rounded-xl border border-[#e1e8ed] bg-[#f8fafc] p-4 space-y-2">
+            <p className="text-sm font-medium text-[#0f1419]">Company description</p>
+            {companyDescription ? (
+              <p className="text-sm text-[#3b4a54] whitespace-pre-wrap">{companyDescription}</p>
+            ) : (
+              <p className="text-sm text-amber-700">
+                No company description is available yet. Complete onboarding before creating
+                a job so every JD has consistent company context.
+              </p>
+            )}
             <p className="text-xs text-[#71767b]">
-              {canEditWorkspace
-                ? 'Save once to prefill every future Smart JD.'
-                : 'The workspace admin controls the saved default.'}
-            </p>
-            <p aria-live="polite" className="text-xs text-emerald-700">
-              {companyBlurbStatus}
+              This description comes from onboarding and is saved with each immutable JD version.
             </p>
           </div>
           <div className="grid md:grid-cols-2 gap-4">
@@ -587,36 +636,77 @@ export default function JobsPage() {
               />
             </div>
           </div>
+          <div className="rounded-xl border border-[#e1e8ed] bg-[#f8fafc] p-4 space-y-3">
+            <div>
+              <p className="text-sm font-medium text-[#0f1419]">Job description</p>
+              <p className="text-xs text-[#71767b] mt-1">
+                Choose how to supply the reviewed job description. Both paths use the same
+                structured requirements and company description.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row" role="radiogroup" aria-label="Job description source">
+              <Button
+                type="button"
+                variant={jdSource === 'ai_generated' ? 'primary' : 'secondary'}
+                aria-pressed={jdSource === 'ai_generated'}
+                onClick={() => {
+                  setJdSource('ai_generated')
+                  setFormError(null)
+                }}
+              >
+                Create with AI
+              </Button>
+              <Button
+                type="button"
+                variant={jdSource === 'manual' ? 'primary' : 'secondary'}
+                aria-pressed={jdSource === 'manual'}
+                onClick={() => {
+                  setJdSource('manual')
+                  setGeneratedFor(null)
+                  setFormError(null)
+                }}
+              >
+                Paste existing JD
+              </Button>
+            </div>
+          </div>
 
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={generating || !canGenerate}
-            onClick={() => void generateJd()}
-          >
-            {generating ? 'Generating…' : jdText ? 'Regenerate JD' : 'Generate JD'}
-          </Button>
+          {jdSource === 'ai_generated' && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={generating || !canGenerate}
+              onClick={() => void generateJd()}
+            >
+              {generating ? 'Generating…' : jdText ? 'Regenerate JD' : 'Generate JD'}
+            </Button>
+          )}
 
-          {jdText && (
+          {(jdSource === 'manual' || jdText) && (
             <div className="space-y-1.5">
               <label
                 htmlFor="hire-reviewed-jd"
                 className="text-sm font-medium text-[#0f1419] block"
               >
-                Reviewed prose JD
+                {jdSource === 'manual' ? 'Existing job description' : 'Reviewed AI-generated JD'}
               </label>
-              {!previewIsCurrent && (
+              {jdSource === 'manual' ? (
+                <p className="text-xs text-[#71767b]">
+                  Your pasted text is preserved. The saved JD adds the selected role level,
+                  experience range, location, and onboarding company description as matching context.
+                </p>
+              ) : !previewIsCurrent ? (
                 <p className="text-xs text-amber-600">
                   Requirement fields changed. Regenerate before creating the job.
                 </p>
-              )}
+              ) : null}
               <textarea
                 id="hire-reviewed-jd"
                 value={jdText}
                 onChange={(e) => setJdText(e.target.value)}
                 required
                 minLength={50}
-                maxLength={50000}
+                maxLength={jdSource === 'manual' ? 47000 : 50000}
                 rows={16}
                 className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-sm font-mono"
               />
@@ -633,7 +723,7 @@ export default function JobsPage() {
         <StateView
           state="empty"
           title="No jobs yet"
-          description="Create a Smart JD and its structured scoring requirements."
+          description="Create a job description and its structured scoring requirements."
           action={{ label: 'New job', onClick: () => setShowForm(true) }}
         />
       ) : (

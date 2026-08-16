@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element -- the private member logo endpoint requires the browser session, which the image optimizer cannot forward. */
+
 /**
  * IPG Hire v2 member shell — sidebar layout for the workspace surface
  * (/workspace/* on www, and the whole hire.* subdomain via the middleware
@@ -18,6 +20,11 @@ import { clearAllInterviewStorage } from "@shared/storageKeys";
 interface HireMemberSessionView {
   authenticated: boolean;
   member?: { name: string; email: string; role: "admin" | "member" };
+}
+
+interface HireWorkspaceBrandView {
+  name: string;
+  companyLogo: { updatedAt: string } | null;
 }
 
 const NAV = [
@@ -41,6 +48,8 @@ export default function WorkspaceLayout({
   const [hireSession, setHireSession] = useState<HireMemberSessionView | null>(
     null,
   );
+  const [workspaceBrand, setWorkspaceBrand] =
+    useState<HireWorkspaceBrandView | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
@@ -57,6 +66,24 @@ export default function WorkspaceLayout({
       live = false;
     };
   }, []);
+
+  useEffect(() => {
+    let live = true;
+    const loadBrand = () => {
+      void fetch("/api/workspace", { cache: "no-store" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((value: { workspace?: HireWorkspaceBrandView | null } | null) => {
+          if (live && value?.workspace) setWorkspaceBrand(value.workspace);
+        })
+        .catch(() => undefined);
+    };
+    loadBrand();
+    window.addEventListener("hire-workspace-brand-updated", loadBrand);
+    return () => {
+      live = false;
+      window.removeEventListener("hire-workspace-brand-updated", loadBrand);
+    };
+  }, [pathname]);
 
   useEffect(() => {
     if (status === "unauthenticated" && hireSession?.authenticated === false) {
@@ -87,11 +114,36 @@ export default function WorkspaceLayout({
     </nav>
   );
 
+  const companyName = workspaceBrand?.name || "IPG Hire";
+  const companyLogoSrc = workspaceBrand?.companyLogo?.updatedAt
+    ? `/api/workspace/branding/logo?v=${encodeURIComponent(
+        workspaceBrand.companyLogo.updatedAt,
+      )}`
+    : null;
+
   const brand = (
     <div className="px-5 py-5 border-b border-[#e1e8ed]">
-      <Link href="/workspace/overview" className="block">
-        <span className="text-lg font-bold text-[#0f1419]">IPG Hire</span>
-        <span className="block text-xs text-[#71767b]">Hiring workspace</span>
+      <Link href="/workspace/overview" className="flex items-center gap-3">
+        {companyLogoSrc ? (
+          <img
+            src={companyLogoSrc}
+            alt={`${companyName} logo`}
+            className="h-9 w-9 shrink-0 rounded-lg border border-[#e1e8ed] bg-white object-contain"
+          />
+        ) : (
+          <span
+            aria-hidden
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-sm font-bold text-indigo-700"
+          >
+            {companyName.slice(0, 1).toUpperCase()}
+          </span>
+        )}
+        <span className="min-w-0">
+          <span className="block truncate text-lg font-bold text-[#0f1419]">
+            {companyName}
+          </span>
+          <span className="block text-xs text-[#71767b]">Hiring workspace</span>
+        </span>
       </Link>
     </div>
   );
@@ -134,8 +186,18 @@ export default function WorkspaceLayout({
 
       {/* Mobile header + drawer */}
       <div className="md:hidden sticky top-0 z-30 bg-white border-b border-[#e1e8ed] flex items-center justify-between px-4 py-3">
-        <Link href="/workspace/overview" className="font-bold text-[#0f1419]">
-          IPG Hire
+        <Link
+          href="/workspace/overview"
+          className="flex min-w-0 items-center gap-2 font-bold text-[#0f1419]"
+        >
+          {companyLogoSrc ? (
+            <img
+              src={companyLogoSrc}
+              alt=""
+              className="h-7 w-7 shrink-0 rounded-md border border-[#e1e8ed] bg-white object-contain"
+            />
+          ) : null}
+          <span className="truncate">{companyName}</span>
         </Link>
         <button
           aria-label="Menu"

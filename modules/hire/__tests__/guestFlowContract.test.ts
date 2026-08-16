@@ -90,12 +90,12 @@ describe('unchanged engine provisioning contract', () => {
   it('creates the prose and structured source before a job can become authoritative', () => {
     const builderInput = {
       title: 'Backend Engineer',
-      level: 'Senior',
+      level: 'manager',
+      targetExperienceRange: { minYears: 3, maxYears: 8 },
       mustHaves: ['Production TypeScript'],
       niceToHaves: ['Distributed systems'],
       location: 'Bengaluru, India',
       workMode: 'hybrid' as const,
-      companyBlurb: 'Acme builds reliable tools for growing engineering teams.',
     }
     expect(BuildJobDescriptionSchema.parse(builderInput)).toEqual(builderInput)
     expect(() =>

@@ -78,6 +78,8 @@ const OptionalPhoneSchema = z.string().trim().min(1).max(32).optional()
 export interface QueuedHireIntakeTask {
   taskId: string
   status: 'queued'
+  /** Safe observation of the best-effort Inngest handoff. */
+  dispatch: HireIntakeTaskDispatchView
 }
 
 export interface EnqueueMemberResumeIntakeInput {
@@ -108,6 +110,8 @@ export interface HireIntakeTaskView {
   fileName: string
   status: IHireIntakeTask['status']
   attempts: number
+  /** No provider exception text or candidate data appears in this view. */
+  dispatch: HireIntakeTaskDispatchView
   lastError?: string
   queuedAt: Date
   statusChangedAt: Date
@@ -117,6 +121,16 @@ export interface HireIntakeTaskView {
   cancelledAt?: Date
   candidateId?: string
   applicationId?: string
+}
+
+export interface HireIntakeTaskDispatchView {
+  /** Event-handoff state, distinct from parsing/scoring task status. */
+  status: 'pending' | 'dispatched' | 'failed'
+  attempts: number
+  /** A fixed code only; raw provider errors are never persisted here. */
+  lastErrorCode?: 'inngest_dispatch_unavailable'
+  lastErrorAt?: Date
+  lastDispatchedAt?: Date
 }
 
 export interface SupplyHireIntakeIdentityInput {
@@ -214,6 +228,35 @@ function normalizeTaskInput(input: {
   }
 }
 
+function pendingDispatchView(): HireIntakeTaskDispatchView {
+  return { status: 'pending', attempts: 0 }
+}
+
+function safeDispatchView(task: Pick<
+  IHireIntakeTask,
+  | 'dispatchStatus'
+  | 'dispatchAttempts'
+  | 'lastDispatchErrorCode'
+  | 'lastDispatchErrorAt'
+  | 'lastDispatchedAt'
+>): HireIntakeTaskDispatchView {
+  const status = task.dispatchStatus === 'dispatched' || task.dispatchStatus === 'failed'
+    ? task.dispatchStatus
+    : 'pending'
+  const attempts = typeof task.dispatchAttempts === 'number' && task.dispatchAttempts >= 0
+    ? task.dispatchAttempts
+    : 0
+  return {
+    status,
+    attempts,
+    ...(task.lastDispatchErrorCode === 'inngest_dispatch_unavailable'
+      ? { lastErrorCode: task.lastDispatchErrorCode }
+      : {}),
+    ...(task.lastDispatchErrorAt ? { lastErrorAt: task.lastDispatchErrorAt } : {}),
+    ...(task.lastDispatchedAt ? { lastDispatchedAt: task.lastDispatchedAt } : {}),
+  }
+}
+
 function safeTaskView(task: Pick<
   IHireIntakeTask,
   | '_id'
@@ -222,6 +265,11 @@ function safeTaskView(task: Pick<
   | 'originalFileName'
   | 'status'
   | 'attempts'
+  | 'dispatchStatus'
+  | 'dispatchAttempts'
+  | 'lastDispatchErrorCode'
+  | 'lastDispatchErrorAt'
+  | 'lastDispatchedAt'
   | 'lastError'
   | 'queuedAt'
   | 'statusChangedAt'
@@ -239,6 +287,7 @@ function safeTaskView(task: Pick<
     fileName: task.originalFileName,
     status: task.status,
     attempts: task.attempts,
+    dispatch: safeDispatchView(task),
     ...(task.lastError ? { lastError: task.lastError } : {}),
     queuedAt: task.queuedAt,
     statusChangedAt: task.statusChangedAt,
@@ -310,18 +359,92 @@ async function emitHireIntakeRequested(input: {
   })
 }
 
+async function persistIntakeDispatchState(input: {
+  workspaceId: string
+  taskId: string
+  dispatch: HireIntakeTaskDispatchView
+}): Promise<void> {
+  const at = input.dispatch.lastErrorAt ?? input.dispatch.lastDispatchedAt ?? new Date()
+  if (input.dispatch.status === 'failed') {
+    await HireIntakeTask.updateOne(
+      { _id: input.taskId, workspaceId: input.workspaceId },
+      {
+        $set: {
+          dispatchStatus: 'failed',
+          lastDispatchErrorCode: 'inngest_dispatch_unavailable',
+          lastDispatchErrorAt: at,
+        },
+        $inc: { dispatchAttempts: 1 },
+      },
+    )
+    return
+  }
+
+  await HireIntakeTask.updateOne(
+    { _id: input.taskId, workspaceId: input.workspaceId },
+    {
+      $set: {
+        dispatchStatus: 'dispatched',
+        lastDispatchedAt: at,
+      },
+      $inc: { dispatchAttempts: 1 },
+      $unset: {
+        lastDispatchErrorCode: 1,
+        lastDispatchErrorAt: 1,
+      },
+    },
+  )
+}
+
 /**
  * Best-effort immediate kick.  The durable task remains queued if Inngest is
  * temporarily unavailable; the cron recovery worker will claim it later.
  */
-async function kickQueuedTask(task: QueuedHireIntakeTask, workspaceId: string): Promise<void> {
+async function kickQueuedTask(
+  task: QueuedHireIntakeTask,
+  workspaceId: string,
+): Promise<HireIntakeTaskDispatchView> {
+  const attempts = task.dispatch.attempts + 1
+  const at = new Date()
   try {
     await emitHireIntakeRequested({ workspaceId, taskId: task.taskId })
-  } catch (error) {
+    const dispatch: HireIntakeTaskDispatchView = {
+      status: 'dispatched',
+      attempts,
+      lastDispatchedAt: at,
+    }
+    try {
+      await persistIntakeDispatchState({ workspaceId, taskId: task.taskId, dispatch })
+    } catch {
+      // The event was accepted, so do not relabel it as a failed dispatch if
+      // an observability-only write races a completion or transient DB issue.
+      logger.warn(
+        { workspaceId, taskId: task.taskId },
+        'hire intake queue dispatch accepted but observability state was not saved',
+      )
+    }
+    return dispatch
+  } catch {
+    const dispatch: HireIntakeTaskDispatchView = {
+      status: 'failed',
+      attempts,
+      lastErrorCode: 'inngest_dispatch_unavailable',
+      lastErrorAt: at,
+    }
+    try {
+      await persistIntakeDispatchState({ workspaceId, taskId: task.taskId, dispatch })
+    } catch {
+      // The task itself remains durable; the sweep can still discover it.
+      logger.warn(
+        { workspaceId, taskId: task.taskId },
+        'hire intake queue dispatch failure state was not saved',
+      )
+    }
     logger.warn(
       { workspaceId, taskId: task.taskId },
       'hire intake queue dispatch failed; durable sweep will retry',
     )
+    return dispatch
   }
 }
 
@@ -411,6 +534,8 @@ export async function enqueueMemberResumeIntake(
             actorName: ctx.membership.name || ctx.membership.email,
             status: 'queued',
             attempts: 0,
+            dispatchStatus: 'pending',
+            dispatchAttempts: 0,
             queuedAt: new Date(),
             statusChangedAt: new Date(),
           },
@@ -421,8 +546,12 @@ export async function enqueueMemberResumeIntake(
     },
   )
 
-  const queued = { taskId: task._id.toString(), status: 'queued' as const }
-  await kickQueuedTask(queued, workspaceId.toString())
+  const queued: QueuedHireIntakeTask = {
+    taskId: task._id.toString(),
+    status: 'queued',
+    dispatch: pendingDispatchView(),
+  }
+  queued.dispatch = await kickQueuedTask(queued, workspaceId.toString())
   return queued
 }
 
@@ -521,6 +650,8 @@ export async function enqueuePublicApplyIntake(
               actorName: 'Applicant (public apply page)',
               status: 'queued',
               attempts: 0,
+              dispatchStatus: 'pending',
+              dispatchAttempts: 0,
               queuedAt: new Date(),
               statusChangedAt: new Date(),
             },
@@ -550,8 +681,12 @@ export async function enqueuePublicApplyIntake(
     throw error
   }
 
-  const queued = { taskId: task._id.toString(), status: 'queued' as const }
-  await kickQueuedTask(queued, view.job.workspaceId.toString())
+  const queued: QueuedHireIntakeTask = {
+    taskId: task._id.toString(),
+    status: 'queued',
+    dispatch: pendingDispatchView(),
+  }
+  queued.dispatch = await kickQueuedTask(queued, view.job.workspaceId.toString())
   return queued
 }
 
@@ -560,9 +695,17 @@ export async function dispatchHireIntakeTask(input: {
   workspaceId: string
   taskId: string
 }): Promise<void> {
-  requireObjectId(input.workspaceId, 'workspace id')
-  requireObjectId(input.taskId, 'task id')
-  await emitHireIntakeRequested(input)
+  await connectHireControlDB()
+  const workspaceId = requireObjectId(input.workspaceId, 'workspace id')
+  const taskId = requireObjectId(input.taskId, 'task id')
+  await kickQueuedTask(
+    {
+      taskId: taskId.toString(),
+      status: 'queued',
+      dispatch: pendingDispatchView(),
+    },
+    workspaceId.toString(),
+  )
 }
 
 /** Recruiter-visible task status. Hidden input bytes, apply hashes, and PII never leave here. */
@@ -579,7 +722,7 @@ export async function getHireIntakeTask(
     jobId,
   })
     .select(
-      '_id jobId source originalFileName status attempts lastError queuedAt statusChangedAt needsIdentityAt completedAt failedAt cancelledAt candidateId applicationId',
+      '_id jobId source originalFileName status attempts dispatchStatus dispatchAttempts lastDispatchErrorCode lastDispatchErrorAt lastDispatchedAt lastError queuedAt statusChangedAt needsIdentityAt completedAt failedAt cancelledAt candidateId applicationId',
     )
     .lean()
   if (!task) throw new NotFoundError('Intake task')
@@ -702,8 +845,11 @@ export async function supplyHireIntakeIdentity(
     )
   }
   const view = safeTaskView(task)
-  await kickQueuedTask({ taskId: view.taskId, status: 'queued' }, ctx.workspace._id.toString())
-  return view
+  const dispatch = await kickQueuedTask(
+    { taskId: view.taskId, status: 'queued', dispatch: view.dispatch },
+    ctx.workspace._id.toString(),
+  )
+  return { ...view, dispatch }
 }
 
 function dueTaskFilter(now: Date): Record<string, unknown> {

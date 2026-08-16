@@ -387,7 +387,8 @@ describe('job candidate add/merge UI', () => {
     fireEvent.click((await screen.findAllByRole('button', { name: 'Add candidate' }))[0])
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Jane Candidate' } })
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'jane@example.com' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add to job' }))
+    expect(screen.getByRole('button', { name: 'Quick add (unscored)' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Quick add (unscored)' }))
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -399,6 +400,88 @@ describe('job candidate add/merge UI', () => {
       '/api/workspace/applications',
       expect.anything(),
     )
+  })
+
+  it('routes a manual résumé through the durable intake queue and exposes only safe recovery state', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/jobs/job-1') {
+        return json({
+          job: {
+            id: 'job-1',
+            title: 'Backend Engineer',
+            status: 'open',
+            closeNote: null,
+            closedByName: null,
+            jdText: 'Build reliable systems.',
+            applyPageEnabled: false,
+          },
+          entries: [],
+        })
+      }
+      if (url === '/api/workspace/jobs/job-1/intake' && init?.method === 'POST') {
+        expect(init.body).toBeInstanceOf(FormData)
+        const formData = init.body as FormData
+        expect((formData.get('file') as File).name).toBe('jane.pdf')
+        expect(formData.get('name')).toBe('Jane Candidate')
+        expect(formData.get('email')).toBe('jane@example.com')
+        return json({
+          task: {
+            taskId: 'task-1',
+            status: 'queued',
+            attempts: 0,
+            dispatch: {
+              status: 'failed',
+              attempts: 1,
+              lastErrorCode: 'inngest_dispatch_unavailable',
+            },
+          },
+        }, 202)
+      }
+      if (url === '/api/workspace/jobs/job-1/intake/task-1') {
+        expect(init?.cache).toBe('no-store')
+        return json({
+          task: {
+            taskId: 'task-1',
+            status: 'queued',
+            attempts: 0,
+            dispatch: {
+              status: 'failed',
+              attempts: 1,
+              lastErrorCode: 'inngest_dispatch_unavailable',
+            },
+          },
+        })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Add candidate' }))[0])
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Jane Candidate' } })
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'jane@example.com' } })
+    fireEvent.change(screen.getByLabelText(/Résumé/), {
+      target: { files: [new File(['resume'], 'jane.pdf', { type: 'application/pdf' })] },
+    })
+
+    expect(screen.getByRole('button', { name: 'Queue résumé & score against JD' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Queue résumé & score against JD' }))
+
+    expect(await screen.findByText(/automatic recovery will retry/i)).toBeInTheDocument()
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/workspace/jobs/job-1/intake',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => String(url) === '/api/workspace/jobs/job-1/candidates' && init?.method === 'POST',
+      ),
+    ).toBe(false)
   })
 })
 

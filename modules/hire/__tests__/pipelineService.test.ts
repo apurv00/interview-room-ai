@@ -247,7 +247,11 @@ import {
 import type { MembershipContext } from '../services/workspaceService'
 
 const CTX = {
-  workspace: { _id: 'ws-A', name: 'Acme' },
+  workspace: {
+    _id: 'ws-A',
+    name: 'Acme',
+    companyDescription: 'Acme builds reliable workflow software for operations teams.',
+  },
   membership: {
     _id: 'm1',
     userId: 'u1',
@@ -263,7 +267,8 @@ const OP_B = '22222222-2222-4222-8222-222222222222'
 const JOB_INPUT = {
   departmentId: 'department-engineering',
   title: 'Backend Engineer',
-  level: 'Senior',
+  level: 'manager',
+  targetExperienceRange: { minYears: 3, maxYears: 8 },
   mustHaves: ['Production TypeScript'],
   niceToHaves: ['Kafka'],
   location: 'Bengaluru, India',
@@ -345,6 +350,12 @@ describe('createJob', () => {
       workspaceId: 'ws-A',
       version: 1,
       state: 'active',
+      input: {
+        level: 'manager',
+        targetExperienceRange: { minYears: 3, maxYears: 8 },
+        companyBlurb: 'Acme builds reliable workflow software for operations teams.',
+        jdSource: 'ai_generated',
+      },
       createdByMemberId: 'm1',
       requirements: [
         expect.objectContaining({ text: 'Production TypeScript', importance: 'must_have' }),
@@ -378,6 +389,20 @@ describe('createJob', () => {
     const jobDocument = mockJob.create.mock.calls[0][0][0]
     expect(jobDocument.screeningSettings).toEqual(screeningSettings)
     expect(jobDocument.screeningSettings).not.toBe(screeningSettings)
+  })
+
+  it('requires the onboarding-owned company description before creating a new job', async () => {
+    const legacyWorkspaceWithoutDescription = {
+      ...CTX,
+      workspace: { _id: 'ws-A', name: 'Acme' },
+    } as unknown as MembershipContext
+
+    await expect(createJob(legacyWorkspaceWithoutDescription, JOB_INPUT)).rejects.toMatchObject({
+      code: 'WORKSPACE_COMPANY_DESCRIPTION_REQUIRED',
+      statusCode: 409,
+    })
+    expect(mockJob.create).not.toHaveBeenCalled()
+    expect(mockRequirementVersion.create).not.toHaveBeenCalled()
   })
 })
 

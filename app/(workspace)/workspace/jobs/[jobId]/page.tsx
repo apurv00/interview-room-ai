@@ -147,6 +147,30 @@ interface EmailDeliverySummary {
   failures: EmailDeliveryFailure[]
 }
 
+const MANUAL_INTAKE_TASK_STATUSES = [
+  'queued',
+  'processing',
+  'needs_identity',
+  'completed',
+  'failed',
+  'cancelled',
+] as const
+type ManualIntakeTaskStatus = (typeof MANUAL_INTAKE_TASK_STATUSES)[number]
+type ManualIntakeDispatchStatus = 'pending' | 'dispatched' | 'failed'
+
+interface ManualIntakeTask {
+  taskId: string
+  status: ManualIntakeTaskStatus
+  attempts: number
+  dispatch: {
+    status: ManualIntakeDispatchStatus
+    attempts: number
+    /** A controlled delivery code, never a provider exception. */
+    lastErrorCode?: 'inngest_dispatch_unavailable'
+  }
+  applicationId?: string
+}
+
 const EMPTY_EMAIL_DELIVERY: EmailDeliverySummary = {
   total: 0,
   pending: 0,
@@ -214,6 +238,57 @@ function rankingChip(entry: Entry): {
   return { label: 'JD match pending', variant: 'default' }
 }
 
+function isManualIntakeTaskStatus(value: unknown): value is ManualIntakeTaskStatus {
+  return typeof value === 'string' && MANUAL_INTAKE_TASK_STATUSES.includes(value as ManualIntakeTaskStatus)
+}
+
+function readManualIntakeTask(value: unknown): ManualIntakeTask | null {
+  if (!value || typeof value !== 'object') return null
+  const task = value as Record<string, unknown>
+  if (typeof task.taskId !== 'string' || !isManualIntakeTaskStatus(task.status)) return null
+
+  const rawDispatch = task.dispatch && typeof task.dispatch === 'object'
+    ? task.dispatch as Record<string, unknown>
+    : {}
+  const dispatchStatus: ManualIntakeDispatchStatus = rawDispatch.status === 'dispatched' || rawDispatch.status === 'failed'
+    ? rawDispatch.status
+    : 'pending'
+
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    attempts: typeof task.attempts === 'number' && task.attempts >= 0 ? task.attempts : 0,
+    dispatch: {
+      status: dispatchStatus,
+      attempts: typeof rawDispatch.attempts === 'number' && rawDispatch.attempts >= 0
+        ? rawDispatch.attempts
+        : 0,
+      ...(rawDispatch.lastErrorCode === 'inngest_dispatch_unavailable'
+        ? { lastErrorCode: rawDispatch.lastErrorCode }
+        : {}),
+    },
+    ...(typeof task.applicationId === 'string' ? { applicationId: task.applicationId } : {}),
+  }
+}
+
+function isManualIntakePolling(status: ManualIntakeTaskStatus | undefined): boolean {
+  return status === 'queued' || status === 'processing'
+}
+
+function manualIntakeStatusMessage(task: ManualIntakeTask): string {
+  if (task.status === 'queued' && task.dispatch.status === 'failed') {
+    return 'Résumé saved. The queue handoff is delayed; automatic recovery will retry.'
+  }
+  if (task.status === 'queued') return 'Résumé queued for parsing and JD scoring.'
+  if (task.status === 'processing') return 'Parsing the résumé and scoring it against this job description.'
+  if (task.status === 'needs_identity') {
+    return 'This résumé needs a confirmed email before JD scoring can continue.'
+  }
+  if (task.status === 'completed') return 'Candidate added. The pipeline now shows its JD-match state.'
+  if (task.status === 'cancelled') return 'This intake was cancelled because the job is no longer accepting candidates.'
+  return 'This résumé could not be processed. Upload a corrected file or use Quick add.'
+}
+
 function selectableDepartments(departments: DepartmentRow[]): DepartmentRow[] {
   return departments.filter(
     (department) => department.status === 'active' && department.kind === 'standard',
@@ -247,6 +322,8 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const [reassignBusy, setReassignBusy] = useState(false)
   const [addName, setAddName] = useState('')
   const [addEmail, setAddEmail] = useState('')
+  const [addResumeFile, setAddResumeFile] = useState<File | null>(null)
+  const [manualIntakeTask, setManualIntakeTask] = useState<ManualIntakeTask | null>(null)
   const [selectedPoolId, setSelectedPoolId] = useState('')
   const [addCommand, setAddCommand] = useState<{
     key: string
@@ -324,6 +401,37 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       .then((d) => setPool(d.candidates ?? []))
       .catch(() => {})
   }, [load, loadDepartmentContext])
+
+  useEffect(() => {
+    const taskId = manualIntakeTask?.taskId
+    const taskStatus = manualIntakeTask?.status
+    if (!taskId || !isManualIntakePolling(taskStatus)) return
+
+    let disposed = false
+    async function pollManualIntakeTask() {
+      try {
+        const response = await fetch(`/api/workspace/jobs/${params.jobId}/intake/${taskId}`, {
+          cache: 'no-store',
+        })
+        const data = await response.json().catch(() => null)
+        if (!response.ok || disposed) return
+        const nextTask = readManualIntakeTask((data as { task?: unknown } | null)?.task)
+        if (!nextTask || nextTask.taskId !== taskId) return
+        setManualIntakeTask((current) => current?.taskId === taskId ? nextTask : current)
+        if (nextTask.status === 'completed') void load()
+      } catch {
+        // The durable task remains server-side. Keep its last safe state and
+        // retry on the next interval rather than treating a poll miss as loss.
+      }
+    }
+
+    void pollManualIntakeTask()
+    const interval = window.setInterval(() => void pollManualIntakeTask(), 3_000)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+    }
+  }, [load, manualIntakeTask?.status, manualIntakeTask?.taskId, params.jobId])
 
   async function issueApplyLink() {
     setApplyBusy(true)
@@ -467,6 +575,36 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
     try {
       const name = addName.trim()
       const email = addEmail.trim()
+      if (!selectedPoolId && addResumeFile) {
+        const formData = new FormData()
+        formData.append('file', addResumeFile)
+        formData.append('name', name)
+        formData.append('email', email)
+        const response = await fetch(`/api/workspace/jobs/${params.jobId}/intake`, {
+          method: 'POST',
+          body: formData,
+        })
+        const data = await response.json().catch(() => null)
+        if (!response.ok) {
+          const message = data && typeof data === 'object' &&
+            typeof (data as { error?: unknown }).error === 'string'
+            ? (data as { error: string }).error
+            : 'Could not queue the résumé for JD scoring.'
+          setActionError(message)
+          return
+        }
+        const task = readManualIntakeTask((data as { task?: unknown } | null)?.task)
+        if (!task) {
+          setActionError('The résumé was accepted but its safe queue status was unavailable. Refresh this job.')
+          return
+        }
+        setManualIntakeTask(task)
+        setAddName('')
+        setAddEmail('')
+        setAddResumeFile(null)
+        setAddCommand(null)
+        return
+      }
       const key = selectedPoolId
         ? `pool:${selectedPoolId}`
         : `manual:${name.toLowerCase()}:${email.toLowerCase()}`
@@ -1322,7 +1460,10 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
               </label>
               <select
                 value={selectedPoolId}
-                onChange={(e) => setSelectedPoolId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedPoolId(e.target.value)
+                  if (e.target.value) setAddResumeFile(null)
+                }}
                 className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-sm"
               >
                 <option value="">— Add a new person instead —</option>
@@ -1335,26 +1476,70 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
             </div>
           )}
           {!selectedPoolId && (
-            <div className="grid md:grid-cols-2 gap-4">
-              <Input
-                label="Name"
-                value={addName}
-                onChange={(e) => setAddName(e.target.value)}
-                required
-                maxLength={120}
-              />
-              <Input
-                label="Email"
-                type="email"
-                value={addEmail}
-                onChange={(e) => setAddEmail(e.target.value)}
-                required
-                maxLength={254}
-              />
-            </div>
+            <>
+              <div className="grid md:grid-cols-2 gap-4">
+                <Input
+                  label="Name"
+                  value={addName}
+                  onChange={(e) => setAddName(e.target.value)}
+                  required
+                  maxLength={120}
+                />
+                <Input
+                  label="Email"
+                  type="email"
+                  value={addEmail}
+                  onChange={(e) => setAddEmail(e.target.value)}
+                  required
+                  maxLength={254}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="manual-candidate-resume" className="text-sm font-medium text-[#0f1419] block">
+                  Résumé <span className="font-normal text-[#71767b]">(optional)</span>
+                </label>
+                <input
+                  id="manual-candidate-resume"
+                  type="file"
+                  accept=".pdf,.docx,.txt"
+                  aria-describedby="manual-candidate-resume-help"
+                  disabled={isManualIntakePolling(manualIntakeTask?.status)}
+                  onChange={(event) => setAddResumeFile(event.target.files?.[0] ?? null)}
+                  className="block w-full text-sm text-[#536471] file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-[#e8f0fe] file:text-[#2563eb] file:font-medium"
+                />
+                <p id="manual-candidate-resume-help" className="text-xs text-[#71767b]">
+                  Attach a résumé to use the durable queue and score it against this job description. Leave it empty to quick-add an unscored candidate.
+                </p>
+              </div>
+            </>
           )}
-          <Button type="submit" disabled={busy || (!selectedPoolId && (!addName.trim() || !addEmail.trim()))}>
-            {busy ? 'Adding…' : 'Add to job'}
+          {manualIntakeTask ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="rounded-xl border border-[#dbeafe] bg-[#f8fbff] px-3 py-2 text-sm text-[#1d4ed8]"
+            >
+              {manualIntakeStatusMessage(manualIntakeTask)}
+              {manualIntakeTask.status === 'queued' && manualIntakeTask.attempts > 0 ? (
+                <span className="ml-1 text-[#536471]">Background attempt {manualIntakeTask.attempts}.</span>
+              ) : null}
+            </div>
+          ) : null}
+          <Button
+            type="submit"
+            disabled={
+              busy ||
+              isManualIntakePolling(manualIntakeTask?.status) ||
+              (!selectedPoolId && (!addName.trim() || !addEmail.trim()))
+            }
+          >
+            {busy
+              ? 'Adding…'
+              : selectedPoolId
+                ? 'Add pool candidate (unscored)'
+                : addResumeFile
+                  ? 'Queue résumé & score against JD'
+                  : 'Quick add (unscored)'}
           </Button>
         </form>
       )}

@@ -82,6 +82,20 @@ function actorName(ctx: MembershipContext): string {
   return ctx.membership.name || ctx.membership.email
 }
 
+/**
+ * `companyBlurb` is retained on the workspace only for legacy reads. New job
+ * requirement versions always snapshot the onboarding-owned company
+ * description into their historical `companyBlurb` field, so no client can
+ * inject a per-job company override.
+ */
+function workspaceCompanyDescription(ctx: MembershipContext): string | undefined {
+  const workspace = ctx.workspace as MembershipContext['workspace'] & {
+    companyDescription?: string | null
+  }
+  const value = workspace.companyDescription ?? workspace.companyBlurb
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
 function actorSnapshot(ctx: MembershipContext) {
   return {
     actorMemberId: ctx.membership._id,
@@ -108,12 +122,13 @@ export async function createJob(
   input: {
     title: string
     level: string
+    targetExperienceRange: NonNullable<IHireJobBuilderInput['targetExperienceRange']>
     mustHaves: string[]
     niceToHaves: string[]
     location: string
     workMode: HireWorkMode
     compensation?: string
-    companyBlurb?: string
+    jdSource?: IHireJobBuilderInput['jdSource']
     departmentId: string
     jdText: string
     screeningSettings?: IHireJob['screeningSettings']
@@ -122,15 +137,28 @@ export async function createJob(
   await connectDB()
   const jobId = new mongoose.Types.ObjectId()
   const requirementVersionId = new mongoose.Types.ObjectId()
+  const companyDescription = workspaceCompanyDescription(ctx)
+  if (!companyDescription) {
+    throw new AppError(
+      'Complete the company profile before creating a job.',
+      409,
+      'WORKSPACE_COMPANY_DESCRIPTION_REQUIRED',
+    )
+  }
   const builderInput = {
     role: input.title,
     level: input.level,
+    targetExperienceRange: {
+      minYears: input.targetExperienceRange.minYears,
+      maxYears: input.targetExperienceRange.maxYears,
+    },
     mustHaves: input.mustHaves,
     niceToHaves: input.niceToHaves,
     location: input.location,
     workMode: input.workMode,
     ...(input.compensation ? { compensation: input.compensation } : {}),
-    ...(input.companyBlurb ? { companyBlurb: input.companyBlurb } : {}),
+    companyBlurb: companyDescription,
+    ...(input.jdSource ? { jdSource: input.jdSource } : { jdSource: 'ai_generated' as const }),
   }
   const artifact = finalizeSmartJd(builderInput, input.jdText)
 
@@ -193,12 +221,21 @@ function cloneRequirementInput(input: IHireJobBuilderInput): IHireJobBuilderInpu
   return {
     role: input.role,
     level: input.level,
+    ...(input.targetExperienceRange
+      ? {
+          targetExperienceRange: {
+            minYears: input.targetExperienceRange.minYears,
+            maxYears: input.targetExperienceRange.maxYears,
+          },
+        }
+      : {}),
     mustHaves: [...input.mustHaves],
     niceToHaves: [...input.niceToHaves],
     location: input.location,
     workMode: input.workMode,
     ...(input.compensation !== undefined ? { compensation: input.compensation } : {}),
     ...(input.companyBlurb !== undefined ? { companyBlurb: input.companyBlurb } : {}),
+    ...(input.jdSource !== undefined ? { jdSource: input.jdSource } : {}),
   }
 }
 
