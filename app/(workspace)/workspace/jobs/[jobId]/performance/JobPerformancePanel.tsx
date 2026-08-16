@@ -74,6 +74,9 @@ export default function JobPerformancePanel({ jobId }: { jobId: string }) {
             <Badge variant={STATUS_VARIANT[performance.job.status]}>
               {performance.job.status.replace("_", " ")}
             </Badge>
+            <Badge variant="primary">
+              Department: {performance.job.department.name}
+            </Badge>
           </div>
           <p className="mt-2 text-sm text-[#536471]">
             {performance.job.daysOpen} day

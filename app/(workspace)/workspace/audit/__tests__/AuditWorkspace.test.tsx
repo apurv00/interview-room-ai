@@ -131,6 +131,35 @@ describe("AuditWorkspace", () => {
     ).toBe(false);
   });
 
+  it("renders the allowlisted job department correction without exposing department history", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json({
+          items: [
+            auditItem({
+              kind: "job_department_changed",
+              target: { kind: "job", id: "2".repeat(24) },
+              fromDepartmentId: "PRIVATE_OLD_DEPARTMENT",
+              toDepartmentId: "PRIVATE_NEW_DEPARTMENT",
+            }),
+          ],
+          nextCursor: null,
+        }),
+      ),
+    );
+
+    render(<AuditWorkspace />);
+
+    expect(await screen.findByText("Job department changed")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View job" })).toHaveAttribute(
+      "href",
+      `/workspace/jobs/${"2".repeat(24)}`,
+    );
+    expect(document.body.textContent).not.toContain("PRIVATE_OLD_DEPARTMENT");
+    expect(document.body.textContent).not.toContain("PRIVATE_NEW_DEPARTMENT");
+  });
+
   it("renders the bounded practice-interview audit receipt without synthetic graph details", async () => {
     vi.stubGlobal(
       "fetch",

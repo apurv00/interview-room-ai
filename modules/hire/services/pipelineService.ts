@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { AppError, NotFoundError } from '@shared/errors'
+import { AppError, ForbiddenError, NotFoundError } from '@shared/errors'
 import { HireSharePacket } from '@hire-decisions/models'
 import {
   HireApplication,
@@ -69,6 +69,7 @@ import {
   type HireReportExportRequestResult,
 } from '../../hire-reports/services/hireReportExportService'
 import { cancelHireDigestOutboxesForScope } from '../../hire-digest/services/hireDigestService'
+import { assertAssignableHireDepartment } from '@hire-departments'
 
 /**
  * Jobs, candidates, applications, and the fixed pipeline. Every query in this
@@ -113,6 +114,7 @@ export async function createJob(
     workMode: HireWorkMode
     compensation?: string
     companyBlurb?: string
+    departmentId: string
     jdText: string
     screeningSettings?: IHireJob['screeningSettings']
   }
@@ -133,11 +135,17 @@ export async function createJob(
   const artifact = finalizeSmartJd(builderInput, input.jdText)
 
   return withHireTransaction(ctx, async (session) => {
+    const department = await assertAssignableHireDepartment({
+      workspaceId: ctx.workspace._id,
+      departmentId: input.departmentId,
+      session,
+    })
     const jobs = await HireJob.create(
       [
         {
           _id: jobId,
           workspaceId: ctx.workspace._id,
+          departmentId: department._id,
           title: input.title,
           jdText: artifact.jdText,
           activeRequirementVersionId: requirementVersionId,
@@ -237,6 +245,7 @@ function cloneScreeningSettings(
 export async function duplicateJob(
   ctx: MembershipContext,
   sourceJobId: string,
+  input: { departmentId: string },
 ): Promise<DuplicateJobResult> {
   await connectDB()
   const jobId = new mongoose.Types.ObjectId()
@@ -252,6 +261,11 @@ export async function duplicateJob(
   )
 
   return withHireTransaction(ctx, async (session) => {
+    const department = await assertAssignableHireDepartment({
+      workspaceId: ctx.workspace._id,
+      departmentId: input.departmentId,
+      session,
+    })
     const sourceJob = await HireJob.findOne(
       { _id: sourceJobId, workspaceId: ctx.workspace._id },
       null,
@@ -293,6 +307,7 @@ export async function duplicateJob(
         {
           _id: jobId,
           workspaceId: ctx.workspace._id,
+          departmentId: department._id,
           title: sourceJob.title,
           jdText: sourceJob.jdText,
           activeRequirementVersionId: requirementVersionId,
@@ -331,6 +346,49 @@ export async function duplicateJob(
       { session },
     )
     return { job: jobs[0], capability }
+  })
+}
+
+/**
+ * Department ownership is metadata, not a lifecycle transition. Keeping this
+ * as a small dedicated command avoids coupling reassignment to close/reopen
+ * revocations, report cleanup, or public-apply state in updateJobStatus().
+ */
+export async function updateJobDepartment(
+  ctx: MembershipContext,
+  jobId: string,
+  input: { departmentId: string },
+): Promise<IHireJob> {
+  await connectDB()
+  if (ctx.membership.role !== 'admin') {
+    throw new ForbiddenError('Only the workspace admin can reassign a job department')
+  }
+
+  return withHireTransaction(ctx, async (session) => {
+    const department = await assertAssignableHireDepartment({
+      workspaceId: ctx.workspace._id,
+      departmentId: input.departmentId,
+      session,
+    })
+    const job = await HireJob.findOne(
+      { _id: jobId, workspaceId: ctx.workspace._id },
+      null,
+      { session },
+    )
+    if (!job) throw new NotFoundError('Job')
+
+    if (String(job.departmentId) === String(department._id)) return job
+    const priorDepartmentId = job.departmentId
+    job.departmentId = department._id
+    job.events.push({
+      type: 'department_change',
+      fromDepartmentId: priorDepartmentId,
+      toDepartmentId: department._id,
+      ...actorSnapshot(ctx),
+      at: new Date(),
+    })
+    await job.save({ session })
+    return job
   })
 }
 

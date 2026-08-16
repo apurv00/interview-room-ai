@@ -15,10 +15,12 @@ import {
   type HireStage,
 } from "@hire-operations-boundary";
 import { HireExternalVerdict } from "@hire-decisions/models";
+import { HireDepartment } from "@hire-departments/models";
 import { buildHireOnboardingTestDriveExclusionStages } from "@/modules/hire-onboarding/services/testDriveService";
 import type {
   HireOperationsActionInboxItem,
   HireOperationsAttentionItem,
+  HireOperationsDepartment,
   HireOperationsFunnelConversion,
   HireOperationsJobHealth,
   HireOperationsJobPerformance,
@@ -60,10 +62,16 @@ type IdLike = mongoose.Types.ObjectId | string;
 
 type OperationsJobRecord = {
   _id: IdLike;
+  departmentId: IdLike;
   title: string;
   status: HireJobStatus;
   createdAt: Date;
   closedAt?: Date;
+};
+
+type OperationsDepartmentRecord = {
+  _id: IdLike;
+  name: string;
 };
 
 type OperationsApplicationRecord = {
@@ -117,6 +125,7 @@ type OperationsScoredApplication = {
 
 type OperationsWorkspaceBatch = {
   jobs: OperationsJobRecord[];
+  departments: OperationsDepartmentRecord[];
   applications: OperationsApplicationRecord[];
   humanRounds: OperationsHumanRoundRecord[];
   terminalDeliveries: OperationsDeliveryRecord[];
@@ -161,6 +170,28 @@ function objectId(value: string, label: string): mongoose.Types.ObjectId {
 
 function recordId(value: IdLike): string {
   return value.toString();
+}
+
+function departmentViewsById(
+  departments: readonly OperationsDepartmentRecord[],
+): Map<string, HireOperationsDepartment> {
+  return new Map(
+    departments.map((department) => [
+      recordId(department._id),
+      { id: recordId(department._id), name: department.name },
+    ]),
+  );
+}
+
+function departmentView(
+  job: OperationsJobRecord,
+  departmentsById: ReadonlyMap<string, HireOperationsDepartment>,
+): HireOperationsDepartment {
+  const id = recordId(job.departmentId);
+  // The Phase-6 backfill is a deployment gate, but a safe fallback avoids
+  // returning another job's label if an operator discovers a damaged legacy
+  // relation before the check has completed.
+  return departmentsById.get(id) ?? { id, name: "Department unavailable" };
 }
 
 /**
@@ -475,6 +506,7 @@ function buildJobsHealth(
   const humanRoundsByJob = recordsByJob(batch.humanRounds);
   const terminalDeliveriesByJob = recordsByJob(batch.terminalDeliveries);
   const externalVerdictsByJob = recordsByJob(batch.externalVerdicts);
+  const departmentsById = departmentViewsById(batch.departments ?? []);
   // Close-out history remains available to the overview's median-time-to-close
   // KPI, but it is not live operational work. Keep it out of the health
   // surface so a member cannot mistake a completed requisition for an active
@@ -490,6 +522,7 @@ function buildJobsHealth(
       return {
         jobId,
         title: job.title,
+        department: departmentView(job, departmentsById),
         status: job.status,
         daysOpen: elapsedDays(job.createdAt, job.closedAt ?? now),
         funnel: currentStageCounts(applications),
@@ -650,13 +683,14 @@ function scoreDistribution(
 
 function buildJobPerformance(input: {
   job: OperationsJobRecord;
+  departments?: OperationsDepartmentRecord[];
   applications: OperationsApplicationRecord[];
   candidates: OperationsCandidateRecord[];
   humanRounds: OperationsHumanRoundRecord[];
   results: OperationsResultRecord[];
   now: Date;
 }): HireOperationsJobPerformance {
-  const { job, applications, candidates, humanRounds, results, now } = input;
+  const { job, departments, applications, candidates, humanRounds, results, now } = input;
   const jobId = recordId(job._id);
   const jobApplications = applications.filter(
     (application) => recordId(application.jobId) === jobId,
@@ -686,6 +720,7 @@ function buildJobPerformance(input: {
     job: {
       jobId: recordId(job._id),
       title: job.title,
+      department: departmentView(job, departmentViewsById(departments ?? [])),
       status: job.status,
       daysOpen: elapsedDays(job.createdAt, job.closedAt ?? now),
     },
@@ -714,7 +749,16 @@ async function readWorkspaceBatch(
     HireJob.aggregate([
       { $match: { workspaceId } },
       ...excludeHireOnboardingTestDrives({ coordinate: "jobId" }),
-      { $project: { _id: 1, title: 1, status: 1, createdAt: 1, closedAt: 1 } },
+      {
+        $project: {
+          _id: 1,
+          departmentId: 1,
+          title: 1,
+          status: 1,
+          createdAt: 1,
+          closedAt: 1,
+        },
+      },
     ]),
     HireCandidate.aggregate([
       { $match: { workspaceId, piiAnonymizedAt: { $exists: false } } },
@@ -729,9 +773,24 @@ async function readWorkspaceBatch(
     activeCandidates,
     livePrivacyRequests,
   );
+  const departmentIds = Array.from(
+    new Set(
+      (jobs as OperationsJobRecord[]).map((job) => recordId(job.departmentId)),
+    ),
+  );
+  const departments =
+    departmentIds.length === 0
+      ? []
+      : await HireDepartment.find({
+          workspaceId,
+          _id: { $in: departmentIds },
+        })
+          .select("_id name")
+          .lean();
   if (candidateIds.length === 0) {
     return {
       jobs: jobs as unknown as OperationsJobRecord[],
+      departments: departments as unknown as OperationsDepartmentRecord[],
       applications: [],
       humanRounds: [],
       terminalDeliveries: [],
@@ -808,6 +867,7 @@ async function readWorkspaceBatch(
     ]);
   return {
     jobs: jobs as unknown as OperationsJobRecord[],
+    departments: departments as unknown as OperationsDepartmentRecord[],
     applications: applications as unknown as OperationsApplicationRecord[],
     humanRounds: humanRounds as unknown as OperationsHumanRoundRecord[],
     terminalDeliveries:
@@ -862,7 +922,16 @@ export async function readHireJobPerformance(input: {
     HireJob.aggregate([
       { $match: { _id: jobId, workspaceId } },
       ...excludeHireOnboardingTestDrives({ coordinate: "jobId" }),
-      { $project: { _id: 1, title: 1, status: 1, createdAt: 1, closedAt: 1 } },
+      {
+        $project: {
+          _id: 1,
+          departmentId: 1,
+          title: 1,
+          status: 1,
+          createdAt: 1,
+          closedAt: 1,
+        },
+      },
     ]),
     HireCandidate.aggregate([
       { $match: { workspaceId, piiAnonymizedAt: { $exists: false } } },
@@ -881,6 +950,12 @@ export async function readHireJobPerformance(input: {
       404,
     );
   }
+  const departments = await HireDepartment.find({
+    workspaceId,
+    _id: job.departmentId,
+  })
+    .select("_id name")
+    .lean();
   const candidateIds = candidateIdsWithoutLivePrivacyRequests(
     activeCandidates,
     livePrivacyRequests,
@@ -888,6 +963,7 @@ export async function readHireJobPerformance(input: {
   if (candidateIds.length === 0) {
     return buildJobPerformance({
       job: job as unknown as OperationsJobRecord,
+      departments: departments as unknown as OperationsDepartmentRecord[],
       applications: [],
       candidates: [],
       humanRounds: [],
@@ -982,6 +1058,7 @@ export async function readHireJobPerformance(input: {
         ]);
   return buildJobPerformance({
     job: job as unknown as OperationsJobRecord,
+    departments: departments as unknown as OperationsDepartmentRecord[],
     applications: applications as unknown as OperationsApplicationRecord[],
     candidates: candidates as unknown as OperationsCandidateRecord[],
     humanRounds: humanRounds as unknown as OperationsHumanRoundRecord[],

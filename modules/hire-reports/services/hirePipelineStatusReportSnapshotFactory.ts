@@ -13,6 +13,7 @@ import {
   HIRE_HUMAN_KIT_MAX_ATTEMPTS,
 } from '@hire-decision-boundary'
 import { HireExternalVerdict } from '@/modules/hire-decisions/models/HireExternalVerdict'
+import { HireDepartment } from '@/modules/hire-departments/models/HireDepartment'
 import {
   HIRE_REPORT_AGING_BUCKETS,
   HIRE_REPORT_BLOCKER_KINDS,
@@ -36,9 +37,19 @@ type IdLike = mongoose.Types.ObjectId | string
 
 type SafeJobRecord = {
   _id: IdLike
+  departmentId?: IdLike
   title: string
   status: 'open' | 'on_hold' | 'closed'
   createdAt: Date
+  department?: {
+    id: string
+    name: string
+  }
+}
+
+type SafeDepartmentRecord = {
+  _id: IdLike
+  name: string
 }
 
 type SafeApplicationRecord = {
@@ -90,6 +101,56 @@ interface SafePipelineReportRows {
 
 function recordId(value: IdLike): string {
   return value.toString()
+}
+
+/**
+ * Resolve catalog display data through the same workspace coordinate as the
+ * source jobs. Status/kind are intentionally not part of this historical
+ * display lookup: an archived or legacy department must keep its original
+ * label, while onboarding jobs have already been excluded at the job root.
+ */
+async function resolveReportJobDepartments(input: {
+  workspaceId: mongoose.Types.ObjectId
+  jobs: readonly SafeJobRecord[]
+  session: ClientSession
+}): Promise<SafeJobRecord[]> {
+  const departmentIdsByKey = new Map<string, IdLike>()
+  for (const job of input.jobs) {
+    if (!job.departmentId) {
+      throw snapshotUnavailable('A job department is unavailable for this report')
+    }
+    departmentIdsByKey.set(recordId(job.departmentId), job.departmentId)
+  }
+  const departmentRows = await HireDepartment.find(
+    {
+      workspaceId: input.workspaceId,
+      _id: { $in: Array.from(departmentIdsByKey.values()) },
+    },
+    { _id: 1, name: 1 },
+  )
+    .session(input.session)
+    .lean() as unknown as SafeDepartmentRecord[]
+  const departmentById = new Map(
+    departmentRows.map((department) => [recordId(department._id), department]),
+  )
+
+  return input.jobs.map((job) => {
+    const departmentId = job.departmentId
+    if (!departmentId) {
+      throw snapshotUnavailable('A job department is unavailable for this report')
+    }
+    const department = departmentById.get(recordId(departmentId))
+    if (!department) {
+      throw snapshotUnavailable('A job department is unavailable for this report')
+    }
+    return {
+      ...job,
+      department: {
+        id: recordId(department._id),
+        name: department.name,
+      },
+    }
+  })
 }
 
 function isKnownStage(value: unknown): value is HireReportPipelineStage {
@@ -223,6 +284,7 @@ export function buildHirePipelineStatusReportSnapshotFromSafeRows(input: {
         : 0
       return {
         jobTitle: job.title,
+        ...(job.department ? { department: job.department } : {}),
         jobStatus: job.status,
         openedAt: job.createdAt,
         stageCounts,
@@ -291,7 +353,7 @@ export async function buildHirePipelineStatusReportSnapshotFromControlRecords(in
     ...excludeHireOnboardingTestDrives({ coordinate: 'jobId' }),
     { $sort: { createdAt: 1, _id: 1 } },
     { $limit: HIRE_REPORT_MAX_PIPELINE_JOBS + 1 },
-    { $project: { _id: 1, title: 1, status: 1, createdAt: 1 } },
+    { $project: { _id: 1, departmentId: 1, title: 1, status: 1, createdAt: 1 } },
   ])
     .session(input.session)
     .exec() as unknown as SafeJobRecord[]
@@ -302,7 +364,15 @@ export async function buildHirePipelineStatusReportSnapshotFromControlRecords(in
     throw snapshotUnavailable('This workspace has too many jobs for one report')
   }
 
-  const jobIds = jobs.map((job) => job._id)
+  // Resolve this before any candidate source: the resulting id/name pair is
+  // the only department data the frozen report can retain.
+  const jobsWithDepartments = await resolveReportJobDepartments({
+    workspaceId: input.workspaceId,
+    jobs,
+    session: input.session,
+  })
+
+  const jobIds = jobsWithDepartments.map((job) => job._id)
   const candidates = await HireCandidate.aggregate([
     {
       $match: {
@@ -322,7 +392,7 @@ export async function buildHirePipelineStatusReportSnapshotFromControlRecords(in
       scope: input.scope,
       now: input.now,
       rows: {
-        jobs,
+        jobs: jobsWithDepartments,
         applications: [],
         pendingHumanRounds: [],
         failedHumanKitDeliveries: [],
@@ -354,7 +424,7 @@ export async function buildHirePipelineStatusReportSnapshotFromControlRecords(in
       scope: input.scope,
       now: input.now,
       rows: {
-        jobs,
+        jobs: jobsWithDepartments,
         applications: [],
         pendingHumanRounds: [],
         failedHumanKitDeliveries: [],
@@ -408,7 +478,7 @@ export async function buildHirePipelineStatusReportSnapshotFromControlRecords(in
     scope: input.scope,
     now: input.now,
     rows: {
-      jobs,
+      jobs: jobsWithDepartments,
       applications: applications as unknown as SafeApplicationRecord[],
       pendingHumanRounds: pendingHumanRounds as unknown as SafeRoundRecord[],
       failedHumanKitDeliveries: failedHumanKitDeliveries as unknown as SafeDeliveryRecord[],

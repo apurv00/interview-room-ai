@@ -55,9 +55,16 @@ export interface HireOperationsAttentionItem {
   thresholdDays?: number;
 }
 
+/** Immutable job-time department identity, resolved only inside the workspace. */
+export interface HireOperationsDepartment {
+  id: string;
+  name: string;
+}
+
 export interface HireOperationsJobHealth {
   jobId: string;
   title: string;
+  department: HireOperationsDepartment;
   status: HireJobStatus;
   daysOpen: number;
   funnel: HireOperationsStageCounts;
@@ -120,6 +127,7 @@ export interface HireOperationsJobPerformance {
   job: {
     jobId: string;
     title: string;
+    department: HireOperationsDepartment;
     status: HireJobStatus;
     daysOpen: number;
   };
@@ -152,6 +160,7 @@ export const HIRE_OPERATIONS_AUDIT_KINDS = [
   "application_human_kit_revoked",
   "application_human_scorecard_submitted",
   "job_status_changed",
+  "job_department_changed",
   "report_requested",
   "report_generation_started",
   "report_ready",

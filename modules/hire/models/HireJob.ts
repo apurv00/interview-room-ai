@@ -4,9 +4,13 @@ export const HIRE_JOB_STATUSES = ['open', 'on_hold', 'closed'] as const
 export type HireJobStatus = (typeof HIRE_JOB_STATUSES)[number]
 
 export interface IHireJobEvent {
-  type: 'status_change'
-  from: HireJobStatus
-  to: HireJobStatus
+  type: 'status_change' | 'department_change'
+  /** Required for a status transition; omitted for a department correction. */
+  from?: HireJobStatus
+  to?: HireJobStatus
+  /** Required only for a department correction event. */
+  fromDepartmentId?: mongoose.Types.ObjectId
+  toDepartmentId?: mongoose.Types.ObjectId
   actorMemberId?: mongoose.Types.ObjectId
   actorUserId?: mongoose.Types.ObjectId
   actorName: string
@@ -35,6 +39,12 @@ export interface IHireScreeningSettings {
 export interface IHireJob extends Document {
   _id: mongoose.Types.ObjectId
   workspaceId: mongoose.Types.ObjectId
+  /**
+   * Required workspace-scoped hiring classification. Department ownership is
+   * carried by the job only: applications, rounds, and evidence derive it
+   * through this immutable tenancy coordinate instead of duplicating it.
+   */
+  departmentId: mongoose.Types.ObjectId
   title: string
   jdText: string
   /** Immutable scoring-contract revision used for new scoring/rounds. */
@@ -68,9 +78,35 @@ export interface IHireJob extends Document {
 
 const HireJobEventSchema = new Schema<IHireJobEvent>(
   {
-    type: { type: String, enum: ['status_change'], required: true },
-    from: { type: String, enum: HIRE_JOB_STATUSES, required: true },
-    to: { type: String, enum: HIRE_JOB_STATUSES, required: true },
+    type: { type: String, enum: ['status_change', 'department_change'], required: true },
+    from: {
+      type: String,
+      enum: HIRE_JOB_STATUSES,
+      required: function requiredStatusFrom(this: IHireJobEvent) {
+        return this.type === 'status_change'
+      },
+    },
+    to: {
+      type: String,
+      enum: HIRE_JOB_STATUSES,
+      required: function requiredStatusTo(this: IHireJobEvent) {
+        return this.type === 'status_change'
+      },
+    },
+    fromDepartmentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'HireDepartment',
+      required: function requiredDepartmentFrom(this: IHireJobEvent) {
+        return this.type === 'department_change'
+      },
+    },
+    toDepartmentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'HireDepartment',
+      required: function requiredDepartmentTo(this: IHireJobEvent) {
+        return this.type === 'department_change'
+      },
+    },
     actorMemberId: { type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember' },
     actorUserId: { type: Schema.Types.ObjectId, ref: 'User' },
     actorName: { type: String, required: true, maxlength: 120 },
@@ -96,6 +132,11 @@ const HireJobSchema = new Schema<IHireJob>(
       ref: 'HireWorkspace',
       required: true,
       immutable: true,
+    },
+    departmentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'HireDepartment',
+      required: true,
     },
     title: { type: String, required: true, trim: true, maxlength: 200 },
     jdText: { type: String, required: true, maxlength: 50000 },
@@ -129,6 +170,9 @@ const HireJobSchema = new Schema<IHireJob>(
 )
 
 HireJobSchema.index({ workspaceId: 1, status: 1, createdAt: -1 })
+// Department is mandatory job metadata, so the common department health and
+// reporting filters stay workspace-leading and never need a collection scan.
+HireJobSchema.index({ workspaceId: 1, departmentId: 1, status: 1, createdAt: -1 })
 HireJobSchema.index({ workspaceId: 1, 'events.operationId': 1 })
 // Public apply-page lookup: the ONLY query that finds a job without a
 // workspace id, and it needs the hash to be selective. Sparse — most jobs

@@ -31,6 +31,7 @@ export const hireReportWorkbookQa = {
     jobs: [{
       // Intentionally formula-shaped to exercise the spreadsheet text fence.
       jobTitle: '=Platform Engineer',
+      department: { id: '222222222222222222222222', name: 'Engineering' },
       jobStatus: 'open',
       openedAt: new Date('2026-08-01T10:00:00.000Z'),
       stageCounts: HIRE_REPORT_PIPELINE_STAGES.map((stage, index) => ({ stage, count: index + 1 })),
@@ -42,6 +43,7 @@ export const hireReportWorkbookQa = {
   closeout: buildHireJobCloseoutReportSnapshot({
     asOf: new Date('2026-08-15T10:00:00.000Z'),
     jobTitle: '=Platform Engineer',
+    department: { id: '333333333333333333333333', name: 'Revenue' },
     openedAt: new Date('2026-08-01T10:00:00.000Z'),
     closedAt: new Date('2026-08-15T10:00:00.000Z'),
     stageCounts: HIRE_REPORT_PIPELINE_STAGES.map((stage, index) => ({ stage, count: index + 1 })),

@@ -509,6 +509,37 @@ describe("Phase-5 operations audit projection", () => {
     });
   });
 
+  it("projects a department correction as a safe job audit event", async () => {
+    mocks.jobAggregate.mockResolvedValue([
+      jobEvent({
+        auditId: `job:${JOB_ID}:1`,
+        eventType: "department_change",
+      }),
+    ]);
+
+    await expect(
+      readHireWorkspaceAudit({ workspaceId: WORKSPACE_ID }),
+    ).resolves.toEqual({
+      items: [
+        {
+          kind: "job_department_changed",
+          occurredAt: "2026-08-11T12:00:00.000Z",
+          actor: { kind: "system", name: "System" },
+          target: { kind: "job", id: JOB_ID },
+        },
+      ],
+      nextCursor: null,
+    });
+
+    const [pipeline] = mocks.jobAggregate.mock.calls[0];
+    expect(pipeline).toContainEqual({
+      $match: {
+        "events.type": { $in: ["status_change", "department_change"] },
+        "events.at": { $type: "date" },
+      },
+    });
+  });
+
   it("uses an opaque, stable descending cursor without replaying prior items", async () => {
     const tiedAt = new Date("2026-08-14T12:00:00.000Z");
     const rows = {

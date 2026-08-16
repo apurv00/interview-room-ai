@@ -24,6 +24,7 @@ export {
 export {
   createJob,
   duplicateJob,
+  updateJobDepartment,
   listJobs,
   getJobPipeline,
   updateJobStatus,

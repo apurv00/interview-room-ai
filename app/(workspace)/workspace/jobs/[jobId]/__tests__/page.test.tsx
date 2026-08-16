@@ -179,10 +179,23 @@ describe('job duplication UI', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') {
+        return json({
+          departments: [
+            { id: 'department-1', name: 'Engineering', status: 'active', kind: 'standard' },
+            { id: 'department-2', name: 'Product', status: 'active', kind: 'standard' },
+            { id: 'department-3', name: 'Former org', status: 'archived', kind: 'standard' },
+            { id: 'department-4', name: 'Legacy import', status: 'active', kind: 'legacy' },
+            { id: 'department-5', name: 'Practice records', status: 'active', kind: 'onboarding' },
+          ],
+        })
+      }
+      if (url === '/api/workspace') return json({ membership: { role: 'admin' } })
       if (url === '/api/workspace/jobs/job-1') {
         return json({
           job: {
             id: 'job-1',
+            departmentId: 'department-1',
             title: 'Backend Engineer',
             status: 'closed',
             closeNote: 'Role filled.',
@@ -194,7 +207,11 @@ describe('job duplication UI', () => {
         })
       }
       if (url === '/api/workspace/jobs/job-1/duplicate') {
-        expect(init).toEqual({ method: 'POST' })
+        expect(init).toEqual({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ departmentId: 'department-2' }),
+        })
         return json({
           job: { id: 'job-copy', title: 'Backend Engineer (copy)' },
           capability,
@@ -209,12 +226,22 @@ describe('job duplication UI', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Duplicate job' }))
     expect(screen.getByRole('dialog', { name: 'Duplicate this job?' })).toBeInTheDocument()
     expect(screen.getByText(/zero candidates and a fresh public apply link/i)).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Engineering' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Product' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Former org' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Legacy import' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Practice records' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Department for duplicate'), {
+      target: { value: 'department-2' },
+    })
 
     fireEvent.click(screen.getByRole('button', { name: 'Create duplicate' }))
 
     await screen.findByRole('heading', { name: 'Job duplicated' })
     expect(fetchMock).toHaveBeenCalledWith('/api/workspace/jobs/job-1/duplicate', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ departmentId: 'department-2' }),
     })
     expect(screen.getByRole('textbox', { name: 'Fresh public apply link' })).toHaveValue(freshApplyLink)
     expect(screen.getByRole('link', { name: 'Continue to new job' })).toHaveAttribute(
@@ -226,6 +253,80 @@ describe('job duplication UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy apply link' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(freshApplyLink))
     expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+  })
+
+  it('lets an admin reassign only to active standard departments', async () => {
+    let currentDepartmentId = 'department-1'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') {
+        return json({
+          departments: [
+            { id: 'department-1', name: 'Engineering', status: 'active', kind: 'standard' },
+            { id: 'department-2', name: 'Product', status: 'active', kind: 'standard' },
+            { id: 'department-3', name: 'Former org', status: 'archived', kind: 'standard' },
+            { id: 'department-4', name: 'Legacy import', status: 'active', kind: 'legacy' },
+          ],
+        })
+      }
+      if (url === '/api/workspace') return json({ membership: { role: 'admin' } })
+      if (url === '/api/workspace/jobs/job-1/department') {
+        expect(init).toEqual({
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ departmentId: 'department-2' }),
+        })
+        currentDepartmentId = 'department-2'
+        return json({
+          job: {
+            id: 'job-1',
+            departmentId: currentDepartmentId,
+          },
+        })
+      }
+      if (url === '/api/workspace/jobs/job-1') {
+        return json({
+          job: {
+            id: 'job-1',
+            departmentId: 'department-2',
+            title: 'Backend Engineer',
+            status: 'closed',
+            closeNote: 'Role filled.',
+            closedByName: 'HR One',
+            jdText: 'Build reliable systems.',
+            applyPageEnabled: false,
+          },
+          entries: [],
+        })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Change department' }))
+    expect(screen.getByRole('heading', { name: 'Change department' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Engineering' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Product' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Former org' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Legacy import' })).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Department'), {
+      target: { value: 'department-2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save department' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspace/jobs/job-1/department', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ departmentId: 'department-2' }),
+      })
+    })
+    expect(screen.getByText('Department:')).toBeInTheDocument()
+    expect(screen.getByText('Product')).toBeInTheDocument()
   })
 })
 

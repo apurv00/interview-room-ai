@@ -5,6 +5,7 @@ import { NotFoundError } from '@shared/errors'
 const IDS = {
   workspace: '1'.repeat(24),
   job: '2'.repeat(24),
+  department: '5'.repeat(24),
   application: '3'.repeat(24),
   candidate: '4'.repeat(24),
 }
@@ -73,6 +74,7 @@ beforeEach(() => {
     snapshot: {
       jobs: [{
         jobTitle: 'Senior platform engineer',
+        department: { id: IDS.department, name: 'Engineering' },
         jobStatus: 'closed',
         openedAt: closedJob.createdAt,
         stageCounts: [{ stage: 'hired', count: 1 }],
@@ -105,6 +107,7 @@ describe('job closeout report snapshot factory', () => {
     expect(result).toEqual({
       asOf: new Date('2026-08-15T00:05:00.000Z'),
       jobTitle: 'Senior platform engineer',
+      department: { id: IDS.department, name: 'Engineering' },
       openedAt: closedJob.createdAt,
       closedAt: closedJob.closedAt,
       stageCounts: [{ stage: 'hired', count: 1 }],

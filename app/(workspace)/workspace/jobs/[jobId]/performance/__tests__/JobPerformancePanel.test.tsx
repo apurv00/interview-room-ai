@@ -28,6 +28,7 @@ function performance(overrides: Record<string, unknown> = {}) {
     job: {
       jobId: JOB_ID,
       title: "Platform engineer",
+      department: { id: "d".repeat(24), name: "Engineering" },
       status: "open",
       daysOpen: 11,
     },
@@ -91,6 +92,7 @@ describe("JobPerformancePanel", () => {
     expect(
       await screen.findByRole("heading", { name: "Platform engineer" }),
     ).toBeTruthy();
+    expect(screen.getByText("Department: Engineering")).toBeTruthy();
     expect(
       screen.getByText(
         /A score chart appears after 10 completed AI assessments/,

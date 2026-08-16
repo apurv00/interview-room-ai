@@ -62,6 +62,11 @@ export function serializeMember(m: IHireWorkspaceMember) {
 export function serializeJob(job: IHireJob, opts: { includeJd?: boolean } = {}) {
   return {
     id: job._id.toString(),
+    // Every HireJob is assigned before it can be created, duplicated, or
+    // returned to a member. The catalog label is hydrated by the department
+    // surface; this stable opaque coordinate keeps every existing job DTO
+    // consistent without making the serializer issue database reads.
+    departmentId: job.departmentId.toString(),
     title: job.title,
     status: job.status,
     closeNote: job.closeNote ?? null,

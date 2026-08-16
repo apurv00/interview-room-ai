@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   testDriveFindOne: vi.fn(),
   testDriveCreate: vi.fn(),
   testDriveFindOneAndUpdate: vi.fn(),
+  ensureSystemDepartment: vi.fn(),
 }))
 
 vi.mock('@hire-onboarding-boundary', () => ({
@@ -52,6 +53,9 @@ vi.mock('../models', () => ({
 }))
 vi.mock('../services/testDriveLifecycleService', () => ({
   kickHireOnboardingTestDriveCleanup: (...args: unknown[]) => mocks.kickCleanup(...args),
+}))
+vi.mock('@hire-departments', () => ({
+  ensureHireSystemDepartment: (...args: unknown[]) => mocks.ensureSystemDepartment(...args),
 }))
 
 import {
@@ -120,6 +124,7 @@ beforeEach(() => {
   })
   mocks.revokeRound.mockResolvedValue(undefined)
   mocks.kickCleanup.mockResolvedValue(true)
+  mocks.ensureSystemDepartment.mockResolvedValue({ _id: objectId('8'.repeat(24)) })
   mocks.testDriveFindOne.mockReturnValue(query(null))
   mocks.testDriveCreate.mockImplementation(async (rows: Record<string, unknown>[]) => [
     testDrive(rows[0]),
@@ -155,10 +160,18 @@ describe('Hire onboarding test-drive service', () => {
       source: 'manual',
       createdByMemberId: context.membership._id,
     })
-    expect(mocks.jobCreate.mock.calls[0]?.[0]?.[0]).toMatchObject({
+    const practiceJob = mocks.jobCreate.mock.calls[0]?.[0]?.[0]
+    expect(practiceJob).toMatchObject({
+      departmentId: expect.anything(),
       title: expect.stringContaining('Practice interview'),
       status: 'open',
       activeRequirementVersion: 1,
+    })
+    expect(practiceJob.departmentId.toString()).toBe('8'.repeat(24))
+    expect(mocks.ensureSystemDepartment).toHaveBeenCalledWith({
+      workspaceId: context.workspace._id,
+      kind: 'onboarding',
+      session: {},
     })
     expect(mocks.applicationCreate.mock.calls[0]?.[0]?.[0]).toMatchObject({
       events: [

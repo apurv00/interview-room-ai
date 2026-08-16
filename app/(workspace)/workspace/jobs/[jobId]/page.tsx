@@ -100,6 +100,7 @@ interface Entry {
 
 interface JobDetail {
   id: string
+  departmentId: string
   title: string
   status: 'open' | 'on_hold' | 'closed'
   closeNote: string | null
@@ -113,6 +114,13 @@ interface DuplicatedJobNotice {
   jobId: string
   title: string
   applyLink: string
+}
+
+interface DepartmentRow {
+  id: string
+  name: string
+  status: 'active' | 'archived'
+  kind: string
 }
 
 interface PoolCandidate {
@@ -205,10 +213,18 @@ function rankingChip(entry: Entry): {
   return { label: 'JD match pending', variant: 'default' }
 }
 
+function selectableDepartments(departments: DepartmentRow[]): DepartmentRow[] {
+  return departments.filter(
+    (department) => department.status === 'active' && department.kind === 'standard',
+  )
+}
+
 export default function JobPipelinePage({ params }: { params: { jobId: string } }) {
   const [job, setJob] = useState<JobDetail | null>(null)
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [pool, setPool] = useState<PoolCandidate[]>([])
+  const [departments, setDepartments] = useState<DepartmentRow[]>([])
+  const [workspaceRole, setWorkspaceRole] = useState<'admin' | 'member' | null>(null)
   const [emailDelivery, setEmailDelivery] = useState<EmailDeliverySummary>(EMPTY_EMAIL_DELIVERY)
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -221,8 +237,12 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const [applyBusy, setApplyBusy] = useState(false)
   const [showDuplicate, setShowDuplicate] = useState(false)
   const [duplicateBusy, setDuplicateBusy] = useState(false)
+  const [duplicateDepartmentId, setDuplicateDepartmentId] = useState('')
   const [duplicatedJob, setDuplicatedJob] = useState<DuplicatedJobNotice | null>(null)
   const [duplicateLinkCopied, setDuplicateLinkCopied] = useState(false)
+  const [showDepartmentEditor, setShowDepartmentEditor] = useState(false)
+  const [reassignDepartmentId, setReassignDepartmentId] = useState('')
+  const [reassignBusy, setReassignBusy] = useState(false)
   const [addName, setAddName] = useState('')
   const [addEmail, setAddEmail] = useState('')
   const [selectedPoolId, setSelectedPoolId] = useState('')
@@ -268,13 +288,36 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
     }
   }, [params.jobId])
 
+  const loadDepartmentContext = useCallback(async () => {
+    try {
+      const [departmentsResponse, workspaceResponse] = await Promise.all([
+        fetch('/api/workspace/departments', { cache: 'no-store' }),
+        fetch('/api/workspace', { cache: 'no-store' }),
+      ])
+      const [departmentsData, workspaceData] = await Promise.all([
+        departmentsResponse.json().catch(() => ({})),
+        workspaceResponse.json().catch(() => ({})),
+      ])
+      if (departmentsResponse.ok && Array.isArray(departmentsData.departments)) {
+        setDepartments(departmentsData.departments as DepartmentRow[])
+      }
+      if (workspaceResponse.ok) {
+        setWorkspaceRole(workspaceData.membership?.role === 'admin' ? 'admin' : 'member')
+      }
+    } catch {
+      // Job operations stay available even if the contextual catalog read is
+      // temporarily unavailable. The server still enforces every assignment.
+    }
+  }, [])
+
   useEffect(() => {
     void load()
+    void loadDepartmentContext()
     fetch('/api/workspace/candidates')
       .then((r) => r.json())
       .then((d) => setPool(d.candidates ?? []))
       .catch(() => {})
-  }, [load])
+  }, [load, loadDepartmentContext])
 
   async function issueApplyLink() {
     setApplyBusy(true)
@@ -316,6 +359,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   function openDuplicateDialog() {
     setActionError(null)
     setDuplicateLinkCopied(false)
+    setDuplicateDepartmentId('')
     setDuplicatedJob(null)
     setShowDuplicate(true)
   }
@@ -329,11 +373,17 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   }
 
   async function duplicateCurrentJob() {
+    if (!duplicateDepartmentId) {
+      setActionError('Choose a department for the duplicate.')
+      return
+    }
     setDuplicateBusy(true)
     setActionError(null)
     try {
       const res = await fetch(`/api/workspace/jobs/${params.jobId}/duplicate`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ departmentId: duplicateDepartmentId }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || typeof data.capability !== 'string' || typeof data.job?.id !== 'string') {
@@ -352,6 +402,45 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       setActionError('Something went wrong. Check your connection.')
     } finally {
       setDuplicateBusy(false)
+    }
+  }
+
+  function openDepartmentEditor() {
+    const assignable = selectableDepartments(departments)
+    setActionError(null)
+    setReassignDepartmentId(
+      assignable.some((department) => department.id === job?.departmentId)
+        ? job?.departmentId ?? ''
+        : '',
+    )
+    setShowDepartmentEditor(true)
+  }
+
+  async function reassignJobDepartment() {
+    if (!reassignDepartmentId) {
+      setActionError('Choose an active department for this job.')
+      return
+    }
+    setReassignBusy(true)
+    setActionError(null)
+    try {
+      const response = await fetch(`/api/workspace/jobs/${params.jobId}/department`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ departmentId: reassignDepartmentId }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setActionError(data.error || 'Could not update the job department.')
+        return
+      }
+      setShowDepartmentEditor(false)
+      await load()
+      await loadDepartmentContext()
+    } catch {
+      setActionError('Something went wrong. Check your connection.')
+    } finally {
+      setReassignBusy(false)
     }
   }
 
@@ -588,6 +677,9 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const rankedEntries = entries
     .filter((entry) => entry.ranking.scoreState === 'scored' && entry.ranking.rank !== null)
     .sort((left, right) => (left.ranking.rank ?? Number.MAX_SAFE_INTEGER) - (right.ranking.rank ?? Number.MAX_SAFE_INTEGER))
+  const assignableDepartments = selectableDepartments(departments)
+  const departmentName = departments.find((department) => department.id === job.departmentId)?.name
+    ?? 'Department unavailable'
 
   return (
     <div id="job-pipeline-top" className="space-y-6">
@@ -601,6 +693,9 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
             <Badge variant={job.status === 'open' ? 'success' : job.status === 'on_hold' ? 'caution' : 'default'}>
               {job.status.replace('_', ' ')}
             </Badge>
+            <span className="text-xs text-[#536471]">
+              Department: <span className="font-medium text-[#0f1419]">{departmentName}</span>
+            </span>
             <Link
               href={`/workspace/jobs/${job.id}/decision`}
               className="text-xs font-medium text-indigo-600 hover:underline"
@@ -614,7 +709,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
             )}
           </div>
         </div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex flex-wrap gap-2 shrink-0">
           <Button
             variant="secondary"
             disabled={busy || duplicateBusy || Boolean(duplicatedJob)}
@@ -622,6 +717,16 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
           >
             Duplicate job
           </Button>
+          {workspaceRole === 'admin' && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={reassignBusy}
+              onClick={openDepartmentEditor}
+            >
+              Change department
+            </Button>
+          )}
           {job.status === 'open' && (
             <Button variant="secondary" disabled={busy} onClick={() => void changeJobStatus('on_hold')}>
               Put on hold
@@ -654,6 +759,68 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
 
       {actionError && <p className="text-sm text-[#f4212e]">{actionError}</p>}
 
+      {showDepartmentEditor && workspaceRole === 'admin' && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            void reassignJobDepartment()
+          }}
+          aria-labelledby="change-job-department-title"
+          className="rounded-2xl border border-[#e1e8ed] bg-white p-5"
+        >
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <h2 id="change-job-department-title" className="text-sm font-semibold text-[#0f1419]">
+                Change department
+              </h2>
+              <p className="mt-1 text-xs text-[#71767b]">
+                This updates the job&apos;s tracking department without changing its candidates,
+                interviews, or lifecycle status.
+              </p>
+              <label htmlFor="job-department" className="mt-3 block text-sm font-medium text-[#0f1419]">
+                Department
+              </label>
+              <select
+                id="job-department"
+                value={reassignDepartmentId}
+                onChange={(event) => setReassignDepartmentId(event.target.value)}
+                required
+                disabled={reassignBusy || assignableDepartments.length === 0}
+                className="mt-1 w-full max-w-md rounded-xl border border-[#e1e8ed] bg-[#f8fafc] px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">Select an active department</option>
+                {assignableDepartments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+              </select>
+              {assignableDepartments.length === 0 && (
+                <p className="mt-2 text-xs text-amber-700">
+                  No active departments are available. Restore or add one before reassigning this job.
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={reassignBusy}
+                onClick={() => setShowDepartmentEditor(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={reassignBusy || !reassignDepartmentId}
+              >
+                {reassignBusy ? 'Saving…' : 'Save department'}
+              </Button>
+            </div>
+          </div>
+        </form>
+      )}
+
       {showDuplicate && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4"
@@ -677,11 +844,46 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                     link.
                   </p>
                 </div>
+                <div>
+                  <label
+                    htmlFor="duplicate-job-department"
+                    className="block text-sm font-medium text-[#0f1419]"
+                  >
+                    Department for duplicate
+                  </label>
+                  <select
+                    id="duplicate-job-department"
+                    value={duplicateDepartmentId}
+                    onChange={(event) => setDuplicateDepartmentId(event.target.value)}
+                    required
+                    disabled={duplicateBusy || assignableDepartments.length === 0}
+                    className="mt-1 w-full rounded-xl border border-[#e1e8ed] bg-[#f8fafc] px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <option value="">Select an active department</option>
+                    {assignableDepartments.map((department) => (
+                      <option key={department.id} value={department.id}>
+                        {department.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-[#71767b]">
+                    Choose explicitly for the new requisition. The source department is {departmentName}.
+                  </p>
+                  {assignableDepartments.length === 0 && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      No active departments are available. Add or restore one before duplicating this job.
+                    </p>
+                  )}
+                </div>
                 <div className="flex justify-end gap-2">
                   <Button variant="secondary" type="button" disabled={duplicateBusy} onClick={dismissDuplicateDialog}>
                     Cancel
                   </Button>
-                  <Button type="button" disabled={duplicateBusy} onClick={() => void duplicateCurrentJob()}>
+                  <Button
+                    type="button"
+                    disabled={duplicateBusy || !duplicateDepartmentId}
+                    onClick={() => void duplicateCurrentJob()}
+                  >
                     {duplicateBusy ? 'Duplicating…' : 'Create duplicate'}
                   </Button>
                 </div>

@@ -53,6 +53,7 @@ import {
 import { HireReportExport } from '../../hire-reports/models/HireReportExport'
 import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
 import { HireOnboardingTestDrive } from '../../hire-onboarding/models'
+import { HireDepartment } from '@hire-departments/models'
 
 const MEDIA_DELETE_BATCH_SIZE = 100
 const RUNTIME_PURGE_DELIVERY_BATCH_SIZE = 25
@@ -97,6 +98,7 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireCandidate',
   'HireJobRequirementVersion',
   'HireJob',
+  'HireDepartment',
   'HireOnboardingTestDrive',
   'HireWorkspaceMember',
   'HireWorkspace',
@@ -380,6 +382,9 @@ async function deleteWorkspaceGraphChildren(
   await HireCandidate.deleteMany({ workspaceId }, { session })
   await HireJobRequirementVersion.deleteMany({ workspaceId }, { session })
   await HireJob.deleteMany({ workspaceId }, { session })
+  // Jobs are the only department-owned graph parent. Remove catalog rows
+  // after every job reference is gone, before the workspace tenancy root.
+  await HireDepartment.deleteMany({ workspaceId }, { session })
   // The marker is last among the synthetic graph parents. It remains an
   // aggregate-exclusion/recovery coordinate until every child is gone.
   await HireOnboardingTestDrive.deleteMany({ workspaceId }, { session })

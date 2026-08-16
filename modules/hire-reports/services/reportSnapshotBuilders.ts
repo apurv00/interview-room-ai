@@ -13,6 +13,7 @@ import {
   type HirePipelineStatusReportJobSnapshot,
   type HirePipelineStatusReportSnapshot,
   type HirePipelineStatusReportSnapshotInput,
+  type HireReportDepartmentSnapshot,
   type HireReportAgingBucket,
   type HireReportAgingCount,
   type HireReportBlockerCount,
@@ -28,6 +29,7 @@ import {
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i
 const MAX_JOB_TITLE_LENGTH = 200
+const MAX_DEPARTMENT_NAME_LENGTH = 120
 const MAX_CANDIDATE_NAME_LENGTH = 120
 const MAX_DECISION_NOTE_LENGTH = 4_000
 const HOUR_MS = 60 * 60 * 1000
@@ -70,6 +72,26 @@ function boundedText(value: unknown, label: string, maxLength: number): string {
     fail(`${label} must be between 1 and ${maxLength} characters`)
   }
   return trimmed
+}
+
+/**
+ * Keep only the immutable display coordinate that a report is allowed to
+ * retain. The enclosing report snapshot is immutable; this builder also
+ * copies the value so later catalog changes cannot rewrite historical output.
+ */
+function buildDepartmentSnapshot(
+  value: unknown,
+  label: string,
+): HireReportDepartmentSnapshot | undefined {
+  if (value === undefined) return undefined
+  const source = record(value, label)
+  if (typeof source.id !== 'string' || !OBJECT_ID.test(source.id)) {
+    fail(`${label} id is invalid`)
+  }
+  return {
+    id: source.id.toLowerCase(),
+    name: boundedText(source.name, `${label} name`, MAX_DEPARTMENT_NAME_LENGTH),
+  }
 }
 
 function boundedCount(value: unknown, label: string): number {
@@ -177,8 +199,10 @@ function buildPipelineJob(value: unknown): HirePipelineStatusReportJobSnapshot {
   if (jobStatus !== 'open' && jobStatus !== 'on_hold' && jobStatus !== 'closed') {
     fail('pipeline job status is unsupported')
   }
+  const department = buildDepartmentSnapshot(source.department, 'pipeline job department')
   return {
     jobTitle: boundedText(source.jobTitle, 'pipeline job title', MAX_JOB_TITLE_LENGTH),
+    ...(department ? { department } : {}),
     jobStatus,
     openedAt: safeDate(source.openedAt, 'pipeline job openedAt'),
     stageCounts: buildStageCounts(source.stageCounts),
@@ -249,6 +273,7 @@ export function buildHireJobCloseoutReportSnapshot(
   input: HireJobCloseoutReportSnapshotInput,
 ): HireReportSnapshotBuildResult<HireJobCloseoutReportSnapshot> {
   const source = record(input, 'job closeout report')
+  const department = buildDepartmentSnapshot(source.department, 'job closeout department')
   const openedAt = safeDate(source.openedAt, 'job closeout openedAt')
   const closedAt = safeDate(source.closedAt, 'job closeout closedAt')
   const elapsedMs = closedAt.getTime() - openedAt.getTime()
@@ -278,6 +303,7 @@ export function buildHireJobCloseoutReportSnapshot(
       kind: 'job_closeout',
       asOf: safeDate(source.asOf, 'job closeout asOf'),
       jobTitle: boundedText(source.jobTitle, 'job closeout title', MAX_JOB_TITLE_LENGTH),
+      ...(department ? { department } : {}),
       openedAt,
       closedAt,
       timeToCloseHours,

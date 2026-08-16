@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   verdictAggregate: vi.fn(),
   privacyRequestFind: vi.fn(),
   privacyFilter: vi.fn(),
+  departmentFind: vi.fn(),
 }));
 
 vi.mock("@hire-operations-boundary", () => ({
@@ -39,6 +40,10 @@ vi.mock("@hire-operations-boundary", () => ({
 
 vi.mock("@hire-decisions/models", () => ({
   HireExternalVerdict: { aggregate: mocks.verdictAggregate },
+}));
+
+vi.mock("@hire-departments/models", () => ({
+  HireDepartment: { find: mocks.departmentFind },
 }));
 
 vi.mock("@/modules/hire-onboarding/services/testDriveService", () => ({
@@ -80,6 +85,7 @@ function privacyRequestMatchesFilter(
 function job(overrides: Record<string, unknown> = {}) {
   return {
     _id: "job-a",
+    departmentId: "department-a",
     title: "Platform engineer",
     status: "open",
     createdAt: new Date("2026-08-01T12:00:00.000Z"),
@@ -124,6 +130,9 @@ describe("Phase-5 operations read model", () => {
     vi.clearAllMocks();
     mocks.connectHireControlDB.mockResolvedValue(undefined);
     mocks.privacyRequestFind.mockReturnValue(query([]));
+    mocks.departmentFind.mockReturnValue(
+      query([{ _id: "department-a", name: "Engineering" }]),
+    );
     mocks.privacyFilter.mockImplementation((now: Date) => ({
       live: true,
       $or: [
@@ -390,12 +399,48 @@ describe("Phase-5 operations read model", () => {
     expect(mocks.deliveryAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.verdictAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.privacyRequestFind).toHaveBeenCalledTimes(1);
+    expect(mocks.departmentFind).toHaveBeenCalledTimes(1);
     const [applicationPipeline] = mocks.applicationAggregate.mock.calls[0];
     expect(applicationPipeline[0]).toMatchObject({
       $match: {
         workspaceId: expect.anything(),
         candidateId: { $in: ["222222222222222222222222"] },
       },
+    });
+  });
+
+  it("returns a workspace-scoped Department label with each job tracking row", async () => {
+    const DEPARTMENT_ID = "4".repeat(24);
+    mocks.jobAggregate.mockResolvedValue([
+      job({ departmentId: DEPARTMENT_ID }),
+    ]);
+    mocks.candidateAggregate.mockResolvedValue([]);
+    mocks.departmentFind.mockReturnValue(
+      query([{ _id: DEPARTMENT_ID, name: "Engineering" }]),
+    );
+
+    const health = await readHireJobsHealth({ workspaceId: WORKSPACE_ID, now: NOW });
+    const performance = await readHireJobPerformance({
+      workspaceId: WORKSPACE_ID,
+      jobId: "2".repeat(24),
+      now: NOW,
+    });
+
+    expect(health.jobs[0]?.department).toEqual({
+      id: DEPARTMENT_ID,
+      name: "Engineering",
+    });
+    expect(performance.job.department).toEqual({
+      id: DEPARTMENT_ID,
+      name: "Engineering",
+    });
+    expect(mocks.departmentFind).toHaveBeenNthCalledWith(1, {
+      workspaceId: expect.anything(),
+      _id: { $in: [DEPARTMENT_ID] },
+    });
+    expect(mocks.departmentFind).toHaveBeenNthCalledWith(2, {
+      workspaceId: expect.anything(),
+      _id: DEPARTMENT_ID,
     });
   });
 
@@ -749,6 +794,11 @@ describe("Phase-5 operations read model", () => {
     expect(mocks.humanRoundAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.resultAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.candidateAggregate).toHaveBeenCalledTimes(2);
+    expect(mocks.departmentFind).toHaveBeenCalledTimes(1);
+    expect(mocks.departmentFind).toHaveBeenCalledWith({
+      workspaceId: expect.anything(),
+      _id: "department-a",
+    });
     const [applicationPipeline] = mocks.applicationAggregate.mock.calls[0];
     expect(applicationPipeline[0]).toMatchObject({
       $match: {

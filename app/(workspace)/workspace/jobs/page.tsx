@@ -17,12 +17,20 @@ import InterviewYourselfCta from './InterviewYourselfCta'
 
 interface JobRow {
   id: string
+  departmentId: string
   title: string
   status: 'open' | 'on_hold' | 'closed'
   applicationCount: number
   byStage: Record<string, number>
   createdAt: string
   activeRequirementVersion: number | null
+}
+
+interface DepartmentRow {
+  id: string
+  name: string
+  status: 'active' | 'archived'
+  kind: string
 }
 
 type WorkMode = 'onsite' | 'hybrid' | 'remote'
@@ -40,12 +48,23 @@ function lines(value: string): string[] {
     .filter(Boolean)
 }
 
+function selectableDepartments(departments: DepartmentRow[]): DepartmentRow[] {
+  return departments.filter(
+    (department) => department.status === 'active' && department.kind === 'standard',
+  )
+}
+
+function sortDepartments(departments: DepartmentRow[]): DepartmentRow[] {
+  return [...departments].sort((left, right) => left.name.localeCompare(right.name))
+}
+
 export default function JobsPage() {
   const [welcome, setWelcome] = useState(false)
   useEffect(() => {
     setWelcome(new URLSearchParams(window.location.search).get('welcome') === '1')
   }, [])
   const [jobs, setJobs] = useState<JobRow[] | null>(null)
+  const [departments, setDepartments] = useState<DepartmentRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [noWorkspace, setNoWorkspace] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -68,25 +87,39 @@ export default function JobsPage() {
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [departmentId, setDepartmentId] = useState('')
+  const [newDepartmentName, setNewDepartmentName] = useState('')
+  const [creatingDepartment, setCreatingDepartment] = useState(false)
+  const [departmentNotice, setDepartmentNotice] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setError(null)
     try {
-      const [jobsResponse, workspaceResponse] = await Promise.all([
+      const [jobsResponse, workspaceResponse, departmentsResponse] = await Promise.all([
         fetch('/api/workspace/jobs'),
         fetch('/api/workspace', { cache: 'no-store' }),
+        fetch('/api/workspace/departments', { cache: 'no-store' }),
       ])
-      if (jobsResponse.status === 403 || workspaceResponse.status === 403) {
+      if (
+        jobsResponse.status === 403 ||
+        workspaceResponse.status === 403 ||
+        departmentsResponse.status === 403
+      ) {
         setNoWorkspace(true)
         return
       }
-      const [jobsData, workspaceData] = await Promise.all([
+      const [jobsData, workspaceData, departmentsData] = await Promise.all([
         jobsResponse.json(),
         workspaceResponse.json(),
+        departmentsResponse.json(),
       ])
       if (!jobsResponse.ok) throw new Error(jobsData.error)
       if (!workspaceResponse.ok) throw new Error(workspaceData.error)
+      if (!departmentsResponse.ok || !Array.isArray(departmentsData.departments)) {
+        throw new Error(departmentsData.error || 'Could not load departments.')
+      }
       setJobs(jobsData.jobs)
+      setDepartments(sortDepartments(departmentsData.departments as DepartmentRow[]))
       const defaultBlurb = workspaceData.workspace?.companyBlurb || ''
       setSavedCompanyBlurb(defaultBlurb)
       setCompanyBlurb((current) => current || defaultBlurb)
@@ -130,6 +163,7 @@ export default function JobsPage() {
 
   const currentBuilderSignature = JSON.stringify(builderPayload())
   const canGenerate =
+    departmentId.length > 0 &&
     title.trim().length >= 2 &&
     level.trim().length > 0 &&
     location.trim().length >= 2 &&
@@ -175,6 +209,7 @@ export default function JobsPage() {
         body: JSON.stringify({
           ...builderPayload(),
           ...screeningSettingsPayload(),
+          departmentId,
           jdText: jdText.trim(),
         }),
       })
@@ -184,6 +219,7 @@ export default function JobsPage() {
         return
       }
       setTitle('')
+      setDepartmentId('')
       setLevel('')
       setLocation('')
       setScreeningLocation('')
@@ -231,6 +267,39 @@ export default function JobsPage() {
     }
   }
 
+  async function createDepartmentInline() {
+    const name = newDepartmentName.trim()
+    if (!name) return
+    setCreatingDepartment(true)
+    setFormError(null)
+    setDepartmentNotice(null)
+    try {
+      const response = await fetch('/api/workspace/departments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.department?.id) {
+        setFormError(data.error || 'Could not add the department.')
+        return
+      }
+      const department = data.department as DepartmentRow
+      if (department.status !== 'active' || department.kind !== 'standard') {
+        setFormError('Could not add an active department for new jobs.')
+        return
+      }
+      setDepartments((current) => sortDepartments([...(current ?? []), department]))
+      setDepartmentId(department.id)
+      setNewDepartmentName('')
+      setDepartmentNotice(`Department “${department.name}” added and selected.`)
+    } catch {
+      setFormError('Could not add the department. Check your connection.')
+    } finally {
+      setCreatingDepartment(false)
+    }
+  }
+
   if (noWorkspace) {
     return (
       <StateView
@@ -242,7 +311,12 @@ export default function JobsPage() {
     )
   }
   if (error) return <StateView state="error" error={error} onRetry={load} />
-  if (jobs === null) return <StateView state="loading" skeletonLayout="list" />
+  if (jobs === null || departments === null) {
+    return <StateView state="loading" skeletonLayout="list" />
+  }
+
+  const selectable = selectableDepartments(departments)
+  const departmentNameById = new Map(departments.map((department) => [department.id, department.name]))
 
   return (
     <div className="space-y-6">
@@ -275,6 +349,35 @@ export default function JobsPage() {
             </p>
           </div>
           <div className="grid md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label
+                htmlFor="hire-department"
+                className="text-sm font-medium text-[#0f1419] block"
+              >
+                Department
+              </label>
+              <select
+                id="hire-department"
+                value={departmentId}
+                onChange={(event) => {
+                  setDepartmentId(event.target.value)
+                  setDepartmentNotice(null)
+                }}
+                required
+                disabled={selectable.length === 0}
+                className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-sm disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">Select a department</option>
+                {selectable.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-[#71767b]">
+                Every requisition belongs to one department for hiring and reporting.
+              </p>
+            </div>
             <Input
               label="Role"
               value={title}
@@ -343,6 +446,67 @@ export default function JobsPage() {
               placeholder="e.g. 3"
             />
           </div>
+          {selectable.length === 0 && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
+              <p className="text-sm text-amber-950">
+                A department is required before a job can be created.
+              </p>
+              {canEditWorkspace ? (
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <div className="flex-1">
+                    <Input
+                      label="New department name"
+                      value={newDepartmentName}
+                      onChange={(event) => setNewDepartmentName(event.target.value)}
+                      maxLength={120}
+                      placeholder="Engineering"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={creatingDepartment || !newDepartmentName.trim()}
+                    onClick={() => void createDepartmentInline()}
+                  >
+                    {creatingDepartment ? 'Adding…' : 'Add department'}
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-xs text-amber-950">
+                  Ask the workspace administrator to add a department, then return here.
+                </p>
+              )}
+            </div>
+          )}
+          {selectable.length > 0 && canEditWorkspace && (
+            <div className="rounded-xl border border-[#e1e8ed] bg-[#f8fafc] p-4 space-y-3">
+              <p className="text-sm font-medium text-[#0f1419]">Need another department?</p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                <div className="flex-1">
+                  <Input
+                    label="New department name"
+                    value={newDepartmentName}
+                    onChange={(event) => setNewDepartmentName(event.target.value)}
+                    maxLength={120}
+                    placeholder="Engineering"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={creatingDepartment || !newDepartmentName.trim()}
+                  onClick={() => void createDepartmentInline()}
+                >
+                  {creatingDepartment ? 'Adding…' : 'Add department'}
+                </Button>
+              </div>
+            </div>
+          )}
+          {departmentNotice && (
+            <p className="text-xs text-emerald-700" aria-live="polite">
+              {departmentNotice}
+            </p>
+          )}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between gap-3">
               <label
@@ -484,6 +648,7 @@ export default function JobsPage() {
                 <div className="min-w-0">
                   <p className="font-semibold text-[#0f1419] truncate">{job.title}</p>
                   <p className="text-xs text-[#71767b]">
+                    {departmentNameById.get(job.departmentId) ?? 'Department unavailable'} ·{' '}
                     {job.applicationCount} candidate{job.applicationCount === 1 ? '' : 's'} ·
                     created {new Date(job.createdAt).toLocaleDateString()}
                     {job.activeRequirementVersion ? ` · JD v${job.activeRequirementVersion}` : ''}
