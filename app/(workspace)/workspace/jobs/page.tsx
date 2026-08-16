@@ -87,6 +87,7 @@ export default function JobsPage() {
   const [compensation, setCompensation] = useState('')
   const [companyDescription, setCompanyDescription] = useState('')
   const [canEditWorkspace, setCanEditWorkspace] = useState(false)
+  const [responsibilitiesText, setResponsibilitiesText] = useState('')
   const [mustHavesText, setMustHavesText] = useState('')
   const [niceToHavesText, setNiceToHavesText] = useState('')
   const [jdText, setJdText] = useState('')
@@ -149,6 +150,7 @@ export default function JobsPage() {
         minYears: Number(targetExperienceMinYears),
         maxYears: Number(targetExperienceMaxYears),
       },
+      responsibilities: lines(responsibilitiesText),
       mustHaves: lines(mustHavesText),
       niceToHaves: lines(niceToHavesText),
       location: location.trim(),
@@ -191,6 +193,7 @@ export default function JobsPage() {
     level.trim().length > 0 &&
     hasValidTargetExperienceRange &&
     location.trim().length >= 2 &&
+    lines(responsibilitiesText).length > 0 &&
     lines(mustHavesText).length > 0
   const previewIsCurrent =
     canGenerate &&
@@ -264,6 +267,7 @@ export default function JobsPage() {
       setTargetExperienceMaxYears('')
       setWorkMode('hybrid')
       setCompensation('')
+      setResponsibilitiesText('')
       setMustHavesText('')
       setNiceToHavesText('')
       setJdText('')
@@ -599,6 +603,28 @@ export default function JobsPage() {
               This description comes from onboarding and is saved with each immutable JD version.
             </p>
           </div>
+          <div className="space-y-1.5">
+            <label
+              htmlFor="hire-responsibilities"
+              className="text-sm font-medium text-[#0f1419] block"
+            >
+              Key responsibilities · one per line
+            </label>
+            <p className="text-xs text-[#71767b]">
+              Describe the work this person will own. These duties inform the JD, resume
+              scoring, and interview context; they are not screening requirements.
+            </p>
+            <textarea
+              id="hire-responsibilities"
+              value={responsibilitiesText}
+              onChange={(e) => setResponsibilitiesText(e.target.value)}
+              rows={5}
+              required
+              maxLength={4000}
+              placeholder={'Own the technical direction for our payments platform\nLead incident response and reliability improvements\nPartner with product and design on delivery'}
+              className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-sm"
+            />
+          </div>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label
@@ -693,7 +719,8 @@ export default function JobsPage() {
               {jdSource === 'manual' ? (
                 <p className="text-xs text-[#71767b]">
                   Your pasted text is preserved. The saved JD adds the selected role level,
-                  experience range, location, and onboarding company description as matching context.
+                  experience range, onboarding company description, and the responsibilities above
+                  as matching context.
                 </p>
               ) : !previewIsCurrent ? (
                 <p className="text-xs text-amber-600">
@@ -706,7 +733,7 @@ export default function JobsPage() {
                 onChange={(e) => setJdText(e.target.value)}
                 required
                 minLength={50}
-                maxLength={jdSource === 'manual' ? 47000 : 50000}
+                maxLength={jdSource === 'manual' ? 44000 : 50000}
                 rows={16}
                 className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-sm font-mono"
               />

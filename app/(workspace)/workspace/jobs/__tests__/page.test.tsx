@@ -101,6 +101,7 @@ describe('mandatory job departments', () => {
             title: 'Backend Engineer',
             level: 'manager',
             targetExperienceRange: { minYears: 3, maxYears: 8 },
+            responsibilities: ['Own the backend platform roadmap'],
             mustHaves: ['Strong TypeScript'],
             niceToHaves: [],
             location: 'Remote',
@@ -114,6 +115,7 @@ describe('mandatory job departments', () => {
           title: 'Backend Engineer',
           level: 'manager',
           targetExperienceRange: { minYears: 3, maxYears: 8 },
+          responsibilities: ['Own the backend platform roadmap'],
           mustHaves: ['Strong TypeScript'],
           niceToHaves: [],
           location: 'Remote',
@@ -147,6 +149,9 @@ describe('mandatory job departments', () => {
     fireEvent.change(screen.getByLabelText('Location'), { target: { value: 'Remote' } })
     fireEvent.change(screen.getByLabelText('Minimum years'), { target: { value: '3' } })
     fireEvent.change(screen.getByLabelText('Maximum years'), { target: { value: '8' } })
+    fireEvent.change(screen.getByLabelText('Key responsibilities · one per line'), {
+      target: { value: 'Own the backend platform roadmap' },
+    })
     fireEvent.change(screen.getByLabelText('Must-haves · one per line'), {
       target: { value: 'Strong TypeScript' },
     })
@@ -219,6 +224,7 @@ describe('mandatory job departments', () => {
           title: 'Platform Manager',
           level: 'manager',
           targetExperienceRange: { minYears: 5, maxYears: 9 },
+          responsibilities: ['Own the backend platform roadmap'],
           mustHaves: ['Production TypeScript'],
           niceToHaves: [],
           location: 'Remote',
@@ -241,6 +247,9 @@ describe('mandatory job departments', () => {
     fireEvent.change(screen.getByLabelText('Location'), { target: { value: 'Remote' } })
     fireEvent.change(screen.getByLabelText('Minimum years'), { target: { value: '5' } })
     fireEvent.change(screen.getByLabelText('Maximum years'), { target: { value: '9' } })
+    fireEvent.change(screen.getByLabelText('Key responsibilities · one per line'), {
+      target: { value: 'Own the backend platform roadmap' },
+    })
     fireEvent.change(screen.getByLabelText('Must-haves · one per line'), {
       target: { value: 'Production TypeScript' },
     })

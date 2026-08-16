@@ -57,7 +57,7 @@ describe('Phase-1 scoring contract schema', () => {
     })
   })
 
-  it('keeps legacy free-text levels and versions without an experience range valid', () => {
+  it('keeps legacy free-text levels and versions without range or responsibilities valid', () => {
     const legacy = new HireJobRequirementVersion({
       workspaceId: new mongoose.Types.ObjectId(),
       jobId: new mongoose.Types.ObjectId(),
@@ -82,6 +82,7 @@ describe('Phase-1 scoring contract schema', () => {
     })
 
     expect(legacy.validateSync()).toBeUndefined()
+    expect(legacy.input.responsibilities).toBeUndefined()
   })
 })
 

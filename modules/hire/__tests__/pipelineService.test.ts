@@ -269,6 +269,7 @@ const JOB_INPUT = {
   title: 'Backend Engineer',
   level: 'manager',
   targetExperienceRange: { minYears: 3, maxYears: 8 },
+  responsibilities: ['Own reliable backend delivery'],
   mustHaves: ['Production TypeScript'],
   niceToHaves: ['Kafka'],
   location: 'Bengaluru, India',
@@ -353,6 +354,7 @@ describe('createJob', () => {
       input: {
         level: 'manager',
         targetExperienceRange: { minYears: 3, maxYears: 8 },
+        responsibilities: ['Own reliable backend delivery'],
         companyBlurb: 'Acme builds reliable workflow software for operations teams.',
         jdSource: 'ai_generated',
       },
@@ -451,6 +453,7 @@ describe('duplicateJob', () => {
       input: {
         role: 'Backend Engineer',
         level: 'Senior',
+        responsibilities: ['Own dependable backend delivery'],
         mustHaves: ['Production TypeScript'],
         niceToHaves: ['Kafka'],
         location: 'Bengaluru, India',
@@ -540,6 +543,8 @@ describe('duplicateJob', () => {
     })
     expect(String(version.jobId)).toBe(String(job._id))
     expect(version.input).not.toBe(requirement.input)
+    expect(version.input.responsibilities).toEqual(requirement.input.responsibilities)
+    expect(version.input.responsibilities).not.toBe(requirement.input.responsibilities)
     expect(version.requirements).not.toBe(requirement.requirements)
     expect(JSON.stringify([jobDocs, versionDocs])).not.toContain(rawSecret)
     expect(mockCandidate.create).not.toHaveBeenCalled()
