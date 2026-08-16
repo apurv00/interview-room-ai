@@ -12,6 +12,10 @@ const INPUT = {
   role: 'Platform Engineer',
   level: 'manager',
   targetExperienceRange: { minYears: 5, maxYears: 8 },
+  responsibilities: [
+    'Own the reliability roadmap for the platform.',
+    'Partner with product teams on service interfaces.',
+  ],
   mustHaves: ['Production TypeScript', 'Distributed systems design'],
   niceToHaves: ['Kafka operations'],
   location: 'Bengaluru, India',
@@ -26,17 +30,12 @@ beforeEach(() => {
     text: JSON.stringify({
       overview:
         'Build the platform services that keep Acme workflows reliable, observable, and easy for product teams to extend.',
-      responsibilities: [
-        'Design and operate reliable platform services.',
-        'Partner with product teams on service interfaces.',
-        'Improve observability and incident response.',
-      ],
     }),
   })
 })
 
 describe('buildSmartJd', () => {
-  it('keeps HR requirements verbatim and outside the model-authored scoring contract', async () => {
+  it('renders recruiter-authored responsibilities while keeping qualifications separate', async () => {
     const artifact = await buildSmartJd(INPUT)
 
     expect(artifact.requirements).toEqual([
@@ -47,6 +46,11 @@ describe('buildSmartJd', () => {
     expect(artifact.jdText).toContain('- Production TypeScript')
     expect(artifact.jdText).toContain('- Distributed systems design')
     expect(artifact.jdText).toContain('- Kafka operations')
+    expect(artifact.jdText).toContain('- Own the reliability roadmap for the platform.')
+    expect(artifact.jdText).toContain('- Partner with product teams on service interfaces.')
+    expect(artifact.requirements).not.toContainEqual(
+      expect.objectContaining({ text: 'Own the reliability roadmap for the platform.' }),
+    )
     expect(artifact.jdText).toContain('Level: manager')
     expect(artifact.jdText).toContain('Target experience: 5–8 years')
     expect(artifact.contentHash).toMatch(/^[a-f0-9]{64}$/)
@@ -54,6 +58,7 @@ describe('buildSmartJd', () => {
     const request = mockCompletion.mock.calls[0][0]
     expect(request.taskSlot).toBe('interview.jd-extract')
     expect(request.system).toContain('untrusted data')
+    expect(request.system).toContain('Do not add\nresponsibilities')
     expect(request.messages[0].content).toContain('<jd_builder_input>')
   })
 
@@ -124,6 +129,8 @@ describe('finalizeSmartJd', () => {
     expect(artifact.jdText).toContain('# Platform Engineer')
     expect(artifact.jdText).toContain('Level: manager')
     expect(artifact.jdText).toContain('Target experience: 5–8 years')
+    expect(artifact.jdText).toContain('## Responsibilities')
+    expect(artifact.jdText).toContain('- Own the reliability roadmap for the platform.')
     expect(artifact.jdText).toContain('## Job description')
     expect(artifact.jdText).toContain(pasted.trim())
     expect(artifact.contentHash).not.toBe(

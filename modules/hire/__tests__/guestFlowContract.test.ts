@@ -92,6 +92,7 @@ describe('unchanged engine provisioning contract', () => {
       title: 'Backend Engineer',
       level: 'manager',
       targetExperienceRange: { minYears: 3, maxYears: 8 },
+      responsibilities: ['Own reliable backend delivery'],
       mustHaves: ['Production TypeScript'],
       niceToHaves: ['Distributed systems'],
       location: 'Bengaluru, India',

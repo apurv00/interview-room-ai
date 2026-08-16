@@ -12,6 +12,7 @@ const BUILDER = {
   title: 'Backend Engineer',
   level: 'manager',
   targetExperienceRange: { minYears: 3, maxYears: 8 },
+  responsibilities: ['Own reliable backend delivery'],
   mustHaves: ['Production TypeScript'],
   niceToHaves: ['Kafka'],
   location: 'Bengaluru, India',
@@ -28,6 +29,14 @@ describe('Smart-JD validators', () => {
         jdText: 'A reviewed description '.repeat(4),
       }),
     ).toMatchObject(BUILDER)
+  })
+
+  it('requires at least one bounded responsibility for new job authoring', () => {
+    const { responsibilities: _responsibilities, ...withoutResponsibilities } = BUILDER
+    expect(() => BuildJobDescriptionSchema.parse(withoutResponsibilities)).toThrow()
+    expect(() =>
+      BuildJobDescriptionSchema.parse({ ...BUILDER, responsibilities: ['Tiny'] }),
+    ).toThrow()
   })
 
   it('accepts bounded Hire-only screening defaults without widening the JD builder contract', () => {
@@ -49,7 +58,7 @@ describe('Smart-JD validators', () => {
     ).toThrow()
   })
 
-  it('rejects unknown fields and duplicates across importance groups', () => {
+  it('rejects unknown fields and duplicates within responsibility or requirement groups', () => {
     expect(() => BuildJobDescriptionSchema.parse({ ...BUILDER, surprise: true })).toThrow()
     expect(() =>
       BuildJobDescriptionSchema.parse({
@@ -57,6 +66,12 @@ describe('Smart-JD validators', () => {
         niceToHaves: [' production   typescript '],
       }),
     ).toThrow(/Duplicate requirement/)
+    expect(() =>
+      BuildJobDescriptionSchema.parse({
+        ...BUILDER,
+        responsibilities: ['Own reliable backend delivery', ' own  reliable BACKEND delivery '],
+      }),
+    ).toThrow(/Duplicate responsibility/)
   })
 
   it('keeps level and experience range separate, and rejects a per-job company override', () => {

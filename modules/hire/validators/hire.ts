@@ -82,6 +82,7 @@ export const SelfDeleteHireMemberSchema = z
   .strict()
 
 const requirementItemSchema = z.string().trim().min(2).max(500)
+const responsibilityItemSchema = z.string().trim().min(5).max(300)
 
 const jobDescriptionFields = {
     // The job title doubles as the engine's `role` in AI rounds; the engine
@@ -110,6 +111,7 @@ const jobDescriptionFields = {
           })
         }
       }),
+    responsibilities: z.array(responsibilityItemSchema).min(1).max(10),
     mustHaves: z.array(requirementItemSchema).min(1).max(20),
     niceToHaves: z.array(requirementItemSchema).max(20).default([]),
     location: z.string().trim().min(2).max(160),
@@ -125,7 +127,7 @@ const screeningSettingsSchema = z
   .strict()
 
 function rejectDuplicateRequirements(
-  value: { mustHaves: string[]; niceToHaves: string[] },
+  value: { responsibilities?: string[]; mustHaves: string[]; niceToHaves: string[] },
   ctx: z.RefinementCtx,
 ) {
     const seen = new Map<string, string>()
@@ -147,6 +149,21 @@ function rejectDuplicateRequirements(
         }
       })
     }
+
+    const responsibilitySeen = new Set<string>()
+    const responsibilities = value.responsibilities ?? []
+    responsibilities.forEach((item, index) => {
+      const key = item.toLowerCase().replace(/\s+/g, ' ')
+      if (responsibilitySeen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['responsibilities', index],
+          message: 'Duplicate responsibility already listed',
+        })
+      } else {
+        responsibilitySeen.add(key)
+      }
+    })
 }
 
 export const BuildJobDescriptionSchema = z

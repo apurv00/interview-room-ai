@@ -34,6 +34,7 @@ export const POST = composeHireApiRoute<BuildJobDescriptionPayload>({
       role: body.title,
       level: body.level,
       targetExperienceRange: body.targetExperienceRange,
+      responsibilities: body.responsibilities,
       mustHaves: body.mustHaves,
       niceToHaves: body.niceToHaves,
       location: body.location,

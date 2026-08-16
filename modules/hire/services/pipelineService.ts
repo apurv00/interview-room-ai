@@ -123,6 +123,7 @@ export async function createJob(
     title: string
     level: string
     targetExperienceRange: NonNullable<IHireJobBuilderInput['targetExperienceRange']>
+    responsibilities: string[]
     mustHaves: string[]
     niceToHaves: string[]
     location: string
@@ -152,6 +153,7 @@ export async function createJob(
       minYears: input.targetExperienceRange.minYears,
       maxYears: input.targetExperienceRange.maxYears,
     },
+    responsibilities: [...input.responsibilities],
     mustHaves: input.mustHaves,
     niceToHaves: input.niceToHaves,
     location: input.location,
@@ -229,6 +231,7 @@ function cloneRequirementInput(input: IHireJobBuilderInput): IHireJobBuilderInpu
           },
         }
       : {}),
+    ...(input.responsibilities ? { responsibilities: [...input.responsibilities] } : {}),
     mustHaves: [...input.mustHaves],
     niceToHaves: [...input.niceToHaves],
     location: input.location,

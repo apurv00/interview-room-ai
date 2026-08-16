@@ -54,6 +54,12 @@ export interface IHireJobBuilderInput {
   level: string
   /** Optional only because pre-range requirement versions must remain valid. */
   targetExperienceRange?: IHireTargetExperienceRange
+  /**
+   * The work the person will own. Kept separate from qualifications so it
+   * informs the JD and model context without becoming a screening rule.
+   * Optional only for historical requirement-version compatibility.
+   */
+  responsibilities?: string[]
   mustHaves: string[]
   niceToHaves: string[]
   location: string
@@ -124,6 +130,15 @@ const HireJobBuilderInputSchema = new Schema<IHireJobBuilderInput>(
         validator: (range: IHireTargetExperienceRange | undefined) =>
           !range || range.minYears <= range.maxYears,
         message: 'targetExperienceRange.minYears cannot exceed maxYears',
+      },
+    },
+    responsibilities: {
+      type: [{ type: String, trim: true, maxlength: 300 }],
+      default: undefined,
+      validate: {
+        validator: (items: string[] | undefined) =>
+          items === undefined || (items.length >= 1 && items.length <= 10),
+        message: 'responsibilities must contain between 1 and 10 items',
       },
     },
     mustHaves: {

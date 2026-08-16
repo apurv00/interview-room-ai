@@ -30,6 +30,10 @@ const body = {
   title: 'Platform Manager',
   level: 'manager',
   targetExperienceRange: { minYears: 5, maxYears: 9 },
+  responsibilities: [
+    'Set the technical direction for the platform.',
+    'Lead reliability and incident-response improvements.',
+  ],
   mustHaves: ['Production TypeScript'],
   niceToHaves: [],
   location: 'Remote',
@@ -72,6 +76,10 @@ describe('POST /api/workspace/jobs/jd-builder', () => {
       role: 'Platform Manager',
       level: 'manager',
       targetExperienceRange: { minYears: 5, maxYears: 9 },
+      responsibilities: [
+        'Set the technical direction for the platform.',
+        'Lead reliability and incident-response improvements.',
+      ],
       mustHaves: ['Production TypeScript'],
       niceToHaves: [],
       location: 'Remote',
