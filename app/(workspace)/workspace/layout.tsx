@@ -25,6 +25,7 @@ const NAV = [
   { href: "/workspace/audit", label: "Audit", icon: "◷" },
   { href: "/workspace/reports", label: "Reports", icon: "▤" },
   { href: "/workspace/jobs", label: "Jobs", icon: "📋" },
+  { href: "/workspace/departments", label: "Departments", icon: "◩" },
   { href: "/workspace/candidates", label: "Candidates", icon: "👥" },
   { href: "/workspace/members", label: "Team", icon: "🧑‍💼" },
 ];

@@ -98,6 +98,12 @@ export interface HireReportBlockerCount {
   count: number
 }
 
+/** Immutable display coordinate captured from the workspace-owned department catalog. */
+export interface HireReportDepartmentSnapshot {
+  id: string
+  name: string
+}
+
 /** Human scorecards and external verdicts stay independent evidence sources. */
 export interface HireReportEvidenceSummary {
   aiAssessments: {
@@ -122,6 +128,8 @@ export interface HireReportEvidenceSummary {
 export interface HirePipelineStatusReportJobSnapshot {
   /** Display-only title; never JD text, private notes, or a candidate list. */
   jobTitle: string
+  /** Optional so exports created before department snapshots remain renderable. */
+  department?: HireReportDepartmentSnapshot
   jobStatus: 'open' | 'on_hold' | 'closed'
   openedAt: Date
   stageCounts: HireReportStageCount[]
@@ -153,6 +161,8 @@ export interface HireJobCloseoutReportSnapshot {
   kind: 'job_closeout'
   asOf: Date
   jobTitle: string
+  /** Optional so historical close-out exports remain renderable. */
+  department?: HireReportDepartmentSnapshot
   openedAt: Date
   closedAt: Date
   /** Derived from the two immutable report timestamps, never accepted as a caller score. */
@@ -188,6 +198,7 @@ export interface HireReportSnapshotBuildResult<TSnapshot extends HireReportSnaps
 
 export interface HirePipelineStatusReportJobInput {
   jobTitle: unknown
+  department?: unknown
   jobStatus: unknown
   openedAt: unknown
   stageCounts: unknown
@@ -211,6 +222,7 @@ export interface HireJobCloseoutHiredCandidateInput {
 export interface HireJobCloseoutReportSnapshotInput {
   asOf: unknown
   jobTitle: unknown
+  department?: unknown
   openedAt: unknown
   closedAt: unknown
   stageCounts: unknown

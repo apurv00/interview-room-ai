@@ -42,7 +42,7 @@ describe('Hire report XLSX rendering', () => {
     expect(buffer.subarray(0, 2).toString()).toBe('PK')
     expect(sheet).toBeDefined()
     expect(sheet?.getCell('A1').value).toBe('Workspace pipeline status report')
-    expect(sheet?.getCell('A4').value).toBe("'=Platform Engineer")
+    expect(sheet?.getCell('A4').value).toBe("'=Platform Engineer — Department: Engineering")
     expect(sheet?.getCell('A2').value).toBe('As of')
     expect(cellValues(sheet)).toEqual(expect.arrayContaining([
       'Evidence summary - sources stay separate',
@@ -61,6 +61,7 @@ describe('Hire report XLSX rendering', () => {
     const sheet = workbook.getWorksheet('Job Closeout')
 
     expect(sheet?.getCell('B2').value).toBe("'=Platform Engineer")
+    expect(sheet?.getCell('A1').value).toBe('Job close-out report — Department: Revenue')
     expect(sheet?.getCell('A21').value).toBe("'+Ada Lovelace")
     expect(sheet?.getCell('A23').value).toBe("'@Panel note: independent evidence was reviewed.")
     expect(sheet?.getColumn(1).width).toBe(30)

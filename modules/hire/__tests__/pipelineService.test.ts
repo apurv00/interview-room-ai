@@ -36,6 +36,7 @@ const {
   mockCancelDigestOutboxes,
   mockCreateCloseoutReport,
   mockKickReportExport,
+  mockAssertAssignableDepartment,
 } = vi.hoisted(() => {
   const transactionSession = {
     withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
@@ -87,6 +88,7 @@ const {
     mockCancelDigestOutboxes: vi.fn(),
     mockCreateCloseoutReport: vi.fn(),
     mockKickReportExport: vi.fn(),
+    mockAssertAssignableDepartment: vi.fn(),
   }
 })
 
@@ -208,6 +210,10 @@ vi.mock('@hire-onboarding-boundary', () => ({
     mockOnboardingTestDriveFence(...args),
 }))
 
+vi.mock('@hire-departments', () => ({
+  assertAssignableHireDepartment: (...args: unknown[]) => mockAssertAssignableDepartment(...args),
+}))
+
 vi.mock('../services/assessmentExportLifecycleService', () => ({
   cancelHireAssessmentExports: (...args: unknown[]) => mockCancelAssessmentExports(...args),
   deleteHireAssessmentExportObjects: (...args: unknown[]) => mockDeleteAssessmentExports(...args),
@@ -235,6 +241,7 @@ import {
   getApplicationDetail,
   getJobPipeline,
   moveStage,
+  updateJobDepartment,
   updateJobStatus,
 } from '../services/pipelineService'
 import type { MembershipContext } from '../services/workspaceService'
@@ -254,6 +261,7 @@ const OP_A = '11111111-1111-4111-8111-111111111111'
 const OP_B = '22222222-2222-4222-8222-222222222222'
 
 const JOB_INPUT = {
+  departmentId: 'department-engineering',
   title: 'Backend Engineer',
   level: 'Senior',
   mustHaves: ['Production TypeScript'],
@@ -298,6 +306,9 @@ beforeEach(() => {
   mockCancelDigestOutboxes.mockResolvedValue(undefined)
   mockCreateCloseoutReport.mockResolvedValue(null)
   mockKickReportExport.mockResolvedValue(undefined)
+  mockAssertAssignableDepartment.mockImplementation(
+    async ({ departmentId }: { departmentId: string }) => ({ _id: departmentId }),
+  )
   mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockEmailOutbox.find.mockResolvedValue([])
 })
@@ -316,6 +327,7 @@ describe('createJob', () => {
     expect(versionOptions).toEqual({ session })
     expect(jobDocs[0]).toMatchObject({
       workspaceId: 'ws-A',
+      departmentId: 'department-engineering',
       status: 'open',
       createdBy: 'u1',
       createdByMemberId: 'm1',
@@ -323,6 +335,11 @@ describe('createJob', () => {
       activeRequirementVersion: 1,
     })
     expect(String(jobDocs[0].activeRequirementVersionId)).toBe(String(versionDocs[0]._id))
+    expect(mockAssertAssignableDepartment).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      departmentId: 'department-engineering',
+      session,
+    })
     expect(String(versionDocs[0].jobId)).toBe(String(jobDocs[0]._id))
     expect(versionDocs[0]).toMatchObject({
       workspaceId: 'ws-A',
@@ -433,7 +450,9 @@ describe('duplicateJob', () => {
     mockJob.create.mockImplementation(async (docs: unknown[]) => docs)
     mockRequirementVersion.create.mockResolvedValue([])
 
-    const duplicated = await duplicateJob(DUPLICATE_CTX, SOURCE_JOB_ID)
+    const duplicated = await duplicateJob(DUPLICATE_CTX, SOURCE_JOB_ID, {
+      departmentId: 'department-platform',
+    })
 
     const [sourceFilter, sourceProjection, sourceOptions] = mockJob.findOne.mock.calls[0]
     expect(sourceFilter).toEqual({ _id: SOURCE_JOB_ID, workspaceId: WORKSPACE_ID })
@@ -462,6 +481,7 @@ describe('duplicateJob', () => {
     expect(versionOptions).toEqual({ session })
     expect(job).toMatchObject({
       workspaceId: WORKSPACE_ID,
+      departmentId: 'department-platform',
       title: source.title,
       jdText: source.jdText,
       activeRequirementVersion: 1,
@@ -501,18 +521,80 @@ describe('duplicateJob', () => {
     expect(mockCandidate.find).not.toHaveBeenCalled()
     expect(mockApplication.create).not.toHaveBeenCalled()
     expect(mockApplication.find).not.toHaveBeenCalled()
+    expect(mockAssertAssignableDepartment).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      departmentId: 'department-platform',
+      session,
+    })
   })
 
   it('does not create a duplicate when the active source requirement is missing', async () => {
     mockJob.findOne.mockResolvedValue(sourceJob())
     mockRequirementVersion.findOne.mockResolvedValue(null)
 
-    await expect(duplicateJob(DUPLICATE_CTX, SOURCE_JOB_ID)).rejects.toMatchObject({
+    await expect(duplicateJob(DUPLICATE_CTX, SOURCE_JOB_ID, {
+      departmentId: 'department-platform',
+    })).rejects.toMatchObject({
       code: 'JOB_REQUIREMENT_VERSION_INVALID',
     })
 
     expect(mockJob.create).not.toHaveBeenCalled()
     expect(mockRequirementVersion.create).not.toHaveBeenCalled()
+  })
+})
+
+describe('updateJobDepartment', () => {
+  it('lets an admin reassign a job through the narrow metadata command', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const job = { _id: 'job-1', departmentId: 'department-old', events: [], save }
+    mockJob.findOne.mockResolvedValue(job)
+
+    const result = await updateJobDepartment(CTX, 'job-1', {
+      departmentId: 'department-new',
+    })
+
+    expect(result).toBe(job)
+    expect(mockAssertAssignableDepartment).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      departmentId: 'department-new',
+      session,
+    })
+    expect(mockJob.findOne).toHaveBeenCalledWith(
+      { _id: 'job-1', workspaceId: 'ws-A' },
+      null,
+      { session },
+    )
+    expect(job.departmentId).toBe('department-new')
+    expect(save).toHaveBeenCalledWith({ session })
+    expect(job.events).toContainEqual(
+      expect.objectContaining({
+        type: 'department_change',
+        fromDepartmentId: 'department-old',
+        toDepartmentId: 'department-new',
+      }),
+    )
+  })
+
+  it('does not use the status lifecycle command for a department reassignment', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    mockJob.findOne.mockResolvedValue({ _id: 'job-1', departmentId: 'same', save })
+
+    await updateJobDepartment(CTX, 'job-1', { departmentId: 'same' })
+
+    expect(save).not.toHaveBeenCalled()
+    expect(mockJob.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('keeps reassignment admin-only', async () => {
+    const member = {
+      ...CTX,
+      membership: { ...CTX.membership, role: 'member' },
+    } as unknown as MembershipContext
+
+    await expect(updateJobDepartment(member, 'job-1', {
+      departmentId: 'department-new',
+    })).rejects.toMatchObject({ statusCode: 403 })
+    expect(mockWorkspaceWriteFence).not.toHaveBeenCalled()
   })
 })
 

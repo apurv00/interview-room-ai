@@ -115,6 +115,9 @@ export default function JobsHealthPanel() {
                     <Badge variant={STATUS_VARIANT[job.status]}>
                       {job.status.replace("_", " ")}
                     </Badge>
+                    <Badge variant="primary">
+                      Department: {job.department.name}
+                    </Badge>
                   </div>
                   <p className="mt-1 text-sm text-[#536471]">
                     {job.daysOpen} day{job.daysOpen === 1 ? "" : "s"} open

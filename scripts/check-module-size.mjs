@@ -83,6 +83,11 @@ const BUDGETS = {
   // architectural tripwire instead of folding that state into AI-round code.
   // See ADR 0031.
   'modules/hire':      { maxLOC: 25_000, maxFiles: 90 },
+  // Department is a required job-classification catalog with its own
+  // migration, archive policy, and narrow control-plane boundary. It stays
+  // outside the full Hire command module, which is already at its deliberate
+  // 90-file cap; see ADR 0036.
+  'modules/hire-departments': { maxLOC: 5_000, maxFiles: 20 },
   // Phase 4 decision work starts as a separate aggregate rather than growing
   // the Phase-3 human-kit delivery boundary. This initial 5k/20 envelope
   // covers the typed evidence read model, hash-only share packet/verdict

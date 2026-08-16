@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const IDS = {
   workspace: '1'.repeat(24),
   job: '2'.repeat(24),
+  department: '8'.repeat(24),
   applicationOne: '3'.repeat(24),
   applicationTwo: '4'.repeat(24),
   candidateOne: '5'.repeat(24),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   resultFind: vi.fn(),
   scorecardFind: vi.fn(),
   verdictFind: vi.fn(),
+  departmentFind: vi.fn(),
   testDriveStages: vi.fn(),
   privacyFilter: vi.fn(),
   queries: {} as Record<string, any>,
@@ -43,6 +45,10 @@ vi.mock('@/modules/hire-decisions/models/HireExternalVerdict', () => ({
   HireExternalVerdict: { aggregate: mocks.verdictFind },
 }))
 
+vi.mock('@/modules/hire-departments/models/HireDepartment', () => ({
+  HireDepartment: { find: mocks.departmentFind },
+}))
+
 vi.mock('@/modules/hire-onboarding/services/testDriveService', () => ({
   buildHireOnboardingTestDriveExclusionStages: mocks.testDriveStages,
 }))
@@ -63,6 +69,16 @@ function query(rows: unknown[]) {
   }
   chain.session.mockReturnValue(chain)
   chain.exec.mockResolvedValue(rows)
+  return chain
+}
+
+function departmentQuery(rows: unknown[]) {
+  const chain = {
+    session: vi.fn(),
+    lean: vi.fn(),
+  }
+  chain.session.mockReturnValue(chain)
+  chain.lean.mockResolvedValue(rows)
   return chain
 }
 
@@ -101,6 +117,7 @@ function privacyRequestMatchesFilter(
 function configureQueries() {
   mocks.queries.jobs = query([{
     _id: id(IDS.job),
+    departmentId: id(IDS.department),
     title: 'Senior platform engineer',
     status: 'open',
     createdAt: new Date('2026-08-01T00:00:00.000Z'),
@@ -110,6 +127,12 @@ function configureQueries() {
     { _id: id(IDS.candidateOne), name: 'Ada', email: 'ada@example.test' },
     { _id: id(IDS.candidateTwo), name: 'Grace', resumeText: 'private' },
   ])
+  mocks.queries.departments = departmentQuery([{
+    _id: id(IDS.department),
+    name: 'Engineering',
+    kind: 'standard',
+    status: 'active',
+  }])
   mocks.queries.privacy = query([])
   mocks.queries.applications = query([
     {
@@ -174,6 +197,7 @@ function configureQueries() {
     comment: 'private external comment',
   }])
   mocks.jobFind.mockReturnValue(mocks.queries.jobs)
+  mocks.departmentFind.mockReturnValue(mocks.queries.departments)
   mocks.candidateFind.mockReturnValue(mocks.queries.candidates)
   mocks.privacyFind.mockReturnValue(mocks.queries.privacy)
   mocks.applicationFind.mockReturnValue(mocks.queries.applications)
@@ -215,6 +239,7 @@ describe('pipeline status report snapshot factory', () => {
       asOf: now,
       jobs: [{
         jobTitle: 'Senior platform engineer',
+        department: { id: IDS.department, name: 'Engineering' },
         jobStatus: 'open',
         stageCounts: expect.arrayContaining([
           { stage: 'shortlist', count: 1 },
@@ -251,8 +276,15 @@ describe('pipeline status report snapshot factory', () => {
     expect(encoded).not.toContain('transcript')
 
     expect(mocks.jobFind).toHaveBeenCalledWith(expect.arrayContaining([
-      expect.objectContaining({ $project: { _id: 1, title: 1, status: 1, createdAt: 1 } }),
+      expect.objectContaining({ $project: { _id: 1, departmentId: 1, title: 1, status: 1, createdAt: 1 } }),
     ]))
+    expect(mocks.departmentFind).toHaveBeenCalledWith(
+      {
+        workspaceId: id(IDS.workspace),
+        _id: { $in: [id(IDS.department)] },
+      },
+      { _id: 1, name: 1 },
+    )
     expect(mocks.applicationFind).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({ $project: { _id: 1, jobId: 1, candidateId: 1, stage: 1, createdAt: 1, 'events.to': 1, 'events.at': 1 } }),
     ]))
@@ -366,12 +398,14 @@ describe('pipeline status report snapshot factory', () => {
   it('excludes the test-drive job root before sorting and grouping report rows', async () => {
     const realJob = {
       _id: id(IDS.job),
+      departmentId: id(IDS.department),
       title: 'Senior platform engineer',
       status: 'open',
       createdAt: new Date('2026-08-01T00:00:00.000Z'),
     }
     const testDriveJob = {
       _id: id(IDS.testDriveJob),
+      departmentId: id(IDS.department),
       title: 'Practice interview role',
       status: 'open',
       createdAt: new Date('2026-08-02T00:00:00.000Z'),
@@ -419,5 +453,17 @@ describe('pipeline status report snapshot factory', () => {
     expect(mocks.deliveryFind).not.toHaveBeenCalled()
     pendingApplications.resolve([])
     await build
+  })
+
+  it('fails closed when a job department is not present in the same workspace', async () => {
+    mocks.departmentFind.mockReturnValue(departmentQuery([]))
+
+    await expect(buildHirePipelineStatusReportSnapshotFromControlRecords({
+      workspaceId: id(IDS.workspace),
+      scope: 'workspace',
+      now: new Date('2026-08-15T00:00:00.000Z'),
+      session: {} as any,
+    })).rejects.toMatchObject({ code: 'REPORT_SNAPSHOT_UNAVAILABLE' })
+    expect(mocks.candidateFind).not.toHaveBeenCalled()
   })
 })

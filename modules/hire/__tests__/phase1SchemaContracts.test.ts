@@ -10,6 +10,19 @@ function indexes(model: Model<never>): Array<[Record<string, number>, Record<str
 }
 
 describe('Phase-1 scoring contract schema', () => {
+  it('requires one workspace-scoped department for every job', () => {
+    const departmentPath = HireJob.schema.path('departmentId')
+    expect(departmentPath).toBeDefined()
+    expect(departmentPath.isRequired).toBe(true)
+    expect((departmentPath.options as { ref?: string }).ref).toBe('HireDepartment')
+
+    const schemaIndexes = indexes(HireJob as unknown as Model<never>)
+    expect(schemaIndexes).toContainEqual([
+      { workspaceId: 1, departmentId: 1, status: 1, createdAt: -1 },
+      {},
+    ])
+  })
+
   it('is workspace-owned and immutable except for active/superseded state', () => {
     for (const pathName of [
       'workspaceId',

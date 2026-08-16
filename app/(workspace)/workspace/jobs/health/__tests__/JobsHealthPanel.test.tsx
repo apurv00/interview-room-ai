@@ -45,6 +45,7 @@ describe("JobsHealthPanel", () => {
           {
             jobId,
             title: "Platform engineer",
+            department: { id: "d".repeat(24), name: "Engineering" },
             status: "open",
             daysOpen: 14,
             funnel,
@@ -72,6 +73,7 @@ describe("JobsHealthPanel", () => {
       await screen.findByRole("heading", { name: "Platform engineer" }),
     ).toBeTruthy();
     expect(screen.getByText("2 in Shortlist for 8+ days")).toBeTruthy();
+    expect(screen.getByText("Department: Engineering")).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "View performance" }),
     ).toHaveAttribute("href", `/workspace/jobs/${jobId}/performance`);

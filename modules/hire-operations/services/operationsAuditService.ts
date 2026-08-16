@@ -49,7 +49,10 @@ const APPLICATION_AUDIT_EVENT_TYPES = Object.keys(
 const STATIC_AUDIT_KIND_BY_SOURCE: Readonly<
   Record<string, Readonly<Record<string, HireOperationsAuditKind | undefined>>>
 > = {
-  job: { status_change: "job_status_changed" },
+  job: {
+    status_change: "job_status_changed",
+    department_change: "job_department_changed",
+  },
   report: {
     requested: "report_requested",
     generating: "report_generation_started",
@@ -309,7 +312,7 @@ function jobPipeline(input: {
     { $unwind: { path: "$events", includeArrayIndex: "eventIndex" } },
     {
       $match: {
-        "events.type": "status_change",
+        "events.type": { $in: ["status_change", "department_change"] },
         "events.at": { $type: "date" },
       },
     },

@@ -85,7 +85,7 @@ export function HirePipelineStatusReport({ snapshot, compact = false }: HirePipe
       {snapshot.jobs.map((job, index) => (
         <section key={`${job.jobTitle}-${job.openedAt.toISOString()}-${index}`} className="hire-report-job">
           <header>
-            <h2>{job.jobTitle}</h2>
+            <h2>{job.department ? `${job.jobTitle} — Department: ${job.department.name}` : job.jobTitle}</h2>
             <p>{job.jobStatus.replace(/_/g, ' ')} - Opened {displayDate(job.openedAt)}</p>
           </header>
 

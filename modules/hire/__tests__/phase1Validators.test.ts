@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   BuildJobDescriptionSchema,
   CreateStructuredJobSchema,
+  DuplicateJobSchema,
   MoveStageSchema,
+  UpdateJobDepartmentSchema,
   UpdateJobStatusSchema,
 } from '../validators/hire'
 
@@ -21,6 +23,7 @@ describe('Smart-JD validators', () => {
     expect(
       CreateStructuredJobSchema.parse({
         ...BUILDER,
+        departmentId: '111111111111111111111111',
         jdText: 'A reviewed description '.repeat(4),
       }),
     ).toMatchObject(BUILDER)
@@ -30,6 +33,7 @@ describe('Smart-JD validators', () => {
     expect(
       CreateStructuredJobSchema.parse({
         ...BUILDER,
+        departmentId: '111111111111111111111111',
         jdText: 'A reviewed description '.repeat(4),
         screeningSettings: { location: 'Bengaluru, India', experienceFloorYears: 3 },
       }),
@@ -52,6 +56,22 @@ describe('Smart-JD validators', () => {
         niceToHaves: [' production   typescript '],
       }),
     ).toThrow(/Duplicate requirement/)
+  })
+
+  it('requires a department only for the persisted job command, not Smart-JD generation', () => {
+    expect(() =>
+      CreateStructuredJobSchema.parse({
+        ...BUILDER,
+        jdText: 'A reviewed description '.repeat(4),
+      }),
+    ).toThrow()
+    expect(BuildJobDescriptionSchema.parse(BUILDER)).toEqual(BUILDER)
+    expect(DuplicateJobSchema.parse({ departmentId: '111111111111111111111111' })).toEqual({
+      departmentId: '111111111111111111111111',
+    })
+    expect(UpdateJobDepartmentSchema.parse({ departmentId: '111111111111111111111111' })).toEqual({
+      departmentId: '111111111111111111111111',
+    })
   })
 })
 

@@ -14,6 +14,8 @@ describe('Hire report PDF rendering', () => {
 
     expect(pipelineHtml).toContain('Pipeline status report')
     expect(closeoutHtml).toContain('Job close-out report')
+    expect(pipelineHtml).toContain('Department: Engineering')
+    expect(closeoutHtml).toContain('Department: Revenue')
     expect(pipelineHtml).toContain('Evidence is displayed by source')
     expect(closeoutHtml).toContain('does not calculate a composite score')
     expect(pipelineHtml).not.toContain('candidateId')

@@ -82,6 +82,9 @@ export async function buildHireJobCloseoutReportSnapshotInputFromControlRecords(
   if (!aggregateJob || aggregateJob.jobStatus !== 'closed') {
     throw reportUnavailable('The closeout report did not observe the closed job state')
   }
+  if (!aggregateJob.department) {
+    throw reportUnavailable('The closeout report did not observe the job department')
+  }
 
   // Mongo/Mongoose does not support concurrent work on one transaction
   // session. Keep the additional closeout disclosures serial with the
@@ -135,6 +138,7 @@ export async function buildHireJobCloseoutReportSnapshotInputFromControlRecords(
   return {
     asOf: input.now,
     jobTitle: aggregateJob.jobTitle,
+    department: aggregateJob.department,
     openedAt: aggregateJob.openedAt,
     closedAt: input.job.closedAt,
     stageCounts: aggregateJob.stageCounts,

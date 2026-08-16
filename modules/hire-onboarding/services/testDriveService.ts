@@ -28,6 +28,7 @@ import {
   type StartHireOnboardingTestDrivePayload,
 } from '../validators/hireOnboarding'
 import { kickHireOnboardingTestDriveCleanup } from './testDriveLifecycleService'
+import { ensureHireSystemDepartment } from '@hire-departments'
 
 export const HIRE_ONBOARDING_TEST_DRIVE_RETENTION_DAYS = 14
 
@@ -275,12 +276,22 @@ async function provisionTestDrive(
         const candidateId = new mongoose.Types.ObjectId()
         const applicationId = new mongoose.Types.ObjectId()
         const requirementVersionId = new mongoose.Types.ObjectId()
+        // The practice graph is still a real HireJob for the purpose of
+        // exercising the candidate flow. Keep the mandatory department
+        // invariant without exposing this non-reportable system department to
+        // ordinary job creation or department selection.
+        const onboardingDepartment = await ensureHireSystemDepartment({
+          workspaceId: ctx.workspace._id,
+          kind: 'onboarding',
+          session,
+        })
 
         await HireJob.create(
           [
             {
               _id: jobId,
               workspaceId: ctx.workspace._id,
+              departmentId: onboardingDepartment._id,
               title: TEST_DRIVE_JOB_TITLE,
               jdText: TEST_DRIVE_JOB_DESCRIPTION,
               status: 'open',

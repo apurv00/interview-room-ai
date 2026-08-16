@@ -75,7 +75,7 @@ export function HireJobCloseoutReport({ snapshot, compact = false }: HireJobClos
     <article className={compact ? 'hire-job-closeout-report hire-job-closeout-report-compact' : 'hire-job-closeout-report'}>
       <header>
         <p className="hire-report-eyebrow">Job close-out report</p>
-        <h1>{snapshot.jobTitle}</h1>
+        <h1>{snapshot.department ? `${snapshot.jobTitle} — Department: ${snapshot.department.name}` : snapshot.jobTitle}</h1>
         <p>
           Opened {displayDate(snapshot.openedAt)} - Closed {displayDate(snapshot.closedAt)} - {snapshot.timeToCloseHours} hours to close
         </p>

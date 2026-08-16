@@ -262,9 +262,23 @@ const EvidenceSchema = new Schema(
   { _id: false, strict: 'throw' },
 )
 
+/**
+ * Historical report output may retain only the department's immutable display
+ * coordinate. The field is optional because Phase-5 exports predate the
+ * catalog and must continue to validate/read without a data migration.
+ */
+const DepartmentSnapshotSchema = new Schema(
+  {
+    id: { type: String, required: true, match: OBJECT_ID, lowercase: true },
+    name: { type: String, required: true, trim: true, minlength: 1, maxlength: 120 },
+  },
+  { _id: false, strict: 'throw' },
+)
+
 const PipelineJobSnapshotSchema = new Schema(
   {
     jobTitle: { type: String, required: true, trim: true, minlength: 1, maxlength: 200 },
+    department: { type: DepartmentSnapshotSchema, default: undefined },
     jobStatus: { type: String, required: true, enum: ['open', 'on_hold', 'closed'] },
     openedAt: { type: Date, required: true },
     stageCounts: {
@@ -323,6 +337,7 @@ const ReportSnapshotSchema = new Schema(
     asOf: { type: Date, required: true },
     jobs: { type: [PipelineJobSnapshotSchema], default: undefined },
     jobTitle: { type: String, trim: true, minlength: 1, maxlength: 200 },
+    department: { type: DepartmentSnapshotSchema, default: undefined },
     openedAt: { type: Date },
     closedAt: { type: Date },
     timeToCloseHours: { type: Number, min: 0, max: HIRE_REPORT_MAX_TIME_TO_CLOSE_HOURS },

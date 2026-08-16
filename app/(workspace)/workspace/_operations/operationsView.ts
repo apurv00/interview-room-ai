@@ -5,6 +5,7 @@ import type {
   HireOperationsAuditKind,
   HireOperationsAuditPage,
   HireOperationsAuditTargetKind,
+  HireOperationsDepartment,
   HireOperationsFunnelConversion,
   HireOperationsJobHealth,
   HireOperationsJobPerformance,
@@ -57,6 +58,7 @@ const AUDIT_KINDS = [
   "application_human_kit_revoked",
   "application_human_scorecard_submitted",
   "job_status_changed",
+  "job_department_changed",
   "report_requested",
   "report_generation_started",
   "report_ready",
@@ -144,6 +146,16 @@ function knownAuditTargetKind(
     typeof value === "string" &&
     AUDIT_TARGET_KINDS.includes(value as HireOperationsAuditTargetKind)
   );
+}
+
+function departmentFrom(value: unknown): HireOperationsDepartment | null {
+  const source = record(value);
+  if (!source) return null;
+  const id = stringValue(source.id);
+  const name = stringValue(source.name)?.trim();
+  return id && validOpaqueId(id) && name && name.length <= 120
+    ? { id, name }
+    : null;
 }
 
 function validOpaqueId(value: unknown): value is string {
@@ -415,12 +427,21 @@ export function jobsHealthFrom(
     if (!job || !knownJobStatus(job.status)) return null;
     const jobId = stringValue(job.jobId);
     const title = stringValue(job.title);
+    const department = departmentFrom(job.department);
     const daysOpen = nonNegativeInteger(job.daysOpen);
     const funnel = stageCountsFrom(job.funnel);
     const attention = attentionFrom(job.attention);
-    if (!jobId || !title || daysOpen === null || !funnel || !attention)
+    if (!jobId || !title || !department || daysOpen === null || !funnel || !attention)
       return null;
-    return { jobId, title, status: job.status, daysOpen, funnel, attention };
+    return {
+      jobId,
+      title,
+      department,
+      status: job.status,
+      daysOpen,
+      funnel,
+      attention,
+    };
   });
   return !asOf || jobs.some((job) => job === null)
     ? null
@@ -445,6 +466,7 @@ export function jobPerformanceFrom(
   const asOf = stringValue(source.asOf);
   const jobId = stringValue(job.jobId);
   const title = stringValue(job.title);
+  const department = departmentFrom(job.department);
   const daysOpen = nonNegativeInteger(job.daysOpen);
   const current = stageCountsFrom(funnel.current);
   const conversions = conversionsFrom(funnel.conversions);
@@ -467,6 +489,7 @@ export function jobPerformanceFrom(
     !asOf ||
     !jobId ||
     !title ||
+    !department ||
     daysOpen === null ||
     !current ||
     !conversions ||
@@ -498,7 +521,7 @@ export function jobPerformanceFrom(
       };
   return {
     asOf,
-    job: { jobId, title, status: job.status, daysOpen },
+    job: { jobId, title, department, status: job.status, daysOpen },
     funnel: { current, conversions },
     humanScorecards,
     scoreDistribution,
@@ -575,6 +598,7 @@ export const auditLabels: Record<HireOperationsAuditKind, string> = {
   application_human_kit_revoked: "Interview kit revoked",
   application_human_scorecard_submitted: "Human scorecard submitted",
   job_status_changed: "Job status changed",
+  job_department_changed: "Job department changed",
   report_requested: "Report requested",
   report_generation_started: "Report generation started",
   report_ready: "Report ready",

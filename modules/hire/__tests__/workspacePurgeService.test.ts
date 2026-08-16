@@ -11,6 +11,7 @@ const {
   digestModels,
   statusModels,
   onboardingModels,
+  departmentModels,
   reportModels,
   session,
   mockDeliverRuntimeRevocation,
@@ -81,6 +82,9 @@ const {
     onboardingModels: {
       HireOnboardingTestDrive: child(),
     },
+    departmentModels: {
+      HireDepartment: child(),
+    },
     reportModels: {
       HireReportExport: child(),
     },
@@ -100,6 +104,7 @@ vi.mock('@hire-decisions/models', () => decisionModels)
 vi.mock('../../hire-digest/models', () => digestModels)
 vi.mock('../../hire-status/models', () => statusModels)
 vi.mock('../../hire-onboarding/models', () => onboardingModels)
+vi.mock('@hire-departments/models', () => departmentModels)
 vi.mock('../services/engineRevocationService', () => ({
   deliverRuntimeRevocation: (...args: unknown[]) => mockDeliverRuntimeRevocation(...args),
 }))
@@ -178,6 +183,7 @@ beforeEach(() => {
   reportModels.HireReportExport.deleteMany.mockResolvedValue({ deletedCount: 1 })
   statusModels.HireCandidateStatusLink.deleteMany.mockResolvedValue({ deletedCount: 1 })
   onboardingModels.HireOnboardingTestDrive.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  departmentModels.HireDepartment.deleteMany.mockResolvedValue({ deletedCount: 1 })
   for (const model of Object.values(models)) {
     if ('deleteMany' in model) {
       model.deleteMany.mockResolvedValue({ deletedCount: 1 })
@@ -220,6 +226,7 @@ describe('workspace hard purge', () => {
       'HireCandidate',
       'HireJobRequirementVersion',
       'HireJob',
+      'HireDepartment',
       'HireOnboardingTestDrive',
       'HireWorkspaceMember',
       'HireWorkspace',
@@ -306,6 +313,10 @@ describe('workspace hard purge', () => {
       { workspaceId: WORKSPACE_ID },
       { session },
     )
+    expect(departmentModels.HireDepartment.deleteMany).toHaveBeenCalledWith(
+      { workspaceId: WORKSPACE_ID },
+      { session },
+    )
     expect(mockCancelAssessmentExports).toHaveBeenCalledWith({
       scope: { workspaceId: WORKSPACE_ID },
       cancelledAt: NOW,
@@ -348,6 +359,9 @@ describe('workspace hard purge', () => {
       models.HireJob.deleteMany.mock.invocationCallOrder[0],
     )
     expect(models.HireJob.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      departmentModels.HireDepartment.deleteMany.mock.invocationCallOrder[0],
+    )
+    expect(departmentModels.HireDepartment.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
       onboardingModels.HireOnboardingTestDrive.deleteMany.mock.invocationCallOrder[0],
     )
     expect(onboardingModels.HireOnboardingTestDrive.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(

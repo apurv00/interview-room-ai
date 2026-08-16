@@ -122,7 +122,11 @@ function writePipelineStatusSheet(
   let row = 4
 
   for (const job of snapshot.jobs) {
-    setSectionHeading(sheet, row, job.jobTitle)
+    setSectionHeading(
+      sheet,
+      row,
+      job.department ? `${job.jobTitle} — Department: ${job.department.name}` : job.jobTitle,
+    )
     setDataCell(sheet.getCell(row + 1, 1), 'Status')
     setDataCell(sheet.getCell(row + 1, 2), job.jobStatus)
     setDataCell(sheet.getCell(row + 2, 1), 'Opened')
@@ -177,7 +181,12 @@ function writeCloseoutSheet(
   snapshot: HireJobCloseoutReportSnapshot,
 ): void {
   const sheet = workbook.addWorksheet('Job Closeout', { views: [{ state: 'frozen', ySplit: 3 }] })
-  setTitle(sheet, 'Job close-out report')
+  setTitle(
+    sheet,
+    snapshot.department
+      ? `Job close-out report — Department: ${snapshot.department.name}`
+      : 'Job close-out report',
+  )
   const facts: Array<[string, string | number | Date]> = [
     ['Job', snapshot.jobTitle],
     ['Opened', snapshot.openedAt],

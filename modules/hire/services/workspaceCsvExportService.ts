@@ -1,4 +1,5 @@
 import { HireApplication, HireCandidate, HireJob } from '../models'
+import { HireDepartment } from '@hire-departments/models'
 import type { MembershipContext } from './workspaceService'
 import { connectHireControlDB } from './hireControlBoundary'
 
@@ -10,6 +11,7 @@ const COLUMNS = [
   'source',
   'resume_file',
   'job',
+  'department',
   'stage',
   'decision_note',
   'candidate_created_at',
@@ -30,8 +32,20 @@ export async function buildWorkspaceCandidatesCsv(ctx: MembershipContext): Promi
   const [candidates, applications, jobs] = await Promise.all([
     HireCandidate.find({ workspaceId }).sort({ createdAt: 1 }).lean(),
     HireApplication.find({ workspaceId }).sort({ createdAt: 1 }).lean(),
-    HireJob.find({ workspaceId }).select('_id title').lean(),
+    HireJob.find({ workspaceId }).select('_id title departmentId').lean(),
   ])
+  const departmentIds = Array.from(
+    new Map(
+      jobs
+        .filter((job) => job.departmentId)
+        .map((job) => [job.departmentId.toString(), job.departmentId]),
+    ).values(),
+  )
+  const departments = departmentIds.length
+    ? await HireDepartment.find({ workspaceId, _id: { $in: departmentIds } })
+      .select('_id name')
+      .lean()
+    : []
   const applicationsByCandidate = new Map<string, typeof applications>()
   for (const application of applications) {
     const key = application.candidateId.toString()
@@ -39,7 +53,19 @@ export async function buildWorkspaceCandidatesCsv(ctx: MembershipContext): Promi
     rows.push(application)
     applicationsByCandidate.set(key, rows)
   }
+  const jobById = new Map(jobs.map((job) => [job._id.toString(), job]))
   const titleByJob = new Map(jobs.map((job) => [job._id.toString(), job.title]))
+  const departmentNameById = new Map(
+    departments.map((department) => [department._id.toString(), department.name]),
+  )
+  const departmentNameForApplication = (application: (typeof applications)[number] | null) => {
+    if (!application) return ''
+    const job = jobById.get(application.jobId.toString())
+    if (!job) return 'Deleted job'
+    return job.departmentId
+      ? departmentNameById.get(job.departmentId.toString()) ?? 'Department unavailable'
+      : 'Department unavailable'
+  }
 
   const rows: unknown[][] = []
   for (const candidate of candidates) {
@@ -53,6 +79,7 @@ export async function buildWorkspaceCandidatesCsv(ctx: MembershipContext): Promi
         candidate.source,
         candidate.resumeFileName,
         application ? titleByJob.get(application.jobId.toString()) ?? 'Deleted job' : '',
+        departmentNameForApplication(application),
         application?.stage,
         application?.decisionNote,
         candidate.createdAt,

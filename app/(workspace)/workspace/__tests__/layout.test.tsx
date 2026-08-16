@@ -68,6 +68,9 @@ describe("WorkspaceLayout navigation", () => {
       "/workspace/audit",
     );
     expect(
+      screen.getAllByRole("link", { name: /Departments/ })[0],
+    ).toHaveAttribute("href", "/workspace/departments");
+    expect(
       screen.getAllByRole("link", { name: /IPG Hire/ })[0],
     ).toHaveAttribute("href", "/workspace/overview");
   });

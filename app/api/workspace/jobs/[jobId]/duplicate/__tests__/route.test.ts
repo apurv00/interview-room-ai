@@ -7,19 +7,23 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../../_lib/composeHireApiRoute', () => ({
-  composeHireApiRoute: (options: any) => (
+  composeHireApiRoute: (options: any) => async (
     req: Request,
     context?: { params?: Record<string, string> },
-  ) => options.handler(req, {
-    user: { id: 'hire-member:workspace.member', email: 'admin@acme.com' },
-    body: {},
-    params: context?.params ?? {},
-  }),
+  ) => {
+    const body = options.schema ? options.schema.parse(await req.json()) : {}
+    return options.handler(req, {
+      user: { id: 'hire-member:workspace.member', email: 'admin@acme.com' },
+      body,
+      params: context?.params ?? {},
+    })
+  },
 }))
 
 vi.mock('@hire', () => ({
   requireMembership: mocks.requireMembership,
   duplicateJob: mocks.duplicateJob,
+  DuplicateJobSchema: { parse: (value: unknown) => value },
 }))
 
 vi.mock('../../../../_lib/serialize', () => ({
@@ -29,6 +33,7 @@ vi.mock('../../../../_lib/serialize', () => ({
 import { POST } from '../route'
 
 const JOB_ID = '222222222222222222222222'
+const DEPARTMENT_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa'
 const CAPABILITY = '111111111111111111111111.' + 'a'.repeat(64)
 const ctx = {
   workspace: { _id: '111111111111111111111111', name: 'Acme' },
@@ -55,7 +60,7 @@ describe('POST /api/workspace/jobs/[jobId]/duplicate', () => {
     const response = await POST(
       new Request(
         `https://hire.interviewprep.guru/api/workspace/jobs/${JOB_ID}/duplicate`,
-        { method: 'POST' },
+        { method: 'POST', body: JSON.stringify({ departmentId: DEPARTMENT_ID }) },
       ) as never,
       { params: { jobId: JOB_ID } },
     )
@@ -74,7 +79,7 @@ describe('POST /api/workspace/jobs/[jobId]/duplicate', () => {
       userId: 'hire-member:workspace.member',
       email: 'admin@acme.com',
     })
-    expect(mocks.duplicateJob).toHaveBeenCalledWith(ctx, JOB_ID)
+    expect(mocks.duplicateJob).toHaveBeenCalledWith(ctx, JOB_ID, { departmentId: DEPARTMENT_ID })
     expect(mocks.serializeJob).toHaveBeenCalledWith(duplicated.job, { includeJd: true })
   })
 })

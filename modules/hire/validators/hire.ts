@@ -130,11 +130,25 @@ export const CreateJobSchema = z
 export const CreateStructuredJobSchema = z
   .object({
     ...jobDescriptionFields,
+    // Department is intentionally excluded from BuildJobDescriptionSchema:
+    // it classifies the requisition for operations tracking, but does not
+    // change the immutable scoring contract or require a new JD generation.
+    departmentId: objectIdSchema,
     jdText: z.string().trim().min(50, 'Job description is too short').max(50000),
     screeningSettings: screeningSettingsSchema.optional(),
   })
   .strict()
   .superRefine(rejectDuplicateRequirements)
+
+/** A duplicate must be deliberately placed in an active department. */
+export const DuplicateJobSchema = z
+  .object({ departmentId: objectIdSchema })
+  .strict()
+
+/** Dedicated metadata command; job lifecycle PATCH remains status-only. */
+export const UpdateJobDepartmentSchema = z
+  .object({ departmentId: objectIdSchema })
+  .strict()
 
 function validateCloseEmailTemplatePlaceholders(
   value: string,
@@ -372,6 +386,8 @@ export type RestoreWorkspacePayload = z.infer<typeof RestoreWorkspaceSchema>
 export type SelfDeleteHireMemberPayload = z.infer<typeof SelfDeleteHireMemberSchema>
 export type BuildJobDescriptionPayload = z.infer<typeof BuildJobDescriptionSchema>
 export type CreateJobPayload = z.infer<typeof CreateStructuredJobSchema>
+export type DuplicateJobPayload = z.infer<typeof DuplicateJobSchema>
+export type UpdateJobDepartmentPayload = z.infer<typeof UpdateJobDepartmentSchema>
 export type UpdateJobStatusPayload = z.infer<typeof UpdateJobStatusSchema>
 export type AddCandidatePayload = z.infer<typeof AddCandidateSchema>
 export type CreateApplicationPayload = z.infer<typeof CreateApplicationSchema>

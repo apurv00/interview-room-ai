@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   candidateFind: vi.fn(),
   applicationFind: vi.fn(),
   jobFind: vi.fn(),
+  departmentFind: vi.fn(),
 }))
 
 vi.mock('../services/hireControlBoundary', () => ({
@@ -15,6 +16,10 @@ vi.mock('../models', () => ({
   HireCandidate: { find: mocks.candidateFind },
   HireApplication: { find: mocks.applicationFind },
   HireJob: { find: mocks.jobFind },
+}))
+
+vi.mock('@hire-departments/models', () => ({
+  HireDepartment: { find: mocks.departmentFind },
 }))
 
 import {
@@ -59,7 +64,16 @@ beforeEach(() => {
   )
   mocks.jobFind.mockReturnValue({
     select: () => ({
-      lean: () => Promise.resolve([{ _id: { toString: () => 'job-1' }, title: 'Engineer' }]),
+      lean: () => Promise.resolve([{
+        _id: { toString: () => 'job-1' },
+        departmentId: { toString: () => 'department-1' },
+        title: 'Engineer',
+      }]),
+    }),
+  })
+  mocks.departmentFind.mockReturnValue({
+    select: () => ({
+      lean: () => Promise.resolve([{ _id: { toString: () => 'department-1' }, name: 'Engineering' }]),
     }),
   })
 })
@@ -71,9 +85,14 @@ describe('buildWorkspaceCandidatesCsv', () => {
     expect(mocks.candidateFind).toHaveBeenCalledWith({ workspaceId: 'ws-1' })
     expect(mocks.applicationFind).toHaveBeenCalledWith({ workspaceId: 'ws-1' })
     expect(mocks.jobFind).toHaveBeenCalledWith({ workspaceId: 'ws-1' })
+    expect(mocks.departmentFind).toHaveBeenCalledWith({
+      workspaceId: 'ws-1',
+      _id: { $in: [expect.anything()] },
+    })
     expect(csv).toContain('"same-as-b2c@example.com"')
     expect(csv).toContain('"shortlist"')
     expect(csv).toContain('"Engineer"')
+    expect(csv).toContain('"Engineering"')
     expect(csv).toContain('"\'=IMPORTXML(""https://bad"")"')
     expect(csv).toContain('"resume,""final"".pdf"')
   })
