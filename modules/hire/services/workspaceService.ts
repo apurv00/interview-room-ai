@@ -732,7 +732,7 @@ export async function softDeleteWorkspace(
       // single, well-defined commit.
       await HireJob.updateMany(
         { workspaceId: ctx.workspace._id },
-        { $set: { applyPageEnabled: false }, $unset: { applyTokenHash: 1 } },
+        { $set: { applyPageEnabled: false }, $unset: { applyTokenHash: 1, applyTokenSecret: 1 } },
         { session },
       )
       // A deletion-pending workspace must have no recoverable email egress.

@@ -23,6 +23,15 @@ describe('Phase-1 scoring contract schema', () => {
     ])
   })
 
+  it('keeps the apply-link secret hidden from ordinary job projections', () => {
+    const secretPath = HireJob.schema.path('applyTokenSecret')
+    expect(secretPath).toBeDefined()
+    expect((secretPath.options as { select?: boolean }).select).toBe(false)
+    expect((secretPath.options as { minlength?: number }).minlength).toBe(64)
+    expect((secretPath.options as { maxlength?: number }).maxlength).toBe(64)
+    expect(HireJob.schema.path('applyLinkRecovery')).toBeUndefined()
+  })
+
   it('is workspace-owned and immutable except for active/superseded state', () => {
     for (const pathName of [
       'workspaceId',

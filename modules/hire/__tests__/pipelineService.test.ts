@@ -530,6 +530,7 @@ describe('duplicateJob', () => {
     expect(job.applyTokenHash).toBe(
       createHash('sha256').update(rawSecret).digest('hex'),
     )
+    expect(job.applyTokenSecret).toBe(rawSecret)
     expect(version).toMatchObject({
       workspaceId: WORKSPACE_ID,
       version: 1,
@@ -546,7 +547,7 @@ describe('duplicateJob', () => {
     expect(version.input.responsibilities).toEqual(requirement.input.responsibilities)
     expect(version.input.responsibilities).not.toBe(requirement.input.responsibilities)
     expect(version.requirements).not.toBe(requirement.requirements)
-    expect(JSON.stringify([jobDocs, versionDocs])).not.toContain(rawSecret)
+    expect(JSON.stringify(versionDocs)).not.toContain(rawSecret)
     expect(mockCandidate.create).not.toHaveBeenCalled()
     expect(mockCandidate.find).not.toHaveBeenCalled()
     expect(mockApplication.create).not.toHaveBeenCalled()

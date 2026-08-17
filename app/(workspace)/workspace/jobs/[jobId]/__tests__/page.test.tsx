@@ -178,7 +178,7 @@ describe('job close-rejection email delivery', () => {
 })
 
 describe('job duplication UI', () => {
-  it('keeps the fresh public apply capability transient until HR copies it and continues', async () => {
+  it('shows the fresh public apply capability and makes clear it remains available on the new job page', async () => {
     const capability = 'fresh-job-capability.abc123'
     const freshApplyLink = `${window.location.origin}/apply#apply=${encodeURIComponent(capability)}`
     const writeText = vi.fn().mockResolvedValue(undefined)
@@ -255,6 +255,7 @@ describe('job duplication UI', () => {
       body: JSON.stringify({ departmentId: 'department-2' }),
     })
     expect(screen.getByRole('textbox', { name: 'Fresh public apply link' })).toHaveValue(freshApplyLink)
+    expect(screen.getByText(/also available from the new job page/i)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Continue to new job' })).toHaveAttribute(
       'href',
       '/workspace/jobs/job-copy',
@@ -656,6 +657,157 @@ describe('human-round pipeline visibility', () => {
   })
 })
 
+describe('visible public apply links', () => {
+  function openJobResponse({
+    applyPageEnabled = true,
+    status = 'open',
+  }: {
+    applyPageEnabled?: boolean
+    status?: 'open' | 'on_hold' | 'closed'
+  } = {}) {
+    return json({
+      job: {
+        id: 'job-1',
+        departmentId: 'department-1',
+        title: 'Backend Engineer',
+        status,
+        closeNote: null,
+        closedByName: null,
+        jdText: 'Build reliable systems.',
+        applyPageEnabled,
+      },
+      entries: [],
+    })
+  }
+
+  it('shows the same fragment-based URL returned to the authenticated HR member', async () => {
+    const capability = '111111111111111111111111.' + 'a'.repeat(64)
+    const applyLink = `${window.location.origin}/apply#apply=${encodeURIComponent(capability)}`
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'member' } })
+      if (url === '/api/workspace/jobs/job-1') return openJobResponse()
+      if (url === '/api/workspace/jobs/job-1/apply-link') {
+        expect(init).toEqual({ cache: 'no-store' })
+        return json({ capability })
+      }
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    expect(await screen.findByDisplayValue(applyLink)).toBeInTheDocument()
+    expect(screen.getByText(/remains available to workspace members/i)).toBeInTheDocument()
+    expect(window.location.href).not.toContain(capability)
+  })
+
+  it('asks HR to replace a live legacy link that cannot be recovered', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'member' } })
+      if (url === '/api/workspace/jobs/job-1') return openJobResponse()
+      if (url === '/api/workspace/jobs/job-1/apply-link') {
+        return json({ capability: null })
+      }
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    expect(await screen.findByText(/live link cannot be recovered here/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Replace link' })).toBeInTheDocument()
+  })
+
+  it('does not present a temporary retrieval error as a reason to revoke a valid link', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'member' } })
+      if (url === '/api/workspace/jobs/job-1') return openJobResponse()
+      if (url === '/api/workspace/jobs/job-1/apply-link') {
+        return json({ error: 'Could not retrieve the active link' }, 503)
+      }
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    expect(await screen.findByText(/may still be live; try again before replacing/i))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/live link cannot be recovered here/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps a just-created URL visible when a routine recovery read is temporarily unavailable', async () => {
+    const capability = '111111111111111111111111.' + 'b'.repeat(64)
+    const applyLink = `${window.location.origin}/apply#apply=${encodeURIComponent(capability)}`
+    let enabled = false
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'member' } })
+      if (url === '/api/workspace/jobs/job-1') return openJobResponse({ applyPageEnabled: enabled })
+      if (url === '/api/workspace/jobs/job-1/apply-link' && init?.method === 'POST') {
+        enabled = true
+        return json({ enabled: true, capability })
+      }
+      if (url === '/api/workspace/jobs/job-1/apply-link') {
+        throw new Error('temporary protected-read failure')
+      }
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Create link' }))
+
+    expect(await screen.findByDisplayValue(applyLink)).toBeInTheDocument()
+    expect(screen.queryByText(/live link cannot be recovered here/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps a live on-hold link visible because public resolution remains enabled until close or turn-off', async () => {
+    const capability = '111111111111111111111111.' + 'c'.repeat(64)
+    const applyLink = `${window.location.origin}/apply#apply=${encodeURIComponent(capability)}`
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url === '/api/workspace/departments') return json({ departments: [] })
+      if (url === '/api/workspace') return json({ membership: { role: 'member' } })
+      if (url === '/api/workspace/jobs/job-1') {
+        return openJobResponse({ applyPageEnabled: true, status: 'on_hold' })
+      }
+      if (url === '/api/workspace/jobs/job-1/apply-link') {
+        return json({ capability })
+      }
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    expect(await screen.findByDisplayValue(applyLink)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Replace link' })).toBeInTheDocument()
+  })
+})
+
 describe('empty-job deletion UI', () => {
   function emptyJobResponse({ applyPageEnabled = false }: { applyPageEnabled?: boolean } = {}) {
     return json({
@@ -698,6 +850,9 @@ describe('empty-job deletion UI', () => {
       if (url === '/api/workspace/departments') return json({ departments: [] })
       if (url === '/api/workspace') return json({ membership: { role: 'admin' } })
       if (url === '/api/workspace/jobs/job-1') return emptyJobResponse({ applyPageEnabled: true })
+      if (url === '/api/workspace/jobs/job-1/apply-link') {
+        return json({ capability: null })
+      }
       if (url.endsWith('/screening')) return json({ gates: [] })
       if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
       throw new Error(`Unexpected request: ${url}`)

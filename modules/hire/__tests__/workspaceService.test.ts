@@ -708,7 +708,10 @@ describe('workspace soft deletion', () => {
     expect(options.session).toBe(transactionSession)
     expect(mockJob.updateMany).toHaveBeenCalledWith(
       { workspaceId: 'ws1' },
-      { $set: { applyPageEnabled: false }, $unset: { applyTokenHash: 1 } },
+      {
+        $set: { applyPageEnabled: false },
+        $unset: { applyTokenHash: 1, applyTokenSecret: 1 },
+      },
       { session: transactionSession },
     )
     expect(mockOutbox.updateMany).toHaveBeenCalledWith(

@@ -21,13 +21,9 @@ import {
 
 /**
  * Public apply page: a per-job shareable link that lets candidates submit
- * themselves into a workspace's pipeline without an account.
- *
- * Token model mirrors the AI-round invite (the pattern this repo already
- * trusts): 32 random bytes, shown to the recruiter ONCE, stored only as a
- * sha256 hash. A database dump therefore yields no working public URLs.
- * Rotating issues a new token and instantly kills every copy of the old
- * link — the only revocation mechanism a shared URL can have.
+ * themselves into a workspace's pipeline without an account. The public
+ * lookup stays hash-only. The current secret also stays on the job, hidden
+ * from normal reads, so authenticated HR can copy the same URL again.
  */
 
 export function sha256(value: string): string {
@@ -35,7 +31,7 @@ export function sha256(value: string): string {
 }
 
 export interface ApplyLinkResult {
-  /** Workspace-scoped capability — returned ONCE; never stored or readable again. */
+  /** Workspace-scoped capability, retrievable later by workspace members. */
   capability: string
   enabled: boolean
 }
@@ -77,6 +73,7 @@ export async function issueApplyLink(
         {
           $set: {
             applyTokenHash: sha256(token),
+            applyTokenSecret: token,
             applyPageEnabled: true,
           },
         },
@@ -93,22 +90,32 @@ export async function issueApplyLink(
   )
 }
 
-/** Turn the page off. The hash is cleared so the old link cannot resume. */
+/** Recover the active link only for a member of the owning workspace. */
+export async function recoverApplyLink(
+  ctx: MembershipContext,
+  jobId: string,
+): Promise<string | null> {
+  await connectDB()
+  const job = await HireJob.findOne({
+    _id: jobId,
+    workspaceId: ctx.workspace._id,
+  }).select('+applyTokenSecret')
+  if (!job) throw new NotFoundError('Job')
+  if (job.status === 'closed' || !job.applyPageEnabled || !job.applyTokenSecret) return null
+  return encodeWorkspaceCapability(ctx.workspace._id.toString(), job.applyTokenSecret)
+}
+
+/** Turn the page off and erase both public lookup and visible-link material. */
 export async function disableApplyLink(
   ctx: MembershipContext,
   jobId: string,
 ): Promise<{ enabled: false }> {
   await connectDB()
-  const job = await HireJob.findOne({
-    _id: jobId,
-    workspaceId: ctx.workspace._id,
-  })
-  if (!job) throw new NotFoundError('Job')
   const update = await HireJob.updateOne(
     { _id: jobId, workspaceId: ctx.workspace._id },
     {
       $set: { applyPageEnabled: false },
-      $unset: { applyTokenHash: 1 },
+      $unset: { applyTokenHash: 1, applyTokenSecret: 1 },
     },
     { runValidators: true },
   )
