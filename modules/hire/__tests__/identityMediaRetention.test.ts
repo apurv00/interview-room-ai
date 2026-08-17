@@ -7,7 +7,7 @@ vi.mock('../services/hireControlBoundary', () => ({
 }))
 
 const { consent, attempt, job, media, round, workspace, session } = vi.hoisted(() => ({
-  consent: { exists: vi.fn() },
+  consent: { exists: vi.fn(), findOne: vi.fn() },
   attempt: { findOne: vi.fn(), updateOne: vi.fn() },
   job: { findOne: vi.fn() },
   media: {
@@ -32,6 +32,12 @@ vi.mock('../models/HireRound', () => ({ HireRound: round }))
 vi.mock('../models/HireWorkspace', () => ({ HireWorkspace: workspace }))
 
 import { saveHireIdentityPhoto } from '../services/identityMediaService'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_DISCLOSURE_DIGEST,
+  HIRE_AI_V2_CONSENT_VERSION,
+  HIRE_AI_V2_DISCLOSURE_DIGEST,
+} from '../policies/aiInterviewConsent'
 
 const IDS = {
   workspaceId: '111111111111111111111111',
@@ -53,6 +59,15 @@ beforeEach(() => {
     lean: vi.fn().mockResolvedValue({ consentReceiptId: '777777777777777777777777' }),
   })
   consent.exists.mockResolvedValue({ _id: '777777777777777777777777' })
+  consent.findOne.mockReturnValue({
+    select: vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        consentVersion: HIRE_AI_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
+        acceptedAt: new Date('2026-08-10T00:00:00.000Z'),
+      }),
+    }),
+  })
   media.create.mockImplementation(async (value: unknown) => value)
   media.updateMany.mockResolvedValue({ modifiedCount: 0 })
   media.updateOne.mockResolvedValue({ matchedCount: 1 })
@@ -62,6 +77,54 @@ beforeEach(() => {
 })
 
 describe('identity media retention after close', () => {
+  it('allows photo capture for an active attempt with the exact v2 receipt pair', async () => {
+    consent.findOne.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          consentVersion: HIRE_AI_V2_CONSENT_VERSION,
+          disclosureDigest: HIRE_AI_V2_DISCLOSURE_DIGEST,
+          acceptedAt: new Date('2026-08-10T00:00:00.000Z'),
+        }),
+      }),
+    })
+    job.findOne.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'open' }),
+      }),
+    })
+    const body = await sharp({
+      create: {
+        width: 20,
+        height: 20,
+        channels: 3,
+        background: { r: 20, g: 40, b: 60 },
+      },
+    }).jpeg().toBuffer()
+
+    await expect(
+      saveHireIdentityPhoto({
+        scope: IDS,
+        body,
+        declaredContentType: 'image/jpeg',
+        storage: {
+          upload: vi.fn().mockResolvedValue(undefined),
+          delete: vi.fn(),
+          signRead: vi.fn(),
+        },
+      }),
+    ).resolves.toMatchObject({ state: 'ready' })
+    expect(consent.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: '777777777777777777777777',
+        attemptId: IDS.attemptId,
+        'accepted.recording': true,
+        'accepted.identityPhoto': true,
+        'accepted.attentionMonitoring': true,
+        'accepted.aiEvaluation': true,
+      }),
+    )
+  })
+
   it('keeps the job-relative six-calendar-month deadline on a late-created photo', async () => {
     const closedAt = new Date('2024-08-31T12:00:00.000Z')
     const expectedPurgeAt = new Date('2025-02-28T12:00:00.000Z')

@@ -11,7 +11,12 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { COMPANY_PROFILES } from '@interview/config/companyProfiles'
 import { track } from '@shared/analytics/track'
 import { readLiveCoachingPreference, writeLiveCoachingPreference } from '@interview/config/liveCoachingPreference'
+import { buildInterviewRoomSearch, isHireRuntimeInterview } from '@interview/config/hireRuntimeMode'
 import { InterviewUnlockCheckoutDialog } from '@/app/_components/billing/InterviewUnlockCheckoutDialog'
+import {
+  isLobbyPrivacyModeAvailable,
+  shouldClearStaleHirePrivacyMode,
+} from './lobbyPrivacyMode'
 import {
   shouldOfferPaidInterviewCheckout,
   type InterviewUsageSummary,
@@ -82,13 +87,19 @@ function LobbyPageInner() {
   const animFrameRef = useRef<number>(0)
 
   const [config, setConfig] = useState<InterviewConfig | null>(null)
+  const configRef = useRef<InterviewConfig | null>(config)
+  configRef.current = config
+  const isHireInterview = isHireRuntimeInterview(config)
   const [bootstrapError, setBootstrapError] = useState<string | null>(null)
   const [lobbyCompany, setLobbyCompany] = useState('')
   const [showSuggestions, setShowSuggestions] = useState(false)
-  // Privacy mode — per-interview opt-out of video storage. Gated behind
-  // NEXT_PUBLIC_FEATURE_PRIVACY_MODE so it only appears in environments
-  // where the feature has been explicitly enabled.
-  const privacyModeFeatureEnabled = process.env.NEXT_PUBLIC_FEATURE_PRIVACY_MODE === 'true'
+  // Privacy mode is a B2C-only per-interview opt-out of video storage. A Hire
+  // invite has already obtained the required recording consent, so it must
+  // never offer a control that suppresses that recording.
+  const privacyModeFeatureEnabled = isLobbyPrivacyModeAvailable(
+    config,
+    process.env.NEXT_PUBLIC_FEATURE_PRIVACY_MODE === 'true',
+  )
   const [privacyMode, setPrivacyMode] = useState(false)
   // Live coaching (feedback #1): chosen here in the lobby and frozen for the
   // session — immutable once the interview starts, which keeps the engine's
@@ -393,10 +404,10 @@ function LobbyPageInner() {
           // Carry runtime choices via the URL (storage-independent handoff):
           // ?lc=0 = live coaching off, ?voice=indian = Sarvam Indian voice. The
           // room reads these on mount; ?lc survives even a failed config write.
-          const params = new URLSearchParams()
-          if (!liveCoachingEnabledRef.current) params.set('lc', '0')
-          if (indianVoiceRef.current) params.set('voice', 'indian')
-          const qs = params.toString()
+          const qs = buildInterviewRoomSearch(configRef.current, {
+            liveCoachingEnabled: liveCoachingEnabledRef.current,
+            indianVoice: indianVoiceRef.current,
+          })
           router.push(qs ? `/interview?${qs}` : '/interview')
           return 0
         }
@@ -419,20 +430,22 @@ function LobbyPageInner() {
       c => c.label === 'Speech recognition' && c.status === 'error'
     )
 
-    // Save optional company context, degraded flag, and privacy-mode opt-in
-    // to config before entering
+    // Save optional company context, degraded flag, and the B2C privacy-mode
+    // opt-in to config before entering. A stale Hire config must not retain a
+    // privacy-mode opt-out from another session or a manually changed client.
     if (config) {
       const patch: Partial<InterviewConfig> = {}
       if (lobbyCompany.trim()) patch.targetCompany = lobbyCompany.trim()
       if (srFailed) patch.degraded = true
-      if (privacyModeFeatureEnabled && privacyMode) patch.privacyMode = true
+      if (shouldClearStaleHirePrivacyMode(config)) patch.privacyMode = false
+      else if (privacyModeFeatureEnabled && privacyMode) patch.privacyMode = true
       // NOTE: live coaching is NOT persisted here — it's passed to the room via
       // the URL (?lc=0 when off) on the join navigation below, a
       // storage-independent channel. This write therefore only runs when the
       // user actually set company / degraded / privacy, and stays unguarded so a
       // privacy-mode persistence failure fails CLOSED (throws → the join does
       // not proceed) rather than entering with a stale config that would store
-      // video despite the opt-out.
+      // video despite a B2C opt-out.
       if (Object.keys(patch).length > 0) {
         const updated = { ...config, ...patch }
         setConfig(updated)
@@ -670,7 +683,7 @@ function LobbyPageInner() {
             </div>
 
             {/* Interviewer voice — prominent Default/Indian choice, set before joining (feedback #4) */}
-            {voicePickerEnabled && (
+            {config && voicePickerEnabled && !isHireInterview && (
               <div className="bg-white border border-[#e1e8ed] rounded-2xl p-4">
                 <div className="text-sm font-semibold text-[#0f1419] mb-0.5">Interviewer voice</div>
                 <div className="text-xs text-[#71767b] mb-3 leading-relaxed">
@@ -800,7 +813,7 @@ function LobbyPageInner() {
               </div>
             )}
 
-            {/* Privacy mode — per-interview opt-out of video storage */}
+            {/* B2C-only privacy mode — Hire recording is mandatory by consent. */}
             {privacyModeFeatureEnabled && (
               <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
                 <input
@@ -821,23 +834,25 @@ function LobbyPageInner() {
             )}
 
             {/* Live coaching — set here in the lobby; immutable once the interview starts */}
-            <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
-              <input
-                type="checkbox"
-                checked={liveCoachingEnabled}
-                onChange={(e) => { setLiveCoachingEnabled(e.target.checked); writeLiveCoachingPreference(e.target.checked) }}
-                className="mt-0.5 w-4 h-4 accent-[#2563eb]"
-              />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-[#0f1419]">Live coaching</div>
-                <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
-                  Show real-time tips during the interview — pacing, filler words, eye contact
-                  and STAR coaching cues. Turn this off for a distraction-free session; status
-                  messages like the time-up warning still appear. This can&apos;t be changed once
-                  the interview starts, and we&apos;ll remember your choice next time.
+            {config && !isHireInterview && (
+              <label className="bg-white border border-[#e1e8ed] rounded-2xl p-4 flex items-start gap-3 cursor-pointer hover:border-[#2563eb]/30 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={liveCoachingEnabled}
+                  onChange={(e) => { setLiveCoachingEnabled(e.target.checked); writeLiveCoachingPreference(e.target.checked) }}
+                  className="mt-0.5 w-4 h-4 accent-[#2563eb]"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-[#0f1419]">Live coaching</div>
+                  <div className="text-xs text-[#71767b] mt-0.5 leading-relaxed">
+                    Show real-time tips during the interview — pacing, filler words, eye contact
+                    and STAR coaching cues. Turn this off for a distraction-free session; status
+                    messages like the time-up warning still appear. This can&apos;t be changed once
+                    the interview starts, and we&apos;ll remember your choice next time.
+                  </div>
                 </div>
-              </div>
-            </label>
+              </label>
+            )}
           </motion.div>
         </div>
 

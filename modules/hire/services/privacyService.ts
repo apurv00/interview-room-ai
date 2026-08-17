@@ -23,6 +23,13 @@ import {
 } from '../models/HirePrivacyRequest'
 import { HireRound } from '../models/HireRound'
 import { HireScreeningGate } from '../models/HireScreeningGate'
+import {
+  HireMultimodalAnalysis,
+  HireMultimodalAnalysisIngestionEvent,
+  HireMultimodalObservation,
+  HireMultimodalObservationIngestionEvent,
+  HireMultimodalObservationPurgeObligation,
+} from '../../hire-multimodal/models'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
   claimHireCandidatePiiWriteFence,
@@ -582,6 +589,24 @@ export async function applyVerifiedHirePrivacyRequest(input: {
           },
           { session: dbSession },
         ),
+        // Supplemental observations have no aggregate, decision, evidence, or
+        // export purpose after a verified deletion. Remove both the derived
+        // report and its idempotency ledger under the same candidate fence.
+        () => HireMultimodalObservationIngestionEvent.deleteMany(scope, {
+          session: dbSession,
+        }),
+        () => HireMultimodalObservation.deleteMany(scope, {
+          session: dbSession,
+        }),
+        () => HireMultimodalObservationPurgeObligation.deleteMany(scope, {
+          session: dbSession,
+        }),
+        () => HireMultimodalAnalysisIngestionEvent.deleteMany(scope, {
+          session: dbSession,
+        }),
+        () => HireMultimodalAnalysis.deleteMany(scope, {
+          session: dbSession,
+        }),
         // A completed task normally clears its payload, but a retry or
         // recovery task may still hold the original resume and supplied PII.
         // Delete only the candidate's exact tenant-owned task coordinates as

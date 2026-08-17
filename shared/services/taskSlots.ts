@@ -51,6 +51,10 @@ export const TASK_SLOTS = [
   'jobs.evidence-attribution',
   // Hire — resume intake: identity extraction + JD-match in one call per CV
   'hire.resume-intake',
+  // Hire — post-interview recorded video/audio/facial review. This is a
+  // recruiter report only; it is deliberately separate from consumer coaching
+  // and never writes a hiring decision or score.
+  'hire.multimodal-analysis',
 ] as const
 
 export type TaskSlot = (typeof TASK_SLOTS)[number]
@@ -149,4 +153,9 @@ export const TASK_SLOT_DEFAULTS: Record<
   // a 50-CV batch must not burn deep-reasoning tokens per file. Anthropic
   // fallback so a provider outage degrades to slower intake, not lost CVs.
   'hire.resume-intake':                  { model: 'gpt-5.6-luna', maxTokens: 1200, provider: 'openai', fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic', reasoningEffort: 'medium' },
+  // Structured post-interview signal synthesis. It is asynchronous and
+  // bounded JSON, so preserve the proven no-reasoning fusion envelope rather
+  // than borrowing the B2C task slot or emitting recruiter-visible prose from
+  // an interactive coaching path.
+  'hire.multimodal-analysis':             { model: 'gpt-5.6-luna', maxTokens: 3000, provider: 'openai', reasoningEffort: 'none' },
 }

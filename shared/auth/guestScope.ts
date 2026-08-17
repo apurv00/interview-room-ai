@@ -104,7 +104,6 @@ const ALLOWED_API_EXACT = new Map<string, readonly string[]>([
   ['/api/tts', ['POST']],
   ['/api/tts/stream', ['POST']],
   ['/api/recordings/finalize', ['POST']],
-  ['/api/recordings/landmarks', ['POST']],
   ['/api/storage/presign', ['POST']],
   ['/api/storage/multipart', ['POST', 'PUT']],
   ['/api/settings/usage', ['GET']], // lobby pre-flight: plan/entitlement
@@ -112,11 +111,6 @@ const ALLOWED_API_EXACT = new Map<string, readonly string[]>([
   // The lobby's network check pings HEAD and treats a non-OK as a hard
   // failure — without HEAD the Join button never enables (Codex P1 on #607).
   ['/api/health', ['GET', 'HEAD']],
-  // Completion trigger for multimodal analysis (fire-and-forget from
-  // useInterview). A 403 here silently discards the candidate's recording,
-  // transcript and landmark analysis — nothing retries it, because the
-  // guest is redirected away and signed out (Codex P2 on #607).
-  ['/api/analysis/start', ['POST']],
 ])
 
 /**

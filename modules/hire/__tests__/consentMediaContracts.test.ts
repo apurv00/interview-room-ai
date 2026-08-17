@@ -15,8 +15,14 @@ import {
   HIRE_AI_CONSENT_VERSION,
   HIRE_AI_DISCLOSURE_DIGEST,
   HIRE_AI_DISCLOSURES,
+  HIRE_AI_V2_CONSENT_VERSION,
+  HIRE_AI_V2_DISCLOSURE_DIGEST,
+  HIRE_AI_V3_CONSENT_VERSION,
+  HIRE_AI_V3_DISCLOSURE_DIGEST,
   HireConsentError,
   assertCompleteHireConsent,
+  isRecognizedHireConsentSnapshot,
+  supportsHireMultimodalObservations,
 } from '../policies/aiInterviewConsent'
 import {
   InvalidHireMediaKeyError,
@@ -58,14 +64,50 @@ describe('Hire AI consent contract', () => {
     ).not.toThrow()
   })
 
-  it('pins a versioned digest to recording, selfie, attention, AI, and retention copy', () => {
-    expect(HIRE_AI_CONSENT_VERSION).toMatch(/^hire-ai-v\d-/)
+  it('pins V4 to recording sharing, Hire analysis, selfie, AI, and retention copy', () => {
+    expect(HIRE_AI_CONSENT_VERSION).toBe('hire-ai-v4-2026-08-17')
     expect(HIRE_AI_DISCLOSURE_DIGEST).toMatch(/^[a-f0-9]{64}$/)
     expect(HIRE_AI_DISCLOSURES.recording).toMatch(/recorded/i)
+    expect(HIRE_AI_DISCLOSURES.recording).toMatch(/shared with the hiring team/i)
+    expect(HIRE_AI_DISCLOSURES.recording).toMatch(/Hire interview review/i)
     expect(HIRE_AI_DISCLOSURES.identityPhoto).toMatch(/selfie/i)
-    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/not scores/i)
+    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/structured facial-landmark/i)
+    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/not standalone hiring scores/i)
     expect(HIRE_AI_DISCLOSURES.aiEvaluation).toMatch(/human/i)
     expect(HIRE_AI_DISCLOSURES.retention).toMatch(/six calendar months/i)
+  })
+
+  it('recognizes only exact historical V2/V3 receipt pairs for active legacy attempts', () => {
+    expect(
+      isRecognizedHireConsentSnapshot({
+        consentVersion: HIRE_AI_V2_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_V2_DISCLOSURE_DIGEST,
+      }),
+    ).toBe(true)
+    expect(
+      isRecognizedHireConsentSnapshot({
+        consentVersion: HIRE_AI_V3_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_V3_DISCLOSURE_DIGEST,
+      }),
+    ).toBe(true)
+    expect(
+      isRecognizedHireConsentSnapshot({
+        consentVersion: HIRE_AI_V2_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
+      }),
+    ).toBe(false)
+    expect(
+      isRecognizedHireConsentSnapshot({
+        consentVersion: HIRE_AI_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_V2_DISCLOSURE_DIGEST,
+      }),
+    ).toBe(false)
+  })
+
+  it('enables current Hire-native capture only for a V4 receipt', () => {
+    expect(supportsHireMultimodalObservations(HIRE_AI_CONSENT_VERSION)).toBe(true)
+    expect(supportsHireMultimodalObservations(HIRE_AI_V3_CONSENT_VERSION)).toBe(false)
+    expect(supportsHireMultimodalObservations(HIRE_AI_V2_CONSENT_VERSION)).toBe(false)
   })
 
   it('rejects a persisted receipt whose acknowledgement is false', () => {

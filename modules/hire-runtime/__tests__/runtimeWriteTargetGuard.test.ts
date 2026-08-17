@@ -99,7 +99,8 @@ describe('Hire runtime write target inventory', () => {
       '/api/interview/answer-candidate-question',
       '/api/interview/clarify-case-context',
       '/api/interview/clarify-coding',
-      '/api/recordings/landmarks',
+      '/api/hire-engine/multimodal-observations/capture',
+      '/api/hire-engine/multimodal-analysis/capture',
     ])
     for (const target of sessionTargets) {
       expect(target.guardedCoordinates).toContain('sessionId')

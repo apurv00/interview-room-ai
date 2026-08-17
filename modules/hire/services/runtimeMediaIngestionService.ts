@@ -81,10 +81,11 @@ function assertRuntimeArtifactScope(input: {
   runtimeSessionId: string
 }): void {
   const expectedOwner = runtimePrincipalId(input.roundId)
-  const match =
-    /^recordings\/([a-f0-9]{24})\/([a-f0-9]{24})(?:-(?:audio|screen))?-\d{10,16}\.webm$/i.exec(
-      input.artifact.sourceKey,
-    )
+  const match = input.artifact.kind === 'landmarks'
+    ? /^landmarks\/([a-f0-9]{24})\/([a-f0-9]{24})-([a-f0-9]{32})\.json$/i.exec(input.artifact.sourceKey)
+    : /^recordings\/([a-f0-9]{24})\/([a-f0-9]{24})(?:-(?:audio|screen))?-\d{10,16}\.webm$/i.exec(
+        input.artifact.sourceKey,
+      )
   if (
     !match ||
     match[1].toLowerCase() !== expectedOwner ||
@@ -164,7 +165,10 @@ export async function ingestRuntimeMediaArtifacts(input: {
 }): Promise<IHireMediaAsset[]> {
   await connectHireControlDB()
   const supported = input.artifacts.filter(
-    (artifact) => artifact.kind === 'recording' || artifact.kind === 'audio',
+    (artifact) =>
+      artifact.kind === 'recording' ||
+      artifact.kind === 'audio' ||
+      artifact.kind === 'landmarks',
   )
   if (supported.length === 0) return []
   const job = await HireJob.findOne({
@@ -182,8 +186,14 @@ export async function ingestRuntimeMediaArtifacts(input: {
       roundId: input.roundId,
       runtimeSessionId: input.runtimeSessionId,
     })
-    const kind =
-      artifact.kind === 'recording' ? 'camera_recording' : 'audio_recording'
+    if (artifact.kind === 'landmarks' && artifact.contentType !== 'application/json') {
+      throw new Error('Runtime landmark artifact has an invalid content type')
+    }
+    const kind = artifact.kind === 'recording'
+      ? 'camera_recording'
+      : artifact.kind === 'audio'
+        ? 'audio_recording'
+        : 'facial_landmarks'
     const existing = await HireMediaAsset.findOne({
       workspaceId: input.workspaceId,
       applicationId: input.applicationId,
@@ -206,8 +216,11 @@ export async function ingestRuntimeMediaArtifacts(input: {
       attemptId: input.attemptId,
       assetId: assetId.toString(),
     }
-    const storageKind =
-      artifact.kind === 'recording' ? 'camera-recording' : 'audio-recording'
+    const storageKind = artifact.kind === 'recording'
+      ? 'camera-recording'
+      : artifact.kind === 'audio'
+        ? 'audio-recording'
+        : 'facial-landmarks'
     const objectKey = hireMediaKey(coordinate, storageKind)
     const purgeEligibleAt =
       job.status === 'closed' && job.closedAt

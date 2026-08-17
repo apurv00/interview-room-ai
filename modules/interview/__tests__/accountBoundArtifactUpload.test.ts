@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   requestAccountBoundJson,
   uploadRecordingArtifact,
@@ -20,6 +20,10 @@ describe('account-bound interview artifact uploads', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     __resetReplayUploadPrivacyForTests()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('carries one privacy generation and origin identity through audio upload and association', async () => {
@@ -199,6 +203,32 @@ describe('account-bound interview artifact uploads', () => {
       expect(call.init?.headers).toMatchObject({ 'x-origin-user-id': USER_ID })
       expect(call.init?.signal).toBeInstanceOf(AbortSignal)
     }
+  })
+
+  it('bounds one JSON request without treating its timeout as a privacy cancellation', async () => {
+    vi.useFakeTimers()
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => reject(new Error('request timed out')), {
+          once: true,
+        })
+      })
+    }))
+
+    const request = requestAccountBoundJson(
+      '/api/hire-engine/multimodal-analysis/capture',
+      { sessionId: SESSION_ID, frames: [] },
+      captureReplayUploadIntent(USER_ID),
+      USER_ID,
+      { timeoutMs: 25 },
+    )
+    const rejected = expect(request).rejects.toThrow('request timed out')
+    await vi.advanceTimersByTimeAsync(25)
+
+    await rejected
+    expect(requestSignal?.aborted).toBe(true)
   })
 
   it('cancels landmark work only for exact 401 ACCOUNT_UNAVAILABLE', async () => {

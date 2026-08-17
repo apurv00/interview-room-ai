@@ -1,6 +1,11 @@
 /** Edge-safe route contract shared by runtime middleware and the Node proxy. */
 export const HIRE_RUNTIME_WRITE_DRAIN_MS = 6 * 60 * 1_000
 export const HIRE_RUNTIME_STORAGE_CAPABILITY_MS = 66 * 60 * 1_000
+/**
+ * The proxy buffers a runtime JSON request before enforcing the exact write
+ * target. Keep any client→runtime JSON contract at or below this limit.
+ */
+export const HIRE_RUNTIME_MAX_FENCED_BODY_BYTES = 16 * 1024 * 1024
 
 export type HireRuntimeCoordinatePolicy =
   | 'none'
@@ -43,7 +48,14 @@ export const HIRE_RUNTIME_EXACT_WRITE_TARGETS = [
   { pathname: '/api/tts', methods: ['POST'], coordinates: 'none', guardedCoordinates: [], body: 'required-object' },
   { pathname: '/api/tts/stream', methods: ['POST'], coordinates: 'none', guardedCoordinates: [], body: 'required-object' },
   { pathname: '/api/recordings/finalize', methods: ['POST'], coordinates: 'recording-artifact', guardedCoordinates: ['sessionId', 'key', 'x-origin-user-id'], body: 'required-object' },
-  { pathname: '/api/recordings/landmarks', methods: ['POST'], coordinates: 'required-session', guardedCoordinates: ['sessionId', 'x-origin-user-id'], body: 'required-object' },
+  // Hire-native supplemental observations are derived once from bounded
+  // in-browser samples. This exact route remains behind the same signed
+  // runtime binding fence as every other session-scoped write.
+  { pathname: '/api/hire-engine/multimodal-observations/capture', methods: ['POST'], coordinates: 'required-session', guardedCoordinates: ['sessionId'], body: 'required-object' },
+  // Full recorded-interview analysis stages bounded raw MediaPipe landmarks in
+  // the isolated runtime. The control plane receives only a signed artifact
+  // manifest after the runtime has persisted the source object.
+  { pathname: '/api/hire-engine/multimodal-analysis/capture', methods: ['POST'], coordinates: 'required-session', guardedCoordinates: ['sessionId'], body: 'required-object' },
   { pathname: '/api/storage/presign', methods: ['POST'], coordinates: 'storage-presign', guardedCoordinates: ['sessionId', 'key', 'x-origin-user-id'], body: 'required-object', storageCapability: true },
   { pathname: '/api/storage/multipart', methods: ['POST'], coordinates: 'storage-multipart', guardedCoordinates: ['sessionId', 'key', 'uploadId', 'x-origin-user-id'], body: 'required-object', storageCapability: true },
   { pathname: '/api/debug/deepgram-ws-close', methods: ['POST'], coordinates: 'none', guardedCoordinates: [], body: 'required-object' },

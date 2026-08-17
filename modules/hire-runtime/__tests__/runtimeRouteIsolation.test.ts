@@ -68,6 +68,7 @@ describe('isolated runtime route fence', () => {
     [`/api/interviews/${'a'.repeat(24)}`, 'GET'],
     ['/api/generate-feedback', 'GET'],
     ['/api/analysis/start', 'POST'],
+    ['/api/recordings/landmarks', 'POST'],
   ])('default-denies non-engine or wrong-method route %s %s', async (path, method) => {
     const response = await runtimeMiddleware(request(path, method))
     expect(response.status).toBe(404)
@@ -103,6 +104,7 @@ describe('isolated runtime route fence', () => {
     ['/api/auth/session', 'GET'],
     ['/api/hire-engine/bootstrap', 'GET'],
     ['/api/internal/hire-engine/revoke', 'POST'],
+    ['/api/internal/hire-engine/multimodal-observations/purge', 'POST'],
     ['/lobby', 'GET'],
     ['/interview', 'GET'],
     ['/api/settings/usage', 'GET'],
@@ -115,6 +117,7 @@ describe('isolated runtime route fence', () => {
   it.each([
     ['/api/generate-feedback?source=browser', 'POST', '/api/generate-feedback'],
     ['/api/tts?voice=indian', 'POST', '/api/tts'],
+    ['/api/hire-engine/multimodal-observations/capture', 'POST', '/api/hire-engine/multimodal-observations/capture'],
     [`/api/interviews/${'a'.repeat(24)}?final=true`, 'PATCH', `/api/interviews/${'a'.repeat(24)}`],
   ])('redirects mutable engine route %s through the body-preserving capability fence', async (path, method, target) => {
     const response = await runtimeMiddleware(request(path, method))
@@ -123,12 +126,17 @@ describe('isolated runtime route fence', () => {
     const redirected = new URL(response.headers.get('location') || '')
     expect(redirected.pathname).toBe('/api/hire-engine/write-fence')
     expect(redirected.searchParams.get('__runtime_target')).toBe(target)
-    const [queryKey, queryValue] = path.includes('source=')
-      ? ['source', 'browser']
-      : path.includes('voice=')
-        ? ['voice', 'indian']
-        : ['final', 'true']
-    expect(redirected.searchParams.get(queryKey)).toBe(queryValue)
+    if (path.includes('source=')) {
+      expect(redirected.searchParams.get('source')).toBe('browser')
+    } else if (path.includes('voice=')) {
+      expect(redirected.searchParams.get('voice')).toBe('indian')
+    } else if (path.includes('final=')) {
+      expect(redirected.searchParams.get('final')).toBe('true')
+    } else {
+      expect(Array.from(redirected.searchParams.keys())).toEqual([
+        '__runtime_target',
+      ])
+    }
   })
 
   it.each([

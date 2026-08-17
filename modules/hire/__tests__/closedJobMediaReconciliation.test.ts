@@ -4,9 +4,10 @@ vi.mock('../services/hireControlBoundary', () => ({
   connectHireControlDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-const { jobAggregate, mediaUpdateMany } = vi.hoisted(() => ({
+const { jobAggregate, mediaUpdateMany, scheduleObservationRetention } = vi.hoisted(() => ({
   jobAggregate: vi.fn(),
   mediaUpdateMany: vi.fn(),
+  scheduleObservationRetention: vi.fn(),
 }))
 
 vi.mock('../models/HireJob', () => ({
@@ -19,7 +20,20 @@ vi.mock('../models/HireMediaAsset', () => ({
   },
 }))
 vi.mock('../models/HirePrivacyRequest', () => ({ HirePrivacyRequest: {} }))
-vi.mock('../models/HireRound', () => ({ HireRound: {} }))
+vi.mock('../models/HireRound', () => ({ HireRound: { collection: { name: 'hirerounds' } } }))
+vi.mock('../../hire-multimodal/models', () => ({
+  HireMultimodalAnalysis: { collection: { name: 'hiremultimodalanalyses' } },
+  HireMultimodalObservation: { collection: { name: 'hiremultimodalobservations' } },
+  HireMultimodalObservationPurgeObligation: {
+    collection: { name: 'hiremultimodalobservationpurgeobligations' },
+  },
+}))
+vi.mock('../../hire-multimodal/services/observationRetentionService', () => ({
+  scheduleHireMultimodalObservationRetention: (...args: unknown[]) =>
+    scheduleObservationRetention(...args),
+  cancelFutureHireMultimodalObservationRetention: vi.fn(),
+  purgeDueHireMultimodalObservationRetention: vi.fn(),
+}))
 
 import { reconcileClosedJobMediaRetention } from '../services/mediaLifecycleService'
 
@@ -31,6 +45,10 @@ describe('closed-job media retention crash reconciliation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mediaUpdateMany.mockResolvedValue({ modifiedCount: 2 })
+    scheduleObservationRetention.mockResolvedValue({
+      scheduledObservations: 1,
+      scheduledRuntimePurgeObligations: 1,
+    })
   })
 
   it('repairs the post-commit crash window at calendar +6 months and is idempotent', async () => {
@@ -42,9 +60,21 @@ describe('closed-job media retention crash reconciliation', () => {
       .mockResolvedValueOnce([])
 
     await expect(reconcileClosedJobMediaRetention({ workspaceId: WORKSPACE_A }))
-      .resolves.toEqual({ closedJobs: 1, scheduled: 2 })
+      .resolves.toEqual({
+        closedJobs: 1,
+        scheduled: 4,
+        scheduledMedia: 2,
+        scheduledObservations: 1,
+        scheduledRuntimePurgeObligations: 1,
+      })
     await expect(reconcileClosedJobMediaRetention({ workspaceId: WORKSPACE_A }))
-      .resolves.toEqual({ closedJobs: 0, scheduled: 0 })
+      .resolves.toEqual({
+        closedJobs: 0,
+        scheduled: 0,
+        scheduledMedia: 0,
+        scheduledObservations: 0,
+        scheduledRuntimePurgeObligations: 0,
+      })
 
     expect(mediaUpdateMany).toHaveBeenCalledTimes(1)
     expect(mediaUpdateMany).toHaveBeenCalledWith(
@@ -60,6 +90,11 @@ describe('closed-job media retention crash reconciliation', () => {
         },
       },
     )
+    expect(scheduleObservationRetention).toHaveBeenCalledWith({
+      workspaceId: expect.objectContaining({ toString: expect.any(Function) }),
+      jobId: JOB_A,
+      purgeEligibleAt: new Date('2027-02-28T12:30:00.000Z'),
+    })
   })
 
   it('scopes both the closed-job root and joined media child to one workspace', async () => {
@@ -81,6 +116,20 @@ describe('closed-job media retention crash reconciliation', () => {
         { $eq: ['$workspaceId', '$$workspaceId'] },
       ],
     })
+    const observationLookup = pipeline.find((stage) =>
+      stage.$lookup?.from === 'hiremultimodalobservations',
+    )
+    const analysisLookup = pipeline.find((stage) =>
+      stage.$lookup?.from === 'hiremultimodalanalyses',
+    )
+    const roundLookup = pipeline.find((stage) =>
+      stage.$lookup?.from === 'hirerounds',
+    )
+    expect(observationLookup).toBeDefined()
+    expect(analysisLookup).toBeDefined()
+    expect(roundLookup?.$lookup.pipeline[1].$lookup.from).toBe(
+      'hiremultimodalobservationpurgeobligations',
+    )
     expect(pipeline).toContainEqual({ $limit: 25 })
     expect(mediaUpdateMany).not.toHaveBeenCalled()
   })

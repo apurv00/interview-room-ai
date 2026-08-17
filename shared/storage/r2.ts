@@ -100,7 +100,9 @@ export function isCanonicalR2Key(key: string): boolean {
   }
   if (segments[0] === 'landmarks' && segments.length === 3) {
     return objectId.test(segments[1]) &&
-      /^[a-fA-F0-9]{24}\.json$/.test(segments[2])
+      // The nonce makes simultaneous Hire full-analysis staging writes
+      // deletion-safe while retaining an exact session-bound filename.
+      /^[a-fA-F0-9]{24}(?:-[a-fA-F0-9]{32})?\.json$/.test(segments[2])
   }
   if (segments[0] === 'documents' && segments.length === 4) {
     return objectId.test(segments[1]) &&
@@ -132,11 +134,12 @@ function assertR2DeleteAuthority(
     }
     return
   }
-  if (
-    segments[0] === 'landmarks' &&
-    segments[2] !== `${authority.sessionId}.json`
-  ) {
-    throw new R2DeleteAuthorityError(key)
+  if (segments[0] === 'landmarks') {
+    const landmarkSessionId = /^([a-fA-F0-9]{24})(?:-[a-fA-F0-9]{32})?\.json$/
+      .exec(segments[2])?.[1]
+    if (landmarkSessionId !== authority.sessionId) {
+      throw new R2DeleteAuthorityError(key)
+    }
   }
   // Document keys carry owner but not session identity. The owner namespace
   // is still mandatory; reference-aware callers decide whether a shared

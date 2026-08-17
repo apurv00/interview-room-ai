@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { verifyRoundToken } from '@hire/services/aiRoundService'
+import { HireConsentReceipt } from '@hire/models/HireConsentReceipt'
+import {
+  HireInterviewAttempt,
+  type IHireInterviewAttempt,
+} from '@hire/models/HireInterviewAttempt'
 import { HireJob } from '@hire/models/HireJob'
 import { HireWorkspace } from '@hire/models/HireWorkspace'
+import type { IHireRound } from '@hire/models/HireRound'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  isRecognizedHireConsentSnapshot,
+} from '@hire/policies/aiInterviewConsent'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { obfuscateHireEmail } from '@hire/services/privacyService'
 
@@ -14,6 +24,50 @@ const BodySchema = z
     capability: z.string().regex(/^[a-f0-9]{24}\.[a-f0-9]{64}$/i),
   })
   .strict()
+
+async function hasResumableV2ConsentAttempt(
+  round: Pick<
+    IHireRound,
+    '_id' | 'workspaceId' | 'applicationId' | 'jobId' | 'candidateId' | 'consentVersion'
+  >,
+): Promise<boolean> {
+  // Current-version attempts use the normal current consent path. Any
+  // recognized historical receipt (V2 or V3 today) may only resume its exact
+  // existing attempt; it is never re-consented or upgraded to V4.
+  if (!round.consentVersion || round.consentVersion === HIRE_AI_CONSENT_VERSION) {
+    return false
+  }
+  const attempt = await HireInterviewAttempt.findOne({
+    workspaceId: round.workspaceId,
+    applicationId: round.applicationId,
+    jobId: round.jobId,
+    candidateId: round.candidateId,
+    roundId: round._id,
+    live: true,
+  })
+    .select('_id consentReceiptId')
+    .lean<Pick<IHireInterviewAttempt, '_id' | 'consentReceiptId'> | null>()
+  if (!attempt) return false
+  const receipt = await HireConsentReceipt.findOne({
+    _id: attempt.consentReceiptId,
+    workspaceId: round.workspaceId,
+    applicationId: round.applicationId,
+    jobId: round.jobId,
+    candidateId: round.candidateId,
+    roundId: round._id,
+    attemptId: attempt._id,
+    'accepted.recording': true,
+    'accepted.identityPhoto': true,
+    'accepted.attentionMonitoring': true,
+    'accepted.aiEvaluation': true,
+  })
+    .select('consentVersion disclosureDigest')
+    .lean()
+  return (
+    receipt?.consentVersion === round.consentVersion &&
+    isRecognizedHireConsentSnapshot(receipt)
+  )
+}
 
 export async function POST(
   req: NextRequest,
@@ -52,7 +106,7 @@ export async function POST(
       )
     }
 
-    const [job, workspace] = await Promise.all([
+    const [job, workspace, legacyConsentAttempt] = await Promise.all([
       HireJob.findOne({
         _id: round.jobId,
         workspaceId: round.workspaceId,
@@ -68,6 +122,7 @@ export async function POST(
       })
         .select('name')
         .lean(),
+      hasResumableV2ConsentAttempt(round),
     ])
     if (!job || !workspace) {
       return NextResponse.json(
@@ -85,6 +140,7 @@ export async function POST(
         duration: round.config.duration,
         authMode: round.authMode === 'otp' ? 'otp' : 'magic_link',
         consentAlreadyGiven: Boolean(round.consentAt),
+        legacyConsentAttempt,
         emailHint: obfuscateHireEmail(round.candidateEmail),
       },
       { headers: { 'Cache-Control': 'private, no-store' } },

@@ -8,6 +8,13 @@ import { tapAudioElement } from '@interview/audio/voiceMixer'
 interface UseAvatarSpeechOptions {
   interviewType?: string
   isMultimodalEnabled: boolean
+  /**
+   * Lets a narrowly-scoped runtime use server TTS without enabling the
+   * broader multimodal capture and analysis feature set.
+   */
+  remoteTtsEnabled?: boolean
+  /** Force the Indian-English TTS route choice for a Hire assessment. */
+  forceIndianVoice?: boolean
 }
 
 export interface UseAvatarSpeechReturn {
@@ -57,7 +64,10 @@ export interface UseAvatarSpeechReturn {
 export function useAvatarSpeech({
   interviewType = 'screening',
   isMultimodalEnabled,
+  remoteTtsEnabled,
+  forceIndianVoice = false,
 }: UseAvatarSpeechOptions): UseAvatarSpeechReturn {
+  const shouldUseRemoteTts = remoteTtsEnabled ?? isMultimodalEnabled
   const [avatarEmotion, setAvatarEmotion] = useState<AvatarEmotion>('friendly')
   const [isAvatarTalking, setIsAvatarTalking] = useState(false)
   // Cache for pre-fetched TTS audio blobs keyed by text
@@ -86,13 +96,21 @@ export function useAvatarSpeech({
   useEffect(() => {
     try {
       voiceQueryRef.current =
-        new URLSearchParams(window.location.search).get('voice') === 'indian'
+        forceIndianVoice || new URLSearchParams(window.location.search).get('voice') === 'indian'
           ? '?voice=indian'
           : ''
     } catch {
       /* SSR / no window — default to Deepgram */
     }
-  }, [])
+  }, [forceIndianVoice])
+
+  // Hire must not wait for the post-render URL-reading effect before selecting
+  // its mandated voice. Ordinary interviews still read the mutable URL choice
+  // from the ref, preserving the existing no-rerender behavior.
+  const getVoiceQuery = useCallback(
+    () => (forceIndianVoice ? '?voice=indian' : voiceQueryRef.current),
+    [forceIndianVoice],
+  )
 
   /**
    * Pre-fetch TTS audio for a question so it's ready when needed (buffered).
@@ -125,7 +143,7 @@ export function useAvatarSpeech({
    */
   const prefetchTTS = useCallback(
     (text: string) => {
-      if (!isMultimodalEnabled || ttsCacheRef.current.has(text)) return
+      if (!shouldUseRemoteTts || ttsCacheRef.current.has(text)) return
       // Streaming path doesn't consume the blob cache — skip the fetch.
       if (isStreamingSupported) return
       // Evict oldest entry if cache exceeds 5 items
@@ -133,7 +151,7 @@ export function useAvatarSpeech({
         const firstKey = ttsCacheRef.current.keys().next().value
         if (firstKey) ttsCacheRef.current.delete(firstKey)
       }
-      const promise = fetch('/api/tts' + voiceQueryRef.current, {
+      const promise = fetch('/api/tts' + getVoiceQuery(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -142,7 +160,7 @@ export function useAvatarSpeech({
         .catch(() => null)
       ttsCacheRef.current.set(text, promise)
     },
-    [isMultimodalEnabled, isStreamingSupported]
+    [shouldUseRemoteTts, isStreamingSupported, getVoiceQuery]
   )
 
   /** Play a blob via Audio element (used for cached/prefetched audio). */
@@ -253,7 +271,7 @@ export function useAvatarSpeech({
         try { onAudioStart?.() } catch { /* swallow */ }
       }
 
-      if (isMultimodalEnabled) {
+      if (shouldUseRemoteTts) {
         try {
           // Priority 1: Use pre-fetched audio if available (instant playback)
           const cached = ttsCacheRef.current.get(text)
@@ -269,7 +287,7 @@ export function useAvatarSpeech({
           // Priority 2: Streaming playback via MediaSource (low latency)
           if (isStreamingSupported) {
             try {
-              const res = await fetch('/api/tts/stream' + voiceQueryRef.current, {
+              const res = await fetch('/api/tts/stream' + getVoiceQuery(), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text }),
@@ -293,7 +311,7 @@ export function useAvatarSpeech({
           }
 
           // Priority 3: Buffered fetch (for browsers without MediaSource)
-          const res = await fetch('/api/tts' + voiceQueryRef.current, {
+          const res = await fetch('/api/tts' + getVoiceQuery(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text }),
@@ -323,7 +341,7 @@ export function useAvatarSpeech({
       fireStart()
       await speakWithBrowser(text)
     },
-    [interviewType, isMultimodalEnabled, isStreamingSupported, streamAndPlay, cancelStream] // eslint-disable-line react-hooks/exhaustive-deps
+    [interviewType, shouldUseRemoteTts, isStreamingSupported, streamAndPlay, cancelStream, getVoiceQuery] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   // Clears the isolated thinking-ack channel: aborts any in-flight
@@ -417,14 +435,14 @@ export function useAvatarSpeech({
    */
   const playAck = useCallback(
     (text: string): Promise<void> => {
-      if (!isMultimodalEnabled) return Promise.resolve()
+      if (!shouldUseRemoteTts) return Promise.resolve()
 
       // Abort any previous ack still in flight — only one ack channel.
       currentAckFetchAbortRef.current?.abort()
       const fetchAbort = new AbortController()
       currentAckFetchAbortRef.current = fetchAbort
 
-      return fetch('/api/tts' + voiceQueryRef.current, {
+      return fetch('/api/tts' + getVoiceQuery(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -456,7 +474,7 @@ export function useAvatarSpeech({
         })
         .catch(() => undefined)
     },
-    [isMultimodalEnabled]
+    [shouldUseRemoteTts, getVoiceQuery]
   )
 
   return {

@@ -59,6 +59,13 @@ import { HireReportExport } from '../../hire-reports/models/HireReportExport'
 import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
 import { HireOnboardingTestDrive } from '../../hire-onboarding/models'
 import { HireDepartment } from '@hire-departments/models'
+import {
+  HireMultimodalAnalysis,
+  HireMultimodalAnalysisIngestionEvent,
+  HireMultimodalObservation,
+  HireMultimodalObservationIngestionEvent,
+  HireMultimodalObservationPurgeObligation,
+} from '../../hire-multimodal/models'
 
 const MEDIA_DELETE_BATCH_SIZE = 100
 const RUNTIME_PURGE_DELIVERY_BATCH_SIZE = 25
@@ -77,6 +84,11 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireConsentReceipt',
   'HireEngineHandoff',
   'HireEngineIngestionEvent',
+  'HireMultimodalObservationIngestionEvent',
+  'HireMultimodalObservation',
+  'HireMultimodalObservationPurgeObligation',
+  'HireMultimodalAnalysisIngestionEvent',
+  'HireMultimodalAnalysis',
   'HireInterviewResult',
   'HireInterviewAttempt',
   'HireMediaAsset',
@@ -346,6 +358,20 @@ async function deleteWorkspaceGraphChildren(
   await HireConsentReceipt.deleteMany({ workspaceId }, { session })
   await HireEngineHandoff.deleteMany({ workspaceId }, { session })
   await HireEngineIngestionEvent.deleteMany({ workspaceId }, { session })
+  await HireMultimodalObservationIngestionEvent.deleteMany(
+    { workspaceId },
+    { session },
+  )
+  await HireMultimodalObservation.deleteMany({ workspaceId }, { session })
+  await HireMultimodalObservationPurgeObligation.deleteMany(
+    { workspaceId },
+    { session },
+  )
+  await HireMultimodalAnalysisIngestionEvent.deleteMany(
+    { workspaceId },
+    { session },
+  )
+  await HireMultimodalAnalysis.deleteMany({ workspaceId }, { session })
   await HireInterviewResult.deleteMany({ workspaceId }, { session })
   await HireInterviewAttempt.deleteMany({ workspaceId }, { session })
   await HireMediaAsset.deleteMany({ workspaceId }, { session })

@@ -80,12 +80,10 @@ describe('the interview flow keeps working', () => {
     ['/api/tts', 'POST'],
     ['/api/tts/stream', 'POST'],
     ['/api/recordings/finalize', 'POST'],
-    ['/api/recordings/landmarks', 'POST'],
     ['/api/storage/presign', 'POST'],
     ['/api/storage/multipart', 'POST'],
     ['/api/settings/usage', 'GET'],
     ['/api/health', 'HEAD'],
-    ['/api/analysis/start', 'POST'],
     ['/api/auth/session', 'GET'],
     ['/api/auth/signout', 'POST'],
     ['/api/candidate/aaaaaaaaaaaaaaaaaaaaaaaa/begin', 'POST'],
@@ -133,6 +131,10 @@ describe('everything else is denied by default', () => {
     ['/api/onboarding', 'POST'],
     ['/api/billing/orders/interview', 'POST'], // no personal checkout
     ['/api/hypothetical/future/route', 'POST'], // proves default-deny
+    // Hire observations use the runtime-native fenced endpoint. Guests must
+    // never regain the B2C raw-landmark or consumer-analysis paths.
+    ['/api/recordings/landmarks', 'POST'],
+    ['/api/analysis/start', 'POST'],
   ]
 
   it.each(FORBIDDEN)('denies %s (%s)', (pathname, method) => {
@@ -168,8 +170,8 @@ describe('method-aware scoping (result reads hide behind shared paths)', () => {
 })
 
 describe('prefix denial cannot be inherited', () => {
-  it('permits the analysis TRIGGER but denies analysis result reads', () => {
-    expect(evaluateGuestAccess('/api/analysis/start', 'POST').allowed).toBe(true)
+  it('denies consumer analysis, including the old trigger and all result reads', () => {
+    expect(evaluateGuestAccess('/api/analysis/start', 'POST').allowed).toBe(false)
     expect(evaluateGuestAccess('/api/analysis/a1b2c3d4e5f6a7b8c9d0e1f2', 'GET').allowed).toBe(false)
     // A future /api/analysis/* route does not inherit access.
     expect(evaluateGuestAccess('/api/analysis/anything-new', 'POST').allowed).toBe(false)

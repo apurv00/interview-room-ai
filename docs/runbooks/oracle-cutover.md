@@ -1,16 +1,110 @@
 # Oracle cutover runbook
 
-Status: **pre-cutover; production is still on Vercel**
+Status: **production deployments run on Oracle Cloud through Coolify; Vercel is not a deployment target.**
 
-Last audited: 2026-08-05 against `origin/main`
-`5fc149a4b65d00318ed2bfb4e8063ce71f31c327`.
+Current release procedure updated: 2026-08-17.
 
-This is the operational source of truth for moving InterviewPrepGuru from
-Vercel to the existing Oracle Cloud Mumbai A1 VM managed by Coolify. It keeps
-Cloudflare DNS/R2, Inngest Cloud, Razorpay, OAuth, Resend, and the AI providers
-as external services.
+This is the operational source of truth for releases to the existing Oracle
+Cloud Mumbai A1 VM managed by Coolify. Cloudflare DNS/R2, Inngest Cloud,
+Razorpay, OAuth, Resend, and the AI providers remain external services.
 
-## Non-negotiable invariants
+The current Hire-native multimodal release procedure is below. The remaining
+Vercel-to-Oracle cutover record is retained for audit history only and is
+explicitly superseded as live deployment guidance.
+
+## Current Hire-native multimodal release procedure
+
+Use this procedure only from an approved, merged `main` commit. Record the
+exact 40-character source commit and deployment timestamps for both services.
+All release actions are manual Coolify actions; do not use Vercel or infer a
+release from a source push.
+
+### 1. Scope the release and configure the Hire engine
+
+- Deploy the Hire runtime/engine service first, then the Hire control service.
+  Both must use the same approved source commit. The old control cannot issue a
+  v3 native-observation handoff, so this prevents a candidate from receiving
+  the new consent/flow before the engine is capable of serving it.
+- Configure `NEXT_PUBLIC_FEATURE_MULTIMODAL=true` as both a **Coolify build
+  variable** and a runtime variable on the Hire engine only. It is inlined into
+  the browser bundle during `next build`, so a runtime restart alone cannot
+  enable it; rebuild the image from the approved commit.
+- Do not set that public flag to `true` on Hire control or the B2C application.
+  Keep `FEATURE_FLAG_MULTIMODAL_ANALYSIS=false`; the Hire-native pipeline is
+  separate from the generic consumer analysis path.
+- Confirm the required server-side provider configuration exists through the
+  approved secret store. Never paste, print, or retain secret values in this
+  runbook, shell history, CI output, Coolify notes, or release evidence.
+
+### 2. Prepare the isolated MongoDB indexes from a source/builder runner
+
+The Coolify application runtime container is a standalone runtime artifact and
+is not the place to run repository maintenance scripts. From an approved
+source/builder runner checked out at the exact release commit, with its
+environment injected securely for the target surface, run `--check`, then
+`--apply` only if needed, then `--check` again:
+
+```sh
+IPG_SURFACE=hire-control npm run check:hire-multimodal-observation-indexes
+IPG_SURFACE=hire-control npm run prepare:hire-multimodal-observation-indexes -- --apply
+IPG_SURFACE=hire-control npm run check:hire-multimodal-observation-indexes
+
+IPG_SURFACE=hire-engine npm run check:hire-multimodal-observation-indexes
+IPG_SURFACE=hire-engine npm run prepare:hire-multimodal-observation-indexes -- --apply
+IPG_SURFACE=hire-engine npm run check:hire-multimodal-observation-indexes
+```
+
+Run the control commands against the control database and the engine commands
+against the isolated runtime database. `--apply` creates only missing exact
+indexes; it must not be substituted with `syncIndexes`, `dropIndex`, or a bulk
+schema migration.
+
+### 3. Manually deploy the Hire engine first, then control
+
+1. In Coolify, manually rebuild and deploy the Hire engine at the approved
+   commit, with the engine-only build and runtime flag from step 1. Confirm
+   the runtime index sequence above passed and verify authenticated health reports
+   `healthy`, MongoDB and Redis `ok`, and that exact commit. The old control
+   cannot create a v3 handoff, so no native observation capture is enabled
+   until the next step.
+2. In Coolify, manually deploy the Hire control service at the same commit.
+   Confirm the control index sequence above passed and verify the same authenticated
+   health and exact-commit evidence before it can issue v3 handoffs.
+3. Do not replace a failed Oracle deployment with a Vercel deployment; use the
+   prior known-good Coolify release only after preserving the relevant
+   operational evidence.
+
+### 4. Sync and prove the Hire runtime Inngest surface
+
+After the runtime deployment is healthy, trigger/confirm Inngest sync against
+the runtime `/api/inngest` route. Its registered functions must include exactly
+these three Hire-runtime jobs:
+
+- `hire-runtime-feedback`
+- `hire-runtime-result`
+- `hire-runtime-multimodal-observation-publisher`
+
+Registration alone is not delivery proof. Retain evidence of a successful
+runtime publish-job execution in Inngest before treating the release as live.
+
+### 5. Run the authenticated Hire smoke
+
+- Authenticate to both Coolify services' health endpoints and retain the
+  healthy dependency state and exact deployed commit.
+- Complete a canonical Hire candidate flow using the current v3 consent. Check
+  that live coaching is absent, the Indian interviewer voice is selected, and
+  the supplemental-observation path is active only after that consent.
+- Run an authenticated Hire TTS turn and verify the response header
+  `X-TTS-Provider: sarvam`. A Deepgram fallback, a missing header, or an
+  unauthenticated health result is a release failure until corrected.
+
+## Historical Vercel-to-Oracle cutover record (superseded)
+
+The sections below preserve the 2026-08 pre-cutover plan and evidence. They do
+not describe the current production origin, deployment method, or rollback
+target.
+
+## Historical cutover invariants (superseded)
 
 - Do not cancel Vercel, Atlas, or the managed Redis service before every
   cutover gate below has retained evidence.
@@ -29,7 +123,10 @@ as external services.
   must have a persistent volume, AOF persistence, restart continuity, and a
   `noeviction` policy.
 
-## Current evidence
+## Historical pre-cutover evidence (superseded)
+
+The entries in this table were captured before production moved to Oracle and
+must not be used as live deployment status.
 
 | Area | Current evidence | State |
 | --- | --- | --- |
@@ -85,6 +182,7 @@ Copy and verify from the provider/source of truth:
   as a coordinated session-invalidating change.
 - AI/speech: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `GROQ_API_KEY`, `GOOGLE_AI_API_KEY`, `DEEPGRAM_API_KEY`,
+  `DEEPGRAM_GRANT_API_KEY` (server-only; mints 30-second browser STT grants),
   `DEEPGRAM_TTS_MODEL`, and `SARVAM_API_KEY` (Indian interviewer voice —
   replaced the retired `AZURE_SPEECH_*` trio on 2026-08-09, see
   INTERVIEW_FLOW.md §8; optional overrides `SARVAM_TTS_SPEAKER`,
@@ -168,7 +266,7 @@ Oracle must not pretend to be a Vercel request path, particularly for trusted
 client-IP handling. Keep `NEXT_PUBLIC_ENABLE_SPEED_INSIGHTS` unset on Oracle;
 otherwise the application attempts to enable a Vercel-specific client.
 
-## Gate A — harden the existing Oracle stack
+## Historical Gate A — harden the existing Oracle stack (superseded)
 
 ### A1. Preserve access and recovery
 
@@ -271,7 +369,7 @@ parallel with automatic rollout.
   intermittent 524 responses.
 - Test alert delivery to both founder channels.
 
-## Gate B — Oracle staging acceptance
+## Historical Gate B — Oracle staging acceptance (superseded)
 
 Every item requires retained output, a timestamp, and the exact deployed commit.
 
@@ -289,7 +387,7 @@ Every item requires retained output, a timestamp, and the exact deployed commit.
   confirm the old container drains and the sessions finish.
 - Compare critical response/error latency with current production.
 
-## Gate C — controlled production cutover
+## Historical Gate C — controlled production cutover (superseded)
 
 1. Announce and begin the write freeze. Pause Inngest schedules, Jobs sources,
    billing checkout, and all other write paths that cannot be reconciled.
@@ -312,7 +410,7 @@ Every item requires retained output, a timestamp, and the exact deployed commit.
 10. Resume writes and schedules in controlled order, observing logs, metrics,
     database state, and provider dashboards.
 
-## Rollback
+## Historical rollback (superseded)
 
 - Before Oracle accepts writes: restore the recorded Cloudflare records to
   Vercel and verify Vercel health.
@@ -322,7 +420,7 @@ Every item requires retained output, a timestamp, and the exact deployed commit.
 - Preserve provider webhook delivery IDs and replay only through their normal
   idempotent endpoints after the selected origin is authoritative.
 
-## Gate D — decommission Vercel
+## Historical Gate D — decommission Vercel (superseded)
 
 Keep Vercel and its old data services available for at least 48 hours after a
 clean cutover, preferably through a full business/billing cycle. Then:

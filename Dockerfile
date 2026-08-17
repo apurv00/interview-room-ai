@@ -15,6 +15,11 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# Browser-visible flags are inlined by Next during this stage. Coolify must
+# supply this as a build variable on the isolated Hire runtime; a runtime-only
+# environment entry cannot enable the native supplemental-capture bundle.
+ARG NEXT_PUBLIC_FEATURE_MULTIMODAL=false
+ENV NEXT_PUBLIC_FEATURE_MULTIMODAL=${NEXT_PUBLIC_FEATURE_MULTIMODAL}
 RUN npm run build
 
 # Stage 3: Production runner

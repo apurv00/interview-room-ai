@@ -77,6 +77,7 @@ export function clearRuntimeInterviewStorage(storage: Storage): void {
 export function seedRuntimeInterviewStorage(
   storage: Storage,
   bootstrap: HireRuntimeBootstrapResponse,
+  options: { multimodalObservationsEnabled?: boolean } = {},
 ): void {
   clearRuntimeInterviewStorage(storage)
 
@@ -84,6 +85,8 @@ export function seedRuntimeInterviewStorage(
     ...bootstrap.config,
     _ownerId: bootstrap.principalId,
     _hireRoundId: bootstrap.roundId,
+    _hireMultimodalObservationsEnabled:
+      options.multimodalObservationsEnabled === true,
   }
   const serialized = JSON.stringify(persistable)
   storage.setItem(STORAGE_KEYS.INTERVIEW_CONFIG, serialized)
@@ -197,10 +200,14 @@ export default function HireRuntimeHandoffClient() {
         return
       }
 
+      const multimodalObservationsEnabled =
+        bootstrapResponse.headers.get('X-Hire-Multimodal-Observations') === '1'
       const bootstrap = HireRuntimeBootstrapResponseSchema.parse(
         await bootstrapResponse.json(),
       )
-      seedRuntimeInterviewStorage(window.localStorage, bootstrap)
+      seedRuntimeInterviewStorage(window.localStorage, bootstrap, {
+        multimodalObservationsEnabled,
+      })
       clearStoredHandoffCode()
       router.replace('/lobby')
     } catch {

@@ -37,6 +37,11 @@ import {
 import { cancelHireReportExportsForLifecycle } from '../../hire-reports/services/hireReportLifecycleService'
 import { revokeCandidateStatusLinksForScope } from '../../hire-status/services/candidateStatusLinkService'
 import { invalidateHireDigestAggregateSnapshotsForPrivacy } from '../../hire-digest/services/hireDigestService'
+import {
+  HireMultimodalObservation,
+  HireMultimodalObservationIngestionEvent,
+  HireMultimodalObservationPurgeObligation,
+} from '../../hire-multimodal/models'
 
 const DEFAULT_CANDIDATE_BATCH_SIZE = 100
 const ANONYMIZATION_LEASE_MS = 15 * 60 * 1000
@@ -125,6 +130,7 @@ export function buildHireCandidateRetentionPipeline(
     '$latestRounds',
     '$latestAttempts',
     '$latestResults',
+    '$latestMultimodalObservations',
     '$latestMedia',
     '$latestConsents',
     '$latestHumanRounds',
@@ -234,6 +240,11 @@ export function buildHireCandidateRetentionPipeline(
       from: HireInterviewResult.collection.name,
       as: 'latestResults',
       activityExpression: '$completedAt',
+    }),
+    activityLookup({
+      from: HireMultimodalObservation.collection.name,
+      as: 'latestMultimodalObservations',
+      activityExpression: '$observedAt',
     }),
     activityLookup({
       from: HireMediaAsset.collection.name,
@@ -440,6 +451,11 @@ async function evaluateRetentionEligibility(
     .select('completedAt')
     .session(session)
     .lean()
+  const multimodalObservation = await HireMultimodalObservation.findOne(scope)
+    .sort({ observedAt: -1 })
+    .select('observedAt')
+    .session(session)
+    .lean()
   const media = await HireMediaAsset.findOne(scope)
     .sort({ capturedAt: -1 })
     .select('capturedAt')
@@ -508,6 +524,10 @@ async function evaluateRetentionEligibility(
       'failedAt',
     ]),
     ...activityFromDocument(result as Record<string, unknown> | null, ['completedAt']),
+    ...activityFromDocument(
+      multimodalObservation as Record<string, unknown> | null,
+      ['observedAt'],
+    ),
     ...activityFromDocument(media as Record<string, unknown> | null, ['capturedAt']),
     ...activityFromDocument(consent as Record<string, unknown> | null, ['acceptedAt']),
     ...activityFromDocument(humanRound as Record<string, unknown> | null, [
@@ -716,6 +736,26 @@ async function anonymizeClaimedCandidate(input: {
           },
         },
         { session },
+      )
+      // The derived observation and its idempotency ledger do not have a
+      // defensible aggregate use after retention anonymization. Erase both in
+      // the same subject transaction rather than preserving an identifier-only
+      // observation that could be re-linked later.
+      await HireMultimodalObservationIngestionEvent.deleteMany(scope, { session })
+      await HireMultimodalObservation.deleteMany(scope, { session })
+      // Retain an unacknowledged runtime-outbox purge barrier: deleting it
+      // would strand a future publisher in the isolated runtime. The control
+      // report/ledger above are already gone, so scrub the candidate key while
+      // preserving only opaque runtime retry coordinates. Acknowledged rows
+      // have no remaining purpose and may be deleted with the candidate.
+      await HireMultimodalObservationPurgeObligation.deleteMany(
+        { ...scope, runtimePurgedAt: { $exists: true } },
+        { session },
+      )
+      await HireMultimodalObservationPurgeObligation.updateMany(
+        { ...scope, runtimePurgedAt: { $exists: false } },
+        { $unset: { candidateId: 1 } },
+        { session, overwriteImmutable: true },
       )
       await HireConsentReceipt.updateMany(
         scope,

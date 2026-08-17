@@ -14,6 +14,12 @@ type RecordingArtifactKind = 'camera' | 'audio'
 interface AccountBoundJsonRequestOptions {
   keepalive?: boolean
   method?: 'POST' | 'PATCH'
+  /**
+   * Bound one network attempt without weakening the replay privacy fence.
+   * Omit this for existing callers that intentionally retain their current
+   * request lifetime.
+   */
+  timeoutMs?: number
 }
 
 async function isTerminalAccountBoundary(response: Response): Promise<boolean> {
@@ -133,6 +139,17 @@ export async function requestAccountBoundJson(
   options: AccountBoundJsonRequestOptions = {},
 ): Promise<Response | null> {
   const operation = beginReplayUploadOperation(intent.privacyGeneration)
+  const requestController = options.timeoutMs && options.timeoutMs > 0
+    ? new AbortController()
+    : null
+  const abortRequest = () => requestController?.abort()
+  const timeout = requestController
+    ? setTimeout(abortRequest, options.timeoutMs)
+    : undefined
+  if (requestController) {
+    operation.signal.addEventListener('abort', abortRequest, { once: true })
+    if (operation.signal.aborted) abortRequest()
+  }
   try {
     assertReplayUploadOperationActive(operation)
     const response = await fetch(url, {
@@ -142,7 +159,7 @@ export async function requestAccountBoundJson(
         'x-origin-user-id': originUserId,
       },
       body: JSON.stringify(body),
-      signal: operation.signal,
+      signal: requestController?.signal ?? operation.signal,
       keepalive: options.keepalive,
     })
     assertReplayUploadOperationActive(operation)
@@ -155,6 +172,10 @@ export async function requestAccountBoundJson(
     if (!isReplayUploadPrivacyCancellation(error, operation)) throw error
     return null
   } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+    if (requestController) {
+      operation.signal.removeEventListener('abort', abortRequest)
+    }
     finishReplayUploadOperation(operation)
   }
 }

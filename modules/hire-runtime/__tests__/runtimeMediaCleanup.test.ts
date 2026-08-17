@@ -150,6 +150,15 @@ describe('runtime source-media cleanup', () => {
     ])
   })
 
+  it('purges a nonce-scoped full-analysis landmark artifact without widening session authority', async () => {
+    const landmarks = `landmarks/${PRINCIPAL_ID}/${SESSION_ID}-${'a'.repeat(32)}.json`
+    await deleteRuntimePersonalObjects({
+      principalId: PRINCIPAL_ID,
+      objects: [{ key: landmarks, runtimeSessionId: SESSION_ID }],
+    })
+    expect(mocks.send.mock.calls.map(([command]) => command.input.Key)).toEqual([landmarks])
+  })
+
   it('aborts inventoried multipart uploads and treats an expired upload as absent', async () => {
     await abortRuntimeMultipartUploads({
       principalId: PRINCIPAL_ID,

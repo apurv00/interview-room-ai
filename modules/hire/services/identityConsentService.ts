@@ -13,7 +13,9 @@ import { HireWorkspace } from '../models/HireWorkspace'
 import {
   HIRE_AI_CONSENT_VERSION,
   HIRE_AI_DISCLOSURE_DIGEST,
+  type HireConsentSnapshot,
   assertCompleteHireConsent,
+  isRecognizedHireConsentSnapshot,
 } from '../policies/aiInterviewConsent'
 import { connectHireControlDB } from './hireControlBoundary'
 import { decodeWorkspaceCapability } from './workspaceCapability'
@@ -125,6 +127,7 @@ async function issueSession(
   inviteExpiresAt: Date,
   now: Date,
   dbSession: ClientSession,
+  consent: HireConsentSnapshot,
   next: AcceptedHireConsent['next'],
 ): Promise<AcceptedHireConsent> {
   const secret = randomBytes(32).toString('hex')
@@ -169,8 +172,8 @@ async function issueSession(
       secret,
     }),
     csrfToken,
-    consentVersion: HIRE_AI_CONSENT_VERSION,
-    disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
+    consentVersion: consent.consentVersion,
+    disclosureDigest: consent.disclosureDigest,
     next,
   }
 }
@@ -315,6 +318,10 @@ async function acceptOnce(
         ...coordinate,
         live: true,
       }).session(dbSession)
+      let consent: HireConsentSnapshot = {
+        consentVersion: HIRE_AI_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
+      }
 
       if (!attempt) {
         const [priorAttempts, attemptId, receiptId] = await Promise.all([
@@ -369,19 +376,28 @@ async function acceptOnce(
           { session: dbSession },
         )
       } else {
-        const receipt = await HireConsentReceipt.exists({
+        const receipt = await HireConsentReceipt.findOne({
           _id: attempt.consentReceiptId,
           ...coordinate,
           attemptId: attempt._id,
-          consentVersion: HIRE_AI_CONSENT_VERSION,
-          disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
-        }).session(dbSession)
-        if (!receipt) {
+          'accepted.recording': true,
+          'accepted.identityPhoto': true,
+          'accepted.attentionMonitoring': true,
+          'accepted.aiEvaluation': true,
+        })
+          .select('consentVersion disclosureDigest')
+          .session(dbSession)
+          .lean<Pick<HireConsentSnapshot, 'consentVersion' | 'disclosureDigest'> | null>()
+        if (!isRecognizedHireConsentSnapshot(receipt)) {
           throw new HireGuestAccessError(
             'The active interview attempt has no valid consent receipt',
             'GUEST_SESSION_CONFLICT',
             409,
           )
+        }
+        consent = {
+          consentVersion: receipt.consentVersion,
+          disclosureDigest: receipt.disclosureDigest,
         }
       }
 
@@ -391,6 +407,7 @@ async function acceptOnce(
         round.inviteTokenExpiry,
         now,
         dbSession,
+        consent,
         next,
       )
     })

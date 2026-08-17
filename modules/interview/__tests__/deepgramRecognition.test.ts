@@ -87,7 +87,11 @@ vi.stubGlobal('WebSocket', MockWebSocket)
 
 global.fetch = vi.fn().mockResolvedValue({
   ok: true,
-  json: () => Promise.resolve({ token: 'test-deepgram-token' }),
+  json: () => Promise.resolve({
+    token: 'test-deepgram-token',
+    tokenType: 'bearer',
+    expiresIn: 30,
+  }),
 })
 
 // ─── AudioContext / getUserMedia mocks ─────────────────────────────────────
@@ -344,7 +348,11 @@ describe('useDeepgramRecognition', () => {
     // backoff and hang warmUp past advanceTimersByTimeAsync(10).
     ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ token: 'test-deepgram-token' }),
+      json: () => Promise.resolve({
+        token: 'test-deepgram-token',
+        tokenType: 'bearer',
+        expiresIn: 30,
+      }),
     })
   })
 
@@ -377,6 +385,79 @@ describe('useDeepgramRecognition', () => {
     ]) {
       expect(url, `missing ${p}`).toContain(p)
     }
+  })
+
+  it('authenticates the browser socket with the temporary-grant bearer protocol', async () => {
+    const { result } = renderHook(() => useDeepgramRecognition())
+
+    act(() => {
+      result.current.warmUp()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    expect(mockWsInstance).not.toBeNull()
+    expect(mockWsInstance!.protocols).toEqual(['bearer', 'test-deepgram-token'])
+  })
+
+  it('refreshes an expiring grant before reconnecting', async () => {
+    let grantNumber = 0
+    ;(global.fetch as ReturnType<typeof vi.fn>).mockImplementation((input: unknown) => {
+      if (input === '/api/transcribe/token') {
+        grantNumber++
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            token: `test-deepgram-grant-${grantNumber}`,
+            tokenType: 'bearer',
+            expiresIn: 30,
+          }),
+        })
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+    })
+
+    const { result } = renderHook(() => useDeepgramRecognition())
+    const onComplete = vi.fn()
+
+    act(() => {
+      result.current.warmUp()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    act(() => {
+      mockWsInstance!.simulateOpen()
+    })
+    await act(async () => {
+      result.current.startListening(onComplete)
+      await vi.advanceTimersByTimeAsync(10)
+    })
+
+    const firstSocket = mockWsInstance!
+    await act(async () => {
+      // The cache refresh margin is five seconds, so this 25-second-old
+      // grant must be replaced before the reconnect handshake.
+      await vi.advanceTimersByTimeAsync(25_001)
+    })
+    act(() => {
+      firstSocket.readyState = MockWebSocket.CLOSED
+      firstSocket.onclose?.(new CloseEvent('close', {
+        code: 1011,
+        reason: 'provider closed socket',
+        wasClean: false,
+      }))
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+
+    const tokenRequests = (global.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([input]) => input === '/api/transcribe/token')
+    expect(tokenRequests).toHaveLength(2)
+    expect(mockWsInstance).not.toBe(firstSocket)
+    expect(mockWsInstance!.protocols).toEqual(['bearer', 'test-deepgram-grant-2'])
   })
 
   it('exposes the finalTranscript / interimTranscript split on the hook return (dimmed-interim UI)', () => {
@@ -1865,7 +1946,10 @@ describe('useDeepgramRecognition', () => {
   // transcripts, UI stuck.
   it('catches up startAudioCapture when startListening races the token fetch', async () => {
     // Hold the token promise open so we can control the timing.
-    let resolveToken: (r: { ok: true; json: () => Promise<{ token: string }> }) => void = () => {}
+    let resolveToken: (r: {
+      ok: true
+      json: () => Promise<{ token: string; tokenType: 'bearer'; expiresIn: number }>
+    }) => void = () => {}
     const fetchSpy = vi
       .spyOn(global, 'fetch')
       .mockImplementationOnce(
@@ -1906,7 +1990,11 @@ describe('useDeepgramRecognition', () => {
     await act(async () => {
       resolveToken({
         ok: true,
-        json: () => Promise.resolve({ token: 'test-deepgram-token' }),
+        json: () => Promise.resolve({
+          token: 'test-deepgram-token',
+          tokenType: 'bearer',
+          expiresIn: 30,
+        }),
       })
       await vi.advanceTimersByTimeAsync(10)
     })

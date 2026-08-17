@@ -3,6 +3,18 @@ import { HireMediaAsset, type IHireMediaAsset } from '../models/HireMediaAsset'
 import { HireJob } from '../models/HireJob'
 import { HirePrivacyRequest } from '../models/HirePrivacyRequest'
 import { HireRound } from '../models/HireRound'
+import {
+  HireMultimodalAnalysis,
+  HireMultimodalObservation,
+  HireMultimodalObservationPurgeObligation,
+} from '../../hire-multimodal/models'
+import {
+  cancelFutureHireMultimodalObservationRetention,
+  purgeDueHireMultimodalObservationRetention,
+  scheduleHireMultimodalObservationRetention,
+} from '../../hire-multimodal/services/observationRetentionService'
+import { HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION } from '@shared/contracts/hireMultimodalObservationBridge'
+import { HIRE_AI_CONSENT_VERSION } from '@hire/policies/aiInterviewConsent'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
   hireMediaStorage,
@@ -18,6 +30,8 @@ export interface HireMediaPurgeReport {
   scanned: number
   purged: number
   failed: number
+  observationsPurged: number
+  runtimeObservationPurgeFailed: number
   privacyRequestsCompleted: number
 }
 
@@ -37,13 +51,16 @@ export function addCalendarMonths(date: Date, months: number): Date {
 export interface HireClosedJobMediaReconciliationReport {
   closedJobs: number
   scheduled: number
+  scheduledMedia: number
+  scheduledObservations: number
+  scheduledRuntimePurgeObligations: number
 }
 
 /**
  * Reconciles the crash window between the close transaction and its
  * best-effort post-commit scheduler call. The root and every joined child are
- * scoped to one workspace; reruns are idempotent because only media without a
- * purge deadline are selected and updated.
+ * scoped to one workspace; reruns are idempotent because only media and
+ * supplemental observations without a purge deadline are selected and updated.
  */
 export async function reconcileClosedJobMediaRetention(input: {
   workspaceId: string
@@ -90,53 +107,202 @@ export async function reconcileClosedJobMediaRetention(input: {
         as: 'unscheduledMedia',
       },
     },
-    { $match: { 'unscheduledMedia.0': { $exists: true } } },
+    {
+      $lookup: {
+        from: HireMultimodalObservation.collection.name,
+        let: { jobId: '$_id', workspaceId: '$workspaceId' },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$jobId', '$$jobId'] },
+                  { $eq: ['$workspaceId', '$$workspaceId'] },
+                ],
+              },
+              purgeEligibleAt: { $exists: false },
+              $or: [
+                { purgeReason: { $exists: false } },
+                { purgeReason: 'job_closed' },
+              ],
+            },
+          },
+          { $limit: 1 },
+          { $project: { _id: 1 } },
+        ],
+        as: 'unscheduledObservations',
+      },
+    },
+    {
+      $lookup: {
+        from: HireMultimodalAnalysis.collection.name,
+        let: { jobId: '$_id', workspaceId: '$workspaceId' },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$jobId', '$$jobId'] },
+                  { $eq: ['$workspaceId', '$$workspaceId'] },
+                ],
+              },
+              purgeEligibleAt: { $exists: false },
+              $or: [
+                { purgeReason: { $exists: false } },
+                { purgeReason: 'job_closed' },
+              ],
+            },
+          },
+          { $limit: 1 },
+          { $project: { _id: 1 } },
+        ],
+        as: 'unscheduledAnalyses',
+      },
+    },
+    {
+      $lookup: {
+        from: HireRound.collection.name,
+        let: { jobId: '$_id', workspaceId: '$workspaceId' },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$jobId', '$$jobId'] },
+                  { $eq: ['$workspaceId', '$$workspaceId'] },
+                ],
+              },
+              kind: 'ai',
+              consentVersion: {
+                $in: [
+                  HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+                  HIRE_AI_CONSENT_VERSION,
+                ],
+              },
+            },
+          },
+          {
+            $lookup: {
+              from: HireMultimodalObservationPurgeObligation.collection.name,
+              let: { roundId: '$_id', workspaceId: '$workspaceId' },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      $and: [
+                        { $eq: ['$roundId', '$$roundId'] },
+                        { $eq: ['$workspaceId', '$$workspaceId'] },
+                      ],
+                    },
+                  },
+                },
+                { $limit: 1 },
+              ],
+              as: 'existingRuntimePurgeObligation',
+            },
+          },
+          { $match: { 'existingRuntimePurgeObligation.0': { $exists: false } } },
+          { $limit: 1 },
+          { $project: { _id: 1 } },
+        ],
+        as: 'unscheduledRuntimeObservationPurge',
+      },
+    },
+    {
+      $match: {
+        $or: [
+          { 'unscheduledMedia.0': { $exists: true } },
+          { 'unscheduledObservations.0': { $exists: true } },
+          { 'unscheduledAnalyses.0': { $exists: true } },
+          { 'unscheduledRuntimeObservationPurge.0': { $exists: true } },
+        ],
+      },
+    },
     { $sort: { closedAt: 1, _id: 1 } },
     { $limit: batchSize },
     { $project: { _id: 1, closedAt: 1 } },
   ])
 
-  let scheduled = 0
+  let scheduledMedia = 0
+  let scheduledObservations = 0
+  let scheduledRuntimePurgeObligations = 0
   for (const job of closedJobs) {
     const purgeEligibleAt = addCalendarMonths(job.closedAt, 6)
-    const result = await HireMediaAsset.updateMany(
-      {
+    const [media, observations] = await Promise.all([
+      HireMediaAsset.updateMany(
+        {
+          workspaceId,
+          jobId: job._id,
+          state: { $nin: ['purged', 'purge_claimed'] },
+          purgeEligibleAt: { $exists: false },
+          $or: [
+            { purgeReason: { $exists: false } },
+            { purgeReason: 'job_closed' },
+          ],
+        },
+        { $set: { purgeEligibleAt, purgeReason: 'job_closed' } },
+      ),
+      scheduleHireMultimodalObservationRetention({
         workspaceId,
         jobId: job._id,
-        state: { $nin: ['purged', 'purge_claimed'] },
-        purgeEligibleAt: { $exists: false },
-        $or: [
-          { purgeReason: { $exists: false } },
-          { purgeReason: 'job_closed' },
-        ],
-      },
-      { $set: { purgeEligibleAt, purgeReason: 'job_closed' } },
-    )
-    scheduled += result.modifiedCount ?? 0
+        purgeEligibleAt,
+      }),
+    ])
+    scheduledMedia += media.modifiedCount ?? 0
+    scheduledObservations += observations.scheduledObservations
+    scheduledRuntimePurgeObligations += observations.scheduledRuntimePurgeObligations
   }
-  return { closedJobs: closedJobs.length, scheduled }
+  return {
+    closedJobs: closedJobs.length,
+    scheduled: scheduledMedia + scheduledObservations + scheduledRuntimePurgeObligations,
+    scheduledMedia,
+    scheduledObservations,
+    scheduledRuntimePurgeObligations,
+  }
 }
 
 export async function scheduleHireJobMediaPurge(input: {
   workspaceId: string
   jobId: string
   closedAt: Date
-}): Promise<{ purgeEligibleAt: Date; scheduled: number }> {
+}): Promise<{
+  purgeEligibleAt: Date
+  scheduled: number
+  scheduledMedia: number
+  scheduledObservations: number
+  scheduledRuntimePurgeObligations: number
+}> {
   await connectHireControlDB()
   const purgeEligibleAt = addCalendarMonths(input.closedAt, 6)
-  const result = await HireMediaAsset.updateMany(
-    {
+  const [media, observations] = await Promise.all([
+    HireMediaAsset.updateMany(
+      {
+        workspaceId: input.workspaceId,
+        jobId: input.jobId,
+        state: { $nin: ['purged', 'purge_claimed'] },
+        $or: [
+          { purgeReason: { $exists: false } },
+          { purgeReason: 'job_closed' },
+        ],
+      },
+      { $set: { purgeEligibleAt, purgeReason: 'job_closed' } },
+    ),
+    scheduleHireMultimodalObservationRetention({
       workspaceId: input.workspaceId,
       jobId: input.jobId,
-      state: { $nin: ['purged', 'purge_claimed'] },
-      $or: [
-        { purgeReason: { $exists: false } },
-        { purgeReason: 'job_closed' },
-      ],
-    },
-    { $set: { purgeEligibleAt, purgeReason: 'job_closed' } },
-  )
-  return { purgeEligibleAt, scheduled: result.modifiedCount ?? 0 }
+      purgeEligibleAt,
+    }),
+  ])
+  const scheduledMedia = media.modifiedCount ?? 0
+  const scheduledObservations = observations.scheduledObservations
+  const scheduledRuntimePurgeObligations = observations.scheduledRuntimePurgeObligations
+  return {
+    purgeEligibleAt,
+    scheduled: scheduledMedia + scheduledObservations + scheduledRuntimePurgeObligations,
+    scheduledMedia,
+    scheduledObservations,
+    scheduledRuntimePurgeObligations,
+  }
 }
 
 export async function cancelFutureHireJobMediaPurge(input: {
@@ -146,25 +312,32 @@ export async function cancelFutureHireJobMediaPurge(input: {
 }): Promise<number> {
   await connectHireControlDB()
   const reopenedAt = input.reopenedAt ?? new Date()
-  const result = await HireMediaAsset.updateMany(
-    {
+  const [media, observations] = await Promise.all([
+    HireMediaAsset.updateMany(
+      {
+        workspaceId: input.workspaceId,
+        jobId: input.jobId,
+        state: { $in: ['ready', 'purge_failed', 'staging'] },
+        purgeReason: 'job_closed',
+        purgeEligibleAt: { $gt: reopenedAt },
+      },
+      {
+        $unset: {
+          purgeEligibleAt: 1,
+          purgeReason: 1,
+          purgeClaimedAt: 1,
+          purgeFailureCode: 1,
+        },
+        $set: { state: 'ready' },
+      },
+    ),
+    cancelFutureHireMultimodalObservationRetention({
       workspaceId: input.workspaceId,
       jobId: input.jobId,
-      state: { $in: ['ready', 'purge_failed', 'staging'] },
-      purgeReason: 'job_closed',
-      purgeEligibleAt: { $gt: reopenedAt },
-    },
-    {
-      $unset: {
-        purgeEligibleAt: 1,
-        purgeReason: 1,
-        purgeClaimedAt: 1,
-        purgeFailureCode: 1,
-      },
-      $set: { state: 'ready' },
-    },
-  )
-  return result.modifiedCount ?? 0
+      reopenedAt,
+    }),
+  ])
+  return (media.modifiedCount ?? 0) + observations
 }
 
 function coordinate(asset: IHireMediaAsset): HireMediaCoordinate {
@@ -281,6 +454,25 @@ export async function purgeDueHireMedia(input: {
   const storage = input.storage ?? hireMediaStorage
   await markStaleHireMediaForPurge({ workspaceId: input.workspaceId, now })
   await recoverStaleHireMediaPurgeClaims({ workspaceId: input.workspaceId, now })
+  // Install/acknowledge the runtime retention tombstone before deleting the
+  // control copy of an analysis artifact. Otherwise a crash after control R2
+  // deletion could leave a pending runtime outbox free to republish data that
+  // has already reached its closed-job deadline.
+  const observationRetention = await purgeDueHireMultimodalObservationRetention({
+    workspaceId: input.workspaceId,
+    now,
+    batchSize,
+  })
+  if (observationRetention.failed > 0) {
+    return {
+      scanned: 0,
+      purged: 0,
+      failed: observationRetention.failed,
+      observationsPurged: observationRetention.controlPurged,
+      runtimeObservationPurgeFailed: observationRetention.failed,
+      privacyRequestsCompleted: await completeSatisfiedPrivacyRequests(input.workspaceId),
+    }
+  }
   const due = await HireMediaAsset.find({
     workspaceId: input.workspaceId,
     state: { $in: ['ready', 'purge_failed', 'staging'] },
@@ -355,7 +547,9 @@ export async function purgeDueHireMedia(input: {
   return {
     scanned: due.length,
     purged,
-    failed,
+    failed: failed + observationRetention.failed,
+    observationsPurged: observationRetention.controlPurged,
+    runtimeObservationPurgeFailed: observationRetention.failed,
     privacyRequestsCompleted: await completeSatisfiedPrivacyRequests(input.workspaceId),
   }
 }

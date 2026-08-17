@@ -33,9 +33,13 @@ export async function POST(
     })
       .select('config jdSnapshot consentVersion consentAt inviteTokenExpiry')
       .lean()
-    if (!round?.consentAt || !round.consentVersion) {
+    const roundMatchesAttemptConsent =
+      Boolean(round?.consentAt) &&
+      round?.consentVersion === started.consent.consentVersion &&
+      round.consentAt?.getTime() === started.consent.acceptedAt.getTime()
+    if (!round || !roundMatchesAttemptConsent) {
       return NextResponse.json(
-        { error: 'A current consent receipt is required', code: 'CONSENT_REQUIRED' },
+        { error: 'A matching consent receipt is required', code: 'CONSENT_REQUIRED' },
         { status: 409 },
       )
     }
@@ -73,8 +77,8 @@ export async function POST(
         jobDescription: round.jdSnapshot,
         targetCompany: workspace.name,
       },
-      consentVersion: round.consentVersion,
-      consentAt: round.consentAt,
+      consentVersion: started.consent.consentVersion,
+      consentAt: started.consent.acceptedAt,
       inviteExpiresAt: round.inviteTokenExpiry,
     })
     await HireRound.updateOne(

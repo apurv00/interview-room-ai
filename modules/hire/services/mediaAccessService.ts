@@ -49,6 +49,10 @@ export async function createHireMediaDownloadCapability(input: {
     _id: input.assetId,
     workspaceId: input.workspaceId,
     applicationId: input.applicationId,
+    // Landmark vectors are retained as a private analysis input, never as a
+    // recruiter-downloadable media object. The reviewer receives derived
+    // report/timeline data and the recorded video through separate assets.
+    kind: { $ne: 'facial_landmarks' },
     ...availableAt(now),
   }).lean()
   if (!asset) throw new HireMediaAccessError()
@@ -69,6 +73,7 @@ export async function createHireMediaDownloadCapability(input: {
     roundId: asset.roundId,
     attemptId: asset.attemptId,
     objectKey: asset.objectKey,
+    kind: { $ne: 'facial_landmarks' },
     ...availableAt(now),
   })
   if (!stillAuthorized) throw new HireMediaAccessError()
