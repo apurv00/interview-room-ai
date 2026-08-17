@@ -355,6 +355,7 @@ export async function duplicateJob(
           status: 'open',
           intakeWriteVersion: 0,
           applyTokenHash,
+          applyTokenSecret: rawApplySecret,
           applyPageEnabled: true,
           ...(sourceJob.screeningSettings
             ? { screeningSettings: cloneScreeningSettings(sourceJob.screeningSettings) }

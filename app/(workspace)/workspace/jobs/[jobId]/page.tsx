@@ -117,6 +117,8 @@ interface DuplicatedJobNotice {
   applyLink: string
 }
 
+type ApplyLinkRecoveryState = 'loading' | 'available' | 'unavailable' | 'error'
+
 interface DepartmentRow {
   id: string
   name: string
@@ -295,6 +297,12 @@ function selectableDepartments(departments: DepartmentRow[]): DepartmentRow[] {
   )
 }
 
+function readRecoveredApplyLink(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null
+  const response = value as Record<string, unknown>
+  return typeof response.capability === 'string' ? response.capability : null
+}
+
 export default function JobPipelinePage({ params }: { params: { jobId: string } }) {
   const router = useRouter()
   const [job, setJob] = useState<JobDetail | null>(null)
@@ -311,6 +319,9 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
   const [showAdd, setShowAdd] = useState(false)
   const [showBulk, setShowBulk] = useState(false)
   const [applyLink, setApplyLink] = useState<string | null>(null)
+  const [applyLinkRecoveryState, setApplyLinkRecoveryState] = useState<ApplyLinkRecoveryState>(
+    'loading',
+  )
   const [applyBusy, setApplyBusy] = useState(false)
   const [showDuplicate, setShowDuplicate] = useState(false)
   const [duplicateBusy, setDuplicateBusy] = useState(false)
@@ -363,9 +374,50 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
       const res = await fetch(`/api/workspace/jobs/${params.jobId}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      setJob(data.job)
+      const loadedJob = data.job as JobDetail
+      setJob(loadedJob)
       setEntries(data.entries)
       setEmailDelivery(data.emailDelivery ?? EMPTY_EMAIL_DELIVERY)
+
+      if (!loadedJob.applyPageEnabled) {
+        setApplyLink(null)
+        setApplyLinkRecoveryState('available')
+        return
+      }
+
+      // Preserve a URL that was just created while a routine job refresh is
+      // in flight. A transient protected-read failure must not make HR reset
+      // a still-valid shared link.
+      setApplyLinkRecoveryState((current) => current === 'available' ? current : 'loading')
+      try {
+        const linkResponse = await fetch(
+          `/api/workspace/jobs/${params.jobId}/apply-link`,
+          { cache: 'no-store' },
+        )
+        const capability = readRecoveredApplyLink(await linkResponse.json().catch(() => null))
+        if (!linkResponse.ok) {
+          setApplyLinkRecoveryState((current) =>
+            current === 'available' ? current : 'error',
+          )
+          return
+        }
+        if (!capability) {
+          setApplyLink(null)
+          setApplyLinkRecoveryState('unavailable')
+          return
+        }
+        setApplyLink(
+          `${window.location.origin}/apply#apply=${encodeURIComponent(capability)}`,
+        )
+        setApplyLinkRecoveryState('available')
+      } catch {
+        // The job remains usable if its protected-link read is temporarily
+        // unavailable. Preserve a known URL rather than telling HR to rotate
+        // a valid shared capability because of a transient read failure.
+        setApplyLinkRecoveryState((current) =>
+          current === 'available' ? current : 'error',
+        )
+      }
     } catch {
       setError('Could not load this job.')
     }
@@ -443,10 +495,10 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
         setActionError(data.error || 'Could not create the apply link.')
         return
       }
-      // Shown once — the server stores only a hash and can never return it again.
       setApplyLink(
         `${window.location.origin}/apply#apply=${encodeURIComponent(data.capability)}`,
       )
+      setApplyLinkRecoveryState('available')
       await load()
     } finally {
       setApplyBusy(false)
@@ -464,6 +516,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
         return
       }
       setApplyLink(null)
+      setApplyLinkRecoveryState('available')
       await load()
     } finally {
       setApplyBusy(false)
@@ -1049,7 +1102,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                   <p className="mt-1 text-sm text-[#536471]">
                     We&apos;ll copy the JD, structured requirements, and job settings into a
                     new requisition. It starts with zero candidates and a fresh public apply
-                    link.
+                    link that remains available from its job page.
                   </p>
                 </div>
                 <div>
@@ -1104,8 +1157,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                   </h2>
                   <p className="mt-1 text-sm text-[#536471]">
                     <span className="font-medium text-[#0f1419]">{duplicatedJob.title}</span> is ready.
-                    Copy its fresh apply link before continuing — it is displayed only for
-                    this confirmation.
+                    Its active link is also available from the new job page.
                   </p>
                 </div>
                 <input
@@ -1115,8 +1167,8 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                   onFocus={(event) => event.currentTarget.select()}
                   className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-xs font-mono"
                 />
-                <p className="text-xs text-[#f4212e]">
-                  Copy this now. Closing this confirmation removes the link from this screen.
+                <p className="text-xs text-[#71767b]">
+                  Copy it now, or open the job to retrieve it later.
                 </p>
                 <div className="flex justify-end gap-2 flex-wrap">
                   <Button type="button" variant="secondary" onClick={() => void copyDuplicateApplyLink()}>
@@ -1326,7 +1378,7 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
 
       <ScreeningPanel jobId={params.jobId} jobStatus={job.status} />
 
-      {job.status === 'open' && (
+      {job.status !== 'closed' && (
         <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -1355,16 +1407,25 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
                 onFocus={(e) => e.currentTarget.select()}
                 className="w-full px-3 py-2 border border-[#e1e8ed] rounded-xl bg-[#f8fafc] text-xs font-mono"
               />
-              <p className="text-xs text-[#f4212e]">
-                Copy this now — it is shown only once. Creating a replacement link
-                immediately stops the previous one from working.
+              <p className="text-xs text-[#71767b]">
+                This active link remains available to workspace members. Creating a
+                replacement link immediately stops the previous one from working.
               </p>
             </div>
           )}
-          {!applyLink && job.applyPageEnabled && (
+          {!applyLink && job.applyPageEnabled && applyLinkRecoveryState === 'loading' && (
+            <p className="text-xs text-[#71767b]">Loading the active link…</p>
+          )}
+          {!applyLink && job.applyPageEnabled && applyLinkRecoveryState === 'unavailable' && (
             <p className="text-xs text-[#71767b]">
-              A link is live. The URL cannot be shown again — use Replace link to issue a
-              new one (which disables the old).
+              This live link cannot be recovered here. Use Replace link to issue a new one
+              that remains available to workspace members (and disables the old link).
+            </p>
+          )}
+          {!applyLink && job.applyPageEnabled && applyLinkRecoveryState === 'error' && (
+            <p className="text-xs text-[#71767b]">
+              The active link could not be retrieved right now. It may still be live; try
+              again before replacing it.
             </p>
           )}
         </div>

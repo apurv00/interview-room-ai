@@ -82,8 +82,8 @@ export function serializeJob(job: IHireJob, opts: { includeJd?: boolean } = {}) 
     activeRequirementVersion: job.activeRequirementVersion ?? null,
     createdAt: job.createdAt,
     // Whether the public apply page is live. The token itself is NEVER
-    // serialized — only its hash is stored, and the raw value is shown
-    // once at mint time.
+    // serialized; a separate authenticated, no-store endpoint owns its
+    // hidden current secret for the job page.
     applyPageEnabled: job.applyPageEnabled === true,
     screeningSettings: {
       location: job.screeningSettings?.location ?? null,

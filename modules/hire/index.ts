@@ -124,6 +124,7 @@ export {
 export {
   issueApplyLink,
   disableApplyLink,
+  recoverApplyLink,
   resolveApplyToken,
   resolveWorkspaceWriteAuthority,
   type ApplyLinkResult,

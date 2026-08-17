@@ -53,12 +53,9 @@ export interface IHireJob extends Document {
   status: HireJobStatus
   /** Conflict-inducing counter for the in-transaction intake claim. */
   intakeWriteVersion?: number
-  /**
-   * sha256 of the public apply link's raw token. Like the round invite
-   * token, the RAW value is shown to the recruiter once and never stored —
-   * a database read must not yield a working public URL.
-   */
+  /** sha256 of the public apply link's raw token. */
   applyTokenHash?: string
+  applyTokenSecret?: string
   /** Recruiter switch; closing the job also stops applications. */
   applyPageEnabled?: boolean
   /** Optional defaults copied into a confirmed screening-gate snapshot. */
@@ -152,6 +149,7 @@ const HireJobSchema = new Schema<IHireJob>(
     // (snapshot reads alone permit write skew). The value itself is unused.
     intakeWriteVersion: { type: Number, default: 0 },
     applyTokenHash: { type: String, maxlength: 64 },
+    applyTokenSecret: { type: String, select: false, minlength: 64, maxlength: 64, match: /^[a-f0-9]{64}$/ },
     applyPageEnabled: { type: Boolean, default: false },
     screeningSettings: { type: HireScreeningSettingsSchema, default: undefined },
     closeNote: { type: String, maxlength: 4000 },

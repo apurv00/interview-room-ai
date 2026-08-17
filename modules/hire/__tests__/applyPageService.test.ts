@@ -1,17 +1,15 @@
 /**
- * Public apply link. Two properties carry the security of this surface:
- * the raw token is never stored (only its sha256), and EVERY resolution
- * failure looks identical, so the URL space cannot be probed for which
- * employers or jobs exist.
+ * Public apply links keep a hidden raw secret so authorized workspace members
+ * can retrieve the same URL, while public resolution continues to use only
+ * the hash and remains non-enumerable.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppError } from '@shared/errors'
 
 const onboarding = vi.hoisted(() => ({
   writeIsolation: vi.fn(),
   isTestDriveCoordinate: vi.fn(),
 }))
-
 vi.mock('@shared/db/connection', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }))
@@ -56,6 +54,7 @@ vi.mock('../models', async () => {
 import {
   issueApplyLink,
   disableApplyLink,
+  recoverApplyLink,
   resolveApplyToken,
   resolveWorkspaceWriteAuthority,
   sha256,
@@ -80,6 +79,7 @@ function jobDoc(overrides: Record<string, unknown> = {}) {
     title: 'Backend Engineer',
     status: 'open',
     applyTokenHash: undefined as string | undefined,
+    applyTokenSecret: undefined as string | undefined,
     applyPageEnabled: false,
     save: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -101,7 +101,7 @@ beforeEach(() => {
 })
 
 describe('issueApplyLink', () => {
-  it('returns a raw token but stores ONLY its hash', async () => {
+  it('returns a raw token and stores it in the hidden recovery field with its hash', async () => {
     const job = jobDoc()
     mockJob.findOne.mockResolvedValue(job)
 
@@ -110,14 +110,13 @@ describe('issueApplyLink', () => {
 
     expect(enabled).toBe(true)
     expect(token).toMatch(/^[a-f0-9]{64}$/)
-    expect(mockJob.updateOne.mock.calls[0][1]).toEqual({
+    expect(mockJob.updateOne.mock.calls[0][1]).toMatchObject({
       $set: {
         applyTokenHash: sha256(token),
+        applyTokenSecret: token,
         applyPageEnabled: true,
       },
     })
-    // The raw value must never be persisted anywhere on the document.
-    expect(JSON.stringify(mockJob.updateOne.mock.calls[0])).not.toContain(token)
     expect(onboarding.writeIsolation).toHaveBeenCalledWith({
       workspaceId: '111111111111111111111111',
       jobId: 'job-1',
@@ -134,6 +133,9 @@ describe('issueApplyLink', () => {
     expect(second.capability).not.toBe(first.capability)
     expect(mockJob.updateOne.mock.calls[1][1].$set.applyTokenHash).not.toBe(
       mockJob.updateOne.mock.calls[0][1].$set.applyTokenHash,
+    )
+    expect(mockJob.updateOne.mock.calls[1][1].$set.applyTokenSecret).not.toBe(
+      mockJob.updateOne.mock.calls[0][1].$set.applyTokenSecret,
     )
   })
 
@@ -187,11 +189,54 @@ describe('issueApplyLink', () => {
   })
 })
 
-describe('disableApplyLink', () => {
-  it('clears the hash so the shared URL cannot resume', async () => {
-    const job = jobDoc({ applyTokenHash: 'deadbeef', applyPageEnabled: true })
-    mockJob.findOne.mockResolvedValue(job)
+describe('recoverApplyLink', () => {
+  it('returns the same active capability from the hidden stored secret', async () => {
+    mockJob.findOne.mockResolvedValueOnce(jobDoc())
+    const issued = await issueApplyLink(CTX, 'job-1')
+    const stored = mockJob.updateOne.mock.calls[0][1].$set
+    const selected = vi.fn().mockResolvedValue(jobDoc({
+      applyPageEnabled: true,
+      applyTokenHash: stored.applyTokenHash,
+      applyTokenSecret: stored.applyTokenSecret,
+    }))
+    mockJob.findOne.mockReturnValueOnce({ select: selected })
 
+    await expect(recoverApplyLink(CTX, 'job-1')).resolves.toBe(issued.capability)
+    expect(mockJob.findOne).toHaveBeenLastCalledWith(
+      {
+        _id: 'job-1',
+        workspaceId: '111111111111111111111111',
+      },
+    )
+    expect(selected).toHaveBeenCalledWith('+applyTokenSecret')
+  })
+
+  it('treats active legacy hash-only links as not recoverable', async () => {
+    mockJob.findOne.mockReturnValueOnce({
+      select: vi.fn().mockResolvedValue(jobDoc({
+        applyPageEnabled: true,
+        applyTokenHash: 'a'.repeat(64),
+      })),
+    })
+
+    await expect(recoverApplyLink(CTX, 'job-1')).resolves.toBeNull()
+  })
+
+  it('does not recover a disabled or closed public link', async () => {
+    mockJob.findOne.mockReturnValueOnce({
+      select: vi.fn().mockResolvedValue(jobDoc({
+        status: 'closed',
+        applyPageEnabled: true,
+        applyTokenHash: 'a'.repeat(64),
+      })),
+    })
+
+    await expect(recoverApplyLink(CTX, 'job-1')).resolves.toBeNull()
+  })
+})
+
+describe('disableApplyLink', () => {
+  it('clears both the hash and hidden raw secret so the shared URL cannot resume', async () => {
     await disableApplyLink(CTX, 'job-1')
 
     expect(mockJob.updateOne).toHaveBeenCalledWith(
@@ -201,7 +246,7 @@ describe('disableApplyLink', () => {
       },
       {
         $set: { applyPageEnabled: false },
-        $unset: { applyTokenHash: 1 },
+        $unset: { applyTokenHash: 1, applyTokenSecret: 1 },
       },
       { runValidators: true },
     )
