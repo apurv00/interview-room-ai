@@ -1,5 +1,5 @@
 import { HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION } from "@shared/contracts/hireMultimodalObservationBridge";
-import { HIRE_AI_CONSENT_VERSION, HireRound } from "@hire";
+import { HIRE_AI_CONSENT_VERSION, HireRound } from "@hire-multimodal-boundary";
 import {
   HireMultimodalAnalysis,
   HireMultimodalAnalysisIngestionEvent,

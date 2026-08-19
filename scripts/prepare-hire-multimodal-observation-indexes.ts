@@ -1,14 +1,14 @@
 #!/usr/bin/env tsx
 /**
- * Explicit, non-dropping Hire supplemental-observation index preparation.
+ * Explicit, non-dropping Hire-native multimodal index preparation.
  *
  *   npm run prepare:hire-multimodal-observation-indexes
  *   npm run check:hire-multimodal-observation-indexes
  *   npm run prepare:hire-multimodal-observation-indexes -- --apply
  *
  * Run --check/--apply once on each isolated Hire surface. The control-plane
- * deployment owns the recruiter-only derived report and its idempotency
- * ledger; the runtime deployment owns its separate publish outbox. This
+ * deployment owns the recruiter-only derived reports and their idempotency
+ * ledgers; the runtime deployment owns its separate publish outboxes. This
  * script never connects in plan mode and never calls syncIndexes/dropIndex.
  */
 
@@ -16,10 +16,14 @@ import { pathToFileURL } from 'node:url'
 import mongoose from 'mongoose'
 import { connectDB } from '../shared/db/connection'
 import {
+  HireMultimodalAnalysis,
+  HireMultimodalAnalysisIngestionEvent,
   HireMultimodalObservation,
   HireMultimodalObservationIngestionEvent,
   HireMultimodalObservationPurgeObligation,
 } from '../modules/hire-multimodal/models'
+import { HireRuntimeBinding } from '../modules/hire-runtime/models/HireRuntimeBinding'
+import { HireRuntimeMultimodalAnalysisOutbox } from '../modules/hire-runtime/models/HireRuntimeMultimodalAnalysisOutbox'
 import { HireRuntimeMultimodalObservationOutbox } from '../modules/hire-runtime/models/HireRuntimeMultimodalObservationOutbox'
 import { HireRuntimeMultimodalObservationRetentionTombstone } from '../modules/hire-runtime/models/HireRuntimeMultimodalObservationRetentionTombstone'
 
@@ -32,9 +36,13 @@ export type HireMultimodalObservationIndexPreparationMode =
 type IndexDirection = 1 | -1
 type IndexKey = Readonly<Record<string, IndexDirection>>
 type IndexTarget =
+  | 'control-analyses'
+  | 'control-analysis-ingestion-events'
   | 'control-observations'
   | 'control-ingestion-events'
   | 'control-runtime-purge-obligations'
+  | 'runtime-analysis-outbox'
+  | 'runtime-bindings'
   | 'runtime-outbox'
   | 'runtime-retention-tombstones'
 
@@ -65,6 +73,62 @@ interface IndexCollection {
 
 /** These names exactly match the declared control and runtime schemas. */
 export const HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS: readonly HireMultimodalObservationIndexDefinition[] = [
+  {
+    target: 'control-analyses',
+    name: 'workspaceId_1_applicationId_1_roundId_1_runtimeSessionId_1_revision_1',
+    key: { workspaceId: 1, applicationId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+    unique: true,
+    purpose: 'one immutable full-analysis revision per isolated runtime session',
+  },
+  {
+    target: 'control-analyses',
+    name: 'eventId_1',
+    key: { eventId: 1 },
+    unique: true,
+    purpose: 'bridge-event idempotency on the recruiter-only full-analysis row',
+  },
+  {
+    target: 'control-analyses',
+    name: 'workspaceId_1_candidateId_1_capturedAt_-1',
+    key: { workspaceId: 1, candidateId: 1, capturedAt: -1 },
+    unique: false,
+    purpose: 'candidate privacy/retention lookup and authorized recruiter read',
+  },
+  {
+    target: 'control-analyses',
+    name: 'workspaceId_1_jobId_1_purgeEligibleAt_1',
+    key: { workspaceId: 1, jobId: 1, purgeEligibleAt: 1 },
+    unique: false,
+    purpose: 'closed-job six-calendar-month full-analysis retention schedule',
+  },
+  {
+    target: 'control-analyses',
+    name: 'workspaceId_1_status_1_retryAt_1_createdAt_1',
+    key: { workspaceId: 1, status: 1, retryAt: 1, createdAt: 1 },
+    unique: false,
+    purpose: 'tenant-scoped full-analysis claim, retry, and recovery sweep',
+  },
+  {
+    target: 'control-analysis-ingestion-events',
+    name: 'eventId_1',
+    key: { eventId: 1 },
+    unique: true,
+    purpose: 'full-analysis signed bridge retry idempotency ledger',
+  },
+  {
+    target: 'control-analysis-ingestion-events',
+    name: 'workspaceId_1_roundId_1_runtimeSessionId_1_revision_1',
+    key: { workspaceId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+    unique: true,
+    purpose: 'one accepted full-analysis revision for each runtime coordinate',
+  },
+  {
+    target: 'control-analysis-ingestion-events',
+    name: 'workspaceId_1_candidateId_1',
+    key: { workspaceId: 1, candidateId: 1 },
+    unique: false,
+    purpose: 'candidate privacy deletion lookup for the full-analysis ledger',
+  },
   {
     target: 'control-observations',
     name: 'workspaceId_1_applicationId_1_roundId_1_runtimeSessionId_1_revision_1',
@@ -143,6 +207,36 @@ export const HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS: readonly HireMultimo
     purpose: 'candidate privacy and retention deletion lookup',
   },
   {
+    target: 'runtime-analysis-outbox',
+    name: 'workspaceId_1_roundId_1_runtimeSessionId_1_revision_1',
+    key: { workspaceId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+    unique: true,
+    purpose: 'one durable runtime publish outbox row per full-analysis revision',
+  },
+  {
+    target: 'runtime-analysis-outbox',
+    name: 'workspaceId_1_status_1_publishRetryAt_1_updatedAt_1',
+    key: { workspaceId: 1, status: 1, publishRetryAt: 1, updatedAt: 1 },
+    unique: false,
+    purpose: 'tenant-scoped full-analysis outbox claim, retry, and recovery sweep',
+  },
+  {
+    target: 'runtime-bindings',
+    name: 'workspaceId_1_status_1_purgePersonalData_1_publishedRevision_1_cameraMediaStatus_1_publishRetryAt_1_publishCheckedAt_1_updatedAt_1',
+    key: {
+      workspaceId: 1,
+      status: 1,
+      purgePersonalData: 1,
+      publishedRevision: 1,
+      cameraMediaStatus: 1,
+      publishRetryAt: 1,
+      publishCheckedAt: 1,
+      updatedAt: 1,
+    },
+    unique: false,
+    purpose: 'runtime late-camera publish recovery sweep',
+  },
+  {
     target: 'runtime-outbox',
     name: 'workspaceId_1_roundId_1_runtimeSessionId_1_revision_1',
     key: { workspaceId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
@@ -166,11 +260,15 @@ export const HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS: readonly HireMultimo
 ]
 
 const CONTROL_TARGETS: readonly IndexTarget[] = [
+  'control-analyses',
+  'control-analysis-ingestion-events',
   'control-observations',
   'control-ingestion-events',
   'control-runtime-purge-obligations',
 ]
 const RUNTIME_TARGETS: readonly IndexTarget[] = [
+  'runtime-analysis-outbox',
+  'runtime-bindings',
   'runtime-outbox',
   'runtime-retention-tombstones',
 ]
@@ -257,11 +355,17 @@ function definitionsFor(targets: readonly IndexTarget[]) {
 
 function collectionsByTarget(): Record<IndexTarget, IndexCollection> {
   return {
+    'control-analyses': HireMultimodalAnalysis.collection as unknown as IndexCollection,
+    'control-analysis-ingestion-events':
+      HireMultimodalAnalysisIngestionEvent.collection as unknown as IndexCollection,
     'control-observations': HireMultimodalObservation.collection as unknown as IndexCollection,
     'control-ingestion-events':
       HireMultimodalObservationIngestionEvent.collection as unknown as IndexCollection,
     'control-runtime-purge-obligations':
       HireMultimodalObservationPurgeObligation.collection as unknown as IndexCollection,
+    'runtime-analysis-outbox':
+      HireRuntimeMultimodalAnalysisOutbox.collection as unknown as IndexCollection,
+    'runtime-bindings': HireRuntimeBinding.collection as unknown as IndexCollection,
     'runtime-outbox':
       HireRuntimeMultimodalObservationOutbox.collection as unknown as IndexCollection,
     'runtime-retention-tombstones':
@@ -382,7 +486,7 @@ async function assertNoDuplicateUniqueRows(
 }
 
 function formatDefinitions(): void {
-  console.log('\nHire supplemental-observation index preparation')
+  console.log('\nHire-native multimodal index preparation')
   console.log('─────────────────────────────────────────────')
   for (const definition of HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS) {
     console.log(

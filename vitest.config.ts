@@ -33,6 +33,10 @@ export default defineConfig({
         __dirname,
         'modules/hire/onboardingBoundary',
       ),
+      '@hire-multimodal-boundary': path.resolve(
+        __dirname,
+        'modules/hire/multimodalBoundary',
+      ),
       '@hire-decision-boundary': path.resolve(__dirname, 'modules/hire/decisionBoundary'),
       '@hire-decisions': path.resolve(__dirname, 'modules/hire-decisions'),
       '@hire-operations-boundary': path.resolve(__dirname, 'modules/hire/operationsBoundary'),

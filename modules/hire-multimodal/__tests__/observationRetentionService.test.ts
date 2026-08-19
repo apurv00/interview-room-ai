@@ -19,7 +19,15 @@ const mocks = vi.hoisted(() => ({
   runtimePurge: vi.fn(),
 }));
 
-vi.mock("@hire/models", () => ({ HireRound: { find: mocks.roundFind } }));
+vi.mock("@hire", () => {
+  throw new Error(
+    "Hire multimodal retention must not load the broad @hire barrel",
+  );
+});
+vi.mock("@hire-multimodal-boundary", () => ({
+  HIRE_AI_CONSENT_VERSION: "hire-ai-v4-2026-08-17",
+  HireRound: { find: mocks.roundFind },
+}));
 vi.mock("../models", () => ({
   HireMultimodalObservation: {
     updateMany: mocks.observationUpdateMany,

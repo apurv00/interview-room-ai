@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   connectDB: vi.fn(),
+  controlAnalysisIndexes: vi.fn(),
+  controlAnalysisCreateIndex: vi.fn(),
+  controlAnalysisAggregate: vi.fn(),
+  controlAnalysisEventIndexes: vi.fn(),
+  controlAnalysisEventCreateIndex: vi.fn(),
+  controlAnalysisEventAggregate: vi.fn(),
   controlObservationIndexes: vi.fn(),
   controlObservationCreateIndex: vi.fn(),
   controlObservationAggregate: vi.fn(),
@@ -14,6 +20,12 @@ const mocks = vi.hoisted(() => ({
   runtimeIndexes: vi.fn(),
   runtimeCreateIndex: vi.fn(),
   runtimeAggregate: vi.fn(),
+  runtimeAnalysisIndexes: vi.fn(),
+  runtimeAnalysisCreateIndex: vi.fn(),
+  runtimeAnalysisAggregate: vi.fn(),
+  runtimeBindingIndexes: vi.fn(),
+  runtimeBindingCreateIndex: vi.fn(),
+  runtimeBindingAggregate: vi.fn(),
   runtimeTombstoneIndexes: vi.fn(),
   runtimeTombstoneCreateIndex: vi.fn(),
   runtimeTombstoneAggregate: vi.fn(),
@@ -21,6 +33,20 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../shared/db/connection', () => ({ connectDB: mocks.connectDB }))
 vi.mock('../../modules/hire-multimodal/models', () => ({
+  HireMultimodalAnalysis: {
+    collection: {
+      indexes: mocks.controlAnalysisIndexes,
+      createIndex: mocks.controlAnalysisCreateIndex,
+      aggregate: mocks.controlAnalysisAggregate,
+    },
+  },
+  HireMultimodalAnalysisIngestionEvent: {
+    collection: {
+      indexes: mocks.controlAnalysisEventIndexes,
+      createIndex: mocks.controlAnalysisEventCreateIndex,
+      aggregate: mocks.controlAnalysisEventAggregate,
+    },
+  },
   HireMultimodalObservation: {
     collection: {
       indexes: mocks.controlObservationIndexes,
@@ -52,6 +78,24 @@ vi.mock('../../modules/hire-runtime/models/HireRuntimeMultimodalObservationOutbo
     },
   },
 }))
+vi.mock('../../modules/hire-runtime/models/HireRuntimeMultimodalAnalysisOutbox', () => ({
+  HireRuntimeMultimodalAnalysisOutbox: {
+    collection: {
+      indexes: mocks.runtimeAnalysisIndexes,
+      createIndex: mocks.runtimeAnalysisCreateIndex,
+      aggregate: mocks.runtimeAnalysisAggregate,
+    },
+  },
+}))
+vi.mock('../../modules/hire-runtime/models/HireRuntimeBinding', () => ({
+  HireRuntimeBinding: {
+    collection: {
+      indexes: mocks.runtimeBindingIndexes,
+      createIndex: mocks.runtimeBindingCreateIndex,
+      aggregate: mocks.runtimeBindingAggregate,
+    },
+  },
+}))
 vi.mock('../../modules/hire-runtime/models/HireRuntimeMultimodalObservationRetentionTombstone', () => ({
   HireRuntimeMultimodalObservationRetentionTombstone: {
     collection: {
@@ -73,6 +117,16 @@ import {
 type Target = (typeof HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS)[number]['target']
 
 const byTarget = {
+  'control-analyses': {
+    indexes: mocks.controlAnalysisIndexes,
+    createIndex: mocks.controlAnalysisCreateIndex,
+    aggregate: mocks.controlAnalysisAggregate,
+  },
+  'control-analysis-ingestion-events': {
+    indexes: mocks.controlAnalysisEventIndexes,
+    createIndex: mocks.controlAnalysisEventCreateIndex,
+    aggregate: mocks.controlAnalysisEventAggregate,
+  },
   'control-observations': {
     indexes: mocks.controlObservationIndexes,
     createIndex: mocks.controlObservationCreateIndex,
@@ -92,6 +146,16 @@ const byTarget = {
     indexes: mocks.runtimeIndexes,
     createIndex: mocks.runtimeCreateIndex,
     aggregate: mocks.runtimeAggregate,
+  },
+  'runtime-analysis-outbox': {
+    indexes: mocks.runtimeAnalysisIndexes,
+    createIndex: mocks.runtimeAnalysisCreateIndex,
+    aggregate: mocks.runtimeAnalysisAggregate,
+  },
+  'runtime-bindings': {
+    indexes: mocks.runtimeBindingIndexes,
+    createIndex: mocks.runtimeBindingCreateIndex,
+    aggregate: mocks.runtimeBindingAggregate,
   },
   'runtime-retention-tombstones': {
     indexes: mocks.runtimeTombstoneIndexes,
@@ -152,7 +216,7 @@ afterEach(() => {
   delete process.env.HIRE_RUNTIME_DATABASE_NAME
 })
 
-describe('Hire supplemental-observation index preparation', () => {
+describe('Hire-native multimodal index preparation', () => {
   it('plans without connecting and rejects unsafe flags', async () => {
     expect(hireMultimodalObservationIndexPreparationModeOf([])).toBe('plan')
     expect(hireMultimodalObservationIndexPreparationModeOf(['--check'])).toBe('check')
@@ -171,9 +235,13 @@ describe('Hire supplemental-observation index preparation', () => {
     await prepareHireMultimodalObservationIndexes(['--check'])
 
     expect(mocks.connectDB).toHaveBeenCalledOnce()
+    expect(mocks.controlAnalysisIndexes).toHaveBeenCalledOnce()
+    expect(mocks.controlAnalysisEventIndexes).toHaveBeenCalledOnce()
     expect(mocks.controlObservationIndexes).toHaveBeenCalledOnce()
     expect(mocks.controlEventIndexes).toHaveBeenCalledOnce()
     expect(mocks.controlPurgeObligationIndexes).toHaveBeenCalledOnce()
+    expect(mocks.runtimeAnalysisIndexes).not.toHaveBeenCalled()
+    expect(mocks.runtimeBindingIndexes).not.toHaveBeenCalled()
     expect(mocks.runtimeIndexes).not.toHaveBeenCalled()
     expect(mocks.runtimeTombstoneIndexes).not.toHaveBeenCalled()
   })
@@ -188,14 +256,20 @@ describe('Hire supplemental-observation index preparation', () => {
 
     await prepareHireMultimodalObservationIndexes(['--check'])
 
+    expect(mocks.runtimeAnalysisIndexes).toHaveBeenCalledOnce()
+    expect(mocks.runtimeBindingIndexes).toHaveBeenCalledOnce()
     expect(mocks.runtimeIndexes).toHaveBeenCalledOnce()
     expect(mocks.runtimeTombstoneIndexes).toHaveBeenCalledOnce()
+    expect(mocks.controlAnalysisIndexes).not.toHaveBeenCalled()
+    expect(mocks.controlAnalysisEventIndexes).not.toHaveBeenCalled()
     expect(mocks.controlObservationIndexes).not.toHaveBeenCalled()
     expect(mocks.controlEventIndexes).not.toHaveBeenCalled()
     expect(mocks.controlPurgeObligationIndexes).not.toHaveBeenCalled()
   })
 
   it('creates only the missing control indexes after checking every unique invariant', async () => {
+    setMissingThenExact('control-analyses')
+    setMissingThenExact('control-analysis-ingestion-events')
     setMissingThenExact('control-observations')
     setMissingThenExact('control-ingestion-events')
     setMissingThenExact('control-runtime-purge-obligations')
@@ -203,7 +277,15 @@ describe('Hire supplemental-observation index preparation', () => {
     await prepareHireMultimodalObservationIndexes(['--apply'])
 
     const controlDefinitions = HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS.filter(
-      (definition) => !definition.target.startsWith('runtime-'),
+      (definition) => definition.target.startsWith('control-'),
+    )
+    expect(mocks.controlAnalysisCreateIndex).toHaveBeenCalledTimes(
+      controlDefinitions.filter((definition) => definition.target === 'control-analyses').length,
+    )
+    expect(mocks.controlAnalysisEventCreateIndex).toHaveBeenCalledTimes(
+      controlDefinitions.filter(
+        (definition) => definition.target === 'control-analysis-ingestion-events',
+      ).length,
     )
     expect(mocks.controlObservationCreateIndex).toHaveBeenCalledTimes(
       controlDefinitions.filter((definition) => definition.target === 'control-observations').length,
@@ -223,6 +305,40 @@ describe('Hire supplemental-observation index preparation', () => {
     )
     expect(mocks.runtimeCreateIndex).not.toHaveBeenCalled()
     expect(mocks.runtimeTombstoneCreateIndex).not.toHaveBeenCalled()
+  })
+
+  it('creates all missing runtime indexes, including late-camera recovery', async () => {
+    process.env.IPG_SURFACE = 'hire-engine'
+    Object.defineProperty(mongoose.connection, 'name', {
+      configurable: true,
+      value: 'hire-runtime',
+    })
+    setMissingThenExact('runtime-analysis-outbox')
+    setMissingThenExact('runtime-bindings')
+    setMissingThenExact('runtime-outbox')
+    setMissingThenExact('runtime-retention-tombstones')
+
+    await prepareHireMultimodalObservationIndexes(['--apply'])
+
+    const runtimeDefinitions = HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS.filter(
+      (definition) => definition.target.startsWith('runtime-'),
+    )
+    expect(mocks.runtimeAnalysisCreateIndex).toHaveBeenCalledTimes(
+      runtimeDefinitions.filter((definition) => definition.target === 'runtime-analysis-outbox').length,
+    )
+    expect(mocks.runtimeBindingCreateIndex).toHaveBeenCalledTimes(
+      runtimeDefinitions.filter((definition) => definition.target === 'runtime-bindings').length,
+    )
+    expect(mocks.runtimeCreateIndex).toHaveBeenCalledTimes(
+      runtimeDefinitions.filter((definition) => definition.target === 'runtime-outbox').length,
+    )
+    expect(mocks.runtimeTombstoneCreateIndex).toHaveBeenCalledTimes(
+      runtimeDefinitions.filter(
+        (definition) => definition.target === 'runtime-retention-tombstones',
+      ).length,
+    )
+    expect(mocks.controlAnalysisCreateIndex).not.toHaveBeenCalled()
+    expect(mocks.controlObservationCreateIndex).not.toHaveBeenCalled()
   })
 
   it('refuses a same-key incompatible index without writing', async () => {

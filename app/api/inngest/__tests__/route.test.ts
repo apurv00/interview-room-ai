@@ -67,7 +67,9 @@ const {
     id: "hire-runtime-multimodal-analysis-publisher",
   },
   hireMultimodalAnalysisJob: { id: "hire-multimodal-analysis" },
-  hireMultimodalAnalysisRecoveryJob: { id: "hire-multimodal-analysis-recovery" },
+  hireMultimodalAnalysisRecoveryJob: {
+    id: "hire-multimodal-analysis-recovery",
+  },
 }));
 
 vi.mock("inngest/next", () => ({ serve: mockServe }));
@@ -162,10 +164,10 @@ vi.mock("@/modules/hire-onboarding/jobs/testDriveCleanupJob", () => ({
   hireOnboardingTestDriveCleanupRecoveryJob,
 }));
 vi.mock("@modules/hire-runtime/jobs/feedbackRecoveryJob", () => ({
-  hireRuntimeFeedbackRecoveryJob: { id: "hire-runtime-feedback" },
+  hireRuntimeFeedbackRecoveryJob: { id: "hire-runtime-feedback-recovery" },
 }));
 vi.mock("@modules/hire-runtime/jobs/resultPublisherJob", () => ({
-  hireRuntimeResultPublisherJob: { id: "hire-runtime-result" },
+  hireRuntimeResultPublisherJob: { id: "hire-runtime-result-publisher" },
 }));
 vi.mock("@modules/hire-runtime/jobs/multimodalObservationPublisherJob", () => ({
   hireRuntimeMultimodalObservationPublisherJob: {
@@ -287,6 +289,14 @@ describe("Inngest route registration", () => {
           (fn) => fn === hireOnboardingTestDriveCleanupRecoveryJob,
         ),
       ).toHaveLength(1);
+      expect(
+        options.functions.filter((fn) => fn === hireMultimodalAnalysisJob),
+      ).toHaveLength(1);
+      expect(
+        options.functions.filter(
+          (fn) => fn === hireMultimodalAnalysisRecoveryJob,
+        ),
+      ).toHaveLength(1);
       expect(options.functions).toHaveLength(21);
       expect(options.functions).not.toContain(retentionJob);
     } finally {
@@ -306,8 +316,8 @@ describe("Inngest route registration", () => {
         functions: Array<{ id: string }>;
       };
       expect(options.functions.map((fn) => fn.id)).toEqual([
-        "hire-runtime-feedback",
-        "hire-runtime-result",
+        "hire-runtime-feedback-recovery",
+        "hire-runtime-result-publisher",
         "hire-runtime-multimodal-observation-publisher",
         "hire-runtime-multimodal-analysis-publisher",
       ]);
