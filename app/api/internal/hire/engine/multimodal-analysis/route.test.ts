@@ -30,7 +30,9 @@ vi.mock("@modules/hire-multimodal/services/analysisIngestionService", () => ({
   ingestHireMultimodalAnalysis: mocks.ingest,
 }));
 
-import { POST, __hireMultimodalAnalysisRoute } from "./route";
+import { POST } from "./route";
+
+const ROUTE_PATH = "/api/internal/hire/engine/multimodal-analysis";
 
 const WORKSPACE_ID = "1".repeat(24);
 const APPLICATION_ID = "2".repeat(24);
@@ -110,7 +112,7 @@ describe("Hire full multimodal-analysis bridge route", () => {
 
     expect(mocks.verify).toHaveBeenCalledWith({
       method: "POST",
-      path: __hireMultimodalAnalysisRoute.ROUTE_PATH,
+      path: ROUTE_PATH,
       body,
       headers: expect.any(Headers),
     });
