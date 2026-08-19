@@ -23,7 +23,7 @@ release from a source push.
 
 - Deploy the Hire runtime/engine service first, then the Hire control service.
   Both must use the same approved source commit. The old control cannot issue a
-  v3 native-observation handoff, so this prevents a candidate from receiving
+  v4 native-multimodal handoff, so this prevents a candidate from receiving
   the new consent/flow before the engine is capable of serving it.
 - Configure `NEXT_PUBLIC_FEATURE_MULTIMODAL=true` as both a **Coolify build
   variable** and a runtime variable on the Hire engine only. It is inlined into
@@ -65,35 +65,44 @@ schema migration.
    commit, with the engine-only build and runtime flag from step 1. Confirm
    the runtime index sequence above passed and verify authenticated health reports
    `healthy`, MongoDB and Redis `ok`, and that exact commit. The old control
-   cannot create a v3 handoff, so no native observation capture is enabled
+   cannot create a v4 handoff, so no native multimodal capture is enabled
    until the next step.
 2. In Coolify, manually deploy the Hire control service at the same commit.
    Confirm the control index sequence above passed and verify the same authenticated
-   health and exact-commit evidence before it can issue v3 handoffs.
+   health and exact-commit evidence before it can issue v4 handoffs.
 3. Do not replace a failed Oracle deployment with a Vercel deployment; use the
    prior known-good Coolify release only after preserving the relevant
    operational evidence.
 
-### 4. Sync and prove the Hire runtime Inngest surface
+### 4. Sync and prove the Hire Inngest surfaces
 
 After the runtime deployment is healthy, trigger/confirm Inngest sync against
 the runtime `/api/inngest` route. Its registered functions must include exactly
-these three Hire-runtime jobs:
+these four Hire-runtime jobs:
 
-- `hire-runtime-feedback`
-- `hire-runtime-result`
+- `hire-runtime-feedback-recovery`
+- `hire-runtime-result-publisher`
 - `hire-runtime-multimodal-observation-publisher`
+- `hire-runtime-multimodal-analysis-publisher`
 
-Registration alone is not delivery proof. Retain evidence of a successful
-runtime publish-job execution in Inngest before treating the release as live.
+After the control deployment is healthy, sync its `/api/inngest` route too and
+confirm it includes the native full-analysis jobs alongside the existing
+control jobs:
+
+- `hire-multimodal-analysis`
+- `hire-multimodal-analysis-recovery`
+
+Registration alone is not delivery proof. Retain evidence of successful
+runtime analysis publishing and control analysis/recovery execution in Inngest
+before treating the release as live.
 
 ### 5. Run the authenticated Hire smoke
 
 - Authenticate to both Coolify services' health endpoints and retain the
   healthy dependency state and exact deployed commit.
-- Complete a canonical Hire candidate flow using the current v3 consent. Check
+- Complete a canonical Hire candidate flow using the current v4 consent. Check
   that live coaching is absent, the Indian interviewer voice is selected, and
-  the supplemental-observation path is active only after that consent.
+  the native multimodal path is active only after that consent.
 - Run an authenticated Hire TTS turn and verify the response header
   `X-TTS-Provider: sarvam`. A Deepgram fallback, a missing header, or an
   unauthenticated health result is a release failure until corrected.

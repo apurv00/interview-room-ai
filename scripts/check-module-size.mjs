@@ -85,8 +85,10 @@ const BUDGETS = {
   // unavoidable consent/privacy/job-close lifecycle adapters here; their
   // models, bridge, report, and retry mechanics live in hire-multimodal.
   // 26k leaves the same deliberately tight cap while preserving those root
-  // lifecycle obligations; see ADR 0039.
-  'modules/hire':      { maxLOC: 26_000, maxFiles: 90 },
+  // lifecycle obligations. The native multimodal release adds one deliberately
+  // tiny, two-export boundary facade so its isolated module never imports the
+  // broad Hire barrel; retain a one-file allowance for that seam. See ADR 0039.
+  'modules/hire':      { maxLOC: 26_000, maxFiles: 91 },
   // A bounded control-plane authority for Hire-native supplemental interview
   // observations. It cannot write assessments, decisions, exports, or raw
   // camera data; see ADR 0039.

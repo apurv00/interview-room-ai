@@ -29,7 +29,10 @@ vi.mock(
   }),
 );
 
-import { POST, __hireMultimodalObservationRoute } from "./route";
+import { POST } from "./route";
+
+const ROUTE_PATH = "/api/internal/hire/engine/multimodal-observations";
+const MAX_BODY_BYTES = 128 * 1024;
 
 function request(body: string): NextRequest {
   return new NextRequest(
@@ -66,7 +69,7 @@ describe("Hire supplemental-observation bridge route", () => {
 
     expect(mocks.verify).toHaveBeenCalledWith({
       method: "POST",
-      path: __hireMultimodalObservationRoute.ROUTE_PATH,
+      path: ROUTE_PATH,
       body,
       headers: expect.any(Headers),
     });
@@ -107,7 +110,7 @@ describe("Hire supplemental-observation bridge route", () => {
 
   it("rejects oversize derived-report bodies before authentication work", async () => {
     const response = await POST(
-      request("x".repeat(__hireMultimodalObservationRoute.MAX_BODY_BYTES + 1)),
+      request("x".repeat(MAX_BODY_BYTES + 1)),
     );
 
     expect(response.status).toBe(413);

@@ -13,10 +13,10 @@ vi.mock('@modules/hire-runtime/services/multimodalObservationRetentionService', 
   purgeHireRuntimeMultimodalObservationRetention: mocks.purge,
 }))
 
-import {
-  POST,
-  __hireRuntimeMultimodalObservationRetentionRoute,
-} from './route'
+import { POST } from './route'
+
+const ROUTE_PATH = '/api/internal/hire-engine/multimodal-observations/purge'
+const MAX_BODY_BYTES = 16 * 1024
 
 function request(body: string): NextRequest {
   return new NextRequest(
@@ -48,7 +48,7 @@ describe('Hire runtime supplemental-observation retention route', () => {
 
     expect(mocks.verify).toHaveBeenCalledWith({
       method: 'POST',
-      path: __hireRuntimeMultimodalObservationRetentionRoute.ROUTE_PATH,
+      path: ROUTE_PATH,
       body,
       headers: expect.any(Headers),
     })
@@ -68,7 +68,7 @@ describe('Hire runtime supplemental-observation retention route', () => {
 
   it('rejects oversized requests before authentication work', async () => {
     const response = await POST(
-      request('x'.repeat(__hireRuntimeMultimodalObservationRetentionRoute.MAX_BODY_BYTES + 1)),
+      request('x'.repeat(MAX_BODY_BYTES + 1)),
     )
 
     expect(response.status).toBe(400)

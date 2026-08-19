@@ -49,6 +49,7 @@
       "@hire-departments": ["./modules/hire-departments"],
       "@hire-departments/*": ["./modules/hire-departments/*"],
       "@hire-onboarding-boundary": ["./modules/hire/onboardingBoundary"],
+      "@hire-multimodal-boundary": ["./modules/hire/multimodalBoundary"],
       "@hire-decision-boundary": ["./modules/hire/decisionBoundary"],
       "@hire-decisions": ["./modules/hire-decisions"],
       "@hire-decisions/*": ["./modules/hire-decisions/*"],

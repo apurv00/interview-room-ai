@@ -52,8 +52,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Service unavailable" }, { status: 503 });
   }
 }
-
-export const __hireMultimodalObservationRoute = {
-  MAX_BODY_BYTES,
-  ROUTE_PATH,
-};

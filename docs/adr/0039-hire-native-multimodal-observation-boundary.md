@@ -32,9 +32,13 @@ The runtime owns its separate derived-only outbox and retention tombstone.
 Neither boundary stores raw camera samples, landmarks, blendshapes, audio,
 transcripts, scoring, recommendations, stage transitions, or export payloads.
 
-Raise the existing `modules/hire` LOC tripwire from **25,000 to 26,000**, while
-keeping its **90-file** cap. The measured post-change core is about 25.3k LOC;
-the narrow headroom is reserved for its unavoidable lifecycle adapters only.
+Raise the existing `modules/hire` LOC tripwire from **25,000 to 26,000** and
+its file tripwire from **90 to 91**. The one-file allowance is exclusively for
+the two-export `multimodalBoundary` facade, which lets the isolated multimodal
+module consume the consent version and `HireRound` without loading the broad
+route-facing Hire barrel. The measured post-change core is about 25.5k LOC;
+the narrow headroom is reserved for unavoidable lifecycle adapters and that
+single boundary seam only.
 
 ## Consequences
 
