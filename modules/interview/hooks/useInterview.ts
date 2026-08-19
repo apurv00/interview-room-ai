@@ -54,6 +54,8 @@ import {
   extractGroundedFollowUp,
 } from './interviewUtils'
 import { useAvatarSpeech } from './useAvatarSpeech'
+import { isHireRuntimeInterview } from '@interview/config/hireRuntimeMode'
+import { awaitHireMultimodalCaptureDelivery } from '@interview/utils/hireMultimodalAnalysisCaptureUpload'
 import { EVALUATE_ANSWER_BACKGROUND_TIMEOUT_MS, useInterviewAPI } from './useInterviewAPI'
 import { createDbSession, persistSession, type CreateDbSessionResult } from './interviewPersistence'
 import {
@@ -201,9 +203,12 @@ export function useInterview({
 
   // ── Avatar (extracted to useAvatarSpeech) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
+  const isHireInterview = isHireRuntimeInterview(config)
   const { avatarEmotion, isAvatarTalking, setAvatarEmotion, avatarSpeak: rawAvatarSpeak, prefetchTTS, cancelTTS, softCancelTTS, playAck, cancelAck } = useAvatarSpeech({
     interviewType: config?.interviewType,
     isMultimodalEnabled,
+    remoteTtsEnabled: isHireInterview ? true : undefined,
+    forceIndianVoice: isHireInterview,
   })
 
   // Interrupt-capable avatarSpeak: if candidate starts talking during TTS,
@@ -1407,12 +1412,15 @@ export function useInterview({
           .catch(logFireAndForgetFailure('/api/generate-feedback'))
       }
 
-      // Auto-trigger AI analysis (fire-and-forget). Analysis no longer
+      // Auto-trigger consumer AI analysis (fire-and-forget). Hire never uses
+      // this B2C score/fusion pipeline: its native supplemental observation
+      // outbox is captured and published separately by the runtime.
+      // Analysis no longer
       // depends on the replay-video upload; the server can run from live
       // Deepgram words or the stored transcript. Wait briefly for small
       // artifacts (audio-only and landmarks) when they are still finishing,
       // but never hold feedback navigation behind large camera/screen PUTs.
-      if (isMultimodalEnabled) {
+      if (isMultimodalEnabled && !isHireInterview) {
         const startAnalysis = async () => {
           if (recordingStopPromise) {
             try {
@@ -1436,6 +1444,21 @@ export function useInterview({
         }
 
         void startAnalysis().catch(logFireAndForgetFailure('/api/analysis/start'))
+      }
+
+      // A Hire report's full landmark stream has its own bounded retry and
+      // durable runtime-outbox receipt. Do not navigate away before that
+      // bounded delivery has settled; B2C keeps its existing non-blocking
+      // feedback path.
+      if (isHireInterview) {
+        const captureDelivery = await awaitHireMultimodalCaptureDelivery(
+          recordingStopPromise,
+        )
+        if (captureDelivery === 'timed_out') {
+          console.warn('[interview] Hire multimodal capture delivery timed out before navigation', {
+            sessionId: sid,
+          })
+        }
       }
 
       // Clear session state — interview is complete

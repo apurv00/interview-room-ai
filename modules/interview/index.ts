@@ -6,6 +6,11 @@ export { getScoringDimensions, buildRubricPromptSection, evaluateStructured, eva
 export type { SessionEvaluationSummary } from './services/eval/evaluationEngine'
 export { getShortFormMinAnswers } from './services/eval/sessionScoringPolicy'
 
+// Stable post-interview signal calculations. Hire may reuse these pure
+// calculations, but owns its own captured data, jobs, fusion, and UI.
+export { aggregateFacialData } from './services/analysis/facialAggregator'
+export { extractProsody } from './services/analysis/prosodyService'
+
 // ── Services: Persona ──
 export { generateSessionBrief, briefToPromptContext } from './services/persona/personalizationEngine'
 export { retrieveQuestions, getQuestionBankContext, getCompanyContext } from './services/persona/retrievalService'

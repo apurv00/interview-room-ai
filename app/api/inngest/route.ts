@@ -62,6 +62,12 @@ import {
 } from "@/modules/hire-onboarding/jobs/testDriveCleanupJob";
 import { hireRuntimeFeedbackRecoveryJob } from "@modules/hire-runtime/jobs/feedbackRecoveryJob";
 import { hireRuntimeResultPublisherJob } from "@modules/hire-runtime/jobs/resultPublisherJob";
+import { hireRuntimeMultimodalObservationPublisherJob } from "@modules/hire-runtime/jobs/multimodalObservationPublisherJob";
+import { hireRuntimeMultimodalAnalysisPublisherJob } from "@modules/hire-runtime/jobs/multimodalAnalysisPublisherJob";
+import {
+  hireMultimodalAnalysisJob,
+  hireMultimodalAnalysisRecoveryJob,
+} from "@modules/hire-multimodal/jobs/hireMultimodalAnalysisJob";
 
 /**
  * Inngest handler route — entry point for all background jobs.
@@ -111,7 +117,12 @@ const b2cFunctions = [
 
 const functions =
   process.env.IPG_SURFACE === "hire-engine"
-    ? [hireRuntimeFeedbackRecoveryJob, hireRuntimeResultPublisherJob]
+    ? [
+        hireRuntimeFeedbackRecoveryJob,
+        hireRuntimeResultPublisherJob,
+        hireRuntimeMultimodalObservationPublisherJob,
+        hireRuntimeMultimodalAnalysisPublisherJob,
+      ]
     : process.env.IPG_SURFACE === "hire-control"
       ? [
           hireEmailOutboxJob,
@@ -133,6 +144,8 @@ const functions =
           hireDailyDigestRecoveryJob,
           hireOnboardingTestDriveCleanupRequestedJob,
           hireOnboardingTestDriveCleanupRecoveryJob,
+          hireMultimodalAnalysisJob,
+          hireMultimodalAnalysisRecoveryJob,
         ]
       : b2cFunctions;
 

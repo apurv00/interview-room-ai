@@ -1,0 +1,68 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { ZodError } from 'zod'
+import { verifyInternalServiceRequest } from '@shared/services/internalServiceAuth'
+import { inngest } from '@shared/services/inngest'
+import { HIRE_MULTIMODAL_ANALYSIS_CAPTURE_MAX_BODY_BYTES } from '@shared/contracts/hireMultimodalAnalysisBridge'
+import {
+  HireMultimodalAnalysisIngestionError,
+  ingestHireMultimodalAnalysis,
+} from '@modules/hire-multimodal/services/analysisIngestionService'
+
+export const dynamic = 'force-dynamic'
+export const maxDuration = 300
+
+const ROUTE_PATH = '/api/internal/hire/engine/multimodal-analysis'
+// This bridge carries a source-artifact coordinate plus bounded transcript
+// timing. Raw landmark frames are stored in runtime R2, never in this body.
+const MAX_BODY_BYTES = HIRE_MULTIMODAL_ANALYSIS_CAPTURE_MAX_BODY_BYTES
+
+export async function POST(req: NextRequest) {
+  const body = await req.text()
+  if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: 'Payload too large' }, { status: 413 })
+  }
+  const auth = await verifyInternalServiceRequest({
+    method: 'POST',
+    path: ROUTE_PATH,
+    body,
+    headers: req.headers,
+  })
+  if (!auth.ok) {
+    const status = auth.reason === 'replay-store-unavailable' ? 503 : 401
+    return NextResponse.json({ error: 'Service authentication failed' }, { status })
+  }
+  try {
+    const payload = JSON.parse(body) as { workspaceId?: unknown }
+    const result = await ingestHireMultimodalAnalysis(payload)
+    // Wake the async worker only after the immutable control-owned analysis
+    // row exists. A failed send returns 503, causing the runtime outbox to
+    // retry safely; duplicate delivery also sends another harmless wake-up.
+    if (result.analysisId && result.outcome !== 'stale') {
+      await inngest.send({
+        name: 'hire/multimodal-analysis.requested',
+        data: {
+          // Ingestion validates this coordinate before returning an id.
+          workspaceId: String(payload.workspaceId),
+          analysisId: result.analysisId,
+        },
+      })
+    }
+    return NextResponse.json(
+      { ok: true, ...result },
+      { headers: { 'Cache-Control': 'no-store' } },
+    )
+  } catch (error) {
+    if (error instanceof HireMultimodalAnalysisIngestionError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: error.status },
+      )
+    }
+    if (error instanceof ZodError || error instanceof SyntaxError) {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+    }
+    return NextResponse.json({ error: 'Service unavailable' }, { status: 503 })
+  }
+}
+
+export const __hireMultimodalAnalysisRoute = { MAX_BODY_BYTES, ROUTE_PATH }

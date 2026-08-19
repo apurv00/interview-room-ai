@@ -5,6 +5,7 @@ import type {
 } from '@shared/contracts/hireEngineBridge'
 
 export type HireRuntimeBindingStatus = 'provisioned' | 'active' | 'completed' | 'revoked'
+export type HireRuntimeCameraMediaStatus = 'pending' | 'published'
 
 export interface IHireRuntimeBinding extends Document {
   workspaceId: mongoose.Types.ObjectId
@@ -43,6 +44,15 @@ export interface IHireRuntimeBinding extends Document {
   publishedRevision?: number
   publishedDigest?: string
   publishedAt?: Date
+  /**
+   * Kept separate from `publishedRevision`: result revision 1 may be safely
+   * acknowledged before the browser finishes its large camera upload. A
+   * missing value is intentionally treated as legacy/unknown after revision
+   * 1, so an old binding never tries to re-hash a source object that a prior
+   * version already deleted.
+   */
+  cameraMediaStatus?: HireRuntimeCameraMediaStatus
+  cameraMediaPublishedAt?: Date
   publishCheckedAt?: Date
   publishFailureCount?: number
   publishRetryAt?: Date
@@ -169,6 +179,8 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
     publishedRevision: { type: Number, min: 1, max: 10 },
     publishedDigest: { type: String, match: /^[a-f0-9]{64}$/ },
     publishedAt: { type: Date },
+    cameraMediaStatus: { type: String, enum: ['pending', 'published'] },
+    cameraMediaPublishedAt: { type: Date },
     publishCheckedAt: { type: Date },
     publishFailureCount: { type: Number, min: 0, default: 0 },
     publishRetryAt: { type: Date },
@@ -191,6 +203,8 @@ HireRuntimeBindingSchema.index({
   workspaceId: 1,
   status: 1,
   purgePersonalData: 1,
+  publishedRevision: 1,
+  cameraMediaStatus: 1,
   publishRetryAt: 1,
   publishCheckedAt: 1,
   updatedAt: 1,

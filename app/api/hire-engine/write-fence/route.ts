@@ -12,6 +12,7 @@ import {
   RuntimeWriteTargetGuardError,
 } from '@modules/hire-runtime/services/runtimeWriteTargetGuard'
 import { requireRuntimeWorkspaceId } from '@modules/hire-runtime/services/runtimeTenantScope'
+import { HIRE_RUNTIME_MAX_FENCED_BODY_BYTES } from '@shared/contracts/hireRuntimeWriteFence'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -19,7 +20,6 @@ export const maxDuration = 300
 const TARGET_PARAM = '__runtime_target'
 const BYPASS_HEADER = 'x-ipg-hire-runtime-fence-bypass'
 const ORIGIN_USER_HEADER = 'x-origin-user-id'
-const MAX_FENCED_BODY_BYTES = 16 * 1024 * 1024
 
 function bypassSecret(): string {
   const secret = process.env.HIRE_RUNTIME_FENCE_SECRET
@@ -135,7 +135,7 @@ async function handler(req: NextRequest): Promise<Response> {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
     const bytes = new Uint8Array(await req.arrayBuffer())
-    if (bytes.byteLength > MAX_FENCED_BODY_BYTES) {
+    if (bytes.byteLength > HIRE_RUNTIME_MAX_FENCED_BODY_BYTES) {
       throw new RuntimeWriteTargetGuardError('Runtime target body was too large', 413)
     }
     const requestBody = parseJson(bytes)

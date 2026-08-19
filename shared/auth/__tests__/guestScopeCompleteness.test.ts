@@ -3,8 +3,8 @@
  *
  * Default-deny is safe by construction but breaks the flow when the list is
  * INCOMPLETE — twice already (HEAD /api/health left the lobby's Join button
- * disabled; POST /api/analysis/start silently discarded the candidate's
- * multimodal analysis). Enumerating by hand does not scale, so this test
+ * disabled; a required runtime endpoint was not allowlisted). Enumerating by
+ * hand does not scale, so this test
  * derives the engine's authenticated client call surface from source and
  * fails when an endpoint is neither allowed nor explicitly acknowledged as
  * out-of-scope. New engine endpoint → this test fails in CI, not in a
@@ -33,6 +33,7 @@ const SCAN_TARGETS = [
  * Anything here is deliberately denied; everything else must be allowed.
  */
 const OUT_OF_SCOPE: Record<string, string> = {
+  '/api/analysis/start': 'consumer multimodal analysis is intentionally denied on Hire; Hire uses its native supplemental-observation path',
   '/api/documents/upload': 'setup-form only — guests get a server-provisioned config',
   '/api/extract-company-context': 'setup-form JD paste',
   '/api/jd/generate': 'lobby JD auto-generation for self-serve configs only',

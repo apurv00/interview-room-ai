@@ -15,6 +15,7 @@ interface CandidateBootstrap {
   duration?: number
   authMode?: 'magic_link' | 'otp'
   consentAlreadyGiven?: boolean
+  legacyConsentAttempt?: boolean
   emailHint?: string
 }
 
@@ -149,6 +150,7 @@ export default function CandidateEntry({ roundId }: { roundId: string }) {
           capability={capability}
           authMode={bootstrap.authMode}
           consentAlreadyGiven={Boolean(bootstrap.consentAlreadyGiven)}
+          legacyConsentAttempt={Boolean(bootstrap.legacyConsentAttempt)}
           emailHint={bootstrap.emailHint}
           workspaceName={bootstrap.workspaceName}
         />

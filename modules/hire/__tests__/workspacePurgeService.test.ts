@@ -8,6 +8,7 @@ vi.mock('../services/hireControlBoundary', () => ({
 const {
   models,
   decisionModels,
+  multimodalModels,
   digestModels,
   statusModels,
   onboardingModels,
@@ -73,6 +74,13 @@ const {
       HireExternalVerdict: child(),
       HireSharePacket: child(),
     },
+    multimodalModels: {
+      HireMultimodalAnalysis: child(),
+      HireMultimodalAnalysisIngestionEvent: child(),
+      HireMultimodalObservation: child(),
+      HireMultimodalObservationIngestionEvent: child(),
+      HireMultimodalObservationPurgeObligation: child(),
+    },
     digestModels: {
       HireDigestOutbox: child(),
       HireDigestPreference: child(),
@@ -103,6 +111,7 @@ const {
 
 vi.mock('../models', () => models)
 vi.mock('@hire-decisions/models', () => decisionModels)
+vi.mock('../../hire-multimodal/models', () => multimodalModels)
 vi.mock('../../hire-digest/models', () => digestModels)
 vi.mock('../../hire-status/models', () => statusModels)
 vi.mock('../../hire-onboarding/models', () => onboardingModels)
@@ -209,6 +218,11 @@ describe('workspace hard purge', () => {
       'HireConsentReceipt',
       'HireEngineHandoff',
       'HireEngineIngestionEvent',
+      'HireMultimodalObservationIngestionEvent',
+      'HireMultimodalObservation',
+      'HireMultimodalObservationPurgeObligation',
+      'HireMultimodalAnalysisIngestionEvent',
+      'HireMultimodalAnalysis',
       'HireInterviewResult',
       'HireInterviewAttempt',
       'HireMediaAsset',
@@ -302,6 +316,12 @@ describe('workspace hard purge', () => {
       )
     }
     for (const [name, model] of Object.entries(decisionModels)) {
+      expect(model.deleteMany, name).toHaveBeenCalledWith(
+        { workspaceId: WORKSPACE_ID },
+        { session },
+      )
+    }
+    for (const [name, model] of Object.entries(multimodalModels)) {
       expect(model.deleteMany, name).toHaveBeenCalledWith(
         { workspaceId: WORKSPACE_ID },
         { session },

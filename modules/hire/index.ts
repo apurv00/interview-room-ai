@@ -20,6 +20,25 @@ export {
   type AddMemberInput,
 } from './services/workspaceService'
 
+// Stable control-plane primitives for the isolated Hire multimodal module.
+// These exports intentionally preserve the existing service implementations;
+// consumers outside `modules/hire` must not reach into service internals.
+export { listHireWorkspaceIdsForSweep } from './services/workspaceSweepService'
+export { connectHireControlDB } from './services/hireControlBoundary'
+export {
+  claimHireCandidatePiiWriteFence,
+  HireCandidatePiiTombstoneError,
+} from './services/hireCandidatePrivacyWriteFence'
+export { addCalendarMonths } from './services/mediaLifecycleService'
+export { ingestRuntimeMediaArtifacts } from './services/runtimeMediaIngestionService'
+export { assertHireMediaKeyScope } from './services/hireMediaStorage'
+export {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_DISCLOSURE_DIGEST,
+  isRecognizedHireConsentSnapshot,
+  supportsHireMultimodalObservations,
+} from './policies/aiInterviewConsent'
+
 // Pipeline: jobs, candidates, applications, stage moves
 export {
   createJob,

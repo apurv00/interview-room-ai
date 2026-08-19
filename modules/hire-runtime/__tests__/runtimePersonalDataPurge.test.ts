@@ -51,6 +51,9 @@ const mocks = vi.hoisted(() => {
     assertDrained: vi.fn(),
     bindingExists: vi.fn(),
     rawDelete: vi.fn(),
+    observationDelete: vi.fn(),
+    analysisDelete: vi.fn(),
+    observationRetentionTombstoneDelete: vi.fn(),
   }
 })
 
@@ -85,6 +88,17 @@ vi.mock('../services/runtimeWriteFence', () => ({
 }))
 vi.mock('../models/HireRuntimeBinding', () => ({
   HireRuntimeBinding: { exists: mocks.bindingExists },
+}))
+vi.mock('../models/HireRuntimeMultimodalObservationOutbox', () => ({
+  HireRuntimeMultimodalObservationOutbox: { deleteMany: mocks.observationDelete },
+}))
+vi.mock('../models/HireRuntimeMultimodalAnalysisOutbox', () => ({
+  HireRuntimeMultimodalAnalysisOutbox: { deleteMany: mocks.analysisDelete },
+}))
+vi.mock('../models/HireRuntimeMultimodalObservationRetentionTombstone', () => ({
+  HireRuntimeMultimodalObservationRetentionTombstone: {
+    deleteMany: mocks.observationRetentionTombstoneDelete,
+  },
 }))
 
 import {
@@ -166,6 +180,18 @@ beforeEach(() => {
     mocks.events.push('InterviewSession')
     return { acknowledged: true, deletedCount: 1 }
   })
+  mocks.observationDelete.mockImplementation(async () => {
+    mocks.events.push('multimodal-observations')
+    return { acknowledged: true, deletedCount: 1 }
+  })
+  mocks.analysisDelete.mockImplementation(async () => {
+    mocks.events.push('multimodal-analyses')
+    return { acknowledged: true, deletedCount: 1 }
+  })
+  mocks.observationRetentionTombstoneDelete.mockImplementation(async () => {
+    mocks.events.push('multimodal-observation-retention-tombstones')
+    return { acknowledged: true, deletedCount: 1 }
+  })
   for (const name of MODEL_NAMES) {
     mocks.models[name].deleteMany.mockImplementation(async () => {
       mocks.events.push(name)
@@ -209,6 +235,26 @@ describe('complete isolated runtime personal-data cascade', () => {
       'delete-r2',
     ])
     expect(mocks.events.at(-1)).toBe('User')
+    expect(mocks.events.indexOf('multimodal-observations')).toBeLessThan(
+      mocks.events.indexOf('InterviewSession'),
+    )
+    expect(mocks.observationDelete).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      applicationId: APPLICATION_ID,
+      roundId: new mongoose.Types.ObjectId(ROUND_ID),
+      principalId: PRINCIPAL_ID,
+    })
+    expect(mocks.analysisDelete).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      applicationId: APPLICATION_ID,
+      roundId: new mongoose.Types.ObjectId(ROUND_ID),
+      principalId: PRINCIPAL_ID,
+    })
+    expect(mocks.observationRetentionTombstoneDelete).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      applicationId: APPLICATION_ID,
+      roundId: new mongoose.Types.ObjectId(ROUND_ID),
+    })
     expect(mocks.abortMultipart).toHaveBeenCalledWith({
       principalId: PRINCIPAL_ID.toString(),
       uploads: [{

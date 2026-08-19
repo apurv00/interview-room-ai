@@ -83,10 +83,19 @@ function assertRuntimePersonalObjectKey(input: {
     assertRuntimeRecordingKey(input as Required<typeof input>)
     return
   }
+  // New capture attempts use a bounded nonce to make concurrent staging
+  // deletion-safe. Keep the exact legacy spelling accepted for cleanup of
+  // pre-rollout objects only; ingestion never accepts it as a new artifact.
+  const landmarkFile = segments[2]
+  const legacyLandmarkFile = `${input.runtimeSessionId}.json`
+  const nonceLandmarkFile = new RegExp(
+    `^${input.runtimeSessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-[a-f0-9]{32}\\.json$`,
+    'i',
+  )
   if (
     segments[0] !== 'landmarks' ||
-    segments[2] !== `${input.runtimeSessionId}.json` ||
-    segments.length !== 3
+    segments.length !== 3 ||
+    (landmarkFile !== legacyLandmarkFile && !nonceLandmarkFile.test(landmarkFile))
   ) {
     throw new Error('Runtime personal-data key crossed its session boundary')
   }

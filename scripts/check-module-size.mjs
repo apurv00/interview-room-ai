@@ -81,8 +81,16 @@ const BUDGETS = {
   // initial/reminder delivery, and lifecycle/privacy fences. The measured
   // implementation is 82 files / ~22.7k LOC, so 25k/90 preserves a bounded
   // architectural tripwire instead of folding that state into AI-round code.
-  // See ADR 0031.
-  'modules/hire':      { maxLOC: 25_000, maxFiles: 90 },
+  // See ADR 0031. Hire-native supplemental observations add only the
+  // unavoidable consent/privacy/job-close lifecycle adapters here; their
+  // models, bridge, report, and retry mechanics live in hire-multimodal.
+  // 26k leaves the same deliberately tight cap while preserving those root
+  // lifecycle obligations; see ADR 0039.
+  'modules/hire':      { maxLOC: 26_000, maxFiles: 90 },
+  // A bounded control-plane authority for Hire-native supplemental interview
+  // observations. It cannot write assessments, decisions, exports, or raw
+  // camera data; see ADR 0039.
+  'modules/hire-multimodal': { maxLOC: 5_000, maxFiles: 20 },
   // Private workspace identity assets have a distinct object-storage and
   // lifecycle boundary from candidate media. Keep this deliberately small so
   // it cannot become a general asset service; see ADR 0038.

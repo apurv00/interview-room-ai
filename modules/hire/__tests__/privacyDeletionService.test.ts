@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
   handoffUpdateMany: vi.fn(),
   mediaUpdateMany: vi.fn(),
   resultUpdateMany: vi.fn(),
+  multimodalObservationDeleteMany: vi.fn(),
+  multimodalEventDeleteMany: vi.fn(),
+  multimodalPurgeObligationDeleteMany: vi.fn(),
+  multimodalAnalysisDeleteMany: vi.fn(),
+  multimodalAnalysisEventDeleteMany: vi.fn(),
   intakeTaskDeleteMany: vi.fn(),
   invitationBatchItemUpdateMany: vi.fn(),
   screeningGateUpdateMany: vi.fn(),
@@ -89,6 +94,17 @@ vi.mock('../models/HireMediaAsset', () => ({
 }))
 vi.mock('../models/HireInterviewResult', () => ({
   HireInterviewResult: { updateMany: mocks.resultUpdateMany },
+}))
+vi.mock('../../hire-multimodal/models', () => ({
+  HireMultimodalObservation: { deleteMany: mocks.multimodalObservationDeleteMany },
+  HireMultimodalObservationIngestionEvent: { deleteMany: mocks.multimodalEventDeleteMany },
+  HireMultimodalObservationPurgeObligation: {
+    deleteMany: mocks.multimodalPurgeObligationDeleteMany,
+  },
+  HireMultimodalAnalysis: { deleteMany: mocks.multimodalAnalysisDeleteMany },
+  HireMultimodalAnalysisIngestionEvent: {
+    deleteMany: mocks.multimodalAnalysisEventDeleteMany,
+  },
 }))
 vi.mock('../models/HireIntakeTask', () => ({
   HireIntakeTask: { deleteMany: mocks.intakeTaskDeleteMany },
@@ -209,6 +225,11 @@ beforeEach(() => {
     mocks.handoffUpdateMany,
     mocks.mediaUpdateMany,
     mocks.resultUpdateMany,
+    mocks.multimodalObservationDeleteMany,
+    mocks.multimodalEventDeleteMany,
+    mocks.multimodalPurgeObligationDeleteMany,
+    mocks.multimodalAnalysisDeleteMany,
+    mocks.multimodalAnalysisEventDeleteMany,
     mocks.intakeTaskDeleteMany,
     mocks.invitationBatchItemUpdateMany,
     mocks.screeningGateUpdateMany,
@@ -347,6 +368,16 @@ describe('verified Hire candidate deletion', () => {
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       { session: dbSession },
     )
+    for (const operation of [
+      mocks.multimodalEventDeleteMany,
+      mocks.multimodalObservationDeleteMany,
+      mocks.multimodalPurgeObligationDeleteMany,
+    ]) {
+      expect(operation).toHaveBeenCalledWith(
+        { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+        { session: dbSession },
+      )
+    }
     for (const operation of [
       mocks.humanKitDeliveryDeleteMany,
       mocks.interviewKitDeleteMany,

@@ -35,10 +35,14 @@ const CONFIG = {
 }
 const HANDOFF_SESSION_KEY = __hireRuntimeHandoffClient.HANDOFF_SESSION_KEY
 
-function jsonResponse(value: unknown, status = 200) {
+function jsonResponse(
+  value: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+) {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
   })
 }
 
@@ -103,6 +107,7 @@ describe('isolated runtime handoff page', () => {
       ...CONFIG,
       _ownerId: PRINCIPAL_ID,
       _hireRoundId: ROUND_ID,
+      _hireMultimodalObservationsEnabled: false,
     })
     expect(
       localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${PRINCIPAL_ID}`),
@@ -114,6 +119,30 @@ describe('isolated runtime handoff page', () => {
     expect(stored).not.toContain(TICKET)
     expect(stored).not.toContain('candidateEmail')
     expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBeNull()
+  })
+
+  it('seeds the native-observation collection marker only from the runtime response header', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ ok: true, ticket: TICKET }))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { principalId: PRINCIPAL_ID, roundId: ROUND_ID, config: CONFIG },
+          200,
+          { 'X-Hire-Multimodal-Observations': '1' },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<HireRuntimeHandoffClient />)
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/lobby'))
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.INTERVIEW_CONFIG) || '{}')).toEqual({
+      ...CONFIG,
+      _ownerId: PRINCIPAL_ID,
+      _hireRoundId: ROUND_ID,
+      _hireMultimodalObservationsEnabled: true,
+    })
   })
 
   it('shows a terminal expired state for a consumed or expired code', async () => {

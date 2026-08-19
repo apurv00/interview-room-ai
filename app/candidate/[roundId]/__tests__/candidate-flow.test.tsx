@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { HIRE_AI_INTERVIEW_DISCLOSURES } from '@shared/contracts/hireAiInterviewConsentDisclosure'
 
 import CandidateFlow from '../CandidateFlow'
 
@@ -13,13 +14,17 @@ function jsonResponse(value: unknown, status = 200) {
   })
 }
 
-function renderFlow(authMode: 'magic_link' | 'otp' = 'magic_link') {
+function renderFlow(
+  authMode: 'magic_link' | 'otp' = 'magic_link',
+  legacyConsentAttempt = false,
+) {
   render(
     <CandidateFlow
       roundId={ROUND_ID}
       capability={CAPABILITY}
       authMode={authMode}
       consentAlreadyGiven={false}
+      legacyConsentAttempt={legacyConsentAttempt}
       emailHint="c***@example.com"
       workspaceName="Example Co"
     />,
@@ -106,6 +111,47 @@ describe('candidate saved-photo resume', () => {
         headers: { 'x-hire-csrf': 'csrf-token' },
       }),
     )
+  })
+})
+
+describe('candidate consent versions', () => {
+  it('renders the shared current V4 disclosure before a new attempt is consented', () => {
+    renderFlow()
+
+    for (const disclosure of Object.values(HIRE_AI_INTERVIEW_DISCLOSURES)) {
+      expect(screen.getByText(disclosure)).toBeTruthy()
+    }
+    expect(
+      screen.getByText(/sharing the interview recording and review with the hiring team/i),
+    ).toBeTruthy()
+  })
+
+  it('continues a server-identified historical attempt without displaying or minting V4 consent', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({ ok: true, csrfToken: 'csrf-token', next: 'identity_photo' }),
+    )
+    renderFlow('magic_link', true)
+
+    expect(screen.getByRole('heading', { name: 'Continue your interview' })).toBeTruthy()
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
+    expect(
+      screen.queryByText(/structured facial-landmark and browser-window observations/i),
+    ).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue your interview' }))
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+    const [, options] = vi.mocked(fetch).mock.calls[0]
+    expect(options).toMatchObject({ method: 'POST' })
+    expect(JSON.parse(String(options?.body))).toEqual({
+      capability: CAPABILITY,
+      accepted: {
+        recording: true,
+        identityPhoto: true,
+        attentionMonitoring: true,
+        aiEvaluation: true,
+      },
+    })
   })
 })
 

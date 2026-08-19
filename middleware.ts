@@ -69,6 +69,7 @@ function isHireRuntimePathAllowed(pathname: string, method: string): boolean {
     pathname === '/handoff/complete' ||
     pathname.startsWith('/api/hire-engine/') ||
     pathname === '/api/internal/hire-engine/revoke' ||
+    pathname === '/api/internal/hire-engine/multimodal-observations/purge' ||
     pathname.startsWith('/api/auth/') ||
     pathname.startsWith('/api/inngest') ||
     pathname.startsWith('/_next/') ||

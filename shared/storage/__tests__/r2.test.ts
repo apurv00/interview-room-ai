@@ -30,6 +30,7 @@ describe('isCanonicalR2Key', () => {
     ['screen recording', `recordings/${USER_ID}/${SESSION_ID}-screen-${TIMESTAMP}.webm`],
     ['audio recording', `recordings/${USER_ID}/${SESSION_ID}-audio-${TIMESTAMP}.webm`],
     ['landmarks', `landmarks/${USER_ID}/${SESSION_ID}.json`],
+    ['nonce-scoped landmarks', `landmarks/${USER_ID}/${SESSION_ID}-${'a'.repeat(32)}.json`],
     ['resume document', `documents/${USER_ID}/resume/${TIMESTAMP}-cv.v2-final.pdf`],
     ['job-description document', `documents/${USER_ID}/jd/${TIMESTAMP}-role_notes.txt`],
   ])('accepts an application-minted %s key', (_label, key) => {
@@ -54,6 +55,8 @@ describe('isCanonicalR2Key', () => {
     ['timestamp too short', `recordings/${USER_ID}/${SESSION_ID}-123456789.webm`],
     ['timestamp too long', `recordings/${USER_ID}/${SESSION_ID}-12345678901234567.webm`],
     ['extra recording suffix', `recordings/${USER_ID}/${SESSION_ID}-${TIMESTAMP}.webm.bak`],
+    ['short landmark nonce', `landmarks/${USER_ID}/${SESSION_ID}-${'a'.repeat(31)}.json`],
+    ['non-hex landmark nonce', `landmarks/${USER_ID}/${SESSION_ID}-${'z'.repeat(32)}.json`],
     ['unsupported document type', `documents/${USER_ID}/profile/${TIMESTAMP}-cv.pdf`],
     ['missing document filename', `documents/${USER_ID}/resume/${TIMESTAMP}-`],
     ['encoded document filename', `documents/${USER_ID}/resume/${TIMESTAMP}-cv%2fpayload.pdf`],
@@ -132,6 +135,16 @@ describe('deleteFromR2 authority gate', () => {
     await expect(deleteFromR2(key, authority)).rejects.toBeInstanceOf(
       R2DeleteAuthorityError,
     )
+  })
+
+  it('allows an exact nonce-scoped landmark only for its owning session', async () => {
+    const nonceKey = `landmarks/${USER_ID}/${SESSION_ID}-${'a'.repeat(32)}.json`
+    expect(isCanonicalR2Key(nonceKey)).toBe(true)
+
+    await expect(deleteFromR2(nonceKey, {
+      ownerUserId: USER_ID,
+      sessionId: FOREIGN_SESSION_ID,
+    })).rejects.toBeInstanceOf(R2DeleteAuthorityError)
   })
 })
 

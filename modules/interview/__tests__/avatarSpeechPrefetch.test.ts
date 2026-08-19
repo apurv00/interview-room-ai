@@ -104,6 +104,31 @@ describe('useAvatarSpeech — prefetchTTS streaming-aware guard (Bug A)', () => 
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('uses Indian server TTS for Hire without enabling multimodal capture', () => {
+    streamingMock.isSupported = false
+    window.history.replaceState({}, '', '/interview')
+    const { result } = renderHook(() =>
+      useAvatarSpeech({
+        isMultimodalEnabled: false,
+        remoteTtsEnabled: true,
+        forceIndianVoice: true,
+        interviewType: 'technical',
+      }),
+    )
+
+    act(() => {
+      result.current.prefetchTTS('Tell me about yourself.')
+    })
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/tts?voice=indian',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ text: 'Tell me about yourself.' }),
+      }),
+    )
+  })
+
   it('does NOT fire twice for the same text within one session (existing dedup still works)', () => {
     streamingMock.isSupported = false
     const { result } = renderHook(() =>

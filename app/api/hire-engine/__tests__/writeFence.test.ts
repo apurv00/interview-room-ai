@@ -136,4 +136,21 @@ describe('POST /api/hire-engine/write-fence', () => {
     expect(target.pathname).toBe('/api/hire-engine/tts')
     expect(JSON.parse(new TextDecoder().decode(init.body as Uint8Array))).toEqual(body)
   })
+
+  it('forwards the Hire-native observation capture only after binding its session', async () => {
+    const body = {
+      sessionId: SESSION_ID,
+      cameraSamples: [],
+      browserVisibility: { available: false, hiddenSpans: [] },
+    }
+    const response = await POST(request(
+      '/api/hire-engine/multimodal-observations/capture',
+      body,
+    ))
+
+    expect(response.status).toBe(200)
+    const [target, init] = mocks.fetch.mock.calls[0] as [URL, RequestInit]
+    expect(target.pathname).toBe('/api/hire-engine/multimodal-observations/capture')
+    expect(JSON.parse(new TextDecoder().decode(init.body as Uint8Array))).toEqual(body)
+  })
 })

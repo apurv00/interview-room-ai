@@ -4,6 +4,9 @@ export const HIRE_MEDIA_KINDS = [
   'identity_photo',
   'camera_recording',
   'audio_recording',
+  // Private input to Hire's recorded-interview analysis. It is lifecycle
+  // managed like other candidate media but is never download-capable.
+  'facial_landmarks',
 ] as const
 export type HireMediaKind = (typeof HIRE_MEDIA_KINDS)[number]
 

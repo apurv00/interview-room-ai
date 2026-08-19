@@ -29,6 +29,9 @@ import {
   HireRuntimeBinding,
   type IHireRuntimeBinding,
 } from '../models/HireRuntimeBinding'
+import { HireRuntimeMultimodalObservationOutbox } from '../models/HireRuntimeMultimodalObservationOutbox'
+import { HireRuntimeMultimodalAnalysisOutbox } from '../models/HireRuntimeMultimodalAnalysisOutbox'
+import { HireRuntimeMultimodalObservationRetentionTombstone } from '../models/HireRuntimeMultimodalObservationRetentionTombstone'
 import {
   abortRuntimeMultipartUploads,
   deleteRuntimePersonalObjects,
@@ -269,6 +272,38 @@ export async function purgeRuntimePrincipalData(input: {
     principalId: principalIdString,
     objects: referencedRuntimeObjects({ binding: input.binding, sessions, user }),
   })
+
+  // The native Hire report is derived data—not an R2 artifact—and uses
+  // principalId instead of the generic engine's userId. Delete it explicitly
+  // before the binding/session parents disappear, so a verified deletion can
+  // never leave a retryable supplemental-observation outbox behind.
+  const deletedObservations = await HireRuntimeMultimodalObservationOutbox.deleteMany({
+    workspaceId,
+    applicationId: input.binding.applicationId,
+    roundId: input.binding.roundId,
+    principalId,
+  })
+  if (!deletedObservations.acknowledged) {
+    throw new Error('Runtime multimodal observation purge was not acknowledged')
+  }
+  const deletedAnalyses = await HireRuntimeMultimodalAnalysisOutbox.deleteMany({
+    workspaceId,
+    applicationId: input.binding.applicationId,
+    roundId: input.binding.roundId,
+    principalId,
+  })
+  if (!deletedAnalyses.acknowledged) {
+    throw new Error('Runtime multimodal analysis purge was not acknowledged')
+  }
+  const deletedObservationRetentionTombstones =
+    await HireRuntimeMultimodalObservationRetentionTombstone.deleteMany({
+      workspaceId,
+      applicationId: input.binding.applicationId,
+      roundId: input.binding.roundId,
+    })
+  if (!deletedObservationRetentionTombstones.acknowledged) {
+    throw new Error('Runtime multimodal observation retention tombstone purge was not acknowledged')
+  }
 
   const deletedSessions = await InterviewSession.deleteMany({
     userId: principalId,

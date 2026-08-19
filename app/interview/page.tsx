@@ -17,6 +17,7 @@ import { useInterviewLifecycleEvents } from '@interview/hooks/useInterviewLifecy
 import { useMediaRecorder } from '@interview/hooks/useMediaRecorder'
 import { useCoachingNudge } from '@interview/hooks/useCoachingNudge'
 import { useFacialLandmarks } from '@interview/hooks/useFacialLandmarks'
+import { useHireMultimodalAnalysisCapture } from '@interview/hooks/useHireMultimodalAnalysisCapture'
 import { useRealtimeFacialCoaching } from '@interview/hooks/useRealtimeFacialCoaching'
 import { useRealtimeProsody } from '@interview/hooks/useRealtimeProsody'
 import {
@@ -29,6 +30,10 @@ import {
   resetRecordingClock,
 } from '@interview/audio/recordingClock'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
+import {
+  isHireRuntimeInterview,
+  isHireRuntimeMultimodalObservationsEnabled,
+} from '@interview/config/hireRuntimeMode'
 import CoachOverlay from '@interview/components/interview/CoachOverlay'
 import CodingLayout from '@interview/components/interview/CodingLayout'
 import DesignLayout from '@interview/components/interview/DesignLayout'
@@ -47,6 +52,7 @@ import {
   requestAccountBoundJson,
   uploadRecordingArtifact,
 } from '@interview/utils/accountBoundArtifactUpload'
+import { deliverHireMultimodalAnalysisCapture } from '@interview/utils/hireMultimodalAnalysisCaptureUpload'
 
 import { formatTime } from '@shared/utils'
 
@@ -98,6 +104,7 @@ export default function InterviewPage() {
   const [currentDesignProblem, setCurrentDesignProblem] = useState<DesignProblem | null>(null)
   const isCodingMode = config?.interviewType === 'coding'
   const isDesignMode = config?.interviewType === 'system-design'
+  const isHireInterview = isHireRuntimeInterview(config)
 
   // ── Camera ──
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -140,7 +147,18 @@ export default function InterviewPage() {
 
   // ── Facial landmarks (multimodal analysis) ──
   const isMultimodalEnabled = process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true'
-  const { startCapture, stopCapture, framesRef } = useFacialLandmarks()
+  const isB2cMultimodalEnabled = isMultimodalEnabled && !isHireInterview
+  const isHireNativeMultimodalEnabled =
+    isHireRuntimeMultimodalObservationsEnabled(config)
+  const {
+    startCapture: startB2cFacialCapture,
+    stopCapture: stopB2cFacialCapture,
+    framesRef,
+  } = useFacialLandmarks()
+  const {
+    startCapture: startHireMultimodalAnalysisCapture,
+    stopCapture: stopHireMultimodalAnalysisCapture,
+  } = useHireMultimodalAnalysisCapture()
 
   // Handle recording stop
   const handleRecordingStop = useCallback(async () => {
@@ -170,10 +188,11 @@ export default function InterviewPage() {
 
     const criticalUploads: Promise<unknown>[] = []
 
-    // Stop facial capture and upload landmarks. This is small enough to wait
-    // for briefly before analysis starts; replay video uploads stay detached.
-    if (isMultimodalEnabled) {
-      const frames = stopCapture()
+    // Consumer interviews keep their existing landmark artifact path. Hire
+    // captures a separate, full landmark stream for its control-owned review
+    // analysis; neither path starts live coaching for a Hire assessment.
+    if (isB2cMultimodalEnabled) {
+      const frames = stopB2cFacialCapture()
       const sessionId = interviewRef.current?.sessionId
       if (frames.length > 0 && sessionId && originUserId) {
         criticalUploads.push(
@@ -187,17 +206,29 @@ export default function InterviewPage() {
           }),
         )
       }
+    } else if (isHireNativeMultimodalEnabled) {
+      const frames = stopHireMultimodalAnalysisCapture()
+      const sessionId = interviewRef.current?.sessionId
+      if (sessionId && originUserId) {
+        criticalUploads.push(
+          deliverHireMultimodalAnalysisCapture({
+            sessionId,
+            frames,
+            intent: replayUploadIntent,
+            originUserId,
+          }),
+        )
+      }
     }
 
     const sessionId = interviewRef.current?.sessionId
     if (!sessionId || !originUserId) return
 
-    // Privacy mode — opt out of video storage. The big camera webm
-    // (~30–80MB per session) is dropped on the floor; only the small
-    // audio-only track (needed by Whisper for the post-interview
-    // transcription pipeline) and the facial-landmark JSON (already
-    // client-derived and tiny) hit R2.
-    const privacyMode = config?.privacyMode === true
+    // Consumer privacy mode opts out of video storage. A Hire assessment's
+    // current consent contract is recorded interview review, so its camera
+    // artifact must not be suppressed by a stale/direct room privacy flag.
+    // This narrow exception preserves B2C privacy-mode behavior unchanged.
+    const privacyMode = !isHireInterview && config?.privacyMode === true
 
     // Persist the duration up front, independent of which uploads succeed —
     // privacy-mode sessions (audio-only) and dropped camera uploads still get
@@ -268,7 +299,18 @@ export default function InterviewPage() {
         new Promise<void>((resolve) => setTimeout(resolve, 8_000)),
       ])
     }
-  }, [stopRecording, audioRecorder, getDurationSeconds, isMultimodalEnabled, stopCapture, config?.privacyMode, authSession?.user?.id])
+  }, [
+    stopRecording,
+    audioRecorder,
+    getDurationSeconds,
+    isB2cMultimodalEnabled,
+    isHireNativeMultimodalEnabled,
+    stopB2cFacialCapture,
+    stopHireMultimodalAnalysisCapture,
+    isHireInterview,
+    config?.privacyMode,
+    authSession?.user?.id,
+  ])
 
   // Feedback #1: live coaching is chosen in the lobby and frozen for the session
   // (no in-room toggle). The lobby passes the choice via the room URL (?lc=0 when
@@ -281,7 +323,7 @@ export default function InterviewPage() {
       setUrlCoachingOff(new URLSearchParams(window.location.search).get('lc') === '0')
     } catch { /* URL unavailable — default on */ }
   }, [])
-  const liveCoachingEnabled = !urlCoachingOff
+  const liveCoachingEnabled = !isHireInterview && !urlCoachingOff
 
   // ── Interview engine ──
   const interview = useInterview({
@@ -353,17 +395,17 @@ export default function InterviewPage() {
   })
 
   // ── Live coaching nudges ──
-  const isCoachMode = config?.coachMode ?? false
+  const isCoachMode = !isHireInterview && (config?.coachMode ?? false)
   const speechNudge = useCoachingNudge({ phase, liveTranscript, pollIntervalMs: isCoachMode ? 2000 : undefined })
   const facialNudge = useRealtimeFacialCoaching({
     phase,
     framesRef,
-    enabled: isMultimodalEnabled,
+    enabled: isMultimodalEnabled && !isHireInterview,
   })
   const prosodyNudge = useRealtimeProsody({
     phase,
     liveTranscript,
-    enabled: isMultimodalEnabled,
+    enabled: isMultimodalEnabled && !isHireInterview,
   })
   // Priority: prosody > speech-content > visual. Gated by the master switch —
   // when coaching is off, the hooks still run (cheap) but nothing reaches the
@@ -710,8 +752,10 @@ export default function InterviewPage() {
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         // Start facial landmark capture if multimodal is enabled
-        if (isMultimodalEnabled) {
-          startCapture(videoRef.current).catch(() => {})
+        if (isB2cMultimodalEnabled) {
+          startB2cFacialCapture(videoRef.current).catch(() => {})
+        } else if (isHireNativeMultimodalEnabled) {
+          startHireMultimodalAnalysisCapture(videoRef.current).catch(() => {})
         }
       }
 

@@ -7,12 +7,14 @@ import {
   useState,
   type FormEvent,
 } from 'react'
+import { HIRE_AI_INTERVIEW_DISCLOSURES } from '@shared/contracts/hireAiInterviewConsentDisclosure'
 
 interface Props {
   roundId: string
   capability: string
   authMode: 'magic_link' | 'otp'
   consentAlreadyGiven: boolean
+  legacyConsentAttempt?: boolean
   emailHint: string
   workspaceName: string
 }
@@ -23,7 +25,7 @@ type ConsentKey =
   | 'attentionMonitoring'
   | 'aiEvaluation'
 
-type Step = 'consent' | 'code' | 'camera' | 'resume' | 'starting'
+type Step = 'consent' | 'legacy_resume' | 'code' | 'camera' | 'resume' | 'starting'
 type CandidateNextStep = 'identity_photo' | 'resume'
 
 const EMPTY_CONSENT: Record<ConsentKey, boolean> = {
@@ -33,14 +35,27 @@ const EMPTY_CONSENT: Record<ConsentKey, boolean> = {
   aiEvaluation: false,
 }
 
+// This only tells the server that the candidate wants to continue an
+// already-consented attempt. The server still verifies the immutable receipt
+// and its exact version+digest before issuing a guest session.
+const EXISTING_CONSENT_ACKNOWLEDGEMENTS: Record<ConsentKey, true> = {
+  recording: true,
+  identityPhoto: true,
+  attentionMonitoring: true,
+  aiEvaluation: true,
+}
+
 export default function CandidateFlow({
   roundId,
   capability,
   authMode,
+  legacyConsentAttempt = false,
   emailHint,
   workspaceName,
 }: Props) {
-  const [step, setStep] = useState<Step>('consent')
+  const [step, setStep] = useState<Step>(() =>
+    legacyConsentAttempt ? 'legacy_resume' : 'consent',
+  )
   const [accepted, setAccepted] = useState(EMPTY_CONSENT)
   const [code, setCode] = useState('')
   const [csrfToken, setCsrfToken] = useState<string | null>(null)
@@ -112,7 +127,7 @@ export default function CandidateFlow({
 
   async function begin(e?: FormEvent) {
     e?.preventDefault()
-    if (!consentComplete) return
+    if (!legacyConsentAttempt && !consentComplete) return
     setError(null)
     setCodeResent(false)
     setBusy(true)
@@ -120,7 +135,10 @@ export default function CandidateFlow({
       const response = await fetch(`/api/candidate/${roundId}/begin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ capability, accepted }),
+        body: JSON.stringify({
+          capability,
+          accepted: legacyConsentAttempt ? EXISTING_CONSENT_ACKNOWLEDGEMENTS : accepted,
+        }),
       })
       const data = (await response.json().catch(() => ({}))) as {
         ok?: boolean
@@ -154,7 +172,11 @@ export default function CandidateFlow({
       const response = await fetch(`/api/candidate/${roundId}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ capability, code: code.trim(), accepted }),
+        body: JSON.stringify({
+          capability,
+          code: code.trim(),
+          accepted: legacyConsentAttempt ? EXISTING_CONSENT_ACKNOWLEDGEMENTS : accepted,
+        }),
       })
       const data = (await response.json().catch(() => ({}))) as {
         ok?: boolean
@@ -263,6 +285,34 @@ export default function CandidateFlow({
     } finally {
       setBusy(false)
     }
+  }
+
+  if (step === 'legacy_resume') {
+    return (
+      <section className="space-y-4 rounded-2xl border border-[#e1e8ed] bg-white p-6">
+        <div>
+          <h2 className="text-base font-semibold text-[#0f1419]">Continue your interview</h2>
+          <p className="mt-1 text-sm leading-relaxed text-[#536471]">
+            You already completed the consent for this interview. Continue with the
+            exact consent already recorded for this in-progress interview; no new
+            consent or data collection is added.
+          </p>
+        </div>
+        {error && <p className="text-sm text-[#f4212e]" role="alert">{error}</p>}
+        <button
+          type="button"
+          onClick={() => void begin()}
+          disabled={busy}
+          className="w-full rounded-xl bg-[#2563eb] py-2.5 text-sm font-semibold text-white disabled:bg-[#e1e8ed] disabled:text-[#8b98a5]"
+        >
+          {busy
+            ? 'Continuing…'
+            : authMode === 'otp'
+              ? 'Continue to verification'
+              : 'Continue your interview'}
+        </button>
+      </section>
+    )
   }
 
   if (step === 'starting') {
@@ -424,7 +474,7 @@ export default function CandidateFlow({
   const consentItems: Array<{ key: ConsentKey; text: string }> = [
     {
       key: 'recording',
-      text: 'I consent to camera and microphone recording, transcription, and sharing with the hiring team.',
+      text: 'I consent to camera and microphone recording, transcription, Hire analysis, and sharing the interview recording and review with the hiring team.',
     },
     {
       key: 'identityPhoto',
@@ -432,33 +482,28 @@ export default function CandidateFlow({
     },
     {
       key: 'attentionMonitoring',
-      text: 'I consent to neutral attention observations such as tab changes, gaze-away cues, and reading-cadence cues. They are not scores.',
+      text: 'I consent to private retention and analysis of structured facial-landmark and browser-window observations for the Hire review.',
     },
     {
       key: 'aiEvaluation',
-      text: 'I consent to AI evaluation and understand that a human makes every hiring decision.',
+      text: 'I consent to AI evaluation of this interview and understand that a human makes every hiring decision.',
     },
   ]
+
+  const disclosures = HIRE_AI_INTERVIEW_DISCLOSURES
 
   return (
     <form onSubmit={begin} className="space-y-5 rounded-2xl border border-[#e1e8ed] bg-white p-6">
       <div>
         <h2 className="text-base font-semibold text-[#0f1419]">Before you start</h2>
         <div className="mt-2 space-y-2 text-sm leading-relaxed text-[#536471]">
+          <p>{disclosures.recording}</p>
+          <p>{disclosures.identityPhoto}</p>
+          <p>{disclosures.attentionMonitoring}</p>
+          <p>{disclosures.aiEvaluation}</p>
+          <p>{disclosures.retention}</p>
           <p>
-            Your camera and microphone are recorded and your spoken answers are
-            transcribed. AI prepares evidence-linked scores and observations for{' '}
-            <strong>{workspaceName}</strong>; people alone make hiring decisions.
-          </p>
-          <p>
-            A live selfie is captured after consent for later human comparison. No
-            government ID or automated face matching is used. Neutral attention
-            events—including tab/window changes, sustained gaze-away cues, and
-            reading-cadence cues—may be recorded, but are not scores.
-          </p>
-          <p>
-            Interview recordings and identity photos are removed six calendar months
-            after the job closes, or earlier after a verified deletion request.
+            The evidence-linked assessment is prepared for <strong>{workspaceName}</strong>.
           </p>
         </div>
       </div>

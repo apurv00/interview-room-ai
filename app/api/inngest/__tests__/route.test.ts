@@ -22,6 +22,9 @@ const {
   hireDailyDigestRecoveryJob,
   hireOnboardingTestDriveCleanupRequestedJob,
   hireOnboardingTestDriveCleanupRecoveryJob,
+  hireRuntimeMultimodalAnalysisPublisherJob,
+  hireMultimodalAnalysisJob,
+  hireMultimodalAnalysisRecoveryJob,
 } = vi.hoisted(() => ({
   mockServe: vi.fn(() => ({ GET: vi.fn(), POST: vi.fn(), PUT: vi.fn() })),
   paymentRecoveryJob: { id: "payment-recovery-sentinel" },
@@ -60,6 +63,11 @@ const {
   hireOnboardingTestDriveCleanupRecoveryJob: {
     id: "hire-onboarding-test-drive-cleanup-recovery-sentinel",
   },
+  hireRuntimeMultimodalAnalysisPublisherJob: {
+    id: "hire-runtime-multimodal-analysis-publisher",
+  },
+  hireMultimodalAnalysisJob: { id: "hire-multimodal-analysis" },
+  hireMultimodalAnalysisRecoveryJob: { id: "hire-multimodal-analysis-recovery" },
 }));
 
 vi.mock("inngest/next", () => ({ serve: mockServe }));
@@ -158,6 +166,18 @@ vi.mock("@modules/hire-runtime/jobs/feedbackRecoveryJob", () => ({
 }));
 vi.mock("@modules/hire-runtime/jobs/resultPublisherJob", () => ({
   hireRuntimeResultPublisherJob: { id: "hire-runtime-result" },
+}));
+vi.mock("@modules/hire-runtime/jobs/multimodalObservationPublisherJob", () => ({
+  hireRuntimeMultimodalObservationPublisherJob: {
+    id: "hire-runtime-multimodal-observation-publisher",
+  },
+}));
+vi.mock("@modules/hire-runtime/jobs/multimodalAnalysisPublisherJob", () => ({
+  hireRuntimeMultimodalAnalysisPublisherJob,
+}));
+vi.mock("@modules/hire-multimodal/jobs/hireMultimodalAnalysisJob", () => ({
+  hireMultimodalAnalysisJob,
+  hireMultimodalAnalysisRecoveryJob,
 }));
 
 import "../route";
@@ -267,7 +287,7 @@ describe("Inngest route registration", () => {
           (fn) => fn === hireOnboardingTestDriveCleanupRecoveryJob,
         ),
       ).toHaveLength(1);
-      expect(options.functions).toHaveLength(19);
+      expect(options.functions).toHaveLength(21);
       expect(options.functions).not.toContain(retentionJob);
     } finally {
       if (previousSurface === undefined) delete process.env.IPG_SURFACE;
@@ -275,7 +295,7 @@ describe("Inngest route registration", () => {
     }
   });
 
-  it("registers only feedback recovery and result publication on the runtime surface", async () => {
+  it("registers only Hire runtime jobs on the runtime surface", async () => {
     const previousSurface = process.env.IPG_SURFACE;
     try {
       process.env.IPG_SURFACE = "hire-engine";
@@ -288,6 +308,8 @@ describe("Inngest route registration", () => {
       expect(options.functions.map((fn) => fn.id)).toEqual([
         "hire-runtime-feedback",
         "hire-runtime-result",
+        "hire-runtime-multimodal-observation-publisher",
+        "hire-runtime-multimodal-analysis-publisher",
       ]);
     } finally {
       if (previousSurface === undefined) delete process.env.IPG_SURFACE;

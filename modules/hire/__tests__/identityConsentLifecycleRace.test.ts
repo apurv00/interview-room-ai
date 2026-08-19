@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   applicationExists: vi.fn(),
   attemptFindOne: vi.fn(),
   consentExists: vi.fn(),
+  consentFindOne: vi.fn(),
   mediaExists: vi.fn(),
   guestUpdateMany: vi.fn(),
   guestCreate: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock('../models/HireInterviewAttempt', () => ({
   HireInterviewAttempt: { findOne: mocks.attemptFindOne },
 }))
 vi.mock('../models/HireConsentReceipt', () => ({
-  HireConsentReceipt: { exists: mocks.consentExists },
+  HireConsentReceipt: { exists: mocks.consentExists, findOne: mocks.consentFindOne },
 }))
 vi.mock('../models/HireMediaAsset', () => ({
   HireMediaAsset: { exists: mocks.mediaExists },
@@ -47,6 +48,12 @@ import {
   acceptHireConsentAndIssueGuestSession,
   HireGuestAccessError,
 } from '../services/identityConsentService'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_DISCLOSURE_DIGEST,
+  HIRE_AI_V2_CONSENT_VERSION,
+  HIRE_AI_V2_DISCLOSURE_DIGEST,
+} from '../policies/aiInterviewConsent'
 
 const startSessionSpy = vi.spyOn(mongoose, 'startSession')
 const IDS = {
@@ -100,6 +107,16 @@ beforeEach(() => {
     }),
   })
   mocks.consentExists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
+  mocks.consentFindOne.mockReturnValue({
+    select: vi.fn().mockReturnValue({
+      session: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          consentVersion: HIRE_AI_CONSENT_VERSION,
+          disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
+        }),
+      }),
+    }),
+  })
   mocks.mediaExists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
   mocks.guestUpdateMany.mockResolvedValue({ modifiedCount: 0 })
   mocks.guestCreate.mockResolvedValue([{}])
@@ -191,5 +208,41 @@ describe('candidate authority versus workspace deletion', () => {
     })
     expect(mocks.mediaExists).not.toHaveBeenCalled()
     expect(mocks.guestCreate).not.toHaveBeenCalled()
+  })
+
+  it('reissues authority for an existing exact v2 receipt without upgrading its consent', async () => {
+    mocks.consentFindOne.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        session: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue({
+            consentVersion: HIRE_AI_V2_CONSENT_VERSION,
+            disclosureDigest: HIRE_AI_V2_DISCLOSURE_DIGEST,
+          }),
+        }),
+      }),
+    })
+
+    const result = await acceptHireConsentAndIssueGuestSession({
+      roundId: IDS.roundId,
+      inviteCapability: `${IDS.workspaceId}.${'a'.repeat(64)}`,
+      accepted,
+      now,
+    })
+
+    expect(result).toMatchObject({
+      consentVersion: HIRE_AI_V2_CONSENT_VERSION,
+      disclosureDigest: HIRE_AI_V2_DISCLOSURE_DIGEST,
+      next: 'resume',
+    })
+    expect(mocks.consentFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: IDS.receiptId,
+        attemptId: IDS.attemptId,
+        'accepted.recording': true,
+        'accepted.identityPhoto': true,
+        'accepted.attentionMonitoring': true,
+        'accepted.aiEvaluation': true,
+      }),
+    )
   })
 })

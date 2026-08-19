@@ -5,6 +5,14 @@ import {
   type HireEngineHandoffEnvelope,
   type HireEngineResultIngestion,
 } from '@shared/contracts/hireEngineBridge'
+import {
+  HireMultimodalObservationIngestionSchema,
+  type HireMultimodalObservationIngestion,
+} from '@shared/contracts/hireMultimodalObservationBridge'
+import {
+  HireMultimodalAnalysisIngestionSchema,
+  type HireMultimodalAnalysisIngestion,
+} from '@shared/contracts/hireMultimodalAnalysisBridge'
 import { createInternalServiceHeaders } from '@shared/services/internalServiceAuth'
 import { assertHireRuntimeSurface } from './runtimeBoundary'
 
@@ -92,6 +100,51 @@ export async function publishResultToControl(
     !['processed', 'duplicate', 'stale'].includes(String(response.outcome))
   ) {
     throw new HireControlBridgeError('Hire control returned an invalid result ack', 502, true)
+  }
+  return response.outcome as 'processed' | 'duplicate' | 'stale'
+}
+
+export async function publishMultimodalObservationToControl(
+  rawPayload: HireMultimodalObservationIngestion,
+): Promise<'processed' | 'duplicate' | 'stale'> {
+  const payload = HireMultimodalObservationIngestionSchema.parse(rawPayload)
+  const response = (await postControl(
+    '/api/internal/hire/engine/multimodal-observations',
+    payload,
+  )) as { ok?: unknown; outcome?: unknown }
+  if (
+    response.ok !== true ||
+    !['processed', 'duplicate', 'stale'].includes(String(response.outcome))
+  ) {
+    throw new HireControlBridgeError(
+      'Hire control returned an invalid multimodal observation acknowledgement',
+      502,
+      true,
+    )
+  }
+  return response.outcome as 'processed' | 'duplicate' | 'stale'
+}
+
+/** Publishes a checksum-addressed raw-landmark artifact for Hire-only review
+ * analysis. It is intentionally not routed through B2C `/api/analysis/*`. */
+export async function publishMultimodalAnalysisToControl(
+  rawPayload: HireMultimodalAnalysisIngestion,
+): Promise<'processed' | 'duplicate' | 'stale'> {
+  const payload = HireMultimodalAnalysisIngestionSchema.parse(rawPayload)
+  const response = (await postControl(
+    '/api/internal/hire/engine/multimodal-analysis',
+    payload,
+    RESULT_INGESTION_TIMEOUT_MS,
+  )) as { ok?: unknown; outcome?: unknown }
+  if (
+    response.ok !== true ||
+    !['processed', 'duplicate', 'stale'].includes(String(response.outcome))
+  ) {
+    throw new HireControlBridgeError(
+      'Hire control returned an invalid multimodal analysis acknowledgement',
+      502,
+      true,
+    )
   }
   return response.outcome as 'processed' | 'duplicate' | 'stale'
 }

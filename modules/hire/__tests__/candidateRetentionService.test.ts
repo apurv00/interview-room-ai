@@ -5,7 +5,14 @@ vi.mock('../services/hireControlBoundary', () => ({
   connectHireControlDB: vi.fn().mockResolvedValue(undefined),
 }))
 
-const { models, decisionModels, session, lifecycle, statusLifecycle } = vi.hoisted(() => {
+const {
+  models,
+  decisionModels,
+  multimodalModels,
+  session,
+  lifecycle,
+  statusLifecycle,
+} = vi.hoisted(() => {
   const collection = (name: string) => ({ name })
   const latestModel = (name: string) => ({ collection: collection(name), findOne: vi.fn() })
   return {
@@ -82,6 +89,17 @@ const { models, decisionModels, session, lifecycle, statusLifecycle } = vi.hoist
         updateMany: vi.fn(),
       },
     },
+    multimodalModels: {
+      HireMultimodalObservation: {
+        ...latestModel('hiremultimodalobservations'),
+        deleteMany: vi.fn(),
+      },
+      HireMultimodalObservationIngestionEvent: { deleteMany: vi.fn() },
+      HireMultimodalObservationPurgeObligation: {
+        deleteMany: vi.fn(),
+        updateMany: vi.fn(),
+      },
+    },
     session: {
       withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
       endSession: vi.fn().mockResolvedValue(undefined),
@@ -100,6 +118,7 @@ const { models, decisionModels, session, lifecycle, statusLifecycle } = vi.hoist
 
 vi.mock('../models', () => models)
 vi.mock('@hire-decisions/models', () => decisionModels)
+vi.mock('../../hire-multimodal/models', () => multimodalModels)
 vi.mock('../services/assessmentExportLifecycleService', () => ({
   cancelHireAssessmentExports: (...args: unknown[]) => lifecycle.cancelAssessmentExports(...args),
   deleteHireAssessmentExportObjects: (...args: unknown[]) => lifecycle.deleteAssessmentExportObjects(...args),
@@ -188,6 +207,7 @@ beforeEach(() => {
     models.HireRound,
     models.HireInterviewAttempt,
     models.HireInterviewResult,
+    multimodalModels.HireMultimodalObservation,
     models.HireMediaAsset,
     models.HireConsentReceipt,
     models.HireEngineIngestionEvent,
@@ -204,6 +224,16 @@ beforeEach(() => {
   models.HireApplication.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireRound.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireInterviewResult.updateMany.mockResolvedValue({ modifiedCount: 1 })
+  multimodalModels.HireMultimodalObservation.deleteMany.mockResolvedValue({ deletedCount: 1 })
+  multimodalModels.HireMultimodalObservationIngestionEvent.deleteMany.mockResolvedValue({
+    deletedCount: 1,
+  })
+  multimodalModels.HireMultimodalObservationPurgeObligation.deleteMany.mockResolvedValue({
+    deletedCount: 1,
+  })
+  multimodalModels.HireMultimodalObservationPurgeObligation.updateMany.mockResolvedValue({
+    modifiedCount: 1,
+  })
   models.HireConsentReceipt.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireEmailOutbox.deleteMany.mockResolvedValue({ deletedCount: 1 })
   models.HireHumanRound.deleteMany.mockResolvedValue({ deletedCount: 1 })
@@ -263,6 +293,7 @@ describe('candidate PII retention', () => {
       expect.objectContaining({ $lookup: expect.objectContaining({ from: 'hiresharepackets' }) }),
       expect.objectContaining({ $lookup: expect.objectContaining({ from: 'hireexternalverdicts' }) }),
       expect.objectContaining({ $lookup: expect.objectContaining({ from: 'hireassessmentexports' }) }),
+      expect.objectContaining({ $lookup: expect.objectContaining({ from: 'hiremultimodalobservations' }) }),
     ]))
   })
 
@@ -342,6 +373,36 @@ describe('candidate PII retention', () => {
         $unset: { rawEngineOutput: 1, projection: 1, evidenceIndex: 1 },
       }),
       { session },
+    )
+    for (const model of [
+      multimodalModels.HireMultimodalObservationIngestionEvent,
+      multimodalModels.HireMultimodalObservation,
+    ]) {
+      expect(model.deleteMany).toHaveBeenCalledWith(
+        { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
+        { session },
+      )
+    }
+    expect(
+      multimodalModels.HireMultimodalObservationPurgeObligation.deleteMany,
+    ).toHaveBeenCalledWith(
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        runtimePurgedAt: { $exists: true },
+      },
+      { session },
+    )
+    expect(
+      multimodalModels.HireMultimodalObservationPurgeObligation.updateMany,
+    ).toHaveBeenCalledWith(
+      {
+        workspaceId: WORKSPACE_ID,
+        candidateId: CANDIDATE_ID,
+        runtimePurgedAt: { $exists: false },
+      },
+      { $unset: { candidateId: 1 } },
+      { session, overwriteImmutable: true },
     )
     expect(models.HireEmailOutbox.deleteMany).toHaveBeenCalledWith(
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },

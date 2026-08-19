@@ -7,7 +7,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i
-const HIRE_MEDIA_KEY = /^hire-media\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})-(identity-photo|camera-recording|audio-recording)\.(jpg|webm)$/i
+const HIRE_MEDIA_KEY = /^hire-media\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})-(identity-photo|camera-recording|audio-recording|facial-landmarks)\.(jpg|webm|json)$/i
 
 export const HIRE_MEDIA_DOWNLOAD_TTL_SECONDS = 300
 
@@ -23,6 +23,7 @@ export type HireMediaStorageKind =
   | 'identity-photo'
   | 'camera-recording'
   | 'audio-recording'
+  | 'facial-landmarks'
 
 export interface HireMediaStoragePort {
   upload(input: {
@@ -72,7 +73,11 @@ export function hireMediaKey(
   kind: HireMediaStorageKind,
 ): string {
   assertCoordinate(coordinate)
-  const extension = kind === 'identity-photo' ? 'jpg' : 'webm'
+  const extension = kind === 'identity-photo'
+    ? 'jpg'
+    : kind === 'facial-landmarks'
+      ? 'json'
+      : 'webm'
   return [
     'hire-media',
     coordinate.workspaceId,
@@ -89,13 +94,21 @@ export function parseHireMediaKey(key: string):
   if (!key || key.length > 1000 || key.includes('%') || key.includes('\\')) return null
   const match = HIRE_MEDIA_KEY.exec(key)
   if (!match) return null
+  const kind = match[6] as HireMediaStorageKind
+  const extension = match[7].toLowerCase()
+  const expectedExtension = kind === 'identity-photo'
+    ? 'jpg'
+    : kind === 'facial-landmarks'
+      ? 'json'
+      : 'webm'
+  if (extension !== expectedExtension) return null
   return {
     workspaceId: match[1],
     applicationId: match[2],
     roundId: match[3],
     attemptId: match[4],
     assetId: match[5],
-    kind: match[6] as HireMediaStorageKind,
+    kind,
   }
 }
 

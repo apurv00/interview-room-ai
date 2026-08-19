@@ -170,6 +170,17 @@ type TaggedWebSocket = WebSocket & {
   __sentSamples?: number
 }
 
+type DeepgramGrant = {
+  token: string
+  expiresAtMs: number
+}
+
+const DEEPGRAM_GRANT_EARLY_REFRESH_MS = 5_000
+
+function isReusableDeepgramGrant(grant: DeepgramGrant | null): grant is DeepgramGrant {
+  return grant !== null && grant.expiresAtMs > Date.now() + DEEPGRAM_GRANT_EARLY_REFRESH_MS
+}
+
 /** Belt-and-suspenders KeepAlive heartbeats against Deepgram's idle-close
  *  timer. We send BOTH on every tick:
  *
@@ -450,8 +461,10 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
   /** Inactivity reset timer for `interruptAccumRef`. Prevents stale
    *  fragments from a prior utterance leaking into the next one. */
   const interruptAccumTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Token cache — avoids re-fetching for each question
-  const cachedTokenRef = useRef<string | null>(null)
+  // Grant cache — browser memory only. The server sends 30-second bearer
+  // grants, so refresh five seconds early instead of attempting a reconnect
+  // with a potentially expired credential.
+  const cachedTokenRef = useRef<DeepgramGrant | null>(null)
   // Whether warmUp() has been called and WebSocket is ready
   const isWarmedUpRef = useRef(false)
   const warmUpPromiseRef = useRef<Promise<void> | null>(null)
@@ -750,7 +763,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
               console.warn(
                 '[Deepgram] preserved warmUp ws died mid-listening, reconnecting',
               )
-              maybeReconnectOrFinish(cachedTokenRef.current)
+              maybeReconnectOrFinish()
             }
           }
         }
@@ -913,7 +926,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
       .then((token) => {
         return new Promise<void>((resolve) => {
           const wsUrl = buildListenUrl(resolveSttLanguage())
-          const ws = new WebSocket(wsUrl, ['token', token])
+          const ws = new WebSocket(wsUrl, ['bearer', token])
           // Publish the CONNECTING socket to wsRef eagerly (was previously
           // deferred to ws.onopen at the bottom of this block). Rationale:
           // `startListening` now launches the AudioWorklet IN PARALLEL with
@@ -1099,15 +1112,17 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** Fetch token with caching — reuses token across questions. */
+  /** Fetch a short-lived grant with bounded in-memory reuse across questions. */
   async function fetchTokenCached(): Promise<string> {
-    if (cachedTokenRef.current) return cachedTokenRef.current
-    const token = await fetchDeepgramTokenWithRetry()
-    cachedTokenRef.current = token
-    return token
+    if (isReusableDeepgramGrant(cachedTokenRef.current)) {
+      return cachedTokenRef.current.token
+    }
+    const grant = await fetchDeepgramTokenWithRetry()
+    cachedTokenRef.current = grant
+    return grant.token
   }
 
-  async function fetchDeepgramTokenWithRetry(retries = 2): Promise<string> {
+  async function fetchDeepgramTokenWithRetry(retries = 2): Promise<DeepgramGrant> {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
         return await fetchDeepgramToken()
@@ -1123,17 +1138,30 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     throw new Error('All token fetch attempts failed')
   }
 
-  async function fetchDeepgramToken(): Promise<string> {
+  async function fetchDeepgramToken(): Promise<DeepgramGrant> {
     const res = await fetch('/api/transcribe/token', { method: 'POST' })
     if (!res.ok) {
       throw new Error(`Token request failed with ${res.status}`)
     }
-    const data = await res.json()
-    if (!data.token) {
-      console.error('[Deepgram] Token endpoint returned no token:', data)
-      throw new Error('No token returned')
+    const data: unknown = await res.json()
+    if (
+      !data ||
+      typeof data !== 'object' ||
+      typeof (data as { token?: unknown }).token !== 'string' ||
+      !(data as { token?: string }).token ||
+      (data as { tokenType?: unknown }).tokenType !== 'bearer' ||
+      typeof (data as { expiresIn?: unknown }).expiresIn !== 'number' ||
+      !Number.isFinite((data as { expiresIn: number }).expiresIn) ||
+      (data as { expiresIn: number }).expiresIn <= 0
+    ) {
+      console.error('[Deepgram] Token endpoint returned an invalid temporary grant')
+      throw new Error('Invalid temporary Deepgram grant')
     }
-    return data.token
+    const { token, expiresIn } = data as { token: string; expiresIn: number }
+    return {
+      token,
+      expiresAtMs: Date.now() + expiresIn * 1000,
+    }
   }
 
   /** Push a bounded summary of one Deepgram message onto the diagnostic
@@ -1437,7 +1465,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
 
     const wsUrl = buildListenUrl(resolveSttLanguage())
     // Use auth via websocket subprotocol so transient token is not logged in the URL.
-    const ws = new WebSocket(wsUrl, ['token', token]) as WebSocket & {
+    const ws = new WebSocket(wsUrl, ['bearer', token]) as WebSocket & {
       __reconnectOnCloseWrapped?: boolean
     }
     // Mark this cold-path ws as already having reconnect-on-close
@@ -1455,7 +1483,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     const handleDisconnect = () => {
       if (disconnectHandled) return
       disconnectHandled = true
-      maybeReconnectOrFinish(token)
+      maybeReconnectOrFinish()
     }
 
     // Per-socket KeepAlive timer handle, captured in the ws's closure.
@@ -1608,7 +1636,7 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     }
   }
 
-  function maybeReconnectOrFinish(token: string) {
+  function maybeReconnectOrFinish() {
     // Browser-offline preflight — short-circuit before counter++ and
     // before scheduling the 800ms × attempt backoff. The post-timer
     // path (`connectWebSocket` line ~1152) ALREADY checks
@@ -1672,7 +1700,19 @@ export function useDeepgramRecognition(): UseDeepgramRecognitionReturn {
     reconnectTimerRef.current = setTimeout(() => {
       reconnectTimerRef.current = null
       if (onCompleteRef.current && !isFinishingRef.current) {
-        connectWebSocket(token)
+        const activeCompletion = onCompleteRef.current
+        fetchTokenCached()
+          .then((token) => {
+            if (onCompleteRef.current === activeCompletion && !isFinishingRef.current) {
+              connectWebSocket(token)
+            }
+          })
+          .catch((err) => {
+            console.error('Deepgram token refresh failed during reconnect:', err)
+            if (onCompleteRef.current === activeCompletion && !isFinishingRef.current) {
+              finishRecognition('tokenFetchFailed')
+            }
+          })
       }
     }, delay)
   }

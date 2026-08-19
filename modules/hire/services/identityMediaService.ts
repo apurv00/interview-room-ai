@@ -7,7 +7,10 @@ import { HireJob } from '../models/HireJob'
 import { HireMediaAsset, type IHireMediaAsset } from '../models/HireMediaAsset'
 import { HireRound } from '../models/HireRound'
 import { HireWorkspace } from '../models/HireWorkspace'
-import { HIRE_AI_CONSENT_VERSION, HIRE_AI_DISCLOSURE_DIGEST } from '../policies/aiInterviewConsent'
+import {
+  type HireConsentSnapshot,
+  isRecognizedHireConsentSnapshot,
+} from '../policies/aiInterviewConsent'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
   hireMediaKey,
@@ -128,6 +131,47 @@ function scopedAttemptFilter(scope: HireGuestScope): Record<string, unknown> {
   }
 }
 
+interface HireAttemptConsent extends HireConsentSnapshot {
+  acceptedAt: Date
+}
+
+/**
+ * A live attempt remains bound to the receipt it was created with. This
+ * explicitly recognizes the exact pre-rollout v2 version+digest pair so an
+ * already-consented candidate can finish, while all new attempts receive v3
+ * from identityConsentService.
+ */
+async function resolveAttemptConsent(
+  scope: HireGuestScope,
+  consentReceiptId: mongoose.Types.ObjectId,
+): Promise<HireAttemptConsent | null> {
+  const receipt = await HireConsentReceipt.findOne({
+    _id: consentReceiptId,
+    workspaceId: scope.workspaceId,
+    applicationId: scope.applicationId,
+    jobId: scope.jobId,
+    candidateId: scope.candidateId,
+    roundId: scope.roundId,
+    attemptId: scope.attemptId,
+    'accepted.recording': true,
+    'accepted.identityPhoto': true,
+    'accepted.attentionMonitoring': true,
+    'accepted.aiEvaluation': true,
+  })
+    .select('consentVersion disclosureDigest acceptedAt')
+    .lean<
+      (Pick<HireConsentSnapshot, 'consentVersion' | 'disclosureDigest'> & {
+        acceptedAt?: Date
+      }) | null
+    >()
+  if (!isRecognizedHireConsentSnapshot(receipt) || !receipt.acceptedAt) return null
+  return {
+    consentVersion: receipt.consentVersion,
+    disclosureDigest: receipt.disclosureDigest,
+    acceptedAt: receipt.acceptedAt,
+  }
+}
+
 export async function saveHireIdentityPhoto(input: {
   scope: HireGuestScope
   body: Buffer
@@ -154,22 +198,8 @@ export async function saveHireIdentityPhoto(input: {
       409,
     )
   }
-  const receipt = await HireConsentReceipt.exists({
-    _id: attempt.consentReceiptId,
-    workspaceId: input.scope.workspaceId,
-    applicationId: input.scope.applicationId,
-    jobId: input.scope.jobId,
-    candidateId: input.scope.candidateId,
-    roundId: input.scope.roundId,
-    attemptId: input.scope.attemptId,
-    consentVersion: HIRE_AI_CONSENT_VERSION,
-    disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
-    'accepted.recording': true,
-    'accepted.identityPhoto': true,
-    'accepted.attentionMonitoring': true,
-    'accepted.aiEvaluation': true,
-  })
-  if (!receipt) {
+  const consent = await resolveAttemptConsent(input.scope, attempt.consentReceiptId)
+  if (!consent) {
     throw new HireIdentityMediaError(
       'Consent is required before photo capture',
       'CONSENT_REQUIRED',
@@ -384,7 +414,11 @@ export async function saveHireIdentityPhoto(input: {
 export async function startHireInterviewAttempt(input: {
   scope: HireGuestScope
   now?: Date
-}): Promise<{ attemptId: string; recordingEpoch: Date }> {
+}): Promise<{
+  attemptId: string
+  recordingEpoch: Date
+  consent: HireAttemptConsent
+}> {
   await connectHireControlDB()
   const now = input.now ?? new Date()
   const round = await HireRound.exists({
@@ -416,16 +450,8 @@ export async function startHireInterviewAttempt(input: {
       409,
     )
   }
-  const [receipt, photo] = await Promise.all([
-    HireConsentReceipt.exists({
-      _id: attempt.consentReceiptId,
-      workspaceId: input.scope.workspaceId,
-      applicationId: input.scope.applicationId,
-      roundId: input.scope.roundId,
-      attemptId: input.scope.attemptId,
-      consentVersion: HIRE_AI_CONSENT_VERSION,
-      disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
-    }),
+  const [consent, photo] = await Promise.all([
+    resolveAttemptConsent(input.scope, attempt.consentReceiptId),
     HireMediaAsset.exists({
       _id: attempt.identityPhotoAssetId,
       workspaceId: input.scope.workspaceId,
@@ -441,7 +467,7 @@ export async function startHireInterviewAttempt(input: {
       ],
     }),
   ])
-  if (!receipt || !photo) {
+  if (!consent || !photo) {
     throw new HireIdentityMediaError(
       'Consent and a retained identity photo are required before starting',
       'ATTEMPT_INVALID',
@@ -455,6 +481,7 @@ export async function startHireInterviewAttempt(input: {
     return {
       attemptId: attempt._id.toString(),
       recordingEpoch: attempt.recordingEpoch,
+      consent,
     }
   }
   const started = await HireInterviewAttempt.findOneAndUpdate(
@@ -473,5 +500,5 @@ export async function startHireInterviewAttempt(input: {
       409,
     )
   }
-  return { attemptId: started._id.toString(), recordingEpoch: now }
+  return { attemptId: started._id.toString(), recordingEpoch: now, consent }
 }

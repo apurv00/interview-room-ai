@@ -39,6 +39,15 @@ export const inngest = new Inngest({
  * Strongly-typed event names. Keep in sync with function event triggers.
  */
 export type InngestEvents = {
+  // Hire recorded-interview analysis. This event intentionally transports
+  // opaque control-plane coordinates only; raw facial data and transcript
+  // remain in private Hire storage and are reloaded by the worker.
+  "hire/multimodal-analysis.requested": {
+    data: {
+      workspaceId: string;
+      analysisId: string;
+    };
+  };
   // Hire resume intake (Phase 2): opaque control-plane coordinates only.
   // The worker reloads the select-hidden resume bytes and apply-token hash
   // from the tenant-scoped HireIntakeTask; candidate PII never enters an

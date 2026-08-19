@@ -416,6 +416,48 @@ describe('isolated engine result ingestion', () => {
     expect(mocks.applicationUpdateOne).not.toHaveBeenCalled()
   })
 
+  it('accepts a camera-only higher revision from the same runtime session after the scorecard', async () => {
+    const input = payload({
+      eventId: 'f'.repeat(64),
+      revision: 2,
+      media: [MEDIA_ARTIFACT],
+    })
+    mocks.ingestionFindOne.mockReset()
+    // The new event id has not been processed; revision 1 was already
+    // accepted for this exact runtime session without a camera artifact.
+    mocks.ingestionFindOne
+      .mockReturnValueOnce(query(null))
+      .mockReturnValueOnce(
+        query({
+          runtimeSessionId: objectId(IDS.runtimeSessionId),
+          revision: 1,
+          resultDigest: '1'.repeat(64),
+          status: 'processed',
+        }),
+      )
+
+    await expect(ingestHireEngineResult(input)).resolves.toEqual({
+      outcome: 'processed',
+    })
+
+    expect(mocks.ingestMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeSessionId: IDS.runtimeSessionId,
+        artifacts: [MEDIA_ARTIFACT],
+      }),
+    )
+    // The evidence service returns the immutable revision-1 assessment when
+    // raw scoring/transcript data is unchanged; the new event exists solely
+    // to make the control-side camera asset available for the full player.
+    expect(mocks.persistResult).toHaveBeenCalledOnce()
+    expect(mocks.ingestionCreate.mock.calls[0][0][0]).toMatchObject({
+      eventId: input.eventId,
+      revision: 2,
+      media: [MEDIA_ARTIFACT],
+      status: 'received',
+    })
+  })
+
   it('fails closed when scored output has no timestamped candidate evidence', async () => {
     const input = payload({ transcript: [] })
     await expect(

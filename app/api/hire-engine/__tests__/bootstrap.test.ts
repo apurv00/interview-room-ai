@@ -15,6 +15,7 @@ vi.mock('@modules/hire-runtime/services/bindingService', async () => {
 })
 
 import { GET } from '../bootstrap/route'
+import { HIRE_AI_CONSENT_VERSION } from '@hire/policies/aiInterviewConsent'
 
 const PRINCIPAL_ID = '1'.repeat(24)
 const ROUND_ID = '2'.repeat(24)
@@ -63,9 +64,29 @@ describe('GET /api/hire-engine/bootstrap', () => {
       config: CONFIG,
     })
     expect(JSON.stringify(body)).not.toContain('must-not-cross@example.com')
+    expect(response.headers.get('X-Hire-Multimodal-Observations')).toBeNull()
     expect(mocks.activeBinding).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       principalId: PRINCIPAL_ID,
+    })
+  })
+
+  it('emits only a boolean collection hint for the current Hire consent', async () => {
+    mocks.activeBinding.mockResolvedValue({
+      principalId: objectId(PRINCIPAL_ID),
+      roundId: objectId(ROUND_ID),
+      config: hydratedConfig(),
+      consentVersion: HIRE_AI_CONSENT_VERSION,
+    })
+
+    const response = await GET()
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Hire-Multimodal-Observations')).toBe('1')
+    expect(await response.json()).toEqual({
+      principalId: PRINCIPAL_ID,
+      roundId: ROUND_ID,
+      config: CONFIG,
     })
   })
 
