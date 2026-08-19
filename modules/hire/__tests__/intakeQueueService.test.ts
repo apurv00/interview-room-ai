@@ -456,35 +456,41 @@ describe('worker ownership and recoverability', () => {
   })
 
   it('moves a claimed no-email resume to needs_identity without dropping its recovery payload', async () => {
-    const task = queuedTask({ attempts: 1 })
-    mocks.taskFindOneAndUpdate.mockReturnValue(query(task))
-    mocks.jobFindOne.mockResolvedValue({
-      _id: task.jobId,
-      workspaceId: task.workspaceId,
-      jdText: 'backend role',
-      status: 'open',
-    })
-    mocks.workspaceFindOne.mockResolvedValue({ _id: task.workspaceId })
-    mocks.memberFindOne.mockResolvedValue({ _id: task.actorMemberId })
-    mocks.parseDocument.mockResolvedValue({
-      text: 'No email in this résumé',
-      wordCount: 5,
-      docType: 'txt',
-    })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-12T10:01:00.000Z'))
+    try {
+      const task = queuedTask({ attempts: 1 })
+      mocks.taskFindOneAndUpdate.mockReturnValue(query(task))
+      mocks.jobFindOne.mockResolvedValue({
+        _id: task.jobId,
+        workspaceId: task.workspaceId,
+        jdText: 'backend role',
+        status: 'open',
+      })
+      mocks.workspaceFindOne.mockResolvedValue({ _id: task.workspaceId })
+      mocks.memberFindOne.mockResolvedValue({ _id: task.actorMemberId })
+      mocks.parseDocument.mockResolvedValue({
+        text: 'No email in this résumé',
+        wordCount: 5,
+        docType: 'txt',
+      })
 
-    await expect(processHireIntakeTask({ workspaceId: IDS.workspace, taskId: IDS.task }))
-      .resolves.toEqual({ outcome: 'needs_identity' })
+      await expect(processHireIntakeTask({ workspaceId: IDS.workspace, taskId: IDS.task }))
+        .resolves.toEqual({ outcome: 'needs_identity' })
 
-    const update = mocks.taskUpdateOne.mock.calls.at(-1)?.[1]
-    expect(mocks.taskUpdateOne.mock.calls.at(-1)?.[0]).toMatchObject({
-      _id: task._id,
-      workspaceId: task.workspaceId,
-      status: 'processing',
-      claimToken: expect.any(String),
-    })
-    expect(update.$set).toMatchObject({ status: 'needs_identity' })
-    expect(update.$unset).not.toHaveProperty('payload')
-    expect(mocks.intakeCandidate).not.toHaveBeenCalled()
+      const update = mocks.taskUpdateOne.mock.calls.at(-1)?.[1]
+      expect(mocks.taskUpdateOne.mock.calls.at(-1)?.[0]).toMatchObject({
+        _id: task._id,
+        workspaceId: task.workspaceId,
+        status: 'processing',
+        claimToken: expect.any(String),
+      })
+      expect(update.$set).toMatchObject({ status: 'needs_identity' })
+      expect(update.$unset).not.toHaveProperty('payload')
+      expect(mocks.intakeCandidate).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('cancels before model work when an exact Hire candidate is already anonymized', async () => {
