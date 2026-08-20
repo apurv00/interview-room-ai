@@ -38,6 +38,7 @@ describe('useMediaRecorder', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    MockMediaRecorder.isTypeSupported.mockReturnValue(true)
     vi.stubGlobal('MediaRecorder', MockMediaRecorder)
     vi.stubGlobal('MediaStream', MockMediaStream)
   })
@@ -46,13 +47,15 @@ describe('useMediaRecorder', () => {
     const stream = new MockMediaStream([audioTrack, videoTrack]) as unknown as MediaStream
     const { result } = renderHook(() => useMediaRecorder())
 
+    let started = false
     act(() => {
-      result.current.startRecording(stream, {
+      started = result.current.startRecording(stream, {
         videoBitsPerSecond: 800_000,
         audioBitsPerSecond: 64_000,
       })
     })
 
+    expect(started).toBe(true)
     expect(mediaRecorderConstructor).toHaveBeenCalledWith(stream, {
       mimeType: 'video/webm;codecs=vp9,opus',
       videoBitsPerSecond: 800_000,
@@ -78,5 +81,36 @@ describe('useMediaRecorder', () => {
       mimeType: 'audio/webm;codecs=opus',
       audioBitsPerSecond: 64_000,
     })
+  })
+
+  it('records a video-only display stream without requesting screen audio', () => {
+    const displayStream = new MockMediaStream([videoTrack]) as unknown as MediaStream
+    const { result } = renderHook(() => useMediaRecorder())
+
+    act(() => {
+      result.current.startRecording(displayStream, {
+        videoBitsPerSecond: 700_000,
+      })
+    })
+
+    expect(mediaRecorderConstructor).toHaveBeenCalledWith(displayStream, {
+      mimeType: 'video/webm;codecs=vp9',
+      videoBitsPerSecond: 700_000,
+    })
+    expect(start).toHaveBeenCalledWith(1000)
+  })
+
+  it('reports synchronous startup failure when the browser has no supported format', () => {
+    MockMediaRecorder.isTypeSupported.mockReturnValue(false)
+    const displayStream = new MockMediaStream([videoTrack]) as unknown as MediaStream
+    const { result } = renderHook(() => useMediaRecorder())
+
+    let started = true
+    act(() => {
+      started = result.current.startRecording(displayStream)
+    })
+
+    expect(started).toBe(false)
+    expect(mediaRecorderConstructor).not.toHaveBeenCalled()
   })
 })

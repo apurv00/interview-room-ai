@@ -103,7 +103,7 @@ export const HireEngineResultSchema = z
 
 export const HireEngineMediaArtifactSchema = z
   .object({
-    kind: z.enum(['recording', 'audio', 'transcript', 'landmarks']),
+    kind: z.enum(['recording', 'screen', 'audio', 'transcript', 'landmarks']),
     sourceKey: z
       .string()
       .min(1)

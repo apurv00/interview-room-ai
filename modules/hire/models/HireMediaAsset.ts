@@ -3,6 +3,7 @@ import mongoose, { Document, Model, Schema } from 'mongoose'
 export const HIRE_MEDIA_KINDS = [
   'identity_photo',
   'camera_recording',
+  'screen_recording',
   'audio_recording',
   // Private input to Hire's recorded-interview analysis. It is lifecycle
   // managed like other candidate media but is never download-capable.

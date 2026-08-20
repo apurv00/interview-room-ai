@@ -167,6 +167,7 @@ export async function ingestRuntimeMediaArtifacts(input: {
   const supported = input.artifacts.filter(
     (artifact) =>
       artifact.kind === 'recording' ||
+      artifact.kind === 'screen' ||
       artifact.kind === 'audio' ||
       artifact.kind === 'landmarks',
   )
@@ -191,6 +192,8 @@ export async function ingestRuntimeMediaArtifacts(input: {
     }
     const kind = artifact.kind === 'recording'
       ? 'camera_recording'
+      : artifact.kind === 'screen'
+        ? 'screen_recording'
       : artifact.kind === 'audio'
         ? 'audio_recording'
         : 'facial_landmarks'
@@ -218,6 +221,8 @@ export async function ingestRuntimeMediaArtifacts(input: {
     }
     const storageKind = artifact.kind === 'recording'
       ? 'camera-recording'
+      : artifact.kind === 'screen'
+        ? 'screen-recording'
       : artifact.kind === 'audio'
         ? 'audio-recording'
         : 'facial-landmarks'

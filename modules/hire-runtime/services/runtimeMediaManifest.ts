@@ -12,7 +12,7 @@ import {
 import { isCanonicalR2Key } from '@shared/storage/r2'
 
 interface RuntimeMediaCandidate {
-  kind: 'recording' | 'audio'
+  kind: 'recording' | 'screen' | 'audio'
   key?: string | null
   sizeBytes?: number | null
   contentType: string
@@ -138,6 +138,8 @@ export async function buildRuntimeMediaManifest(input: {
   runtimeSessionId: string
   recordingR2Key?: string | null
   recordingSizeBytes?: number | null
+  screenRecordingR2Key?: string | null
+  screenRecordingSizeBytes?: number | null
   audioRecordingR2Key?: string | null
   audioRecordingSizeBytes?: number | null
 }): Promise<HireEngineResultIngestion['media']> {
@@ -146,6 +148,12 @@ export async function buildRuntimeMediaManifest(input: {
       kind: 'recording',
       key: input.recordingR2Key,
       sizeBytes: input.recordingSizeBytes,
+      contentType: 'video/webm',
+    },
+    {
+      kind: 'screen',
+      key: input.screenRecordingR2Key,
+      sizeBytes: input.screenRecordingSizeBytes,
       contentType: 'video/webm',
     },
     {
@@ -188,7 +196,11 @@ export async function deleteRuntimeMediaManifest(input: {
 }): Promise<void> {
   const media = HireEngineResultIngestionSchema.shape.media.parse(input.media)
   for (const artifact of media) {
-    if (artifact.kind !== 'recording' && artifact.kind !== 'audio') {
+    if (
+      artifact.kind !== 'recording' &&
+      artifact.kind !== 'screen' &&
+      artifact.kind !== 'audio'
+    ) {
       throw new Error('Runtime result contains an unsupported staged-media kind')
     }
     assertRuntimeRecordingKey({

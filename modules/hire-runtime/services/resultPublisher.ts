@@ -8,6 +8,7 @@ import {
   type HireEngineResultIngestion,
 } from '@shared/contracts/hireEngineBridge'
 import { HIRE_RUNTIME_WRITE_DRAIN_MS } from '@shared/contracts/hireRuntimeWriteFence'
+import { supportsHireDisplayCapture } from '@hire-multimodal-boundary'
 import { InterviewSession } from '@shared/db/models/InterviewSession'
 import {
   HireRuntimeBinding,
@@ -40,6 +41,8 @@ interface RuntimeSessionSnapshot {
   }> | null
   recordingR2Key?: string | null
   recordingSizeBytes?: number | null
+  screenRecordingR2Key?: string | null
+  screenRecordingSizeBytes?: number | null
   audioRecordingR2Key?: string | null
   audioRecordingSizeBytes?: number | null
   updatedAt?: Date
@@ -196,12 +199,13 @@ function buildRuntimeTimeline(session: RuntimeSessionSnapshot): {
 }
 
 const RESULT_REVISION = 1
-const LATE_CAMERA_MEDIA_REVISION = 2
+const MAX_RESULT_REVISION = 10
 const PUBLISH_RETRY_BASE_MS = 5_000
 const PUBLISH_RETRY_MAX_MS = 5 * 60 * 1_000
-// A camera replay can finish after feedback/result publication because the
-// browser deliberately detaches the large multipart upload. Check again on
-// the next publisher minute without treating that normal race as an error.
+// Camera and display replays can finish after feedback/result publication
+// because the browser deliberately detaches their multipart uploads. Check
+// again on the next publisher minute without treating that normal race as an
+// error.
 const CAMERA_MEDIA_RETRY_MS = 60_000
 
 function persistedMedia(
@@ -221,28 +225,63 @@ function persistedMedia(
 
 function isLateCameraPublication(binding: IHireRuntimeBinding): boolean {
   return (
-    binding.publishedRevision === RESULT_REVISION &&
+    binding.publishedRevision !== undefined &&
+    binding.publishedRevision < MAX_RESULT_REVISION &&
     binding.cameraMediaStatus === 'pending'
   )
 }
 
+function isLateScreenPublication(binding: IHireRuntimeBinding): boolean {
+  return (
+    supportsHireDisplayCapture(binding.consentVersion) &&
+    binding.publishedRevision !== undefined &&
+    binding.publishedRevision < MAX_RESULT_REVISION &&
+    binding.screenMediaStatus === 'pending'
+  )
+}
+
+function isLateReplayPublication(binding: IHireRuntimeBinding): boolean {
+  return isLateCameraPublication(binding) || isLateScreenPublication(binding)
+}
+
 function isPublishableBinding(binding: IHireRuntimeBinding): boolean {
-  return binding.publishedRevision === undefined || isLateCameraPublication(binding)
+  return binding.publishedRevision === undefined || isLateReplayPublication(binding)
 }
 
 function containsCameraMedia(media: HireEngineResultIngestion['media']): boolean {
   return media.some((artifact) => artifact.kind === 'recording')
 }
 
-function publicationStateFilter(input: {
-  lateCamera: boolean
-}): Record<string, unknown> {
-  return input.lateCamera
-    ? {
-        publishedRevision: RESULT_REVISION,
-        cameraMediaStatus: 'pending',
-      }
-    : { publishedRevision: { $exists: false } }
+function containsScreenMedia(media: HireEngineResultIngestion['media']): boolean {
+  return media.some((artifact) => artifact.kind === 'screen')
+}
+
+function expectsScreenRecording(binding: IHireRuntimeBinding): boolean {
+  return supportsHireDisplayCapture(binding.consentVersion)
+}
+
+function assertMediaConsent(
+  binding: IHireRuntimeBinding,
+  media: HireEngineResultIngestion['media'],
+): void {
+  if (containsScreenMedia(media) && !expectsScreenRecording(binding)) {
+    throw new Error('Runtime display recording was not consented')
+  }
+}
+
+function publicationStateFilter(binding: IHireRuntimeBinding): Record<string, unknown> {
+  if (binding.publishedRevision === undefined) {
+    return { publishedRevision: { $exists: false } }
+  }
+  return {
+    publishedRevision: binding.publishedRevision,
+    ...(binding.cameraMediaStatus === 'pending'
+      ? { cameraMediaStatus: 'pending' }
+      : {}),
+    ...(binding.screenMediaStatus === 'pending'
+      ? { screenMediaStatus: 'pending' }
+      : {}),
+  }
 }
 
 async function scheduleCameraMediaCheck(
@@ -254,8 +293,7 @@ async function scheduleCameraMediaCheck(
       _id: binding._id,
       workspaceId: binding.workspaceId,
       runtimeSessionId: binding.runtimeSessionId,
-      publishedRevision: RESULT_REVISION,
-      cameraMediaStatus: 'pending',
+      ...publicationStateFilter(binding),
       purgePersonalData: { $ne: true },
     },
     {
@@ -313,18 +351,20 @@ async function reserveRuntimePublishDrain(
 async function publishRuntimeBindingResult(
   binding: IHireRuntimeBinding,
 ): Promise<'published' | 'skipped'> {
-  // Revision 1 makes the scorecard available promptly. A detached camera
-  // upload may finish later, in which case a camera-only revision 2 is the
-  // sole allowed follow-up. Legacy revision-1 bindings have no explicit
-  // camera state and deliberately remain terminal: their source object may
-  // already have been deleted by the pre-revision-2 publisher.
+  // Revision 1 makes the scorecard available promptly. Detached camera and
+  // display uploads can finish independently, so later revisions contain
+  // only the still-pending replay kinds. Legacy bindings without an explicit
+  // pending status remain terminal because their source object may already
+  // have been deleted by an earlier publisher.
   if (!isPublishableBinding(binding)) {
     await markPublishChecked(binding)
     return 'skipped'
   }
-  const lateCamera = isLateCameraPublication(binding)
-  const revision = lateCamera ? LATE_CAMERA_MEDIA_REVISION : RESULT_REVISION
-  const expectedPublicationState = publicationStateFilter({ lateCamera })
+  const lateReplay = isLateReplayPublication(binding)
+  const revision = lateReplay
+    ? (binding.publishedRevision ?? RESULT_REVISION) + 1
+    : RESULT_REVISION
+  const expectedPublicationState = publicationStateFilter(binding)
   // Result projection/copy can hold transcript/media in memory and can write
   // publisher state. Reserve a bounded drain horizon before the first read;
   // privacy revocation atomically flips purgePersonalData and then waits for
@@ -338,7 +378,7 @@ async function publishRuntimeBindingResult(
     status: 'completed',
   })
     .select(
-      '_id status feedback evaluations answeredCount plannedQuestionCount endReason startedAt completedAt durationActualSeconds transcript recordingR2Key recordingSizeBytes audioRecordingR2Key audioRecordingSizeBytes updatedAt',
+      '_id status feedback evaluations answeredCount plannedQuestionCount endReason startedAt completedAt durationActualSeconds transcript recordingR2Key recordingSizeBytes screenRecordingR2Key screenRecordingSizeBytes audioRecordingR2Key audioRecordingSizeBytes updatedAt',
     )
     .lean()) as RuntimeSessionSnapshot | null
   if (!session) {
@@ -357,31 +397,53 @@ async function publishRuntimeBindingResult(
   }
 
   let media = persistedMedia(binding)
-  if (lateCamera && media && !media.every((artifact) => artifact.kind === 'recording')) {
-    throw new Error('Late camera publication contains a non-camera artifact')
+  if (media) assertMediaConsent(binding, media)
+  if (
+    lateReplay &&
+    media &&
+    !media.every(
+      (artifact) =>
+        (artifact.kind === 'recording' &&
+          binding.cameraMediaStatus === 'pending') ||
+        (artifact.kind === 'screen' && binding.screenMediaStatus === 'pending'),
+    )
+  ) {
+    throw new Error('Late replay publication contains an unexpected artifact')
   }
   if (!media) {
     media = await buildRuntimeMediaManifest({
       principalId: binding.principalId.toString(),
       runtimeSessionId: session._id.toString(),
-      recordingR2Key: session.recordingR2Key,
-      recordingSizeBytes: session.recordingSizeBytes,
+      ...(!lateReplay || binding.cameraMediaStatus === 'pending'
+        ? {
+            recordingR2Key: session.recordingR2Key,
+            recordingSizeBytes: session.recordingSizeBytes,
+          }
+        : {}),
+      ...(expectsScreenRecording(binding) &&
+      (!lateReplay || binding.screenMediaStatus === 'pending')
+        ? {
+            screenRecordingR2Key: session.screenRecordingR2Key,
+            screenRecordingSizeBytes: session.screenRecordingSizeBytes,
+          }
+        : {}),
       // Audio may have been copied and its isolated source object deleted by
-      // revision 1. Revision 2 is strictly for the camera object that was not
-      // present when revision 1 was built.
-      ...(lateCamera
+      // revision 1. Later revisions are strictly for replay objects that were
+      // not present when an earlier revision was built.
+      ...(lateReplay
         ? {}
         : {
             audioRecordingR2Key: session.audioRecordingR2Key,
             audioRecordingSizeBytes: session.audioRecordingSizeBytes,
           }),
     })
-    if (lateCamera && !containsCameraMedia(media)) {
+    assertMediaConsent(binding, media)
+    if (lateReplay && media.length === 0) {
       await scheduleCameraMediaCheck(binding)
       return 'skipped'
     }
     // Persist even an empty revision-1 manifest before publishing. If the
-    // binding update or source deletion later fails, a camera upload that
+    // binding update or source deletion later fails, a replay upload that
     // finishes in that gap must not mutate/reuse the already-acknowledged
     // revision-1 digest on retry.
     const staged = await HireRuntimeBinding.updateOne(
@@ -448,6 +510,13 @@ async function publishRuntimeBindingResult(
   })
   const now = new Date()
   const cameraPublished = containsCameraMedia(media)
+  const screenPublished = containsScreenMedia(media)
+  const cameraWasPending = !lateReplay || binding.cameraMediaStatus === 'pending'
+  const screenWasPending = expectsScreenRecording(binding) &&
+    (lateReplay ? binding.screenMediaStatus === 'pending' : true)
+  const cameraStillPending = cameraWasPending && !cameraPublished
+  const screenStillPending = screenWasPending && !screenPublished
+  const replayStillPending = cameraStillPending || screenStillPending
   const completed = await HireRuntimeBinding.updateOne(
     {
       _id: binding._id,
@@ -463,25 +532,37 @@ async function publishRuntimeBindingResult(
         publishedAt: now,
         publishCheckedAt: now,
         publishFailureCount: 0,
-        ...(cameraPublished
-          ? {
-              cameraMediaStatus: 'published',
-              cameraMediaPublishedAt: now,
-            }
-          : {
-              // A result may legitimately have no media or audio only while
-              // the larger browser camera upload is still in flight. Do not
-              // declare success for camera delivery until the recording is
-              // part of a checksum-acknowledged manifest.
-              cameraMediaStatus: 'pending',
-              publishRetryAt: new Date(now.getTime() + CAMERA_MEDIA_RETRY_MS),
-            }),
+        ...(cameraWasPending
+          ? cameraPublished
+            ? {
+                cameraMediaStatus: 'published',
+                cameraMediaPublishedAt: now,
+              }
+            : {
+                // A result may legitimately have no media or audio only while
+                // the larger browser camera upload is still in flight. Do not
+                // declare success for camera delivery until the recording is
+                // part of a checksum-acknowledged manifest.
+                cameraMediaStatus: 'pending',
+              }
+          : {}),
+        ...(screenWasPending
+          ? screenPublished
+            ? {
+                screenMediaStatus: 'published',
+                screenMediaPublishedAt: now,
+              }
+            : { screenMediaStatus: 'pending' }
+          : {}),
+        ...(replayStillPending
+          ? { publishRetryAt: new Date(now.getTime() + CAMERA_MEDIA_RETRY_MS) }
+          : {}),
         ...(binding.status === 'revoked' ? {} : { status: 'completed' }),
       },
       $unset: {
         pendingMediaManifest: 1,
         publishFailureCode: 1,
-        ...(cameraPublished ? { publishRetryAt: 1 } : {}),
+        ...(!replayStillPending ? { publishRetryAt: 1 } : {}),
       },
     },
   )
@@ -501,13 +582,7 @@ async function recordPublishFailure(binding: IHireRuntimeBinding): Promise<void>
     {
       _id: binding._id,
       workspaceId: binding.workspaceId,
-      $or: [
-        { publishedRevision: { $exists: false } },
-        {
-          publishedRevision: RESULT_REVISION,
-          cameraMediaStatus: 'pending',
-        },
-      ],
+      ...publicationStateFilter(binding),
       purgePersonalData: { $ne: true },
     },
     {
@@ -546,8 +621,12 @@ export async function publishCompletedRuntimeResults(
           $or: [
             { publishedRevision: { $exists: false } },
             {
-              publishedRevision: RESULT_REVISION,
+              publishedRevision: { $gte: RESULT_REVISION, $lt: MAX_RESULT_REVISION },
               cameraMediaStatus: 'pending',
+            },
+            {
+              publishedRevision: { $gte: RESULT_REVISION, $lt: MAX_RESULT_REVISION },
+              screenMediaStatus: 'pending',
             },
           ],
         },

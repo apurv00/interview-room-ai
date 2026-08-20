@@ -32,6 +32,7 @@ const PRINCIPAL_ID = '4'.repeat(24)
 const SESSION_ID = '5'.repeat(24)
 const FOREIGN_SESSION_ID = '6'.repeat(24)
 const BINDING_ID = '7'.repeat(24)
+const CAMERA_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-1723248000000.webm`
 
 function objectId(value: string) {
   return { toString: () => value }
@@ -135,6 +136,56 @@ describe('POST /api/hire-engine/write-fence', () => {
     const [target, init] = mocks.fetch.mock.calls[0] as [URL, RequestInit]
     expect(target.pathname).toBe('/api/hire-engine/tts')
     expect(JSON.parse(new TextDecoder().decode(init.body as Uint8Array))).toEqual(body)
+  })
+
+  it('forwards only a pending replay upload after the result is published', async () => {
+    mocks.claim.mockResolvedValueOnce({
+      ...binding(),
+      status: 'completed',
+      consentVersion: 'hire-ai-v6-2026-08-20',
+      publishedRevision: 1,
+      cameraMediaStatus: 'pending',
+    })
+    mocks.fetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      url: 'https://upload.invalid',
+      key: CAMERA_KEY,
+      contentType: 'video/webm',
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    const response = await POST(request('/api/storage/presign', {
+      action: 'upload',
+      type: 'recording',
+      sessionId: SESSION_ID,
+    }))
+
+    expect(response.status).toBe(200)
+    expect(mocks.fetch).toHaveBeenCalledOnce()
+    expect(mocks.recordStorage).toHaveBeenCalledWith(expect.objectContaining({
+      bindingId: BINDING_ID,
+      runtimeSessionId: SESSION_ID,
+      key: CAMERA_KEY,
+    }))
+  })
+
+  it('does not forward interview work after the result is published', async () => {
+    mocks.claim.mockResolvedValueOnce({
+      ...binding(),
+      status: 'completed',
+      consentVersion: 'hire-ai-v6-2026-08-20',
+      publishedRevision: 1,
+      cameraMediaStatus: 'pending',
+    })
+
+    const response = await POST(request(
+      '/api/generate-feedback',
+      { sessionId: SESSION_ID, transcript: [] },
+    ))
+
+    expect(response.status).toBe(410)
+    expect(mocks.fetch).not.toHaveBeenCalled()
   })
 
   it('forwards the Hire-native observation capture only after binding its session', async () => {

@@ -19,9 +19,15 @@ import {
   HIRE_AI_V2_DISCLOSURE_DIGEST,
   HIRE_AI_V3_CONSENT_VERSION,
   HIRE_AI_V3_DISCLOSURE_DIGEST,
+  HIRE_AI_V4_CONSENT_VERSION,
+  HIRE_AI_V4_DISCLOSURE_DIGEST,
+  HIRE_AI_V5_CONSENT_VERSION,
+  HIRE_AI_V5_DISCLOSURE_DIGEST,
   HireConsentError,
   assertCompleteHireConsent,
   isRecognizedHireConsentSnapshot,
+  isRecognizedHireConsentVersion,
+  supportsHireDisplayCapture,
   supportsHireMultimodalObservations,
 } from '../policies/aiInterviewConsent'
 import {
@@ -64,24 +70,46 @@ describe('Hire AI consent contract', () => {
     ).not.toThrow()
   })
 
-  it('pins V4 to recording sharing, Hire analysis, selfie, AI, and retention copy', () => {
-    expect(HIRE_AI_CONSENT_VERSION).toBe('hire-ai-v4-2026-08-17')
+  it('pins V6 to compulsory entire-display capture, validation, Hire analysis, selfie, AI, and retention copy', () => {
+    expect(HIRE_AI_CONSENT_VERSION).toBe('hire-ai-v6-2026-08-20')
     expect(HIRE_AI_DISCLOSURE_DIGEST).toMatch(/^[a-f0-9]{64}$/)
+    expect(HIRE_AI_DISCLOSURES.recording).toMatch(/entire-display share are required/i)
     expect(HIRE_AI_DISCLOSURES.recording).toMatch(/recorded/i)
     expect(HIRE_AI_DISCLOSURES.recording).toMatch(/shared with the hiring team/i)
+    expect(HIRE_AI_DISCLOSURES.recording).toMatch(/entire display/i)
     expect(HIRE_AI_DISCLOSURES.recording).toMatch(/Hire interview review/i)
     expect(HIRE_AI_DISCLOSURES.identityPhoto).toMatch(/selfie/i)
-    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/structured facial-landmark/i)
-    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/not standalone hiring scores/i)
+    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/full-screen mode/i)
+    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/camera or microphone capture is interrupted/i)
+    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/wrong display surface is shared/i)
+    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/display sharing is interrupted/i)
+    expect(HIRE_AI_DISCLOSURES.attentionMonitoring).toMatch(/never make a hiring decision, stage, ranking, recommendation, or export/i)
+    expect(HIRE_AI_DISCLOSURES.aiEvaluation).toMatch(/corroborated by the visible candidate/i)
+    expect(HIRE_AI_DISCLOSURES.aiEvaluation).toMatch(/does not establish who was speaking/i)
     expect(HIRE_AI_DISCLOSURES.aiEvaluation).toMatch(/human/i)
     expect(HIRE_AI_DISCLOSURES.retention).toMatch(/six calendar months/i)
   })
 
-  it('recognizes only exact historical V2/V3 receipt pairs for active legacy attempts', () => {
+  it('recognizes only exact historical V2–V5 receipt pairs for active legacy attempts', () => {
+    expect(HIRE_AI_V5_DISCLOSURE_DIGEST).toBe(
+      '4770e6cfe3c0b0e36bb132353748b79d9479b6c0a0fa1f95ab736368c6227658',
+    )
     expect(
       isRecognizedHireConsentSnapshot({
         consentVersion: HIRE_AI_V2_CONSENT_VERSION,
         disclosureDigest: HIRE_AI_V2_DISCLOSURE_DIGEST,
+      }),
+    ).toBe(true)
+    expect(
+      isRecognizedHireConsentSnapshot({
+        consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_V5_DISCLOSURE_DIGEST,
+      }),
+    ).toBe(true)
+    expect(
+      isRecognizedHireConsentSnapshot({
+        consentVersion: HIRE_AI_V4_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_V4_DISCLOSURE_DIGEST,
       }),
     ).toBe(true)
     expect(
@@ -98,16 +126,31 @@ describe('Hire AI consent contract', () => {
     ).toBe(false)
     expect(
       isRecognizedHireConsentSnapshot({
-        consentVersion: HIRE_AI_CONSENT_VERSION,
+        consentVersion: HIRE_AI_V4_CONSENT_VERSION,
         disclosureDigest: HIRE_AI_V2_DISCLOSURE_DIGEST,
       }),
     ).toBe(false)
   })
 
-  it('enables current Hire-native capture only for a V4 receipt', () => {
+  it('enables Hire-native observations for V5 and V6, but display capture only for V6', () => {
     expect(supportsHireMultimodalObservations(HIRE_AI_CONSENT_VERSION)).toBe(true)
+    expect(supportsHireMultimodalObservations(HIRE_AI_V5_CONSENT_VERSION)).toBe(true)
+    expect(supportsHireMultimodalObservations(HIRE_AI_V4_CONSENT_VERSION)).toBe(false)
     expect(supportsHireMultimodalObservations(HIRE_AI_V3_CONSENT_VERSION)).toBe(false)
     expect(supportsHireMultimodalObservations(HIRE_AI_V2_CONSENT_VERSION)).toBe(false)
+    expect(supportsHireDisplayCapture(HIRE_AI_CONSENT_VERSION)).toBe(true)
+    expect(supportsHireDisplayCapture(HIRE_AI_V5_CONSENT_VERSION)).toBe(false)
+    expect(supportsHireDisplayCapture(HIRE_AI_V4_CONSENT_VERSION)).toBe(false)
+  })
+
+  it('exposes the recognized version set only as a runtime coarse gate', () => {
+    expect(isRecognizedHireConsentVersion(HIRE_AI_CONSENT_VERSION)).toBe(true)
+    expect(isRecognizedHireConsentVersion(HIRE_AI_V5_CONSENT_VERSION)).toBe(true)
+    expect(isRecognizedHireConsentVersion(HIRE_AI_V4_CONSENT_VERSION)).toBe(true)
+    expect(isRecognizedHireConsentVersion(HIRE_AI_V3_CONSENT_VERSION)).toBe(true)
+    expect(isRecognizedHireConsentVersion(HIRE_AI_V2_CONSENT_VERSION)).toBe(true)
+    expect(isRecognizedHireConsentVersion('hire-ai-v999')).toBe(false)
+    expect(isRecognizedHireConsentVersion(undefined)).toBe(false)
   })
 
   it('rejects a persisted receipt whose acknowledgement is false', () => {
@@ -194,7 +237,12 @@ describe('Hire media storage and selfie normalization', () => {
 
   it('mints a coordinate-bound key and rejects cross-workspace authority', () => {
     const key = hireMediaKey(IDS, 'identity-photo')
+    const screenKey = hireMediaKey(IDS, 'screen-recording')
     expect(parseHireMediaKey(key)).toEqual({ ...IDS, kind: 'identity-photo' })
+    expect(parseHireMediaKey(screenKey)).toEqual({
+      ...IDS,
+      kind: 'screen-recording',
+    })
     expect(() => assertHireMediaKeyScope(key, IDS)).not.toThrow()
     expect(() =>
       assertHireMediaKeyScope(key, { ...IDS, workspaceId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }),

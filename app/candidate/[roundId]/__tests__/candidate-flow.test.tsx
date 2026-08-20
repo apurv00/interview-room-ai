@@ -115,7 +115,7 @@ describe('candidate saved-photo resume', () => {
 })
 
 describe('candidate consent versions', () => {
-  it('renders the shared current V4 disclosure before a new attempt is consented', () => {
+  it('renders the shared current V6 disclosure before a new attempt is consented', () => {
     renderFlow()
 
     for (const disclosure of Object.values(HIRE_AI_INTERVIEW_DISCLOSURES)) {
@@ -124,9 +124,11 @@ describe('candidate consent versions', () => {
     expect(
       screen.getByText(/sharing the interview recording and review with the hiring team/i),
     ).toBeTruthy()
+    expect(screen.getByText(/full-screen interview validation/i)).toBeTruthy()
+    expect(screen.getByText(/audio-video speech-verification signals/i)).toBeTruthy()
   })
 
-  it('continues a server-identified historical attempt without displaying or minting V4 consent', async () => {
+  it('continues a server-identified historical attempt without displaying or minting V5 consent', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({ ok: true, csrfToken: 'csrf-token', next: 'identity_photo' }),
     )
@@ -135,7 +137,7 @@ describe('candidate consent versions', () => {
     expect(screen.getByRole('heading', { name: 'Continue your interview' })).toBeTruthy()
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
     expect(
-      screen.queryByText(/structured facial-landmark and browser-window observations/i),
+      screen.queryByText(/full-screen interview validation/i),
     ).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue your interview' }))

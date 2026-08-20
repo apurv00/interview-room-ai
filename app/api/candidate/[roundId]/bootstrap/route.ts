@@ -32,8 +32,8 @@ async function hasResumableV2ConsentAttempt(
   >,
 ): Promise<boolean> {
   // Current-version attempts use the normal current consent path. Any
-  // recognized historical receipt (V2 or V3 today) may only resume its exact
-  // existing attempt; it is never re-consented or upgraded to V4.
+  // recognized historical receipt (V2–V5) may only resume its exact existing
+  // attempt; it is never re-consented or upgraded to V6.
   if (!round.consentVersion || round.consentVersion === HIRE_AI_CONSENT_VERSION) {
     return false
   }

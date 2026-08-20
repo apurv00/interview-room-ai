@@ -3,6 +3,7 @@ import type { InterviewConfig } from "@shared/types";
 type HireRuntimeInterviewConfig = InterviewConfig & {
   _hireRoundId?: unknown;
   _hireMultimodalObservationsEnabled?: unknown;
+  _hireDisplayCaptureRequired?: unknown;
 };
 
 /**
@@ -30,6 +31,21 @@ export function isHireRuntimeMultimodalObservationsEnabled(
     isHireRuntimeInterview(config) &&
     (config as HireRuntimeInterviewConfig | null | undefined)
       ?._hireMultimodalObservationsEnabled === true
+  );
+}
+
+/**
+ * Only the authenticated V6 bootstrap marker requires display capture. Like
+ * the other Hire runtime markers, this is a client setup gate; it is never an
+ * authorization decision and capture endpoints repeat the binding check.
+ */
+export function isHireRuntimeDisplayCaptureRequired(
+  config: InterviewConfig | null | undefined,
+): boolean {
+  return (
+    isHireRuntimeInterview(config) &&
+    (config as HireRuntimeInterviewConfig | null | undefined)
+      ?._hireDisplayCaptureRequired === true
   );
 }
 

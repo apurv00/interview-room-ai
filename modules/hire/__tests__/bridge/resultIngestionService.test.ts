@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto'
 import mongoose from 'mongoose'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HireEngineResultIngestion } from '@shared/contracts/hireEngineBridge'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+} from '@hire-multimodal-boundary'
 
 const mocks = vi.hoisted(() => {
   class CandidatePiiTombstoneError extends Error {}
@@ -95,6 +99,14 @@ const MEDIA_ARTIFACT: HireEngineResultIngestion['media'][number] = {
   contentType: 'video/webm',
   sizeBytes: 1_024,
   sha256: '7'.repeat(64),
+}
+
+const SCREEN_MEDIA_ARTIFACT: HireEngineResultIngestion['media'][number] = {
+  kind: 'screen',
+  sourceKey: `recordings/${RUNTIME_PRINCIPAL_ID}/${IDS.runtimeSessionId}-screen-1723248000000.webm`,
+  contentType: 'video/webm',
+  sizeBytes: 2_048,
+  sha256: '8'.repeat(64),
 }
 
 function objectId(value: string) {
@@ -394,6 +406,47 @@ describe('isolated engine result ingestion', () => {
       type: 'ai_result_linked',
       actorName: 'System',
     })
+  })
+
+  it('rejects display media for a V5 consent receipt before copying any artifact', async () => {
+    mocks.roundFindOne.mockReturnValueOnce(
+      query({
+        candidateId: objectId(IDS.candidateId),
+        jobId: objectId(IDS.jobId),
+        consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+        revokedAt: undefined,
+        runtimeSessionId: undefined,
+      }),
+    )
+
+    await expect(
+      ingestHireEngineResult(payload({ media: [SCREEN_MEDIA_ARTIFACT] })),
+    ).rejects.toMatchObject<HireEngineIngestionError>({
+      code: 'conflict',
+      status: 409,
+    })
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+    expect(mocks.persistResult).not.toHaveBeenCalled()
+  })
+
+  it('accepts display media for the exact V6 consent receipt', async () => {
+    mocks.roundFindOne.mockReturnValueOnce(
+      query({
+        candidateId: objectId(IDS.candidateId),
+        jobId: objectId(IDS.jobId),
+        consentVersion: HIRE_AI_CONSENT_VERSION,
+        revokedAt: undefined,
+        runtimeSessionId: undefined,
+      }),
+    )
+    const input = payload({ media: [SCREEN_MEDIA_ARTIFACT] })
+
+    await expect(ingestHireEngineResult(input)).resolves.toEqual({
+      outcome: 'processed',
+    })
+    expect(mocks.ingestMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ artifacts: [SCREEN_MEDIA_ARTIFACT] }),
+    )
   })
 
   it('acknowledges an identical processed event without mutating the round twice', async () => {

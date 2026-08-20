@@ -525,6 +525,43 @@ describe('resumable replay upload helpers', () => {
     expect(empty).toEqual({ attempted: 0, uploaded: 0, queued: 0, dropped: 0, skipped: 0 })
   })
 
+  it('durably queues a small partial screen recording after a transient failure', async () => {
+    const completeStatuses = { current: [500] }
+    const fetchMock = installMultipartFetch(completeStatuses)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await uploadReplayRecording(
+      SESSION_ID,
+      'screen',
+      new Blob(['partial screen evidence'], { type: 'video/webm' }),
+    )
+    expect(result).toEqual({ status: 'queued' })
+    expect(fetchMock.mock.calls.some(([input]) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      return url === '/api/storage/presign'
+    })).toBe(false)
+
+    completeStatuses.current = [200]
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 1,
+      uploaded: 1,
+      queued: 0,
+      dropped: 0,
+      skipped: 0,
+    })
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 0,
+      uploaded: 0,
+      queued: 0,
+      dropped: 0,
+      skipped: 0,
+    })
+  })
+
   // ── Layer 1: same-tab race protection ───────────────────────────────────
   it('blocks concurrent drain from racing an in-flight uploadReplayRecording (Layer 1)', async () => {
     // Reproduces the 2026-05-14 production bug: /interview's

@@ -37,6 +37,10 @@ import {
   __resultPublisher,
   publishCompletedRuntimeResults,
 } from '../services/resultPublisher'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+} from '@hire-multimodal-boundary'
 
 const WORKSPACE_ID = 'a'.repeat(24)
 const APPLICATION_ID = 'b'.repeat(24)
@@ -44,6 +48,7 @@ const ROUND_ID = 'c'.repeat(24)
 const PRINCIPAL_ID = 'd'.repeat(24)
 const SESSION_ID = 'e'.repeat(24)
 const CAMERA_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-1723248000000.webm`
+const SCREEN_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-screen-1723248000001.webm`
 
 function objectId(value: string) {
   return { toString: () => value }
@@ -106,6 +111,16 @@ const audioManifest = [
     contentType: 'audio/webm',
     sizeBytes: 40,
     sha256: '2'.repeat(64),
+  },
+]
+
+const screenManifest = [
+  {
+    kind: 'screen' as const,
+    sourceKey: SCREEN_KEY,
+    contentType: 'video/webm',
+    sizeBytes: 200,
+    sha256: '3'.repeat(64),
   },
 ]
 
@@ -187,6 +202,7 @@ describe('runtime result publication lifecycle', () => {
       $set: {
         publishedRevision: 1,
         cameraMediaStatus: 'pending',
+        status: 'completed',
         publishRetryAt: expect.any(Date),
       },
     })
@@ -221,9 +237,114 @@ describe('runtime result publication lifecycle', () => {
       ],
     ])
     expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1]).toMatchObject({
-      $set: { publishedRevision: 2, cameraMediaStatus: 'published' },
+      $set: {
+        publishedRevision: 2,
+        cameraMediaStatus: 'published',
+        status: 'completed',
+      },
       $unset: { pendingMediaManifest: 1, publishRetryAt: 1 },
     })
+  })
+
+  it('publishes independently finalized V6 camera and display recordings in ordered late revisions', async () => {
+    mocks.sessionFindOne.mockReturnValueOnce(
+      sessionQuery(
+        completedSession({
+          recordingR2Key: null,
+          recordingSizeBytes: null,
+          screenRecordingR2Key: null,
+          screenRecordingSizeBytes: null,
+        }),
+      ),
+    )
+    mocks.buildMedia.mockResolvedValueOnce([])
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({ consentVersion: HIRE_AI_CONSENT_VERSION }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1]).toMatchObject({
+      $set: {
+        publishedRevision: 1,
+        cameraMediaStatus: 'pending',
+        screenMediaStatus: 'pending',
+        status: 'completed',
+        publishRetryAt: expect.any(Date),
+      },
+    })
+
+    mocks.sessionFindOne.mockReturnValueOnce(
+      sessionQuery(
+        completedSession({
+          screenRecordingR2Key: null,
+          screenRecordingSizeBytes: null,
+        }),
+      ),
+    )
+    mocks.buildMedia.mockResolvedValueOnce(manifest)
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: HIRE_AI_CONSENT_VERSION,
+          publishedRevision: 1,
+          cameraMediaStatus: 'pending',
+          screenMediaStatus: 'pending',
+        }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.publish.mock.calls[1][0]).toMatchObject({
+      revision: 2,
+      media: manifest,
+    })
+    expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1]).toMatchObject({
+      $set: {
+        publishedRevision: 2,
+        cameraMediaStatus: 'published',
+        screenMediaStatus: 'pending',
+        status: 'completed',
+        publishRetryAt: expect.any(Date),
+      },
+    })
+
+    mocks.sessionFindOne.mockReturnValueOnce(
+      sessionQuery(
+        completedSession({
+          screenRecordingR2Key: SCREEN_KEY,
+          screenRecordingSizeBytes: 200,
+        }),
+      ),
+    )
+    mocks.buildMedia.mockResolvedValueOnce(screenManifest)
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: HIRE_AI_CONSENT_VERSION,
+          publishedRevision: 2,
+          cameraMediaStatus: 'published',
+          screenMediaStatus: 'pending',
+        }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.publish.mock.calls[2][0]).toMatchObject({
+      revision: 3,
+      media: screenManifest,
+    })
+    const finalUpdate = mocks.bindingUpdate.mock.calls.at(-1)?.[1]
+    expect(finalUpdate).toMatchObject({
+      $set: {
+        publishedRevision: 3,
+        screenMediaStatus: 'published',
+        status: 'completed',
+      },
+      $unset: { pendingMediaManifest: 1, publishRetryAt: 1 },
+    })
+    expect(finalUpdate.$set).not.toHaveProperty('cameraMediaStatus')
   })
 
   it('keeps camera delivery pending when revision 1 contains only audio', async () => {
@@ -246,6 +367,47 @@ describe('runtime result publication lifecycle', () => {
         publishRetryAt: expect.any(Date),
       },
     })
+  })
+
+  it('does not discover or publish display media for a V5 binding', async () => {
+    mocks.sessionFindOne.mockReturnValueOnce(
+      sessionQuery(
+        completedSession({
+          screenRecordingR2Key: SCREEN_KEY,
+          screenRecordingSizeBytes: 200,
+        }),
+      ),
+    )
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({ consentVersion: HIRE_AI_V5_CONSENT_VERSION }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    const manifestInput = mocks.buildMedia.mock.calls[0][0]
+    expect(manifestInput).not.toHaveProperty('screenRecordingR2Key')
+    expect(manifestInput).not.toHaveProperty('screenRecordingSizeBytes')
+    expect(mocks.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ media: manifest }),
+    )
+    expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1].$set).not.toHaveProperty(
+      'screenMediaStatus',
+    )
+  })
+
+  it('rejects a persisted screen manifest unless consent is the exact V6 version', async () => {
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: `${HIRE_AI_CONSENT_VERSION}-forged`,
+          pendingMediaManifest: screenManifest,
+        }) as never,
+      ),
+    ).rejects.toThrow(/not consented/)
+
+    expect(mocks.publish).not.toHaveBeenCalled()
+    expect(mocks.deleteMedia).not.toHaveBeenCalled()
   })
 
   it('does not republish revision 1 while a late camera upload is still absent', async () => {
@@ -352,7 +514,7 @@ describe('runtime result publication lifecycle', () => {
     expect(mocks.publish).toHaveBeenCalledOnce()
   })
 
-  it('scans a camera-pending revision 1 but not terminal published bindings', async () => {
+  it('scans pending replay revisions but not terminal published bindings', async () => {
     mocks.bindingFind.mockImplementation(() => ({
       sort: () => ({ limit: async () => [] }),
     }))
@@ -364,7 +526,14 @@ describe('runtime result publication lifecycle', () => {
       {
         $or: [
           { publishedRevision: { $exists: false } },
-          { publishedRevision: 1, cameraMediaStatus: 'pending' },
+          {
+            publishedRevision: { $gte: 1, $lt: 10 },
+            cameraMediaStatus: 'pending',
+          },
+          {
+            publishedRevision: { $gte: 1, $lt: 10 },
+            screenMediaStatus: 'pending',
+          },
         ],
       },
       {

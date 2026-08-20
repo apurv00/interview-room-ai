@@ -7,7 +7,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i
-const HIRE_MEDIA_KEY = /^hire-media\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})-(identity-photo|camera-recording|audio-recording|facial-landmarks)\.(jpg|webm|json)$/i
+const HIRE_MEDIA_KEY = /^hire-media\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})\/([a-f0-9]{24})-(identity-photo|camera-recording|screen-recording|audio-recording|facial-landmarks)\.(jpg|webm|json)$/i
 
 export const HIRE_MEDIA_DOWNLOAD_TTL_SECONDS = 300
 
@@ -22,6 +22,7 @@ export interface HireMediaCoordinate {
 export type HireMediaStorageKind =
   | 'identity-photo'
   | 'camera-recording'
+  | 'screen-recording'
   | 'audio-recording'
   | 'facial-landmarks'
 

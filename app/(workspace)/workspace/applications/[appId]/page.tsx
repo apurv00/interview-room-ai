@@ -23,6 +23,9 @@ import HireSupplementalObservationsPanel, {
 import HireInterviewRecordingPanel, {
   type HireInterviewRecordingView,
 } from "./HireInterviewRecordingPanel";
+import HireScreenRecordingPanel, {
+  type HireScreenRecordingView,
+} from "./HireScreenRecordingPanel";
 import HireMultimodalAnalysisPanel, {
   type HireMultimodalAnalysisView,
 } from "./HireMultimodalAnalysisPanel";
@@ -125,6 +128,7 @@ interface Round {
   }>;
   identityPhoto: { assetId: string; capturedAt: string } | null;
   interviewRecording: HireInterviewRecordingView | null;
+  screenRecording: HireScreenRecordingView | null;
   multimodalAnalysis?: HireMultimodalAnalysisView | null;
   mediaPurged: boolean;
   supplementalObservations?: HireSupplementalObservationView[];
@@ -259,8 +263,14 @@ export default function ApplicationCardPage({
     data?.activity.some((activity) => activity.inProgress) ?? false;
   const hasPendingRecording =
     data?.rounds.some((round) => {
-      const status = round.interviewRecording?.status;
-      return status === "capturing" || status === "awaiting_transfer";
+      const cameraStatus = round.interviewRecording?.status;
+      const screenStatus = round.screenRecording?.status;
+      return (
+        cameraStatus === "capturing" ||
+        cameraStatus === "awaiting_transfer" ||
+        screenStatus === "capturing" ||
+        screenStatus === "awaiting_transfer"
+      );
     }) ?? false;
   const hasPendingMultimodalAnalysis =
     data?.rounds.some((round) => {
@@ -945,10 +955,20 @@ export default function ApplicationCardPage({
             </p>
           )}
 
-          <HireInterviewRecordingPanel
-            applicationId={application.id}
-            recording={round.interviewRecording}
-          />
+          <div
+            id={`interview-recording-${round.id}`}
+            tabIndex={-1}
+            className="grid gap-4 lg:grid-cols-2"
+          >
+            <HireInterviewRecordingPanel
+              applicationId={application.id}
+              recording={round.interviewRecording}
+            />
+            <HireScreenRecordingPanel
+              applicationId={application.id}
+              recording={round.screenRecording}
+            />
+          </div>
 
           <HireMultimodalAnalysisPanel
             analysis={round.multimodalAnalysis ?? null}
@@ -966,6 +986,7 @@ export default function ApplicationCardPage({
 
           <HireSupplementalObservationsPanel
             observations={round.supplementalObservations ?? []}
+            recordingTargetId={`interview-recording-${round.id}`}
           />
 
           {!round.assessment && round.results && (

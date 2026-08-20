@@ -17,7 +17,14 @@ import { useInterviewLifecycleEvents } from '@interview/hooks/useInterviewLifecy
 import { useMediaRecorder } from '@interview/hooks/useMediaRecorder'
 import { useCoachingNudge } from '@interview/hooks/useCoachingNudge'
 import { useFacialLandmarks } from '@interview/hooks/useFacialLandmarks'
+import { useHireMultimodalCapture } from '@interview/hooks/useHireMultimodalCapture'
 import { useHireMultimodalAnalysisCapture } from '@interview/hooks/useHireMultimodalAnalysisCapture'
+import { useHireDisplayRecorder } from '@interview/hooks/useHireDisplayRecorder'
+import {
+  hasLiveHireInterviewMedia,
+  type HireInterviewIntegrityEvent as HireInterviewIntegrityGateEvent,
+  useHireInterviewIntegrityGate,
+} from '@interview/hooks/useHireInterviewIntegrityGate'
 import { useRealtimeFacialCoaching } from '@interview/hooks/useRealtimeFacialCoaching'
 import { useRealtimeProsody } from '@interview/hooks/useRealtimeProsody'
 import {
@@ -31,6 +38,7 @@ import {
 } from '@interview/audio/recordingClock'
 import { useCoachMode } from '@interview/hooks/useCoachMode'
 import {
+  isHireRuntimeDisplayCaptureRequired,
   isHireRuntimeInterview,
   isHireRuntimeMultimodalObservationsEnabled,
 } from '@interview/config/hireRuntimeMode'
@@ -53,6 +61,13 @@ import {
   uploadRecordingArtifact,
 } from '@interview/utils/accountBoundArtifactUpload'
 import { deliverHireMultimodalAnalysisCapture } from '@interview/utils/hireMultimodalAnalysisCaptureUpload'
+import {
+  attachHireInterviewIntegrityPagehideFlush,
+  createHireInterviewIntegrityReporter,
+  createHireInterviewSpeechVideoSampler,
+  type HireInterviewIntegrityEvent as HireInterviewIntegrityReportEvent,
+  type HireInterviewIntegrityReporter,
+} from '@interview/utils/hireInterviewIntegrityReporter'
 
 import { formatTime } from '@shared/utils'
 
@@ -90,6 +105,28 @@ const PHASE_COLORS: Record<string, { text: string; bg: string; border: string; d
 
 const DEFAULT_PHASE_COLOR = { text: 'text-[#71767b]', bg: 'bg-[#f8fafc]', border: 'border-[#e1e8ed]', dot: 'bg-[#71767b]' }
 
+function toHireInterviewIntegrityReportEvent(
+  event: HireInterviewIntegrityGateEvent,
+): HireInterviewIntegrityReportEvent {
+  const interval = { startMs: event.startMs, endMs: event.endMs }
+  switch (event.kind) {
+    case 'fullscreen_exited':
+      return { kind: event.kind, source: 'fullscreen', ...interval }
+    case 'browser_window_not_visible':
+      return { kind: event.kind, source: 'browser_visibility', ...interval }
+    case 'browser_window_focus_lost':
+      return { kind: event.kind, source: 'browser_focus', ...interval }
+    case 'camera_interrupted':
+      return { kind: event.kind, source: 'camera_track', ...interval }
+    case 'microphone_interrupted':
+      return { kind: event.kind, source: 'microphone_track', ...interval }
+    case 'screen_share_wrong_surface':
+      return { kind: event.kind, source: 'display_surface', ...interval }
+    case 'screen_share_interrupted':
+      return { kind: event.kind, source: 'display_track', ...interval }
+  }
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function InterviewPage() {
@@ -105,6 +142,8 @@ export default function InterviewPage() {
   const isCodingMode = config?.interviewType === 'coding'
   const isDesignMode = config?.interviewType === 'system-design'
   const isHireInterview = isHireRuntimeInterview(config)
+  const isHireDisplayCaptureRequired =
+    isHireRuntimeDisplayCaptureRequired(config)
 
   // ── Camera ──
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -124,6 +163,95 @@ export default function InterviewPage() {
   const audioRecorderOptions: MediaRecorderOptions = {
     audioBitsPerSecond: 64_000,
   }
+
+  const hireIntegrityReporterRef = useRef<HireInterviewIntegrityReporter | null>(null)
+  const pendingHireIntegrityEventsRef = useRef<HireInterviewIntegrityGateEvent[]>([])
+  const pendingHireScreenRecordingInterruptionRef =
+    useRef<HireInterviewIntegrityReportEvent | null>(null)
+  const hireScreenRecordingInterruptionReportedRef = useRef(false)
+  const [hireIntegrityReporter, setHireIntegrityReporter] =
+    useState<HireInterviewIntegrityReporter | null>(null)
+  const hireSpeechVideoSamplerStopRef = useRef<(() => void) | null>(null)
+  const {
+    isRecording: isHireDisplayRecording,
+    error: hireDisplayRecordingError,
+    hasTerminalFailure: hasHireDisplayRecordingTerminalFailure,
+    setSource: setHireDisplayRecordingSource,
+    stopRecording: stopHireDisplayRecording,
+  } = useHireDisplayRecorder()
+
+  const reportHireIntegrityEvent = useCallback(
+    (event: HireInterviewIntegrityGateEvent) => {
+      const reporter = hireIntegrityReporterRef.current
+      if (!reporter) {
+        if (pendingHireIntegrityEventsRef.current.length < 100) {
+          pendingHireIntegrityEventsRef.current.push(event)
+        }
+        return
+      }
+      if (reporter.record(toHireInterviewIntegrityReportEvent(event))) {
+        void reporter.flush()
+      }
+    },
+    [],
+  )
+
+  const hireIntegrityGate = useHireInterviewIntegrityGate({
+    enabled: isHireInterview,
+    displayCaptureRequired: isHireDisplayCaptureRequired,
+    mediaConstraints: {
+      video: cameraVideoConstraints,
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    },
+    onEvent: reportHireIntegrityEvent,
+  })
+  const {
+    elapsedMs: getHireInterviewElapsedMs,
+    markInterviewComplete: markHireInterviewIntegrityComplete,
+  } = hireIntegrityGate
+  useEffect(() => {
+    setHireDisplayRecordingSource(
+      isHireDisplayCaptureRequired ? hireIntegrityGate.displayStream : null,
+    )
+  }, [
+    hireIntegrityGate.displayStream,
+    isHireDisplayCaptureRequired,
+    setHireDisplayRecordingSource,
+  ])
+  useEffect(() => {
+    if (
+      !hasHireDisplayRecordingTerminalFailure ||
+      hireScreenRecordingInterruptionReportedRef.current
+    ) {
+      return
+    }
+
+    hireScreenRecordingInterruptionReportedRef.current = true
+    const observedAtMs = getHireInterviewElapsedMs()
+    const event: HireInterviewIntegrityReportEvent = {
+      kind: 'screen_recording_interrupted',
+      source: 'display_recorder',
+      startMs: observedAtMs,
+      endMs: observedAtMs,
+    }
+    const reporter = hireIntegrityReporterRef.current
+    if (!reporter) {
+      pendingHireScreenRecordingInterruptionRef.current = event
+      return
+    }
+    if (reporter.record(event)) void reporter.flush()
+  }, [
+    getHireInterviewElapsedMs,
+    hasHireDisplayRecordingTerminalFailure,
+  ])
+  // A Hire session can only cross this boundary after a user gesture has
+  // verified fullscreen plus live camera/microphone tracks. V6 also waits for
+  // the stable display recorder to start; B2C and existing V5 attempts retain
+  // their established behavior.
+  const canStartInterview =
+    !isHireInterview ||
+    (hireIntegrityGate.hasStarted &&
+      (!isHireDisplayCaptureRequired || isHireDisplayRecording))
 
   // ── Voices loaded ──
   const [voicesReady, setVoicesReady] = useState(false)
@@ -159,6 +287,12 @@ export default function InterviewPage() {
     startCapture: startHireMultimodalAnalysisCapture,
     stopCapture: stopHireMultimodalAnalysisCapture,
   } = useHireMultimodalAnalysisCapture()
+  const {
+    startCapture: startHireMultimodalObservationCapture,
+    stopCapture: stopHireMultimodalObservationCapture,
+    getFacePresent: getHireMultimodalObservationFacePresent,
+    getFacialSpeechActive: getHireMultimodalObservationFacialSpeechActive,
+  } = useHireMultimodalCapture()
 
   // Handle recording stop
   const handleRecordingStop = useCallback(async () => {
@@ -169,9 +303,12 @@ export default function InterviewPage() {
 
     // Stop the camera + audio recorders in parallel (audio runs for every
     // interview; camera unless privacy mode).
-    const [cameraBlob, audioBlob] = await Promise.all([
+    const [cameraBlob, audioBlob, screenBlob] = await Promise.all([
       stopRecording(),
       audioRecorder.stopRecording(),
+      isHireDisplayCaptureRequired
+        ? stopHireDisplayRecording()
+        : Promise.resolve(null),
     ])
 
     // Recorder-truth span (camera and audio recorders start back-to-back, so
@@ -187,6 +324,11 @@ export default function InterviewPage() {
         : null
 
     const criticalUploads: Promise<unknown>[] = []
+    const integrityCapture = isHireNativeMultimodalEnabled
+      ? stopHireMultimodalObservationCapture()
+      : null
+    hireSpeechVideoSamplerStopRef.current?.()
+    hireSpeechVideoSamplerStopRef.current = null
 
     // Consumer interviews keep their existing landmark artifact path. Hire
     // captures a separate, full landmark stream for its control-owned review
@@ -224,6 +366,18 @@ export default function InterviewPage() {
     const sessionId = interviewRef.current?.sessionId
     if (!sessionId || !originUserId) return
 
+    // The final revision contains the bounded camera/visibility capture as
+    // well as every full-screen, window, and device event buffered earlier.
+    // This supersedes a best-effort pagehide snapshot without losing it.
+    if (integrityCapture && hireIntegrityReporterRef.current) {
+      criticalUploads.push(
+        hireIntegrityReporterRef.current.flush({
+          capture: integrityCapture,
+          force: true,
+        }),
+      )
+    }
+
     // Consumer privacy mode opts out of video storage. A Hire assessment's
     // current consent contract is recorded interview review, so its camera
     // artifact must not be suppressed by a stale/direct room privacy flag.
@@ -256,6 +410,17 @@ export default function InterviewPage() {
           recordingDurationSeconds ?? undefined,
           replayUploadIntent,
         )
+      )
+    }
+    if (screenBlob && isHireDisplayCaptureRequired) {
+      replayUploads.push(
+        uploadReplayRecording(
+          sessionId,
+          'screen',
+          screenBlob,
+          undefined,
+          replayUploadIntent,
+        ),
       )
     }
     if (audioBlob) {
@@ -307,6 +472,9 @@ export default function InterviewPage() {
     isHireNativeMultimodalEnabled,
     stopB2cFacialCapture,
     stopHireMultimodalAnalysisCapture,
+    stopHireMultimodalObservationCapture,
+    stopHireDisplayRecording,
+    isHireDisplayCaptureRequired,
     isHireInterview,
     config?.privacyMode,
     authSession?.user?.id,
@@ -345,10 +513,108 @@ export default function InterviewPage() {
     currentProblem,
     currentDesignProblem,
     liveCoachingEnabled,
+    canStart: canStartInterview,
+    integrityPaused:
+      isHireInterview &&
+      (hireIntegrityGate.isPaused ||
+        (isHireDisplayCaptureRequired &&
+          hireIntegrityGate.hasStarted &&
+          !isHireDisplayRecording)),
   })
 
   const interviewRef = useRef(interview)
   interviewRef.current = interview
+
+  // A consented Hire session gets a dedicated, account-bound reporter once the
+  // engine has issued its runtime session. Gate events that arrive during the
+  // short engine-start window are retained in memory and included in the first
+  // durable snapshot rather than being lost before the ID is available.
+  useEffect(() => {
+    const sessionId = interview.sessionId
+    const originUserId = authSession?.user?.id
+    if (!isHireNativeMultimodalEnabled || !sessionId || !originUserId) return
+
+    const reporter = createHireInterviewIntegrityReporter({
+      sessionId,
+      originUserId,
+      intent: captureReplayUploadIntent(originUserId),
+      availability: {
+        displayShare: isHireDisplayCaptureRequired,
+      },
+    })
+    hireIntegrityReporterRef.current = reporter
+    setHireIntegrityReporter(reporter)
+
+    for (const pendingEvent of pendingHireIntegrityEventsRef.current) {
+      reporter.record(toHireInterviewIntegrityReportEvent(pendingEvent))
+    }
+    pendingHireIntegrityEventsRef.current = []
+    const pendingScreenRecordingInterruption =
+      pendingHireScreenRecordingInterruptionRef.current
+    if (pendingScreenRecordingInterruption) {
+      const recorded = reporter.record(pendingScreenRecordingInterruption)
+      pendingHireScreenRecordingInterruptionRef.current = null
+      if (recorded) void reporter.flush()
+    }
+
+    const detachPagehideFlush = attachHireInterviewIntegrityPagehideFlush(reporter)
+    return () => {
+      detachPagehideFlush()
+      // Component teardown should still hand off a bounded event snapshot.
+      // A normal interview finish sends the fuller camera/visibility capture
+      // from handleRecordingStop below.
+      void reporter.flush()
+      if (hireIntegrityReporterRef.current === reporter) {
+        hireIntegrityReporterRef.current = null
+      }
+      setHireIntegrityReporter((current) =>
+        current === reporter ? null : current,
+      )
+    }
+  }, [
+    authSession?.user?.id,
+    interview.sessionId,
+    isHireDisplayCaptureRequired,
+    isHireNativeMultimodalEnabled,
+  ])
+
+  // Correlate only a local candidate-mic VAD boolean with a current face
+  // result. The reporter intentionally sends neither sound levels nor raw
+  // camera data, and skips a sample whenever face state is unavailable.
+  useEffect(() => {
+    if (
+      !isHireNativeMultimodalEnabled ||
+      !hireIntegrityGate.hasStarted ||
+      !hireIntegrityGate.stream ||
+      !hireIntegrityReporter
+    ) {
+      return
+    }
+
+    const sampler = createHireInterviewSpeechVideoSampler({
+      stream: hireIntegrityGate.stream,
+      reporter: hireIntegrityReporter,
+      elapsedMs: hireIntegrityGate.elapsedMs,
+      facePresent: getHireMultimodalObservationFacePresent,
+      facialSpeechActive: getHireMultimodalObservationFacialSpeechActive,
+    })
+    sampler.start()
+    hireSpeechVideoSamplerStopRef.current = sampler.stop
+    return () => {
+      sampler.stop()
+      if (hireSpeechVideoSamplerStopRef.current === sampler.stop) {
+        hireSpeechVideoSamplerStopRef.current = null
+      }
+    }
+  }, [
+    getHireMultimodalObservationFacePresent,
+    getHireMultimodalObservationFacialSpeechActive,
+    hireIntegrityGate.elapsedMs,
+    hireIntegrityGate.hasStarted,
+    hireIntegrityGate.stream,
+    hireIntegrityReporter,
+    isHireNativeMultimodalEnabled,
+  ])
 
   const {
     phase,
@@ -380,6 +646,19 @@ export default function InterviewPage() {
   const displayAnswerInterim = isListening ? interimTranscript : ''
   const phaseColor = PHASE_COLORS[phase] ?? DEFAULT_PHASE_COLOR
   const isProcessing = phase === 'PROCESSING'
+
+  useEffect(() => {
+    if (
+      isHireInterview &&
+      (phase === 'SCORING' || phase === 'FEEDBACK' || phase === 'ENDED')
+    ) {
+      markHireInterviewIntegrityComplete()
+    }
+  }, [
+    markHireInterviewIntegrityComplete,
+    isHireInterview,
+    phase,
+  ])
 
   // ── Lifecycle analytics ──
   // Observes useInterview's exposed phase + sessionId from the outside
@@ -726,20 +1005,30 @@ export default function InterviewPage() {
 
   // ─── Camera init + start recording (only after config is loaded) ───────────
   useEffect(() => {
-    if (!config) return // Don't start camera until interview config is ready
+    if (
+      !config ||
+      (isHireInterview && !hireIntegrityGate.hasStarted) ||
+      (isHireDisplayCaptureRequired && !isHireDisplayRecording)
+    ) return
 
     let cancelled = false
 
     async function initCapture() {
       let stream: MediaStream
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: cameraVideoConstraints,
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        })
-      } catch (err) {
-        console.error(err)
-        return
+      if (isHireInterview) {
+        const verifiedStream = hireIntegrityGate.stream
+        if (!verifiedStream || !hasLiveHireInterviewMedia(verifiedStream)) return
+        stream = verifiedStream
+      } else {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: cameraVideoConstraints,
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          })
+        } catch (err) {
+          console.error(err)
+          return
+        }
       }
       if (cancelled) {
         stream.getTracks().forEach((t) => t.stop())
@@ -755,6 +1044,7 @@ export default function InterviewPage() {
         if (isB2cMultimodalEnabled) {
           startB2cFacialCapture(videoRef.current).catch(() => {})
         } else if (isHireNativeMultimodalEnabled) {
+          startHireMultimodalObservationCapture(videoRef.current).catch(() => {})
           startHireMultimodalAnalysisCapture(videoRef.current).catch(() => {})
         }
       }
@@ -810,7 +1100,15 @@ export default function InterviewPage() {
     // reference each render — listing them would re-prompt for camera on every
     // render. Re-run only when the underlying interview config changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config])
+  }, [
+    config,
+    isHireInterview,
+    hireIntegrityGate.hasStarted,
+    hireIntegrityGate.stream,
+    isHireDisplayCaptureRequired,
+    isHireDisplayRecording,
+    startHireMultimodalObservationCapture,
+  ])
 
   // ─── Load TTS voices ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -1046,6 +1344,115 @@ export default function InterviewPage() {
         isScoring={phase === 'SCORING'}
         darkMode={isCodingMode || isDesignMode}
       />
+
+      {isHireInterview && (
+        <AnimatePresence>
+          {(!hireIntegrityGate.hasStarted ||
+            hireIntegrityGate.isPaused ||
+            (isHireDisplayCaptureRequired && !isHireDisplayRecording)) && (
+            <motion.section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="hire-integrity-gate-title"
+              className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/95 p-5 text-white"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                className="w-full max-w-lg rounded-3xl border border-white/15 bg-slate-900 p-7 shadow-2xl"
+                initial={{ y: 16, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 8, opacity: 0 }}
+              >
+                <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-500/20 text-lg" aria-hidden>
+                  ⛶
+                </div>
+                <h1 id="hire-integrity-gate-title" className="text-xl font-semibold tracking-tight">
+                  {hasHireDisplayRecordingTerminalFailure
+                    ? 'Display recording stopped'
+                    : hireIntegrityGate.hasStarted
+                    ? isHireDisplayCaptureRequired && !isHireDisplayRecording
+                      ? 'Display recording is required'
+                      : 'Interview paused for a required recheck'
+                    : 'Start assessment in full screen'}
+                </h1>
+                <p className="mt-3 text-sm leading-6 text-slate-300">
+                  {hasHireDisplayRecordingTerminalFailure
+                    ? 'The screen recorder ended unexpectedly, so this attempt cannot continue as if its recording were complete. End the assessment below to submit the available partial recording for HR review.'
+                    : hireIntegrityGate.hasStarted
+                    ? isHireDisplayCaptureRequired
+                      ? 'Return to full screen, restore the entire-display share, and confirm your live camera and microphone to resume. The interview timer stays paused during this recheck.'
+                      : 'Return to full screen and confirm your live camera and microphone to resume the assessment. The interview timer stays paused while you complete this recheck.'
+                    : isHireDisplayCaptureRequired
+                      ? 'Camera, microphone, and your entire-display share are required. Select the button below, choose your entire screen, and begin in full screen.'
+                      : 'Camera and microphone are required for this assessment. Select the button below to enable both and begin in full screen.'}
+                </p>
+                {hireIntegrityGate.interruption ? (
+                  <p className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                    The assessment window, fullscreen mode, camera, microphone, or required screen share was interrupted. Please restore the required setup to continue.
+                  </p>
+                ) : null}
+                {hireIntegrityGate.error ? (
+                  <p className="mt-3 rounded-xl border border-red-300/20 bg-red-300/10 px-3 py-2 text-xs leading-5 text-red-100" role="alert">
+                    {hireIntegrityGate.error}
+                  </p>
+                ) : null}
+                {hireDisplayRecordingError ? (
+                  <p className="mt-3 rounded-xl border border-red-300/20 bg-red-300/10 px-3 py-2 text-xs leading-5 text-red-100" role="alert">
+                    {hireDisplayRecordingError}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (hasHireDisplayRecordingTerminalFailure) {
+                      markAbandoned()
+                      finishInterview('user_ended')
+                      return
+                    }
+                    if (
+                      hireIntegrityGate.hasStarted &&
+                      isHireDisplayCaptureRequired &&
+                      !isHireDisplayRecording &&
+                      hireIntegrityGate.displayStream
+                    ) {
+                      setHireDisplayRecordingSource(hireIntegrityGate.displayStream)
+                      return
+                    }
+                    void (hireIntegrityGate.hasStarted
+                      ? hireIntegrityGate.recheck()
+                      : hireIntegrityGate.startAssessment())
+                  }}
+                  disabled={hireIntegrityGate.isVerifying}
+                  className="mt-6 w-full rounded-2xl bg-blue-500 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-blue-400 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {hasHireDisplayRecordingTerminalFailure
+                    ? 'End assessment and submit available recording'
+                    : hireIntegrityGate.isVerifying
+                    ? isHireDisplayCaptureRequired
+                      ? 'Checking camera, microphone, screen share, and full screen…'
+                      : 'Checking camera, microphone, and full screen…'
+                    : hireIntegrityGate.hasStarted &&
+                        isHireDisplayCaptureRequired &&
+                        !isHireDisplayRecording
+                      ? 'Retry display recording'
+                    : hireIntegrityGate.hasStarted
+                      ? 'Recheck and resume assessment'
+                      : 'Start assessment in full screen'}
+                </button>
+                <p className="mt-3 text-center text-xs leading-5 text-slate-400">
+                  {hasHireDisplayRecordingTerminalFailure
+                    ? 'The retained recording ends at the interruption and is submitted as partial evidence; no recording segments are joined together.'
+                    : isHireDisplayCaptureRequired
+                    ? 'Leaving full screen, hiding the assessment, or stopping the entire-display share pauses the interview until it is restored.'
+                    : 'Leaving full screen or making the assessment window unavailable pauses the interview until it is restored.'}
+                </p>
+              </motion.div>
+            </motion.section>
+          )}
+        </AnimatePresence>
+      )}
     </motion.div>
   )
 }

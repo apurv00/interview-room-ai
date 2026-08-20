@@ -62,6 +62,8 @@ const IDS = {
   round: "c".repeat(24),
   attempt: "d".repeat(24),
   recording: "e".repeat(24),
+  screenRecording: "9".repeat(24),
+  runtimeSession: "f".repeat(24),
 };
 
 function objectId(value: string) {
@@ -151,7 +153,9 @@ describe("application supplemental-observation read fence", () => {
       workspaceId: IDS.workspace,
       applicationId: IDS.application,
       roundId: { $in: [expect.anything()] },
-      kind: { $in: ["identity_photo", "camera_recording"] },
+      kind: {
+        $in: ["identity_photo", "camera_recording", "screen_recording"],
+      },
       state: "ready",
       active: true,
       $or: [
@@ -168,6 +172,131 @@ describe("application supplemental-observation read fence", () => {
     });
     expect(JSON.stringify(body)).not.toContain("objectKey");
     expect(JSON.stringify(body)).not.toContain("must-never-serialize");
+  });
+
+  it("returns a V6 shared-display asset only for the completed result attempt", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [
+        {
+          _id: objectId(IDS.round),
+          status: "completed",
+          consentVersion: "hire-ai-v6-2026-08-20",
+        },
+      ],
+      humanRounds: [],
+    });
+    mocks.resultFind.mockReturnValueOnce(
+      selected([
+        {
+          roundId: objectId(IDS.round),
+          attemptId: objectId(IDS.attempt),
+          piiPurgedAt: undefined,
+        },
+      ]),
+    );
+    mocks.photoFind.mockReturnValueOnce(
+      selected([
+        {
+          _id: objectId(IDS.screenRecording),
+          kind: "screen_recording",
+          roundId: objectId(IDS.round),
+          attemptId: objectId(IDS.attempt),
+          capturedAt: new Date("2026-08-20T12:00:00.000Z"),
+          bytes: 84_000,
+          objectKey: "hire-media/must-never-serialize-screen.webm",
+        },
+      ]),
+    );
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+
+    const body = await response.json();
+    expect(body.rounds[0].screenRecording).toEqual({
+      status: "ready",
+      assetId: IDS.screenRecording,
+      capturedAt: "2026-08-20T12:00:00.000Z",
+      bytes: 84_000,
+    });
+    expect(JSON.stringify(body)).not.toContain("objectKey");
+    expect(JSON.stringify(body)).not.toContain("must-never-serialize-screen");
+  });
+
+  it("does not invent a pending display recording for pre-V6 rounds", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [
+        {
+          _id: objectId(IDS.round),
+          status: "completed",
+          consentVersion: "hire-ai-v5-2026-08-19",
+        },
+      ],
+      humanRounds: [],
+    });
+    mocks.resultFind.mockReturnValueOnce(
+      selected([
+        {
+          roundId: objectId(IDS.round),
+          attemptId: objectId(IDS.attempt),
+          piiPurgedAt: undefined,
+        },
+      ]),
+    );
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+
+    const body = await response.json();
+    expect(body.rounds[0].screenRecording).toBeNull();
+  });
+
+  it("does not treat an unknown V6-prefixed receipt as display consent", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [
+        {
+          _id: objectId(IDS.round),
+          status: "completed",
+          consentVersion: "hire-ai-v6-2099-01-01",
+        },
+      ],
+      humanRounds: [],
+    });
+    mocks.resultFind.mockReturnValueOnce(
+      selected([
+        {
+          roundId: objectId(IDS.round),
+          attemptId: objectId(IDS.attempt),
+          piiPurgedAt: undefined,
+        },
+      ]),
+    );
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+
+    const body = await response.json();
+    expect(body.rounds[0].screenRecording).toBeNull();
   });
 
   it("reports an honest awaiting-transfer state when scores arrived before the camera asset", async () => {
@@ -250,5 +379,145 @@ describe("application supplemental-observation read fence", () => {
       roundId: IDS.round,
       report: { summary: { deliverySummary: "Full report summary" } },
     });
+  });
+
+  it("passes neutral interview-validation events through only to their matching round", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [{ _id: objectId(IDS.round), status: "completed" }],
+      humanRounds: [],
+    });
+    mocks.observationFind.mockReturnValueOnce(
+      selected([
+        {
+          roundId: objectId(IDS.round),
+          runtimeSessionId: objectId(IDS.runtimeSession),
+          revision: 1,
+          observedAt: new Date("2026-08-19T12:00:00.000Z"),
+          report: {
+            status: "completed",
+            capture: { camera: "captured", browserVisibility: "captured" },
+            events: [
+              {
+                kind: "speech_video_unverified",
+                source: "speech_video_corroboration",
+                startMs: 10_000,
+                endMs: 12_000,
+              },
+            ],
+          },
+        },
+      ]),
+    );
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+
+    const body = await response.json();
+    expect(body.rounds[0].supplementalObservations).toEqual([
+      {
+        observedAt: "2026-08-19T12:00:00.000Z",
+        report: {
+          status: "completed",
+          capture: { camera: "captured", browserVisibility: "captured" },
+          events: [
+            {
+              kind: "speech_video_unverified",
+              source: "speech_video_corroboration",
+              startMs: 10_000,
+              endMs: 12_000,
+            },
+          ],
+        },
+      },
+    ]);
+    expect(JSON.stringify(body)).not.toMatch(/score|rank|recommendation/i);
+  });
+
+  it("surfaces cumulative validation revisions once per runtime session", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [{ _id: objectId(IDS.round), status: "completed" }],
+      humanRounds: [],
+    });
+    const capture = { camera: "captured", browserVisibility: "captured" } as const;
+    const fullscreenEvent = {
+      kind: "fullscreen_exited" as const,
+      source: "fullscreen" as const,
+      startMs: 1_000,
+      endMs: 1_000,
+    };
+    const windowEvent = {
+      kind: "browser_window_not_visible" as const,
+      source: "browser_visibility" as const,
+      startMs: 2_000,
+      endMs: 2_500,
+    };
+    const microphoneEvent = {
+      kind: "microphone_interrupted" as const,
+      source: "microphone_track" as const,
+      startMs: 3_000,
+      endMs: 3_250,
+    };
+    mocks.observationFind.mockReturnValueOnce(
+      selected([
+        {
+          roundId: objectId(IDS.round),
+          runtimeSessionId: objectId(IDS.runtimeSession),
+          revision: 1,
+          observedAt: new Date("2026-08-19T12:00:00.000Z"),
+          report: { status: "completed", capture, events: [fullscreenEvent] },
+        },
+        {
+          roundId: objectId(IDS.round),
+          runtimeSessionId: objectId(IDS.runtimeSession),
+          revision: 2,
+          observedAt: new Date("2026-08-19T12:01:00.000Z"),
+          report: {
+            status: "completed",
+            capture,
+            events: [fullscreenEvent, windowEvent],
+          },
+        },
+        {
+          roundId: objectId(IDS.round),
+          runtimeSessionId: objectId(IDS.runtimeSession),
+          revision: 3,
+          observedAt: new Date("2026-08-19T12:02:00.000Z"),
+          report: {
+            status: "completed",
+            capture,
+            events: [fullscreenEvent, windowEvent, microphoneEvent],
+          },
+        },
+      ]),
+    );
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+
+    const body = await response.json();
+    expect(body.rounds[0].supplementalObservations).toEqual([
+      {
+        observedAt: "2026-08-19T12:02:00.000Z",
+        report: {
+          status: "completed",
+          capture,
+          events: [fullscreenEvent, windowEvent, microphoneEvent],
+        },
+      },
+    ]);
   });
 });

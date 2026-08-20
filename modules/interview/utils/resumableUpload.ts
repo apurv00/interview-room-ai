@@ -651,7 +651,11 @@ export async function uploadReplayRecording(
   const operation = beginReplayUploadOperation(intent?.privacyGeneration)
   const contentType = blob.type || 'video/webm'
   try {
-    if (blob.size <= DIRECT_UPLOAD_LIMIT_BYTES) {
+    // Screen recordings are mandatory Hire evidence. Even a short/partial
+    // recording must enter the durable IndexedDB-backed multipart queue so a
+    // transient presign, upload, or finalize failure cannot silently drop it.
+    // Camera keeps its established direct-upload fast path.
+    if (kind !== 'screen' && blob.size <= DIRECT_UPLOAD_LIMIT_BYTES) {
       try {
         const uploaded = await uploadDirect(
           sessionId,

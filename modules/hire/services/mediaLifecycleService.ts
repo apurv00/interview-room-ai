@@ -14,7 +14,11 @@ import {
   scheduleHireMultimodalObservationRetention,
 } from '../../hire-multimodal/services/observationRetentionService'
 import { HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION } from '@shared/contracts/hireMultimodalObservationBridge'
-import { HIRE_AI_CONSENT_VERSION } from '@hire/policies/aiInterviewConsent'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V4_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+} from '@hire/policies/aiInterviewConsent'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
   hireMediaStorage,
@@ -176,6 +180,8 @@ export async function reconcileClosedJobMediaRetention(input: {
               consentVersion: {
                 $in: [
                   HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+                  HIRE_AI_V4_CONSENT_VERSION,
+                  HIRE_AI_V5_CONSENT_VERSION,
                   HIRE_AI_CONSENT_VERSION,
                 ],
               },

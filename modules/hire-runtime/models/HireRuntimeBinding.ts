@@ -6,6 +6,7 @@ import type {
 
 export type HireRuntimeBindingStatus = 'provisioned' | 'active' | 'completed' | 'revoked'
 export type HireRuntimeCameraMediaStatus = 'pending' | 'published'
+export type HireRuntimeScreenMediaStatus = 'pending' | 'published'
 
 export interface IHireRuntimeBinding extends Document {
   workspaceId: mongoose.Types.ObjectId
@@ -53,6 +54,10 @@ export interface IHireRuntimeBinding extends Document {
    */
   cameraMediaStatus?: HireRuntimeCameraMediaStatus
   cameraMediaPublishedAt?: Date
+  /** Present only for screen-share-consented attempts. Missing legacy values
+   * are terminal so an old attempt never acquires a new collection duty. */
+  screenMediaStatus?: HireRuntimeScreenMediaStatus
+  screenMediaPublishedAt?: Date
   publishCheckedAt?: Date
   publishFailureCount?: number
   publishRetryAt?: Date
@@ -159,7 +164,7 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
           {
             kind: {
               type: String,
-              enum: ['recording', 'audio', 'transcript', 'landmarks'],
+              enum: ['recording', 'screen', 'audio', 'transcript', 'landmarks'],
               required: true,
             },
             sourceKey: { type: String, required: true, maxlength: 1_024 },
@@ -181,6 +186,8 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
     publishedAt: { type: Date },
     cameraMediaStatus: { type: String, enum: ['pending', 'published'] },
     cameraMediaPublishedAt: { type: Date },
+    screenMediaStatus: { type: String, enum: ['pending', 'published'] },
+    screenMediaPublishedAt: { type: Date },
     publishCheckedAt: { type: Date },
     publishFailureCount: { type: Number, min: 0, default: 0 },
     publishRetryAt: { type: Date },
@@ -205,6 +212,7 @@ HireRuntimeBindingSchema.index({
   purgePersonalData: 1,
   publishedRevision: 1,
   cameraMediaStatus: 1,
+  screenMediaStatus: 1,
   publishRetryAt: 1,
   publishCheckedAt: 1,
   updatedAt: 1,

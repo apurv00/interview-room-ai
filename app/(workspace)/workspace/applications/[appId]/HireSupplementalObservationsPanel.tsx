@@ -1,20 +1,11 @@
-interface SupplementalObservationEvent {
-  kind: "browser_window_not_visible" | "sustained_camera_away";
-  source: "camera" | "browser_visibility";
-  startMs: number;
-  endMs: number;
-}
+import type {
+  HireMultimodalObservationEvent,
+  HireMultimodalObservationReport,
+} from "@shared/contracts/hireMultimodalObservationBridge";
 
 export interface HireSupplementalObservationView {
   observedAt: string;
-  report: {
-    status: "completed" | "insufficient_signal";
-    capture: {
-      camera: "captured" | "unavailable" | "insufficient_signal";
-      browserVisibility: "captured" | "unavailable" | "insufficient_signal";
-    };
-    events: SupplementalObservationEvent[];
-  };
+  report: HireMultimodalObservationReport;
 }
 
 function formatElapsed(milliseconds: number): string {
@@ -24,14 +15,58 @@ function formatElapsed(milliseconds: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function eventLabel(event: SupplementalObservationEvent): string {
-  return event.kind === "browser_window_not_visible"
-    ? "Browser window was not visible"
-    : "Sustained camera-away interval";
+function eventLabel(event: HireMultimodalObservationEvent): string {
+  switch (event.kind) {
+    case "fullscreen_exited":
+      return "Full-screen mode was exited";
+    case "browser_window_not_visible":
+      return "Assessment window was not visible";
+    case "browser_window_focus_lost":
+      return "Assessment window lost focus";
+    case "camera_interrupted":
+      return "Camera capture was interrupted";
+    case "microphone_interrupted":
+      return "Microphone capture was interrupted";
+    case "screen_share_wrong_surface":
+      return "The required entire display was not shared";
+    case "screen_share_interrupted":
+      return "Entire-display sharing was interrupted";
+    case "screen_recording_interrupted":
+      return "Shared-display recording was interrupted";
+    case "speech_video_unverified":
+      return "Spoken audio could not be verified against the visible candidate";
+    case "sustained_camera_away":
+      return "Sustained camera-away interval";
+  }
+}
+
+function sourceLabel(source: HireMultimodalObservationEvent["source"]): string {
+  switch (source) {
+    case "fullscreen":
+      return "full-screen";
+    case "browser_visibility":
+      return "window visibility";
+    case "browser_focus":
+      return "window focus";
+    case "camera_track":
+      return "camera capture";
+    case "microphone_track":
+      return "microphone capture";
+    case "display_surface":
+      return "display surface";
+    case "display_track":
+      return "display capture";
+    case "display_recorder":
+      return "display recording";
+    case "speech_video_corroboration":
+      return "audio-video corroboration";
+    case "camera":
+      return "camera attention";
+  }
 }
 
 function captureLabel(
-  state: HireSupplementalObservationView["report"]["capture"]["camera"],
+  state: HireMultimodalObservationReport["capture"]["camera"],
 ): string {
   return state === "captured"
     ? "captured"
@@ -42,30 +77,32 @@ function captureLabel(
 
 /**
  * Deliberately independent from the full recording and the separate Hire
- * multimodal analysis. These bounded system observations are neither scores
- * nor input to hiring decisions.
+ * multimodal analysis. These bounded system observations are not scores and
+ * do not automatically determine downstream hiring outcomes.
  */
 export default function HireSupplementalObservationsPanel({
   observations,
+  recordingTargetId,
 }: {
   observations: HireSupplementalObservationView[];
+  recordingTargetId?: string;
 }) {
   if (observations.length === 0) return null;
 
   return (
     <section
-      aria-label="Supplemental interview observations"
+      aria-label="Interview validation timeline"
       className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3"
     >
       <div>
         <h3 className="text-sm font-semibold text-[#0f1419]">
-          Supplemental interview observations
+          Interview validation timeline
         </h3>
         <p className="mt-1 text-xs leading-relaxed text-[#536471]">
-          These neutral system observations are not interview scores and did not
-          affect a hiring decision, stage, ranking, recommendation, or export.
-          The full recording and complete multimodal analysis are shown
-          separately for this interview.
+          These neutral system signals are available for human review beside the
+          full interview recording. They are not interview scores and do not
+          automatically determine a hiring decision, stage, ranking,
+          recommendation, or export.
         </p>
       </div>
 
@@ -94,13 +131,30 @@ export default function HireSupplementalObservationsPanel({
               No reportable supplemental interval was recorded.
             </p>
           ) : (
-            <ul className="space-y-1 text-xs text-[#0f1419]">
+            <ul className="space-y-2 text-xs text-[#0f1419]">
               {observation.report.events.map((event, index) => (
                 <li
                   key={`${event.kind}-${event.startMs}-${event.endMs}-${index}`}
+                  className="rounded border border-slate-100 bg-slate-50 px-2 py-1.5"
                 >
-                  {eventLabel(event)} · {formatElapsed(event.startMs)}–
-                  {formatElapsed(event.endMs)}
+                  <p>
+                    {eventLabel(event)} · {formatElapsed(event.startMs)}–
+                    {formatElapsed(event.endMs)}
+                  </p>
+                  <p className="mt-0.5 text-[#536471]">
+                    Signal: {sourceLabel(event.source)}
+                    {recordingTargetId ? (
+                      <>
+                        {" · "}
+                        <a
+                          href={`#${recordingTargetId}`}
+                          className="font-semibold text-[#2563eb] underline"
+                        >
+                          Review recording
+                        </a>
+                      </>
+                    ) : null}
+                  </p>
                 </li>
               ))}
             </ul>
@@ -114,4 +168,5 @@ export default function HireSupplementalObservationsPanel({
 export const __hireSupplementalObservationsPanel = {
   formatElapsed,
   eventLabel,
+  sourceLabel,
 };

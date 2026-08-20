@@ -120,6 +120,19 @@ interface UseInterviewOptions {
    *  post-answer STAR read-pause is skipped (no dead air); status notices stay
    *  visible. Defaults to true (on). */
   liveCoachingEnabled?: boolean
+  /**
+   * Holds initial session creation, recording-driven interview work, and the
+   * interview loop until the enclosing surface has completed its required
+   * preflight. Defaults to true so every existing B2C caller is unchanged.
+   */
+  canStart?: boolean
+  /**
+   * Temporarily holds the active interview when the enclosing surface needs a
+   * candidate recheck (for example, Hire fullscreen/media integrity). The
+   * engine freezes its timer, stops active input, and resumes the same turn
+   * once this becomes false.
+   */
+  integrityPaused?: boolean
 }
 
 // ─── Hook return ──────────────────────────────────────────────────────────────
@@ -167,6 +180,8 @@ export function useInterview({
   currentProblem,
   currentDesignProblem,
   liveCoachingEnabled,
+  canStart = true,
+  integrityPaused = false,
 }: UseInterviewOptions): UseInterviewReturn {
   const router = useRouter()
 
@@ -211,6 +226,19 @@ export function useInterview({
     forceIndianVoice: isHireInterview,
   })
 
+  // The Hire integrity gate lives at the page boundary so this engine remains
+  // reusable for B2C. A small pause primitive here prevents the running clock
+  // or an active microphone turn from advancing behind that blocking UI.
+  const integrityPausedRef = useRef(integrityPaused)
+  const integrityResumeResolversRef = useRef(new Set<() => void>())
+  const activeIntegrityPauseHandlerRef = useRef<(() => void) | null>(null)
+  const waitForIntegrityClear = useCallback(() => {
+    if (!integrityPausedRef.current) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      integrityResumeResolversRef.current.add(resolve)
+    })
+  }, [])
+
   // Interrupt-capable avatarSpeak: if candidate starts talking during TTS,
   // cancel speech and let the candidate be heard. Deepgram streams continuously.
   // Also discards any queued coaching messages (I6) to avoid stale overlaps.
@@ -224,6 +252,7 @@ export function useInterview({
     emotion?: import('@shared/types').AvatarEmotion,
     onAudioStart?: () => void,
   ): Promise<{ interrupted: boolean; interruptContext: InterruptContext | null }> => {
+    await waitForIntegrityClear()
     interruptedRef.current = false
     interruptContextRef.current = null
     // Suppress interrupt detection during TTS to prevent the AI's own
@@ -261,11 +290,12 @@ export function useInterview({
     })
     setOnInterrupt?.(null) // Clear interrupt handler after TTS finishes
     setSuppressInterrupt?.(false) // Ensure suppression is cleared
+    await waitForIntegrityClear()
     return {
       interrupted: interruptedRef.current,
       interruptContext: interruptContextRef.current,
     }
-  }, [rawAvatarSpeak, setOnInterrupt, setSuppressInterrupt, softCancelTTS])
+  }, [getAndClearInterruptAccum, rawAvatarSpeak, setOnInterrupt, setSuppressInterrupt, softCancelTTS, waitForIntegrityClear])
 
   // ── DB session id (hoisted above useInterviewAPI so the hook can read it) ──
   const sessionIdRef = useRef<string | null>(null)
@@ -334,6 +364,36 @@ export function useInterview({
   const [coachingTip, setCoachingTip] = useState<string | null>(null)
   const coachingAbortRef = useRef<AbortController | null>(null)
 
+  useEffect(() => {
+    const wasPaused = integrityPausedRef.current
+    integrityPausedRef.current = integrityPaused
+
+    if (integrityPaused) {
+      if (!wasPaused) {
+        activeIntegrityPauseHandlerRef.current?.()
+        // Omit the optional reason to preserve the established external-stop
+        // path without widening the Deepgram reason union.
+        stopListening()
+        cancelTTS()
+        cancelAck()
+      }
+      return
+    }
+
+    if (wasPaused) {
+      for (const resolve of Array.from(integrityResumeResolversRef.current)) resolve()
+      integrityResumeResolversRef.current.clear()
+    }
+  }, [cancelAck, cancelTTS, integrityPaused, stopListening])
+
+  useEffect(() => {
+    const resumeResolvers = integrityResumeResolversRef.current
+    return () => {
+      for (const resolve of Array.from(resumeResolvers)) resolve()
+      resumeResolvers.clear()
+    }
+  }, [])
+
   // ── Interview abort (stops the loop on End Interview) ──
   const interviewAbortRef = useRef<AbortController | null>(null)
 
@@ -343,6 +403,7 @@ export function useInterview({
   currentProblemRef.current = currentProblem
 
   const onCodeSubmit = useCallback((code: string, language: string) => {
+    if (integrityPausedRef.current) return
     if (codeSubmitResolverRef.current) {
       codeSubmitResolverRef.current({ code, language })
       codeSubmitResolverRef.current = null
@@ -371,6 +432,7 @@ export function useInterview({
   currentDesignProblemRef.current = currentDesignProblem
 
   const onDesignSubmit = useCallback((data: import('@shared/types').DesignSubmission) => {
+    if (integrityPausedRef.current) return
     designSubmissionGateRef.current.submit(data)
   }, [])
 
@@ -494,7 +556,7 @@ export function useInterview({
   // ─── Init timer + DB session ────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!config) return
+    if (!config || !canStart) return
     setTimeRemaining(config.duration * 60)
     timeRemainingRef.current = config.duration * 60
 
@@ -600,16 +662,17 @@ export function useInterview({
         })
       }
     })
-  }, [config, jobsHandoffToken]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config, jobsHandoffToken, canStart]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Timer countdown with milestone nudges (TM6) ────────────────────────
 
   const firedMilestonesRef = useRef<Set<number>>(new Set())
 
   useEffect(() => {
-    if (!config) return
+    if (!config || !canStart) return
     const tick = setInterval(() => {
       setTimeRemaining((t) => {
+        if (integrityPausedRef.current) return t
         const next = Math.max(0, t - 1)
         timeRemainingRef.current = next
 
@@ -705,7 +768,7 @@ export function useInterview({
       })
     }, 1000)
     return () => clearInterval(tick)
-  }, [config]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config, canStart]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Transcript helpers ────────────────────────────────────────────────────
 
@@ -792,11 +855,12 @@ export function useInterview({
   /** Max answer duration (180s) — prevents candidate from monopolizing time */
   const MAX_ANSWER_MS = 180_000
 
-  function listenForAnswer(
+  async function listenForAnswer(
     showLive: boolean = true,
     timeoutMs: number = 30000,
     onCaptureReady?: () => void,
   ): Promise<string> {
+    await waitForIntegrityClear()
     // [DIAGNOSTIC] Temporary Q1-latency perf marker — paired with the
     // wrappedOnCaptureReady console.timeEnd below. Measures the
     // user-perceived "listenForAnswer called → audio capture actually
@@ -862,12 +926,37 @@ export function useInterview({
         onCaptureReady?.()
       }
 
-      startListening((result) => {
-        if (resolved) return
-        resolved = true
+      const clearTurnTimers = () => {
         if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
         clearTimeout(maxTimer)
         clearInterval(emotionInterval)
+      }
+
+      const restartAfterIntegrityPause = () => {
+        if (resolved) return
+        resolved = true
+        clearTurnTimers()
+        activeIntegrityPauseHandlerRef.current = null
+        void waitForIntegrityClear().then(() => {
+          if (isInterviewOver()) {
+            resolve('')
+            return
+          }
+          void listenForAnswer(showLive, timeoutMs, onCaptureReady).then(resolve)
+        })
+      }
+
+      activeIntegrityPauseHandlerRef.current = restartAfterIntegrityPause
+
+      startListening((result) => {
+        if (resolved) return
+        if (integrityPausedRef.current) {
+          restartAfterIntegrityPause()
+          return
+        }
+        resolved = true
+        activeIntegrityPauseHandlerRef.current = null
+        clearTurnTimers()
         if (result.metrics) {
           speechMetricsRef.current.push(result.metrics)
         }
@@ -943,9 +1032,8 @@ export function useInterview({
         // correction — the Deepgram hook's grace timer is the primary
         // guard; the inactivity timer is a last-resort net.
         const fireStop = (reason: 'inactivityPreSpeech' | 'inactivityPostSpeech') => {
-          if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
-          clearTimeout(maxTimer)
-          clearInterval(emotionInterval)
+          clearTurnTimers()
+          activeIntegrityPauseHandlerRef.current = null
           stopListening(reason)
           // Safety settle: if onComplete doesn't fire within 3s, resolve empty
           setTimeout(() => {
@@ -960,6 +1048,7 @@ export function useInterview({
             if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
             return
           }
+          if (integrityPausedRef.current) return
           // E-3.7: if the tab is hidden, browsers throttle timers and
           // suspend the AudioContext, so liveTranscript cannot grow
           // even if the candidate is still speaking. Skip the tick —
@@ -1009,8 +1098,8 @@ export function useInterview({
       maxTimer = setTimeout(() => {
         if (!resolved) {
           resolved = true
-          if (inactivityWatchdog !== undefined) clearInterval(inactivityWatchdog)
-          clearInterval(emotionInterval)
+          activeIntegrityPauseHandlerRef.current = null
+          clearTurnTimers()
           stopListening('maxAnswer')
           // Resolve with whatever was captured so far
           resolve(liveAnswerRef.current || '')
@@ -2282,7 +2371,7 @@ export function useInterview({
   // ─── Start interview when config + voices ready ────────────────────────────
 
   useEffect(() => {
-    if (!config || !voicesReady) return
+    if (!config || !voicesReady || !canStart) return
 
     interviewAbortRef.current = new AbortController()
     mainQuestionNumberRef.current = 0
@@ -2785,7 +2874,7 @@ export function useInterview({
     // Brief delay to let React render settle before starting the interview flow
     const t = setTimeout(start, 200)
     return () => clearTimeout(t)
-  }, [config, voicesReady]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config, voicesReady, canStart]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     phase,

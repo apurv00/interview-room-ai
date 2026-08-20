@@ -25,6 +25,7 @@ import {
 const PRINCIPAL_ID = 'a'.repeat(24)
 const SESSION_ID = 'b'.repeat(24)
 const CAMERA_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-1723248000000.webm`
+const SCREEN_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-screen-1723248000002.webm`
 const AUDIO_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-audio-1723248000001.webm`
 
 beforeEach(() => {
@@ -50,6 +51,13 @@ describe('runtime source-media cleanup', () => {
           sha256: 'c'.repeat(64),
         },
         {
+          kind: 'screen',
+          sourceKey: SCREEN_KEY,
+          contentType: 'video/webm',
+          sizeBytes: 80,
+          sha256: 'e'.repeat(64),
+        },
+        {
           kind: 'audio',
           sourceKey: AUDIO_KEY,
           contentType: 'audio/webm',
@@ -59,9 +67,10 @@ describe('runtime source-media cleanup', () => {
       ],
     })
 
-    expect(mocks.send).toHaveBeenCalledTimes(2)
+    expect(mocks.send).toHaveBeenCalledTimes(3)
     expect(mocks.send.mock.calls.map(([command]) => command.input)).toEqual([
       { Bucket: 'runtime-bucket', Key: CAMERA_KEY },
+      { Bucket: 'runtime-bucket', Key: SCREEN_KEY },
       { Bucket: 'runtime-bucket', Key: AUDIO_KEY },
     ])
   })

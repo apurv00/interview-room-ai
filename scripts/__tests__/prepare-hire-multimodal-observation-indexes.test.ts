@@ -307,7 +307,7 @@ describe('Hire-native multimodal index preparation', () => {
     expect(mocks.runtimeTombstoneCreateIndex).not.toHaveBeenCalled()
   })
 
-  it('creates all missing runtime indexes, including late-camera recovery', async () => {
+  it('creates all missing runtime indexes, including late camera/display recovery', async () => {
     process.env.IPG_SURFACE = 'hire-engine'
     Object.defineProperty(mongoose.connection, 'name', {
       configurable: true,

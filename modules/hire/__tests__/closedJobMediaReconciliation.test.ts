@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V3_CONSENT_VERSION,
+  HIRE_AI_V4_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+} from '../policies/aiInterviewConsent'
 
 vi.mock('../services/hireControlBoundary', () => ({
   connectHireControlDB: vi.fn().mockResolvedValue(undefined),
@@ -130,6 +136,14 @@ describe('closed-job media retention crash reconciliation', () => {
     expect(roundLookup?.$lookup.pipeline[1].$lookup.from).toBe(
       'hiremultimodalobservationpurgeobligations',
     )
+    expect(roundLookup?.$lookup.pipeline[0].$match.consentVersion).toEqual({
+      $in: [
+        HIRE_AI_V3_CONSENT_VERSION,
+        HIRE_AI_V4_CONSENT_VERSION,
+        HIRE_AI_V5_CONSENT_VERSION,
+        HIRE_AI_CONSENT_VERSION,
+      ],
+    })
     expect(pipeline).toContainEqual({ $limit: 25 })
     expect(mediaUpdateMany).not.toHaveBeenCalled()
   })

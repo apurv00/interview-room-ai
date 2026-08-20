@@ -82,11 +82,26 @@ describe('POST /api/hire-engine/multimodal-observations/capture', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
-    await expect(response.json()).resolves.toEqual({ accepted: true })
+    await expect(response.json()).resolves.toEqual({
+      accepted: true,
+      outcome: 'accepted',
+    })
     expect(mocks.capture).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       principalId: PRINCIPAL_ID,
-      capture,
+      capture: expect.objectContaining({
+        ...capture,
+        revision: 1,
+        integrity: {
+          browserFocus: { available: false },
+          fullscreen: { available: false },
+          cameraTrack: { available: false },
+          microphoneTrack: { available: false },
+          displayShare: { available: false },
+          events: [],
+          speechVideoCorroboration: { available: false, samples: [] },
+        },
+      }),
     })
   })
 

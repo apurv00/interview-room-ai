@@ -108,6 +108,7 @@ describe('isolated runtime handoff page', () => {
       _ownerId: PRINCIPAL_ID,
       _hireRoundId: ROUND_ID,
       _hireMultimodalObservationsEnabled: false,
+      _hireDisplayCaptureRequired: false,
     })
     expect(
       localStorage.getItem(`${STORAGE_KEYS.INTERVIEW_CONFIG}:${PRINCIPAL_ID}`),
@@ -121,7 +122,7 @@ describe('isolated runtime handoff page', () => {
     expect(sessionStorage.getItem(HANDOFF_SESSION_KEY)).toBeNull()
   })
 
-  it('seeds the native-observation collection marker only from the runtime response header', async () => {
+  it('seeds V6 collection and display-capture markers only from authenticated bootstrap headers', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ ok: true, ticket: TICKET }))
@@ -129,7 +130,10 @@ describe('isolated runtime handoff page', () => {
         jsonResponse(
           { principalId: PRINCIPAL_ID, roundId: ROUND_ID, config: CONFIG },
           200,
-          { 'X-Hire-Multimodal-Observations': '1' },
+          {
+            'X-Hire-Multimodal-Observations': '1',
+            'X-Hire-Display-Capture-Required': '1',
+          },
         ),
       )
     vi.stubGlobal('fetch', fetchMock)
@@ -142,6 +146,7 @@ describe('isolated runtime handoff page', () => {
       _ownerId: PRINCIPAL_ID,
       _hireRoundId: ROUND_ID,
       _hireMultimodalObservationsEnabled: true,
+      _hireDisplayCaptureRequired: true,
     })
   })
 

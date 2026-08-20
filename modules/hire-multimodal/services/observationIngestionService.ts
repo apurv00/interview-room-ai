@@ -1,13 +1,19 @@
 import { createHash } from "node:crypto";
 import mongoose, { type ClientSession } from "mongoose";
 import {
-  HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+  HIRE_MULTIMODAL_OBSERVATION_LEGACY_POLICY_VERSION,
   HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION,
+  HIRE_MULTIMODAL_OBSERVATION_V2_POLICY_VERSION,
   HireMultimodalObservationIngestionSchema,
   canonicalHireMultimodalObservationJson,
   hireMultimodalObservationDigestPayload,
   type HireMultimodalObservationIngestion,
 } from "@shared/contracts/hireMultimodalObservationBridge";
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+  isRecognizedHireConsentSnapshot,
+} from "@hire-multimodal-boundary";
 import {
   HireApplication,
   HireConsentReceipt,
@@ -15,7 +21,6 @@ import {
   HireJob,
   HirePrivacyRequest,
   HireRound,
-  HIRE_AI_DISCLOSURE_DIGEST,
   connectHireControlDB,
   claimHireCandidatePiiWriteFence,
   HireCandidatePiiTombstoneError,
@@ -98,11 +103,10 @@ async function observationCoordinateFor(
   payload: HireMultimodalObservationIngestion,
   session?: ClientSession,
 ): Promise<ObservationCoordinate | "stale"> {
-  // A v2 session is allowed to finish, but must never become an implicit opt-in
-  // for the separate v3 supplemental-observation policy.
   if (
-    payload.consentVersion !== HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION ||
-    payload.policyVersion !== HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION
+    payload.policyVersion !== HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION &&
+    payload.policyVersion !== HIRE_MULTIMODAL_OBSERVATION_V2_POLICY_VERSION &&
+    payload.policyVersion !== HIRE_MULTIMODAL_OBSERVATION_LEGACY_POLICY_VERSION
   ) {
     return "stale";
   }
@@ -137,7 +141,7 @@ async function observationCoordinateFor(
       404,
     );
   }
-  if (round.consentVersion !== HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION) {
+  if (round.consentVersion !== payload.consentVersion) {
     return "stale";
   }
   // The runtime session binding is created by the result-linked round. Do not
@@ -192,9 +196,11 @@ async function observationCoordinateFor(
       : undefined;
   if (purgeEligibleAt && purgeEligibleAt <= new Date()) return "stale";
 
-  // Use the immutable receipt selected by the attempt, not just any v3 receipt
-  // for the candidate/round. This closes the retake and cross-attempt path.
-  const receiptQuery = HireConsentReceipt.exists({
+  // Use the immutable receipt selected by the attempt, not just any prior
+  // receipt for the candidate/round. The version and disclosure digest are an
+  // inseparable pair; current V6 and exact historic pairs may finish, while a
+  // forged digest or altered historical wording cannot activate this bridge.
+  const receiptQuery = HireConsentReceipt.findOne({
     _id: attempt.consentReceiptId,
     workspaceId: payload.workspaceId,
     applicationId: payload.applicationId,
@@ -202,16 +208,51 @@ async function observationCoordinateFor(
     candidateId: application.candidateId,
     roundId: payload.roundId,
     attemptId: attempt._id,
-    consentVersion: HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
-    disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
+    consentVersion: payload.consentVersion,
     "accepted.recording": true,
     "accepted.identityPhoto": true,
     "accepted.attentionMonitoring": true,
     "accepted.aiEvaluation": true,
-  });
+  }).select("consentVersion disclosureDigest");
   if (session) receiptQuery.session(session);
-  const receipt = await receiptQuery;
-  if (!receipt) return "stale";
+  const receipt = await receiptQuery.lean();
+  if (
+    !receipt ||
+    !isRecognizedHireConsentSnapshot({
+      consentVersion: receipt.consentVersion,
+      disclosureDigest: receipt.disclosureDigest,
+    })
+  ) {
+    return "stale";
+  }
+  const usesCurrentPolicy =
+    receipt.consentVersion === HIRE_AI_CONSENT_VERSION &&
+    payload.policyVersion === HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION &&
+    payload.schemaVersion === 2;
+  const usesV5Policy =
+    receipt.consentVersion === HIRE_AI_V5_CONSENT_VERSION &&
+    payload.policyVersion === HIRE_MULTIMODAL_OBSERVATION_V2_POLICY_VERSION &&
+    payload.schemaVersion === 2;
+  const usesHistoricPolicy =
+    receipt.consentVersion !== HIRE_AI_CONSENT_VERSION &&
+    receipt.consentVersion !== HIRE_AI_V5_CONSENT_VERSION &&
+    payload.policyVersion === HIRE_MULTIMODAL_OBSERVATION_LEGACY_POLICY_VERSION &&
+    payload.schemaVersion === 1;
+  const containsDisplayCapture =
+    payload.report.capture.displayShare !== undefined ||
+    payload.report.events.some(
+      (event) =>
+        event.kind === "screen_share_wrong_surface" ||
+        event.kind === "screen_share_interrupted" ||
+        event.kind === "screen_recording_interrupted",
+    );
+  if (
+    receipt.consentVersion !== HIRE_AI_CONSENT_VERSION &&
+    containsDisplayCapture
+  ) {
+    return "stale";
+  }
+  if (!usesCurrentPolicy && !usesV5Policy && !usesHistoricPolicy) return "stale";
 
   return {
     workspaceId: payload.workspaceId,

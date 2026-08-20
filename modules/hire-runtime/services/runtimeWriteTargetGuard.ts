@@ -1,9 +1,11 @@
 import { resolveHireRuntimeWriteTarget } from '@shared/contracts/hireRuntimeWriteFence'
+import { supportsHireDisplayCapture } from '@hire-multimodal-boundary'
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i
 const RECORDING_KEY =
   /^recordings\/([a-f0-9]{24})\/([a-f0-9]{24})(?:-(screen|audio))?-\d{10,16}\.webm$/i
 const MAX_VISITED_CONTAINERS = 250_000
+const MAX_RESULT_REVISION = 10
 
 export class RuntimeWriteTargetGuardError extends Error {
   constructor(
@@ -18,6 +20,10 @@ export class RuntimeWriteTargetGuardError extends Error {
 export interface RuntimeWriteTargetBinding {
   bindingId: string
   status: string
+  consentVersion: string
+  publishedRevision?: number
+  cameraMediaStatus?: 'pending' | 'published'
+  screenMediaStatus?: 'pending' | 'published'
   workspaceId: string
   applicationId: string
   roundId: string
@@ -35,6 +41,9 @@ export interface RuntimeWriteTargetBinding {
     expiresAt: Date | string
   }>
 }
+
+type RecordingKind = 'recording' | 'screen-recording' | 'audio-recording'
+type ReplayRecordingKind = Exclude<RecordingKind, 'audio-recording'>
 
 export interface RuntimeWriteTargetGuardInput {
   pathname: string
@@ -159,7 +168,7 @@ function assertAllCoordinates(
 function recordingIdentity(key: string): {
   principalId: string
   runtimeSessionId: string
-  kind: 'recording' | 'screen-recording' | 'audio-recording'
+  kind: RecordingKind
 } {
   const match = RECORDING_KEY.exec(key)
   if (!match) throw new RuntimeWriteTargetGuardError('Runtime recording key was not canonical')
@@ -171,6 +180,20 @@ function recordingIdentity(key: string): {
       : match[3] === 'audio'
         ? 'audio-recording'
         : 'recording',
+  }
+}
+
+function assertRecordingConsent(
+  kind: RecordingKind,
+  binding: RuntimeWriteTargetBinding,
+): void {
+  if (
+    kind === 'screen-recording' &&
+    !supportsHireDisplayCapture(binding.consentVersion)
+  ) {
+    throw new RuntimeWriteTargetGuardError(
+      'Runtime display recording was not consented',
+    )
   }
 }
 
@@ -255,6 +278,10 @@ function assertRecordingArtifact(
   assertSessionField(body, binding, true)
   const key = requiredString(body, 'key')
   const type = requiredString(body, 'type')
+  if (!['recording', 'screen-recording', 'audio-recording'].includes(type)) {
+    throw new RuntimeWriteTargetGuardError('Runtime recording type was not allowed')
+  }
+  assertRecordingConsent(type as RecordingKind, binding)
   assertRecordingKey(key, binding, type)
   assertObjectCapability(key, binding, now)
 }
@@ -271,10 +298,12 @@ function assertPresign(
     if (!['recording', 'screen-recording', 'audio-recording'].includes(type) || body.key !== undefined) {
       throw new RuntimeWriteTargetGuardError('Runtime presign shape was not allowed')
     }
+    assertRecordingConsent(type as RecordingKind, binding)
     return
   }
   if (action === 'download') {
     const key = requiredString(body, 'key')
+    assertRecordingConsent(recordingIdentity(key).kind, binding)
     assertObjectCapability(key, binding, now)
     return
   }
@@ -297,6 +326,7 @@ function assertMultipart(
     ) {
       throw new RuntimeWriteTargetGuardError('Runtime multipart create shape was not allowed')
     }
+    assertRecordingConsent(type as RecordingKind, binding)
     return
   }
   if (!['sign-part', 'complete', 'abort'].includes(action)) {
@@ -305,6 +335,9 @@ function assertMultipart(
   assertSessionField(body, binding, action === 'complete')
   const key = requiredString(body, 'key')
   const uploadId = requiredString(body, 'uploadId')
+  if (action !== 'abort') {
+    assertRecordingConsent(recordingIdentity(key).kind, binding)
+  }
   assertMultipartCapability(key, uploadId, binding, now)
   if (typeof body.type === 'string') assertRecordingKey(key, binding, body.type)
 }
@@ -325,9 +358,87 @@ function assertLegacyPathRecordingKeys(
     if (typeof value !== 'string') {
       throw new RuntimeWriteTargetGuardError('Runtime recording coordinate was invalid')
     }
+    assertRecordingConsent(kind as RecordingKind, binding)
     assertRecordingKey(value, binding, kind)
     assertObjectCapability(value, binding, now)
   }
+}
+
+function assertPendingReplayKind(
+  kind: ReplayRecordingKind,
+  binding: RuntimeWriteTargetBinding,
+): void {
+  const pending = kind === 'recording'
+    ? binding.cameraMediaStatus === 'pending'
+    : binding.screenMediaStatus === 'pending' &&
+      supportsHireDisplayCapture(binding.consentVersion)
+  if (!pending) {
+    throw new RuntimeWriteTargetGuardError(
+      'Runtime replay upload is no longer pending',
+      410,
+    )
+  }
+}
+
+function replayKindFromBodyType(
+  body: Record<string, unknown>,
+): ReplayRecordingKind {
+  const type = requiredString(body, 'type')
+  if (type !== 'recording' && type !== 'screen-recording') {
+    throw new RuntimeWriteTargetGuardError(
+      'Runtime post-result write was not a replay upload',
+      410,
+    )
+  }
+  return type
+}
+
+function assertPostResultReplayWrite(
+  input: RuntimeWriteTargetGuardInput,
+  target: NonNullable<ReturnType<typeof resolveHireRuntimeWriteTarget>>,
+): void {
+  const { binding } = input
+  if (binding.publishedRevision === undefined) return
+  if (
+    !Number.isInteger(binding.publishedRevision) ||
+    binding.publishedRevision < 1 ||
+    binding.publishedRevision >= MAX_RESULT_REVISION
+  ) {
+    throw new RuntimeWriteTargetGuardError(
+      'Runtime replay publication window is closed',
+      410,
+    )
+  }
+  const body = input.requestBody ?? {}
+
+  switch (target.coordinates) {
+    case 'recording-artifact':
+      assertPendingReplayKind(replayKindFromBodyType(body), binding)
+      return
+    case 'storage-presign':
+      if (body.action !== 'upload') break
+      assertPendingReplayKind(replayKindFromBodyType(body), binding)
+      return
+    case 'storage-multipart': {
+      if (body.action === 'abort') return
+      if (body.action === 'create') {
+        assertPendingReplayKind(replayKindFromBodyType(body), binding)
+        return
+      }
+      const key = requiredString(body, 'key')
+      const kind = recordingIdentity(key).kind
+      if (kind === 'audio-recording') break
+      assertPendingReplayKind(kind, binding)
+      return
+    }
+    default:
+      break
+  }
+
+  throw new RuntimeWriteTargetGuardError(
+    'Runtime interview writes are closed after result publication',
+    410,
+  )
 }
 
 export function assertRuntimeWriteTargetBound(
@@ -336,8 +447,14 @@ export function assertRuntimeWriteTargetBound(
   const target = resolveHireRuntimeWriteTarget(input.pathname, input.method)
   if (!target) throw new RuntimeWriteTargetGuardError('Runtime write target was not inventoried')
   const { binding } = input
+  const completedReplay =
+    binding.status === 'completed' &&
+    binding.publishedRevision !== undefined &&
+    Number.isInteger(binding.publishedRevision) &&
+    binding.publishedRevision >= 1 &&
+    binding.publishedRevision < MAX_RESULT_REVISION
   if (
-    binding.status !== 'active' ||
+    (binding.status !== 'active' && !completedReplay) ||
     !binding.runtimeSessionId ||
     !sameId(binding.runtimeSessionId, binding.runtimeSessionId)
   ) {
@@ -381,6 +498,7 @@ export function assertRuntimeWriteTargetBound(
     case 'none':
       break
   }
+  assertPostResultReplayWrite(input, target)
 }
 
 export const __runtimeWriteTargetGuard = {

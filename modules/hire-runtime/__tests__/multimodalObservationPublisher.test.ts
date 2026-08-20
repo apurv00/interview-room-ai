@@ -171,6 +171,30 @@ describe('Hire-native multimodal observation publisher', () => {
     )
   })
 
+  it('still bridges observations after late replay advances the result revision', async () => {
+    const candidate = outbox()
+    mocks.outboxFindOneAndUpdate.mockResolvedValue(candidate)
+    mocks.bindingFindOneAndUpdate.mockResolvedValue({
+      _id: objectId('9'.repeat(24)),
+      publishedRevision: 3,
+    })
+
+    await expect(
+      __hireMultimodalObservationPublisher.publishOneObservation(
+        candidate as never,
+        new Date('2026-08-17T00:00:00.000Z'),
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.bindingFindOneAndUpdate).toHaveBeenCalledTimes(2)
+    for (const [filter] of mocks.bindingFindOneAndUpdate.mock.calls) {
+      expect(filter).toEqual(expect.objectContaining({
+        publishedRevision: { $gte: 1 },
+      }))
+    }
+    expect(mocks.publish).toHaveBeenCalledOnce()
+  })
+
   it('does not bridge a claimed report once the runtime deadline tombstone exists', async () => {
     mocks.retentionExists.mockResolvedValueOnce(true)
 

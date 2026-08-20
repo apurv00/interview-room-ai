@@ -1,4 +1,5 @@
 import mongoose, { Document, Model, Schema } from 'mongoose'
+import { HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS } from '@shared/contracts/hireMultimodalObservationBridge'
 
 export type HireRuntimeObservationCaptureState =
   | 'captured'
@@ -7,7 +8,27 @@ export type HireRuntimeObservationCaptureState =
 
 export type HireRuntimeObservationEventKind =
   | 'browser_window_not_visible'
+  | 'browser_window_focus_lost'
+  | 'fullscreen_exited'
+  | 'camera_interrupted'
+  | 'microphone_interrupted'
+  | 'screen_share_wrong_surface'
+  | 'screen_share_interrupted'
+  | 'screen_recording_interrupted'
   | 'sustained_camera_away'
+  | 'speech_video_unverified'
+
+export type HireRuntimeObservationEventSource =
+  | 'camera'
+  | 'browser_visibility'
+  | 'browser_focus'
+  | 'fullscreen'
+  | 'camera_track'
+  | 'microphone_track'
+  | 'display_surface'
+  | 'display_track'
+  | 'display_recorder'
+  | 'speech_video_corroboration'
 
 export interface IHireRuntimeMultimodalObservationOutbox extends Document {
   workspaceId: mongoose.Types.ObjectId
@@ -28,10 +49,16 @@ export interface IHireRuntimeMultimodalObservationOutbox extends Document {
     capture: {
       camera: HireRuntimeObservationCaptureState
       browserVisibility: HireRuntimeObservationCaptureState
+      browserFocus?: HireRuntimeObservationCaptureState
+      fullscreen?: HireRuntimeObservationCaptureState
+      cameraTrack?: HireRuntimeObservationCaptureState
+      microphoneTrack?: HireRuntimeObservationCaptureState
+      displayShare?: HireRuntimeObservationCaptureState
+      speechVideoCorroboration?: HireRuntimeObservationCaptureState
     }
     events: Array<{
       kind: HireRuntimeObservationEventKind
-      source: 'camera' | 'browser_visibility'
+      source: HireRuntimeObservationEventSource
       startMs: number
       endMs: number
     }>
@@ -56,7 +83,13 @@ const HireRuntimeMultimodalObservationOutboxSchema =
       principalId: { type: Schema.Types.ObjectId, required: true, immutable: true },
       runtimeSessionId: { type: Schema.Types.ObjectId, required: true, immutable: true },
       attempt: { type: Number, required: true, min: 1, max: 10, immutable: true },
-      revision: { type: Number, required: true, min: 1, max: 1, immutable: true },
+      revision: {
+        type: Number,
+        required: true,
+        min: 1,
+        max: HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS,
+        immutable: true,
+      },
       consentVersion: { type: String, required: true, maxlength: 80, immutable: true },
       policyVersion: { type: String, required: true, maxlength: 80, immutable: true },
       eventId: { type: String, required: true, match: /^[a-f0-9]{64}$/, immutable: true },
@@ -84,6 +117,30 @@ const HireRuntimeMultimodalObservationOutboxSchema =
             enum: ['captured', 'unavailable', 'insufficient_signal'],
             required: true,
           },
+          browserFocus: {
+            type: String,
+            enum: ['captured', 'unavailable', 'insufficient_signal'],
+          },
+          fullscreen: {
+            type: String,
+            enum: ['captured', 'unavailable', 'insufficient_signal'],
+          },
+          cameraTrack: {
+            type: String,
+            enum: ['captured', 'unavailable', 'insufficient_signal'],
+          },
+          microphoneTrack: {
+            type: String,
+            enum: ['captured', 'unavailable', 'insufficient_signal'],
+          },
+          displayShare: {
+            type: String,
+            enum: ['captured', 'unavailable', 'insufficient_signal'],
+          },
+          speechVideoCorroboration: {
+            type: String,
+            enum: ['captured', 'unavailable', 'insufficient_signal'],
+          },
         },
         events: {
           type: [
@@ -91,12 +148,34 @@ const HireRuntimeMultimodalObservationOutboxSchema =
               {
                 kind: {
                   type: String,
-                  enum: ['browser_window_not_visible', 'sustained_camera_away'],
+                  enum: [
+                    'browser_window_not_visible',
+                    'browser_window_focus_lost',
+                    'fullscreen_exited',
+                    'camera_interrupted',
+                    'microphone_interrupted',
+                    'screen_share_wrong_surface',
+                    'screen_share_interrupted',
+                    'screen_recording_interrupted',
+                    'sustained_camera_away',
+                    'speech_video_unverified',
+                  ],
                   required: true,
                 },
                 source: {
                   type: String,
-                  enum: ['camera', 'browser_visibility'],
+                  enum: [
+                    'camera',
+                    'browser_visibility',
+                    'browser_focus',
+                    'fullscreen',
+                    'camera_track',
+                    'microphone_track',
+                    'display_surface',
+                    'display_track',
+                    'display_recorder',
+                    'speech_video_corroboration',
+                  ],
                   required: true,
                 },
                 startMs: { type: Number, required: true, min: 0, max: 30 * 60 * 1_000 },

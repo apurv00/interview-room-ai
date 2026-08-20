@@ -4,6 +4,7 @@ import {
   HIRE_RUNTIME_WRITE_DRAIN_MS,
   runtimeWriteDrainMs,
 } from '@shared/contracts/hireRuntimeWriteFence'
+import { HIRE_AI_CONSENT_VERSION } from '@hire-multimodal-boundary'
 import { HireRuntimeBinding, type IHireRuntimeBinding } from '../models/HireRuntimeBinding'
 import { connectHireRuntimeDB } from './runtimeBoundary'
 
@@ -19,6 +20,30 @@ export class RuntimeWriteFenceError extends Error {
 
 export { runtimeWriteDrainMs }
 
+const MAX_RESULT_REVISION = 10
+
+function isReplayContinuationTarget(pathname: string, method: string): boolean {
+  return method.toUpperCase() === 'POST' && (
+    pathname === '/api/storage/presign' ||
+    pathname === '/api/storage/multipart' ||
+    pathname === '/api/recordings/finalize'
+  )
+}
+
+function completedReplayScope(): Record<string, unknown> {
+  return {
+    status: 'completed',
+    publishedRevision: { $gte: 1, $lt: MAX_RESULT_REVISION },
+    $or: [
+      { cameraMediaStatus: 'pending' },
+      {
+        screenMediaStatus: 'pending',
+        consentVersion: HIRE_AI_CONSENT_VERSION,
+      },
+    ],
+  }
+}
+
 export async function claimRuntimeWriteCapability(input: {
   workspaceId: string
   principalId: string
@@ -32,11 +57,14 @@ export async function claimRuntimeWriteCapability(input: {
   }
   await connectHireRuntimeDB()
   const now = input.now ?? new Date()
+  const statusScope = isReplayContinuationTarget(input.pathname, input.method)
+    ? { $or: [{ status: 'active' }, completedReplayScope()] }
+    : { status: 'active' }
   const binding = await HireRuntimeBinding.findOneAndUpdate(
     {
       workspaceId: input.workspaceId,
       principalId: input.principalId,
-      status: 'active',
+      ...statusScope,
       runtimeSessionId: { $exists: true },
       revokedAt: { $exists: false },
       purgePersonalData: { $ne: true },
@@ -71,6 +99,33 @@ function assertCapabilityKey(input: {
   }
 }
 
+function capabilityKind(key: string): 'recording' | 'screen-recording' | 'audio-recording' {
+  if (/-screen-\d{10,16}\.webm$/i.test(key)) return 'screen-recording'
+  if (/-audio-\d{10,16}\.webm$/i.test(key)) return 'audio-recording'
+  return 'recording'
+}
+
+function storageCapabilityStatusScope(key: string): Record<string, unknown> {
+  const kind = capabilityKind(key)
+  const replayScope = kind === 'recording'
+    ? {
+        status: 'completed',
+        publishedRevision: { $gte: 1, $lt: MAX_RESULT_REVISION },
+        cameraMediaStatus: 'pending',
+      }
+    : kind === 'screen-recording'
+      ? {
+          status: 'completed',
+          publishedRevision: { $gte: 1, $lt: MAX_RESULT_REVISION },
+          screenMediaStatus: 'pending',
+          consentVersion: HIRE_AI_CONSENT_VERSION,
+        }
+      : null
+  return replayScope
+    ? { $or: [{ status: { $in: ['provisioned', 'active'] } }, replayScope] }
+    : { status: { $in: ['provisioned', 'active'] } }
+}
+
 export async function recordRuntimeStorageCapability(input: {
   workspaceId: string
   bindingId: string
@@ -89,7 +144,7 @@ export async function recordRuntimeStorageCapability(input: {
     workspaceId: input.workspaceId,
     principalId: input.principalId,
     runtimeSessionId: input.runtimeSessionId,
-    status: { $in: ['provisioned', 'active'] },
+    ...storageCapabilityStatusScope(input.key),
     revokedAt: { $exists: false },
     purgePersonalData: { $ne: true },
   }

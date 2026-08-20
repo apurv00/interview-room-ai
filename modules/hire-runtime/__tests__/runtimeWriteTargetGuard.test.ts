@@ -7,6 +7,10 @@ import {
   assertRuntimeWriteTargetBound,
   type RuntimeWriteTargetBinding,
 } from '../services/runtimeWriteTargetGuard'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+} from '@hire-multimodal-boundary'
 
 const ids = {
   workspaceA: '1'.repeat(24),
@@ -40,6 +44,7 @@ function binding(
   return {
     bindingId: ids[`binding${suffix}`],
     status: 'active',
+    consentVersion: HIRE_AI_CONSENT_VERSION,
     workspaceId: ids[`workspace${suffix}`],
     applicationId: ids[`application${suffix}`],
     roundId: ids[`round${suffix}`],
@@ -290,5 +295,204 @@ describe('Hire runtime two-tenant coordinate guard', () => {
         }],
       }),
     })).not.toThrow()
+  })
+
+  it('admits display recording only for the exact V6 consent version', () => {
+    const v5Binding = binding('A', {
+      consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+      issuedObjectCapabilities: [{
+        key: screenKeyA,
+        runtimeSessionId: ids.sessionA,
+        expiresAt,
+      }],
+      issuedMultipartCapabilities: [{
+        key: screenKeyA,
+        runtimeSessionId: ids.sessionA,
+        uploadId: 'screen-upload-A',
+        expiresAt,
+      }],
+    })
+
+    expect(() => assertBound({
+      pathname: '/api/storage/presign',
+      body: {
+        action: 'upload',
+        type: 'screen-recording',
+        sessionId: ids.sessionA,
+      },
+      binding: v5Binding,
+    })).toThrow(/not consented/)
+    expect(() => assertBound({
+      pathname: '/api/storage/multipart',
+      body: {
+        action: 'create',
+        type: 'screen-recording',
+        sessionId: ids.sessionA,
+      },
+      binding: v5Binding,
+    })).toThrow(/not consented/)
+    expect(() => assertBound({
+      pathname: '/api/storage/multipart',
+      body: {
+        action: 'sign-part',
+        type: 'screen-recording',
+        sessionId: ids.sessionA,
+        key: screenKeyA,
+        uploadId: 'screen-upload-A',
+        partNumber: 1,
+      },
+      binding: v5Binding,
+    })).toThrow(/not consented/)
+    expect(() => assertBound({
+      pathname: '/api/storage/multipart',
+      body: {
+        action: 'complete',
+        type: 'screen-recording',
+        sessionId: ids.sessionA,
+        key: screenKeyA,
+        uploadId: 'screen-upload-A',
+        parts: [{ ETag: 'etag', PartNumber: 1 }],
+      },
+      binding: v5Binding,
+    })).toThrow(/not consented/)
+    expect(() => assertBound({
+      pathname: '/api/recordings/finalize',
+      body: {
+        type: 'screen-recording',
+        sessionId: ids.sessionA,
+        key: screenKeyA,
+        sizeBytes: 10,
+      },
+      binding: v5Binding,
+    })).toThrow(/not consented/)
+    expect(() => assertBound({
+      pathname: `/api/interviews/${ids.sessionA}`,
+      method: 'PATCH',
+      body: { screenRecordingR2Key: screenKeyA, screenRecordingSizeBytes: 10 },
+      binding: v5Binding,
+    })).toThrow(/not consented/)
+
+    expect(() => assertBound({
+      pathname: '/api/storage/multipart',
+      body: {
+        action: 'abort',
+        type: 'screen-recording',
+        key: screenKeyA,
+        uploadId: 'screen-upload-A',
+      },
+      binding: v5Binding,
+    })).not.toThrow()
+    expect(() => assertBound({
+      pathname: '/api/storage/presign',
+      body: { action: 'upload', type: 'recording', sessionId: ids.sessionA },
+      binding: v5Binding,
+    })).not.toThrow()
+    expect(() => assertBound({
+      pathname: '/api/storage/presign',
+      body: {
+        action: 'upload',
+        type: 'audio-recording',
+        sessionId: ids.sessionA,
+      },
+      binding: v5Binding,
+    })).not.toThrow()
+  })
+
+  it('keeps only the pending replay uploads writable after result publication', () => {
+    const postResultBinding = binding('A', {
+      status: 'completed',
+      publishedRevision: 1,
+      cameraMediaStatus: 'pending',
+      screenMediaStatus: 'pending',
+      issuedObjectCapabilities: [
+        { key: keyA, runtimeSessionId: ids.sessionA, expiresAt },
+        { key: screenKeyA, runtimeSessionId: ids.sessionA, expiresAt },
+      ],
+      issuedMultipartCapabilities: [{
+        key: screenKeyA,
+        runtimeSessionId: ids.sessionA,
+        uploadId: 'screen-upload-A',
+        expiresAt,
+      }],
+    })
+
+    expect(() => assertBound({
+      pathname: '/api/storage/presign',
+      body: { action: 'upload', type: 'recording', sessionId: ids.sessionA },
+      binding: postResultBinding,
+    })).not.toThrow()
+    expect(() => assertBound({
+      pathname: '/api/storage/multipart',
+      body: {
+        action: 'sign-part',
+        type: 'screen-recording',
+        sessionId: ids.sessionA,
+        key: screenKeyA,
+        uploadId: 'screen-upload-A',
+        partNumber: 1,
+      },
+      binding: postResultBinding,
+    })).not.toThrow()
+    expect(() => assertBound({
+      pathname: '/api/recordings/finalize',
+      body: {
+        type: 'recording',
+        sessionId: ids.sessionA,
+        key: keyA,
+        sizeBytes: 10,
+      },
+      binding: postResultBinding,
+    })).not.toThrow()
+    expect(() => assertBound({
+      pathname: `/api/interviews/${ids.sessionA}`,
+      method: 'PATCH',
+      body: { screenRecordingR2Key: screenKeyA, screenRecordingSizeBytes: 10 },
+      binding: postResultBinding,
+    })).toThrow(/closed/)
+
+    for (const [pathname, body] of [
+      ['/api/generate-question', { sessionId: ids.sessionA }],
+      ['/api/tts', { text: 'late prompt' }],
+      [
+        '/api/storage/presign',
+        { action: 'upload', type: 'audio-recording', sessionId: ids.sessionA },
+      ],
+      [
+        '/api/storage/presign',
+        { action: 'download', key: keyA },
+      ],
+    ] as const) {
+      expect(() => assertBound({
+        pathname,
+        method: pathname.startsWith('/api/interviews/') ? 'PATCH' : 'POST',
+        body,
+        binding: postResultBinding,
+      })).toThrow(/closed|not a replay/)
+    }
+
+    expect(() => assertBound({
+      pathname: '/api/recordings/finalize',
+      body: {
+        type: 'recording',
+        sessionId: ids.sessionA,
+        key: keyA,
+        sizeBytes: 10,
+      },
+      binding: binding('A', {
+        status: 'completed',
+        publishedRevision: 2,
+        cameraMediaStatus: 'published',
+      }),
+    })).toThrow(/no longer pending/)
+
+    expect(() => assertBound({
+      pathname: '/api/storage/presign',
+      body: { action: 'upload', type: 'recording', sessionId: ids.sessionA },
+      binding: binding('A', {
+        status: 'completed',
+        publishedRevision: 10,
+        cameraMediaStatus: 'pending',
+      }),
+    })).toThrow(/active session/)
   })
 })

@@ -81,9 +81,19 @@ describe('Hire engine bridge contract', () => {
       resultDigest: HASH,
       results: { overallScore: 80 },
       transcript: [],
-      media: [],
+      media: [
+        {
+          kind: 'screen',
+          sourceKey: `recordings/${ID_A}/${ID_A}-screen-1723248000000.webm`,
+          contentType: 'video/webm',
+          sizeBytes: 1_024,
+          sha256: HASH,
+        },
+      ],
     }
-    expect(HireEngineResultIngestionSchema.parse(payload).roundId).toBe(ID_C)
+    const parsed = HireEngineResultIngestionSchema.parse(payload)
+    expect(parsed.roundId).toBe(ID_C)
+    expect(parsed.media[0].kind).toBe('screen')
     const { workspaceId: _workspaceId, ...withoutWorkspace } = payload
     expect(() => HireEngineResultIngestionSchema.parse(withoutWorkspace)).toThrow()
   })
