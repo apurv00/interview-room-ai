@@ -3,7 +3,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@shared/auth/authOptions'
 import { HireRuntimeBootstrapResponseSchema } from '@shared/contracts/hireEngineBridge'
 import { logger } from '@shared/logger'
-import { supportsHireMultimodalObservations } from '@hire/policies/aiInterviewConsent'
+import {
+  supportsHireDisplayCapture,
+  supportsHireMultimodalObservations,
+} from '@hire/policies/aiInterviewConsent'
 import {
   activeBindingForPrincipal,
   HireRuntimeBindingError,
@@ -38,6 +41,12 @@ export async function GET() {
     // create a recruiter-visible analysis artifact.
     if (supportsHireMultimodalObservations(binding.consentVersion)) {
       response.headers.set('X-Hire-Multimodal-Observations', '1')
+    }
+    // The authenticated bootstrap response derives this marker from the
+    // immutable signed runtime binding. It is a browser setup requirement;
+    // runtime capture endpoints still re-check the binding and V6 consent.
+    if (supportsHireDisplayCapture(binding.consentVersion)) {
+      response.headers.set('X-Hire-Display-Capture-Required', '1')
     }
     return response
   } catch (error) {

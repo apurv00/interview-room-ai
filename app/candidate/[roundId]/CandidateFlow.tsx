@@ -474,7 +474,7 @@ export default function CandidateFlow({
   const consentItems: Array<{ key: ConsentKey; text: string }> = [
     {
       key: 'recording',
-      text: 'I consent to camera and microphone recording, transcription, Hire analysis, and sharing the interview recording and review with the hiring team.',
+      text: 'I consent to the required camera and microphone access, recording, transcription, Hire analysis, and sharing the interview recording and review with the hiring team.',
     },
     {
       key: 'identityPhoto',
@@ -482,11 +482,11 @@ export default function CandidateFlow({
     },
     {
       key: 'attentionMonitoring',
-      text: 'I consent to private retention and analysis of structured facial-landmark and browser-window observations for the Hire review.',
+      text: 'I consent to full-screen interview validation, including browser visibility or focus changes, full-screen exit, and camera or microphone interruptions being timestamped for the Hire review.',
     },
     {
       key: 'aiEvaluation',
-      text: 'I consent to AI evaluation of this interview and understand that a human makes every hiring decision.',
+      text: 'I consent to AI evaluation of this interview, including neutral audio-video speech-verification signals for human review, and understand that a human makes every hiring decision.',
     },
   ]
 

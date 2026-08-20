@@ -29,6 +29,8 @@ const SESSION_ID = 'b'.repeat(24)
 const BINDING_ID = 'c'.repeat(24)
 const WORKSPACE_ID = 'd'.repeat(24)
 const KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-1723248000000.webm`
+const SCREEN_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-screen-1723248000000.webm`
+const AUDIO_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-audio-1723248000000.webm`
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -91,6 +93,43 @@ describe('runtime host write fence', () => {
     ).rejects.toMatchObject({ status: 410 })
   })
 
+  it('claims a completed binding only for a bounded pending replay continuation', async () => {
+    await claimRuntimeWriteCapability({
+      workspaceId: WORKSPACE_ID,
+      principalId: PRINCIPAL_ID,
+      pathname: '/api/storage/multipart',
+      method: 'POST',
+    })
+    expect(mocks.findOneAndUpdate.mock.calls[0][0]).toMatchObject({
+      $or: [
+        { status: 'active' },
+        {
+          status: 'completed',
+          publishedRevision: { $gte: 1, $lt: 10 },
+          $or: [
+            { cameraMediaStatus: 'pending' },
+            {
+              screenMediaStatus: 'pending',
+              consentVersion: 'hire-ai-v6-2026-08-20',
+            },
+          ],
+        },
+      ],
+    })
+
+    mocks.findOneAndUpdate.mockClear()
+    await claimRuntimeWriteCapability({
+      workspaceId: WORKSPACE_ID,
+      principalId: PRINCIPAL_ID,
+      pathname: '/api/generate-feedback',
+      method: 'POST',
+    })
+    expect(mocks.findOneAndUpdate.mock.calls[0][0]).toMatchObject({
+      status: 'active',
+    })
+    expect(mocks.findOneAndUpdate.mock.calls[0][0]).not.toHaveProperty('$or')
+  })
+
   it('inventories an issued object and multipart upload before exposure', async () => {
     const now = new Date('2026-08-10T00:00:00.000Z')
     await recordRuntimeStorageCapability({
@@ -116,6 +155,41 @@ describe('runtime host write fence', () => {
         },
       },
     })
+  })
+
+  it('inventories completed capabilities only for their exact pending replay kind', async () => {
+    await recordRuntimeStorageCapability({
+      workspaceId: WORKSPACE_ID,
+      bindingId: BINDING_ID,
+      principalId: PRINCIPAL_ID,
+      runtimeSessionId: SESSION_ID,
+      key: SCREEN_KEY,
+      uploadId: 'screen-upload',
+    })
+    expect(mocks.updateOne.mock.calls[0][0]).toMatchObject({
+      $or: [
+        { status: { $in: ['provisioned', 'active'] } },
+        {
+          status: 'completed',
+          publishedRevision: { $gte: 1, $lt: 10 },
+          screenMediaStatus: 'pending',
+          consentVersion: 'hire-ai-v6-2026-08-20',
+        },
+      ],
+    })
+
+    mocks.updateOne.mockClear()
+    await recordRuntimeStorageCapability({
+      workspaceId: WORKSPACE_ID,
+      bindingId: BINDING_ID,
+      principalId: PRINCIPAL_ID,
+      runtimeSessionId: SESSION_ID,
+      key: AUDIO_KEY,
+    })
+    expect(mocks.updateOne.mock.calls[0][0]).toMatchObject({
+      status: { $in: ['provisioned', 'active'] },
+    })
+    expect(mocks.updateOne.mock.calls[0][0]).not.toHaveProperty('$or')
   })
 
   it('refuses to inventory a foreign R2 key', async () => {

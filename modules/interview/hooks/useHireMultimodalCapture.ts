@@ -6,6 +6,8 @@ const CAPTURE_INTERVAL_MS = 200
 const MAX_CAMERA_SAMPLES = 10_000
 const MAX_VISIBILITY_SPANS = 200
 const MAX_DURATION_MS = 30 * 60 * 1_000
+const FACIAL_SPEECH_MOTION_RATIO = 0.006
+const FACIAL_SPEECH_MOTION_HOLD_MS = 1_500
 // Match the reviewed, lockfile-resolved @mediapipe/tasks-vision package.
 // Never use @latest for code that receives a live candidate camera stream.
 const MEDIAPIPE_TASKS_VISION_VERSION = '0.10.34'
@@ -33,8 +35,10 @@ export interface HireMultimodalCapturePayload {
   }
 }
 
+type FaceLandmark = { x: number; y: number }
+
 type FaceLandmarkerResult = {
-  faceLandmarks?: Array<Array<{ x: number; y: number }>>
+  faceLandmarks?: Array<FaceLandmark[]>
   facialTransformationMatrixes?: Array<{ data: ArrayLike<number> }>
 }
 
@@ -70,6 +74,58 @@ function appendVisibilitySpan(
 }
 
 /**
+ * A face-relative mouth-opening ratio used only in browser memory. It is
+ * discarded after it updates a boolean corroboration proxy; no geometry is
+ * included in any capture payload.
+ */
+function normalizedMouthOpening(landmarks: FaceLandmark[]): number | null {
+  const upperLip = landmarks[13]
+  const lowerLip = landmarks[14]
+  const leftEye = landmarks[33]
+  const rightEye = landmarks[263]
+  if (!upperLip || !lowerLip || !leftEye || !rightEye) return null
+  const faceWidth = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y)
+  if (!Number.isFinite(faceWidth) || faceWidth <= 0) return null
+  const opening = Math.hypot(lowerLip.x - upperLip.x, lowerLip.y - upperLip.y)
+  return Number.isFinite(opening) ? opening / faceWidth : null
+}
+
+function nextFacialSpeechActivity(input: {
+  previousOpening: number | null
+  activeUntilMs: number
+  opening: number | null
+  atMs: number
+}): {
+  previousOpening: number | null
+  activeUntilMs: number
+  facialSpeechActive: boolean | null
+} {
+  if (input.opening === null) {
+    return {
+      previousOpening: null,
+      activeUntilMs: 0,
+      facialSpeechActive: null,
+    }
+  }
+  if (input.previousOpening === null) {
+    return {
+      previousOpening: input.opening,
+      activeUntilMs: input.activeUntilMs,
+      facialSpeechActive: null,
+    }
+  }
+  const moved = Math.abs(input.opening - input.previousOpening) >= FACIAL_SPEECH_MOTION_RATIO
+  const activeUntilMs = moved
+    ? Math.max(input.activeUntilMs, input.atMs + FACIAL_SPEECH_MOTION_HOLD_MS)
+    : input.activeUntilMs
+  return {
+    previousOpening: input.opening,
+    activeUntilMs,
+    facialSpeechActive: input.atMs <= activeUntilMs,
+  }
+}
+
+/**
  * Hire-only browser collection. It deliberately keeps only bounded source
  * samples in memory until the interview ends; the runtime derives fixed,
  * neutral intervals and discards these samples without writing raw landmarks,
@@ -78,6 +134,16 @@ function appendVisibilitySpan(
 export function useHireMultimodalCapture(): {
   startCapture: (video: HTMLVideoElement) => Promise<void>
   stopCapture: () => HireMultimodalCapturePayload
+  /**
+   * Current local MediaPipe presence only. `null` means no detection result
+   * has arrived yet; it is deliberately distinct from a detected no-face.
+   */
+  getFacePresent: () => boolean | null
+  /**
+   * Current local mouth-motion proxy. It is only a boolean corroboration cue,
+   * never a speaker identity or a persisted facial measurement.
+   */
+  getFacialSpeechActive: () => boolean | null
 } {
   const samplesRef = useRef<HireMultimodalCameraSample[]>([])
   const hiddenSpansRef = useRef<HireMultimodalVisibilitySpan[]>([])
@@ -88,6 +154,10 @@ export function useHireMultimodalCapture(): {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const landmarkerRef = useRef<FaceLandmarker | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const facePresentRef = useRef<boolean | null>(null)
+  const facialSpeechActiveRef = useRef<boolean | null>(null)
+  const previousMouthOpeningRef = useRef<number | null>(null)
+  const facialSpeechActiveUntilMsRef = useRef(0)
   const generationRef = useRef(0)
 
   const stopCapture = useCallback((): HireMultimodalCapturePayload => {
@@ -116,6 +186,10 @@ export function useHireMultimodalCapture(): {
       landmarkerRef.current = null
     }
     videoRef.current = null
+    facePresentRef.current = null
+    facialSpeechActiveRef.current = null
+    previousMouthOpeningRef.current = null
+    facialSpeechActiveUntilMsRef.current = 0
 
     const result: HireMultimodalCapturePayload = {
       cameraSamples: samplesRef.current,
@@ -138,6 +212,10 @@ export function useHireMultimodalCapture(): {
     samplesRef.current = []
     hiddenSpansRef.current = []
     videoRef.current = video
+    facePresentRef.current = null
+    facialSpeechActiveRef.current = null
+    previousMouthOpeningRef.current = null
+    facialSpeechActiveUntilMsRef.current = 0
 
     if (typeof document !== 'undefined') {
       visibilityAvailableRef.current = true
@@ -195,6 +273,20 @@ export function useHireMultimodalCapture(): {
         try {
           const result = landmarker.detectForVideo(activeVideo, performance.now())
           const landmarks = result.faceLandmarks?.[0]
+          // Update this before the iris/pose guard. A current frame with no
+          // face is meaningful to the VAD/face corroboration sampler, while a
+          // frame with a face but incomplete iris geometry remains unusable
+          // for the separate camera-away sample.
+          facePresentRef.current = Boolean(landmarks && landmarks.length > 0)
+          const activity = nextFacialSpeechActivity({
+            previousOpening: previousMouthOpeningRef.current,
+            activeUntilMs: facialSpeechActiveUntilMsRef.current,
+            opening: landmarks ? normalizedMouthOpening(landmarks) : null,
+            atMs: elapsedMs(startedAtRef.current),
+          })
+          previousMouthOpeningRef.current = activity.previousOpening
+          facialSpeechActiveUntilMsRef.current = activity.activeUntilMs
+          facialSpeechActiveRef.current = activity.facialSpeechActive
           if (!landmarks) return
           const leftIris = landmarks[473] ?? landmarks[468]
           const rightIris = landmarks[468] ?? landmarks[473]
@@ -230,7 +322,18 @@ export function useHireMultimodalCapture(): {
     stopCapture()
   }, [stopCapture])
 
-  return { startCapture, stopCapture }
+  const getFacePresent = useCallback(() => facePresentRef.current, [])
+  const getFacialSpeechActive = useCallback(
+    () => facialSpeechActiveRef.current,
+    [],
+  )
+
+  return {
+    startCapture,
+    stopCapture,
+    getFacePresent,
+    getFacialSpeechActive,
+  }
 }
 
 export const __hireMultimodalCapture = {
@@ -239,4 +342,6 @@ export const __hireMultimodalCapture = {
   clamp,
   elapsedMs,
   appendVisibilitySpan,
+  normalizedMouthOpening,
+  nextFacialSpeechActivity,
 }

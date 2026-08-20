@@ -5,7 +5,7 @@ import { useCallback, useRef, useState } from 'react'
 export interface UseMediaRecorderReturn {
   isRecording: boolean
   recordingDuration: number
-  startRecording: (stream: MediaStream, options?: MediaRecorderOptions) => void
+  startRecording: (stream: MediaStream, options?: MediaRecorderOptions) => boolean
   stopRecording: () => Promise<Blob | null>
   /**
    * Recorder-truth wall-clock span in seconds: live while recording, frozen
@@ -24,27 +24,33 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
   const chunksRef = useRef<Blob[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval>>()
   const resolveRef = useRef<((blob: Blob | null) => void) | null>(null)
+  const completedBlobRef = useRef<Blob | null>(null)
   const startedAtMsRef = useRef<number | null>(null)
   const finalDurationSecondsRef = useRef<number | null>(null)
 
   const startRecording = useCallback((stream: MediaStream, options?: MediaRecorderOptions) => {
-    // Require at least audio; video is optional but preferred
     const audioTracks = stream.getAudioTracks()
-    if (audioTracks.length === 0) {
-      console.warn('No audio tracks available for recording')
-      return
+    const videoTracks = stream.getVideoTracks()
+    if (audioTracks.length === 0 && videoTracks.length === 0) {
+      console.warn('No media tracks available for recording')
+      return false
     }
 
     // Use the full stream (video + audio) when video tracks are present
-    const hasVideo = stream.getVideoTracks().length > 0
+    const hasVideo = videoTracks.length > 0
+    const hasAudio = audioTracks.length > 0
     const recordingStream = hasVideo ? stream : new MediaStream(audioTracks)
 
     // Choose codec — prefer video/webm for full recording, fall back to audio-only
     const mimeType = hasVideo
-      ? (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+      ? (hasAudio && MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
           ? 'video/webm;codecs=vp9,opus'
-          : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+          : !hasAudio && MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+          ? 'video/webm;codecs=vp9'
+          : hasAudio && MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
           ? 'video/webm;codecs=vp8,opus'
+          : !hasAudio && MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+          ? 'video/webm;codecs=vp8'
           : MediaRecorder.isTypeSupported('video/webm')
           ? 'video/webm'
           : '')
@@ -56,7 +62,7 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
 
     if (!mimeType) {
       console.warn('No supported recording format found')
-      return
+      return false
     }
 
     try {
@@ -65,29 +71,46 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
         mimeType,
       })
       chunksRef.current = []
+      completedBlobRef.current = null
+      let finalized = false
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data)
-        }
-      }
-
-      recorder.onstop = () => {
+      const finalizeRecording = () => {
+        if (finalized || recorderRef.current !== recorder) return
+        finalized = true
+        recorderRef.current = null
         clearInterval(timerRef.current)
+        setIsRecording(false)
         if (startedAtMsRef.current !== null) {
           finalDurationSecondsRef.current = (Date.now() - startedAtMsRef.current) / 1000
         }
         const blob = new Blob(chunksRef.current, { type: mimeType })
         chunksRef.current = []
+        completedBlobRef.current = blob
         resolveRef.current?.(blob)
         resolveRef.current = null
       }
 
+      recorder.ondataavailable = (event) => {
+        if (recorderRef.current !== recorder) return
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data)
+        }
+      }
+
+      recorder.onstop = finalizeRecording
+
       recorder.onerror = () => {
-        clearInterval(timerRef.current)
+        if (recorderRef.current !== recorder) return
         setIsRecording(false)
-        resolveRef.current?.(null)
-        resolveRef.current = null
+        if (recorder.state !== 'inactive') {
+          try {
+            recorder.stop()
+          } catch {
+            finalizeRecording()
+          }
+        } else {
+          finalizeRecording()
+        }
       }
 
       recorderRef.current = recorder
@@ -102,13 +125,19 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
       timerRef.current = setInterval(() => {
         setRecordingDuration(Math.floor((Date.now() - startTime) / 1000))
       }, 1000)
+      return true
     } catch (err) {
       console.error('Failed to start MediaRecorder:', err)
+      return false
     }
   }, [])
 
   const stopRecording = useCallback((): Promise<Blob | null> => {
     return new Promise((resolve) => {
+      if (completedBlobRef.current) {
+        resolve(completedBlobRef.current)
+        return
+      }
       if (!recorderRef.current || recorderRef.current.state === 'inactive') {
         resolve(null)
         return

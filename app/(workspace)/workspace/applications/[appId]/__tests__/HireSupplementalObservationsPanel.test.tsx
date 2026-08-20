@@ -3,9 +3,10 @@ import { render, screen } from '@testing-library/react'
 import HireSupplementalObservationsPanel from '../HireSupplementalObservationsPanel'
 
 describe('HireSupplementalObservationsPanel', () => {
-  it('renders bounded neutral intervals separately from assessment scores', () => {
+  it('renders a bounded neutral validation timeline separately from assessment scores', () => {
     render(
       <HireSupplementalObservationsPanel
+        recordingTargetId="interview-recording-round-1"
         observations={[
           {
             observedAt: '2026-08-17T12:00:00.000Z',
@@ -27,12 +28,18 @@ describe('HireSupplementalObservationsPanel', () => {
     )
 
     expect(
-      screen.getByRole('region', { name: 'Supplemental interview observations' }),
+      screen.getByRole('region', { name: 'Interview validation timeline' }),
     ).toBeTruthy()
-    expect(screen.getByText(/Browser window was not visible/i)).toBeTruthy()
+    expect(screen.getByText(/Assessment window was not visible/i)).toBeTruthy()
     expect(screen.getByText(/0:05–0:08/)).toBeTruthy()
+    expect(screen.getByText(/Signal: window visibility/i)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Review recording' })).toHaveAttribute(
+      'href',
+      '#interview-recording-round-1',
+    )
     expect(screen.getByText(/not interview scores/i)).toBeTruthy()
-    expect(screen.getByText(/did not affect a hiring decision, stage, ranking, recommendation, or export/i)).toBeTruthy()
+    expect(screen.getByText(/do not automatically determine a hiring decision, stage, ranking, recommendation, or export/i)).toBeTruthy()
+    expect(screen.queryByText(/did not affect/i)).toBeNull()
     expect(screen.queryByText(/confidence/i)).toBeNull()
   })
 
@@ -53,5 +60,73 @@ describe('HireSupplementalObservationsPanel', () => {
     )
 
     expect(screen.getByText(/not enough supplemental signal/i)).toBeTruthy()
+  })
+
+  it('renders new full-screen, device, and speech-validation signals as neutral review timestamps', () => {
+    render(
+      <HireSupplementalObservationsPanel
+        observations={[
+          {
+            observedAt: '2026-08-19T12:00:00.000Z',
+            report: {
+              status: 'completed',
+              capture: { camera: 'captured', browserVisibility: 'captured' },
+              events: [
+                {
+                  kind: 'fullscreen_exited',
+                  source: 'fullscreen',
+                  startMs: 10_000,
+                  endMs: 10_000,
+                },
+                {
+                  kind: 'microphone_interrupted',
+                  source: 'microphone_track',
+                  startMs: 12_000,
+                  endMs: 15_000,
+                },
+                {
+                  kind: 'speech_video_unverified',
+                  source: 'speech_video_corroboration',
+                  startMs: 30_000,
+                  endMs: 33_000,
+                },
+                {
+                  kind: 'screen_share_wrong_surface',
+                  source: 'display_surface',
+                  startMs: 40_000,
+                  endMs: 42_000,
+                },
+                {
+                  kind: 'screen_share_interrupted',
+                  source: 'display_track',
+                  startMs: 45_000,
+                  endMs: 47_000,
+                },
+                {
+                  kind: 'screen_recording_interrupted',
+                  source: 'display_recorder',
+                  startMs: 48_000,
+                  endMs: 48_000,
+                },
+              ],
+            },
+          },
+        ]}
+      />,
+    )
+
+    expect(screen.getByText(/Full-screen mode was exited/i)).toBeTruthy()
+    expect(screen.getByText(/Microphone capture was interrupted/i)).toBeTruthy()
+    expect(
+      screen.getByText(/Spoken audio could not be verified against the visible candidate/i),
+    ).toBeTruthy()
+    expect(screen.getByText(/Signal: audio-video corroboration/i)).toBeTruthy()
+    expect(screen.getByText(/The required entire display was not shared/i)).toBeTruthy()
+    expect(screen.getByText(/Entire-display sharing was interrupted/i)).toBeTruthy()
+    expect(screen.getByText(/Shared-display recording was interrupted/i)).toBeTruthy()
+    expect(screen.getByText(/Signal: display surface/i)).toBeTruthy()
+    expect(screen.getByText(/Signal: display capture/i)).toBeTruthy()
+    expect(screen.getByText(/Signal: display recording/i)).toBeTruthy()
+    expect(screen.queryByText(/someone else was speaking/i)).toBeNull()
   })
 })

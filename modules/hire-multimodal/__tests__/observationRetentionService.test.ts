@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION } from "@shared/contracts/hireMultimodalObservationBridge";
-import { HIRE_AI_CONSENT_VERSION } from "@hire/policies/aiInterviewConsent";
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V4_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+} from "@hire/policies/aiInterviewConsent";
 
 const mocks = vi.hoisted(() => ({
   roundFind: vi.fn(),
@@ -25,7 +29,9 @@ vi.mock("@hire", () => {
   );
 });
 vi.mock("@hire-multimodal-boundary", () => ({
-  HIRE_AI_CONSENT_VERSION: "hire-ai-v4-2026-08-17",
+  HIRE_AI_CONSENT_VERSION: "hire-ai-v6-2026-08-20",
+  HIRE_AI_V4_CONSENT_VERSION: "hire-ai-v4-2026-08-17",
+  HIRE_AI_V5_CONSENT_VERSION: "hire-ai-v5-2026-08-19",
   HireRound: { find: mocks.roundFind },
 }));
 vi.mock("../models", () => ({
@@ -145,6 +151,8 @@ describe("Hire supplemental-observation retention", () => {
       consentVersion: {
         $in: [
           HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+          HIRE_AI_V4_CONSENT_VERSION,
+          HIRE_AI_V5_CONSENT_VERSION,
           HIRE_AI_CONSENT_VERSION,
         ],
       },

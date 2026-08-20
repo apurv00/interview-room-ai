@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+  HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS,
   HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION,
   HireMultimodalObservationIngestionSchema,
+  HireMultimodalObservationSpeechVideoSampleSchema,
   HireMultimodalObservationRuntimePurgeAckSchema,
   HireMultimodalObservationRuntimePurgeSchema,
   canonicalHireMultimodalObservationJson,
@@ -78,6 +80,99 @@ describe("Hire supplemental-observation bridge contract", () => {
             },
           ],
         },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts only factual entire-display events with their fixed sources", () => {
+    expect(
+      HireMultimodalObservationIngestionSchema.parse({
+        ...payload(),
+        schemaVersion: 2,
+        report: {
+          status: "completed",
+          capture: {
+            camera: "captured",
+            browserVisibility: "captured",
+            displayShare: "captured",
+          },
+          events: [
+            {
+              kind: "screen_share_wrong_surface",
+              source: "display_surface",
+              startMs: 0,
+              endMs: 0,
+            },
+            {
+              kind: "screen_share_interrupted",
+              source: "display_track",
+              startMs: 5_000,
+              endMs: 7_000,
+            },
+            {
+              kind: "screen_recording_interrupted",
+              source: "display_recorder",
+              startMs: 8_000,
+              endMs: 8_000,
+            },
+          ],
+        },
+      }).report.capture.displayShare,
+    ).toBe("captured");
+
+    expect(() =>
+      HireMultimodalObservationIngestionSchema.parse({
+        ...payload(),
+        schemaVersion: 2,
+        report: {
+          ...payload().report,
+          events: [{
+            kind: "screen_share_interrupted",
+            source: "fullscreen",
+            startMs: 5_000,
+            endMs: 7_000,
+          }],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("allows only a boolean facial-speech proxy, never mouth geometry", () => {
+    expect(
+      HireMultimodalObservationSpeechVideoSampleSchema.parse({
+        atMs: 3_000,
+        voiceActive: true,
+        facePresent: true,
+        facialSpeechActive: false,
+      }),
+    ).toEqual({
+      atMs: 3_000,
+      voiceActive: true,
+      facePresent: true,
+      facialSpeechActive: false,
+    });
+    expect(() =>
+      HireMultimodalObservationSpeechVideoSampleSchema.parse({
+        atMs: 3_000,
+        voiceActive: true,
+        facePresent: true,
+        facialSpeechActive: false,
+        mouthOpening: 0.12,
+      }),
+    ).toThrow();
+  });
+
+  it("reserves enough immutable revisions for interruption lifecycle snapshots", () => {
+    expect(
+      HireMultimodalObservationIngestionSchema.parse({
+        ...payload(),
+        revision: HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS,
+      }).revision,
+    ).toBe(HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS);
+    expect(() =>
+      HireMultimodalObservationIngestionSchema.parse({
+        ...payload(),
+        revision: HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS + 1,
       }),
     ).toThrow();
   });

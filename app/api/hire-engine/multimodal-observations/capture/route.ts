@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     // Candidates never receive or render their own derived report. Recruiter
     // access happens only after the separate signed runtime → control bridge.
     return NextResponse.json(
-      { accepted: outcome === 'accepted' },
+      { accepted: outcome === 'accepted', outcome },
       { headers: { 'Cache-Control': 'private, no-store' } },
     )
   } catch (error) {

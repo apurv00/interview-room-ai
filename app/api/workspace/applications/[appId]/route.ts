@@ -9,6 +9,8 @@ import {
 } from "@hire";
 import { HireMultimodalObservation } from "@modules/hire-multimodal/models/HireMultimodalObservation";
 import { getHireMultimodalAnalysisViews } from "@modules/hire-multimodal/services/analysisPresenter";
+import { supportsHireDisplayCapture } from "@hire-multimodal-boundary";
+import type { HireMultimodalObservationReport } from "@shared/contracts/hireMultimodalObservationBridge";
 import {
   serializeApplication,
   serializeCandidate,
@@ -49,7 +51,9 @@ export const GET = composeHireApiRoute({
         .lean(),
       HireMediaAsset.find({
         ...scope,
-        kind: { $in: ["identity_photo", "camera_recording"] },
+        kind: {
+          $in: ["identity_photo", "camera_recording", "screen_recording"],
+        },
         state: "ready",
         active: true,
         // A delayed retention worker must not make expired media discoverable
@@ -77,7 +81,7 @@ export const GET = composeHireApiRoute({
           { purgeEligibleAt: { $gt: now } },
         ],
       })
-        .select("roundId observedAt report")
+        .select("roundId runtimeSessionId revision observedAt report")
         .sort({ observedAt: -1, _id: -1 })
         .lean(),
       getHireMultimodalAnalysisViews({
@@ -90,19 +94,29 @@ export const GET = composeHireApiRoute({
     );
     const photoByRound = new Map<string, (typeof media)[number]>();
     const recordingByRoundAttempt = new Map<string, (typeof media)[number]>();
+    const screenRecordingByRoundAttempt = new Map<
+      string,
+      (typeof media)[number]
+    >();
     for (const asset of media) {
       if (asset.kind === "identity_photo") {
         photoByRound.set(asset.roundId.toString(), asset);
         continue;
       }
-      if (asset.kind !== "camera_recording") continue;
       const key = `${asset.roundId.toString()}:${asset.attemptId.toString()}`;
-      const existing = recordingByRoundAttempt.get(key);
+      const byAttempt =
+        asset.kind === "camera_recording"
+          ? recordingByRoundAttempt
+          : asset.kind === "screen_recording"
+            ? screenRecordingByRoundAttempt
+            : null;
+      if (!byAttempt) continue;
+      const existing = byAttempt.get(key);
       if (
         !existing ||
         existing.capturedAt.getTime() < asset.capturedAt.getTime()
       ) {
-        recordingByRoundAttempt.set(key, asset);
+        byAttempt.set(key, asset);
       }
     }
     const latestAttemptByRound = new Map<string, (typeof attempts)[number]>();
@@ -113,34 +127,44 @@ export const GET = composeHireApiRoute({
         latestAttemptByRound.set(key, attempt);
       }
     }
+    const latestObservationByRuntimeSession = new Map<
+      string,
+      (typeof supplementalObservations)[number]
+    >();
+    for (const observation of supplementalObservations) {
+      // Reporter revisions are cumulative full snapshots. Only surface the
+      // newest successfully bridged snapshot for a given runtime session;
+      // otherwise every earlier event is repeated on the recruiter timeline.
+      const sessionKey = `${observation.roundId.toString()}:${observation.runtimeSessionId.toString()}`;
+      const previous = latestObservationByRuntimeSession.get(sessionKey);
+      if (
+        !previous ||
+        observation.revision > previous.revision ||
+        (observation.revision === previous.revision &&
+          observation.observedAt > previous.observedAt)
+      ) {
+        latestObservationByRuntimeSession.set(sessionKey, observation);
+      }
+    }
     const observationsByRound = new Map<
       string,
       Array<{
         observedAt: Date;
-        report: {
-          status: "completed" | "insufficient_signal";
-          capture: {
-            camera: "captured" | "unavailable" | "insufficient_signal";
-            browserVisibility:
-              "captured" | "unavailable" | "insufficient_signal";
-          };
-          events: Array<{
-            kind: "browser_window_not_visible" | "sustained_camera_away";
-            source: "camera" | "browser_visibility";
-            startMs: number;
-            endMs: number;
-          }>;
-        };
+        report: HireMultimodalObservationReport;
       }>
     >();
-    for (const observation of supplementalObservations) {
+    for (const observation of Array.from(
+      latestObservationByRuntimeSession.values(),
+    )) {
       const key = observation.roundId.toString();
       const current = observationsByRound.get(key) ?? [];
-      current.push({
-        observedAt: observation.observedAt,
-        report: observation.report,
-      });
+      current.push({ observedAt: observation.observedAt, report: observation.report });
       observationsByRound.set(key, current);
+    }
+    for (const observations of Array.from(observationsByRound.values())) {
+      observations.sort(
+        (left, right) => right.observedAt.getTime() - left.observedAt.getTime(),
+      );
     }
     const multimodalAnalysisByRound = new Map(
       multimodalAnalyses.map((analysis) => [analysis.roundId, analysis]),
@@ -166,6 +190,11 @@ export const GET = composeHireApiRoute({
                 `${roundId}:${result.attemptId.toString()}`,
               )
             : undefined;
+          const screenRecordingAsset = result
+            ? screenRecordingByRoundAttempt.get(
+                `${roundId}:${result.attemptId.toString()}`,
+              )
+            : undefined;
           const latestAttempt = latestAttemptByRound.get(roundId);
           const interviewRecording = recording
             ? {
@@ -184,6 +213,28 @@ export const GET = composeHireApiRoute({
                     round.status === "completed"
                   ? { status: "awaiting_transfer" as const }
                   : null;
+          const expectsScreenRecording = supportsHireDisplayCapture(
+            round.consentVersion,
+          );
+          const screenRecording = screenRecordingAsset
+            ? {
+                status: "ready" as const,
+                assetId: screenRecordingAsset._id.toString(),
+                capturedAt: screenRecordingAsset.capturedAt,
+                bytes: screenRecordingAsset.bytes,
+              }
+            : !expectsScreenRecording
+              ? null
+              : result?.piiPurgedAt
+                ? { status: "removed" as const }
+                : latestAttempt?.status === "in_progress"
+                  ? { status: "capturing" as const }
+                  : result ||
+                      latestAttempt?.status === "processing" ||
+                      latestAttempt?.status === "completed" ||
+                      round.status === "completed"
+                    ? { status: "awaiting_transfer" as const }
+                    : null;
           return {
             ...serialized,
             inviteDelivery:
@@ -197,6 +248,7 @@ export const GET = composeHireApiRoute({
             // signed playback URL is minted separately after membership and the
             // complete media coordinate are re-validated server-side.
             interviewRecording,
+            screenRecording,
             multimodalAnalysis: multimodalAnalysisByRound.get(roundId) ?? null,
             mediaPurged: Boolean(result?.piiPurgedAt),
             supplementalObservations:

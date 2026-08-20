@@ -1,5 +1,8 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
-import type { HireMultimodalObservationReport } from "@shared/contracts/hireMultimodalObservationBridge";
+import {
+  HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS,
+  type HireMultimodalObservationReport,
+} from "@shared/contracts/hireMultimodalObservationBridge";
 
 export const HIRE_MULTIMODAL_OBSERVATION_PURGE_REASONS = [
   "job_closed",
@@ -40,13 +43,35 @@ const HireMultimodalObservationEventSchema = new Schema(
   {
     kind: {
       type: String,
-      enum: ["browser_window_not_visible", "sustained_camera_away"],
+      enum: [
+        "browser_window_not_visible",
+        "browser_window_focus_lost",
+        "fullscreen_exited",
+        "camera_interrupted",
+        "microphone_interrupted",
+        "screen_share_wrong_surface",
+        "screen_share_interrupted",
+        "screen_recording_interrupted",
+        "sustained_camera_away",
+        "speech_video_unverified",
+      ],
       required: true,
       immutable: true,
     },
     source: {
       type: String,
-      enum: ["camera", "browser_visibility"],
+      enum: [
+        "camera",
+        "browser_visibility",
+        "browser_focus",
+        "fullscreen",
+        "camera_track",
+        "microphone_track",
+        "display_surface",
+        "display_track",
+        "display_recorder",
+        "speech_video_corroboration",
+      ],
       required: true,
       immutable: true,
     },
@@ -97,7 +122,7 @@ const HireMultimodalObservationSchema = new Schema<IHireMultimodalObservation>(
       type: Number,
       required: true,
       min: 1,
-      max: 1,
+      max: 2,
       immutable: true,
     },
     eventId: {
@@ -110,7 +135,7 @@ const HireMultimodalObservationSchema = new Schema<IHireMultimodalObservation>(
       type: Number,
       required: true,
       min: 1,
-      max: 10,
+      max: HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS,
       immutable: true,
     },
     consentVersion: {
@@ -155,6 +180,36 @@ const HireMultimodalObservationSchema = new Schema<IHireMultimodalObservation>(
           type: String,
           enum: ["captured", "unavailable", "insufficient_signal"],
           required: true,
+          immutable: true,
+        },
+        browserFocus: {
+          type: String,
+          enum: ["captured", "unavailable", "insufficient_signal"],
+          immutable: true,
+        },
+        fullscreen: {
+          type: String,
+          enum: ["captured", "unavailable", "insufficient_signal"],
+          immutable: true,
+        },
+        cameraTrack: {
+          type: String,
+          enum: ["captured", "unavailable", "insufficient_signal"],
+          immutable: true,
+        },
+        microphoneTrack: {
+          type: String,
+          enum: ["captured", "unavailable", "insufficient_signal"],
+          immutable: true,
+        },
+        displayShare: {
+          type: String,
+          enum: ["captured", "unavailable", "insufficient_signal"],
+          immutable: true,
+        },
+        speechVideoCorroboration: {
+          type: String,
+          enum: ["captured", "unavailable", "insufficient_signal"],
           immutable: true,
         },
       },

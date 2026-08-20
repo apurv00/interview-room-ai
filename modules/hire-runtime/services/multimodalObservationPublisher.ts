@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import {
   HIRE_MULTIMODAL_OBSERVATION_BRIDGE_SCHEMA_VERSION,
+  HIRE_MULTIMODAL_OBSERVATION_LEGACY_BRIDGE_SCHEMA_VERSION,
+  HIRE_MULTIMODAL_OBSERVATION_LEGACY_POLICY_VERSION,
   HireMultimodalObservationIngestionSchema,
   type HireMultimodalObservationIngestion,
 } from '@shared/contracts/hireMultimodalObservationBridge'
@@ -79,7 +81,9 @@ async function reserveObservationPublishDrain(
       roundId: outbox.roundId,
       principalId: outbox.principalId,
       runtimeSessionId: outbox.runtimeSessionId,
-      publishedRevision: OBSERVATION_REVISION,
+      // Late camera/screen replay publication can advance the normal result
+      // beyond revision 1 before this independent observation is delivered.
+      publishedRevision: { $gte: OBSERVATION_REVISION },
       status: { $in: ['active', 'completed', 'revoked'] },
       purgePersonalData: { $ne: true },
     },
@@ -168,7 +172,10 @@ function bridgePayload(
 ): HireMultimodalObservationIngestion | null {
   if (!outbox.report) return null
   return HireMultimodalObservationIngestionSchema.parse({
-    schemaVersion: HIRE_MULTIMODAL_OBSERVATION_BRIDGE_SCHEMA_VERSION,
+    schemaVersion:
+      outbox.policyVersion === HIRE_MULTIMODAL_OBSERVATION_LEGACY_POLICY_VERSION
+        ? HIRE_MULTIMODAL_OBSERVATION_LEGACY_BRIDGE_SCHEMA_VERSION
+        : HIRE_MULTIMODAL_OBSERVATION_BRIDGE_SCHEMA_VERSION,
     eventId: outbox.eventId,
     workspaceId: outbox.workspaceId.toString(),
     applicationId: outbox.applicationId.toString(),

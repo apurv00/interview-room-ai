@@ -15,7 +15,10 @@ vi.mock('@modules/hire-runtime/services/bindingService', async () => {
 })
 
 import { GET } from '../bootstrap/route'
-import { HIRE_AI_CONSENT_VERSION } from '@hire/policies/aiInterviewConsent'
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+} from '@hire/policies/aiInterviewConsent'
 
 const PRINCIPAL_ID = '1'.repeat(24)
 const ROUND_ID = '2'.repeat(24)
@@ -65,13 +68,14 @@ describe('GET /api/hire-engine/bootstrap', () => {
     })
     expect(JSON.stringify(body)).not.toContain('must-not-cross@example.com')
     expect(response.headers.get('X-Hire-Multimodal-Observations')).toBeNull()
+    expect(response.headers.get('X-Hire-Display-Capture-Required')).toBeNull()
     expect(mocks.activeBinding).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       principalId: PRINCIPAL_ID,
     })
   })
 
-  it('emits only a boolean collection hint for the current Hire consent', async () => {
+  it('emits authenticated V6 collection and display-capture markers only for current consent', async () => {
     mocks.activeBinding.mockResolvedValue({
       principalId: objectId(PRINCIPAL_ID),
       roundId: objectId(ROUND_ID),
@@ -83,11 +87,27 @@ describe('GET /api/hire-engine/bootstrap', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('X-Hire-Multimodal-Observations')).toBe('1')
+    expect(response.headers.get('X-Hire-Display-Capture-Required')).toBe('1')
     expect(await response.json()).toEqual({
       principalId: PRINCIPAL_ID,
       roundId: ROUND_ID,
       config: CONFIG,
     })
+  })
+
+  it('keeps V5 observation collection enabled without requesting V6 display capture', async () => {
+    mocks.activeBinding.mockResolvedValue({
+      principalId: objectId(PRINCIPAL_ID),
+      roundId: objectId(ROUND_ID),
+      config: hydratedConfig(),
+      consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+    })
+
+    const response = await GET()
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Hire-Multimodal-Observations')).toBe('1')
+    expect(response.headers.get('X-Hire-Display-Capture-Required')).toBeNull()
   })
 
   it('does not disclose bootstrap config without the runtime session', async () => {

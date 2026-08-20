@@ -1,5 +1,10 @@
 import { HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION } from "@shared/contracts/hireMultimodalObservationBridge";
-import { HIRE_AI_CONSENT_VERSION, HireRound } from "@hire-multimodal-boundary";
+import {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V4_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+  HireRound,
+} from "@hire-multimodal-boundary";
 import {
   HireMultimodalAnalysis,
   HireMultimodalAnalysisIngestionEvent,
@@ -86,6 +91,8 @@ export async function scheduleHireMultimodalObservationRetention(input: {
       consentVersion: {
         $in: [
           HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+          HIRE_AI_V4_CONSENT_VERSION,
+          HIRE_AI_V5_CONSENT_VERSION,
           HIRE_AI_CONSENT_VERSION,
         ],
       },

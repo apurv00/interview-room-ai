@@ -41,6 +41,10 @@ import {
   HIRE_AI_V2_DISCLOSURE_DIGEST,
   HIRE_AI_V3_CONSENT_VERSION,
   HIRE_AI_V3_DISCLOSURE_DIGEST,
+  HIRE_AI_V4_CONSENT_VERSION,
+  HIRE_AI_V4_DISCLOSURE_DIGEST,
+  HIRE_AI_V5_CONSENT_VERSION,
+  HIRE_AI_V5_DISCLOSURE_DIGEST,
 } from '@hire/policies/aiInterviewConsent'
 
 const ROUND_ID = '555555555555555555555555'
@@ -159,7 +163,75 @@ describe('POST /api/candidate/[roundId]/bootstrap legacy consent mode', () => {
     })
   })
 
-  it('keeps a current V4 receipt on the normal V4 consent path', async () => {
+  it('exposes legacy continuation for the exact active V4 receipt pair', async () => {
+    mocks.verifyRoundToken.mockResolvedValueOnce({
+      state: 'ok',
+      round: {
+        _id: IDS.roundId,
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        jobId: IDS.jobId,
+        candidateId: IDS.candidateId,
+        candidateEmail: 'candidate@example.com',
+        config: { duration: 30 },
+        authMode: 'magic_link',
+        consentAt: new Date('2026-08-10T00:00:00.000Z'),
+        consentVersion: HIRE_AI_V4_CONSENT_VERSION,
+      },
+    })
+    mocks.consentFindOne.mockReturnValueOnce(
+      selected({
+        consentVersion: HIRE_AI_V4_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_V4_DISCLOSURE_DIGEST,
+      }),
+    )
+
+    const response = await POST(request(), {
+      params: Promise.resolve({ roundId: ROUND_ID }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      state: 'ok',
+      legacyConsentAttempt: true,
+    })
+  })
+
+  it('exposes legacy continuation for the exact active V5 receipt pair', async () => {
+    mocks.verifyRoundToken.mockResolvedValueOnce({
+      state: 'ok',
+      round: {
+        _id: IDS.roundId,
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        jobId: IDS.jobId,
+        candidateId: IDS.candidateId,
+        candidateEmail: 'candidate@example.com',
+        config: { duration: 30 },
+        authMode: 'magic_link',
+        consentAt: new Date('2026-08-10T00:00:00.000Z'),
+        consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+      },
+    })
+    mocks.consentFindOne.mockReturnValueOnce(
+      selected({
+        consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+        disclosureDigest: HIRE_AI_V5_DISCLOSURE_DIGEST,
+      }),
+    )
+
+    const response = await POST(request(), {
+      params: Promise.resolve({ roundId: ROUND_ID }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      state: 'ok',
+      legacyConsentAttempt: true,
+    })
+  })
+
+  it('keeps a current V6 receipt on the normal V6 consent path', async () => {
     mocks.verifyRoundToken.mockResolvedValueOnce({
       state: 'ok',
       round: {

@@ -75,6 +75,7 @@ const IDS = {
 const BODY = Buffer.from('verified-runtime-media')
 const SHA256 = createHash('sha256').update(BODY).digest('hex')
 const SOURCE_KEY = `recordings/${__runtimeMediaIngestion.runtimePrincipalId(IDS.roundId)}/${IDS.runtimeSessionId}-1723248000000.webm`
+const SCREEN_SOURCE_KEY = `recordings/${__runtimeMediaIngestion.runtimePrincipalId(IDS.roundId)}/${IDS.runtimeSessionId}-screen-1723248000001.webm`
 const dbSession = {
   withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
   endSession: vi.fn().mockResolvedValue(undefined),
@@ -176,5 +177,38 @@ describe('runtime media versus verified deletion', () => {
       },
     )
     expect(dbSession.endSession).toHaveBeenCalledOnce()
+  })
+
+  it('stages a shared-display object as screen media under the same privacy fence', async () => {
+    await expect(
+      ingestRuntimeMediaArtifacts({
+        ...IDS,
+        completedAt: new Date('2026-08-10T12:00:00.000Z'),
+        artifacts: [
+          {
+            kind: 'screen',
+            sourceKey: SCREEN_SOURCE_KEY,
+            contentType: 'video/webm',
+            sizeBytes: BODY.byteLength,
+            sha256: SHA256,
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(mocks.CandidatePiiTombstoneError)
+
+    expect(mocks.mediaCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        roundId: IDS.roundId,
+        attemptId: IDS.attemptId,
+        kind: 'screen_recording',
+        state: 'staging',
+        contentType: 'video/webm',
+      }),
+    )
+    expect(
+      (mocks.mediaCreate.mock.calls[0][0] as { objectKey: string }).objectKey,
+    ).toMatch(/-screen-recording\.webm$/)
   })
 })

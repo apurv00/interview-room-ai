@@ -155,6 +155,10 @@ async function handler(req: NextRequest): Promise<Response> {
       binding: {
         bindingId: binding._id.toString(),
         status: binding.status,
+        consentVersion: binding.consentVersion,
+        publishedRevision: binding.publishedRevision,
+        cameraMediaStatus: binding.cameraMediaStatus,
+        screenMediaStatus: binding.screenMediaStatus,
         workspaceId: binding.workspaceId.toString(),
         applicationId: binding.applicationId.toString(),
         roundId: binding.roundId.toString(),

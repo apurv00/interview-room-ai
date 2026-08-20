@@ -222,19 +222,20 @@ export const HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS: readonly HireMultimo
   },
   {
     target: 'runtime-bindings',
-    name: 'workspaceId_1_status_1_purgePersonalData_1_publishedRevision_1_cameraMediaStatus_1_publishRetryAt_1_publishCheckedAt_1_updatedAt_1',
+    name: 'workspaceId_1_status_1_purgePersonalData_1_publishedRevision_1_cameraMediaStatus_1_screenMediaStatus_1_publishRetryAt_1_publishCheckedAt_1_updatedAt_1',
     key: {
       workspaceId: 1,
       status: 1,
       purgePersonalData: 1,
       publishedRevision: 1,
       cameraMediaStatus: 1,
+      screenMediaStatus: 1,
       publishRetryAt: 1,
       publishCheckedAt: 1,
       updatedAt: 1,
     },
     unique: false,
-    purpose: 'runtime late-camera publish recovery sweep',
+    purpose: 'runtime late camera/display publish recovery sweep',
   },
   {
     target: 'runtime-outbox',

@@ -2,12 +2,17 @@ import { createHash } from "node:crypto";
 import mongoose from "mongoose";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+  HIRE_MULTIMODAL_OBSERVATION_LEGACY_POLICY_VERSION,
   HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION,
+  HIRE_MULTIMODAL_OBSERVATION_V2_POLICY_VERSION,
   canonicalHireMultimodalObservationJson,
   hireMultimodalObservationDigestPayload,
   type HireMultimodalObservationIngestion,
 } from "@shared/contracts/hireMultimodalObservationBridge";
+
+const CURRENT_CONSENT_VERSION = "hire-ai-v6-2026-08-20";
+const V5_CONSENT_VERSION = "hire-ai-v5-2026-08-19";
+const DISCLOSURE_DIGEST = "1".repeat(64);
 
 const mocks = vi.hoisted(() => {
   class CandidatePiiTombstoneError extends Error {}
@@ -18,7 +23,8 @@ const mocks = vi.hoisted(() => {
     roundFindOne: vi.fn(),
     attemptFindOne: vi.fn(),
     jobFindOne: vi.fn(),
-    receiptExists: vi.fn(),
+    receiptFindOne: vi.fn(),
+    recognizedSnapshot: vi.fn(),
     privacyExists: vi.fn(),
     purgeObligationExists: vi.fn(),
     fence: vi.fn(),
@@ -35,11 +41,15 @@ vi.mock("@hire/models", () => ({
   HireRound: { findOne: mocks.roundFindOne },
   HireInterviewAttempt: { findOne: mocks.attemptFindOne },
   HireJob: { findOne: mocks.jobFindOne },
-  HireConsentReceipt: { exists: mocks.receiptExists },
+  HireConsentReceipt: { findOne: mocks.receiptFindOne },
   HirePrivacyRequest: { exists: mocks.privacyExists },
 }));
-vi.mock("@hire/policies/aiInterviewConsent", () => ({
-  HIRE_AI_DISCLOSURE_DIGEST: "1".repeat(64),
+vi.mock("@hire-multimodal-boundary", () => ({
+  // Vitest hoists this factory above module constants, so retain the immutable
+  // current snapshot literal here rather than closing over the test fixture.
+  HIRE_AI_CONSENT_VERSION: "hire-ai-v6-2026-08-20",
+  HIRE_AI_V5_CONSENT_VERSION: "hire-ai-v5-2026-08-19",
+  isRecognizedHireConsentSnapshot: mocks.recognizedSnapshot,
 }));
 vi.mock("@hire/services/hireControlBoundary", () => ({
   connectHireControlDB: mocks.connect,
@@ -112,7 +122,7 @@ function payload(
   > = {},
 ): HireMultimodalObservationIngestion {
   const draft: Omit<HireMultimodalObservationIngestion, "observationDigest"> = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     eventId: "2".repeat(64),
     workspaceId: IDS.workspaceId,
     applicationId: IDS.applicationId,
@@ -120,7 +130,7 @@ function payload(
     runtimeSessionId: IDS.runtimeSessionId,
     attempt: 1,
     revision: 1,
-    consentVersion: HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+    consentVersion: CURRENT_CONSENT_VERSION,
     policyVersion: HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION,
     observedAt: "2026-08-17T12:00:00.000Z",
     report: {
@@ -159,7 +169,7 @@ function setUsualQueries() {
   mocks.roundFindOne.mockReturnValue(
     query({
       runtimeSessionId: objectId(IDS.runtimeSessionId),
-      consentVersion: HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+      consentVersion: CURRENT_CONSENT_VERSION,
     }),
   );
   mocks.attemptFindOne.mockReturnValue(
@@ -169,7 +179,10 @@ function setUsualQueries() {
     }),
   );
   mocks.jobFindOne.mockReturnValue(query({ status: "open" }));
-  mocks.receiptExists.mockReturnValue(existsQuery({ _id: "receipt" }));
+  mocks.receiptFindOne.mockReturnValue(query({
+    consentVersion: CURRENT_CONSENT_VERSION,
+    disclosureDigest: DISCLOSURE_DIGEST,
+  }));
   mocks.privacyExists.mockReturnValue(existsQuery(null));
   mocks.purgeObligationExists.mockReturnValue(existsQuery(null));
   mocks.eventFindOne.mockReturnValue(query(null));
@@ -183,6 +196,7 @@ beforeEach(() => {
   mocks.observationCreate.mockResolvedValue([{}]);
   mocks.eventCreate.mockResolvedValue([{}]);
   mocks.eventUpdateOne.mockResolvedValue({ matchedCount: 1 });
+  mocks.recognizedSnapshot.mockReturnValue(true);
   setUsualQueries();
   const session = {
     withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
@@ -192,7 +206,7 @@ beforeEach(() => {
 });
 
 describe("Hire supplemental-observation ingestion", () => {
-  it("persists a bounded v3 report under the candidate privacy fence", async () => {
+  it("persists a bounded V6 report under the candidate privacy fence", async () => {
     const input = payload();
 
     await expect(ingestHireMultimodalObservation(input)).resolves.toEqual({
@@ -225,8 +239,87 @@ describe("Hire supplemental-observation ingestion", () => {
     );
   });
 
-  it("returns stale for existing v2 rounds before reading candidate data", async () => {
-    const input = payload({ consentVersion: "hire-ai-v2-2026-08" });
+  it("accepts V6 entire-display validation events under the V3 policy", async () => {
+    const input = payload({
+      report: {
+        status: "completed",
+        capture: {
+          camera: "captured",
+          browserVisibility: "captured",
+          displayShare: "captured",
+        },
+        events: [{
+          kind: "screen_share_interrupted",
+          source: "display_track",
+          startMs: 4_000,
+          endMs: 7_000,
+        }],
+      },
+    });
+
+    await expect(ingestHireMultimodalObservation(input)).resolves.toEqual({
+      outcome: "processed",
+    });
+    expect(mocks.observationCreate.mock.calls[0][0][0].report).toEqual(
+      input.report,
+    );
+  });
+
+  it("accepts an immutable V5 snapshot only with its V2 wire policy", async () => {
+    const input = payload({
+      consentVersion: V5_CONSENT_VERSION,
+      policyVersion: HIRE_MULTIMODAL_OBSERVATION_V2_POLICY_VERSION,
+    });
+    mocks.roundFindOne.mockReturnValueOnce(query({
+      runtimeSessionId: objectId(IDS.runtimeSessionId),
+      consentVersion: V5_CONSENT_VERSION,
+    }));
+    mocks.receiptFindOne.mockReturnValueOnce(query({
+      consentVersion: V5_CONSENT_VERSION,
+      disclosureDigest: DISCLOSURE_DIGEST,
+    }));
+
+    await expect(ingestHireMultimodalObservation(input)).resolves.toEqual({
+      outcome: "processed",
+    });
+  });
+
+  it("rejects V6 display-share observations attached to a V5 receipt", async () => {
+    const draft = payload({
+      consentVersion: V5_CONSENT_VERSION,
+      policyVersion: HIRE_MULTIMODAL_OBSERVATION_V2_POLICY_VERSION,
+      report: {
+        status: "completed",
+        capture: {
+          camera: "captured",
+          browserVisibility: "captured",
+          displayShare: "captured",
+        },
+        events: [{
+          kind: "screen_share_interrupted",
+          source: "display_track",
+          startMs: 1_000,
+          endMs: 2_000,
+        }],
+      },
+    });
+    mocks.roundFindOne.mockReturnValueOnce(query({
+      runtimeSessionId: objectId(IDS.runtimeSessionId),
+      consentVersion: V5_CONSENT_VERSION,
+    }));
+    mocks.receiptFindOne.mockReturnValueOnce(query({
+      consentVersion: V5_CONSENT_VERSION,
+      disclosureDigest: DISCLOSURE_DIGEST,
+    }));
+
+    await expect(ingestHireMultimodalObservation(draft)).resolves.toEqual({
+      outcome: "stale",
+    });
+    expect(mocks.observationCreate).not.toHaveBeenCalled();
+  });
+
+  it("returns stale for an unsupported policy before reading candidate data", async () => {
+    const input = payload({ policyVersion: "unsupported-policy" });
 
     await expect(ingestHireMultimodalObservation(input)).resolves.toEqual({
       outcome: "stale",
@@ -237,8 +330,30 @@ describe("Hire supplemental-observation ingestion", () => {
     expect(mocks.observationCreate).not.toHaveBeenCalled();
   });
 
-  it("returns stale when the selected attempt has no exact v3 receipt", async () => {
-    mocks.receiptExists.mockReturnValueOnce(existsQuery(null));
+  it("accepts an exact historic receipt pair only with the legacy wire policy", async () => {
+    const historicVersion = "hire-ai-v4-2026-08-17";
+    const input = payload({
+      schemaVersion: 1,
+      consentVersion: historicVersion,
+      policyVersion: HIRE_MULTIMODAL_OBSERVATION_LEGACY_POLICY_VERSION,
+    });
+    mocks.roundFindOne.mockReturnValueOnce(query({
+      runtimeSessionId: objectId(IDS.runtimeSessionId),
+      consentVersion: historicVersion,
+    }));
+    mocks.receiptFindOne.mockReturnValueOnce(query({
+      consentVersion: historicVersion,
+      disclosureDigest: DISCLOSURE_DIGEST,
+    }));
+    mocks.recognizedSnapshot.mockReturnValueOnce(true);
+
+    await expect(ingestHireMultimodalObservation(input)).resolves.toEqual({
+      outcome: "processed",
+    });
+  });
+
+  it("returns stale when the selected attempt has no exact receipt", async () => {
+    mocks.receiptFindOne.mockReturnValueOnce(query(null));
 
     await expect(ingestHireMultimodalObservation(payload())).resolves.toEqual({
       outcome: "stale",
@@ -248,12 +363,12 @@ describe("Hire supplemental-observation ingestion", () => {
     expect(mocks.observationCreate).not.toHaveBeenCalled();
   });
 
-  it("requires every immutable acknowledgement on the selected v3 receipt", async () => {
+  it("requires every immutable acknowledgement on the selected receipt", async () => {
     await expect(ingestHireMultimodalObservation(payload())).resolves.toEqual({
       outcome: "processed",
     });
 
-    expect(mocks.receiptExists).toHaveBeenCalledWith(
+    expect(mocks.receiptFindOne).toHaveBeenCalledWith(
       expect.objectContaining({
         "accepted.recording": true,
         "accepted.identityPhoto": true,
@@ -267,7 +382,7 @@ describe("Hire supplemental-observation ingestion", () => {
     mocks.roundFindOne.mockReturnValueOnce(
       query({
         runtimeSessionId: undefined,
-        consentVersion: HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
+        consentVersion: CURRENT_CONSENT_VERSION,
       }),
     );
 
@@ -396,7 +511,7 @@ describe("Hire supplemental-observation ingestion", () => {
       outcome: "stale",
     });
 
-    expect(mocks.receiptExists).not.toHaveBeenCalled();
+    expect(mocks.receiptFindOne).not.toHaveBeenCalled();
     expect(mocks.fence).not.toHaveBeenCalled();
     expect(mocks.observationCreate).not.toHaveBeenCalled();
   });

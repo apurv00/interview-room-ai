@@ -41,7 +41,12 @@ const BUDGETS = {
   // 2026-06-17: flow/templates/ now excluded from the count as declarative content
   // (see EXCLUDED_PATHS + ADR 0012). Budget unchanged at 30k/142 — it now governs the
   // interview ENGINE/UI code only (~25.2k/107 post-exclusion), not the domain catalog.
-  'modules/interview': { maxLOC: 30_000, maxFiles: 142 },
+  // Bumped LOC 30k → 31.1k on 2026-08-20 for the isolated Hire interview
+  // integrity gate, browser delivery, full-display gate, and continuous
+  // display recorder. This is live-session runtime wiring, not the legacy
+  // post-interview analysis slice ADR 0006 identifies for a future structural
+  // extraction. The cap retains 132 LOC of deliberate headroom; see ADR 0040.
+  'modules/interview': { maxLOC: 31_100, maxFiles: 142 },
   'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
   // Bumped maxFiles 80 → 82 on 2026-06-09 (PR #435): adds ONE counted file —
   // services/resolvePathwayNextHref.ts, the server-side CTA next-step resolver
@@ -200,7 +205,10 @@ const BUDGETS = {
   // deletion, and deployment-readiness contracts. Actual is 175 / ~25.3k;
   // the unchanged interview engine and B2C persistence remain outside Hire.
   // See docs/adr/0029-hire-phase1-bounded-service-budgets.md.
-  'shared':            { maxLOC: 26_000, maxFiles: 180 },
+  // Bumped LOC 26k → 26.2k on 2026-08-20 for the versioned cross-surface Hire
+  // interview-integrity bridge. It adds only wire contracts and preserves
+  // V1/V2 compatibility; see ADR 0040.
+  'shared':            { maxLOC: 26_200, maxFiles: 180 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   // Bumped maxLOC 14,000 → 16,000 on 2026-07-22 for the bounded A08

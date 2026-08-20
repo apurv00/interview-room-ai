@@ -113,6 +113,7 @@ const ROUND_ID = 'c'.repeat(24)
 const WORKSPACE_ID = new mongoose.Types.ObjectId('f'.repeat(24))
 const APPLICATION_ID = new mongoose.Types.ObjectId('1'.repeat(24))
 const CAMERA_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-1723248000000.webm`
+const SCREEN_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-screen-1723248000002.webm`
 const AUDIO_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-audio-1723248000001.webm`
 
 function selected(value: unknown) {
@@ -141,8 +142,8 @@ function binding(overrides: Record<string, unknown> = {}) {
       expiresAt: new Date('2026-08-10T00:00:00.000Z'),
     }],
     pendingMediaManifest: [{
-      kind: 'recording',
-      sourceKey: CAMERA_KEY,
+      kind: 'screen',
+      sourceKey: SCREEN_KEY,
       contentType: 'video/webm',
       sizeBytes: 100,
       sha256: 'e'.repeat(64),
@@ -267,6 +268,7 @@ describe('complete isolated runtime personal-data cascade', () => {
       principalId: PRINCIPAL_ID.toString(),
       objects: expect.arrayContaining([
         { key: CAMERA_KEY, runtimeSessionId: SESSION_ID.toString() },
+        { key: SCREEN_KEY, runtimeSessionId: SESSION_ID.toString() },
         { key: AUDIO_KEY, runtimeSessionId: SESSION_ID.toString() },
       ]),
     })

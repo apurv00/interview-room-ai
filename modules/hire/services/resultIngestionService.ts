@@ -5,6 +5,7 @@ import {
   HireEngineResultIngestionSchema,
   type HireEngineResultIngestion,
 } from '@shared/contracts/hireEngineBridge'
+import { supportsHireDisplayCapture } from '@hire-multimodal-boundary'
 import type {
   HireAssessmentProjection,
   HireEvidenceRef,
@@ -622,6 +623,16 @@ export async function ingestHireEngineResult(
   })
   if (privacyTombstone) {
     return discardResultBehindPrivacyTombstone(payload, attempt._id.toString())
+  }
+  if (
+    payload.media.some((artifact) => artifact.kind === 'screen') &&
+    !supportsHireDisplayCapture(round.consentVersion)
+  ) {
+    throw new HireEngineIngestionError(
+      'Display recording was not consented for this interview',
+      'conflict',
+      409,
+    )
   }
   let persistedResult: Awaited<ReturnType<typeof persistHireInterviewResult>>
   try {

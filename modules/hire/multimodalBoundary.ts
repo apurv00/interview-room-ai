@@ -5,4 +5,12 @@
  * exports create a broad dependency surface for a retention-only workflow.
  */
 export { HireRound } from "./models/HireRound";
-export { HIRE_AI_CONSENT_VERSION } from "./policies/aiInterviewConsent";
+export {
+  HIRE_AI_CONSENT_VERSION,
+  HIRE_AI_V4_CONSENT_VERSION,
+  HIRE_AI_V5_CONSENT_VERSION,
+  isRecognizedHireConsentSnapshot,
+  isRecognizedHireConsentVersion,
+  supportsHireDisplayCapture,
+  supportsHireMultimodalObservations,
+} from "./policies/aiInterviewConsent";

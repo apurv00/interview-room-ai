@@ -118,7 +118,9 @@ function referencedRuntimeObjects(input: {
   }
   for (const artifact of input.binding.pendingMediaManifest ?? []) {
     if (
-      (artifact.kind === 'recording' || artifact.kind === 'audio') &&
+      (artifact.kind === 'recording' ||
+        artifact.kind === 'screen' ||
+        artifact.kind === 'audio') &&
       input.binding.runtimeSessionId
     ) {
       objects.push({

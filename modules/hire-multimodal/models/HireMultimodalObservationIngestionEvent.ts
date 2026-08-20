@@ -1,4 +1,5 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
+import { HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS } from "@shared/contracts/hireMultimodalObservationBridge";
 
 export type HireMultimodalObservationIngestionEventStatus =
   "received" | "processed";
@@ -65,7 +66,7 @@ const HireMultimodalObservationIngestionEventSchema =
         type: Number,
         required: true,
         min: 1,
-        max: 10,
+        max: HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS,
         immutable: true,
       },
       observationDigest: {

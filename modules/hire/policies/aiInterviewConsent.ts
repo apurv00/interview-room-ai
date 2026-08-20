@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import {
-  HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION,
   HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION,
 } from '@shared/contracts/hireMultimodalObservationBridge'
 import { HIRE_AI_INTERVIEW_DISCLOSURES } from '@shared/contracts/hireAiInterviewConsentDisclosure'
@@ -11,17 +10,18 @@ import type { HireConsentAcknowledgements } from '../models/HireConsentReceipt'
  * valid only for their already-started attempts; they are never silently
  * upgraded to new disclosure terms.
  */
-export const HIRE_AI_CONSENT_VERSION = 'hire-ai-v4-2026-08-17'
+export const HIRE_AI_CONSENT_VERSION = 'hire-ai-v6-2026-08-20'
 export { HIRE_MULTIMODAL_OBSERVATION_POLICY_VERSION }
 
 /**
- * Exact historical V2/V3 pairs are deliberately retained for in-progress
+ * Exact historical V2–V5 pairs are deliberately retained for in-progress
  * attempts. This is not a generic historical-consent escape hatch: an
  * altered or unknown disclosure digest remains invalid.
  */
 export const HIRE_AI_V2_CONSENT_VERSION = 'hire-ai-v2-2026-08'
-export const HIRE_AI_V3_CONSENT_VERSION =
-  HIRE_MULTIMODAL_OBSERVATION_CONSENT_VERSION
+export const HIRE_AI_V3_CONSENT_VERSION = 'hire-ai-v3-2026-08-17'
+export const HIRE_AI_V4_CONSENT_VERSION = 'hire-ai-v4-2026-08-17'
+export const HIRE_AI_V5_CONSENT_VERSION = 'hire-ai-v5-2026-08-19'
 
 const HIRE_AI_V2_DISCLOSURES = Object.freeze({
   recording:
@@ -43,7 +43,7 @@ export const HIRE_AI_V2_DISCLOSURE_DIGEST = createHash('sha256')
 /**
  * This is the exact V3 copy that was previously the current disclosure. It
  * must remain immutable so existing V3 receipts can finish under the wording
- * the candidate accepted, even though all new attempts use V4.
+ * the candidate accepted, even though all new attempts use V6.
  */
 const HIRE_AI_V3_DISCLOSURES = Object.freeze({
   recording:
@@ -60,6 +60,50 @@ const HIRE_AI_V3_DISCLOSURES = Object.freeze({
 
 export const HIRE_AI_V3_DISCLOSURE_DIGEST = createHash('sha256')
   .update(JSON.stringify(HIRE_AI_V3_DISCLOSURES))
+  .digest('hex')
+
+/**
+ * This is the exact V4 copy that was previously the current disclosure. It
+ * must remain immutable so existing V4 receipts can finish under the wording
+ * the candidate accepted, even though all new attempts use V6.
+ */
+const HIRE_AI_V4_DISCLOSURES = Object.freeze({
+  recording:
+    'Your camera and microphone are recorded, shared with the hiring team for review, and analyzed with your spoken answers to prepare the Hire interview review.',
+  identityPhoto:
+    'A selfie is captured at interview start and shown to the hiring team for a later human identity comparison. No government ID or automated face match is used.',
+  attentionMonitoring:
+    'The interview processes camera video in your browser and privately retains structured facial-landmark and browser-window observations for Hire analysis and reproducibility. The hiring team receives the interview recording and derived Hire review, not raw landmark data. These observations are not standalone hiring scores; a human makes every hiring decision.',
+  aiEvaluation:
+    'AI evaluates the interview recording, transcript, and permitted interview signals and prepares evidence-linked scores and written observations. A human makes every hiring decision.',
+  retention:
+    'Interview recordings, identity photos, private analysis observations, and derived Hire review data are removed six calendar months after the job closes, or earlier after a verified deletion request.',
+})
+
+export const HIRE_AI_V4_DISCLOSURE_DIGEST = createHash('sha256')
+  .update(JSON.stringify(HIRE_AI_V4_DISCLOSURES))
+  .digest('hex')
+
+/**
+ * This is the exact V5 copy that was previously the current disclosure. It
+ * must remain immutable so existing V5 receipts can finish under the wording
+ * the candidate accepted, even though all new attempts use V6.
+ */
+const HIRE_AI_V5_DISCLOSURES = Object.freeze({
+  recording:
+    'A working camera and microphone are required before the interview can start. They are recorded, shared with the hiring team for review, and analyzed with your spoken answers to prepare the Hire interview review.',
+  identityPhoto:
+    'A selfie is captured at interview start and shown to the hiring team for a later human identity comparison. No government ID or automated face match is used.',
+  attentionMonitoring:
+    'The interview starts in full-screen mode. It records neutral interview-validation events when the assessment window is hidden or loses focus, full-screen mode is exited, or camera or microphone capture is interrupted. You will be warned and asked to restore the interview when that happens. The hiring team receives a timestamped review of these events with the interview recording; raw landmark data is not shared. These observations are not standalone hiring scores and never make a hiring decision, stage, ranking, recommendation, or export.',
+  aiEvaluation:
+    'AI evaluates the interview recording, transcript, and permitted interview signals, including whether spoken audio can be corroborated by the visible candidate. An unverified signal is only a timestamp for human review; it does not establish who was speaking. A human makes every hiring decision.',
+  retention:
+    'Interview recordings, identity photos, private validation observations, and derived Hire review data are removed six calendar months after the job closes, or earlier after a verified deletion request.',
+})
+
+export const HIRE_AI_V5_DISCLOSURE_DIGEST = createHash('sha256')
+  .update(JSON.stringify(HIRE_AI_V5_DISCLOSURES))
   .digest('hex')
 
 /**
@@ -84,6 +128,14 @@ const RECOGNIZED_HIRE_CONSENT_SNAPSHOTS = Object.freeze([
     disclosureDigest: HIRE_AI_DISCLOSURE_DIGEST,
   },
   {
+    consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+    disclosureDigest: HIRE_AI_V5_DISCLOSURE_DIGEST,
+  },
+  {
+    consentVersion: HIRE_AI_V4_CONSENT_VERSION,
+    disclosureDigest: HIRE_AI_V4_DISCLOSURE_DIGEST,
+  },
+  {
     consentVersion: HIRE_AI_V3_CONSENT_VERSION,
     disclosureDigest: HIRE_AI_V3_DISCLOSURE_DIGEST,
   },
@@ -105,6 +157,20 @@ export function isRecognizedHireConsentSnapshot(
     (recognized) =>
       recognized.consentVersion === snapshot?.consentVersion &&
       recognized.disclosureDigest === snapshot?.disclosureDigest,
+  )
+}
+
+/**
+ * The runtime binding transports the consent version but deliberately does
+ * not carry a disclosure digest. This is therefore only a coarse intake gate
+ * for a version issued by the control surface; the control-side receipt check
+ * must still call isRecognizedHireConsentSnapshot to enforce the exact pair.
+ */
+export function isRecognizedHireConsentVersion(
+  consentVersion: string | undefined,
+): boolean {
+  return RECOGNIZED_HIRE_CONSENT_SNAPSHOTS.some(
+    (recognized) => recognized.consentVersion === consentVersion,
   )
 }
 
@@ -132,12 +198,23 @@ export function assertCompleteHireConsent(
 }
 
 /**
- * Existing V2/V3 sessions remain valid to finish under their exact receipt,
- * but only a V4 receipt may activate the current Hire-native capture path.
+ * Existing V2–V5 sessions remain valid to finish under their exact receipt.
+ * V5 and V6 can activate the Hire-native observation path; V6 additionally
+ * authorizes compulsory entire-display capture.
  * The runtime independently checks the receipt; this browser marker only
  * prevents unnecessary client collection.
  */
 export function supportsHireMultimodalObservations(
+  consentVersion: string | undefined,
+): boolean {
+  return (
+    consentVersion === HIRE_AI_V5_CONSENT_VERSION ||
+    consentVersion === HIRE_AI_CONSENT_VERSION
+  )
+}
+
+/** Entire-display recording was introduced only in the V6 disclosure. */
+export function supportsHireDisplayCapture(
   consentVersion: string | undefined,
 ): boolean {
   return consentVersion === HIRE_AI_CONSENT_VERSION
