@@ -38,6 +38,8 @@ function configureControlHealth(
     INNGEST_EVENT_KEY: 'event-key',
     NEXTAUTH_SECRET: 'n'.repeat(64),
     HIRE_HANDOFF_ISSUANCE_MODE: 'open',
+    HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'required',
+    HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: '2026-08-20T00:00:00.000Z',
     HIRE_HANDOFF_SMOKE_TOKEN: undefined,
     HIRE_PUBLIC_URL: 'https://hire.interviewprep.guru',
     HIRE_ENGINE_RUNTIME_URL: 'https://engine.hire.interviewprep.guru',
@@ -144,6 +146,31 @@ describe('GET deployment identity', () => {
         explicitlyConfigured: true,
         publicIssuanceOpen: false,
         smokeReady: true,
+      },
+      hireIngestionRevisionProtocol: {
+        protocolVersion: '2',
+        mode: 'required',
+        explicitlyConfigured: true,
+        releaseReady: true,
+      },
+    })
+  })
+
+  it('keeps intentional draining live but marks it as not release-ready', async () => {
+    configureControlHealth({
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'draining',
+    })
+
+    const response = await GET(new NextRequest('https://example.test/api/health', {
+      headers: { authorization: 'Bearer gate-secret' },
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'healthy',
+      hireIngestionRevisionProtocol: {
+        mode: 'draining',
+        releaseReady: false,
       },
     })
   })

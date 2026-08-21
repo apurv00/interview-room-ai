@@ -190,6 +190,40 @@ beforeEach(() => {
 })
 
 describe('multimodal analysis revision ordering', () => {
+  it('rejects a payload whose consent version differs from the round before side effects', async () => {
+    mocks.roundFindOne.mockReturnValue(
+      query({
+        consentVersion: 'hire-ai-v5-2026-08-12',
+        resultId: objectId(IDS.resultId),
+      }),
+    )
+
+    await expect(ingestHireMultimodalAnalysis(payload())).resolves.toEqual({
+      outcome: 'stale',
+    })
+    expect(mocks.attemptFindOne).not.toHaveBeenCalled()
+    expect(mocks.reserve).not.toHaveBeenCalled()
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+  })
+
+  it('rejects a receipt whose consent version differs from the payload before side effects', async () => {
+    mocks.receiptFindOne.mockReturnValue(
+      query({
+        consentVersion: 'hire-ai-v5-2026-08-12',
+        disclosureDigest: '8'.repeat(64),
+      }),
+    )
+
+    await expect(ingestHireMultimodalAnalysis(payload())).resolves.toEqual({
+      outcome: 'stale',
+    })
+    expect(mocks.receiptFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({ consentVersion: 'hire-ai-v6-2026-08-20' }),
+    )
+    expect(mocks.reserve).not.toHaveBeenCalled()
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+  })
+
   it('returns stale for a delayed revision without copying or staging landmarks', async () => {
     mocks.reserve.mockResolvedValueOnce({ outcome: 'stale' })
 

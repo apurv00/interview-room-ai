@@ -60,6 +60,8 @@ export interface IHireRuntimeBinding extends Document {
   }>
   issuedObjectCapabilities?: Array<{
     key: string
+    /** Temporary authority for a digest-only runtime landmark v2 key. */
+    objectKeyNonce?: string
     runtimeSessionId: mongoose.Types.ObjectId
     expiresAt: Date
   }>
@@ -73,11 +75,21 @@ export interface IHireRuntimeBinding extends Document {
   revokeReason?: string
   purgePersonalData?: boolean
   personalDataPurgedAt?: Date
+  /** Durable round-retention fence; raw analysis capture may never reopen it. */
+  multimodalObservationRetentionPurgedAt?: Date
   pendingMediaManifest?: HireEngineResultIngestion['media']
   /**
-   * Exact serialized result bridge payload reserved before the first send.
-   * It survives an ambiguous acknowledgement so every retry replays the same
-   * immutable event instead of rebuilding it from a mutable engine session.
+   * Immutable marker stamped only by snapshot-aware binding creation. It lets
+   * the publisher distinguish a safe pre-send defer from a legacy attempt
+   * whose acknowledgement may have been lost before snapshots existed.
+   */
+  resultPayloadSnapshotProtocolVersion?: 1
+  /**
+   * Exact serialized result bridge payload. Before acknowledgement it is the
+   * in-flight event; while replay media is still pending it is retained as the
+   * last acknowledged immutable result core for the next revision. This keeps
+   * every retry and follow-up independent of a mutable completed session
+   * without storing two near-body-limit JSON copies on one Mongo document.
    */
   pendingResultPayloadJson?: string
   /**
@@ -209,7 +221,26 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
       type: [
         new Schema(
           {
-            key: { type: String, required: true, maxlength: 1_024 },
+            key: {
+              type: String,
+              required: true,
+              maxlength: 1_024,
+              validate: {
+                validator(this: { objectKeyNonce?: string }, key: string) {
+                  const v2 = /^landmarks\/v2\/[a-f0-9]{64}$/.test(key)
+                  if (key.startsWith('landmarks/v2/') && !v2) return false
+                  return v2
+                    ? /^[a-f0-9]{64}$/.test(this.objectKeyNonce ?? '')
+                    : this.objectKeyNonce === undefined
+                },
+                message: 'Runtime object capability key and nonce do not match',
+              },
+            },
+            objectKeyNonce: {
+              type: String,
+              match: /^[a-f0-9]{64}$/,
+              immutable: true,
+            },
             runtimeSessionId: {
               type: Schema.Types.ObjectId,
               ref: 'InterviewSession',
@@ -244,6 +275,7 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
     revokeReason: { type: String, maxlength: 500 },
     purgePersonalData: { type: Boolean, default: false },
     personalDataPurgedAt: { type: Date },
+    multimodalObservationRetentionPurgedAt: { type: Date },
     pendingMediaManifest: {
       type: [
         new Schema(
@@ -266,6 +298,11 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
         ),
       ],
       default: undefined,
+    },
+    resultPayloadSnapshotProtocolVersion: {
+      type: Number,
+      enum: [1],
+      immutable: true,
     },
     pendingResultPayloadJson: { type: String, maxlength: 12 * 1024 * 1024 },
     mediaCompletionContractVersion: {

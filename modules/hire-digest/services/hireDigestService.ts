@@ -10,6 +10,7 @@ import {
   HireHumanKitDelivery,
   HireHumanRound,
   HireJob,
+  HireMultimodalObservation,
   HireOnboardingTestDrive,
   HirePrivacyRequest,
   HireWorkspace,
@@ -237,14 +238,15 @@ export async function buildHireDigestPayload(input: {
     exclusions,
     privacyExclusions.candidateIds,
   )
-  const openJobs = await HireJob.countDocuments(
-    {
-      workspaceId: input.workspaceId,
-      status: 'open',
-      ...(exclusions.jobIds.length > 0 ? { _id: { $nin: exclusions.jobIds } } : {}),
-    },
-    options,
-  )
+  const openJobQuery = HireJob.find({
+    workspaceId: input.workspaceId,
+    status: 'open',
+    ...(exclusions.jobIds.length > 0 ? { _id: { $nin: exclusions.jobIds } } : {}),
+  }).select('_id')
+  if (input.session) openJobQuery.session(input.session)
+  const openJobRecords = await openJobQuery.lean()
+  const openJobIds = openJobRecords.map((job) => job._id)
+  const openJobs = openJobIds.length
   const awaitingDecision = await HireApplication.countDocuments(
     {
       workspaceId: input.workspaceId,
@@ -271,6 +273,52 @@ export async function buildHireDigestPayload(input: {
     },
     options,
   )
+  const validationAttentionAggregate = HireMultimodalObservation.aggregate<{ count: number }>([
+    {
+      $match: {
+        workspaceId: input.workspaceId,
+        ...aggregateCoordinateExclusions,
+        // `openJobIds` was already filtered for onboarding coordinates. Keep
+        // this last so a `$nin` exclusion can never overwrite the open-job
+        // boundary and re-admit held or closed requisitions.
+        jobId: { $in: openJobIds },
+      },
+    },
+    { $sort: { revision: -1, observedAt: -1, createdAt: -1, _id: -1 } },
+    {
+      $group: {
+        _id: {
+          applicationId: '$applicationId',
+          roundId: '$roundId',
+          runtimeSessionId: '$runtimeSessionId',
+        },
+        latest: { $first: '$$ROOT' },
+      },
+    },
+    { $replaceRoot: { newRoot: '$latest' } },
+    {
+      $match: {
+        $and: [
+          {
+            $or: [
+              { purgeEligibleAt: { $exists: false } },
+              { purgeEligibleAt: { $gt: input.now } },
+            ],
+          },
+          {
+            $or: [
+              { 'report.status': 'insufficient_signal' },
+              { 'report.events.0': { $exists: true } },
+            ],
+          },
+        ],
+      },
+    },
+    { $count: 'count' },
+  ])
+  if (input.session) validationAttentionAggregate.session(input.session)
+  const [validationAttention] = await validationAttentionAggregate.exec()
+  const validationAttentionInterviews = validationAttention?.count ?? 0
   return {
     workspaceName: input.workspaceName,
     generatedAt: input.now,
@@ -278,6 +326,7 @@ export async function buildHireDigestPayload(input: {
     awaitingDecision,
     pendingScorecards,
     terminalKitDeliveryFailures,
+    validationAttentionInterviews,
   }
 }
 

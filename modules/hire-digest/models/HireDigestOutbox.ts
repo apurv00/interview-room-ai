@@ -48,6 +48,7 @@ const HireDigestPayloadSchema = new Schema<HireDigestPayload>(
     awaitingDecision: { type: Number, required: true, min: 0, max: 1_000_000, immutable: true },
     pendingScorecards: { type: Number, required: true, min: 0, max: 1_000_000, immutable: true },
     terminalKitDeliveryFailures: { type: Number, required: true, min: 0, max: 1_000_000, immutable: true },
+    validationAttentionInterviews: { type: Number, required: true, min: 0, max: 1_000_000, immutable: true },
   },
   { _id: false, strict: 'throw' },
 )

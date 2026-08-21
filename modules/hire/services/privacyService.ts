@@ -7,6 +7,7 @@ import { HireCandidate } from '../models/HireCandidate'
 import { HireConsentReceipt } from '../models/HireConsentReceipt'
 import { HireEmailOutbox } from '../models/HireEmailOutbox'
 import { HireEngineHandoff } from '../models/HireEngineHandoff'
+import { HireEngineIngestionEvent } from '../models/HireEngineIngestionEvent'
 import { HireGuestSession } from '../models/HireGuestSession'
 import { HireHumanKitDelivery } from '../models/HireHumanKitDelivery'
 import { HireHumanRound } from '../models/HireHumanRound'
@@ -589,6 +590,24 @@ export async function applyVerifiedHirePrivacyRequest(input: {
           },
           { session: dbSession },
         ),
+        // Older result-ingestion events stored source object paths and media
+        // fingerprints before the reservation protocol moved new events to
+        // an empty manifest. Preserve immutable retry identity and digests,
+        // but remove that legacy media metadata under the candidate fence.
+        // Application ownership is sufficient and intentionally does not
+        // depend on a still-present/matching round row: those are often the
+        // first records removed by older lifecycle implementations.
+        () =>
+          applicationIds.length === 0
+            ? Promise.resolve()
+            : HireEngineIngestionEvent.updateMany(
+                {
+                  workspaceId: request.workspaceId,
+                  applicationId: { $in: applicationIds },
+                },
+                { $set: { media: [] } },
+                { session: dbSession },
+              ),
         // Supplemental observations have no aggregate, decision, evidence, or
         // export purpose after a verified deletion. Remove both the derived
         // report and its idempotency ledger under the same candidate fence.

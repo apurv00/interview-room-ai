@@ -2,6 +2,7 @@ import {
   deploymentSurfaceIdentity,
   type IpgDeploymentSurface,
 } from './deploymentSurfaceIdentity'
+import { hireIngestionRevisionProtocolState } from '../contracts/hireIngestionRevisionProtocol'
 
 export type { IpgDeploymentSurface } from './deploymentSurfaceIdentity'
 
@@ -165,6 +166,7 @@ export function hireDeploymentConfigurationIssues(
       [
         'NEXTAUTH_SECRET',
         'HIRE_HANDOFF_ISSUANCE_MODE',
+        'HIRE_INGESTION_REVISION_PROTOCOL_MODE',
         'HIRE_PUBLIC_URL',
         'HIRE_ENGINE_RUNTIME_URL',
         'RESEND_API_KEY',
@@ -206,6 +208,25 @@ export function hireDeploymentConfigurationIssues(
       Buffer.byteLength(env.HIRE_HANDOFF_SMOKE_TOKEN?.trim() ?? '', 'utf8') < 32
     ) {
       issues.add('weak:HIRE_HANDOFF_SMOKE_TOKEN')
+    }
+    const ingestionProtocol = hireIngestionRevisionProtocolState(env)
+    if (
+      !ingestionProtocol.explicitlyConfigured ||
+      !['draining', 'required'].includes(ingestionProtocol.mode)
+    ) {
+      issues.add('invalid:HIRE_INGESTION_REVISION_PROTOCOL_MODE')
+    }
+    if (env.NODE_ENV === 'production' && ingestionProtocol.mode === 'draining') {
+      if (!ingestionProtocol.drainMarkerValid) {
+        issues.add('invalid:HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT')
+      }
+    }
+    if (
+      env.NODE_ENV === 'production' &&
+      ingestionProtocol.mode === 'required' &&
+      !ingestionProtocol.releaseReady
+    ) {
+      issues.add('not-ready:HIRE_INGESTION_REVISION_PROTOCOL')
     }
     if (!canonicalBase64Bytes(env.HIRE_INVITE_DELIVERY_KEY, 32)) {
       issues.add('invalid:HIRE_INVITE_DELIVERY_KEY')

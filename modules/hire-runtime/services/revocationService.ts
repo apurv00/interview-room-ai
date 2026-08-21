@@ -9,6 +9,8 @@ import { HireRuntimeRevocation } from '../models/HireRuntimeRevocation'
 import { purgeRuntimePrincipalData } from './runtimePersonalDataPurge'
 import { connectHireRuntimeDB } from './runtimeBoundary'
 
+const MAJORITY_WRITE_CONCERN = { w: 'majority', j: true } as const
+
 export function hireRuntimeRevocationKey(roundId: string): string {
   return `hire-runtime:revoked:${roundId.toLowerCase()}`
 }
@@ -57,6 +59,7 @@ async function finalizeRuntimePrivacyTombstones(input: {
         revokeReason: 1,
       },
     },
+    { writeConcern: MAJORITY_WRITE_CONCERN },
   )
   if (scrubbed.matchedCount !== 1) {
     throw new Error('Runtime binding changed during personal-data purge')
@@ -64,6 +67,7 @@ async function finalizeRuntimePrivacyTombstones(input: {
   const tombstone = await HireRuntimeRevocation.updateOne(
     { ...input.coordinates, purgePersonalData: true },
     { $set: { purgeStatus: 'completed', purgedAt: input.purgedAt } },
+    { writeConcern: MAJORITY_WRITE_CONCERN },
   )
   if (tombstone.matchedCount !== 1) {
     throw new Error('Runtime privacy tombstone changed during purge')
@@ -94,7 +98,7 @@ export async function revokeRuntimeBinding(
         reason: preservePrivacyReason ? existingTombstone.reason : input.reason,
       },
     },
-    { upsert: true },
+    { upsert: true, writeConcern: MAJORITY_WRITE_CONCERN },
   )
   if (input.purgePersonalData) {
     // Purge is monotonic: an older ordinary-revocation retry can never turn a
@@ -102,10 +106,12 @@ export async function revokeRuntimeBinding(
     await HireRuntimeRevocation.updateOne(
       coordinates,
       { $set: { purgePersonalData: true } },
+      { writeConcern: MAJORITY_WRITE_CONCERN },
     )
     await HireRuntimeRevocation.updateOne(
       { ...coordinates, purgeStatus: { $ne: 'completed' } },
       { $set: { purgeStatus: 'pending' } },
+      { writeConcern: MAJORITY_WRITE_CONCERN },
     )
   }
   const purgePersonalData =
@@ -123,7 +129,7 @@ export async function revokeRuntimeBinding(
         ? {}
         : { $unset: { sessionLeaseToken: 1, sessionLeaseExpiresAt: 1 } }),
     },
-    { new: true },
+    { new: true, writeConcern: MAJORITY_WRITE_CONCERN },
   )
 
   // Redis is the request-path revocation authority. Fail the acknowledgement
@@ -163,6 +169,7 @@ export async function revokeRuntimeBinding(
         organizationId: input.workspaceId,
       },
       { $set: { monthlyInterviewLimit: 0 } },
+      { writeConcern: MAJORITY_WRITE_CONCERN },
     )
     return { outcome: existingTombstone ? 'already-revoked' : 'revoked' }
   }
@@ -171,6 +178,7 @@ export async function revokeRuntimeBinding(
     const tombstone = await HireRuntimeRevocation.updateOne(
       { ...coordinates, purgePersonalData: true },
       { $set: { purgeStatus: 'completed', purgedAt } },
+      { writeConcern: MAJORITY_WRITE_CONCERN },
     )
     if (tombstone.matchedCount !== 1) {
       throw new Error('Runtime privacy tombstone changed during purge')

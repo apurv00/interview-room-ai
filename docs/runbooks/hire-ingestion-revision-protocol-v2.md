@@ -17,14 +17,19 @@ attempt-unaware indexes are being replaced.
    `npm run prepare:hire-ingestion-revision-protocol -- --apply`.
 5. On `IPG_SURFACE=hire-engine`, run the same apply command. The command
    refuses to mutate indexes unless draining mode and the elapsed timestamp
-   are both present.
+   are both present. It also blocks on any already-attempted legacy result or
+   analysis publisher row without an immutable payload snapshot. Reconcile
+   those rows against control-plane event state; never synthesize a snapshot
+   from the current mutable session after an ambiguous old send.
 6. Run `npm run check:hire-ingestion-revision-protocol` on both surfaces.
    Before release, run the opt-in real transaction gate against a disposable
    replica-set database whose name ends in `_test`:
    `HIRE_INGESTION_REPLICA_SET_TEST_URI=... HIRE_INGESTION_REPLICA_SET_TEST_DATABASE=hire_ingestion_test npm exec vitest -- run modules/hire/__tests__/ingestionRevisionReservation.replica.integration.test.ts`.
 7. Change control to `HIRE_INGESTION_REVISION_PROTOCOL_MODE=required`, retaining
    the original drain timestamp. Re-run the check. Only senders presenting
-   protocol version 2 can now enter ingestion.
+   protocol version 2 can now enter ingestion. Authenticated control health
+   must report `hireIngestionRevisionProtocol={protocolVersion:"2",mode:"required",releaseReady:true}`
+   before handoff issuance may leave smoke/draining mode.
 
 Do not enable mixed runtime workers after the drain. Version-2 publishers
 persist an exact serialized result/analysis payload before the first network

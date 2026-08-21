@@ -1,6 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  hireRecordingCaptionsToVtt,
+  type HireRecordingCaption,
+} from "./recordingCaptions";
 
 export type HireRecordingUnavailableReason =
   | "capture_failed"
@@ -22,6 +26,13 @@ export type HireInterviewRecordingView =
 interface Props {
   applicationId: string;
   recording: HireInterviewRecordingView | null | undefined;
+  playbackRequest?: HireRecordingPlaybackRequest;
+  captions?: HireRecordingCaption[];
+}
+
+export interface HireRecordingPlaybackRequest {
+  id: number;
+  startMs: number;
 }
 
 function formatBytes(bytes: number): string {
@@ -52,44 +63,143 @@ function unavailableDescription(reason: HireRecordingUnavailableReason): string 
 export default function HireInterviewRecordingPanel({
   applicationId,
   recording,
+  playbackRequest,
+  captions = [],
 }: Props) {
   const [url, setUrl] = useState<string | null>(null);
+  const [captionsUrl, setCaptionsUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const openingRef = useRef(false);
+  const capabilityControllerRef = useRef<AbortController | null>(null);
+  const capabilityEpochRef = useRef(0);
+  const pendingSeekMsRef = useRef<number | null>(null);
+  const handledPlaybackRequestIdRef = useRef<number | null>(null);
+  const descriptionId = useId();
   const readyRecording = recording?.status === "ready" ? recording : null;
   const recordingAssetId = readyRecording?.assetId ?? null;
+  const captionsVtt = useMemo(
+    () => (captions.length > 0 ? hireRecordingCaptionsToVtt(captions) : null),
+    [captions],
+  );
 
   useEffect(() => {
+    capabilityEpochRef.current += 1;
+    capabilityControllerRef.current?.abort();
+    capabilityControllerRef.current = null;
+    openingRef.current = false;
     setUrl(null);
     setLoading(false);
     setError(null);
+    pendingSeekMsRef.current = null;
+    return () => {
+      capabilityEpochRef.current += 1;
+      capabilityControllerRef.current?.abort();
+      capabilityControllerRef.current = null;
+      openingRef.current = false;
+    };
   }, [recording?.status, recordingAssetId]);
 
-  if (!recording) return null;
+  useEffect(() => {
+    if (
+      !captionsVtt ||
+      typeof URL.createObjectURL !== "function" ||
+      typeof URL.revokeObjectURL !== "function"
+    ) {
+      setCaptionsUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(
+      new Blob([captionsVtt], { type: "text/vtt" }),
+    );
+    setCaptionsUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [captionsVtt]);
 
-  async function openRecording() {
-    if (!readyRecording || loading) return;
+  const applyPendingSeek = useCallback(() => {
+    const video = videoRef.current;
+    const pendingMs = pendingSeekMsRef.current;
+    if (!video || pendingMs === null || video.readyState < 1) return;
+    const requestedSeconds = Math.max(0, pendingMs / 1_000);
+    video.currentTime = Number.isFinite(video.duration)
+      ? Math.min(requestedSeconds, Math.max(0, video.duration))
+      : requestedSeconds;
+    pendingSeekMsRef.current = null;
+    video.focus();
+    void video.play().catch(() => undefined);
+  }, []);
+
+  const handleLoadedMetadata = useCallback(() => {
+    const hadPendingSeek = pendingSeekMsRef.current !== null;
+    applyPendingSeek();
+    if (!hadPendingSeek) videoRef.current?.focus();
+  }, [applyPendingSeek]);
+
+  const openRecording = useCallback(async () => {
+    if (!readyRecording || openingRef.current) return;
+    const requestEpoch = capabilityEpochRef.current;
+    const controller = new AbortController();
+    capabilityControllerRef.current = controller;
+    openingRef.current = true;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch(
         `/api/workspace/applications/${encodeURIComponent(applicationId)}/media/${encodeURIComponent(readyRecording.assetId)}`,
-        { cache: "no-store" },
+        { cache: "no-store", signal: controller.signal },
       );
       if (!response.ok) throw new Error("recording unavailable");
       const body = (await response.json()) as { url?: unknown };
       if (typeof body.url !== "string" || !body.url) {
         throw new Error("recording unavailable");
       }
+      if (
+        controller.signal.aborted ||
+        capabilityEpochRef.current !== requestEpoch
+      ) {
+        return;
+      }
       setUrl(body.url);
-    } catch {
+    } catch (cause) {
+      if (
+        controller.signal.aborted ||
+        capabilityEpochRef.current !== requestEpoch ||
+        (cause instanceof DOMException && cause.name === "AbortError")
+      ) {
+        return;
+      }
       setError(
         "The recording is unavailable right now. Try reloading playback access.",
       );
     } finally {
-      setLoading(false);
+      if (capabilityControllerRef.current === controller) {
+        capabilityControllerRef.current = null;
+        openingRef.current = false;
+        setLoading(false);
+      }
     }
-  }
+  }, [applicationId, readyRecording]);
+
+  useEffect(() => {
+    if (
+      !playbackRequest ||
+      !readyRecording ||
+      handledPlaybackRequestIdRef.current === playbackRequest.id
+    ) {
+      return;
+    }
+    // Treat a supplemental-observation request as a one-shot command. Parent
+    // polling can recreate the surrounding data without seeking an actively
+    // playing video again, and a failed capability must not auto-remint until
+    // the recruiter explicitly retries.
+    handledPlaybackRequestIdRef.current = playbackRequest.id;
+    pendingSeekMsRef.current = playbackRequest.startMs;
+    if (url) applyPendingSeek();
+    else void openRecording();
+  }, [applyPendingSeek, openRecording, playbackRequest, readyRecording, url]);
+
+  if (!recording) return null;
 
   const status = (() => {
     switch (recording.status) {
@@ -131,7 +241,9 @@ export default function HireInterviewRecordingPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-[#0f1419]">{status.label}</p>
-          <p className="mt-1 text-xs text-[#536471]">{status.description}</p>
+          <p id={descriptionId} className="mt-1 text-xs text-[#536471]">
+            {status.description}
+          </p>
         </div>
         {recording.status === "ready" && !url && (
           <button
@@ -148,10 +260,15 @@ export default function HireInterviewRecordingPanel({
       {recording.status === "ready" && url && (
         <div className="mt-3 space-y-2">
           <video
+            ref={videoRef}
             controls
+            tabIndex={0}
             preload="metadata"
             src={url}
+            aria-label="Private full interview recording"
+            aria-describedby={descriptionId}
             className="w-full rounded-lg bg-black"
+            onLoadedMetadata={handleLoadedMetadata}
             onError={() => {
               setUrl(null);
               setError(
@@ -159,8 +276,35 @@ export default function HireInterviewRecordingPanel({
               );
             }}
           >
+            {captionsUrl && (
+              <track
+                kind="captions"
+                src={captionsUrl}
+                srcLang="en"
+                label="English interview transcript"
+                default
+              />
+            )}
             Your browser cannot play this private interview recording.
           </video>
+          {captions.length > 0 && (
+            <details className="rounded-lg border border-slate-200 bg-white p-2 text-xs">
+              <summary className="cursor-pointer font-semibold text-[#0f1419]">
+                Read synchronized interview transcript
+              </summary>
+              <ol className="mt-2 space-y-1 text-[#536471]">
+                {captions.map((caption, index) => (
+                  <li key={`${caption.startMs}-${caption.endMs}-${index}`}>
+                    <span className="font-medium text-[#0f1419]">
+                      {Math.floor(caption.startMs / 60_000)}:
+                      {String(Math.floor(caption.startMs / 1_000) % 60).padStart(2, "0")}
+                    </span>{" "}
+                    {caption.text}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -175,7 +319,11 @@ export default function HireInterviewRecordingPanel({
         </div>
       )}
 
-      {error && <p className="mt-2 text-xs text-[#b42318]">{error}</p>}
+      {error && (
+        <p role="alert" className="mt-2 text-xs text-[#b42318]">
+          {error}
+        </p>
+      )}
     </section>
   );
 }

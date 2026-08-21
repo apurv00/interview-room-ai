@@ -79,6 +79,26 @@ describe('Hire multimodal analysis bridge contract', () => {
     })).toThrow()
   })
 
+  it('pairs every digest-only runtime v2 key with temporary nonce authority only', () => {
+    const v2Landmarks = {
+      ...payload().landmarks,
+      sourceKey: `landmarks/v2/${'9'.repeat(64)}`,
+      objectKeyNonce: '8'.repeat(64),
+    }
+    expect(HireMultimodalAnalysisIngestionSchema.parse({
+      ...payload(),
+      landmarks: v2Landmarks,
+    }).landmarks).toMatchObject(v2Landmarks)
+    expect(() => HireMultimodalAnalysisIngestionSchema.parse({
+      ...payload(),
+      landmarks: { ...v2Landmarks, objectKeyNonce: undefined },
+    })).toThrow(/object-key nonce is required/)
+    expect(() => HireMultimodalAnalysisIngestionSchema.parse({
+      ...payload(),
+      landmarks: { ...payload().landmarks, objectKeyNonce: '8'.repeat(64) },
+    })).toThrow(/Legacy landmark artifact cannot carry/)
+  })
+
   it('makes event content idempotent over only immutable analysis inputs', () => {
     const parsed = HireMultimodalAnalysisIngestionSchema.parse(payload())
     expect(canonicalHireMultimodalAnalysisJson(

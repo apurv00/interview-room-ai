@@ -25,6 +25,9 @@ function attentionLabel(
   if (item.kind === "failed_multimodal_analyses") {
     return `${item.count} interview ${item.count === 1 ? "analysis" : "analyses"} needing retry`;
   }
+  if (item.kind === "interview_validation_attention") {
+    return `${item.count} interview validation ${item.count === 1 ? "timeline" : "timelines"} available`;
+  }
   if (item.kind !== "stuck_in_stage") return operationsLabels[item.kind];
   return `${item.count} in ${stageLabels[item.stage!]} for ${item.oldestAgeDays}+ days`;
 }
@@ -38,7 +41,7 @@ export default function JobsHealthPanel() {
     try {
       setHealth(
         await readOperationsResponse(
-          "/api/workspace/jobs/health",
+          "/api/workspace/jobs/health?contractVersion=2",
           jobsHealthFrom,
         ),
       );
@@ -73,8 +76,9 @@ export default function JobsHealthPanel() {
             Jobs health
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-[#536471]">
-            Jobs with the most attention signals appear first. Pipeline counts
-            are current-stage totals, not cross-job rankings.
+            Jobs are ordered by workflow attention. Validation timelines are
+            shown for review without affecting order; pipeline counts are
+            current-stage totals, not cross-job rankings.
           </p>
         </div>
         <Link
@@ -168,7 +172,9 @@ export default function JobsHealthPanel() {
                     <li key={`${item.kind}-${item.stage ?? "all"}-${index}`}>
                       <Badge
                         variant={
-                          item.kind === "terminal_human_kit_delivery_failures"
+                          item.kind === "interview_validation_attention"
+                            ? "default"
+                            : item.kind === "terminal_human_kit_delivery_failures"
                             || item.kind === "failed_multimodal_analyses"
                             ? "danger"
                             : "caution"

@@ -1,11 +1,24 @@
 import type {
   HireMultimodalObservationEvent,
+  HireMultimodalObservationPlaybackClock,
   HireMultimodalObservationReport,
 } from "@shared/contracts/hireMultimodalObservationBridge";
 
 export interface HireSupplementalObservationView {
   observedAt: string;
   report: HireMultimodalObservationReport;
+}
+
+export type HireObservationRecordingKind = "camera" | "screen";
+
+export interface HireObservationRecordingRequest {
+  kind: HireObservationRecordingKind;
+  startMs: number;
+}
+
+interface RecordingAvailability {
+  camera: boolean;
+  screen: boolean;
 }
 
 function formatElapsed(milliseconds: number): string {
@@ -75,6 +88,73 @@ function captureLabel(
       : "insufficient signal";
 }
 
+function preferredRecordingKind(
+  source: HireMultimodalObservationEvent["source"],
+): HireObservationRecordingKind {
+  switch (source) {
+    case "fullscreen":
+    case "browser_visibility":
+    case "browser_focus":
+    case "display_surface":
+    case "display_track":
+    case "display_recorder":
+      return "screen";
+    case "camera_track":
+    case "microphone_track":
+    case "speech_video_corroboration":
+    case "camera":
+      return "camera";
+  }
+}
+
+function availableRecordingKind(
+  source: HireMultimodalObservationEvent["source"],
+  availability: RecordingAvailability,
+): HireObservationRecordingKind | null {
+  const preferred = preferredRecordingKind(source);
+  if (availability[preferred]) return preferred;
+  const fallback = preferred === "camera" ? "screen" : "camera";
+  return availability[fallback] ? fallback : null;
+}
+
+function recorderStartOffset(
+  clock: HireMultimodalObservationPlaybackClock | undefined,
+  kind: HireObservationRecordingKind,
+): number | null {
+  if (!clock || clock.protocolVersion !== 1) return null;
+  const offset =
+    kind === "camera"
+      ? clock.cameraRecorderStartOffsetMs
+      : clock.screenRecorderStartOffsetMs;
+  return Number.isInteger(offset) && (offset as number) >= 0
+    ? (offset as number)
+    : null;
+}
+
+function availableRecordingTarget(
+  event: HireMultimodalObservationEvent,
+  availability: RecordingAvailability,
+  clock: HireMultimodalObservationPlaybackClock | undefined,
+): HireObservationRecordingRequest | null {
+  const cameraOffset = recorderStartOffset(clock, "camera");
+  const screenOffset = recorderStartOffset(clock, "screen");
+  const exactAvailability: RecordingAvailability = {
+    camera:
+      availability.camera &&
+      cameraOffset !== null &&
+      event.startMs >= cameraOffset,
+    screen:
+      availability.screen &&
+      screenOffset !== null &&
+      event.startMs >= screenOffset,
+  };
+  const kind = availableRecordingKind(event.source, exactAvailability);
+  if (!kind) return null;
+  const offset = recorderStartOffset(clock, kind);
+  if (offset === null) return null;
+  return { kind, startMs: event.startMs - offset };
+}
+
 /**
  * Deliberately independent from the full recording and the separate Hire
  * multimodal analysis. These bounded system observations are not scores and
@@ -82,10 +162,12 @@ function captureLabel(
  */
 export default function HireSupplementalObservationsPanel({
   observations,
-  recordingTargetId,
+  recordingAvailability = { camera: false, screen: false },
+  onReviewRecording,
 }: {
   observations: HireSupplementalObservationView[];
-  recordingTargetId?: string;
+  recordingAvailability?: RecordingAvailability;
+  onReviewRecording?: (request: HireObservationRecordingRequest) => void;
 }) {
   if (observations.length === 0) return null;
 
@@ -102,7 +184,8 @@ export default function HireSupplementalObservationsPanel({
           These neutral system signals are available for human review beside the
           full interview recording. They are not interview scores and do not
           automatically determine a hiring decision, stage, ranking,
-          recommendation, or export.
+          recommendation, or export. Recording review links appear only when
+          an exact recorder clock was captured.
         </p>
       </div>
 
@@ -132,31 +215,52 @@ export default function HireSupplementalObservationsPanel({
             </p>
           ) : (
             <ul className="space-y-2 text-xs text-[#0f1419]">
-              {observation.report.events.map((event, index) => (
-                <li
-                  key={`${event.kind}-${event.startMs}-${event.endMs}-${index}`}
-                  className="rounded border border-slate-100 bg-slate-50 px-2 py-1.5"
-                >
-                  <p>
-                    {eventLabel(event)} · {formatElapsed(event.startMs)}–
-                    {formatElapsed(event.endMs)}
-                  </p>
-                  <p className="mt-0.5 text-[#536471]">
-                    Signal: {sourceLabel(event.source)}
-                    {recordingTargetId ? (
-                      <>
-                        {" · "}
-                        <a
-                          href={`#${recordingTargetId}`}
-                          className="font-semibold text-[#2563eb] underline"
-                        >
-                          Review recording
-                        </a>
-                      </>
-                    ) : null}
-                  </p>
-                </li>
-              ))}
+              {observation.report.events.map((event, index) => {
+                const recordingTarget = availableRecordingTarget(
+                  event,
+                  recordingAvailability,
+                  observation.report.playbackClock,
+                );
+                const elapsed = formatElapsed(event.startMs);
+                return (
+                  <li
+                    key={`${event.kind}-${event.startMs}-${event.endMs}-${index}`}
+                    className="rounded border border-slate-100 bg-slate-50 px-2 py-1.5"
+                  >
+                    <p>
+                      {eventLabel(event)} · {elapsed}–
+                      {formatElapsed(event.endMs)}
+                    </p>
+                    <p className="mt-0.5 text-[#536471]">
+                      Signal: {sourceLabel(event.source)}
+                      {recordingTarget && onReviewRecording ? (
+                        <>
+                          {" · "}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onReviewRecording({
+                                ...recordingTarget,
+                              })
+                            }
+                            aria-label={`Review ${recordingTarget.kind === "screen" ? "shared display" : "interview"} recording for event at ${elapsed}`}
+                            className="font-semibold text-[#2563eb] underline"
+                          >
+                            Review recording
+                          </button>
+                        </>
+                      ) : onReviewRecording &&
+                        (recordingAvailability.camera ||
+                          recordingAvailability.screen) ? (
+                        <>
+                          {" · "}
+                          <span>Exact recording time unavailable for this capture.</span>
+                        </>
+                      ) : null}
+                    </p>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -169,4 +273,8 @@ export const __hireSupplementalObservationsPanel = {
   formatElapsed,
   eventLabel,
   sourceLabel,
+  preferredRecordingKind,
+  availableRecordingKind,
+  recorderStartOffset,
+  availableRecordingTarget,
 };

@@ -92,9 +92,7 @@ describe('runtime replay terminalization CAS', () => {
     const [claimFilter, claimUpdate] = mocks.bindingFindOneAndUpdate.mock.calls[0]
     expect(claimFilter).toMatchObject({
       cameraMediaStatus: { $nin: ['published', 'unavailable'] },
-      pendingMediaManifest: {
-        $not: { $elemMatch: { kind: 'recording' } },
-      },
+      pendingMediaManifest: { $exists: false },
       issuedObjectCapabilities: {
         $not: { $elemMatch: { key: expect.any(RegExp), expiresAt: { $gt: expect.any(Date) } } },
       },
@@ -105,6 +103,8 @@ describe('runtime replay terminalization CAS', () => {
         $not: { $elemMatch: { kind: 'camera', expiresAt: { $gt: expect.any(Date) } } },
       },
       runtimeWriteDrainUntil: { $not: { $gt: expect.any(Date) } },
+      revokedAt: { $exists: false },
+      purgePersonalData: { $ne: true },
     })
     expect(claimUpdate.$set).toMatchObject({
       cameraMediaTerminalClaimToken: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -115,13 +115,13 @@ describe('runtime replay terminalization CAS', () => {
     expect(finalFilter).toMatchObject({
       cameraMediaTerminalClaimToken: claimUpdate.$set.cameraMediaTerminalClaimToken,
       cameraMediaTerminalClaimArtifactVersion: 3,
-      pendingMediaManifest: {
-        $not: { $elemMatch: { kind: 'recording' } },
-      },
+      pendingMediaManifest: { $exists: false },
       mediaWriteReservations: {
         $not: { $elemMatch: { kind: 'camera', expiresAt: { $gt: expect.any(Date) } } },
       },
       runtimeWriteDrainUntil: { $not: { $gt: expect.any(Date) } },
+      revokedAt: { $exists: false },
+      purgePersonalData: { $ne: true },
     })
     expect(finalUpdate).toMatchObject({
       $set: {
@@ -135,6 +135,181 @@ describe('runtime replay terminalization CAS', () => {
         cameraMediaUnavailableReportedAt: 1,
       },
     })
+  })
+
+  it('terminalizes an ordinary revoked binding only after its durable media deadline', async () => {
+    const now = new Date('2026-08-10T00:00:00.000Z')
+    const revokedAt = new Date('2026-08-09T22:00:00.000Z')
+    const mediaCompletionDeadlineAt = new Date('2026-08-09T23:00:00.000Z')
+    const current = binding({
+      status: 'revoked',
+      revokedAt,
+      purgePersonalData: false,
+      mediaCompletionDeadlineAt,
+    })
+    const snapshot = {
+      status: 'completed',
+      recordingR2Key: null,
+      recordingSizeBytes: null,
+      recordingArtifactVersion: 6,
+    }
+    snapshots(snapshot, snapshot)
+    mocks.bindingFindOneAndUpdate
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(binding({
+        status: 'revoked',
+        revokedAt,
+        mediaCompletionDeadlineAt,
+        cameraMediaStatus: 'unavailable',
+        cameraMediaUnavailableReason: 'upload_expired',
+      }))
+
+    await expect(terminalizeRuntimeReplayMedia({
+      binding: current as never,
+      kind: 'camera',
+      reason: 'upload_expired',
+      now,
+    })).resolves.toBe('recorded')
+
+    const [claimFilter] = mocks.bindingFindOneAndUpdate.mock.calls[0]
+    expect(claimFilter).toMatchObject({
+      status: 'revoked',
+      revokedAt,
+      mediaCompletionDeadlineAt,
+      purgePersonalData: { $ne: true },
+      pendingMediaManifest: expect.any(Object),
+      issuedObjectCapabilities: expect.any(Object),
+      issuedMultipartCapabilities: expect.any(Object),
+      mediaWriteReservations: expect.any(Object),
+      runtimeWriteDrainUntil: expect.any(Object),
+    })
+    const [finalFilter, finalUpdate] = mocks.bindingFindOneAndUpdate.mock.calls[1]
+    expect(finalFilter).toMatchObject({
+      status: 'revoked',
+      revokedAt,
+      mediaCompletionDeadlineAt,
+      purgePersonalData: { $ne: true },
+      cameraMediaTerminalClaimArtifactVersion: 6,
+      pendingMediaManifest: expect.any(Object),
+      issuedObjectCapabilities: expect.any(Object),
+      issuedMultipartCapabilities: expect.any(Object),
+      mediaWriteReservations: expect.any(Object),
+      runtimeWriteDrainUntil: expect.any(Object),
+    })
+    expect(finalUpdate.$set).toMatchObject({
+      cameraMediaStatus: 'unavailable',
+      cameraMediaUnavailableReason: 'upload_expired',
+      cameraMediaUnavailableAt: now,
+    })
+  })
+
+  it('does not terminalize an ordinary revoked binding before its media deadline', async () => {
+    const now = new Date('2026-08-10T00:00:00.000Z')
+
+    await expect(terminalizeRuntimeReplayMedia({
+      binding: binding({
+        status: 'revoked',
+        revokedAt: new Date('2026-08-09T22:00:00.000Z'),
+        mediaCompletionDeadlineAt: new Date('2026-08-10T00:00:00.001Z'),
+      }) as never,
+      kind: 'camera',
+      reason: 'upload_expired',
+      now,
+    })).resolves.toBe('in_flight')
+
+    expect(mocks.interviewFindOne).not.toHaveBeenCalled()
+    expect(mocks.bindingFindOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a privacy-purge binding before reading or claiming replay state', async () => {
+    await expect(terminalizeRuntimeReplayMedia({
+      binding: binding({
+        status: 'revoked',
+        revokedAt: new Date('2026-08-09T22:00:00.000Z'),
+        purgePersonalData: true,
+      }) as never,
+      kind: 'camera',
+      reason: 'upload_expired',
+    })).resolves.toBe('state_changed')
+
+    expect(mocks.interviewFindOne).not.toHaveBeenCalled()
+    expect(mocks.bindingFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(mocks.bindingUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when privacy purge wins after an ordinary-revocation claim', async () => {
+    const now = new Date('2026-08-10T00:00:00.000Z')
+    const revokedAt = new Date('2026-08-09T22:00:00.000Z')
+    const current = binding({
+      status: 'revoked',
+      revokedAt,
+      mediaCompletionDeadlineAt: new Date('2026-08-09T23:00:00.000Z'),
+    })
+    const snapshot = {
+      status: 'completed',
+      recordingR2Key: null,
+      recordingSizeBytes: null,
+      recordingArtifactVersion: 2,
+    }
+    snapshots(snapshot, snapshot)
+    mocks.bindingFindOneAndUpdate
+      .mockResolvedValueOnce(current)
+      // The final `$ne: true` CAS rejects the row after privacy flips the flag.
+      .mockResolvedValueOnce(null)
+
+    await expect(terminalizeRuntimeReplayMedia({
+      binding: current as never,
+      kind: 'camera',
+      reason: 'upload_expired',
+      now,
+    })).resolves.toBe('state_changed')
+
+    const [finalFilter] = mocks.bindingFindOneAndUpdate.mock.calls[1]
+    expect(finalFilter).toMatchObject({
+      status: 'revoked',
+      revokedAt,
+      purgePersonalData: { $ne: true },
+      cameraMediaTerminalClaimArtifactVersion: 2,
+    })
+    expect(mocks.bindingUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cameraMediaTerminalClaimToken: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({
+        $unset: expect.objectContaining({
+          cameraMediaTerminalClaimToken: 1,
+        }),
+      }),
+    )
+  })
+
+  it('blocks terminalization while an exact empty-manifest result snapshot is staged', async () => {
+    const current = binding({
+      pendingMediaManifest: [],
+      pendingResultPayloadJson: JSON.stringify({ revision: 1 }),
+    })
+    snapshots({
+      status: 'completed',
+      recordingR2Key: null,
+      recordingSizeBytes: null,
+      recordingArtifactVersion: 0,
+    })
+    mocks.bindingFindOneAndUpdate.mockResolvedValueOnce(null)
+
+    await expect(terminalizeRuntimeReplayMedia({
+      binding: current as never,
+      kind: 'camera',
+      reason: 'upload_expired',
+    })).resolves.toBe('in_flight')
+
+    expect(mocks.bindingFindOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pendingMediaManifest: { $exists: false },
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    )
+    expect(mocks.bindingUpdateOne).not.toHaveBeenCalled()
   })
 
   it.each([

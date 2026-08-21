@@ -27,6 +27,7 @@ const RETRY_BASE_MS = 5_000
 const RETRY_MAX_MS = 5 * 60 * 1_000
 // Reserve BSON headroom below MongoDB's 16 MiB document limit.
 const ANALYSIS_PAYLOAD_SNAPSHOT_MAX_BYTES = 12 * 1024 * 1024
+const MAJORITY_WRITE_CONCERN = { w: 'majority', j: true } as const
 
 type PublishOutcome = 'published' | 'stale' | 'deferred' | 'skipped'
 
@@ -78,7 +79,11 @@ function parseAnalysisPayloadSnapshot(
     payload.runtimeSessionId !== outbox.runtimeSessionId.toString() ||
     payload.attempt !== outbox.attempt ||
     payload.revision !== outbox.revision ||
+    payload.consentVersion !== outbox.consentVersion ||
+    payload.policyVersion !== outbox.policyVersion ||
     payload.landmarks.sourceKey !== outbox.landmarkArtifact?.sourceKey ||
+    payload.landmarks.objectKeyNonce !==
+      outbox.landmarkArtifact?.objectKeyNonce ||
     payload.landmarks.sha256 !== outbox.artifactDigest
   ) {
     throw new Error('Runtime analysis payload snapshot does not match its outbox')
@@ -103,7 +108,11 @@ async function reserveAnalysisPayloadSnapshot(input: {
       payloadSnapshotJson: { $exists: false },
     },
     { $set: { payloadSnapshotJson: serialized } },
+    { writeConcern: MAJORITY_WRITE_CONCERN },
   )
+  if (!staged.acknowledged) {
+    throw new Error('Runtime analysis payload snapshot was not durably acknowledged')
+  }
   if (staged.matchedCount === 1) {
     return parseAnalysisPayloadSnapshot(input.outbox, serialized)
   }
@@ -216,10 +225,19 @@ async function claimOutbox(
   now: Date,
 ): Promise<IHireRuntimeMultimodalAnalysisOutbox | null> {
   const leaseToken = randomBytes(32).toString('hex')
+  const adoptingSnapshotProtocol =
+    candidate.payloadSnapshotProtocolVersion !== 1 &&
+    (candidate.publishAttemptCount ?? 0) === 0
   return HireRuntimeMultimodalAnalysisOutbox.findOneAndUpdate(
     {
       _id: candidate._id,
       status: 'pending',
+      ...(adoptingSnapshotProtocol
+        ? {
+            payloadSnapshotProtocolVersion: { $exists: false },
+            publishAttemptCount: 0,
+          }
+        : {}),
       $and: [
         {
           $or: [
@@ -240,6 +258,9 @@ async function claimOutbox(
         publishLeaseToken: leaseToken,
         publishLeaseExpiresAt: new Date(now.getTime() + PUBLISH_LEASE_MS),
         publishAttemptCount: Math.min((candidate.publishAttemptCount ?? 0) + 1, 20),
+        ...(adoptingSnapshotProtocol
+          ? { payloadSnapshotProtocolVersion: 1 }
+          : {}),
       },
     },
     { new: true },
@@ -314,6 +335,9 @@ async function clearAcknowledgedSource(input: {
       objects: [{
         key: artifact.sourceKey,
         runtimeSessionId: input.outbox.runtimeSessionId.toString(),
+        ...(artifact.objectKeyNonce
+          ? { objectKeyNonce: artifact.objectKeyNonce }
+          : {}),
       }],
     })
     await InterviewSession.updateOne(
@@ -341,8 +365,9 @@ async function clearAcknowledgedSource(input: {
         failureCode: 1,
       },
     },
+    { writeConcern: MAJORITY_WRITE_CONCERN },
   )
-  if (settled.matchedCount !== 1) {
+  if (!settled.acknowledged || settled.matchedCount !== 1) {
     throw new Error('Runtime multimodal analysis outbox changed before acknowledgement')
   }
 }
@@ -411,6 +436,19 @@ async function publishOne(
       }
       await deferOutbox(outbox, now)
       return 'deferred'
+    }
+    // Claiming increments the attempt count. A count above one with no
+    // snapshot means an older publisher may already have crossed the plane
+    // and lost its acknowledgement. Preserve it for operator reconciliation;
+    // rebuilding from the current mutable session could create a new digest.
+    if (
+      !outbox.payloadSnapshotJson &&
+      outbox.payloadSnapshotProtocolVersion !== 1 &&
+      outbox.publishAttemptCount > 1
+    ) {
+      throw new Error(
+        'Legacy runtime analysis attempt requires operator snapshot reconciliation',
+      )
     }
     let payload = outbox.payloadSnapshotJson
       ? parseAnalysisPayloadSnapshot(outbox, outbox.payloadSnapshotJson)

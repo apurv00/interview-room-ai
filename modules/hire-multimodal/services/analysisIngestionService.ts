@@ -151,7 +151,11 @@ async function coordinateFor(
   if (!round) {
     throw new HireMultimodalAnalysisIngestionError('Round not found', 'not_found', 404)
   }
-  if (!supportsHireMultimodalObservations(round.consentVersion) || !round.resultId) {
+  if (
+    round.consentVersion !== payload.consentVersion ||
+    !supportsHireMultimodalObservations(round.consentVersion) ||
+    !round.resultId
+  ) {
     return 'stale'
   }
   const attemptQuery = HireInterviewAttempt.findOne({
@@ -179,6 +183,7 @@ async function coordinateFor(
     candidateId: application.candidateId,
     roundId: payload.roundId,
     attemptId: attempt._id,
+    consentVersion: payload.consentVersion,
     'accepted.recording': true,
     'accepted.identityPhoto': true,
     'accepted.attentionMonitoring': true,
@@ -186,7 +191,12 @@ async function coordinateFor(
   }).select('consentVersion disclosureDigest')
   if (session) receiptQuery.session(session)
   const receipt = await receiptQuery.lean()
-  if (!receipt || !supportsHireMultimodalObservations(receipt.consentVersion) || !isRecognizedHireConsentSnapshot(receipt)) {
+  if (
+    !receipt ||
+    receipt.consentVersion !== payload.consentVersion ||
+    !supportsHireMultimodalObservations(receipt.consentVersion) ||
+    !isRecognizedHireConsentSnapshot(receipt)
+  ) {
     return 'stale'
   }
   const privacyQuery = HirePrivacyRequest.exists({

@@ -240,6 +240,7 @@ async function observationCoordinateFor(
     payload.schemaVersion === 1;
   const containsDisplayCapture =
     payload.report.capture.displayShare !== undefined ||
+    payload.report.playbackClock?.screenRecorderStartOffsetMs !== undefined ||
     payload.report.events.some(
       (event) =>
         event.kind === "screen_share_wrong_surface" ||

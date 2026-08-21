@@ -13,12 +13,22 @@ export const GET = composeHireApiRoute({
     maxRequests: 60,
     keyPrefix: "rl:hire-operations-overview",
   },
-  async handler(_req, { user }) {
+  async handler(req, { user }) {
     const ctx = await requireMembership({ userId: user.id, email: user.email });
     const overview = await readHireWorkspaceOverview({
       workspaceId: ctx.workspace._id.toString(),
     });
-    return NextResponse.json(overview, {
+    const response = new URL(req.url).searchParams.get("contractVersion") === "2"
+      ? overview
+      : {
+          ...overview,
+          actionInbox: {
+            items: overview.actionInbox.items.filter(
+              (item) => item.kind !== "interview_validation_attention",
+            ),
+          },
+        };
+    return NextResponse.json(response, {
       headers: { "Cache-Control": "private, no-store" },
     });
   },

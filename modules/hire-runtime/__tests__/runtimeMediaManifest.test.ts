@@ -13,6 +13,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   AbortMultipartUploadCommand: mocks.Command,
   DeleteObjectCommand: mocks.Command,
   GetObjectCommand: mocks.Command,
+  PutObjectCommand: mocks.Command,
   S3Client: class {
     send = mocks.send
   },

@@ -3,7 +3,11 @@ import {
   currentDeploymentSurface,
   hireDeploymentConfigurationIssues,
 } from '@shared/surfaces/hireDeploymentReadiness'
-import { HIRE_MEDIA_OBJECT_PROTOCOL } from '@shared/contracts/hireMediaObjectProtocol'
+import {
+  HIRE_MEDIA_OBJECT_PROTOCOL,
+  HIRE_RUNTIME_LANDMARK_OBJECT_PROTOCOL,
+} from '@shared/contracts/hireMediaObjectProtocol'
+import { hireIngestionRevisionProtocolState } from '@shared/contracts/hireIngestionRevisionProtocol'
 import { hireHandoffIssuanceState } from '../candidate/_lib/hireHandoffIssuanceGate'
 import { deploymentCommitOf } from './deploymentIdentity'
 
@@ -96,6 +100,14 @@ export async function GET(req: NextRequest) {
           surface === 'hire-control'
             ? HIRE_MEDIA_OBJECT_PROTOCOL
             : 'not-applicable',
+        hireRuntimeLandmarkObjectProtocol:
+          surface === 'hire-engine'
+            ? HIRE_RUNTIME_LANDMARK_OBJECT_PROTOCOL
+            : 'not-applicable',
+        hireIngestionRevisionProtocol:
+          surface === 'hire-control'
+            ? hireIngestionRevisionProtocolState()
+            : 'not-applicable',
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
       },
@@ -140,6 +152,14 @@ export async function GET(req: NextRequest) {
       hireMediaObjectProtocol:
         surface === 'hire-control'
           ? HIRE_MEDIA_OBJECT_PROTOCOL
+          : 'not-applicable',
+      hireRuntimeLandmarkObjectProtocol:
+        surface === 'hire-engine'
+          ? HIRE_RUNTIME_LANDMARK_OBJECT_PROTOCOL
+          : 'not-applicable',
+      hireIngestionRevisionProtocol:
+        surface === 'hire-control'
+          ? hireIngestionRevisionProtocolState()
           : 'not-applicable',
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),

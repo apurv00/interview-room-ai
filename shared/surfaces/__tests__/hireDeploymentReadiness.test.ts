@@ -29,6 +29,8 @@ const control = {
   INNGEST_EVENT_KEY: 'event-key',
   NEXTAUTH_SECRET: 'c'.repeat(64),
   HIRE_HANDOFF_ISSUANCE_MODE: 'open',
+  HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'required',
+  HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: '2026-08-20T00:00:00.000Z',
   HIRE_PUBLIC_URL: 'https://hire.interviewprep.guru',
   HIRE_ENGINE_RUNTIME_URL: 'https://engine.hire.interviewprep.guru',
   RESEND_API_KEY: 're_test',
@@ -145,6 +147,28 @@ describe('Hire deployment readiness', () => {
       HIRE_HANDOFF_ISSUANCE_MODE: 'smoke',
       HIRE_HANDOFF_SMOKE_TOKEN: 's'.repeat(64),
     })).toEqual([])
+  })
+
+  it('requires a release-aware ingestion protocol while allowing an intentional drain', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: undefined,
+    })).toEqual(expect.arrayContaining([
+      'missing:HIRE_INGESTION_REVISION_PROTOCOL_MODE',
+      'invalid:HIRE_INGESTION_REVISION_PROTOCOL_MODE',
+    ]))
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'disabled',
+    })).toContain('invalid:HIRE_INGESTION_REVISION_PROTOCOL_MODE')
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'draining',
+    })).toEqual([])
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: undefined,
+    })).toContain('not-ready:HIRE_INGESTION_REVISION_PROTOCOL')
   })
 
   it('accepts bounded invite-delivery key rotation and rejects unsafe key manifests', () => {

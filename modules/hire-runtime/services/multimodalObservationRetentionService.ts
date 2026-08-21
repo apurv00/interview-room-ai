@@ -9,6 +9,8 @@ import { HireRuntimeMultimodalObservationRetentionTombstone } from '../models/Hi
 import { deleteRuntimePersonalObjects } from './runtimeMediaManifest'
 import { connectHireRuntimeDB } from './runtimeBoundary'
 
+const MAJORITY_WRITE_CONCERN = { w: 'majority', j: true } as const
+
 export type HireRuntimeMultimodalObservationRetentionOutcome =
   | 'purged'
   | 'already_purged'
@@ -71,7 +73,7 @@ export async function purgeHireRuntimeMultimodalObservationRetention(
             purgedAt: now,
           },
         },
-        { upsert: true },
+        { upsert: true, writeConcern: MAJORITY_WRITE_CONCERN },
       )
     } catch (error) {
       // Two control retries can race on the unique coordinate. A subsequent
@@ -80,6 +82,51 @@ export async function purgeHireRuntimeMultimodalObservationRetention(
       if (!(await isHireRuntimeMultimodalObservationRetentionPurged(coordinates))) {
         throw error
       }
+    }
+  }
+
+  // Serialize with capture's capability-to-outbox transaction on this binding
+  // row. A capture that wins first is visible in the outbox scan below; a
+  // retention fence that wins first leaves its exact capability visible here
+  // and prevents any later handoff or reservation.
+  const fencedBindings = await HireRuntimeBinding.updateMany(
+    coordinates,
+    { $set: { multimodalObservationRetentionPurgedAt: now } },
+    { writeConcern: MAJORITY_WRITE_CONCERN },
+  )
+  if (!fencedBindings.acknowledged) {
+    throw new Error('Runtime multimodal retention binding fence was not acknowledged')
+  }
+  const bindings = await HireRuntimeBinding.find(coordinates)
+    .select('_id principalId issuedObjectCapabilities')
+    .lean()
+  for (const binding of bindings) {
+    const landmarkCapabilities = (binding.issuedObjectCapabilities ?? [])
+      .filter((capability) => capability.key.startsWith('landmarks/'))
+    if (landmarkCapabilities.length === 0) continue
+    await deleteRuntimePersonalObjects({
+      principalId: binding.principalId.toString(),
+      objects: landmarkCapabilities.map((capability) => ({
+        key: capability.key,
+        ...(capability.objectKeyNonce
+          ? { objectKeyNonce: capability.objectKeyNonce }
+          : {}),
+        runtimeSessionId: capability.runtimeSessionId.toString(),
+      })),
+    })
+    const released = await HireRuntimeBinding.updateOne(
+      { _id: binding._id, ...coordinates },
+      {
+        $pull: {
+          issuedObjectCapabilities: {
+            key: { $in: landmarkCapabilities.map(({ key }) => key) },
+          },
+        },
+      },
+      { writeConcern: MAJORITY_WRITE_CONCERN },
+    )
+    if (!released.acknowledged) {
+      throw new Error('Runtime multimodal retention capability release was not acknowledged')
     }
   }
 
@@ -92,13 +139,22 @@ export async function purgeHireRuntimeMultimodalObservationRetention(
       principalId: outbox.principalId.toString(),
       objects: [{
         key: outbox.landmarkArtifact.sourceKey,
+        ...(outbox.landmarkArtifact.objectKeyNonce
+          ? { objectKeyNonce: outbox.landmarkArtifact.objectKeyNonce }
+          : {}),
         runtimeSessionId: outbox.runtimeSessionId.toString(),
       }],
     })
   }
   const [deleted, deletedAnalyses] = await Promise.all([
-    HireRuntimeMultimodalObservationOutbox.deleteMany(coordinates),
-    HireRuntimeMultimodalAnalysisOutbox.deleteMany(coordinates),
+    HireRuntimeMultimodalObservationOutbox.deleteMany(
+      coordinates,
+      { writeConcern: MAJORITY_WRITE_CONCERN },
+    ),
+    HireRuntimeMultimodalAnalysisOutbox.deleteMany(
+      coordinates,
+      { writeConcern: MAJORITY_WRITE_CONCERN },
+    ),
   ])
   if (!deleted.acknowledged || !deletedAnalyses.acknowledged) {
     throw new Error('Runtime multimodal observation retention purge was not acknowledged')

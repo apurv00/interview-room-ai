@@ -15,6 +15,17 @@ export type HireIngestionRevisionProtocolDecision =
       reason: 'disabled' | 'draining' | 'invalid_configuration' | 'version_mismatch'
     }
 
+type HireIngestionRevisionEnvironment = Record<string, string | undefined>
+
+export type HireIngestionRevisionProtocolState = {
+  protocolVersion: typeof HIRE_INGESTION_REVISION_PROTOCOL_VERSION
+  mode: HireIngestionRevisionProtocolMode | 'invalid'
+  explicitlyConfigured: boolean
+  drainMarkerValid: boolean
+  drainWindowSatisfied: boolean
+  releaseReady: boolean
+}
+
 /**
  * Fail-closed deployment interlock for the reservation/index cutover. A
  * production control deployment may accept v2 traffic only after the old
@@ -22,7 +33,7 @@ export type HireIngestionRevisionProtocolDecision =
  */
 export function evaluateHireIngestionRevisionProtocol(input: {
   requestVersion: string | null | undefined
-  environment?: NodeJS.ProcessEnv
+  environment?: HireIngestionRevisionEnvironment
   now?: Date
 }): HireIngestionRevisionProtocolDecision {
   const environment = input.environment ?? process.env
@@ -52,4 +63,43 @@ export function evaluateHireIngestionRevisionProtocol(input: {
   return input.requestVersion === HIRE_INGESTION_REVISION_PROTOCOL_VERSION
     ? { ok: true }
     : { ok: false, reason: 'version_mismatch' }
+}
+
+/** Redacted deployment evidence for authenticated release-health checks. */
+export function hireIngestionRevisionProtocolState(
+  environment: HireIngestionRevisionEnvironment = process.env,
+  now = new Date(),
+): HireIngestionRevisionProtocolState {
+  const configuredMode = environment.HIRE_INGESTION_REVISION_PROTOCOL_MODE
+  const defaultMode = environment.NODE_ENV === 'production' ? 'disabled' : 'required'
+  const candidateMode = configuredMode ?? defaultMode
+  const mode: HireIngestionRevisionProtocolState['mode'] =
+    ['disabled', 'draining', 'required'].includes(candidateMode)
+      ? candidateMode as HireIngestionRevisionProtocolMode
+      : 'invalid'
+  const rawStartedAt = environment.HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT
+  const startedAt = rawStartedAt ? new Date(rawStartedAt) : null
+  const drainMarkerValid = Boolean(
+    startedAt &&
+      Number.isFinite(startedAt.getTime()) &&
+      startedAt.getTime() <= now.getTime(),
+  )
+  const drainWindowSatisfied = Boolean(
+    drainMarkerValid &&
+      startedAt &&
+      startedAt.getTime() <= now.getTime() - HIRE_INGESTION_REVISION_DRAIN_MS,
+  )
+  const decision = evaluateHireIngestionRevisionProtocol({
+    requestVersion: HIRE_INGESTION_REVISION_PROTOCOL_VERSION,
+    environment,
+    now,
+  })
+  return {
+    protocolVersion: HIRE_INGESTION_REVISION_PROTOCOL_VERSION,
+    mode,
+    explicitlyConfigured: configuredMode !== undefined,
+    drainMarkerValid,
+    drainWindowSatisfied,
+    releaseReady: decision.ok,
+  }
 }

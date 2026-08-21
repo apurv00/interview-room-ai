@@ -34,7 +34,10 @@ import {
   HireCandidatePiiTombstoneError,
 } from './hireCandidatePrivacyWriteFence'
 
-type MediaArtifact = HireEngineResultIngestion['media'][number]
+type MediaArtifact = HireEngineResultIngestion['media'][number] & {
+  /** Temporary scope authority carried only by runtime landmark v2. */
+  objectKeyNonce?: string
+}
 type RuntimeMediaIngestionStream = 'engine_result' | 'multimodal_analysis'
 
 interface RuntimeMediaIngestionIdentity {
@@ -140,17 +143,54 @@ function runtimePrincipalId(roundId: string): string {
     .slice(0, 24)
 }
 
+function runtimeLandmarkV2ScopeDigest(input: {
+  principalId: string
+  runtimeSessionId: string
+  objectKeyNonce: string
+}): string {
+  return createHash('sha256')
+    .update('interview-room-ai:hire-runtime-landmark:v2\0')
+    .update(input.principalId.toLowerCase())
+    .update('\0')
+    .update(input.runtimeSessionId.toLowerCase())
+    .update('\0')
+    .update(input.objectKeyNonce.toLowerCase())
+    .digest('hex')
+}
+
 function assertRuntimeArtifactScope(input: {
   artifact: MediaArtifact
   roundId: string
   runtimeSessionId: string
 }): void {
   const expectedOwner = runtimePrincipalId(input.roundId)
-  const match = input.artifact.kind === 'landmarks'
-    ? /^landmarks\/([a-f0-9]{24})\/([a-f0-9]{24})-([a-f0-9]{32})\.json$/i.exec(input.artifact.sourceKey)
-    : /^recordings\/([a-f0-9]{24})\/([a-f0-9]{24})(?:-(?:audio|screen))?-\d{10,16}\.webm$/i.exec(
-        input.artifact.sourceKey,
-      )
+  if (input.artifact.kind === 'landmarks') {
+    const legacy =
+      /^landmarks\/([a-f0-9]{24})\/([a-f0-9]{24})-([a-f0-9]{32})\.json$/i
+        .exec(input.artifact.sourceKey)
+    const v2 = /^landmarks\/v2\/([a-f0-9]{64})$/
+      .exec(input.artifact.sourceKey)
+    const legacyMatches = Boolean(
+      legacy &&
+      !input.artifact.objectKeyNonce &&
+      legacy[1].toLowerCase() === expectedOwner &&
+      legacy[2].toLowerCase() === input.runtimeSessionId.toLowerCase(),
+    )
+    const v2Matches = Boolean(
+      v2 &&
+      /^[a-f0-9]{64}$/.test(input.artifact.objectKeyNonce ?? '') &&
+      v2[1] === runtimeLandmarkV2ScopeDigest({
+        principalId: expectedOwner,
+        runtimeSessionId: input.runtimeSessionId,
+        objectKeyNonce: input.artifact.objectKeyNonce as string,
+      }),
+    )
+    if (legacyMatches || v2Matches) return
+    throw new Error('Runtime media artifact crossed its round/session boundary')
+  }
+  const match =
+    /^recordings\/([a-f0-9]{24})\/([a-f0-9]{24})(?:-(?:audio|screen))?-\d{10,16}\.webm$/i
+      .exec(input.artifact.sourceKey)
   if (
     !match ||
     match[1].toLowerCase() !== expectedOwner ||
@@ -592,7 +632,7 @@ type RuntimeMediaIngestionInput = {
   ingestionEventId: string
   ingestionDigest: string
   completedAt: Date
-  artifacts: HireEngineResultIngestion['media']
+  artifacts: MediaArtifact[]
 }
 
 class RuntimeMediaChecksumError extends Error {

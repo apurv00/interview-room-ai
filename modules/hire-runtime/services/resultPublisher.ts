@@ -360,10 +360,21 @@ function publicationStateFilter(binding: IHireRuntimeBinding): Record<string, un
   }
 }
 
+function publicationLifecycleFilter(
+  binding: IHireRuntimeBinding,
+): Record<string, unknown> {
+  return {
+    status: binding.status,
+    ...(binding.revokedAt === undefined
+      ? { revokedAt: { $exists: false } }
+      : { revokedAt: binding.revokedAt }),
+  }
+}
+
 function parseResultPayloadSnapshot(
   binding: IHireRuntimeBinding,
-  revision: number,
   serialized: string,
+  expectedRevision?: number,
 ): HireEngineResultIngestion {
   const payload = HireEngineResultIngestionSchema.parse(JSON.parse(serialized))
   if (
@@ -372,7 +383,7 @@ function parseResultPayloadSnapshot(
     payload.roundId !== binding.roundId.toString() ||
     payload.runtimeSessionId !== binding.runtimeSessionId?.toString() ||
     payload.attempt !== Math.max(1, binding.attemptCount) ||
-    payload.revision !== revision
+    (expectedRevision !== undefined && payload.revision !== expectedRevision)
   ) {
     throw new Error('Runtime result payload snapshot does not match its binding')
   }
@@ -384,6 +395,7 @@ async function reserveResultPayloadSnapshot(input: {
   revision: number
   expectedPublicationState: Record<string, unknown>
   payload: HireEngineResultIngestion
+  previousSnapshotJson?: string
 }): Promise<HireEngineResultIngestion> {
   const normalized = HireEngineResultIngestionSchema.parse(input.payload)
   const serialized = JSON.stringify(normalized)
@@ -397,7 +409,9 @@ async function reserveResultPayloadSnapshot(input: {
       runtimeSessionId: input.binding.runtimeSessionId,
       ...input.expectedPublicationState,
       purgePersonalData: { $ne: true },
-      pendingResultPayloadJson: { $exists: false },
+      ...(input.previousSnapshotJson === undefined
+        ? { pendingResultPayloadJson: { $exists: false } }
+        : { pendingResultPayloadJson: input.previousSnapshotJson }),
     },
     {
       // The exact media inventory and the exact outgoing payload become
@@ -412,8 +426,8 @@ async function reserveResultPayloadSnapshot(input: {
   if (staged.matchedCount === 1) {
     return parseResultPayloadSnapshot(
       input.binding,
-      input.revision,
       serialized,
+      input.revision,
     )
   }
 
@@ -432,8 +446,8 @@ async function reserveResultPayloadSnapshot(input: {
   }
   return parseResultPayloadSnapshot(
     input.binding,
-    input.revision,
     winner.pendingResultPayloadJson,
+    input.revision,
   )
 }
 
@@ -566,16 +580,41 @@ async function publishRuntimeBindingResult(
     await markPublishChecked(binding)
     return 'skipped'
   }
-  if (
-    !binding.pendingResultPayloadJson &&
-    await settleKnownExpiredMediaBeforePublish(binding)
-  ) return 'skipped'
   const lateReplay = isLateReplayPublication(binding)
   const completionReportPending = isMediaCompletionReportPending(binding)
   const followUp = binding.publishedRevision !== undefined
   const revision = followUp
     ? (binding.publishedRevision ?? RESULT_REVISION) + 1
     : RESULT_REVISION
+  const snapshotJson = binding.pendingResultPayloadJson
+  const snapshot = snapshotJson
+    ? parseResultPayloadSnapshot(binding, snapshotJson)
+    : null
+  const payloadFromSnapshot = snapshot?.revision === revision ? snapshot : null
+  const publishedCoreSnapshot = snapshot &&
+    binding.publishedRevision !== undefined &&
+    snapshot.revision === binding.publishedRevision &&
+    snapshot.resultDigest === binding.publishedDigest
+    ? snapshot
+    : null
+  if (snapshot && !payloadFromSnapshot && !publishedCoreSnapshot) {
+    throw new Error('Runtime result payload snapshot is not the current or published revision')
+  }
+  if (
+    !snapshot &&
+    (
+      binding.pendingMediaManifest !== undefined ||
+      followUp
+    )
+  ) {
+    throw new Error(
+      'Legacy runtime result attempt requires operator snapshot reconciliation',
+    )
+  }
+  if (
+    !payloadFromSnapshot &&
+    await settleKnownExpiredMediaBeforePublish(binding)
+  ) return 'skipped'
   const expectedPublicationState = publicationStateFilter(binding)
   // Result projection/copy can hold transcript/media in memory and can write
   // publisher state. Reserve a bounded drain horizon before the first read;
@@ -584,13 +623,7 @@ async function publishRuntimeBindingResult(
   await reserveRuntimePublishDrain(binding)
 
   let mediaCompletionDeadlineAt = binding.mediaCompletionDeadlineAt
-  let payload = binding.pendingResultPayloadJson
-    ? parseResultPayloadSnapshot(
-        binding,
-        revision,
-        binding.pendingResultPayloadJson,
-      )
-    : null
+  let payload = payloadFromSnapshot
   if (!payload) {
     const session = (await InterviewSession.findOne({
       _id: binding.runtimeSessionId,
@@ -611,8 +644,8 @@ async function publishRuntimeBindingResult(
     if (mediaExpiry.expired) return 'skipped'
     mediaCompletionDeadlineAt = mediaExpiry.deadline
 
-    const results = buildRuntimeResult(session)
-    const timeline = buildRuntimeTimeline(session)
+    const results = publishedCoreSnapshot?.results ?? buildRuntimeResult(session)
+    const timeline = publishedCoreSnapshot ? null : buildRuntimeTimeline(session)
     // The control result is immutable and evidence-linked. Do not publish a
     // provisional scorecard while engine feedback is still being generated;
     // the scheduled publisher retries until the authoritative result exists.
@@ -684,14 +717,19 @@ async function publishRuntimeBindingResult(
       }
     }
 
-    const completedAt = session.completedAt ?? session.updatedAt ?? new Date()
+    const startedAt = publishedCoreSnapshot?.startedAt ??
+      timeline!.startedAt.toISOString()
+    const completedAt = publishedCoreSnapshot?.completedAt ??
+      (session.completedAt ?? session.updatedAt ?? new Date()).toISOString()
+    const durationMs = publishedCoreSnapshot?.durationMs ?? timeline!.durationMs
+    const transcript = publishedCoreSnapshot?.transcript ?? timeline!.transcript
     const mediaCompletion = mediaCompletionFor(binding, media)
     const digest = sha256(canonicalBridgeJson({
       results,
-      startedAt: timeline.startedAt.toISOString(),
-      completedAt: completedAt.toISOString(),
-      durationMs: timeline.durationMs,
-      transcript: timeline.transcript,
+      startedAt,
+      completedAt,
+      durationMs,
+      transcript,
       media,
       mediaCompletion,
     }))
@@ -703,6 +741,9 @@ async function publishRuntimeBindingResult(
       binding,
       revision,
       expectedPublicationState,
+      ...(publishedCoreSnapshot && snapshotJson
+        ? { previousSnapshotJson: snapshotJson }
+        : {}),
       payload: {
         schemaVersion: HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
         eventId,
@@ -713,12 +754,12 @@ async function publishRuntimeBindingResult(
         attempt,
         revision,
         status: 'completed',
-        startedAt: timeline.startedAt.toISOString(),
-        completedAt: completedAt.toISOString(),
-        durationMs: timeline.durationMs,
+        startedAt,
+        completedAt,
+        durationMs,
         resultDigest: digest,
         results,
-        transcript: timeline.transcript,
+        transcript,
         // Media transfer is a separate checksum-verified bridge operation.
         // Never send raw object URLs or candidate identity through this contract.
         media,
@@ -774,6 +815,7 @@ async function publishRuntimeBindingResult(
       workspaceId: binding.workspaceId,
       runtimeSessionId: binding.runtimeSessionId,
       ...expectedPublicationState,
+      ...publicationLifecycleFilter(binding),
       purgePersonalData: { $ne: true },
       pendingResultPayloadJson: JSON.stringify(payload),
     },
@@ -822,8 +864,8 @@ async function publishRuntimeBindingResult(
       },
       $unset: {
         pendingMediaManifest: 1,
-        pendingResultPayloadJson: 1,
         publishFailureCode: 1,
+        ...(!replayStillPending ? { pendingResultPayloadJson: 1 } : {}),
         ...(!replayStillPending ? { publishRetryAt: 1 } : {}),
       },
     },

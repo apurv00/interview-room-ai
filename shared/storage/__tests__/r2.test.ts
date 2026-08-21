@@ -57,6 +57,8 @@ describe('isCanonicalR2Key', () => {
     ['extra recording suffix', `recordings/${USER_ID}/${SESSION_ID}-${TIMESTAMP}.webm.bak`],
     ['short landmark nonce', `landmarks/${USER_ID}/${SESSION_ID}-${'a'.repeat(31)}.json`],
     ['non-hex landmark nonce', `landmarks/${USER_ID}/${SESSION_ID}-${'z'.repeat(32)}.json`],
+    ['opaque runtime landmark namespace', `landmarks/v2/${'b'.repeat(64)}`],
+    ['short opaque runtime landmark digest', `landmarks/v2/${'b'.repeat(63)}`],
     ['unsupported document type', `documents/${USER_ID}/profile/${TIMESTAMP}-cv.pdf`],
     ['missing document filename', `documents/${USER_ID}/resume/${TIMESTAMP}-`],
     ['encoded document filename', `documents/${USER_ID}/resume/${TIMESTAMP}-cv%2fpayload.pdf`],
@@ -111,6 +113,25 @@ describe('R2 command canonical-key gate', () => {
     })
     await expect(operation()).rejects.toBeInstanceOf(InvalidR2KeyError)
   })
+
+  it.each([
+    ['direct upload', (key: string) => uploadToR2(key, new Uint8Array([1]), 'application/json')],
+    ['upload presign', (key: string) => getUploadPresignedUrl(key, 'application/json')],
+    ['multipart create', (key: string) => createMultipartUpload(key, 'application/json')],
+    ['multipart part presign', (key: string) => getMultipartPartPresignedUrl(key, 'upload-id', 1)],
+    ['multipart complete', (key: string) => completeMultipartUpload(key, 'upload-id', [])],
+    ['multipart abort', (key: string) => abortMultipartUpload(key, 'upload-id')],
+    ['download presign', (key: string) => getDownloadPresignedUrl(key)],
+    ['existence check', (key: string) => objectExists(key)],
+    ['delete', (key: string) => deleteFromR2(key, {
+      ownerUserId: USER_ID,
+      sessionId: SESSION_ID,
+    })],
+  ] as const)('%s rejects the private runtime v2 namespace', async (_label, operation) => {
+    const runtimeKey = `landmarks/v2/${'b'.repeat(64)}`
+    expect(isCanonicalR2Key(runtimeKey)).toBe(false)
+    await expect(operation(runtimeKey)).rejects.toBeInstanceOf(InvalidR2KeyError)
+  })
 })
 
 describe('deleteFromR2 authority gate', () => {
@@ -145,6 +166,16 @@ describe('deleteFromR2 authority gate', () => {
       ownerUserId: USER_ID,
       sessionId: FOREIGN_SESSION_ID,
     })).rejects.toBeInstanceOf(R2DeleteAuthorityError)
+  })
+
+  it('never grants the generic delete path authority over runtime v2 landmarks', async () => {
+    const runtimeKey = `landmarks/v2/${'b'.repeat(64)}`
+    expect(isCanonicalR2Key(runtimeKey)).toBe(false)
+
+    await expect(deleteFromR2(runtimeKey, {
+      ownerUserId: USER_ID,
+      sessionId: SESSION_ID,
+    })).rejects.toBeInstanceOf(InvalidR2KeyError)
   })
 })
 

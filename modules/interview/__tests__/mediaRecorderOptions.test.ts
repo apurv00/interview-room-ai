@@ -64,6 +64,22 @@ describe('useMediaRecorder', () => {
     expect(start).toHaveBeenCalledWith(1000)
   })
 
+  it('retains the exact wall-clock boundary used to start the recorder', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(42_125)
+    try {
+      const stream = new MockMediaStream([audioTrack, videoTrack]) as unknown as MediaStream
+      const { result } = renderHook(() => useMediaRecorder())
+
+      act(() => {
+        expect(result.current.startRecording(stream)).toBe(true)
+      })
+
+      expect(result.current.getStartedAtMs()).toBe(42_125)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
   it('keeps audio-only recording audio-only while preserving the audio bitrate cap', () => {
     const sourceStream = new MockMediaStream([audioTrack]) as unknown as MediaStream
     const { result } = renderHook(() => useMediaRecorder())

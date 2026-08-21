@@ -133,7 +133,9 @@ reorder or combine these stop/start actions:
 6. Start the new exact-commit control in `smoke` mode. Require authenticated
    health to report MongoDB/Redis `ok`, `surface:"hire-control"`, the same
    commit, `hireMediaObjectProtocol:
-   "v2-opaque-nonce-if-none-match-zero-seal"`, and
+   "v2-opaque-nonce-if-none-match-zero-seal"`,
+   `hireIngestionRevisionProtocol={protocolVersion:"2",mode:"required",releaseReady:true}`,
+   and
    `handoffIssuance={mode:"smoke",publicIssuanceOpen:false,smokeReady:true}`.
    Also prove a normal start request still returns `503`. Do not open issuance
    if any marker is missing, stale, or `not-applicable` on the wrong surface.

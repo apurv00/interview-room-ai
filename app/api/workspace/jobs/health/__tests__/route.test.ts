@@ -49,4 +49,41 @@ describe("GET /api/workspace/jobs/health", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({ jobs: [] });
   });
+
+  it("filters the new attention enum for legacy clients and exposes it in v2", async () => {
+    mocks.readHealth.mockResolvedValue({
+      jobs: [{
+        jobId: "job-1",
+        attention: [
+          { kind: "failed_multimodal_analyses", count: 1 },
+          { kind: "interview_validation_attention", count: 2 },
+        ],
+      }],
+    });
+
+    const legacy = await GET(
+      new Request("https://hire.example/api/workspace/jobs/health") as never,
+    );
+    await expect(legacy.json()).resolves.toEqual({
+      jobs: [{
+        jobId: "job-1",
+        attention: [{ kind: "failed_multimodal_analyses", count: 1 }],
+      }],
+    });
+
+    const v2 = await GET(
+      new Request(
+        "https://hire.example/api/workspace/jobs/health?contractVersion=2",
+      ) as never,
+    );
+    await expect(v2.json()).resolves.toEqual({
+      jobs: [{
+        jobId: "job-1",
+        attention: [
+          { kind: "failed_multimodal_analyses", count: 1 },
+          { kind: "interview_validation_attention", count: 2 },
+        ],
+      }],
+    });
+  });
 });

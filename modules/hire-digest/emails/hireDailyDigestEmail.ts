@@ -18,6 +18,11 @@ export function buildHireDailyDigestEmail(input: {
   const failureLine = input.payload.terminalKitDeliveryFailures > 0
     ? `${input.payload.terminalKitDeliveryFailures} interview-kit delivery issue${input.payload.terminalKitDeliveryFailures === 1 ? '' : 's'} need attention`
     : 'No terminal interview-kit delivery issues'
+  const validationLine = typeof input.payload.validationAttentionInterviews === 'number'
+    ? input.payload.validationAttentionInterviews > 0
+      ? `${input.payload.validationAttentionInterviews} interview validation timeline${input.payload.validationAttentionInterviews === 1 ? '' : 's'} available`
+      : 'No interview validation timelines currently available'
+    : null
 
   return {
     subject: `${input.payload.workspaceName}: daily hiring summary`,
@@ -28,6 +33,7 @@ export function buildHireDailyDigestEmail(input: {
   <ul style="line-height:1.7;padding-left:22px;">
     ${summary.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
     <li>${escapeHtml(failureLine)}</li>
+    ${validationLine ? `<li>${escapeHtml(validationLine)}</li>` : ''}
   </ul>
   <p style="margin:28px 0;"><a href="${safeUrl}" style="background:#2563eb;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;">Open hiring overview</a></p>
   <p style="line-height:1.6;color:#52606d;">This message contains aggregate operational counts only. You can turn daily summaries off in your workspace overview.</p>
@@ -39,6 +45,7 @@ export function buildHireDailyDigestEmail(input: {
       '',
       ...summary.map((item) => `- ${item}`),
       `- ${failureLine}`,
+      ...(validationLine ? [`- ${validationLine}`] : []),
       '',
       `Open hiring overview: ${overviewUrl}`,
       '',

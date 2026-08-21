@@ -6,3 +6,7 @@
  */
 export const HIRE_MEDIA_OBJECT_PROTOCOL =
   'v2-opaque-nonce-if-none-match-zero-seal' as const
+
+/** Authenticated Hire engine release marker for raw landmark storage. */
+export const HIRE_RUNTIME_LANDMARK_OBJECT_PROTOCOL =
+  'v2-opaque-scope-digest-if-none-match-zero-seal' as const

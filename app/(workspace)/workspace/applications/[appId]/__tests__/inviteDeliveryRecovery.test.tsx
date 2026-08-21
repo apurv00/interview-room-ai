@@ -75,6 +75,28 @@ afterEach(() => {
 })
 
 describe('AI invitation delivery recovery UI', () => {
+  it('programmatically labels the experience selector and required offer note', async () => {
+    const newApplication = card('sent')
+    newApplication.rounds = []
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(newApplication)))
+    const first = render(<ApplicationCardPage params={{ appId: 'app-1' }} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send AI interview' }))
+    expect(
+      screen.getByLabelText("Candidate's experience level"),
+    ).toHaveAttribute('id', 'hire-candidate-experience')
+    first.unmount()
+
+    const offerApplication = card('sent')
+    offerApplication.application.stage = 'offer'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(offerApplication)))
+    render(<ApplicationCardPage params={{ appId: 'app-1' }} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Offer accepted' }))
+    expect(
+      screen.getByLabelText(/Record why the candidate accepted/i),
+    ).toHaveAttribute('id', 'offer-decision-note')
+  })
+
   it('shows the authenticated recovery link after reload and retries email idempotently', async () => {
     let retried = false
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

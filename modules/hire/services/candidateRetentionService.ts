@@ -10,6 +10,7 @@ import {
   HireCandidate,
   HireConsentReceipt,
   HireEmailOutbox,
+  HireEngineIngestionEvent,
   HireHumanKitDelivery,
   HireHumanRound,
   HireHumanScorecard,
@@ -737,6 +738,19 @@ async function anonymizeClaimedCandidate(input: {
         },
         { session },
       )
+      if (applicationIds.length > 0) {
+        // Legacy ingestion ledgers may still contain source object paths and
+        // media fingerprints. Keep their immutable retry identity/digest,
+        // but remove the manifest at the same retention boundary as results.
+        await HireEngineIngestionEvent.updateMany(
+          {
+            workspaceId: candidate.workspaceId,
+            applicationId: { $in: applicationIds },
+          },
+          { $set: { media: [] } },
+          { session },
+        )
+      }
       // The derived observation and its idempotency ledger do not have a
       // defensible aggregate use after retention anonymization. Erase both in
       // the same subject transaction rather than preserving an identifier-only

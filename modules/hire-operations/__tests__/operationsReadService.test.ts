@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   resultAggregate: vi.fn(),
   verdictAggregate: vi.fn(),
   analysisAggregate: vi.fn(),
+  observationAggregate: vi.fn(),
   privacyRequestFind: vi.fn(),
   privacyFilter: vi.fn(),
   departmentFind: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock("@hire-departments/models", () => ({
 vi.mock("@/modules/hire-multimodal/models", () => ({
   HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS: 3,
   HireMultimodalAnalysis: { aggregate: mocks.analysisAggregate },
+  HireMultimodalObservation: { aggregate: mocks.observationAggregate },
 }));
 
 vi.mock("@/modules/hire-onboarding/services/testDriveService", () => ({
@@ -156,6 +158,7 @@ describe("Phase-5 operations read model", () => {
       { $match: { [`__testDrive_${input.coordinate}.0`]: { $exists: false } } },
     ]);
     mocks.analysisAggregate.mockResolvedValue([]);
+    mocks.observationAggregate.mockResolvedValue([]);
   });
 
   it("builds aggregate-only overview and attention-sorted health without candidate data", () => {
@@ -210,6 +213,9 @@ describe("Phase-5 operations read model", () => {
       failedAnalyses: [
         { jobId: "job-a", applicationId: "app-a", candidateId: "candidate-a" },
       ],
+      validationAttention: [
+        { jobId: "job-a", applicationId: "app-a", candidateId: "candidate-a" },
+      ],
     } as never;
 
     const overview = __hireOperations.buildWorkspaceOverview(batch, NOW);
@@ -230,6 +236,7 @@ describe("Phase-5 operations read model", () => {
           { kind: "terminal_human_kit_delivery_failures", count: 1 },
           { kind: "external_verdicts_received", count: 1 },
           { kind: "failed_multimodal_analyses", count: 1 },
+          { kind: "interview_validation_attention", count: 1 },
         ],
       },
     });
@@ -250,12 +257,52 @@ describe("Phase-5 operations read model", () => {
         { kind: "candidates_awaiting_decision", count: 1 },
         { kind: "pending_human_scorecards", count: 1 },
         { kind: "failed_multimodal_analyses", count: 1 },
+        { kind: "interview_validation_attention", count: 1 },
       ]),
     );
     expect(JSON.stringify({ overview, health })).not.toContain(
       "PRIVATE_CANDIDATE_NAME",
     );
     expect(JSON.stringify({ overview, health })).not.toContain("candidate-a");
+  });
+
+  it("surfaces validation attention without changing the existing job-health ordering", () => {
+    const health = __hireOperations.buildJobsHealth(
+      {
+        jobs: [
+          job({ _id: "job-a" }),
+          job({ _id: "job-b", title: "Design engineer" }),
+        ],
+        departments: [{ _id: "department-a", name: "Engineering" }],
+        applications: [],
+        humanRounds: [
+          {
+            jobId: "job-a",
+            applicationId: "app-a",
+            candidateId: "candidate-a",
+            status: "pending_scorecard",
+          },
+        ],
+        terminalDeliveries: [],
+        externalVerdicts: [],
+        failedAnalyses: [],
+        validationAttention: Array.from({ length: 10 }, (_, index) => ({
+          jobId: "job-b",
+          applicationId: `app-${index}`,
+          candidateId: `candidate-${index}`,
+        })),
+      } as never,
+      NOW,
+    );
+
+    expect(health.jobs.map((item: { jobId: string }) => item.jobId)).toEqual([
+      "job-a",
+      "job-b",
+    ]);
+    expect(health.jobs[1]?.attention).toContainEqual({
+      kind: "interview_validation_attention",
+      count: 10,
+    });
   });
 
   it("returns only a same-job ranked fallback below 10 scores and uses the latest valid result per application", () => {
@@ -411,6 +458,7 @@ describe("Phase-5 operations read model", () => {
     expect(mocks.deliveryAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.verdictAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.analysisAggregate).toHaveBeenCalledTimes(1);
+    expect(mocks.observationAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.privacyRequestFind).toHaveBeenCalledTimes(1);
     expect(mocks.departmentFind).toHaveBeenCalledTimes(1);
     const [applicationPipeline] = mocks.applicationAggregate.mock.calls[0];
@@ -441,6 +489,39 @@ describe("Phase-5 operations read model", () => {
         }),
       },
     ]));
+    const [observationPipeline] = mocks.observationAggregate.mock.calls[0];
+    expect(observationPipeline[0]).toMatchObject({
+      $match: {
+        workspaceId: expect.anything(),
+        candidateId: { $in: ["222222222222222222222222"] },
+      },
+    });
+    expect(observationPipeline).toEqual(
+      expect.arrayContaining([
+        {
+          $group: {
+            _id: {
+              applicationId: "$applicationId",
+              roundId: "$roundId",
+              runtimeSessionId: "$runtimeSessionId",
+            },
+            latest: { $first: "$$ROOT" },
+          },
+        },
+        {
+          $match: {
+            $and: expect.arrayContaining([
+              {
+                $or: [
+                  { "report.status": "insufficient_signal" },
+                  { "report.events.0": { $exists: true } },
+                ],
+              },
+            ]),
+          },
+        },
+      ]),
+    );
   });
 
   it("returns a workspace-scoped Department label with each job tracking row", async () => {

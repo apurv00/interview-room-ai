@@ -1,7 +1,8 @@
-# Hire media v2 cold-cutover runbook
+# Hire media and runtime-landmark v2 cold-cutover runbook
 
 Status: **required for the first production release of Hire media object
-protocol `v2-opaque-nonce-if-none-match-zero-seal`.**
+protocol `v2-opaque-nonce-if-none-match-zero-seal` or runtime landmark object
+protocol `v2-opaque-scope-digest-if-none-match-zero-seal`.**
 
 This runbook overrides the rolling control-service deployment in
 [`oracle-cutover.md`](./oracle-cutover.md) for this one protocol boundary.
@@ -11,29 +12,39 @@ a maintenance window and perform a cold cutover instead.
 
 ## Non-negotiable invariants
 
-- The approved artifact is identified by one exact 40-character Git SHA and
-  the authenticated Hire control health marker
-  `v2-opaque-nonce-if-none-match-zero-seal`.
-- Old and new Hire control containers, HTTP writers, and Inngest lifecycle
-  workers must never overlap. A successful response from one new container is
-  not evidence that every old container is gone.
+- The approved artifact is identified by one exact 40-character Git SHA, the
+  authenticated Hire control marker
+  `v2-opaque-nonce-if-none-match-zero-seal`, and the authenticated Hire engine
+  marker `v2-opaque-scope-digest-if-none-match-zero-seal`.
+- Old and new Hire control and Hire engine containers, HTTP writers, and
+  Inngest lifecycle workers must never overlap. A successful response from one
+  new container is not evidence that every old container is gone.
 - Production v2 keys have shape `hire-media/v2/<64 lowercase hex characters>`.
   They contain a nonce-bound digest, not Mongo coordinate IDs, the candidate
   name, media kind, extension, or the nonce itself.
-- Deleting v2 media means replacing the object at the same key with a
+- Production runtime landmark keys have shape
+  `landmarks/v2/<64 lowercase hex scope digest>`. Their 64-character random
+  object-key nonce exists only in the temporary binding capability, runtime
+  outbox, and signed bridge artifact; it is never embedded in the key and is
+  erased with the raw-artifact authority after acknowledgement. Thus a
+  permanent seal exposes no principal, session, candidate, workspace, or
+  offline-verifiable nonce.
+- Deleting either kind of v2 object means replacing it at the same key with a
   permanent zero-byte seal. Never delete that key afterwards. Never configure
-  R2 expiration for all or any subset of `hire-media/v2/`.
-- Existing v1 objects are not migrated. The v2-aware release continues to
-  read them and deletes them with `DeleteObject`; it writes no new v1 objects.
+  R2 expiration for all or any subset of `hire-media/v2/` or `landmarks/v2/`.
+- Existing v1 media and coordinate-bearing landmark objects are not migrated.
+  The v2-aware release continues to read them and deletes them with
+  `DeleteObject`; it writes no new v1 objects.
 - Once the first v2 database row or object exists, rollback to a build without
   this exact protocol is forbidden. Freeze and fix forward to a v2-aware
   build instead.
 
 The permanent v2 seal does not retain clear candidate-linked coordinates. Its
-opaque digest is nonce-bound, its body is empty, and its metadata is only
-`hire-media-tombstone=v2`. After the owning database graph is deleted there is
-no retained coordinate-to-key mapping. A coordinate-bearing permanent key
-would violate verified deletion and must never be introduced.
+opaque digest is nonce-bound and its body is empty. Media seal metadata is only
+`hire-media-tombstone=v2`; runtime landmark seal metadata is only
+`hire-runtime-landmark-tombstone=v2`. After the owning database graph is
+deleted there is no retained coordinate-to-key mapping. A coordinate-bearing
+permanent key would violate verified deletion and must never be introduced.
 
 ## 1. Pin the release and pass local conformance
 
@@ -52,6 +63,12 @@ npm run test:run -- \
   app/api/health/__tests__/route.test.ts \
   app/api/health/__tests__/hireMediaObjectProtocol.test.ts \
   scripts/__tests__/check-hire-media-r2-protocol.test.ts \
+  shared/storage/__tests__/r2.test.ts \
+  modules/hire-runtime/__tests__/runtimeMediaCleanup.test.ts \
+  modules/hire-runtime/__tests__/runtimeMediaManifest.test.ts \
+  modules/hire-runtime/__tests__/multimodalAnalysisCaptureService.test.ts \
+  modules/hire-runtime/__tests__/multimodalAnalysisPublisherSnapshot.test.ts \
+  modules/hire-runtime/__tests__/runtimePersonalDataPurge.test.ts \
   modules/hire/__tests__/hireMediaStorageProtocol.test.ts \
   modules/hire/__tests__/runtimeMediaPrivacyRace.test.ts \
   modules/hire/__tests__/identityMediaRetention.test.ts \
@@ -67,34 +84,129 @@ workspace hard purge, retention, and onboarding test-drive cleanup.
 
 ## 2. Audit the real production R2 bucket
 
-Inject the production bucket credentials through the approved operator secret
-store. Do not paste or print them. The token must be able to read bucket
-lifecycle configuration and read/write/delete objects for the conformance
-check.
+Inject both exact production bucket credential sets through the approved
+operator secret store. Do not paste or print them. `R2_*` must identify the
+Hire control bucket; `HIRE_RUNTIME_R2_*` must identify the Hire engine runtime
+bucket. Each token must be able to read its own bucket lifecycle configuration,
+list objects, and read/write/delete objects only for the conformance check.
+Also inject a read-only `MONGODB_URI` for the production runtime database and
+its exact `HIRE_RUNTIME_DATABASE_NAME`; the checker selects that database
+explicitly and reads it with primary/majority semantics.
+
+The first-activation counts are release-authoritative, so credentials and
+names alone are insufficient: a self-consistently wrong database/bucket tuple
+could otherwise report an empty inventory. Before the first check, provision
+the following immutable identity sentinel through a separate, change-controlled
+bootstrap workflow. The checker contains no sentinel create, update, repair,
+or delete path:
+
+- collection: `__deployment_environment_identity` in the exact production
+  runtime database;
+- `_id`: `hire-media-r2-v2-production-activation-v1`;
+- `environment`: `production`;
+- `runtimeDatabaseName`: the exact production runtime database name;
+- `schemaVersion`: `1` and `immutable`: `true`;
+- `replicaSetName`: the exact committed replica-set config `_id`;
+- `replicaSetId`: the 24-character lowercase hex value of committed
+  `config.settings.replicaSetId`;
+- `tokenSha256`: lowercase SHA-256 of an independently stored UTF-8 sentinel
+  secret containing at least 32 bytes; and
+- `bindingHmacSha256`: the token-keyed HMAC-SHA-256 below.
+
+The bootstrap must query the production primary with
+`admin.command({ replSetGetConfig: 1, commitmentStatus: true })`, require
+`commitmentStatus === true`, and fail closed on a standalone, missing
+privilege, malformed response, or uncommitted replica configuration. Build
+`bindingHmacSha256` by feeding each field name and value as UTF-8, each
+preceded by its own unsigned four-byte big-endian byte length, in this exact
+order:
+
+1. `domain` = `hire-media-r2-v2-production-activation-binding-v1`;
+2. `environment` = `production`;
+3. `runtimeDatabaseName`, `replicaSetName`, and `replicaSetId`;
+4. `controlR2Jurisdiction` = `default`;
+5. `controlR2Endpoint` =
+   `https://<control-account-id>.r2.cloudflarestorage.com`;
+6. `controlR2AccountId`, `controlR2Bucket`, and
+   `controlR2ProtectedPrefix` = `hire-media/v2/`;
+7. `runtimeR2Jurisdiction` = `default`;
+8. `runtimeR2Endpoint` =
+   `https://<runtime-account-id>.r2.cloudflarestorage.com`; and
+9. `runtimeR2AccountId`, `runtimeR2Bucket`, and
+   `runtimeR2ProtectedPrefix` = `landmarks/v2/`.
+
+Insert the sentinel exactly once with majority plus journal acknowledgement,
+independently verify it, then revoke the bootstrap principal's sentinel-write
+authority. Never copy the sentinel into a clone or restore. A physical clone
+that preserves the local replica configuration and `replicaSetId` must be
+treated as the same deployment identity until its replica set is reinitialized.
+The checker principal needs only `find` on this fixed collection, the inventory
+collection reads below, and the exact cluster privilege for
+`replSetGetConfig`; it must have no sentinel mutation authority.
+
+Inject these independently reviewed expected values and the sentinel token
+through the approved operator secret store for both `--first-activation` and
+`--write`; never print them or record the token/digests in release evidence:
+
+- `NODE_ENV=production` and
+  `HIRE_MEDIA_R2_EXPECTED_ENVIRONMENT=production`;
+- `HIRE_MEDIA_R2_EXPECTED_RUNTIME_DATABASE_NAME`;
+- `HIRE_MEDIA_R2_EXPECTED_CONTROL_ACCOUNT_ID` and
+  `HIRE_MEDIA_R2_EXPECTED_CONTROL_BUCKET_NAME`;
+- `HIRE_MEDIA_R2_EXPECTED_RUNTIME_ACCOUNT_ID` and
+  `HIRE_MEDIA_R2_EXPECTED_RUNTIME_BUCKET_NAME`; and
+- `HIRE_MEDIA_R2_ACTIVATION_SENTINEL_TOKEN`.
+
+The expected values must match the live connection settings exactly. The
+checker then recomputes and timing-safely verifies the sentinel against the
+committed live replica identity and both R2 tuples before issuing any R2
+inventory, lifecycle, conformance, or cleanup request. A missing or invalid
+sentinel is a hard NO-GO, even when every supplied target reports zero state.
 
 First run the read-only lifecycle audit:
 
 ```sh
-npm run check:hire-media-r2-protocol
+npm run check:hire-media-r2-protocol -- --first-activation
 ```
 
-It must report that no enabled expiration rule overlaps `hire-media/v2/`.
-Bucket-wide expiration, parent prefixes such as `hire-media/`, and child
-prefixes below `hire-media/v2/` are all blockers. Also audit Cloudflare
-Dashboard rules and every external cleanup, inventory, backup, and operator
-script. There must be no policy that deletes v2 objects merely because they
-are zero bytes or old.
+It must report that the control bucket has no enabled expiration rule
+overlapping `hire-media/v2/` and the runtime bucket has no enabled expiration
+rule overlapping `landmarks/v2/`. It fully paginates count-only inventories in
+the two separately authenticated buckets. Bucket-wide expiration, parent
+prefixes such as `hire-media/` or `landmarks/`, and child prefixes below the
+corresponding production v2 prefix are blockers. On first activation both v2
+object counts and the runtime Mongo v2 reference count must be zero; a nonzero
+count means that protocol has already crossed its irreversible boundary and
+requires a v2-aware fix-forward review.
+
+The same read-only run fully paginates runtime-bucket `landmarks/` and joins
+every coordinate-bearing legacy object to exact majority-read runtime Mongo
+references in `HireRuntimeMultimodalAnalysisOutbox`, `InterviewSession`, and
+`HireRuntimeBinding.issuedObjectCapabilities`. It emits aggregate counts only.
+For first activation, even a fully matched legacy object/reference count must
+be zero: matched means discoverable, not reconciled or safe against a late old
+write. The command fails its first-activation gate on any legacy object or
+reference.
+Malformed keys/references, crossed principal/session coordinates, an unmatched
+legacy object, or a reference whose object is absent is a hard blocker. This
+checker has no legacy mutation mode: a nonzero blocker requires a separately
+reviewed exact-key reconciliation with production identity and late-write
+evidence. Never replace it with `DeleteObject` by prefix or a manual sweep.
+
+Also audit Cloudflare Dashboard rules and every external cleanup, inventory,
+backup, restore, and operator script for both accounts/buckets. There must be
+no policy that deletes v2 objects merely because they are zero bytes or old.
 
 Then run the write conformance check:
 
 ```sh
 HIRE_MEDIA_R2_CONFORMANCE_ACK=write-and-delete-random-canaries \
-  npm run check:hire-media-r2-protocol -- --write
+  npm run check:hire-media-r2-protocol -- --first-activation --write
 ```
 
-The checker writes only three random keys below
-`hire-media-conformance/v2/<uuid>/`. It verifies all of the following through
-independent S3 clients:
+The checker writes three random keys below
+`hire-media-conformance/v2/<uuid>/` in each exact bucket. It verifies all of
+the following through independent S3 clients against both storage identities:
 
 1. the first `PutObject` with `If-None-Match: *` succeeds;
 2. another conditional put returns `412 PreconditionFailed` without changing
@@ -116,10 +228,12 @@ together with R2's documented strong-consistency/last-completing-writer
 semantics and the deterministic local delayed-body race tests as the evidence
 set; do not describe any one probe as a formal proof of every network schedule.
 
-The checker removes and independently verifies only its three exact random
-canaries in `finally`. It refuses production-prefix cleanup. A cleanup failure
-is a failed gate and must be resolved without broad prefix deletion. Production
-`hire-media/v2/` seals are intentionally excluded and are permanent.
+The checker removes and independently verifies only the six exact random
+canaries in `finally`. It refuses both production v2 prefixes. A cleanup
+failure is a failed gate and must be resolved without broad prefix deletion.
+Production `hire-media/v2/` and `landmarks/v2/` seals are intentionally
+excluded and permanent. `DeleteObject`, a manual prefix sweep, lifecycle
+expiration, or zero-byte cleanup against either prefix is prohibited.
 
 Do not apply R2 bucket lock/Object Lock as a substitute for the seal. The
 protocol must be able to overwrite live media with the zero-byte seal; the
@@ -134,6 +248,11 @@ default invocation is read-only and loads no dotenv file:
 ```sh
 npm run reconcile:hire-media-v1
 ```
+
+That control-bucket tool does not own runtime landmarks. The read-only runtime
+landmark join in section 2 is the separate release gate for that namespace.
+It must be clean before continuing; this runbook authorizes no runtime-prefix
+deletion.
 
 Inject `MONGODB_URI`, the R2 credentials, and all values below through the
 approved production operator secret store. Do not place their values in the
@@ -277,7 +396,8 @@ that preserves every v2 seal and cannot issue `DeleteObject` for a v2 key.
 
 ## 4. Freeze and drain every old writer and deleter
 
-1. Put the Hire control origin behind an explicit maintenance/write freeze.
+1. Put both the Hire control and Hire engine origins behind an explicit
+   maintenance/write freeze.
    Block new interview starts, identity capture, recording ingestion, privacy
    requests, workspace deletion, and onboarding test-drive mutations. Keep an
    operator-only path to authenticated `/api/health`.
@@ -288,13 +408,16 @@ that preserves every v2 seal and cannot issue `DeleteObject` for a v2 key.
    `hire-runtime-result-publisher`, and
    `hire-runtime-multimodal-analysis-publisher`. Also pause any manually
    triggered privacy or workspace purge run.
-3. Inventory every credentialed process, service principal, operator token,
+3. Stop and drain every Hire engine replica and explicitly block the runtime
+   landmark capture route. Inventory every credentialed process, service
+   principal, operator token,
    lifecycle rule, external cleanup, backup, restore, or migration that can
    write or delete in the control bucket. Freeze or revoke every old writer
    and cleanup principal and record its identity and disposition in the
    release ticket. Application container inventory alone is insufficient.
-4. Wait until the proxy reports zero active Hire control requests and Inngest
-   reports zero active runs that can upload, copy, purge, or delete Hire media.
+4. Wait until the proxies report zero active Hire control and Hire engine
+   requests and Inngest reports zero active runs that can upload, copy, purge,
+   or delete Hire media or runtime landmarks.
 5. Complete any final approved database restore/clone action, wait for the
    primary and replicas to become fully synchronized, and prohibit any further
    restore. Then rerun the read-only reconciliation checker. **Every** `staging` row and every
@@ -307,10 +430,14 @@ that preserves every v2 seal and cannot issue `DeleteObject` for a v2 key.
 6. Freeze Mongo DNS/seed authority changes, replica-set reconfiguration,
    database clone/restore operations, R2 account/bucket changes, and relevant
    credential rotation for the entire reconciliation window. After this
-   freeze/drain—not earlier—perform the one-time sentinel bootstrap described
-   above. Verify its majority+journal insert and revoke the bootstrap writer.
-7. Record every old control container ID, its exact image/source SHA, the drain
-   completion time, and the inventory counts. Keep the freeze in place.
+   freeze/drain—not earlier—perform the one-time **control v1 destructive
+   reconciliation** sentinel bootstrap described in section 3. Verify its
+   majority+journal insert and revoke the bootstrap writer. (The separate
+   runtime/database and dual-bucket activation sentinel required by section 2
+   must already exist and remains read-only throughout the window.)
+7. Record every old control and engine container ID, its exact image/source
+   SHA, the drain completion time, and both bucket inventory counts. Keep the
+   freeze in place.
 
 Do not infer drain completion from the 240-second storage timeout alone. The
 database lease and the worker/request state are the authority. Do not accept
@@ -325,7 +452,11 @@ is guaranteed unable to complete. Stopping workers, revoking credentials, a
 client-side timeout, waiting an arbitrary interval, and one or many clean
 rescans therefore do **not** prove that a late v1 object cannot appear.
 
-The default release decision is **NO-GO** until the release ticket contains
+This gate applies independently to unconditional legacy control-media writes
+in the control bucket and unconditional legacy landmark writes below
+`landmarks/` in the runtime bucket. A barrier for one account, bucket, or
+writer population is not evidence for the other. The default release decision
+is **NO-GO** until the release ticket contains
 independently reviewed evidence of one of these external conditions:
 
 1. a provider-enforced write barrier has completed;
@@ -379,30 +510,106 @@ deletes v2 or conformance objects. The final clean status is a point-in-time
 reconciliation observation; the external barrier remains the authority for
 activation.
 
-After destructive reconciliation and cutover evidence are recorded, remove
-`HIRE_MEDIA_V1_SENTINEL_TOKEN` from every process, revoke every lease, and
-permanently destroy its secret-store value so this one-time authorization
-cannot be reused. The immutable marker then becomes deliberately unusable. Any
-future destructive workflow requires a separately reviewed, versioned
-fix-forward identity protocol; never copy, regenerate, or update this marker as
-a shortcut.
+After both independent external late-write barriers are complete and the
+control destructive reconciliation has finished its clean rescan, rerun the
+separate identity-bound activation checker while every old writer remains
+frozen:
+
+```sh
+npm run check:hire-media-r2-protocol -- --first-activation
+```
+
+This final run is mandatory immediately before starting any new container. It
+must reverify the committed runtime replica identity and immutable activation
+sentinel, both exact R2 account/bucket tuples, both lifecycle configurations,
+zero control and runtime v2 objects, zero runtime v2 Mongo references, and
+zero legacy runtime landmark objects/references. Preserve its aggregate output
+and completion timestamp in the release ticket. The earlier section 2 scan is
+pre-freeze reconnaissance and cannot substitute for this post-barrier scan.
+Any nonzero count, identity mismatch, lifecycle blocker, or new malformed
+runtime landmark state is a hard NO-GO; return to reconciliation without
+starting the new services.
+
+After destructive reconciliation, revoke every destructive lease and remove
+`HIRE_MEDIA_V1_SENTINEL_TOKEN` from the reconciler process. Retain that token
+only in the approved operator secret store through the per-control-container
+live identity attestation in section 5; never persist it in an application
+container. Permanently destroy it together with the activation token after the
+irreversible-boundary evidence is accepted. The immutable marker then becomes
+deliberately unusable. Any future destructive workflow requires a separately
+reviewed, versioned fix-forward identity protocol; never copy, regenerate, or
+update this marker as a shortcut.
 
 ## 5. Perform the no-overlap Coolify deployment
 
 An ordinary Coolify rolling redeploy is prohibited for this boundary.
 Do not enter this section unless the external late-write gate and destructive
-reconciliation above are complete with zero blockers.
+control reconciliation above are complete with zero blockers and the final
+post-barrier identity-bound `--first-activation` scan reports zero across both
+buckets and runtime Mongo. This repository does not provide a destructive
+runtime-landmark reconciler; a nonzero runtime join must stop activation until
+a separately reviewed identity-bound exact-key tool and late-write barrier are
+available.
 
-1. Stop every old Hire control replica and disable any automation that could
-   recreate it. Verify from the host/container inventory that zero old control
+1. Stop every old Hire control replica and every old Hire engine replica, and
+   disable any automation that could recreate either population. Verify from
+   the host/container inventory that zero old control and zero old engine
    containers remain running. Wait through one normal health-check interval
-   and verify again.
-2. With the old population still at zero, deploy the approved artifact at
-   `RELEASE_SHA`. Starting multiple replicas is allowed only if every replica
-   is the same new artifact.
-3. Probe each new container directly through the internal operator path; do
-   not rely on one load-balanced response. Then probe the external origin.
-   Every authenticated response must satisfy this exact predicate:
+   and verify both inventories again.
+2. With both old populations still at zero, deploy the approved artifact at
+   `RELEASE_SHA` to both surfaces. Starting multiple replicas is allowed only
+   if every control and engine replica is the same new artifact.
+3. Before any health probe or synthetic write, bind **every running new
+   container's effective configuration** to the same identities accepted by
+   the sentinels and final activation scan. Use the Coolify/host operator
+   plane to inspect the resolved per-container environment and secret revision
+   metadata in a non-logged secure session; checking only the service template,
+   deployment manifest, or one replica is insufficient.
+
+   For every control container, require its effective `R2_ACCOUNT_ID` and
+   `R2_BUCKET_NAME` to equal the exact sentinel-bound expected control tuple.
+   Its effective `HIRE_RUNTIME_R2_ACCOUNT_ID` and
+   `HIRE_RUNTIME_R2_BUCKET_NAME` must equal the exact sentinel-bound runtime
+   tuple used for source landmark copies. Its selected control database must
+   equal the control-v1 identity sentinel expectation. For every engine
+   container, require effective
+   `R2_ACCOUNT_ID`/`R2_BUCKET_NAME` and
+   `HIRE_RUNTIME_R2_ACCOUNT_ID`/`HIRE_RUNTIME_R2_BUCKET_NAME` to equal the exact
+   sentinel-bound expected runtime tuple; require both runtime aliases to be
+   identical. Its effective `HIRE_RUNTIME_DATABASE_NAME` must equal
+   `HIRE_MEDIA_R2_EXPECTED_RUNTIME_DATABASE_NAME`.
+
+   From each control container, use its effective Mongo connection in a
+   read-only operator command to obtain the committed live
+   `replicaSetName`/`replicaSetId`, majority-read the fixed control-v1
+   sentinel, canonicalize the effective Mongo authority/options, and recompute
+   the control-v1 HMAC with the effective control tuple and selected database
+   using the exact section 3 algorithm. It must match the same immutable
+   control sentinel that authorized destructive reconciliation. From each
+   engine container, use its effective Mongo connection in a separate
+   read-only operator command to obtain the committed live
+   `replicaSetName`/`replicaSetId` and majority-read the fixed activation
+   sentinel. Recompute the token HMAC with the exact effective runtime tuple
+   and selected database using the section 2 algorithm. It must match the same
+   sentinel already accepted by the final checker. The command must contain no
+   sentinel mutation path and must not print the URI, credentials, token,
+   digests, account IDs, bucket names, or database names.
+
+   Supply `HIRE_MEDIA_V1_SENTINEL_TOKEN` and
+   `HIRE_MEDIA_R2_ACTIVATION_SENTINEL_TOKEN` only as ephemeral operator-command
+   secrets; never add either token to an application container's persistent
+   environment or image.
+
+   Record only container ID, `RELEASE_SHA`, immutable secret/config revision
+   identifiers, and pass/fail booleans for the control tuple, runtime tuple,
+   selected database, committed replica identity, and sentinel HMAC. Keep the
+   expected values and secrets out of release evidence. Any replica whose
+   effective values cannot be inspected and compared is a NO-GO; implement an
+   authenticated token-bound identity attestation before proceeding rather
+   than trusting health/configuration status alone.
+4. Probe each new control container directly through the internal operator
+   path; do not rely on one load-balanced response. Then probe the external
+   control origin. Every authenticated response must satisfy this predicate:
 
 ```sh
 curl --fail-with-body --silent --show-error \
@@ -417,33 +624,88 @@ curl --fail-with-body --silent --show-error \
     .releaseGateAuthenticated == true and
     .surface == "hire-control" and
     .deploymentCommit == $sha and
-    .hireMediaObjectProtocol == "v2-opaque-nonce-if-none-match-zero-seal"
+    .hireMediaObjectProtocol == "v2-opaque-nonce-if-none-match-zero-seal" and
+    .hireIngestionRevisionProtocol.protocolVersion == "2" and
+    .hireIngestionRevisionProtocol.mode == "required" and
+    .hireIngestionRevisionProtocol.releaseReady == true
   '
 ```
 
 Replace the placeholder origin with the approved control origin. The marker
 is intentionally absent from the unauthenticated health body; `hire-engine`
-and `b2c` authenticated health report it as `not-applicable`.
+and `b2c` authenticated health report the control marker as `not-applicable`.
 
-4. Recheck the host inventory after the probes. If any old container exists,
-   stop the rollout and keep writes frozen even if every sampled HTTP response
-   came from the new artifact.
+5. Probe every new Hire engine container directly, followed by the external
+   engine origin. Each authenticated engine response must be bound to the same
+   `RELEASE_SHA`, identify the engine surface and browser build, and expose
+   only the runtime-landmark marker:
+
+```sh
+curl --fail-with-body --silent --show-error \
+  --header "Authorization: Bearer ${HEALTH_CHECK_TOKEN}" \
+  https://engine.hire.example.invalid/api/health |
+  jq --exit-status --arg sha "$RELEASE_SHA" '
+    .status == "healthy" and
+    .checks.configuration == "ok" and
+    .checks.mongodb == "ok" and
+    .checks.redis == "ok" and
+    .checks.hireBrowserBuild == "ok" and
+    .configurationIssues == [] and
+    .releaseGateAuthenticated == true and
+    .surface == "hire-engine" and
+    .deploymentCommit == $sha and
+    .hireInterviewBuild.multimodal == true and
+    .hireMediaObjectProtocol == "not-applicable" and
+    .hireRuntimeLandmarkObjectProtocol ==
+      "v2-opaque-scope-digest-if-none-match-zero-seal" and
+    .hireIngestionRevisionProtocol == "not-applicable"
+  '
+```
+
+Replace the placeholder with the approved engine origin. The runtime marker
+is absent from the unauthenticated body and is `not-applicable` on control and
+B2C; a control probe cannot stand in for an engine probe.
+
+6. Recheck both host inventories after the probes. If any old control or
+   engine container exists, stop the rollout and keep writes frozen even if
+   every sampled HTTP response came from the new artifact.
 
 ## 6. Activate and record the irreversible boundary
 
 Before restoring general traffic, use the approved internal maintenance bypass
-to complete one synthetic Hire media flow in an isolated QA workspace. Verify
-with count-only database predicates that its media row has both the exact v2
-key shape and a 64-character lowercase-hex `objectKeyNonce`; do not put the key,
-nonce, coordinates, or candidate data in release evidence.
+to complete both synthetic flows in an isolated QA workspace:
 
-The creation time of that first v2 row is the irreversible rollback boundary.
-Record its timestamp and a boolean/count-only proof. Resume the paused Inngest
-functions, remove the write freeze, and monitor:
+1. Complete one Hire control media upload and verify with count-only database
+   predicates that its media row has both the exact `hire-media/v2/` key shape
+   and a 64-character lowercase-hex `objectKeyNonce`.
+2. Complete one browser-to-engine landmark capture, resume the exact runtime
+   analysis publisher, and require the control service to checksum-copy and
+   acknowledge it. Verify count-only that the control artifact digest and size
+   equal the runtime outbox snapshot, the control object is durable, the
+   runtime outbox is settled with its raw-artifact pointer removed, and an
+   internal `HEAD` of the exact runtime source observes a permanent zero-byte
+   seal with metadata `hire-runtime-landmark-tombstone=v2`.
+
+The synthetic landmark must exercise capture, publish, control ingestion and
+copy, acknowledgement, and source sealing end to end; a direct storage canary
+or isolated API call is not a substitute. Do not put either key, nonce,
+coordinates, artifact bytes, or candidate data in release evidence.
+
+The earliest creation time of either production v2 row or object is the
+irreversible rollback boundary. Record its timestamp and boolean/count-only
+proof. After the boundary evidence is independently accepted, remove
+`HIRE_MEDIA_V1_SENTINEL_TOKEN` and
+`HIRE_MEDIA_R2_ACTIVATION_SENTINEL_TOKEN` from every operator process and
+destroy both secret-store values so neither one-time attestation can be
+replayed.
+Resume the paused Inngest functions, remove the write freeze, and
+monitor both surfaces and buckets for:
 
 - conditional-write 412s and same-key 429 retries/failures;
 - staging leases and `purge_claimed` recovery;
-- v1 read/delete completion; and
+- v1 read/delete completion;
+- runtime landmark staging/cleanup leases, publisher retries, and source-seal
+  acknowledgements; and
 - the first completed privacy, workspace hard-purge, retention, and test-drive
   cleanup paths on the v2-aware release.
 
@@ -451,19 +713,21 @@ For every v2 deletion path, database graph removal may complete only after the
 zero-byte seal write is acknowledged. A failed seal write must retain the row
 and claim for retry. A later `HEAD` of the key must show content length zero,
 content type `application/octet-stream`, cache control `private, no-store`, and
-metadata `hire-media-tombstone=v2`. Do not turn this verification into a tool
-that deletes the seal.
+the owning protocol metadata: `hire-media-tombstone=v2` for control media or
+`hire-runtime-landmark-tombstone=v2` for runtime landmarks. Do not turn this
+verification into a tool that deletes either seal.
 
 ## 7. Rollback boundary and incident handling
 
-- **Before any v2 row/object exists:** keep the write freeze, stop all new
-  containers, verify zero new containers, and then start the prior build. Do
-  not overlap versions in the reverse direction either. Repeat health and
-  inventory gates before reopening traffic.
+- **Before any v2 row/object exists in either bucket or database:** keep the
+  write freeze, stop all new control and engine containers, verify zero new
+  containers on both surfaces, and then start the prior builds. Do not overlap
+  versions in the reverse direction either. Repeat both health and inventory
+  gates before reopening traffic.
 - **After any v2 row/object exists:** never start a non-v2-aware build. Keep or
   reinstate the freeze and deploy a fix-forward or validated backport that
-  exposes the same exact health marker. Do not rewrite v2 keys to v1, remove
-  their nonces, or delete their seals.
+  exposes both exact surface-owned health markers. Do not rewrite v2 keys to
+  v1, remove their nonces, or delete their seals.
 
 The old parser recognizes only coordinate-bearing v1 keys. It rejects v2 keys
 before issuing `GetObject`, signed-download, or `DeleteObject`, so an old

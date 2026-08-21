@@ -89,6 +89,7 @@ export async function provisionRuntimeBinding(
       consentVersion: envelope.consentVersion,
       consentAt: new Date(envelope.consentAt),
       inviteExpiresAt: new Date(envelope.inviteExpiresAt),
+      resultPayloadSnapshotProtocolVersion: 1,
       mediaCompletionContractVersion: 1,
       status: 'provisioned',
       attemptCount: 0,

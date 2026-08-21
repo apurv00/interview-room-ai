@@ -64,6 +64,7 @@ import {
 import { deliverHireMultimodalAnalysisCapture } from '@interview/utils/hireMultimodalAnalysisCaptureUpload'
 import {
   attachHireInterviewIntegrityPagehideFlush,
+  buildHireInterviewPlaybackClock,
   createHireInterviewIntegrityReporter,
   createHireInterviewSpeechVideoSampler,
   type HireInterviewIntegrityEvent as HireInterviewIntegrityReportEvent,
@@ -179,6 +180,7 @@ export default function InterviewPage() {
     hasTerminalFailure: hasHireDisplayRecordingTerminalFailure,
     setSource: setHireDisplayRecordingSource,
     stopRecording: stopHireDisplayRecording,
+    getStartedAtMs: getHireDisplayRecordingStartedAtMs,
   } = useHireDisplayRecorder()
 
   const reportHireIntegrityEvent = useCallback(
@@ -208,6 +210,7 @@ export default function InterviewPage() {
   })
   const {
     elapsedMs: getHireInterviewElapsedMs,
+    elapsedMsAt: getHireInterviewElapsedMsAt,
     markInterviewComplete: markHireInterviewIntegrityComplete,
   } = hireIntegrityGate
   useEffect(() => {
@@ -261,7 +264,14 @@ export default function InterviewPage() {
   const { isListening, liveTranscript, finalTranscript, interimTranscript, startListening, stopListening, warmUp, setExternalStream, setOnInterrupt, setSuppressInterrupt, getAndClearInterruptAccum } = useSpeechRecognition()
 
   // ── Recording (camera track) ──
-  const { isRecording, recordingDuration, startRecording, stopRecording, getDurationSeconds } = useMediaRecorder()
+  const {
+    isRecording,
+    recordingDuration,
+    startRecording,
+    stopRecording,
+    getDurationSeconds,
+    getStartedAtMs: getCameraRecordingStartedAtMs,
+  } = useMediaRecorder()
   // ── Recording (audio-only track — what Whisper transcribes). Kept
   //    separate from the camera webm because Groq Whisper rejects files
   //    >25MB and a multi-minute HD camera recording easily exceeds that.
@@ -328,6 +338,13 @@ export default function InterviewPage() {
     const integrityCapture = isHireNativeMultimodalEnabled
       ? stopHireMultimodalObservationCapture()
       : null
+    const playbackClock = buildHireInterviewPlaybackClock({
+      cameraRecorderStartedAtMs: getCameraRecordingStartedAtMs(),
+      screenRecorderStartedAtMs: isHireDisplayCaptureRequired
+        ? getHireDisplayRecordingStartedAtMs()
+        : null,
+      elapsedMsAt: getHireInterviewElapsedMsAt,
+    })
     hireSpeechVideoSamplerStopRef.current?.()
     hireSpeechVideoSamplerStopRef.current = null
 
@@ -373,7 +390,9 @@ export default function InterviewPage() {
     if (integrityCapture && hireIntegrityReporterRef.current) {
       criticalUploads.push(
         hireIntegrityReporterRef.current.flush({
-          capture: integrityCapture,
+          capture: playbackClock
+            ? { ...integrityCapture, playbackClock }
+            : integrityCapture,
           force: true,
         }),
       )
@@ -513,6 +532,9 @@ export default function InterviewPage() {
     stopRecording,
     audioRecorder,
     getDurationSeconds,
+    getCameraRecordingStartedAtMs,
+    getHireDisplayRecordingStartedAtMs,
+    getHireInterviewElapsedMsAt,
     isB2cMultimodalEnabled,
     isHireNativeMultimodalEnabled,
     stopB2cFacialCapture,
@@ -1089,7 +1111,10 @@ export default function InterviewPage() {
         if (isB2cMultimodalEnabled) {
           startB2cFacialCapture(videoRef.current).catch(() => {})
         } else if (isHireNativeMultimodalEnabled) {
-          startHireMultimodalObservationCapture(videoRef.current).catch(() => {})
+          startHireMultimodalObservationCapture(
+            videoRef.current,
+            getHireInterviewElapsedMs,
+          ).catch(() => {})
           startHireMultimodalAnalysisCapture(videoRef.current).catch(() => {})
         }
       }
@@ -1152,6 +1177,7 @@ export default function InterviewPage() {
     hireIntegrityGate.stream,
     isHireDisplayCaptureRequired,
     isHireDisplayRecording,
+    getHireInterviewElapsedMs,
     startHireMultimodalObservationCapture,
   ])
 

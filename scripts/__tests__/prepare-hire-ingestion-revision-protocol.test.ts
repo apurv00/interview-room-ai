@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   assertHireIngestionRevisionMigrationWindow,
+  assertNoAmbiguousLegacyRuntimePublisherRows,
   hireIngestionRevisionMigrationSurface,
   hireIngestionRevisionPreparationMode,
 } from '../prepare-hire-ingestion-revision-protocol'
@@ -63,5 +64,54 @@ describe('Hire ingestion revision migration command', () => {
         now: NOW,
       }),
     ).not.toThrow()
+  })
+
+  it('blocks attempted legacy publishers that have no immutable payload snapshot', async () => {
+    const countResultBindings = vi.fn().mockResolvedValue(1)
+    const countAnalysisOutboxes = vi.fn().mockResolvedValue(2)
+
+    await expect(assertNoAmbiguousLegacyRuntimePublisherRows({
+      countResultBindings,
+      countAnalysisOutboxes,
+    })).rejects.toThrow('results=1, analyses=2')
+    expect(countResultBindings).toHaveBeenCalledWith({
+      status: { $in: ['active', 'completed', 'revoked'] },
+      purgePersonalData: { $ne: true },
+      pendingResultPayloadJson: { $exists: false },
+      $or: [
+        { pendingMediaManifest: { $exists: true } },
+        {
+          publishedRevision: { $gte: 1, $lt: 10 },
+          cameraMediaStatus: 'pending',
+        },
+        {
+          publishedRevision: { $gte: 1, $lt: 10 },
+          screenMediaStatus: 'pending',
+        },
+        {
+          publishedRevision: { $gte: 1, $lt: 10 },
+          cameraMediaStatus: 'unavailable',
+          cameraMediaUnavailableReportedAt: { $exists: false },
+        },
+        {
+          publishedRevision: { $gte: 1, $lt: 10 },
+          screenMediaStatus: 'unavailable',
+          screenMediaUnavailableReportedAt: { $exists: false },
+        },
+      ],
+    })
+    expect(countAnalysisOutboxes).toHaveBeenCalledWith({
+      status: 'pending',
+      publishAttemptCount: { $gt: 0 },
+      payloadSnapshotJson: { $exists: false },
+      payloadSnapshotProtocolVersion: { $ne: 1 },
+    })
+  })
+
+  it('allows only a clean legacy publisher inventory', async () => {
+    await expect(assertNoAmbiguousLegacyRuntimePublisherRows({
+      countResultBindings: vi.fn().mockResolvedValue(0),
+      countAnalysisOutboxes: vi.fn().mockResolvedValue(0),
+    })).resolves.toBeUndefined()
   })
 })

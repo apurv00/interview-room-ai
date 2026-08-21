@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   HIRE_INGESTION_REVISION_DRAIN_MS,
   evaluateHireIngestionRevisionProtocol,
+  hireIngestionRevisionProtocolState,
 } from '../hireIngestionRevisionProtocol'
 
 const NOW = new Date('2026-08-21T12:00:00.000Z')
@@ -52,5 +53,28 @@ describe('Hire ingestion revision deployment interlock', () => {
         now: NOW,
       }),
     ).toEqual({ ok: true })
+  })
+
+  it('reports redacted release readiness without treating drain mode as ready', () => {
+    const drainStartedAt = new Date(
+      NOW.getTime() - HIRE_INGESTION_REVISION_DRAIN_MS,
+    ).toISOString()
+    expect(hireIngestionRevisionProtocolState({
+      NODE_ENV: 'production',
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'draining',
+      HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: drainStartedAt,
+    }, NOW)).toMatchObject({
+      protocolVersion: '2',
+      mode: 'draining',
+      explicitlyConfigured: true,
+      drainMarkerValid: true,
+      drainWindowSatisfied: true,
+      releaseReady: false,
+    })
+    expect(hireIngestionRevisionProtocolState({
+      NODE_ENV: 'production',
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'required',
+      HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: drainStartedAt,
+    }, NOW)).toMatchObject({ mode: 'required', releaseReady: true })
   })
 })

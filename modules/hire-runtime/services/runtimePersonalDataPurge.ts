@@ -53,6 +53,14 @@ interface RuntimePurgeUser {
   resumeR2Key?: string | null
 }
 
+interface RuntimePurgeAnalysisOutbox {
+  runtimeSessionId: mongoose.Types.ObjectId
+  landmarkArtifact?: {
+    sourceKey: string
+    objectKeyNonce?: string
+  } | null
+}
+
 type DeleteManyModel = {
   modelName?: string
   deleteMany(filter: Record<string, unknown>): Promise<{
@@ -93,8 +101,17 @@ function referencedRuntimeObjects(input: {
   binding: IHireRuntimeBinding
   sessions: RuntimePurgeSession[]
   user: RuntimePurgeUser | null
-}): Array<{ key: string; runtimeSessionId?: string }> {
-  const objects: Array<{ key: string; runtimeSessionId?: string }> = []
+  analysisOutboxes: RuntimePurgeAnalysisOutbox[]
+}): Array<{
+  key: string
+  runtimeSessionId?: string
+  objectKeyNonce?: string
+}> {
+  const objects: Array<{
+    key: string
+    runtimeSessionId?: string
+    objectKeyNonce?: string
+  }> = []
   for (const session of input.sessions) {
     const runtimeSessionId = session._id.toString()
     for (const key of [
@@ -113,6 +130,9 @@ function referencedRuntimeObjects(input: {
   for (const capability of input.binding.issuedObjectCapabilities ?? []) {
     objects.push({
       key: capability.key,
+      ...(capability.objectKeyNonce
+        ? { objectKeyNonce: capability.objectKeyNonce }
+        : {}),
       runtimeSessionId: capability.runtimeSessionId.toString(),
     })
   }
@@ -126,6 +146,17 @@ function referencedRuntimeObjects(input: {
       objects.push({
         key: artifact.sourceKey,
         runtimeSessionId: input.binding.runtimeSessionId.toString(),
+      })
+    }
+  }
+  for (const outbox of input.analysisOutboxes) {
+    if (outbox.landmarkArtifact) {
+      objects.push({
+        key: outbox.landmarkArtifact.sourceKey,
+        ...(outbox.landmarkArtifact.objectKeyNonce
+          ? { objectKeyNonce: outbox.landmarkArtifact.objectKeyNonce }
+          : {}),
+        runtimeSessionId: outbox.runtimeSessionId.toString(),
       })
     }
   }
@@ -261,6 +292,21 @@ export async function purgeRuntimePrincipalData(input: {
   })
     .select('resumeR2Key')
     .lean()) as RuntimePurgeUser | null
+  const analysisOutboxScope = {
+    workspaceId,
+    applicationId: input.binding.applicationId,
+    roundId: input.binding.roundId,
+    principalId,
+  }
+  // The outbox is the authoritative raw-landmark source inventory. The
+  // InterviewSession mirror is deliberately best-effort and can hold only one
+  // key, while retries/attempts may leave several pending outboxes. Preserve
+  // every exact coordinate until all corresponding R2 deletes acknowledge.
+  const analysisOutboxes = (await HireRuntimeMultimodalAnalysisOutbox.find(
+    analysisOutboxScope,
+  )
+    .select('runtimeSessionId landmarkArtifact')
+    .lean()) as RuntimePurgeAnalysisOutbox[]
 
   await abortRuntimeMultipartUploads({
     principalId: principalIdString,
@@ -272,7 +318,12 @@ export async function purgeRuntimePrincipalData(input: {
   })
   await deleteRuntimePersonalObjects({
     principalId: principalIdString,
-    objects: referencedRuntimeObjects({ binding: input.binding, sessions, user }),
+    objects: referencedRuntimeObjects({
+      binding: input.binding,
+      sessions,
+      user,
+      analysisOutboxes,
+    }),
   })
 
   // The native Hire report is derived data—not an R2 artifact—and uses
@@ -288,12 +339,9 @@ export async function purgeRuntimePrincipalData(input: {
   if (!deletedObservations.acknowledged) {
     throw new Error('Runtime multimodal observation purge was not acknowledged')
   }
-  const deletedAnalyses = await HireRuntimeMultimodalAnalysisOutbox.deleteMany({
-    workspaceId,
-    applicationId: input.binding.applicationId,
-    roundId: input.binding.roundId,
-    principalId,
-  })
+  const deletedAnalyses = await HireRuntimeMultimodalAnalysisOutbox.deleteMany(
+    analysisOutboxScope,
+  )
   if (!deletedAnalyses.acknowledged) {
     throw new Error('Runtime multimodal analysis purge was not acknowledged')
   }

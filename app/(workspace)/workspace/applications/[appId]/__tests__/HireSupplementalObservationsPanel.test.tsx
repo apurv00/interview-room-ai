@@ -1,18 +1,29 @@
-import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
 import HireSupplementalObservationsPanel from '../HireSupplementalObservationsPanel'
 
 describe('HireSupplementalObservationsPanel', () => {
   it('renders a bounded neutral validation timeline separately from assessment scores', () => {
+    const onReviewRecording = vi.fn()
     render(
       <HireSupplementalObservationsPanel
-        recordingTargetId="interview-recording-round-1"
+        recordingAvailability={{ camera: true, screen: true }}
+        onReviewRecording={onReviewRecording}
         observations={[
           {
             observedAt: '2026-08-17T12:00:00.000Z',
             report: {
               status: 'completed',
-              capture: { camera: 'captured', browserVisibility: 'captured' },
+              capture: {
+                camera: 'captured',
+                browserVisibility: 'captured',
+                displayShare: 'captured',
+              },
+              playbackClock: {
+                protocolVersion: 1,
+                cameraRecorderStartOffsetMs: 1_000,
+                screenRecorderStartOffsetMs: 1_250,
+              },
               events: [
                 {
                   kind: 'browser_window_not_visible',
@@ -33,14 +44,80 @@ describe('HireSupplementalObservationsPanel', () => {
     expect(screen.getByText(/Assessment window was not visible/i)).toBeTruthy()
     expect(screen.getByText(/0:05–0:08/)).toBeTruthy()
     expect(screen.getByText(/Signal: window visibility/i)).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Review recording' })).toHaveAttribute(
-      'href',
-      '#interview-recording-round-1',
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Review shared display recording for event at 0:05',
+      }),
     )
+    expect(onReviewRecording).toHaveBeenCalledWith({ kind: 'screen', startMs: 3_750 })
     expect(screen.getByText(/not interview scores/i)).toBeTruthy()
     expect(screen.getByText(/do not automatically determine a hiring decision, stage, ranking, recommendation, or export/i)).toBeTruthy()
     expect(screen.queryByText(/did not affect/i)).toBeNull()
     expect(screen.queryByText(/confidence/i)).toBeNull()
+  })
+
+  it('does not claim an exact seek for a legacy report without a recorder clock', () => {
+    const onReviewRecording = vi.fn()
+    render(
+      <HireSupplementalObservationsPanel
+        recordingAvailability={{ camera: true, screen: true }}
+        onReviewRecording={onReviewRecording}
+        observations={[
+          {
+            observedAt: '2026-08-17T12:00:00.000Z',
+            report: {
+              status: 'completed',
+              capture: { camera: 'captured', browserVisibility: 'captured' },
+              events: [{
+                kind: 'camera_interrupted',
+                source: 'camera_track',
+                startMs: 5_000,
+                endMs: 5_500,
+              }],
+            },
+          },
+        ]}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: /Review .* recording/i })).toBeNull()
+    expect(
+      screen.getByText(/Exact recording time unavailable for this capture/i),
+    ).toBeTruthy()
+    expect(onReviewRecording).not.toHaveBeenCalled()
+  })
+
+  it('does not seek an event that predates every available recorder', () => {
+    const onReviewRecording = vi.fn()
+    render(
+      <HireSupplementalObservationsPanel
+        recordingAvailability={{ camera: true, screen: false }}
+        onReviewRecording={onReviewRecording}
+        observations={[{
+          observedAt: '2026-08-17T12:00:00.000Z',
+          report: {
+            status: 'completed',
+            capture: { camera: 'captured', browserVisibility: 'captured' },
+            playbackClock: {
+              protocolVersion: 1,
+              cameraRecorderStartOffsetMs: 1_000,
+            },
+            events: [{
+              kind: 'camera_interrupted',
+              source: 'camera_track',
+              startMs: 500,
+              endMs: 750,
+            }],
+          },
+        }]}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: /Review .* recording/i })).toBeNull()
+    expect(
+      screen.getByText(/Exact recording time unavailable for this capture/i),
+    ).toBeTruthy()
+    expect(onReviewRecording).not.toHaveBeenCalled()
   })
 
   it('explains insufficient signal without inventing a conclusion', () => {

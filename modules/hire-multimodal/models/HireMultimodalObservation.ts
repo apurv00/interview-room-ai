@@ -93,6 +93,30 @@ const HireMultimodalObservationEventSchema = new Schema(
   { _id: false, strict: "throw" },
 );
 
+const HireMultimodalObservationPlaybackClockSchema = new Schema(
+  {
+    protocolVersion: {
+      type: Number,
+      enum: [1],
+      required: true,
+      immutable: true,
+    },
+    cameraRecorderStartOffsetMs: {
+      type: Number,
+      min: 0,
+      max: 30 * 60 * 1_000,
+      immutable: true,
+    },
+    screenRecorderStartOffsetMs: {
+      type: Number,
+      min: 0,
+      max: 30 * 60 * 1_000,
+      immutable: true,
+    },
+  },
+  { _id: false, strict: "throw" },
+);
+
 const HireMultimodalObservationSchema = new Schema<IHireMultimodalObservation>(
   {
     workspaceId: {
@@ -217,6 +241,10 @@ const HireMultimodalObservationSchema = new Schema<IHireMultimodalObservation>(
         type: [HireMultimodalObservationEventSchema],
         required: true,
         default: [],
+        immutable: true,
+      },
+      playbackClock: {
+        type: HireMultimodalObservationPlaybackClockSchema,
         immutable: true,
       },
     },

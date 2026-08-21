@@ -43,6 +43,7 @@ function overview() {
         { kind: "terminal_human_kit_delivery_failures", count: 0 },
         { kind: "external_verdicts_received", count: 1 },
         { kind: "failed_multimodal_analyses", count: 2 },
+        { kind: "interview_validation_attention", count: 3 },
       ],
     },
   };
@@ -66,6 +67,10 @@ describe("OverviewWorkspace", () => {
     expect(screen.getByText("4 of 6 complete")).toBeTruthy();
     expect(screen.getByText("Candidates awaiting decision")).toBeTruthy();
     expect(screen.getByText("Interview analyses needing retry")).toBeTruthy();
+    expect(
+      screen.getByText("Interview validation timelines available"),
+    ).toBeTruthy();
+    expect(screen.getByText("8 open")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Jobs health" })).toHaveAttribute(
       "href",
       "/workspace/jobs/health",
@@ -77,7 +82,7 @@ describe("OverviewWorkspace", () => {
     expect(screen.getByRole("link", { name: "Download CSV" })).toHaveAttribute(
       "download",
     );
-    expect(fetchMock).toHaveBeenCalledWith("/api/workspace/overview", {
+    expect(fetchMock).toHaveBeenCalledWith("/api/workspace/overview?contractVersion=2", {
       cache: "no-store",
     });
     expect(

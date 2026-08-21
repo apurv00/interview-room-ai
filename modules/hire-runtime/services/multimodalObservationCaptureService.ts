@@ -9,6 +9,7 @@ import {
   HIRE_MULTIMODAL_OBSERVATION_V2_POLICY_VERSION,
   HireMultimodalObservationClientEventSchema,
   HireMultimodalObservationIsoDateTimeSchema,
+  HireMultimodalObservationPlaybackClockSchema,
   HireMultimodalObservationSpeechVideoCorroborationSchema,
   canonicalHireMultimodalObservationJson,
   hireMultimodalObservationDigestPayload,
@@ -103,6 +104,7 @@ export const HireMultimodalCaptureSchema = z
           .max(MAX_VISIBILITY_SPANS),
       })
       .strict(),
+    playbackClock: HireMultimodalObservationPlaybackClockSchema.optional(),
     integrity: HireMultimodalIntegrityCaptureSchema.default({
       browserFocus: { available: false },
       fullscreen: { available: false },
@@ -342,6 +344,9 @@ export function deriveHireRuntimeObservationReport(
       speechVideoCorroboration,
     },
     events,
+    ...(capture.playbackClock
+      ? { playbackClock: { ...capture.playbackClock } }
+      : {}),
   }
 }
 
@@ -391,6 +396,7 @@ export async function captureHireRuntimeMultimodalObservation(input: {
   if (!supportsHireMultimodalObservations(binding.consentVersion)) return 'disabled'
   const containsDisplayCapture =
     capture.integrity.displayShare.available ||
+    capture.playbackClock?.screenRecorderStartOffsetMs !== undefined ||
     capture.integrity.events.some(
       (event) =>
         event.kind === 'screen_share_wrong_surface' ||

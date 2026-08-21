@@ -19,6 +19,7 @@ import { HireDepartment } from "@hire-departments/models";
 import {
   HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS,
   HireMultimodalAnalysis,
+  HireMultimodalObservation,
 } from "@/modules/hire-multimodal/models";
 import { buildHireOnboardingTestDriveExclusionStages } from "@/modules/hire-onboarding/services/testDriveService";
 import type {
@@ -118,6 +119,12 @@ type OperationsFailedAnalysisRecord = {
   candidateId: IdLike;
 };
 
+type OperationsValidationAttentionRecord = {
+  jobId: IdLike;
+  applicationId: IdLike;
+  candidateId: IdLike;
+};
+
 type OperationsResultRecord = {
   _id: IdLike;
   applicationId: IdLike;
@@ -141,6 +148,7 @@ type OperationsWorkspaceBatch = {
   terminalDeliveries: OperationsDeliveryRecord[];
   externalVerdicts: OperationsVerdictRecord[];
   failedAnalyses: OperationsFailedAnalysisRecord[];
+  validationAttention: OperationsValidationAttentionRecord[];
 };
 
 /**
@@ -397,6 +405,10 @@ function overviewActionItems(
       kind: "failed_multimodal_analyses",
       count: countForOpenJobs(batch.failedAnalyses ?? [], openJobIds),
     },
+    {
+      kind: "interview_validation_attention",
+      count: countForOpenJobs(batch.validationAttention ?? [], openJobIds),
+    },
   ];
 }
 
@@ -407,6 +419,7 @@ function healthAttention(
   terminalDeliveries: readonly OperationsDeliveryRecord[],
   externalVerdicts: readonly OperationsVerdictRecord[],
   failedAnalyses: readonly OperationsFailedAnalysisRecord[],
+  validationAttention: readonly OperationsValidationAttentionRecord[],
   now: Date,
 ): HireOperationsAttentionItem[] {
   // A held/closed requisition has no live operating-action requirement. Its
@@ -469,6 +482,12 @@ function healthAttention(
       count: failedAnalyses.length,
     });
   }
+  if (validationAttention.length > 0) {
+    attention.push({
+      kind: "interview_validation_attention",
+      count: validationAttention.length,
+    });
+  }
 
   return attention;
 }
@@ -476,7 +495,15 @@ function healthAttention(
 function healthAttentionWeight(
   attention: readonly HireOperationsAttentionItem[],
 ): number {
-  return attention.reduce((total, item) => total + item.count, 0);
+  // Supplemental observations are review context only. They must not reorder
+  // jobs, just as they must not influence candidate scores or ranks.
+  return attention.reduce(
+    (total, item) =>
+      item.kind === "interview_validation_attention"
+        ? total
+        : total + item.count,
+    0,
+  );
 }
 
 function recordsByJob<T extends { jobId: IdLike }>(
@@ -529,6 +556,9 @@ function buildJobsHealth(
   const terminalDeliveriesByJob = recordsByJob(batch.terminalDeliveries);
   const externalVerdictsByJob = recordsByJob(batch.externalVerdicts);
   const failedAnalysesByJob = recordsByJob(batch.failedAnalyses ?? []);
+  const validationAttentionByJob = recordsByJob(
+    batch.validationAttention ?? [],
+  );
   const departmentsById = departmentViewsById(batch.departments ?? []);
   // Close-out history remains available to the overview's median-time-to-close
   // KPI, but it is not live operational work. Keep it out of the health
@@ -543,6 +573,7 @@ function buildJobsHealth(
       const terminalDeliveries = terminalDeliveriesByJob.get(jobId) ?? [];
       const externalVerdicts = externalVerdictsByJob.get(jobId) ?? [];
       const failedAnalyses = failedAnalysesByJob.get(jobId) ?? [];
+      const validationAttention = validationAttentionByJob.get(jobId) ?? [];
       return {
         jobId,
         title: job.title,
@@ -557,6 +588,7 @@ function buildJobsHealth(
           terminalDeliveries,
           externalVerdicts,
           failedAnalyses,
+          validationAttention,
           now,
         ),
       };
@@ -821,6 +853,7 @@ async function readWorkspaceBatch(
       terminalDeliveries: [],
       externalVerdicts: [],
       failedAnalyses: [],
+      validationAttention: [],
     };
   }
   const baseScope = { workspaceId, candidateId: { $in: candidateIds } };
@@ -830,6 +863,7 @@ async function readWorkspaceBatch(
     terminalDeliveries,
     externalVerdicts,
     failedAnalyses,
+    validationAttention,
   ] =
     await Promise.all([
       HireApplication.aggregate([
@@ -925,6 +959,45 @@ async function readWorkspaceBatch(
         },
         { $project: { _id: 0, jobId: 1, applicationId: 1, candidateId: 1 } },
       ]),
+      HireMultimodalObservation.aggregate([
+        { $match: baseScope },
+        ...excludeHireOnboardingTestDrives({
+          coordinate: "applicationId",
+          sourceIdField: "applicationId",
+        }),
+        ...excludeHireOnboardingTestDrives({ coordinate: "roundId" }),
+        { $sort: { revision: -1, observedAt: -1, createdAt: -1, _id: -1 } },
+        {
+          $group: {
+            _id: {
+              applicationId: "$applicationId",
+              roundId: "$roundId",
+              runtimeSessionId: "$runtimeSessionId",
+            },
+            latest: { $first: "$$ROOT" },
+          },
+        },
+        { $replaceRoot: { newRoot: "$latest" } },
+        {
+          $match: {
+            $and: [
+              {
+                $or: [
+                  { purgeEligibleAt: { $exists: false } },
+                  { purgeEligibleAt: { $gt: now } },
+                ],
+              },
+              {
+                $or: [
+                  { "report.status": "insufficient_signal" },
+                  { "report.events.0": { $exists: true } },
+                ],
+              },
+            ],
+          },
+        },
+        { $project: { _id: 0, jobId: 1, applicationId: 1, candidateId: 1 } },
+      ]),
     ]);
   return {
     jobs: jobs as unknown as OperationsJobRecord[],
@@ -936,6 +1009,8 @@ async function readWorkspaceBatch(
     externalVerdicts: externalVerdicts as unknown as OperationsVerdictRecord[],
     failedAnalyses:
       failedAnalyses as unknown as OperationsFailedAnalysisRecord[],
+    validationAttention:
+      validationAttention as unknown as OperationsValidationAttentionRecord[],
   };
 }
 

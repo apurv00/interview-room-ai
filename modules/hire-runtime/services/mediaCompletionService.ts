@@ -37,10 +37,6 @@ function capabilityKeyPattern(kind: HireRuntimeReplayMediaKind): RegExp {
     : /\/[a-f0-9]{24}-\d{10,16}\.webm$/i
 }
 
-function stagedKind(kind: HireRuntimeReplayMediaKind): 'recording' | 'screen' {
-  return kind === 'camera' ? 'recording' : 'screen'
-}
-
 function statusField(kind: HireRuntimeReplayMediaKind) {
   return kind === 'camera' ? 'cameraMediaStatus' as const : 'screenMediaStatus' as const
 }
@@ -171,6 +167,7 @@ export async function terminalizeRuntimeReplayMedia(input: {
 }): Promise<RuntimeMediaTerminalizationOutcome> {
   const { binding, kind } = input
   if (binding.mediaCompletionContractVersion !== 1) return 'legacy'
+  if (binding.purgePersonalData === true) return 'state_changed'
   if (kind === 'screen' && !supportsHireDisplayCapture(binding.consentVersion)) {
     return 'not_required'
   }
@@ -179,13 +176,31 @@ export async function terminalizeRuntimeReplayMedia(input: {
   if (binding[mediaStatusField] === 'unavailable') return 'already_unavailable'
   if (!binding.runtimeSessionId) return 'session_pending'
 
+  const now = input.now ?? new Date()
+  if (
+    binding.revokedAt &&
+    (
+      !binding.mediaCompletionDeadlineAt ||
+      binding.mediaCompletionDeadlineAt > now
+    )
+  ) return 'in_flight'
+
   const before = await completionArtifact(binding)
   if (!before || before.status !== 'completed') return 'session_pending'
   const beforeArtifact = artifactSnapshot(before, kind)
   if (hasArtifact(beforeArtifact)) return 'artifact_present'
 
-  const now = input.now ?? new Date()
   const fields = terminalFields(kind)
+  // Ordinary revocation preserves the bounded media-completion duty after its
+  // deadline. Pin that exact tombstone/deadline through both CAS operations;
+  // privacy revocation is excluded separately and monotonically.
+  const lifecycleFilter: Record<string, unknown> = binding.revokedAt
+    ? {
+        status: 'revoked',
+        revokedAt: binding.revokedAt,
+        mediaCompletionDeadlineAt: binding.mediaCompletionDeadlineAt,
+      }
+    : { revokedAt: { $exists: false } }
   const claimToken = randomBytes(32).toString('hex')
   const claimExpiresAt = new Date(now.getTime() + TERMINAL_CLAIM_MS)
   const capabilityFilter = noLiveCapability(kind, now)
@@ -196,14 +211,16 @@ export async function terminalizeRuntimeReplayMedia(input: {
       runtimeSessionId: binding.runtimeSessionId,
       mediaCompletionContractVersion: 1,
       [mediaStatusField]: { $nin: ['published', 'unavailable'] },
-      pendingMediaManifest: {
-        $not: { $elemMatch: { kind: stagedKind(kind) } },
-      },
+      // A result snapshot and its manifest are reserved atomically. Any
+      // staged revision—not just one containing this replay kind—freezes the
+      // completion state until its exact payload is acknowledged or retained
+      // for operator reconciliation.
+      pendingMediaManifest: { $exists: false },
       issuedObjectCapabilities: capabilityFilter,
       issuedMultipartCapabilities: capabilityFilter,
       mediaWriteReservations: noLiveReservation(kind, now),
       runtimeWriteDrainUntil: noLiveRuntimeDrain(now),
-      revokedAt: { $exists: false },
+      ...lifecycleFilter,
       purgePersonalData: { $ne: true },
       $or: [
         { [fields.token]: { $exists: false } },
@@ -245,14 +262,12 @@ export async function terminalizeRuntimeReplayMedia(input: {
       [fields.token]: claimToken,
       [fields.artifactVersion]: afterArtifact.version,
       [fields.expiresAt]: { $gt: finalizedAt },
-      pendingMediaManifest: {
-        $not: { $elemMatch: { kind: stagedKind(kind) } },
-      },
+      pendingMediaManifest: { $exists: false },
       issuedObjectCapabilities: noLiveCapability(kind, finalizedAt),
       issuedMultipartCapabilities: noLiveCapability(kind, finalizedAt),
       mediaWriteReservations: noLiveReservation(kind, finalizedAt),
       runtimeWriteDrainUntil: noLiveRuntimeDrain(finalizedAt),
-      revokedAt: { $exists: false },
+      ...lifecycleFilter,
       purgePersonalData: { $ne: true },
     },
     {

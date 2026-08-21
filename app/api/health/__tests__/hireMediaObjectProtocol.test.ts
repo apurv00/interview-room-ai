@@ -35,6 +35,8 @@ function configureControlHealth(): void {
     INNGEST_EVENT_KEY: 'event-key',
     NEXTAUTH_SECRET: 'n'.repeat(64),
     HIRE_HANDOFF_ISSUANCE_MODE: 'open',
+    HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'required',
+    HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: '2026-08-20T00:00:00.000Z',
     HIRE_HANDOFF_SMOKE_TOKEN: undefined,
     HIRE_PUBLIC_URL: 'https://hire.interviewprep.guru',
     HIRE_ENGINE_RUNTIME_URL: 'https://engine.hire.interviewprep.guru',
@@ -83,6 +85,7 @@ describe('GET Hire media object protocol release marker', () => {
       releaseGateAuthenticated: true,
       surface: 'hire-control',
       hireMediaObjectProtocol: 'v2-opaque-nonce-if-none-match-zero-seal',
+      hireRuntimeLandmarkObjectProtocol: 'not-applicable',
     })
   })
 
@@ -95,7 +98,7 @@ describe('GET Hire media object protocol release marker', () => {
   })
 
   it.each(['b2c', 'hire-engine'] as const)(
-    'reports the protocol as not applicable on the %s surface',
+    'reports only the protocol owned by the %s surface',
     async (surface) => {
       process.env.HEALTH_CHECK_TOKEN = 'gate-secret'
       process.env.IPG_SURFACE = surface
@@ -108,6 +111,11 @@ describe('GET Hire media object protocol release marker', () => {
         releaseGateAuthenticated: true,
         surface,
         hireMediaObjectProtocol: 'not-applicable',
+        hireRuntimeLandmarkObjectProtocol:
+          surface === 'hire-engine'
+            ? 'v2-opaque-scope-digest-if-none-match-zero-seal'
+            : 'not-applicable',
+        deploymentCommit: 'e'.repeat(40),
       })
     },
   )

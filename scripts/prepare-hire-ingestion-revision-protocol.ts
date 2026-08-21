@@ -24,6 +24,7 @@ import {
   HireMultimodalAnalysisIngestionEvent,
 } from '../modules/hire-multimodal/models'
 import { HireRuntimeMultimodalAnalysisOutbox } from '../modules/hire-runtime/models/HireRuntimeMultimodalAnalysisOutbox'
+import { HireRuntimeBinding } from '../modules/hire-runtime/models/HireRuntimeBinding'
 
 type Mode = 'plan' | 'check' | 'apply'
 type Surface = 'hire-control' | 'hire-engine'
@@ -174,6 +175,67 @@ function runtimeIndexes(): IndexDefinition[] {
   ]
 }
 
+const AMBIGUOUS_LEGACY_RESULT_FILTER = {
+  status: { $in: ['active', 'completed', 'revoked'] },
+  purgePersonalData: { $ne: true },
+  pendingResultPayloadJson: { $exists: false },
+  $or: [
+    { pendingMediaManifest: { $exists: true } },
+    {
+      publishedRevision: { $gte: 1, $lt: 10 },
+      cameraMediaStatus: 'pending',
+    },
+    {
+      publishedRevision: { $gte: 1, $lt: 10 },
+      screenMediaStatus: 'pending',
+    },
+    {
+      publishedRevision: { $gte: 1, $lt: 10 },
+      cameraMediaStatus: 'unavailable',
+      cameraMediaUnavailableReportedAt: { $exists: false },
+    },
+    {
+      publishedRevision: { $gte: 1, $lt: 10 },
+      screenMediaStatus: 'unavailable',
+      screenMediaUnavailableReportedAt: { $exists: false },
+    },
+  ],
+} as const
+
+const AMBIGUOUS_LEGACY_ANALYSIS_FILTER = {
+  status: 'pending',
+  publishAttemptCount: { $gt: 0 },
+  payloadSnapshotJson: { $exists: false },
+  payloadSnapshotProtocolVersion: { $ne: 1 },
+} as const
+
+type CountDocuments = (filter: Record<string, unknown>) => Promise<number>
+
+/**
+ * A pre-v2 sender may have committed at control and lost the acknowledgement.
+ * Without its exact payload snapshot, rebuilding from a mutable session can
+ * never prove which digest control accepted. Refuse the cutover; an operator
+ * must reconcile these bounded rows instead of synthesizing new evidence.
+ */
+export async function assertNoAmbiguousLegacyRuntimePublisherRows(input: {
+  countResultBindings?: CountDocuments
+  countAnalysisOutboxes?: CountDocuments
+} = {}): Promise<void> {
+  const countResultBindings = input.countResultBindings ??
+    (async (filter) => HireRuntimeBinding.countDocuments(filter))
+  const countAnalysisOutboxes = input.countAnalysisOutboxes ??
+    (async (filter) => HireRuntimeMultimodalAnalysisOutbox.countDocuments(filter))
+  const [resultBindings, analysisOutboxes] = await Promise.all([
+    countResultBindings(AMBIGUOUS_LEGACY_RESULT_FILTER),
+    countAnalysisOutboxes(AMBIGUOUS_LEGACY_ANALYSIS_FILTER),
+  ])
+  if (resultBindings || analysisOutboxes) {
+    throw new Error(
+      `ambiguous legacy publisher rows require reconciliation (results=${resultBindings}, analyses=${analysisOutboxes})`,
+    )
+  }
+}
+
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
 }
@@ -316,6 +378,9 @@ export async function prepareHireIngestionRevisionProtocol(
   }
   await connectDB({ schemaInitialization: 'disabled' })
   assertExpectedDatabase(target)
+  if (target === 'hire-engine') {
+    await assertNoAmbiguousLegacyRuntimePublisherRows()
+  }
   const definitions =
     target === 'hire-control' ? controlIndexes() : runtimeIndexes()
   if (mode === 'apply') {

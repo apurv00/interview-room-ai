@@ -207,6 +207,8 @@ const controlHireEnvironment = {
   INNGEST_EVENT_KEY: "event-key",
   NEXTAUTH_SECRET: "c".repeat(64),
   HIRE_HANDOFF_ISSUANCE_MODE: "open",
+  HIRE_INGESTION_REVISION_PROTOCOL_MODE: "required",
+  HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: "2026-08-20T00:00:00.000Z",
   HIRE_PUBLIC_URL: "https://hire.interviewprep.guru",
   HIRE_ENGINE_RUNTIME_URL: "https://engine.hire.interviewprep.guru",
   RESEND_API_KEY: "re_test",

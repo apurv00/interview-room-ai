@@ -63,7 +63,10 @@ const {
         ...latestModel('hireconsentreceipts'),
         updateMany: vi.fn(),
       },
-      HireEngineIngestionEvent: latestModel('hireengineingestionevents'),
+      HireEngineIngestionEvent: {
+        ...latestModel('hireengineingestionevents'),
+        updateMany: vi.fn(),
+      },
       HireEmailOutbox: { deleteMany: vi.fn() },
       HireIntakeTask: { deleteMany: vi.fn() },
       HireInvitationBatchItem: { updateMany: vi.fn() },
@@ -224,6 +227,7 @@ beforeEach(() => {
   models.HireApplication.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireRound.updateMany.mockResolvedValue({ modifiedCount: 1 })
   models.HireInterviewResult.updateMany.mockResolvedValue({ modifiedCount: 1 })
+  models.HireEngineIngestionEvent.updateMany.mockResolvedValue({ modifiedCount: 1 })
   multimodalModels.HireMultimodalObservation.deleteMany.mockResolvedValue({ deletedCount: 1 })
   multimodalModels.HireMultimodalObservationIngestionEvent.deleteMany.mockResolvedValue({
     deletedCount: 1,
@@ -372,6 +376,14 @@ describe('candidate PII retention', () => {
         $set: { piiPurgedAt: NOW },
         $unset: { rawEngineOutput: 1, projection: 1, evidenceIndex: 1 },
       }),
+      { session },
+    )
+    expect(models.HireEngineIngestionEvent.updateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: WORKSPACE_ID,
+        applicationId: { $in: [APPLICATION_ID] },
+      },
+      { $set: { media: [] } },
       { session },
     )
     for (const model of [

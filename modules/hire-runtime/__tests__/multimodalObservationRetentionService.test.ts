@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   bindingExists: vi.fn(),
+  bindingUpdateMany: vi.fn(),
+  bindingFind: vi.fn(),
+  bindingUpdateOne: vi.fn(),
   outboxDeleteMany: vi.fn(),
   analysisOutboxFind: vi.fn(),
   analysisOutboxDeleteMany: vi.fn(),
@@ -15,7 +18,12 @@ vi.mock('../services/runtimeBoundary', () => ({
   connectHireRuntimeDB: mocks.connect,
 }))
 vi.mock('../models/HireRuntimeBinding', () => ({
-  HireRuntimeBinding: { exists: mocks.bindingExists },
+  HireRuntimeBinding: {
+    exists: mocks.bindingExists,
+    updateMany: mocks.bindingUpdateMany,
+    find: mocks.bindingFind,
+    updateOne: mocks.bindingUpdateOne,
+  },
 }))
 vi.mock('../models/HireRuntimeMultimodalObservationOutbox', () => ({
   HireRuntimeMultimodalObservationOutbox: { deleteMany: mocks.outboxDeleteMany },
@@ -52,6 +60,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.connect.mockResolvedValue(undefined)
   mocks.bindingExists.mockResolvedValue({ _id: 'binding' })
+  mocks.bindingUpdateMany.mockResolvedValue({ acknowledged: true, matchedCount: 1 })
+  mocks.bindingFind.mockReturnValue({
+    select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+  })
+  mocks.bindingUpdateOne.mockResolvedValue({ acknowledged: true, matchedCount: 1 })
   mocks.outboxDeleteMany.mockResolvedValue({ acknowledged: true, deletedCount: 1 })
   mocks.analysisOutboxFind.mockReturnValue({
     select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
@@ -92,18 +105,94 @@ describe('Hire runtime multimodal observation deadline retention', () => {
           purgedAt: expect.any(Date),
         }),
       },
-      { upsert: true },
+      { upsert: true, writeConcern: { w: 'majority', j: true } },
     )
-    expect(mocks.outboxDeleteMany).toHaveBeenCalledWith({
+    const coordinates = {
       workspaceId: INPUT.workspaceId,
       applicationId: INPUT.applicationId,
       roundId: INPUT.roundId,
+    }
+    expect(mocks.bindingUpdateMany).toHaveBeenCalledWith(
+      coordinates,
+      { $set: { multimodalObservationRetentionPurgedAt: expect.any(Date) } },
+      { writeConcern: { w: 'majority', j: true } },
+    )
+    expect(mocks.outboxDeleteMany).toHaveBeenCalledWith(
+      coordinates,
+      { writeConcern: { w: 'majority', j: true } },
+    )
+    expect(mocks.analysisOutboxDeleteMany).toHaveBeenCalledWith(
+      coordinates,
+      { writeConcern: { w: 'majority', j: true } },
+    )
+  })
+
+  it('fences capture, seals a just-reserved exact capability, then releases its inventory', async () => {
+    const events: string[] = []
+    const key = `landmarks/v2/${'2'.repeat(64)}`
+    const objectKeyNonce = '1'.repeat(64)
+    mocks.bindingUpdateMany.mockImplementationOnce(async () => {
+      events.push('binding-fence')
+      return { acknowledged: true, matchedCount: 1 }
     })
-    expect(mocks.analysisOutboxDeleteMany).toHaveBeenCalledWith({
-      workspaceId: INPUT.workspaceId,
-      applicationId: INPUT.applicationId,
-      roundId: INPUT.roundId,
+    mocks.bindingFind.mockReturnValueOnce({
+      select: vi.fn().mockReturnValue({
+        lean: vi.fn().mockImplementation(async () => {
+          events.push('binding-inventory')
+          return [{
+            _id: 'binding',
+            principalId: { toString: () => 'e'.repeat(24) },
+            issuedObjectCapabilities: [{
+              key,
+              objectKeyNonce,
+              runtimeSessionId: { toString: () => 'f'.repeat(24) },
+              expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+            }],
+          }]
+        }),
+      }),
     })
+    mocks.deleteObjects.mockImplementationOnce(async () => {
+      events.push('seal')
+    })
+    mocks.bindingUpdateOne.mockImplementationOnce(async () => {
+      events.push('release')
+      return { acknowledged: true, matchedCount: 1 }
+    })
+    mocks.analysisOutboxDeleteMany.mockImplementationOnce(async () => {
+      events.push('outbox-delete')
+      return { acknowledged: true, deletedCount: 0 }
+    })
+
+    await expect(
+      purgeHireRuntimeMultimodalObservationRetention(INPUT),
+    ).resolves.toEqual({ outcome: 'purged' })
+
+    expect(events).toEqual([
+      'binding-fence',
+      'binding-inventory',
+      'seal',
+      'release',
+      'outbox-delete',
+    ])
+    expect(mocks.deleteObjects).toHaveBeenCalledWith({
+      principalId: 'e'.repeat(24),
+      objects: [{ key, runtimeSessionId: 'f'.repeat(24), objectKeyNonce }],
+    })
+    expect(mocks.bindingUpdateOne).toHaveBeenCalledWith(
+      {
+        _id: 'binding',
+        workspaceId: INPUT.workspaceId,
+        applicationId: INPUT.applicationId,
+        roundId: INPUT.roundId,
+      },
+      {
+        $pull: {
+          issuedObjectCapabilities: { key: { $in: [key] } },
+        },
+      },
+      { writeConcern: { w: 'majority', j: true } },
+    )
   })
 
   it('creates a fence even when the runtime round was never provisioned', async () => {

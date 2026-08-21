@@ -119,6 +119,56 @@ describe("application supplemental-observation read fence", () => {
     });
   });
 
+  it("returns the exact optional playback-clock offsets in the recruiter DTO", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [{
+        _id: objectId(IDS.round),
+        status: "completed",
+        consentVersion: "hire-ai-v6-2026-08-20",
+      }],
+      humanRounds: [],
+    });
+    mocks.observationFind.mockReturnValueOnce(selected([{
+      roundId: objectId(IDS.round),
+      runtimeSessionId: objectId(IDS.runtimeSession),
+      revision: 2,
+      observedAt: new Date("2026-08-21T10:00:00.000Z"),
+      report: {
+        status: "completed",
+        capture: {
+          camera: "captured",
+          browserVisibility: "captured",
+          displayShare: "captured",
+        },
+        events: [],
+        playbackClock: {
+          protocolVersion: 1,
+          cameraRecorderStartOffsetMs: 250,
+          screenRecorderStartOffsetMs: 75,
+        },
+      },
+    }]));
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+    const body = await response.json();
+
+    expect(
+      body.rounds[0].supplementalObservations[0].report.playbackClock,
+    ).toEqual({
+      protocolVersion: 1,
+      cameraRecorderStartOffsetMs: 250,
+      screenRecorderStartOffsetMs: 75,
+    });
+  });
+
   it("returns only opaque, ready control-side camera recording metadata for its exact round attempt", async () => {
     mocks.detail.mockResolvedValueOnce({
       application: { _id: IDS.application },

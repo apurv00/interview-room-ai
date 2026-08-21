@@ -7,6 +7,7 @@ export const HIRE_OPERATIONS_ACTION_KINDS = [
   "terminal_human_kit_delivery_failures",
   "external_verdicts_received",
   "failed_multimodal_analyses",
+  "interview_validation_attention",
 ] as const;
 
 export type HireOperationsActionKind =

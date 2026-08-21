@@ -18,9 +18,11 @@ import { ScoreBar, scoreBand } from "@shared/ui/ScoreBar";
 import StateView from "@shared/ui/StateView";
 import HireEvidenceAssessment from "@hire/components/HireEvidenceAssessment";
 import HireSupplementalObservationsPanel, {
+  type HireObservationRecordingRequest,
   type HireSupplementalObservationView,
 } from "./HireSupplementalObservationsPanel";
 import HireInterviewRecordingPanel, {
+  type HireRecordingPlaybackRequest,
   type HireInterviewRecordingView,
 } from "./HireInterviewRecordingPanel";
 import HireScreenRecordingPanel, {
@@ -33,6 +35,7 @@ import HumanRoundsPanel, { type HumanRoundView } from "./HumanRoundsPanel";
 import CandidateStatusLinksPanel from "./CandidateStatusLinksPanel";
 import SharePacketsPanel from "./SharePacketsPanel";
 import AssessmentExportsPanel from "./AssessmentExportsPanel";
+import { buildHireRecordingCaptions } from "./recordingCaptions";
 
 // Canonical 75/55 bands (shared/ui/ScoreBar) — a 72 must never be green here
 // while amber in the adjacent ScoreBar (Codex on #603, same class as #498).
@@ -236,6 +239,25 @@ export default function ApplicationCardPage({
     action: StageAction;
     operationId: string;
   } | null>(null);
+  const [recordingReview, setRecordingReview] = useState<{
+    roundId: string;
+    kind: HireObservationRecordingRequest["kind"];
+    request: HireRecordingPlaybackRequest;
+  } | null>(null);
+
+  const reviewRecordingAt = useCallback(
+    (roundId: string, request: HireObservationRecordingRequest) => {
+      setRecordingReview((current) => ({
+        roundId,
+        kind: request.kind,
+        request: {
+          id: (current?.request.id ?? 0) + 1,
+          startMs: request.startMs,
+        },
+      }));
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     setError(null);
@@ -583,10 +605,14 @@ export default function ApplicationCardPage({
         )}
         {needNote && (
           <div className="mt-3 space-y-2">
-            <p className="text-xs text-[#536471]">
+            <label
+              htmlFor="offer-decision-note"
+              className="text-xs text-[#536471]"
+            >
               Record why the candidate accepted the offer and should be hired.
-            </p>
+            </label>
             <textarea
+              id="offer-decision-note"
               value={note}
               onChange={(e) => setNote(e.target.value)}
               rows={2}
@@ -757,10 +783,14 @@ export default function ApplicationCardPage({
             {candidate.email}.
           </p>
           <div className="space-y-1.5">
-            <label className="text-sm text-[#536471] block">
+            <label
+              htmlFor="hire-candidate-experience"
+              className="text-sm text-[#536471] block"
+            >
               Candidate&apos;s experience level
             </label>
             <select
+              id="hire-candidate-experience"
               value={experience}
               onChange={(e) =>
                 setExperience(e.target.value as typeof experience)
@@ -963,10 +993,25 @@ export default function ApplicationCardPage({
             <HireInterviewRecordingPanel
               applicationId={application.id}
               recording={round.interviewRecording}
+              playbackRequest={
+                recordingReview?.roundId === round.id &&
+                recordingReview.kind === "camera"
+                  ? recordingReview.request
+                  : undefined
+              }
+              captions={buildHireRecordingCaptions(
+                round.assessment?.questions ?? [],
+              )}
             />
             <HireScreenRecordingPanel
               applicationId={application.id}
               recording={round.screenRecording}
+              playbackRequest={
+                recordingReview?.roundId === round.id &&
+                recordingReview.kind === "screen"
+                  ? recordingReview.request
+                  : undefined
+              }
             />
           </div>
 
@@ -988,7 +1033,13 @@ export default function ApplicationCardPage({
 
           <HireSupplementalObservationsPanel
             observations={round.supplementalObservations ?? []}
-            recordingTargetId={`interview-recording-${round.id}`}
+            recordingAvailability={{
+              camera: round.interviewRecording?.status === "ready",
+              screen: round.screenRecording?.status === "ready",
+            }}
+            onReviewRecording={(request) =>
+              reviewRecordingAt(round.id, request)
+            }
           />
 
           {!round.assessment && round.results && (

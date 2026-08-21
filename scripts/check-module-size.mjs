@@ -50,7 +50,10 @@ const BUDGETS = {
   // replay queue/completion state machine: required multipart persistence,
   // expired-upload identity reset, terminal evidence markers, and abortable
   // IndexedDB settlement. See ADR 0042.
-  'modules/interview': { maxLOC: 31_600, maxFiles: 142 },
+  // Bumped LOC 31.6k → 31.7k on 2026-08-21 for recorder-boundary clock
+  // capture that maps recruiter evidence seeks to the canonical integrity
+  // timeline. Measured at 31,631 LOC / 130 files; see ADR 0045.
+  'modules/interview': { maxLOC: 31_700, maxFiles: 142 },
   'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
   // Bumped maxFiles 80 → 82 on 2026-06-09 (PR #435): adds ONE counted file —
   // services/resolvePathwayNextHref.ts, the server-side CTA next-step resolver
@@ -222,7 +225,10 @@ const BUDGETS = {
   // identity/Mongo boundary and attempt-aware ingestion protocol. Their two
   // distinct authority files bring the integrated stack to 26,365 LOC / 182
   // files; see ADRs 0043 and 0044.
-  'shared':            { maxLOC: 26_400, maxFiles: 182 },
+  // Bumped LOC 26.4k → 26.6k on 2026-08-21 for the exact runtime-landmark
+  // authority and recorder-clock wire contracts. Measured at 26,533 LOC /
+  // 182 files; see ADR 0045.
+  'shared':            { maxLOC: 26_600, maxFiles: 182 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   // Bumped maxLOC 14,000 → 16,000 on 2026-07-22 for the bounded A08

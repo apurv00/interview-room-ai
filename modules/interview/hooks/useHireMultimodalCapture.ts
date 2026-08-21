@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef } from 'react'
+import type { HireMultimodalObservationPlaybackClock } from '@shared/contracts/hireMultimodalObservationBridge'
 
 const CAPTURE_INTERVAL_MS = 200
 const MAX_CAMERA_SAMPLES = 10_000
@@ -33,6 +34,12 @@ export interface HireMultimodalCapturePayload {
     available: boolean
     hiddenSpans: HireMultimodalVisibilitySpan[]
   }
+  /**
+   * Optional because reports captured before playback-clock protocol V1 have
+   * no authoritative mapping and must remain readable without an inferred
+   * seek offset.
+   */
+  playbackClock?: HireMultimodalObservationPlaybackClock
 }
 
 type FaceLandmark = { x: number; y: number }
@@ -56,8 +63,14 @@ function rounded(value: number, decimals: number): number {
   return Math.round(value * multiplier) / multiplier
 }
 
-function elapsedMs(startedAt: number): number {
-  return clamp(Date.now() - startedAt, 0, MAX_DURATION_MS)
+function elapsedMs(readCanonicalTimeline: () => number | null): number | null {
+  try {
+    const value = readCanonicalTimeline()
+    if (value === null || !Number.isFinite(value)) return null
+    return Math.round(clamp(value, 0, MAX_DURATION_MS))
+  } catch {
+    return null
+  }
 }
 
 function appendVisibilitySpan(
@@ -132,7 +145,10 @@ function nextFacialSpeechActivity(input: {
  * blendshapes, expressions, or a biometric score anywhere.
  */
 export function useHireMultimodalCapture(): {
-  startCapture: (video: HTMLVideoElement) => Promise<void>
+  startCapture: (
+    video: HTMLVideoElement,
+    readCanonicalTimeline: () => number | null,
+  ) => Promise<void>
   stopCapture: () => HireMultimodalCapturePayload
   /**
    * Current local MediaPipe presence only. `null` means no detection result
@@ -148,7 +164,7 @@ export function useHireMultimodalCapture(): {
   const samplesRef = useRef<HireMultimodalCameraSample[]>([])
   const hiddenSpansRef = useRef<HireMultimodalVisibilitySpan[]>([])
   const hiddenStartedAtRef = useRef<number | null>(null)
-  const startedAtRef = useRef(0)
+  const canonicalTimelineRef = useRef<(() => number | null) | null>(null)
   const visibilityAvailableRef = useRef(false)
   const visibilityListenerRef = useRef<(() => void) | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -171,10 +187,16 @@ export function useHireMultimodalCapture(): {
       visibilityListenerRef.current = null
     }
     if (hiddenStartedAtRef.current !== null) {
-      appendVisibilitySpan(hiddenSpansRef.current, {
-        startMs: hiddenStartedAtRef.current,
-        endMs: elapsedMs(startedAtRef.current),
-      })
+      const readCanonicalTimeline = canonicalTimelineRef.current
+      const endMs = readCanonicalTimeline
+        ? elapsedMs(readCanonicalTimeline)
+        : null
+      if (endMs !== null) {
+        appendVisibilitySpan(hiddenSpansRef.current, {
+          startMs: hiddenStartedAtRef.current,
+          endMs,
+        })
+      }
       hiddenStartedAtRef.current = null
     }
     if (landmarkerRef.current) {
@@ -201,14 +223,18 @@ export function useHireMultimodalCapture(): {
     samplesRef.current = []
     hiddenSpansRef.current = []
     visibilityAvailableRef.current = false
+    canonicalTimelineRef.current = null
     return result
   }, [])
 
-  const startCapture = useCallback(async (video: HTMLVideoElement): Promise<void> => {
+  const startCapture = useCallback(async (
+    video: HTMLVideoElement,
+    readCanonicalTimeline: () => number | null,
+  ): Promise<void> => {
     // Stop any prior capture before a fresh runtime session starts.
     stopCapture()
     const generation = generationRef.current
-    startedAtRef.current = Date.now()
+    canonicalTimelineRef.current = readCanonicalTimeline
     samplesRef.current = []
     hiddenSpansRef.current = []
     videoRef.current = video
@@ -220,7 +246,8 @@ export function useHireMultimodalCapture(): {
     if (typeof document !== 'undefined') {
       visibilityAvailableRef.current = true
       const recordVisibility = () => {
-        const now = elapsedMs(startedAtRef.current)
+        const now = elapsedMs(readCanonicalTimeline)
+        if (now === null) return
         if (document.visibilityState === 'hidden') {
           if (hiddenStartedAtRef.current === null) hiddenStartedAtRef.current = now
           return
@@ -272,6 +299,8 @@ export function useHireMultimodalCapture(): {
         }
         try {
           const result = landmarker.detectForVideo(activeVideo, performance.now())
+          const atMs = elapsedMs(readCanonicalTimeline)
+          if (atMs === null) return
           const landmarks = result.faceLandmarks?.[0]
           // Update this before the iris/pose guard. A current frame with no
           // face is meaningful to the VAD/face corroboration sampler, while a
@@ -282,7 +311,7 @@ export function useHireMultimodalCapture(): {
             previousOpening: previousMouthOpeningRef.current,
             activeUntilMs: facialSpeechActiveUntilMsRef.current,
             opening: landmarks ? normalizedMouthOpening(landmarks) : null,
-            atMs: elapsedMs(startedAtRef.current),
+            atMs,
           })
           previousMouthOpeningRef.current = activity.previousOpening
           facialSpeechActiveUntilMsRef.current = activity.activeUntilMs
@@ -302,7 +331,7 @@ export function useHireMultimodalCapture(): {
             : 0
           if (![gazeX, gazeY, headYaw, headPitch].every(Number.isFinite)) return
           samplesRef.current.push({
-            atMs: elapsedMs(startedAtRef.current),
+            atMs,
             gazeX: rounded(gazeX, 3),
             gazeY: rounded(gazeY, 3),
             headYaw: rounded(headYaw, 1),
