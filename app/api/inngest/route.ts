@@ -1,5 +1,7 @@
 import { serve } from "inngest/next";
 import { inngest } from "@shared/services/inngest";
+import { deploymentSurfaceIdentity } from "@shared/surfaces/deploymentSurfaceIdentity";
+import { hireDeploymentConfigurationIssues } from "@shared/surfaces/hireDeploymentReadiness";
 import { analysisJob } from "@interview/jobs/analysisJob";
 import { enrichFeedbackJob } from "@interview/jobs/enrichFeedbackJob";
 import { emailDigestJob } from "@learn/jobs/emailDigestJob";
@@ -115,15 +117,22 @@ const b2cFunctions = [
   paymentRecoveryJob,
 ];
 
-const functions =
-  process.env.IPG_SURFACE === "hire-engine"
+const deploymentSurface = deploymentSurfaceIdentity();
+const deploymentConfigurationIssues =
+  deploymentSurface.surface === "b2c"
+    ? []
+    : hireDeploymentConfigurationIssues();
+const deploymentConfigurationInvalid = Boolean(
+  deploymentSurface.configurationIssue || deploymentConfigurationIssues.length > 0,
+);
+const functions = deploymentSurface.surface === "hire-engine"
     ? [
         hireRuntimeFeedbackRecoveryJob,
         hireRuntimeResultPublisherJob,
         hireRuntimeMultimodalObservationPublisherJob,
         hireRuntimeMultimodalAnalysisPublisherJob,
       ]
-    : process.env.IPG_SURFACE === "hire-control"
+    : deploymentSurface.surface === "hire-control"
       ? [
           hireEmailOutboxJob,
           hireMediaRetentionJob,
@@ -149,7 +158,13 @@ const functions =
         ]
       : b2cFunctions;
 
-export const { GET, POST, PUT } = serve({
-  client: inngest,
-  functions,
-});
+const unavailable = async () =>
+  new Response(null, {
+    status: 503,
+    headers: { "Retry-After": "60" },
+  });
+const handlers = deploymentConfigurationInvalid
+  ? { GET: unavailable, POST: unavailable, PUT: unavailable }
+  : serve({ client: inngest, functions });
+
+export const { GET, POST, PUT } = handlers;

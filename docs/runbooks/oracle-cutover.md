@@ -2,7 +2,7 @@
 
 Status: **production deployments run on Oracle Cloud through Coolify; Vercel is not a deployment target.**
 
-Current release procedure updated: 2026-08-17.
+Current release procedure updated: 2026-08-21.
 
 This is the operational source of truth for releases to the existing Oracle
 Cloud Mumbai A1 VM managed by Coolify. Cloudflare DNS/R2, Inngest Cloud,
@@ -28,12 +28,36 @@ release from a source push.
 
 - Deploy the Hire runtime/engine service first, then the Hire control service.
   Both must use the same approved source commit. The old control cannot issue a
-  v4 native-multimodal handoff, so this prevents a candidate from receiving
+  v6 validation handoff, so this prevents a candidate from receiving
   the new consent/flow before the engine is capable of serving it.
+- Set `IPG_SURFACE=hire-engine` on runtime and `IPG_SURFACE=hire-control` on
+  control. A missing or unknown value on any environment carrying Hire
+  configuration is a hard 503 and performs no Inngest registration;
+  never bypass that failure by treating the image as B2C.
+- Set `IPG_SURFACE=b2c` explicitly on every B2C deployment that retains any
+  `HIRE_*` environment variable. Before this release, inventory and update
+  those manifests; blank is supported only for legacy B2C environments with
+  no Hire configuration at all. Values are exact and case-sensitive—leading
+  or trailing whitespace is invalid.
+- Set `DEPLOYMENT_COMMIT_SHA` to the exact 40-character release commit on both
+  Hire services. Short SHAs and non-hex placeholders keep health and Inngest
+  fail closed.
+- On the engine, set browser-facing `HIRE_CONTROL_URL` and internal
+  `HIRE_CONTROL_INTERNAL_URL` to valid HTTPS control origins; neither may
+  share the engine origin. Do not rely on the completion page's production
+  fallback in staging or custom-origin deployments.
+- On control, configure `HIRE_ACCOUNT_BRIDGE_KEY_ID` and a distinct
+  `HIRE_ACCOUNT_BRIDGE_SECRET` of at least 32 characters. Missing bridge
+  authority keeps readiness closed because account deletion would otherwise
+  be unavailable.
 - Configure `NEXT_PUBLIC_FEATURE_MULTIMODAL=true` as both a **Coolify build
   variable** and a runtime variable on the Hire engine only. It is inlined into
   the browser bundle during `next build`, so a runtime restart alone cannot
   enable it; rebuild the image from the approved commit.
+- Immediately after the engine build, run `npm run check:hire-browser-build`.
+  This inspects the emitted artifact, requires the compile-defined marker to
+  be `true`, and rejects a health bundle that still reads either marker from
+  runtime environment variables.
 - Do not set that public flag to `true` on Hire control or the B2C application.
   Keep `FEATURE_FLAG_MULTIMODAL_ANALYSIS=false`; the Hire-native pipeline is
   separate from the generic consumer analysis path.
@@ -69,12 +93,14 @@ schema migration.
 1. In Coolify, manually rebuild and deploy the Hire engine at the approved
    commit, with the engine-only build and runtime flag from step 1. Confirm
    the runtime index sequence above passed and verify authenticated health reports
-   `healthy`, MongoDB and Redis `ok`, and that exact commit. The old control
-   cannot create a v4 handoff, so no native multimodal capture is enabled
+   `healthy`, MongoDB and Redis `ok`, `surface: hire-engine`,
+   `hireInterviewBuild.multimodal: true`, and that exact commit. The old control
+   cannot create a v6 handoff, so no validation/display capture is enabled
    until the next step.
 2. In Coolify, manually deploy the Hire control service at the same commit.
    Confirm the control index sequence above passed and verify the same authenticated
-   health and exact-commit evidence before it can issue v4 handoffs.
+   health, `surface: hire-control`, and exact-commit evidence before it can
+   issue v6 handoffs.
 3. Do not replace a failed Oracle deployment with a Vercel deployment; use the
    prior known-good Coolify release only after preserving the relevant
    operational evidence.
@@ -101,13 +127,20 @@ Registration alone is not delivery proof. Retain evidence of successful
 runtime analysis publishing and control analysis/recovery execution in Inngest
 before treating the release as live.
 
+Never sync an unhealthy Hire `/api/inngest` endpoint. Static readiness
+failures return 503 without invoking the Inngest serving adapter, preventing a
+missing or mismatched app ID from replacing another deployment's registration.
+
 ### 5. Run the authenticated Hire smoke
 
 - Authenticate to both Coolify services' health endpoints and retain the
   healthy dependency state and exact deployed commit.
-- Complete a canonical Hire candidate flow using the current v4 consent. Check
-  that live coaching is absent, the Indian interviewer voice is selected, and
-  the native multimodal path is active only after that consent.
+- Complete a canonical Hire candidate flow using the current v6 consent. Prove
+  the camera/microphone gate, full-screen entry, entire-display selection,
+  camera and screen recording transfer, and timestamped validation events in
+  the HR detail view. Check that live coaching is absent, the Indian
+  interviewer voice is selected, and the native multimodal path is active only
+  after that consent.
 - Run an authenticated Hire TTS turn and verify the response header
   `X-TTS-Provider: sarvam`. A Deepgram fallback, a missing header, or an
   unauthenticated health result is a release failure until corrected.

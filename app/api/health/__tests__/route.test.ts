@@ -16,12 +16,18 @@ import { GET, HEAD } from '../route'
 
 const originalHealthToken = process.env.HEALTH_CHECK_TOKEN
 const originalDeploymentCommit = process.env.DEPLOYMENT_COMMIT_SHA
+const originalSurface = process.env.IPG_SURFACE
+const originalControlDb = process.env.HIRE_CONTROL_DATABASE_NAME
 
 afterEach(() => {
   if (originalHealthToken === undefined) delete process.env.HEALTH_CHECK_TOKEN
   else process.env.HEALTH_CHECK_TOKEN = originalHealthToken
   if (originalDeploymentCommit === undefined) delete process.env.DEPLOYMENT_COMMIT_SHA
   else process.env.DEPLOYMENT_COMMIT_SHA = originalDeploymentCommit
+  if (originalSurface === undefined) delete process.env.IPG_SURFACE
+  else process.env.IPG_SURFACE = originalSurface
+  if (originalControlDb === undefined) delete process.env.HIRE_CONTROL_DATABASE_NAME
+  else process.env.HIRE_CONTROL_DATABASE_NAME = originalControlDb
   vi.clearAllMocks()
 })
 
@@ -93,6 +99,34 @@ describe('HEAD dependency readiness', () => {
     const response = await HEAD()
 
     expect(response.status).toBe(503)
+    expect(mocks.ping).not.toHaveBeenCalled()
+  })
+
+  it('fails before dependency probes when a Hire manifest has no valid surface', async () => {
+    delete process.env.IPG_SURFACE
+    process.env.HIRE_CONTROL_DATABASE_NAME = 'ipg-hire-control'
+    process.env.HEALTH_CHECK_TOKEN = 'gate-secret'
+
+    const headResponse = await HEAD()
+    const publicResponse = await GET(
+      new NextRequest('https://hire.example.test/api/health'),
+    )
+    const gateResponse = await GET(
+      new NextRequest('https://hire.example.test/api/health', {
+        headers: { authorization: 'Bearer gate-secret' },
+      }),
+    )
+
+    expect(headResponse.status).toBe(503)
+    expect(publicResponse.status).toBe(503)
+    expect(gateResponse.status).toBe(503)
+    await expect(publicResponse.json()).resolves.toEqual({ status: 'degraded' })
+    await expect(gateResponse.json()).resolves.toMatchObject({
+      status: 'degraded',
+      checks: { configuration: 'error' },
+      configurationIssues: ['missing:IPG_SURFACE'],
+    })
+    expect(mocks.connectDB).not.toHaveBeenCalled()
     expect(mocks.ping).not.toHaveBeenCalled()
   })
 })

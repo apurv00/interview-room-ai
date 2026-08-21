@@ -7,6 +7,7 @@ import {
   MONGO_SERVER_SELECTION_TIMEOUT_MS,
   MONGO_SOCKET_TIMEOUT_MS,
 } from './mongoConfig'
+import { assertHireSurfaceDatabaseBoundary } from './hireSurfaceDatabaseBoundary'
 
 interface CachedConnection {
   conn: typeof mongoose | null
@@ -82,47 +83,6 @@ export interface ConnectDBOptions {
   /** Disable Mongoose collection/index initialization for repair dry-runs and
    *  read-only promotion checks. Explicit writes still work in --apply mode. */
   schemaInitialization?: 'default' | 'disabled'
-}
-
-/**
- * The Hire control plane and the unchanged interview-engine runtime are
- * deliberately deployed with different Mongo principals and databases.
- * Validate the URI before Mongoose connects: checking connection.name after
- * connect is too late because model initialization may already create indexes
- * in the wrong database.
- *
- * Ordinary B2C processes do not set IPG_SURFACE, so their connection behavior
- * remains byte-for-byte equivalent to the pre-Hire path.
- */
-function assertHireSurfaceDatabaseBoundary(mongodbUri: string): void {
-  const surface = process.env.IPG_SURFACE
-  if (surface !== 'hire-control' && surface !== 'hire-engine') return
-
-  const controlDatabase = process.env.HIRE_CONTROL_DATABASE_NAME?.trim()
-  const runtimeDatabase = process.env.HIRE_RUNTIME_DATABASE_NAME?.trim()
-  const b2cDatabase = process.env.B2C_DATABASE_NAME?.trim()
-  if (!controlDatabase || !runtimeDatabase || !b2cDatabase) {
-    throw new Error('Hire database boundary is not configured')
-  }
-  if (new Set([controlDatabase, runtimeDatabase, b2cDatabase]).size !== 3) {
-    throw new Error('Hire control, Hire runtime, and B2C databases must be distinct')
-  }
-
-  // WHATWG URL rejects valid replica-set authorities containing commas, so
-  // parse only the database-path portion shared by mongodb and mongodb+srv.
-  const match = mongodbUri.match(/^mongodb(?:\+srv)?:\/\/[^/]+\/([^/?#]+)(?:[?#]|$)/i)
-  let actualDatabase: string
-  try {
-    actualDatabase = match ? decodeURIComponent(match[1]) : ''
-  } catch {
-    actualDatabase = ''
-  }
-  const expectedDatabase = surface === 'hire-control' ? controlDatabase : runtimeDatabase
-  if (!actualDatabase || actualDatabase !== expectedDatabase) {
-    throw new Error(
-      `Hire ${surface === 'hire-control' ? 'control' : 'runtime'} database URI mismatch`,
-    )
-  }
 }
 
 export async function connectDB(options: ConnectDBOptions = {}): Promise<typeof mongoose> {

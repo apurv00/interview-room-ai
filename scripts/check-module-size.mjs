@@ -213,7 +213,10 @@ const BUDGETS = {
   // Bumped LOC 26k → 26.2k on 2026-08-20 for the versioned cross-surface Hire
   // interview-integrity bridge. It adds only wire contracts and preserves
   // V1/V2 compatibility; see ADR 0040.
-  'shared':            { maxLOC: 26_200, maxFiles: 180 },
+  // Bumped LOC 26.2k → 26.3k on 2026-08-21 for the fail-closed deployment
+  // identity and shared Mongo pre-connect boundary. File cap is unchanged;
+  // see ADR 0044.
+  'shared':            { maxLOC: 26_300, maxFiles: 180 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   // Bumped maxLOC 14,000 → 16,000 on 2026-07-22 for the bounded A08

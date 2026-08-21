@@ -5,6 +5,7 @@ import {
   MONGO_SERVER_SELECTION_TIMEOUT_MS,
   MONGO_SOCKET_TIMEOUT_MS,
 } from './mongoConfig'
+import { assertHireSurfaceDatabaseBoundary } from './hireSurfaceDatabaseBoundary'
 
 // Timeouts + pool size come from the shared constants module so this
 // NextAuth-adapter client cannot drift from Mongoose's `connection.ts`.
@@ -31,6 +32,11 @@ export function getClientPromise(): Promise<MongoClient> {
   if (!MONGODB_URI) {
     // Return a promise that rejects lazily so it doesn't crash at build time
     return Promise.reject(new Error('MONGODB_URI environment variable is not defined'))
+  }
+  try {
+    assertHireSurfaceDatabaseBoundary(MONGODB_URI)
+  } catch (error) {
+    return Promise.reject(error)
   }
 
   // Cache the client promise in both dev and production to avoid
