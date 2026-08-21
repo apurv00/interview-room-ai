@@ -206,6 +206,7 @@ const controlHireEnvironment = {
   INNGEST_APP_ID: "ipg-hire-control-production",
   INNGEST_EVENT_KEY: "event-key",
   NEXTAUTH_SECRET: "c".repeat(64),
+  HIRE_HANDOFF_ISSUANCE_MODE: "open",
   HIRE_PUBLIC_URL: "https://hire.interviewprep.guru",
   HIRE_ENGINE_RUNTIME_URL: "https://engine.hire.interviewprep.guru",
   RESEND_API_KEY: "re_test",
