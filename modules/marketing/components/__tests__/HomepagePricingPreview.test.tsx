@@ -43,6 +43,7 @@ const catalog = billingResponseSchemas.catalog.parse({
 afterEach(cleanup)
 
 beforeEach(() => {
+  usePublicBillingCatalog.mockReset()
   usePublicBillingCatalog.mockReturnValue({
     catalog,
     error: null,
@@ -73,6 +74,9 @@ describe('homepage pricing preview', () => {
     const onStartFree = vi.fn()
     render(<HomepagePricingPreview onStartFree={onStartFree} />)
 
+    expect(usePublicBillingCatalog).toHaveBeenCalledWith({
+      cachePolicy: 'homepage-memory',
+    })
     expect(screen.getByRole('heading', { name: 'Basic' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Plus' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Pro' })).toBeInTheDocument()

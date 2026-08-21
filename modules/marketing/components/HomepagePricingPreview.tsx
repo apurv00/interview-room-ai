@@ -68,7 +68,9 @@ export interface HomepagePricingPreviewProps {
 export function HomepagePricingPreview({
   onStartFree,
 }: HomepagePricingPreviewProps) {
-  const { catalog, error, loading } = usePublicBillingCatalog()
+  const { catalog, error, loading } = usePublicBillingCatalog({
+    cachePolicy: 'homepage-memory',
+  })
   const pricingAvailable = Boolean(
     catalog?.customerBillingUiReady && !error,
   )
