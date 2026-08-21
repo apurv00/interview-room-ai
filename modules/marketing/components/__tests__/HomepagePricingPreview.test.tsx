@@ -1,16 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CONSUMER_CATALOG_V1 } from '@shared/services/planConfig'
 import { billingResponseSchemas } from '@/app/_components/billing/billingClient'
-
-const usePublicBillingCatalog = vi.hoisted(() => vi.fn())
-
-vi.mock('@/app/_components/billing/usePublicBillingCatalog', () => ({
-  usePublicBillingCatalog,
-}))
-
 import { HomepagePricingPreview } from '../HomepagePricingPreview'
 
 const catalog = billingResponseSchemas.catalog.parse({
@@ -42,16 +36,6 @@ const catalog = billingResponseSchemas.catalog.parse({
 
 afterEach(cleanup)
 
-beforeEach(() => {
-  usePublicBillingCatalog.mockReset()
-  usePublicBillingCatalog.mockReturnValue({
-    catalog,
-    error: null,
-    loading: false,
-    reload: vi.fn(),
-  })
-})
-
 describe('homepage pricing preview', () => {
   it('is the only pricing implementation composed into the homepage', () => {
     const homepageSource = readFileSync(
@@ -62,8 +46,9 @@ describe('homepage pricing preview', () => {
       'utf8',
     )
 
+    expect(homepageSource).toContain('<HomepagePricingPreview')
     expect(homepageSource).toContain(
-      '<HomepagePricingPreview onStartFree={handleStartCta} />',
+      'initialCatalog={initialBillingCatalog}',
     )
     expect(homepageSource).not.toMatch(
       /@shared\/services\/stripe|\bPLANS\b|\$19|Coming Soon/,
@@ -72,11 +57,13 @@ describe('homepage pricing preview', () => {
 
   it('renders every plan and allowance from the authoritative catalog', () => {
     const onStartFree = vi.fn()
-    render(<HomepagePricingPreview onStartFree={onStartFree} />)
+    render(
+      <HomepagePricingPreview
+        initialCatalog={catalog}
+        onStartFree={onStartFree}
+      />,
+    )
 
-    expect(usePublicBillingCatalog).toHaveBeenCalledWith({
-      cachePolicy: 'homepage-memory',
-    })
     expect(screen.getByRole('heading', { name: 'Basic' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Plus' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Pro' })).toBeInTheDocument()
@@ -105,31 +92,30 @@ describe('homepage pricing preview', () => {
     }
   })
 
-  it('shows no stale fallback price while the catalog is loading', () => {
-    usePublicBillingCatalog.mockReturnValue({
-      catalog: null,
-      error: null,
-      loading: true,
-      reload: vi.fn(),
-    })
-
-    render(<HomepagePricingPreview onStartFree={vi.fn()} />)
-
-    expect(screen.getByRole('status')).toHaveTextContent(
-      'Loading current pricing',
+  it('includes authoritative plan content in the server-rendered HTML', () => {
+    const html = renderToStaticMarkup(
+      <HomepagePricingPreview
+        initialCatalog={catalog}
+        onStartFree={() => undefined}
+      />,
     )
-    expect(screen.queryByText(/₹|\$/)).not.toBeInTheDocument()
+
+    expect(html).toContain('Basic')
+    expect(html).toContain('Plus')
+    expect(html).toContain('Pro')
+    expect(html).toContain('₹712.34')
+    expect(html).toContain('₹1,234.56')
+    expect(html).toContain('Get started with Basic')
+    expect(html).not.toContain('Loading current pricing')
   })
 
-  it('fails closed to the Pricing page when the catalog is unavailable', () => {
-    usePublicBillingCatalog.mockReturnValue({
-      catalog: null,
-      error: 'Pricing is temporarily unavailable.',
-      loading: false,
-      reload: vi.fn(),
-    })
-
-    render(<HomepagePricingPreview onStartFree={vi.fn()} />)
+  it('fails closed to the Pricing page when the server catalog is unavailable', () => {
+    render(
+      <HomepagePricingPreview
+        initialCatalog={null}
+        onStartFree={vi.fn()}
+      />,
+    )
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Current pricing is temporarily unavailable here.',
@@ -140,17 +126,15 @@ describe('homepage pricing preview', () => {
   })
 
   it('does not expose catalog prices before customer billing is ready', () => {
-    usePublicBillingCatalog.mockReturnValue({
-      catalog: {
-        ...catalog,
-        customerBillingUiReady: false,
-      },
-      error: null,
-      loading: false,
-      reload: vi.fn(),
-    })
-
-    render(<HomepagePricingPreview onStartFree={vi.fn()} />)
+    render(
+      <HomepagePricingPreview
+        initialCatalog={{
+          ...catalog,
+          customerBillingUiReady: false,
+        }}
+        onStartFree={vi.fn()}
+      />,
+    )
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Current pricing is temporarily unavailable here.',

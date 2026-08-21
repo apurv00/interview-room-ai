@@ -3,10 +3,10 @@
 import Link from 'next/link'
 import { CheckCircle2 } from 'lucide-react'
 import {
+  billingResponseSchemas,
   formatInr,
   type PublicBillingCatalog,
 } from '@/app/_components/billing/billingClient'
-import { usePublicBillingCatalog } from '@/app/_components/billing/usePublicBillingCatalog'
 
 const PLAN_ORDER = ['free', 'plus', 'pro'] as const
 
@@ -38,42 +38,39 @@ function planFeatures(plan: HomepagePlan): readonly string[] {
   ]
 }
 
-function PricingUnavailable({ loading }: { loading: boolean }) {
+function PricingUnavailable() {
   return (
     <div
       className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-slate-50 px-6 py-8 text-center"
-      role={loading ? 'status' : 'alert'}
+      role="alert"
     >
       <p className="text-sm text-slate-600">
-        {loading
-          ? 'Loading current pricing…'
-          : 'Current pricing is temporarily unavailable here.'}
+        Current pricing is temporarily unavailable here.
       </p>
-      {!loading ? (
-        <Link
-          href="/pricing"
-          className="mt-3 inline-flex text-sm font-semibold text-blue-600 transition-colors hover:text-blue-700"
-        >
-          Open the Pricing page
-        </Link>
-      ) : null}
+      <Link
+        href="/pricing"
+        className="mt-3 inline-flex text-sm font-semibold text-blue-600 transition-colors hover:text-blue-700"
+      >
+        Open the Pricing page
+      </Link>
     </div>
   )
 }
 
 export interface HomepagePricingPreviewProps {
+  readonly initialCatalog: PublicBillingCatalog | null
   readonly onStartFree: () => void
 }
 
 export function HomepagePricingPreview({
+  initialCatalog,
   onStartFree,
 }: HomepagePricingPreviewProps) {
-  const { catalog, error, loading } = usePublicBillingCatalog({
-    cachePolicy: 'homepage-memory',
-  })
-  const pricingAvailable = Boolean(
-    catalog?.customerBillingUiReady && !error,
+  const parsedCatalog = billingResponseSchemas.catalog.safeParse(
+    initialCatalog,
   )
+  const catalog = parsedCatalog.success ? parsedCatalog.data : null
+  const pricingAvailable = Boolean(catalog?.customerBillingUiReady)
 
   return (
     <section
@@ -95,7 +92,7 @@ export function HomepagePricingPreview({
         </div>
 
         {!pricingAvailable || !catalog ? (
-          <PricingUnavailable loading={loading && !error} />
+          <PricingUnavailable />
         ) : (
           <>
             <div className="mx-auto grid max-w-6xl gap-5 md:grid-cols-3">

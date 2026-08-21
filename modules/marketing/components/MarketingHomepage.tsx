@@ -7,6 +7,7 @@ import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { track } from '@shared/analytics/track'
 // eslint-disable-next-line no-restricted-imports -- direct import required: the @learn barrel transitively pulls server-only Mongoose services into this client component.
 import { usePathwayNextAction } from '@learn/hooks/usePathwayNextAction'
+import type { PublicBillingCatalog } from '@/app/_components/billing/billingClient'
 import { HomepagePricingPreview } from './HomepagePricingPreview'
 import {
   Play, Eye, Mic, Brain, Activity,
@@ -39,7 +40,13 @@ interface JourneyStep {
   core?: boolean
 }
 
-export default function MarketingHomepage() {
+interface MarketingHomepageProps {
+  readonly initialBillingCatalog: PublicBillingCatalog | null
+}
+
+export default function MarketingHomepage({
+  initialBillingCatalog,
+}: MarketingHomepageProps) {
   const [activeTab, setActiveTab] = useState(0)
   // Data-policy panel on the second scroll (FOLD 2). Default collapsed —
   // single toggle reveals all three points at once (not per-item FAQ).
@@ -680,7 +687,10 @@ export default function MarketingHomepage() {
       </section>
 
       {/* ── FOLD 7: PRICING ── */}
-      <HomepagePricingPreview onStartFree={handleStartCta} />
+      <HomepagePricingPreview
+        initialCatalog={initialBillingCatalog}
+        onStartFree={handleStartCta}
+      />
 
       {/* ── FOLD 7.5: POPULAR GUIDES ── SEO topic-cluster anchors to hero guides */}
       <section className="py-20 bg-white border-t border-slate-200">
