@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   startSession: vi.fn(),
-  memberExists: vi.fn(),
+  memberUpdate: vi.fn(),
   workspaceUpdate: vi.fn(),
 }))
 
@@ -16,7 +16,7 @@ vi.mock('../services/hireControlBoundary', () => ({
 }))
 
 vi.mock('../models', () => ({
-  HireWorkspaceMember: { exists: mocks.memberExists },
+  HireWorkspaceMember: { updateOne: mocks.memberUpdate },
   HireWorkspace: { updateOne: mocks.workspaceUpdate },
 }))
 
@@ -37,7 +37,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.connect.mockResolvedValue(undefined)
   mocks.startSession.mockResolvedValue(session)
-  mocks.memberExists.mockReturnValue({ session: () => Promise.resolve({ _id: 'member-1' }) })
+  mocks.memberUpdate.mockResolvedValue({ matchedCount: 1 })
   mocks.workspaceUpdate.mockResolvedValue({ matchedCount: 1 })
 })
 
@@ -50,28 +50,38 @@ describe('withActiveHireWorkspaceWriteTransaction', () => {
     ).resolves.toBe('committed')
 
     expect(mocks.connect).toHaveBeenCalledOnce()
-    expect(mocks.memberExists).toHaveBeenCalledWith({
-      _id: 'member-1',
-      workspaceId: 'ws-1',
-      authState: 'active',
-    })
+    expect(mocks.memberUpdate).toHaveBeenCalledWith(
+      {
+        _id: 'member-1',
+        workspaceId: 'ws-1',
+        authState: 'active',
+      },
+      { $inc: { workspaceWriteFenceVersion: 1 } },
+      { session },
+    )
     expect(mocks.workspaceUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ _id: 'ws-1' }),
       { $inc: { writeFenceVersion: 1 } },
       { session },
+    )
+    expect(mocks.workspaceUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.memberUpdate.mock.invocationCallOrder[0],
+    )
+    expect(mocks.memberUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      work.mock.invocationCallOrder[0],
     )
     expect(work).toHaveBeenCalledWith(session)
     expect(session.endSession).toHaveBeenCalledOnce()
   })
 
   it('fails before the write when the Hire member was removed', async () => {
-    mocks.memberExists.mockReturnValue({ session: () => Promise.resolve(null) })
+    mocks.memberUpdate.mockResolvedValue({ matchedCount: 0 })
     const work = vi.fn()
 
     await expect(
       withActiveHireWorkspaceWriteTransaction('ws-1' as never, 'member-1' as never, work),
     ).rejects.toMatchObject({ code: 'MEMBER_REMOVED' })
-    expect(mocks.workspaceUpdate).not.toHaveBeenCalled()
+    expect(mocks.workspaceUpdate).toHaveBeenCalledOnce()
     expect(work).not.toHaveBeenCalled()
     expect(session.endSession).toHaveBeenCalledOnce()
   })

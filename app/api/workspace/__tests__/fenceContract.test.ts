@@ -46,12 +46,40 @@ describe('workspace API fence contract', () => {
     }
   )
 
+  it.each(files.map((f) => [f.slice(API_ROOT.length + 1), f]))(
+    '%s: exposes no mutation outside the central boundary',
+    (label, file) => {
+      const src = readFileSync(file as string, 'utf8')
+      const unsafeDeclarations =
+        src.match(/export const (?:POST|PUT|PATCH|DELETE)\s*=/g) ?? []
+      const composedUnsafeDeclarations =
+        src.match(
+          /export const (?:POST|PUT|PATCH|DELETE)\s*=\s*composeHireApiRoute(?:<[^>]+>)?\s*\(/g,
+        ) ?? []
+      expect(
+        composedUnsafeDeclarations.length,
+        `${label as string} must wrap every unsafe method`,
+      ).toBe(unsafeDeclarations.length)
+      expect(src).not.toMatch(
+        /export async function (?:POST|PUT|PATCH|DELETE)\s*\(/,
+      )
+    },
+  )
+
   it('rechecks the correct identity system on success, exception, and long requests', () => {
     expect(COMPOSE_HIRE).toContain("kind: 'hire_member'")
     expect(COMPOSE_HIRE).toContain('resolveHireMemberSession(principal.rawHireToken)')
     expect(COMPOSE_HIRE).toContain('isPrincipalActive: () => principalStillActive(principal, req)')
     expect(COMPOSE_HIRE).toContain('catch (handlerError)')
     expect((COMPOSE_HIRE.match(/principalStillActive\(principal, req\)/g) ?? []).length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('enforces the central trusted-Origin gate before resolving any principal', () => {
+    const originFence = COMPOSE_HIRE.indexOf('hasTrustedOriginForMutation(req)')
+    const principalResolution = COMPOSE_HIRE.indexOf('await resolvePrincipal(req)')
+    expect(originFence).toBeGreaterThan(0)
+    expect(principalResolution).toBeGreaterThan(originFence)
+    expect(COMPOSE_HIRE).toContain("{ error: 'Invalid request origin' }")
   })
 
   it('permits only the exact workspace GET/POST bootstrap without weakening removal races', () => {

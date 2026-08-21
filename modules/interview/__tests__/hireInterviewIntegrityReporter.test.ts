@@ -10,6 +10,7 @@ vi.mock('@interview/utils/accountBoundArtifactUpload', () => ({
 
 import {
   attachHireInterviewIntegrityPagehideFlush,
+  buildHireInterviewPlaybackClock,
   createHireInterviewIntegrityReporter,
   createHireInterviewSpeechVideoSampler,
 } from '@interview/utils/hireInterviewIntegrityReporter'
@@ -30,6 +31,44 @@ describe('Hire interview integrity reporter', () => {
     mocks.request.mockImplementation(() => Promise.resolve(
       response({ accepted: true, outcome: 'accepted' }),
     ))
+  })
+
+  it('binds each recorder start to the canonical integrity timeline', async () => {
+    const playbackClock = buildHireInterviewPlaybackClock({
+      cameraRecorderStartedAtMs: 10_250,
+      screenRecorderStartedAtMs: 10_075,
+      elapsedMsAt: (timestamp) => timestamp - 10_000,
+    })
+    expect(playbackClock).toEqual({
+      protocolVersion: 1,
+      cameraRecorderStartOffsetMs: 250,
+      screenRecorderStartOffsetMs: 75,
+    })
+
+    const reporter = createHireInterviewIntegrityReporter({
+      sessionId: SESSION_ID,
+      originUserId: USER_ID,
+      intent: { privacyGeneration: 1 },
+      availability: { displayShare: true },
+    })
+    await expect(reporter.flush({
+      capture: {
+        cameraSamples: [],
+        browserVisibility: { available: true, hiddenSpans: [] },
+        playbackClock,
+      },
+      force: true,
+    })).resolves.toBe('accepted')
+
+    expect(mocks.request.mock.calls[0][1]).toMatchObject({ playbackClock })
+  })
+
+  it('omits playback authority when recorder starts cannot be mapped', () => {
+    expect(buildHireInterviewPlaybackClock({
+      cameraRecorderStartedAtMs: 10_250,
+      screenRecorderStartedAtMs: null,
+      elapsedMsAt: () => null,
+    })).toBeUndefined()
   })
 
   it('delivers only bounded neutral events and coarse speech/video booleans', async () => {

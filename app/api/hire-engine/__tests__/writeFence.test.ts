@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   claim: vi.fn(),
   recordStorage: vi.fn(),
   settleMultipart: vi.fn(),
+  reserveReplay: vi.fn(),
+  releaseReplay: vi.fn(),
   fetch: vi.fn(),
 }))
 
@@ -20,9 +22,12 @@ vi.mock('@modules/hire-runtime/services/runtimeWriteFence', async () => {
     claimRuntimeWriteCapability: mocks.claim,
     recordRuntimeStorageCapability: mocks.recordStorage,
     settleRuntimeMultipartCapability: mocks.settleMultipart,
+    reserveRuntimeReplayWrites: mocks.reserveReplay,
+    releaseRuntimeReplayWriteReservations: mocks.releaseReplay,
   }
 })
 
+import { RuntimeWriteFenceError } from '@modules/hire-runtime/services/runtimeWriteFence'
 import { PATCH, POST } from '../write-fence/route'
 
 const WORKSPACE_ID = '1'.repeat(24)
@@ -75,6 +80,8 @@ beforeEach(() => {
     user: { id: PRINCIPAL_ID, organizationId: WORKSPACE_ID },
   })
   mocks.claim.mockResolvedValue(binding())
+  mocks.reserveReplay.mockResolvedValue([])
+  mocks.releaseReplay.mockResolvedValue(undefined)
   mocks.fetch.mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
@@ -145,6 +152,7 @@ describe('POST /api/hire-engine/write-fence', () => {
       consentVersion: 'hire-ai-v6-2026-08-20',
       publishedRevision: 1,
       cameraMediaStatus: 'pending',
+      mediaCompletionContractVersion: 1,
     })
     mocks.fetch.mockResolvedValueOnce(new Response(JSON.stringify({
       url: 'https://upload.invalid',
@@ -168,6 +176,96 @@ describe('POST /api/hire-engine/write-fence', () => {
       runtimeSessionId: SESSION_ID,
       key: CAMERA_KEY,
     }))
+    expect(mocks.reserveReplay).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      bindingId: BINDING_ID,
+      principalId: PRINCIPAL_ID,
+      runtimeSessionId: SESSION_ID,
+      kinds: ['camera'],
+    })
+  })
+
+  it('reserves a replay kind before side effects and releases only after capability capture', async () => {
+    const events: string[] = []
+    mocks.claim.mockResolvedValueOnce({
+      ...binding(),
+      consentVersion: 'hire-ai-v6-2026-08-20',
+      mediaCompletionContractVersion: 1,
+      cameraMediaStatus: 'pending',
+    })
+    mocks.reserveReplay.mockImplementationOnce(async () => {
+      events.push('reserve')
+      return [{ reservationId: 'reservation', kind: 'camera' }]
+    })
+    mocks.fetch.mockImplementationOnce(async () => {
+      events.push('upstream')
+      return new Response(JSON.stringify({
+        key: CAMERA_KEY,
+        uploadId: 'upload-id',
+        contentType: 'video/webm',
+        partSizeBytes: 8 * 1024 * 1024,
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    mocks.recordStorage.mockImplementationOnce(async () => {
+      events.push('capability')
+    })
+    mocks.releaseReplay.mockImplementationOnce(async () => {
+      events.push('release')
+    })
+
+    const response = await POST(request('/api/storage/multipart', {
+      action: 'create',
+      type: 'recording',
+      sessionId: SESSION_ID,
+    }))
+
+    expect(response.status).toBe(200)
+    expect(events).toEqual(['reserve', 'upstream', 'capability', 'release'])
+  })
+
+  it('does not reach R2 when terminalization wins before reservation', async () => {
+    mocks.claim.mockResolvedValueOnce({
+      ...binding(),
+      consentVersion: 'hire-ai-v6-2026-08-20',
+      mediaCompletionContractVersion: 1,
+      cameraMediaStatus: 'pending',
+    })
+    mocks.reserveReplay.mockRejectedValueOnce(
+      new RuntimeWriteFenceError('terminalizing', 410, 'MEDIA_TERMINAL'),
+    )
+
+    const response = await POST(request('/api/storage/multipart', {
+      action: 'create',
+      type: 'recording',
+      sessionId: SESSION_ID,
+    }))
+
+    expect(response.status).toBe(410)
+    await expect(response.json()).resolves.toEqual({
+      error: 'Runtime unavailable',
+      code: 'MEDIA_TERMINAL',
+    })
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.releaseReplay).not.toHaveBeenCalled()
+  })
+
+  it('exposes an exact account-unavailable boundary without forwarding', async () => {
+    mocks.claim.mockRejectedValueOnce(
+      new RuntimeWriteFenceError('purged', 410, 'ACCOUNT_UNAVAILABLE'),
+    )
+
+    const response = await POST(request('/api/storage/multipart', {
+      action: 'create',
+      type: 'recording',
+      sessionId: SESSION_ID,
+    }))
+
+    expect(response.status).toBe(410)
+    await expect(response.json()).resolves.toEqual({
+      error: 'Runtime unavailable',
+      code: 'ACCOUNT_UNAVAILABLE',
+    })
+    expect(mocks.fetch).not.toHaveBeenCalled()
   })
 
   it('does not forward interview work after the result is published', async () => {

@@ -16,8 +16,8 @@
  * Properties:
  *   - 32 bytes of crypto-random entropy (hex-encoded → 64-char string)
  *   - 60-second TTL (minted and redeemed in the same browser flow)
- *   - Single-use: Redis DEL runs before the ticket is returned, so a
- *     replay can't succeed even if intercepted
+ *   - Single-use: one Redis script atomically reads and deletes the ticket,
+ *     so concurrent redeemers cannot both receive its payload
  *   - Stored alongside { userId, sessionId }; the isolated Hire runtime also
  *     carries its organizationId so every principal lookup is tenant-scoped
  */
@@ -29,6 +29,15 @@ import { authLogger } from '@shared/logger'
 
 const TICKET_PREFIX = 'auth:invite-ticket:'
 const TICKET_TTL_SECONDS = 60
+
+const REDEEM_TICKET_SCRIPT = `
+local value = redis.call('GET', KEYS[1])
+if not value then
+  return nil
+end
+redis.call('DEL', KEYS[1])
+return value
+`
 
 export interface TicketPayload {
   userId: string
@@ -68,10 +77,12 @@ export async function redeemAuthTicket(
   }
   try {
     const key = `${TICKET_PREFIX}${ticket}`
-    const raw = await redis.get(key)
-    if (!raw) return null
-    // Single-use: delete before parsing so a race can't double-redeem.
-    await redis.del(key)
+    const raw = await redis.eval(
+      REDEEM_TICKET_SCRIPT,
+      1,
+      key,
+    )
+    if (typeof raw !== 'string') return null
     const parsed = JSON.parse(raw) as TicketPayload
     if (
       !parsed.userId ||
@@ -93,4 +104,5 @@ export async function redeemAuthTicket(
 export const __internals = {
   TICKET_PREFIX,
   TICKET_TTL_SECONDS,
+  REDEEM_TICKET_SCRIPT,
 }

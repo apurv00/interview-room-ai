@@ -19,6 +19,22 @@ export const HIRE_ROUND_STATUSES = [
 ] as const
 export type HireRoundStatus = (typeof HIRE_ROUND_STATUSES)[number]
 
+export type HireRoundIngestionReservationStatus = 'reserved' | 'processed'
+export type HireRoundIngestionTerminalOutcome = 'processed' | 'stale'
+
+export interface HireRoundIngestionReservation {
+  runtimeSessionId: mongoose.Types.ObjectId
+  attempt: number
+  revision: number
+  eventId: string
+  digest: string
+  status: HireRoundIngestionReservationStatus
+  terminalOutcome?: HireRoundIngestionTerminalOutcome
+  reservationToken?: string
+  leaseExpiresAt?: Date
+  processedAt?: Date
+}
+
 /** Workspace-owned projection delivered by the isolated runtime bridge. */
 export interface HireRoundPerQuestion {
   questionIndex: number
@@ -89,9 +105,15 @@ export interface IHireRound extends Document {
   consentVersion?: string
   consentUserAgent?: string
   preparedAt?: Date
+  /** Monotonic authority for ordering independently issued runtime links. */
+  engineHandoffGeneration?: number
   /** Opaque id from the physically isolated runtime database. It is not a
    * ref and can never be populated or dereferenced by the control plane. */
   runtimeSessionId?: mongoose.Types.ObjectId
+  ingestionReservations?: {
+    engineResult?: HireRoundIngestionReservation
+    multimodalAnalysis?: HireRoundIngestionReservation
+  }
   resultId?: mongoose.Types.ObjectId
   linkedAt?: Date
   revokedAt?: Date
@@ -137,6 +159,30 @@ export interface IHireRound extends Document {
   updatedAt: Date
 }
 
+const HireRoundIngestionReservationSchema =
+  new Schema<HireRoundIngestionReservation>(
+    {
+      runtimeSessionId: { type: Schema.Types.ObjectId, required: true },
+      attempt: { type: Number, required: true, min: 1, max: 10 },
+      revision: { type: Number, required: true, min: 1, max: 10 },
+      eventId: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+      digest: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
+      status: {
+        type: String,
+        enum: ['reserved', 'processed'],
+        required: true,
+      },
+      terminalOutcome: {
+        type: String,
+        enum: ['processed', 'stale'],
+      },
+      reservationToken: { type: String, maxlength: 80 },
+      leaseExpiresAt: { type: Date },
+      processedAt: { type: Date },
+    },
+    { _id: false, strict: 'throw' },
+  )
+
 const HireRoundSchema = new Schema<IHireRound>(
   {
     workspaceId: {
@@ -170,7 +216,12 @@ const HireRoundSchema = new Schema<IHireRound>(
     consentVersion: { type: String, maxlength: 40 },
     consentUserAgent: { type: String, maxlength: 512 },
     preparedAt: { type: Date },
+    engineHandoffGeneration: { type: Number, min: 0, default: 0 },
     runtimeSessionId: { type: Schema.Types.ObjectId },
+    ingestionReservations: {
+      engineResult: { type: HireRoundIngestionReservationSchema },
+      multimodalAnalysis: { type: HireRoundIngestionReservationSchema },
+    },
     resultId: { type: Schema.Types.ObjectId, ref: 'HireInterviewResult' },
     linkedAt: { type: Date },
     revokedAt: { type: Date },

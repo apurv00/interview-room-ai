@@ -2,16 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { AppError } from '@shared/errors'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
-import {
-  HIRE_MEMBER_COOKIE,
-  resolveHireMemberSession,
-} from '@hire/services/memberAuthService'
 import { selfDeleteHireMember } from '@hire/services/memberLifecycleService'
 import {
   SelfDeleteHireMemberSchema,
   type SelfDeleteHireMemberPayload,
 } from '@hire/validators/hire'
 import { clearHireMemberCookie } from '../_lib/cookie'
+import {
+  applyHireMemberRequestCookies,
+  resolveHireMemberRequestSession,
+} from '../_lib/memberSession'
 import { clientIp, hasTrustedOrigin } from '../_lib/request'
 
 export const dynamic = 'force-dynamic'
@@ -31,9 +31,15 @@ export async function DELETE(req: NextRequest) {
   })
   if (blocked) return blocked
 
-  const rawToken = req.cookies.get(HIRE_MEMBER_COOKIE)?.value
-  const auth = await resolveHireMemberSession(rawToken)
-  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const memberSession = await resolveHireMemberRequestSession(req)
+  const finalize = (response: NextResponse) =>
+    applyHireMemberRequestCookies(response, memberSession)
+  const auth = memberSession.auth
+  if (!auth) {
+    return finalize(
+      NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    )
+  }
 
   try {
     const body: SelfDeleteHireMemberPayload = SelfDeleteHireMemberSchema.parse(await req.json())
@@ -47,14 +53,23 @@ export async function DELETE(req: NextRequest) {
     return response
   } catch (error) {
     if (error instanceof ZodError) {
-      return NextResponse.json({ error: 'Validation failed' }, { status: 400 })
-    }
-    if (error instanceof AppError) {
-      return NextResponse.json(
-        { error: error.message, code: error.code },
-        { status: error.statusCode },
+      return finalize(
+        NextResponse.json({ error: 'Validation failed' }, { status: 400 }),
       )
     }
-    return NextResponse.json({ error: 'Could not delete your Hire account' }, { status: 500 })
+    if (error instanceof AppError) {
+      return finalize(
+        NextResponse.json(
+          { error: error.message, code: error.code },
+          { status: error.statusCode },
+        ),
+      )
+    }
+    return finalize(
+      NextResponse.json(
+        { error: 'Could not delete your Hire account' },
+        { status: 500 },
+      ),
+    )
   }
 }

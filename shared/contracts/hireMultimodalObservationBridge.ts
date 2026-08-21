@@ -73,6 +73,41 @@ export const HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS = 256;
  */
 export const HIRE_MULTIMODAL_OBSERVATION_MAX_SPEECH_VIDEO_SAMPLES = 600;
 
+/**
+ * Recorder timestamps and integrity events use different media clocks. V1
+ * binds each recording's t=0 to the canonical integrity timeline so a
+ * recruiter seek can be exact. Older reports intentionally omit this object;
+ * consumers must never infer an offset for them.
+ */
+export const HIRE_MULTIMODAL_OBSERVATION_PLAYBACK_CLOCK_PROTOCOL_VERSION =
+  1 as const;
+
+export const HireMultimodalObservationPlaybackClockSchema = z
+  .object({
+    protocolVersion: z.literal(
+      HIRE_MULTIMODAL_OBSERVATION_PLAYBACK_CLOCK_PROTOCOL_VERSION,
+    ),
+    cameraRecorderStartOffsetMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(HIRE_MULTIMODAL_OBSERVATION_MAX_DURATION_MS)
+      .optional(),
+    screenRecorderStartOffsetMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(HIRE_MULTIMODAL_OBSERVATION_MAX_DURATION_MS)
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (clock) =>
+      clock.cameraRecorderStartOffsetMs !== undefined ||
+      clock.screenRecorderStartOffsetMs !== undefined,
+    "A playback clock must bind at least one recorder",
+  );
+
 export const HIRE_MULTIMODAL_OBSERVATION_EVENT_KINDS = [
   "browser_window_not_visible",
   "browser_window_focus_lost",
@@ -227,8 +262,21 @@ export const HireMultimodalObservationReportSchema = z
     events: z
       .array(HireMultimodalObservationEventSchema)
       .max(HIRE_MULTIMODAL_OBSERVATION_MAX_EVENTS),
+    playbackClock: HireMultimodalObservationPlaybackClockSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((report, context) => {
+    if (
+      report.playbackClock?.screenRecorderStartOffsetMs !== undefined &&
+      report.capture.displayShare === undefined
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "A screen recorder clock requires display-share capture",
+        path: ["playbackClock", "screenRecorderStartOffsetMs"],
+      });
+    }
+  });
 
 /**
  * The runtime can only state that collection was unavailable or report bounded
@@ -258,7 +306,16 @@ export const HireMultimodalObservationIngestionSchema = z
     observedAt: HireMultimodalObservationIsoDateTimeSchema,
     report: HireMultimodalObservationReportSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((payload, context) => {
+    if (payload.report.playbackClock && payload.schemaVersion !== 2) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Playback clocks require bridge schema version 2",
+        path: ["schemaVersion"],
+      });
+    }
+  });
 
 export type HireMultimodalObservationEvent = z.infer<
   typeof HireMultimodalObservationEventSchema
@@ -268,6 +325,9 @@ export type HireMultimodalObservationClientEvent = z.infer<
 >;
 export type HireMultimodalObservationReport = z.infer<
   typeof HireMultimodalObservationReportSchema
+>;
+export type HireMultimodalObservationPlaybackClock = z.infer<
+  typeof HireMultimodalObservationPlaybackClockSchema
 >;
 export type HireMultimodalObservationSpeechVideoSample = z.infer<
   typeof HireMultimodalObservationSpeechVideoSampleSchema

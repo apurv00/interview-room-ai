@@ -5,6 +5,7 @@ export interface IHireEngineHandoff extends Document {
   workspaceId: mongoose.Types.ObjectId
   applicationId: mongoose.Types.ObjectId
   roundId: mongoose.Types.ObjectId
+  handoffGeneration: number
   codeHash: string
   requestBindingHash?: string
   config: HireEngineConfig
@@ -24,6 +25,12 @@ const HireEngineHandoffSchema = new Schema<IHireEngineHandoff>(
     workspaceId: { type: Schema.Types.ObjectId, required: true, immutable: true },
     applicationId: { type: Schema.Types.ObjectId, required: true, immutable: true },
     roundId: { type: Schema.Types.ObjectId, required: true, immutable: true },
+    handoffGeneration: {
+      type: Number,
+      required: true,
+      immutable: true,
+      min: 1,
+    },
     codeHash: {
       type: String,
       required: true,

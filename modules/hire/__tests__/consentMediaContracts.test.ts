@@ -49,6 +49,7 @@ const IDS = {
   attemptId: '444444444444444444444444',
   assetId: '555555555555555555555555',
 }
+const OBJECT_KEY_NONCE = 'a'.repeat(64)
 
 describe('Hire AI consent contract', () => {
   it('requires explicit acceptance of every disclosed activity', () => {
@@ -176,6 +177,50 @@ describe('Hire AI consent contract', () => {
 })
 
 describe('Hire-owned schema boundaries', () => {
+  it('keeps the v2 object-key nonce immutable and out of default projections', () => {
+    const nonce = HireMediaAsset.schema.path('objectKeyNonce')
+    expect(nonce.options.immutable).toBe(true)
+    expect(nonce.options.select).toBe(false)
+    expect(nonce.options.minlength).toBe(64)
+    expect(nonce.options.maxlength).toBe(64)
+    const required = nonce.options.required as (this: {
+      objectKey: string
+    }) => boolean
+    expect(required.call({ objectKey: `hire-media/v2/${'a'.repeat(64)}` })).toBe(
+      true,
+    )
+    expect(
+      required.call({
+        objectKey: `hire-media/${IDS.workspaceId}/${IDS.applicationId}/${IDS.roundId}/${IDS.attemptId}/${IDS.assetId}-identity-photo.jpg`,
+      }),
+    ).toBe(false)
+
+    const mediaFields = {
+      ...IDS,
+      jobId: '666666666666666666666666',
+      candidateId: '777777777777777777777777',
+      kind: 'identity_photo' as const,
+      state: 'staging' as const,
+      contentType: 'image/jpeg',
+      bytes: 1,
+      sha256: 'b'.repeat(64),
+      capturedAt: new Date('2026-08-21T00:00:00.000Z'),
+    }
+    const v2WithoutNonce = new HireMediaAsset({
+      ...mediaFields,
+      objectKey: `hire-media/v2/${'a'.repeat(64)}`,
+    })
+    expect(
+      v2WithoutNonce.validateSync()?.errors.objectKeyNonce,
+    ).toBeDefined()
+
+    const legacyWithoutNonce = new HireMediaAsset({
+      ...mediaFields,
+      objectKey: `hire-media/${IDS.workspaceId}/${IDS.applicationId}/${IDS.roundId}/${IDS.attemptId}/${IDS.assetId}-identity-photo.jpg`,
+    })
+    expect(legacyWithoutNonce.validateSync()).toBeUndefined()
+  })
+
   it('treats only processing or unexpired verification requests as active', () => {
     const now = new Date('2026-08-15T12:00:00.000Z')
 
@@ -235,18 +280,89 @@ describe('Hire media storage and selfie normalization', () => {
     expect(getHireGuestCookieName('test')).toBe('hire_guest')
   })
 
-  it('mints a coordinate-bound key and rejects cross-workspace authority', () => {
-    const key = hireMediaKey(IDS, 'identity-photo')
-    const screenKey = hireMediaKey(IDS, 'screen-recording')
-    expect(parseHireMediaKey(key)).toEqual({ ...IDS, kind: 'identity-photo' })
-    expect(parseHireMediaKey(screenKey)).toEqual({
-      ...IDS,
-      kind: 'screen-recording',
+  it('mints an opaque v2 key, dual-reads v1, and rejects scope tampering', () => {
+    const key = hireMediaKey(IDS, 'identity-photo', OBJECT_KEY_NONCE)
+    const screenKey = hireMediaKey(IDS, 'screen-recording', OBJECT_KEY_NONCE)
+    expect(key).toMatch(/^hire-media\/v2\/[a-f0-9]{64}$/)
+    expect(key).not.toContain(IDS.workspaceId)
+    expect(key).not.toContain(IDS.applicationId)
+    expect(key).not.toContain(IDS.roundId)
+    expect(key).not.toContain(IDS.attemptId)
+    expect(key).not.toContain(IDS.assetId)
+    expect(key).not.toContain('identity-photo')
+    expect(parseHireMediaKey(key)).toEqual({
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/),
     })
-    expect(() => assertHireMediaKeyScope(key, IDS)).not.toThrow()
+    expect(parseHireMediaKey(screenKey)).toEqual({
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(parseHireMediaKey(`hire-media/v2/${'A'.repeat(64)}`)).toBeNull()
     expect(() =>
-      assertHireMediaKeyScope(key, { ...IDS, workspaceId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }),
+      assertHireMediaKeyScope(
+        key,
+        IDS,
+        'identity-photo',
+        OBJECT_KEY_NONCE,
+      ),
+    ).not.toThrow()
+    expect(() =>
+      assertHireMediaKeyScope(
+        key,
+        { ...IDS, workspaceId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+        'identity-photo',
+        OBJECT_KEY_NONCE,
+      ),
     ).toThrow(InvalidHireMediaKeyError)
+    expect(() =>
+      assertHireMediaKeyScope(
+        `${key.slice(0, -1)}${key.endsWith('a') ? 'b' : 'a'}`,
+        IDS,
+        'identity-photo',
+        OBJECT_KEY_NONCE,
+      ),
+    ).toThrow(InvalidHireMediaKeyError)
+    expect(() =>
+      assertHireMediaKeyScope(
+        key,
+        { ...IDS, assetId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+        'identity-photo',
+        OBJECT_KEY_NONCE,
+      ),
+    ).toThrow(InvalidHireMediaKeyError)
+    expect(() =>
+      assertHireMediaKeyScope(
+        key,
+        IDS,
+        'screen-recording',
+        OBJECT_KEY_NONCE,
+      ),
+    ).toThrow(InvalidHireMediaKeyError)
+    expect(() =>
+      assertHireMediaKeyScope(key, IDS, 'identity-photo', 'b'.repeat(64)),
+    ).toThrow(InvalidHireMediaKeyError)
+    expect(() =>
+      assertHireMediaKeyScope(key, IDS, 'identity-photo', undefined),
+    ).toThrow(InvalidHireMediaKeyError)
+    const legacyKey = [
+      'hire-media',
+      IDS.workspaceId,
+      IDS.applicationId,
+      IDS.roundId,
+      IDS.attemptId,
+      `${IDS.assetId}-identity-photo.jpg`,
+    ].join('/')
+    expect(parseHireMediaKey(legacyKey)).toEqual({
+      ...IDS,
+      kind: 'identity-photo',
+    })
+    expect(() =>
+      assertHireMediaKeyScope(
+        legacyKey,
+        IDS,
+        'identity-photo',
+        undefined,
+      ),
+    ).not.toThrow()
     expect(parseHireMediaKey('hire-media/../../secret')).toBeNull()
   })
 

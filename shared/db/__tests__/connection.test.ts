@@ -70,6 +70,7 @@ describe('connectDBIfNeeded (Phase 1 PR C)', () => {
     delete process.env.HIRE_CONTROL_DATABASE_NAME
     delete process.env.HIRE_RUNTIME_DATABASE_NAME
     delete process.env.B2C_DATABASE_NAME
+    delete process.env.HIRE_ENGINE_RUNTIME_URL
   })
 
   it('calls connectDB when needsMongo is true, regardless of flag', async () => {
@@ -195,6 +196,27 @@ describe('connectDBIfNeeded (Phase 1 PR C)', () => {
     )
   })
 
+  it.each([undefined, 'hire-contorl'])(
+    'fails before Mongoose connects for invalid surface %s with a Hire manifest',
+    async (surface) => {
+      if (surface === undefined) delete process.env.IPG_SURFACE
+      else process.env.IPG_SURFACE = surface
+      process.env.HIRE_ENGINE_RUNTIME_URL = 'https://engine.example.test'
+
+      await expect(connectDB()).rejects.toThrow(/surface identity is invalid/)
+      expect(mongoose.connect).not.toHaveBeenCalled()
+    },
+  )
+
+  it('preserves explicitly identified B2C connections with Hire markers', async () => {
+    process.env.IPG_SURFACE = 'b2c'
+    process.env.HIRE_ENGINE_RUNTIME_URL = 'https://engine.example.test'
+
+    await connectDB()
+
+    expect(mongoose.connect).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['hire-control', 'ipg-hire-control'],
     ['hire-engine', 'ipg-hire-runtime'],
@@ -241,4 +263,24 @@ describe('connectDBIfNeeded (Phase 1 PR C)', () => {
     await expect(connectDB()).rejects.toThrow(/must be distinct/)
     expect(mongoose.connect).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ['hire-control', 'HIRE_CONTROL_DATABASE_NAME'],
+    ['hire-engine', 'HIRE_RUNTIME_DATABASE_NAME'],
+  ] as const)(
+    'rejects whitespace in the %s database identity before Mongoose connects',
+    async (surface, name) => {
+      process.env.IPG_SURFACE = surface
+      process.env.HIRE_CONTROL_DATABASE_NAME = 'ipg-hire-control'
+      process.env.HIRE_RUNTIME_DATABASE_NAME = 'ipg-hire-runtime'
+      process.env.B2C_DATABASE_NAME = 'ipg-b2c'
+      process.env[name] = ` ${process.env[name]} `
+      process.env.MONGODB_URI = `mongodb://localhost/${
+        surface === 'hire-control' ? 'ipg-hire-control' : 'ipg-hire-runtime'
+      }`
+
+      await expect(connectDB()).rejects.toThrow(/surrounding whitespace/)
+      expect(mongoose.connect).not.toHaveBeenCalled()
+    },
+  )
 })

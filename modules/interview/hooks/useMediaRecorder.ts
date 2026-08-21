@@ -14,6 +14,8 @@ export interface UseMediaRecorderReturn {
    * read because the state value is stale inside stable useCallbacks.
    */
   getDurationSeconds: () => number | null
+  /** Wall-clock timestamp captured at the MediaRecorder.start() boundary. */
+  getStartedAtMs: () => number | null
 }
 
 export function useMediaRecorder(): UseMediaRecorderReturn {
@@ -114,12 +116,15 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
       }
 
       recorderRef.current = recorder
+      // Capture the boundary immediately before start(). Consumers can map
+      // this timestamp onto their own canonical timeline without guessing
+      // from a later React effect or Blob completion time.
+      const startTime = Date.now()
       recorder.start(1000) // 1-second timeslices
       setIsRecording(true)
       setRecordingDuration(0)
 
       // Duration tracker
-      const startTime = Date.now()
       startedAtMsRef.current = startTime
       finalDurationSecondsRef.current = null
       timerRef.current = setInterval(() => {
@@ -155,5 +160,16 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
     return null
   }, [])
 
-  return { isRecording, recordingDuration, startRecording, stopRecording, getDurationSeconds }
+  const getStartedAtMs = useCallback((): number | null => {
+    return startedAtMsRef.current
+  }, [])
+
+  return {
+    isRecording,
+    recordingDuration,
+    startRecording,
+    stopRecording,
+    getDurationSeconds,
+    getStartedAtMs,
+  }
 }

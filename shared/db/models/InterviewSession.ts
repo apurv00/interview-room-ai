@@ -55,11 +55,15 @@ export interface IInterviewSession extends Document {
   // duration header) — the probe cost a full file download per player mount.
   recordingDurationSeconds?: number
   recordingR2Key?: string
+  /** Monotonic CAS witness for camera artifact association/replacement. */
+  recordingArtifactVersion?: number
 
   // Screen recording (coding & system-design interviews) — captures the
   // candidate's work surface (IDE / canvas) alongside the camera track.
   screenRecordingR2Key?: string
   screenRecordingSizeBytes?: number
+  /** Monotonic CAS witness for display artifact association/replacement. */
+  screenRecordingArtifactVersion?: number
 
   // Audio-only recording — uploaded in parallel with the camera webm so
   // Whisper transcription reads a small file (typically 1–2MB for a
@@ -288,10 +292,12 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     recordingSizeBytes: { type: Number },
     recordingDurationSeconds: { type: Number },
     recordingR2Key: { type: String },
+    recordingArtifactVersion: { type: Number, min: 0, default: 0 },
 
     // Screen recording (coding & system-design)
     screenRecordingR2Key: { type: String },
     screenRecordingSizeBytes: { type: Number },
+    screenRecordingArtifactVersion: { type: Number, min: 0, default: 0 },
 
     // Audio-only recording (used by Whisper to avoid 25MB Groq limit)
     audioRecordingR2Key: { type: String },

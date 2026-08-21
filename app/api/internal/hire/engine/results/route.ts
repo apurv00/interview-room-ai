@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { verifyInternalServiceRequest } from '@shared/services/internalServiceAuth'
+import { HIRE_ENGINE_RESULT_MAX_BODY_BYTES } from '@shared/contracts/hireEngineBridge'
+import {
+  HIRE_INGESTION_REVISION_PROTOCOL_HEADER,
+  evaluateHireIngestionRevisionProtocol,
+} from '@shared/contracts/hireIngestionRevisionProtocol'
 import {
   HireEngineIngestionError,
   ingestHireEngineResult,
@@ -9,11 +14,10 @@ import {
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 const ROUTE_PATH = '/api/internal/hire/engine/results'
-const MAX_BODY_BYTES = 2 * 1024 * 1024
 
 export async function POST(req: NextRequest) {
   const body = await req.text()
-  if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+  if (Buffer.byteLength(body) > HIRE_ENGINE_RESULT_MAX_BODY_BYTES) {
     return NextResponse.json({ error: 'Payload too large' }, { status: 413 })
   }
   const auth = await verifyInternalServiceRequest({
@@ -25,6 +29,18 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) {
     const status = auth.reason === 'replay-store-unavailable' ? 503 : 401
     return NextResponse.json({ error: 'Service authentication failed' }, { status })
+  }
+  const protocol = evaluateHireIngestionRevisionProtocol({
+    requestVersion: req.headers.get(HIRE_INGESTION_REVISION_PROTOCOL_HEADER),
+  })
+  if (!protocol.ok) {
+    return NextResponse.json(
+      { error: 'Hire ingestion revision protocol is unavailable' },
+      {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
+      },
+    )
   }
 
   try {

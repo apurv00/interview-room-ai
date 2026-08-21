@@ -10,6 +10,7 @@ function json(value: unknown, status = 200): Response {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -44,12 +45,18 @@ describe("HireScreenRecordingPanel", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/workspace/applications/application-1/media/screen-asset-1",
-        { cache: "no-store" },
+        expect.objectContaining({
+          cache: "no-store",
+          signal: expect.any(AbortSignal),
+        }),
       );
     });
-    expect(container.querySelector("video")?.getAttribute("src")).toBe(
+    const player = container.querySelector("video");
+    expect(player?.getAttribute("src")).toBe(
       "https://private-r2.example/display.webm?signature=temporary",
     );
+    fireEvent.loadedMetadata(player!);
+    expect(document.activeElement).toBe(player);
   });
 
   it("rejects a capability for a different media kind", async () => {
@@ -98,5 +105,137 @@ describe("HireScreenRecordingPanel", () => {
       />,
     );
     expect(screen.getByText("Display recording removed")).toBeTruthy();
+  });
+
+  it("shows a neutral terminal delivery failure without a playback action", () => {
+    render(
+      <HireScreenRecordingPanel
+        applicationId="application-1"
+        recording={{ status: "unavailable", reason: "upload_expired" }}
+      />,
+    );
+
+    expect(screen.getByText("Display recording unavailable")).toBeTruthy();
+    expect(screen.getByText(/upload window expired/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Play shared display" })).toBeNull();
+  });
+
+  it("opens from a validation event and seeks the shared display recording", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json({
+          url: "https://private-r2.example/display.webm?signature=temporary",
+          kind: "screen_recording",
+        }),
+      ),
+    );
+
+    const { rerender } = render(
+      <HireScreenRecordingPanel
+        applicationId="application-1"
+        recording={{
+          status: "ready",
+          assetId: "screen-asset-1",
+          capturedAt: "2026-08-20T12:00:00.000Z",
+          bytes: 84_000_000,
+        }}
+        playbackRequest={{ id: 1, startMs: 12_500 }}
+      />,
+    );
+
+    const video = await screen.findByLabelText(
+      "Private shared display recording",
+    );
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: 1 },
+      duration: { configurable: true, value: 60 },
+      play: { configurable: true, value: vi.fn().mockResolvedValue(undefined) },
+    });
+    fireEvent.loadedMetadata(video);
+
+    expect((video as HTMLVideoElement).currentTime).toBe(12.5);
+    expect(document.activeElement).toBe(video);
+    expect(video.getAttribute("tabindex")).toBe("0");
+
+    (video as HTMLVideoElement).currentTime = 21;
+    rerender(
+      <HireScreenRecordingPanel
+        applicationId="application-1"
+        recording={{
+          status: "ready",
+          assetId: "screen-asset-1",
+          capturedAt: "2026-08-20T12:00:00.000Z",
+          bytes: 84_000_000,
+        }}
+        playbackRequest={{ id: 1, startMs: 12_500 }}
+      />,
+    );
+    expect((video as HTMLVideoElement).currentTime).toBe(21);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    fireEvent.error(video);
+    await screen.findByText(/temporary playback link expired/i);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <HireScreenRecordingPanel
+        applicationId="application-1"
+        recording={{
+          status: "ready",
+          assetId: "screen-asset-2",
+          capturedAt: "2026-08-20T12:01:00.000Z",
+          bytes: 85_000_000,
+        }}
+        playbackRequest={{ id: 1, startMs: 12_500 }}
+      />,
+    );
+    await Promise.resolve();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards a capability response for a replaced display asset", async () => {
+    let resolveCapability!: (response: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveCapability = resolve;
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container, rerender } = render(
+      <HireScreenRecordingPanel
+        applicationId="application-1"
+        recording={{
+          status: "ready",
+          assetId: "screen-asset-1",
+          capturedAt: "2026-08-20T12:00:00.000Z",
+          bytes: 84_000_000,
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Play shared display" }));
+    const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
+
+    rerender(
+      <HireScreenRecordingPanel
+        applicationId="application-1"
+        recording={{
+          status: "ready",
+          assetId: "screen-asset-2",
+          capturedAt: "2026-08-20T12:01:00.000Z",
+          bytes: 85_000_000,
+        }}
+      />,
+    );
+    expect(signal.aborted).toBe(true);
+
+    resolveCapability(json({
+      url: "https://private-r2.example/stale-display.webm",
+      kind: "screen_recording",
+    }));
+    await Promise.resolve();
+    expect(container.querySelector("video")).toBeNull();
+    expect(screen.getByRole("button", { name: "Play shared display" })).toBeTruthy();
   });
 });

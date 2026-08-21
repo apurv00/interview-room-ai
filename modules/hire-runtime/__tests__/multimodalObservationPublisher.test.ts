@@ -100,6 +100,33 @@ beforeEach(() => {
 })
 
 describe('Hire-native multimodal observation publisher', () => {
+  it('bridges the exact digest-covered recorder clock without reinterpretation', () => {
+    const exactReport = {
+      status: 'completed' as const,
+      capture: {
+        camera: 'captured' as const,
+        browserVisibility: 'captured' as const,
+        displayShare: 'captured' as const,
+      },
+      events: [],
+      playbackClock: {
+        protocolVersion: 1 as const,
+        cameraRecorderStartOffsetMs: 250,
+        screenRecorderStartOffsetMs: 75,
+      },
+    }
+    const payload = __hireMultimodalObservationPublisher.bridgePayload(
+      outbox({
+        consentVersion: 'hire-ai-v6-2026-08-20',
+        policyVersion: 'hire-supplemental-observations-v3',
+        report: exactReport,
+      }) as never,
+    )
+
+    expect(payload?.schemaVersion).toBe(2)
+    expect(payload?.report.playbackClock).toEqual(exactReport.playbackClock)
+  })
+
   it('waits for a result-linked binding before bridging the supplemental report', async () => {
     mocks.bindingFindOneAndUpdate.mockResolvedValue(null)
     mocks.bindingExists.mockResolvedValue({ _id: objectId('9'.repeat(24)) })

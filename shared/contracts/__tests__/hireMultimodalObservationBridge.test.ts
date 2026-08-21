@@ -137,6 +137,59 @@ describe("Hire supplemental-observation bridge contract", () => {
     ).toThrow();
   });
 
+  it("accepts a digest-covered V2 playback clock and rejects legacy inference", () => {
+    const report = {
+      ...payload().report,
+      capture: {
+        ...payload().report.capture,
+        displayShare: "captured" as const,
+      },
+      playbackClock: {
+        protocolVersion: 1 as const,
+        cameraRecorderStartOffsetMs: 275,
+        screenRecorderStartOffsetMs: 80,
+      },
+    };
+    expect(
+      HireMultimodalObservationIngestionSchema.parse({
+        ...payload(),
+        schemaVersion: 2,
+        report,
+      }).report.playbackClock,
+    ).toEqual(report.playbackClock);
+
+    expect(() =>
+      HireMultimodalObservationIngestionSchema.parse({
+        ...payload(),
+        schemaVersion: 1,
+        report,
+      }),
+    ).toThrow(/Playback clocks require bridge schema version 2/);
+    expect(() =>
+      HireMultimodalObservationIngestionSchema.parse({
+        ...payload(),
+        schemaVersion: 2,
+        report: {
+          ...payload().report,
+          playbackClock: { protocolVersion: 1 },
+        },
+      }),
+    ).toThrow(/bind at least one recorder/);
+    expect(() =>
+      HireMultimodalObservationIngestionSchema.parse({
+        ...payload(),
+        schemaVersion: 2,
+        report: {
+          ...payload().report,
+          playbackClock: {
+            protocolVersion: 1,
+            screenRecorderStartOffsetMs: 80,
+          },
+        },
+      }),
+    ).toThrow(/screen recorder clock requires display-share capture/i);
+  });
+
   it("allows only a boolean facial-speech proxy, never mouth geometry", () => {
     expect(
       HireMultimodalObservationSpeechVideoSampleSchema.parse({

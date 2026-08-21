@@ -35,6 +35,9 @@ vi.mock('@shared/logger', () => ({
 vi.mock('@b2b/services/inviteTicketService', () => ({
   redeemAuthTicket: mocks.redeemAuthTicket,
 }))
+vi.mock('@modules/hire-runtime/services/handoffAuthTicketService', () => ({
+  redeemRuntimeAuthTicket: mocks.redeemAuthTicket,
+}))
 
 const RUNTIME_SECRET = 'runtime-secret-isolated-from-b2c'
 const B2C_SECRET = 'b2c-secret-must-not-be-used-here'

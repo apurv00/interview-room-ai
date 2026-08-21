@@ -5,6 +5,7 @@ import {
   HireEngineRevocationSchema,
   HireEngineResultIngestionSchema,
   HireRuntimeBootstrapResponseSchema,
+  HireRuntimeHandoffRequestSchema,
 } from '../hireEngineBridge'
 
 const ID_A = 'a'.repeat(24)
@@ -14,10 +15,11 @@ const HASH = 'd'.repeat(64)
 
 function envelope() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     workspaceId: ID_A,
     applicationId: ID_B,
     roundId: ID_C,
+    handoffGeneration: 1,
     nonce: HASH,
     issuedAt: '2026-08-10T00:00:00.000Z',
     expiresAt: '2026-08-10T00:01:00.000Z',
@@ -44,6 +46,27 @@ describe('Hire engine bridge contract', () => {
     })
   })
 
+  it('rejects the pre-generation handoff wire version', () => {
+    expect(() => HireEngineHandoffEnvelopeSchema.parse({
+      ...envelope(),
+      schemaVersion: 1,
+    })).toThrow()
+  })
+
+  it('requires an independent browser nonce for runtime handoff exchange', () => {
+    const code = `${ID_A}.${HASH}`
+    expect(HireRuntimeHandoffRequestSchema.parse({
+      code,
+      clientNonce: 'e'.repeat(64),
+    })).toEqual({ code, clientNonce: 'e'.repeat(64) })
+    expect(() => HireRuntimeHandoffRequestSchema.parse({ code })).toThrow()
+    expect(() => HireRuntimeHandoffRequestSchema.parse({
+      code,
+      clientNonce: HASH,
+      unexpected: true,
+    })).toThrow()
+  })
+
   it.each([
     ['candidateEmail', 'candidate@example.com'],
     ['candidateName', 'Candidate Name'],
@@ -62,6 +85,17 @@ describe('Hire engine bridge contract', () => {
         issuedAt: 'August 10, 2026 12:00:00',
       }),
     ).toThrow()
+  })
+
+  it('requires a positive safe monotonic handoff generation', () => {
+    expect(() => HireEngineHandoffEnvelopeSchema.parse({
+      ...envelope(),
+      handoffGeneration: 0,
+    })).toThrow()
+    expect(() => HireEngineHandoffEnvelopeSchema.parse({
+      ...envelope(),
+      handoffGeneration: Number.MAX_SAFE_INTEGER + 1,
+    })).toThrow()
   })
 
   it('rejects unkeyed result ingestion', () => {
@@ -94,6 +128,27 @@ describe('Hire engine bridge contract', () => {
     const parsed = HireEngineResultIngestionSchema.parse(payload)
     expect(parsed.roundId).toBe(ID_C)
     expect(parsed.media[0].kind).toBe('screen')
+    expect(parsed.mediaCompletion).toBeUndefined()
+    expect(HireEngineResultIngestionSchema.parse({
+      ...payload,
+      mediaCompletion: {
+        contractVersion: 1,
+        camera: { status: 'unavailable', reason: 'retry_exhausted' },
+        screen: { status: 'published' },
+      },
+    }).mediaCompletion).toEqual({
+      contractVersion: 1,
+      camera: { status: 'unavailable', reason: 'retry_exhausted' },
+      screen: { status: 'published' },
+    })
+    expect(() => HireEngineResultIngestionSchema.parse({
+      ...payload,
+      mediaCompletion: {
+        contractVersion: 1,
+        camera: { status: 'unavailable' },
+        screen: { status: 'published' },
+      },
+    })).toThrow()
     const { workspaceId: _workspaceId, ...withoutWorkspace } = payload
     expect(() => HireEngineResultIngestionSchema.parse(withoutWorkspace)).toThrow()
   })

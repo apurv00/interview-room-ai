@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   findOneAndUpdate: vi.fn(),
+  findOne: vi.fn(),
   updateOne: vi.fn(),
 }))
 
 vi.mock('../models/HireRuntimeBinding', () => ({
   HireRuntimeBinding: {
     findOneAndUpdate: mocks.findOneAndUpdate,
+    findOne: mocks.findOne,
     updateOne: mocks.updateOne,
   },
 }))
@@ -21,6 +23,8 @@ import {
   assertRuntimeWritesDrained,
   claimRuntimeWriteCapability,
   recordRuntimeStorageCapability,
+  releaseRuntimeReplayWriteReservations,
+  reserveRuntimeReplayWrites,
   runtimeWriteDrainMs,
 } from '../services/runtimeWriteFence'
 
@@ -36,6 +40,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.connect.mockResolvedValue(undefined)
   mocks.findOneAndUpdate.mockResolvedValue({ _id: BINDING_ID })
+  mocks.findOne.mockReturnValue({
+    select: () => ({ lean: async () => ({ status: 'active' }) }),
+  })
   mocks.updateOne.mockResolvedValue({ acknowledged: true, matchedCount: 1 })
 })
 
@@ -83,6 +90,11 @@ describe('runtime host write fence', () => {
 
   it('rejects a new write after revocation wins the binding race', async () => {
     mocks.findOneAndUpdate.mockResolvedValueOnce(null)
+    mocks.findOne.mockReturnValueOnce({
+      select: () => ({
+        lean: async () => ({ status: 'revoked', revokedAt: new Date() }),
+      }),
+    })
     await expect(
       claimRuntimeWriteCapability({
         workspaceId: WORKSPACE_ID,
@@ -90,7 +102,105 @@ describe('runtime host write fence', () => {
         pathname: '/api/generate-feedback',
         method: 'POST',
       }),
-    ).rejects.toMatchObject({ status: 410 })
+    ).rejects.toMatchObject({ status: 410, code: 'ACCOUNT_UNAVAILABLE' })
+  })
+
+  it('distinguishes a terminal media fence from an account privacy boundary', async () => {
+    mocks.findOneAndUpdate.mockResolvedValueOnce(null)
+    mocks.findOne.mockReturnValueOnce({
+      select: () => ({
+        lean: async () => ({ status: 'completed' }),
+      }),
+    })
+
+    await expect(claimRuntimeWriteCapability({
+      workspaceId: WORKSPACE_ID,
+      principalId: PRINCIPAL_ID,
+      pathname: '/api/storage/multipart',
+      method: 'POST',
+    })).rejects.toMatchObject({ status: 410, code: 'MEDIA_TERMINAL' })
+  })
+
+  it('atomically reserves the exact replay kind before a storage side effect', async () => {
+    const now = new Date('2026-08-10T00:00:00.000Z')
+
+    const reservations = await reserveRuntimeReplayWrites({
+      workspaceId: WORKSPACE_ID,
+      bindingId: BINDING_ID,
+      principalId: PRINCIPAL_ID,
+      runtimeSessionId: SESSION_ID,
+      kinds: ['camera'],
+      now,
+    })
+
+    expect(reservations).toEqual([
+      { reservationId: expect.stringMatching(/^[a-f0-9]{64}$/), kind: 'camera' },
+    ])
+    expect(mocks.updateOne).toHaveBeenNthCalledWith(
+      1,
+      {
+        _id: BINDING_ID,
+        workspaceId: WORKSPACE_ID,
+        principalId: PRINCIPAL_ID,
+        runtimeSessionId: SESSION_ID,
+      },
+      { $pull: { mediaWriteReservations: { expiresAt: { $lte: now } } } },
+    )
+    expect(mocks.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: BINDING_ID,
+        mediaCompletionContractVersion: 1,
+        $and: expect.arrayContaining([
+          expect.objectContaining({
+            $or: expect.arrayContaining([
+              expect.objectContaining({
+                status: 'active',
+                cameraMediaStatus: { $nin: ['published', 'unavailable'] },
+              }),
+            ]),
+          }),
+          expect.objectContaining({
+            $or: expect.arrayContaining([
+              { cameraMediaTerminalClaimToken: { $exists: false } },
+            ]),
+          }),
+        ]),
+      }),
+      {
+        $push: {
+          mediaWriteReservations: {
+            reservationId: reservations[0].reservationId,
+            kind: 'camera',
+            expiresAt: new Date(
+              now.getTime() + __runtimeWriteFence.REPLAY_WRITE_RESERVATION_MS,
+            ),
+          },
+        },
+      },
+      { new: true },
+    )
+  })
+
+  it('releases only the reservation ids owned by the completed request', async () => {
+    await releaseRuntimeReplayWriteReservations({
+      workspaceId: WORKSPACE_ID,
+      bindingId: BINDING_ID,
+      reservations: [
+        { reservationId: 'a'.repeat(64), kind: 'camera' },
+        { reservationId: 'b'.repeat(64), kind: 'screen' },
+      ],
+    })
+
+    expect(mocks.updateOne).toHaveBeenCalledWith(
+      { _id: BINDING_ID, workspaceId: WORKSPACE_ID },
+      {
+        $pull: {
+          mediaWriteReservations: {
+            reservationId: { $in: ['a'.repeat(64), 'b'.repeat(64)] },
+          },
+        },
+      },
+    )
   })
 
   it('claims a completed binding only for a bounded pending replay continuation', async () => {
@@ -168,7 +278,10 @@ describe('runtime host write fence', () => {
     })
     expect(mocks.updateOne.mock.calls[0][0]).toMatchObject({
       $or: [
-        { status: { $in: ['provisioned', 'active'] } },
+        {
+          status: { $in: ['provisioned', 'active'] },
+          screenMediaStatus: { $ne: 'unavailable' },
+        },
         {
           status: 'completed',
           publishedRevision: { $gte: 1, $lt: 10 },

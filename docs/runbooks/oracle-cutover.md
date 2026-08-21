@@ -2,7 +2,7 @@
 
 Status: **production deployments run on Oracle Cloud through Coolify; Vercel is not a deployment target.**
 
-Current release procedure updated: 2026-08-17.
+Current release procedure updated: 2026-08-21.
 
 This is the operational source of truth for releases to the existing Oracle
 Cloud Mumbai A1 VM managed by Coolify. Cloudflare DNS/R2, Inngest Cloud,
@@ -11,6 +11,11 @@ Razorpay, OAuth, Resend, and the AI providers remain external services.
 The current Hire-native multimodal release procedure is below. The remaining
 Vercel-to-Oracle cutover record is retained for audit history only and is
 explicitly superseded as live deployment guidance.
+
+The first release of Hire media object protocol
+`v2-opaque-nonce-if-none-match-zero-seal` must use the dedicated
+[`Hire media v2 cold-cutover runbook`](./hire-media-v2-cold-cutover.md). Its
+pause/drain/no-overlap procedure overrides the rolling deployment step below.
 
 ## Current Hire-native multimodal release procedure
 
@@ -23,12 +28,36 @@ release from a source push.
 
 - Deploy the Hire runtime/engine service first, then the Hire control service.
   Both must use the same approved source commit. The old control cannot issue a
-  v4 native-multimodal handoff, so this prevents a candidate from receiving
+  v6 validation handoff, so this prevents a candidate from receiving
   the new consent/flow before the engine is capable of serving it.
+- Set `IPG_SURFACE=hire-engine` on runtime and `IPG_SURFACE=hire-control` on
+  control. A missing or unknown value on any environment carrying Hire
+  configuration is a hard 503 and performs no Inngest registration;
+  never bypass that failure by treating the image as B2C.
+- Set `IPG_SURFACE=b2c` explicitly on every B2C deployment that retains any
+  `HIRE_*` environment variable. Before this release, inventory and update
+  those manifests; blank is supported only for legacy B2C environments with
+  no Hire configuration at all. Values are exact and case-sensitive—leading
+  or trailing whitespace is invalid.
+- Set `DEPLOYMENT_COMMIT_SHA` to the exact 40-character release commit on both
+  Hire services. Short SHAs and non-hex placeholders keep health and Inngest
+  fail closed.
+- On the engine, set browser-facing `HIRE_CONTROL_URL` and internal
+  `HIRE_CONTROL_INTERNAL_URL` to valid HTTPS control origins; neither may
+  share the engine origin. Do not rely on the completion page's production
+  fallback in staging or custom-origin deployments.
+- On control, configure `HIRE_ACCOUNT_BRIDGE_KEY_ID` and a distinct
+  `HIRE_ACCOUNT_BRIDGE_SECRET` of at least 32 characters. Missing bridge
+  authority keeps readiness closed because account deletion would otherwise
+  be unavailable.
 - Configure `NEXT_PUBLIC_FEATURE_MULTIMODAL=true` as both a **Coolify build
   variable** and a runtime variable on the Hire engine only. It is inlined into
   the browser bundle during `next build`, so a runtime restart alone cannot
   enable it; rebuild the image from the approved commit.
+- Immediately after the engine build, run `npm run check:hire-browser-build`.
+  This inspects the emitted artifact, requires the compile-defined marker to
+  be `true`, and rejects a health bundle that still reads either marker from
+  runtime environment variables.
 - Do not set that public flag to `true` on Hire control or the B2C application.
   Keep `FEATURE_FLAG_MULTIMODAL_ANALYSIS=false`; the Hire-native pipeline is
   separate from the generic consumer analysis path.
@@ -61,18 +90,89 @@ schema migration.
 
 ### 3. Manually deploy the Hire engine first, then control
 
-1. In Coolify, manually rebuild and deploy the Hire engine at the approved
-   commit, with the engine-only build and runtime flag from step 1. Confirm
-   the runtime index sequence above passed and verify authenticated health reports
-   `healthy`, MongoDB and Redis `ok`, and that exact commit. The old control
-   cannot create a v4 handoff, so no native multimodal capture is enabled
-   until the next step.
-2. In Coolify, manually deploy the Hire control service at the same commit.
-   Confirm the control index sequence above passed and verify the same authenticated
-   health and exact-commit evidence before it can issue v4 handoffs.
-3. Do not replace a failed Oracle deployment with a Vercel deployment; use the
-   prior known-good Coolify release only after preserving the relevant
-   operational evidence.
+The browser-bound handoff request is a strict wire change: an old handoff page
+cannot call the new exchange route, and a new page cannot call the old route.
+An overlapping Coolify rollout is forbidden. The control service has an
+executable runtime gate, `HIRE_HANDOFF_ISSUANCE_MODE`, with these exact states:
+
+- `open`: ordinary candidate starts may issue handoffs.
+- `draining`: every start returns `503 HANDOFF_ISSUANCE_PAUSED` before guest,
+  attempt, or handoff mutation.
+- `smoke`: ordinary starts remain blocked; only a request carrying the exact
+  server-only `x-hire-handoff-smoke-token` may proceed. The configured token
+  must contain at least 32 bytes and must never be exposed to browser code.
+
+Authenticated `GET /api/health` reports only the redacted mode,
+`publicIssuanceOpen`, and `smokeReady`; it never returns the token. A missing or
+invalid production mode fails closed as `draining` and also makes deployment
+configuration readiness fail.
+
+For the first deployment of this gate and strict wire, use the zero-overlap
+sequence below. If this is also the first media-object-v2 release, first
+complete every pre-start freeze, legacy reconciliation, storage conformance,
+and activation gate in the dedicated media-v2 cold-cutover runbook. Apply both
+runbooks together and let the stricter pause/drain condition win; neither a
+clean handoff drain nor a clean media scan substitutes for the other. Do not
+reorder or combine these stop/start actions:
+
+1. Configure the new control image with
+   `HIRE_HANDOFF_ISSUANCE_MODE=smoke` and a newly generated
+   `HIRE_HANDOFF_SMOKE_TOKEN`, but do not start it yet.
+2. Stop **all** old control containers. Retain Coolify replica/process evidence
+   and a timestamped probe showing the public candidate start endpoint cannot
+   return `2xx`. This full stop is the initial release's fail-closed issuance
+   fence because the old revision does not contain the new switch.
+3. From that stop timestamp, wait at least 75 seconds: the complete 60-second
+   code lifetime plus the 15-second runtime-to-control exchange timeout. Do not
+   infer the interval from a build or image-pull timestamp.
+4. Stop **all** old engine containers and retain zero-replica/process evidence.
+   Only after zero old engines is proved may the new exact-commit engine start.
+5. Start the new engine, then require authenticated health to report `healthy`,
+   MongoDB/Redis `ok`, `surface:"hire-engine"`,
+   `hireInterviewBuild.multimodal:true`, and the approved exact commit.
+6. Start the new exact-commit control in `smoke` mode. Require authenticated
+   health to report MongoDB/Redis `ok`, `surface:"hire-control"`, the same
+   commit, `hireMediaObjectProtocol:
+   "v2-opaque-nonce-if-none-match-zero-seal"`,
+   `hireIngestionRevisionProtocol={protocolVersion:"2",mode:"required",releaseReady:true}`,
+   and
+   `handoffIssuance={mode:"smoke",publicIssuanceOpen:false,smokeReady:true}`.
+   Also prove a normal start request still returns `503`. Do not open issuance
+   if any marker is missing, stale, or `not-applicable` on the wrong surface.
+7. Run the operator smoke below while public issuance remains closed. After the
+   entire handoff, sign-in, lobby, and canonical interview checks pass, change
+   only the control mode to `open`, restart it, and retain authenticated health
+   showing `publicIssuanceOpen:true` plus a normal candidate-start success.
+
+For later compatible releases, an already deployed control can first be moved
+to `draining`; retain its authenticated health evidence and the public `503`,
+then begin the same 75-second interval. For any future strict-wire change,
+still require zero old engine containers before a new engine starts.
+
+The smoke bypass does not replace normal guest authorization or CSRF. Use a
+dedicated non-production candidate/round whose valid production guest cookie
+and CSRF value were obtained through the ordinary consent flow. Load secrets
+from the approved secret runner without printing them, then execute:
+
+```sh
+SMOKE_RESPONSE_FILE="$(mktemp)"
+curl --silent --show-error --fail-with-body --request POST \
+  "${HIRE_PUBLIC_URL}/api/candidate/${SMOKE_ROUND_ID}/start" \
+  --header "Cookie: __Host-hire_guest=${SMOKE_GUEST_COOKIE}" \
+  --header "x-hire-csrf: ${SMOKE_GUEST_CSRF}" \
+  --header "x-hire-handoff-smoke-token: ${HIRE_HANDOFF_SMOKE_TOKEN}" \
+  --output "${SMOKE_RESPONSE_FILE}" \
+  --write-out 'status=%{http_code}\n'
+```
+
+Open the returned handoff only inside the controlled smoke browser, then
+securely delete `SMOKE_RESPONSE_FILE`; it contains a one-time capability and
+must not enter release logs or evidence. Retain only the status, timestamps,
+redacted health result, and final flow outcome. If the smoke fails, keep
+`smoke` mode in place. Once any new-wire
+handoff has been issued, rollback to a pre-contract engine is forbidden; fix
+forward or repeat the full fence with a compatible image. Do not replace a
+failed Oracle deployment with a Vercel deployment.
 
 ### 4. Sync and prove the Hire Inngest surfaces
 
@@ -96,13 +196,20 @@ Registration alone is not delivery proof. Retain evidence of successful
 runtime analysis publishing and control analysis/recovery execution in Inngest
 before treating the release as live.
 
+Never sync an unhealthy Hire `/api/inngest` endpoint. Static readiness
+failures return 503 without invoking the Inngest serving adapter, preventing a
+missing or mismatched app ID from replacing another deployment's registration.
+
 ### 5. Run the authenticated Hire smoke
 
 - Authenticate to both Coolify services' health endpoints and retain the
   healthy dependency state and exact deployed commit.
-- Complete a canonical Hire candidate flow using the current v4 consent. Check
-  that live coaching is absent, the Indian interviewer voice is selected, and
-  the native multimodal path is active only after that consent.
+- Complete a canonical Hire candidate flow using the current v6 consent. Prove
+  the camera/microphone gate, full-screen entry, entire-display selection,
+  camera and screen recording transfer, and timestamped validation events in
+  the HR detail view. Check that live coaching is absent, the Indian
+  interviewer voice is selected, and the native multimodal path is active only
+  after that consent.
 - Run an authenticated Hire TTS turn and verify the response header
   `X-TTS-Provider: sarvam`. A Deepgram fallback, a missing header, or an
   unauthenticated health result is a release failure until corrected.
@@ -183,6 +290,10 @@ Change for Oracle:
 - `DEPLOYMENT_COMMIT_SHA=$SOURCE_COMMIT`,
   `BILLING_ROLLOUT_COMMIT_SHA=$SOURCE_COMMIT`, and a stable
   `BILLING_ROLLOUT_DEPLOYMENT_ID`: self-hosted deployment identity.
+- On Hire control, `HIRE_HANDOFF_ISSUANCE_MODE`: explicit `open`, `draining`,
+  or `smoke`; absence is a production readiness failure and request-path
+  issuance fails closed. Configure `HIRE_HANDOFF_SMOKE_TOKEN` from the secret
+  store before using `smoke` mode; never expose it as a `NEXT_PUBLIC_*` value.
 
 Copy and verify from the provider/source of truth:
 

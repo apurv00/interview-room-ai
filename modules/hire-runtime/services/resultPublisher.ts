@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import {
   canonicalBridgeJson,
   HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
+  HIRE_ENGINE_RESULT_MAX_BODY_BYTES,
   HireEngineResultSchema,
   HireEngineResultIngestionSchema,
   type HireEngineResult,
@@ -16,6 +17,7 @@ import {
 } from '../models/HireRuntimeBinding'
 import { connectHireRuntimeDB } from './runtimeBoundary'
 import { publishResultToControl } from './controlBridgeClient'
+import { terminalizeRuntimeReplayMedia } from './mediaCompletionService'
 import {
   buildRuntimeMediaManifest,
   deleteRuntimeMediaManifest,
@@ -207,6 +209,7 @@ const PUBLISH_RETRY_MAX_MS = 5 * 60 * 1_000
 // again on the next publisher minute without treating that normal race as an
 // error.
 const CAMERA_MEDIA_RETRY_MS = 60_000
+const MEDIA_COMPLETION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000
 
 function persistedMedia(
   binding: IHireRuntimeBinding,
@@ -244,8 +247,25 @@ function isLateReplayPublication(binding: IHireRuntimeBinding): boolean {
   return isLateCameraPublication(binding) || isLateScreenPublication(binding)
 }
 
+function isMediaCompletionReportPending(binding: IHireRuntimeBinding): boolean {
+  if (
+    binding.publishedRevision === undefined ||
+    binding.publishedRevision >= MAX_RESULT_REVISION
+  ) return false
+  return (
+    binding.cameraMediaStatus === 'unavailable' &&
+    !binding.cameraMediaUnavailableReportedAt
+  ) || (
+    expectsScreenRecording(binding) &&
+    binding.screenMediaStatus === 'unavailable' &&
+    !binding.screenMediaUnavailableReportedAt
+  )
+}
+
 function isPublishableBinding(binding: IHireRuntimeBinding): boolean {
-  return binding.publishedRevision === undefined || isLateReplayPublication(binding)
+  return binding.publishedRevision === undefined ||
+    isLateReplayPublication(binding) ||
+    isMediaCompletionReportPending(binding)
 }
 
 function containsCameraMedia(media: HireEngineResultIngestion['media']): boolean {
@@ -260,6 +280,57 @@ function expectsScreenRecording(binding: IHireRuntimeBinding): boolean {
   return supportsHireDisplayCapture(binding.consentVersion)
 }
 
+function mediaCompletionFor(
+  binding: IHireRuntimeBinding,
+  media: HireEngineResultIngestion['media'],
+): HireEngineResultIngestion['mediaCompletion'] {
+  if (binding.mediaCompletionContractVersion !== 1) return undefined
+  const requiredState = (
+    status: IHireRuntimeBinding['cameraMediaStatus'],
+    reason: IHireRuntimeBinding['cameraMediaUnavailableReason'],
+  ) => {
+    if (status === 'published') return { status: 'published' as const }
+    if (status === 'unavailable') {
+      if (!reason) throw new Error('Unavailable runtime media has no terminal reason')
+      return { status: 'unavailable' as const, reason }
+    }
+    return { status: 'pending' as const }
+  }
+  return {
+    contractVersion: 1,
+    camera: containsCameraMedia(media)
+      ? { status: 'published' }
+      : requiredState(
+          binding.cameraMediaStatus,
+          binding.cameraMediaUnavailableReason,
+        ),
+    screen: expectsScreenRecording(binding)
+      ? containsScreenMedia(media)
+        ? { status: 'published' }
+        : requiredState(
+            binding.screenMediaStatus,
+            binding.screenMediaUnavailableReason,
+          )
+      : { status: 'not_required' },
+  }
+}
+
+function hasLiveReplayCapability(
+  binding: IHireRuntimeBinding,
+  kind: 'camera' | 'screen',
+  now: Date,
+): boolean {
+  return [
+    ...(binding.issuedObjectCapabilities ?? []),
+    ...(binding.issuedMultipartCapabilities ?? []),
+  ].some((capability) => {
+    if (capability.expiresAt <= now) return false
+    return kind === 'screen'
+      ? /-screen-\d{10,16}\.webm$/i.test(capability.key)
+      : /\/[a-f0-9]{24}-\d{10,16}\.webm$/i.test(capability.key)
+  })
+}
+
 function assertMediaConsent(
   binding: IHireRuntimeBinding,
   media: HireEngineResultIngestion['media'],
@@ -270,18 +341,167 @@ function assertMediaConsent(
 }
 
 function publicationStateFilter(binding: IHireRuntimeBinding): Record<string, unknown> {
-  if (binding.publishedRevision === undefined) {
-    return { publishedRevision: { $exists: false } }
-  }
   return {
-    publishedRevision: binding.publishedRevision,
-    ...(binding.cameraMediaStatus === 'pending'
-      ? { cameraMediaStatus: 'pending' }
-      : {}),
-    ...(binding.screenMediaStatus === 'pending'
-      ? { screenMediaStatus: 'pending' }
-      : {}),
+    ...(binding.publishedRevision === undefined
+      ? { publishedRevision: { $exists: false } }
+      : { publishedRevision: binding.publishedRevision }),
+    ...(binding.cameraMediaStatus === undefined
+      ? { cameraMediaStatus: { $exists: false } }
+      : { cameraMediaStatus: binding.cameraMediaStatus }),
+    ...(binding.screenMediaStatus === undefined
+      ? { screenMediaStatus: { $exists: false } }
+      : { screenMediaStatus: binding.screenMediaStatus }),
+    ...(binding.cameraMediaUnavailableReportedAt === undefined
+      ? { cameraMediaUnavailableReportedAt: { $exists: false } }
+      : { cameraMediaUnavailableReportedAt: binding.cameraMediaUnavailableReportedAt }),
+    ...(binding.screenMediaUnavailableReportedAt === undefined
+      ? { screenMediaUnavailableReportedAt: { $exists: false } }
+      : { screenMediaUnavailableReportedAt: binding.screenMediaUnavailableReportedAt }),
   }
+}
+
+function publicationLifecycleFilter(
+  binding: IHireRuntimeBinding,
+): Record<string, unknown> {
+  return {
+    status: binding.status,
+    ...(binding.revokedAt === undefined
+      ? { revokedAt: { $exists: false } }
+      : { revokedAt: binding.revokedAt }),
+  }
+}
+
+function parseResultPayloadSnapshot(
+  binding: IHireRuntimeBinding,
+  serialized: string,
+  expectedRevision?: number,
+): HireEngineResultIngestion {
+  const payload = HireEngineResultIngestionSchema.parse(JSON.parse(serialized))
+  if (
+    payload.workspaceId !== binding.workspaceId.toString() ||
+    payload.applicationId !== binding.applicationId.toString() ||
+    payload.roundId !== binding.roundId.toString() ||
+    payload.runtimeSessionId !== binding.runtimeSessionId?.toString() ||
+    payload.attempt !== Math.max(1, binding.attemptCount) ||
+    (expectedRevision !== undefined && payload.revision !== expectedRevision)
+  ) {
+    throw new Error('Runtime result payload snapshot does not match its binding')
+  }
+  return payload
+}
+
+async function reserveResultPayloadSnapshot(input: {
+  binding: IHireRuntimeBinding
+  revision: number
+  expectedPublicationState: Record<string, unknown>
+  payload: HireEngineResultIngestion
+  previousSnapshotJson?: string
+}): Promise<HireEngineResultIngestion> {
+  const normalized = HireEngineResultIngestionSchema.parse(input.payload)
+  const serialized = JSON.stringify(normalized)
+  if (Buffer.byteLength(serialized, 'utf8') > HIRE_ENGINE_RESULT_MAX_BODY_BYTES) {
+    throw new Error('Runtime result payload exceeds the durable snapshot limit')
+  }
+  const staged = await HireRuntimeBinding.updateOne(
+    {
+      _id: input.binding._id,
+      workspaceId: input.binding.workspaceId,
+      runtimeSessionId: input.binding.runtimeSessionId,
+      ...input.expectedPublicationState,
+      purgePersonalData: { $ne: true },
+      ...(input.previousSnapshotJson === undefined
+        ? { pendingResultPayloadJson: { $exists: false } }
+        : { pendingResultPayloadJson: input.previousSnapshotJson }),
+    },
+    {
+      // The exact media inventory and the exact outgoing payload become
+      // authoritative in one CAS. Concurrent workers may build candidates,
+      // but only this winner can define the revision that is sent.
+      $set: {
+        pendingMediaManifest: normalized.media,
+        pendingResultPayloadJson: serialized,
+      },
+    },
+  )
+  if (staged.matchedCount === 1) {
+    return parseResultPayloadSnapshot(
+      input.binding,
+      serialized,
+      input.revision,
+    )
+  }
+
+  const winner = await HireRuntimeBinding.findOne({
+    _id: input.binding._id,
+    workspaceId: input.binding.workspaceId,
+    runtimeSessionId: input.binding.runtimeSessionId,
+    ...input.expectedPublicationState,
+    purgePersonalData: { $ne: true },
+    pendingResultPayloadJson: { $exists: true },
+  })
+    .select('pendingResultPayloadJson')
+    .lean() as Pick<IHireRuntimeBinding, 'pendingResultPayloadJson'> | null
+  if (!winner?.pendingResultPayloadJson) {
+    throw new Error('Runtime result binding changed before payload reservation')
+  }
+  return parseResultPayloadSnapshot(
+    input.binding,
+    winner.pendingResultPayloadJson,
+    input.revision,
+  )
+}
+
+async function expireUnavailableMediaIfDue(
+  binding: IHireRuntimeBinding,
+  session: RuntimeSessionSnapshot,
+  now = new Date(),
+): Promise<{ expired: boolean; deadline?: Date }> {
+  if (binding.mediaCompletionContractVersion !== 1) {
+    return { expired: false }
+  }
+  const completedAt = session.completedAt ?? session.updatedAt ?? now
+  const deadline = binding.mediaCompletionDeadlineAt ??
+    new Date(completedAt.getTime() + MEDIA_COMPLETION_MAX_AGE_MS)
+  return { expired: false, deadline }
+}
+
+async function settleKnownExpiredMediaBeforePublish(
+  binding: IHireRuntimeBinding,
+  now = new Date(),
+): Promise<boolean> {
+  if (
+    binding.mediaCompletionContractVersion !== 1 ||
+    !binding.mediaCompletionDeadlineAt ||
+    binding.mediaCompletionDeadlineAt > now
+  ) return false
+
+  const pendingKinds: Array<'camera' | 'screen'> = []
+  if (
+    binding.cameraMediaStatus !== 'published' &&
+    binding.cameraMediaStatus !== 'unavailable' &&
+    !hasLiveReplayCapability(binding, 'camera', now)
+  ) pendingKinds.push('camera')
+  if (
+    expectsScreenRecording(binding) &&
+    binding.screenMediaStatus !== 'published' &&
+    binding.screenMediaStatus !== 'unavailable' &&
+    !hasLiveReplayCapability(binding, 'screen', now)
+  ) pendingKinds.push('screen')
+
+  let deferPublication = false
+  for (const kind of pendingKinds) {
+    const outcome = await terminalizeRuntimeReplayMedia({
+      binding,
+      kind,
+      reason: 'upload_expired',
+      now,
+    })
+    // An already-associated artifact should proceed into the publisher. Every
+    // other outcome means the binding changed or a bounded writer/drain is
+    // still authoritative; do not extend that drain from this stale row.
+    if (outcome !== 'artifact_present') deferPublication = true
+  }
+  return deferPublication
 }
 
 async function scheduleCameraMediaCheck(
@@ -361,9 +581,40 @@ async function publishRuntimeBindingResult(
     return 'skipped'
   }
   const lateReplay = isLateReplayPublication(binding)
-  const revision = lateReplay
+  const completionReportPending = isMediaCompletionReportPending(binding)
+  const followUp = binding.publishedRevision !== undefined
+  const revision = followUp
     ? (binding.publishedRevision ?? RESULT_REVISION) + 1
     : RESULT_REVISION
+  const snapshotJson = binding.pendingResultPayloadJson
+  const snapshot = snapshotJson
+    ? parseResultPayloadSnapshot(binding, snapshotJson)
+    : null
+  const payloadFromSnapshot = snapshot?.revision === revision ? snapshot : null
+  const publishedCoreSnapshot = snapshot &&
+    binding.publishedRevision !== undefined &&
+    snapshot.revision === binding.publishedRevision &&
+    snapshot.resultDigest === binding.publishedDigest
+    ? snapshot
+    : null
+  if (snapshot && !payloadFromSnapshot && !publishedCoreSnapshot) {
+    throw new Error('Runtime result payload snapshot is not the current or published revision')
+  }
+  if (
+    !snapshot &&
+    (
+      binding.pendingMediaManifest !== undefined ||
+      followUp
+    )
+  ) {
+    throw new Error(
+      'Legacy runtime result attempt requires operator snapshot reconciliation',
+    )
+  }
+  if (
+    !payloadFromSnapshot &&
+    await settleKnownExpiredMediaBeforePublish(binding)
+  ) return 'skipped'
   const expectedPublicationState = publicationStateFilter(binding)
   // Result projection/copy can hold transcript/media in memory and can write
   // publisher state. Reserve a bounded drain horizon before the first read;
@@ -371,128 +622,163 @@ async function publishRuntimeBindingResult(
   // this horizon, so it cannot acknowledge while a stale cron row is active.
   await reserveRuntimePublishDrain(binding)
 
-  const session = (await InterviewSession.findOne({
-    _id: binding.runtimeSessionId,
-    userId: binding.principalId,
-    organizationId: binding.workspaceId,
-    status: 'completed',
-  })
-    .select(
-      '_id status feedback evaluations answeredCount plannedQuestionCount endReason startedAt completedAt durationActualSeconds transcript recordingR2Key recordingSizeBytes screenRecordingR2Key screenRecordingSizeBytes audioRecordingR2Key audioRecordingSizeBytes updatedAt',
-    )
-    .lean()) as RuntimeSessionSnapshot | null
-  if (!session) {
-    await markPublishChecked(binding)
-    return 'skipped'
-  }
-
-  const results = buildRuntimeResult(session)
-  const timeline = buildRuntimeTimeline(session)
-  // The control result is immutable and evidence-linked. Do not publish a
-  // provisional scorecard while engine feedback is still being generated;
-  // the scheduled publisher retries until the authoritative result exists.
-  if (results.pending) {
-    await markPublishChecked(binding)
-    return 'skipped'
-  }
-
-  let media = persistedMedia(binding)
-  if (media) assertMediaConsent(binding, media)
-  if (
-    lateReplay &&
-    media &&
-    !media.every(
-      (artifact) =>
-        (artifact.kind === 'recording' &&
-          binding.cameraMediaStatus === 'pending') ||
-        (artifact.kind === 'screen' && binding.screenMediaStatus === 'pending'),
-    )
-  ) {
-    throw new Error('Late replay publication contains an unexpected artifact')
-  }
-  if (!media) {
-    media = await buildRuntimeMediaManifest({
-      principalId: binding.principalId.toString(),
-      runtimeSessionId: session._id.toString(),
-      ...(!lateReplay || binding.cameraMediaStatus === 'pending'
-        ? {
-            recordingR2Key: session.recordingR2Key,
-            recordingSizeBytes: session.recordingSizeBytes,
-          }
-        : {}),
-      ...(expectsScreenRecording(binding) &&
-      (!lateReplay || binding.screenMediaStatus === 'pending')
-        ? {
-            screenRecordingR2Key: session.screenRecordingR2Key,
-            screenRecordingSizeBytes: session.screenRecordingSizeBytes,
-          }
-        : {}),
-      // Audio may have been copied and its isolated source object deleted by
-      // revision 1. Later revisions are strictly for replay objects that were
-      // not present when an earlier revision was built.
-      ...(lateReplay
-        ? {}
-        : {
-            audioRecordingR2Key: session.audioRecordingR2Key,
-            audioRecordingSizeBytes: session.audioRecordingSizeBytes,
-          }),
+  let mediaCompletionDeadlineAt = binding.mediaCompletionDeadlineAt
+  let payload = payloadFromSnapshot
+  if (!payload) {
+    const session = (await InterviewSession.findOne({
+      _id: binding.runtimeSessionId,
+      userId: binding.principalId,
+      organizationId: binding.workspaceId,
+      status: 'completed',
     })
-    assertMediaConsent(binding, media)
-    if (lateReplay && media.length === 0) {
-      await scheduleCameraMediaCheck(binding)
+      .select(
+        '_id status feedback evaluations answeredCount plannedQuestionCount endReason startedAt completedAt durationActualSeconds transcript recordingR2Key recordingSizeBytes screenRecordingR2Key screenRecordingSizeBytes audioRecordingR2Key audioRecordingSizeBytes updatedAt',
+      )
+      .lean()) as RuntimeSessionSnapshot | null
+    if (!session) {
+      await markPublishChecked(binding)
       return 'skipped'
     }
-    // Persist even an empty revision-1 manifest before publishing. If the
-    // binding update or source deletion later fails, a replay upload that
-    // finishes in that gap must not mutate/reuse the already-acknowledged
-    // revision-1 digest on retry.
-    const staged = await HireRuntimeBinding.updateOne(
-        {
-          _id: binding._id,
-          workspaceId: binding.workspaceId,
-          runtimeSessionId: binding.runtimeSessionId,
-        ...expectedPublicationState,
-        purgePersonalData: { $ne: true },
-      },
-      { $set: { pendingMediaManifest: media } },
-    )
-    if (staged.matchedCount !== 1) {
-      throw new Error('Runtime result binding changed before media staging')
+
+    const mediaExpiry = await expireUnavailableMediaIfDue(binding, session)
+    if (mediaExpiry.expired) return 'skipped'
+    mediaCompletionDeadlineAt = mediaExpiry.deadline
+
+    const results = publishedCoreSnapshot?.results ?? buildRuntimeResult(session)
+    const timeline = publishedCoreSnapshot ? null : buildRuntimeTimeline(session)
+    // The control result is immutable and evidence-linked. Do not publish a
+    // provisional scorecard while engine feedback is still being generated;
+    // the scheduled publisher retries until the authoritative result exists.
+    if (results.pending) {
+      await markPublishChecked(binding)
+      return 'skipped'
     }
+
+    let media = persistedMedia(binding)
+    if (media) assertMediaConsent(binding, media)
+    if (
+      media?.some(
+        (artifact) =>
+          (artifact.kind === 'recording' &&
+            binding.cameraMediaStatus === 'unavailable') ||
+          (artifact.kind === 'screen' &&
+            binding.screenMediaStatus === 'unavailable'),
+      )
+    ) {
+      throw new Error('Unavailable runtime replay kind still has staged media')
+    }
+    if (
+      lateReplay &&
+      media &&
+      !media.every(
+        (artifact) =>
+          (artifact.kind === 'recording' &&
+            binding.cameraMediaStatus === 'pending') ||
+          (artifact.kind === 'screen' && binding.screenMediaStatus === 'pending'),
+      )
+    ) {
+      throw new Error('Late replay publication contains an unexpected artifact')
+    }
+    if (!media) {
+      media = await buildRuntimeMediaManifest({
+        principalId: binding.principalId.toString(),
+        runtimeSessionId: session._id.toString(),
+        ...((!lateReplay || binding.cameraMediaStatus === 'pending') &&
+        binding.cameraMediaStatus !== 'unavailable' &&
+        binding.cameraMediaStatus !== 'published'
+          ? {
+              recordingR2Key: session.recordingR2Key,
+              recordingSizeBytes: session.recordingSizeBytes,
+            }
+          : {}),
+        ...(expectsScreenRecording(binding) &&
+        (!lateReplay || binding.screenMediaStatus === 'pending') &&
+        binding.screenMediaStatus !== 'unavailable' &&
+        binding.screenMediaStatus !== 'published'
+          ? {
+              screenRecordingR2Key: session.screenRecordingR2Key,
+              screenRecordingSizeBytes: session.screenRecordingSizeBytes,
+            }
+          : {}),
+        // Audio may have been copied and its isolated source object deleted by
+        // revision 1. Later revisions are strictly for replay objects that were
+        // not present when an earlier revision was built.
+        ...(followUp
+          ? {}
+          : {
+              audioRecordingR2Key: session.audioRecordingR2Key,
+              audioRecordingSizeBytes: session.audioRecordingSizeBytes,
+            }),
+      })
+      assertMediaConsent(binding, media)
+      if (lateReplay && media.length === 0 && !completionReportPending) {
+        await scheduleCameraMediaCheck(binding)
+        return 'skipped'
+      }
+    }
+
+    const startedAt = publishedCoreSnapshot?.startedAt ??
+      timeline!.startedAt.toISOString()
+    const completedAt = publishedCoreSnapshot?.completedAt ??
+      (session.completedAt ?? session.updatedAt ?? new Date()).toISOString()
+    const durationMs = publishedCoreSnapshot?.durationMs ?? timeline!.durationMs
+    const transcript = publishedCoreSnapshot?.transcript ?? timeline!.transcript
+    const mediaCompletion = mediaCompletionFor(binding, media)
+    const digest = sha256(canonicalBridgeJson({
+      results,
+      startedAt,
+      completedAt,
+      durationMs,
+      transcript,
+      media,
+      mediaCompletion,
+    }))
+    const attempt = Math.max(1, binding.attemptCount)
+    const eventId = sha256(
+      `${binding.roundId.toString()}:${session._id.toString()}:${attempt}:${revision}:${digest}`,
+    )
+    payload = await reserveResultPayloadSnapshot({
+      binding,
+      revision,
+      expectedPublicationState,
+      ...(publishedCoreSnapshot && snapshotJson
+        ? { previousSnapshotJson: snapshotJson }
+        : {}),
+      payload: {
+        schemaVersion: HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
+        eventId,
+        workspaceId: binding.workspaceId.toString(),
+        applicationId: binding.applicationId.toString(),
+        roundId: binding.roundId.toString(),
+        runtimeSessionId: session._id.toString(),
+        attempt,
+        revision,
+        status: 'completed',
+        startedAt,
+        completedAt,
+        durationMs,
+        resultDigest: digest,
+        results,
+        transcript,
+        // Media transfer is a separate checksum-verified bridge operation.
+        // Never send raw object URLs or candidate identity through this contract.
+        media,
+        ...(mediaCompletion ? { mediaCompletion } : {}),
+      },
+    })
   }
 
-  const completedAt = session.completedAt ?? session.updatedAt ?? new Date()
-  const digest = sha256(canonicalBridgeJson({
-    results,
-    startedAt: timeline.startedAt.toISOString(),
-    completedAt: completedAt.toISOString(),
-    durationMs: timeline.durationMs,
-    transcript: timeline.transcript,
-    media,
-  }))
-  const eventId = sha256(
-    `${binding.roundId.toString()}:${session._id.toString()}:${revision}:${digest}`,
-  )
-  const payload: HireEngineResultIngestion = {
-    schemaVersion: HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
-    eventId,
-    workspaceId: binding.workspaceId.toString(),
-    applicationId: binding.applicationId.toString(),
-    roundId: binding.roundId.toString(),
-    runtimeSessionId: session._id.toString(),
-    attempt: Math.max(1, binding.attemptCount),
-    revision,
-    status: 'completed',
-    startedAt: timeline.startedAt.toISOString(),
-    completedAt: completedAt.toISOString(),
-    durationMs: timeline.durationMs,
-    resultDigest: digest,
-    results,
-    transcript: timeline.transcript,
-    // Media transfer is a separate checksum-verified bridge operation.
-    // Never send raw object URLs or candidate identity through this result contract.
-    media,
+  if (
+    binding.mediaCompletionContractVersion === 1 &&
+    !mediaCompletionDeadlineAt
+  ) {
+    mediaCompletionDeadlineAt = new Date(
+      new Date(payload.completedAt).getTime() + MEDIA_COMPLETION_MAX_AGE_MS,
+    )
   }
+  const media = payload.media
+  const mediaCompletion = payload.mediaCompletion
+  const digest = payload.resultDigest
 
   // Control acknowledges only after checksum-verified copying and durable
   // result ingestion. Runtime source deletion is therefore safe on all valid
@@ -505,15 +791,21 @@ async function publishRuntimeBindingResult(
   await publishResultToControl(payload)
   await deleteRuntimeMediaManifest({
     principalId: binding.principalId.toString(),
-    runtimeSessionId: session._id.toString(),
+    runtimeSessionId: payload.runtimeSessionId,
     media,
   })
   const now = new Date()
   const cameraPublished = containsCameraMedia(media)
   const screenPublished = containsScreenMedia(media)
-  const cameraWasPending = !lateReplay || binding.cameraMediaStatus === 'pending'
+  const cameraWasPending = lateReplay
+    ? binding.cameraMediaStatus === 'pending'
+    : binding.cameraMediaStatus !== 'unavailable' &&
+      binding.cameraMediaStatus !== 'published'
   const screenWasPending = expectsScreenRecording(binding) &&
-    (lateReplay ? binding.screenMediaStatus === 'pending' : true)
+    (lateReplay
+      ? binding.screenMediaStatus === 'pending'
+      : binding.screenMediaStatus !== 'unavailable' &&
+        binding.screenMediaStatus !== 'published')
   const cameraStillPending = cameraWasPending && !cameraPublished
   const screenStillPending = screenWasPending && !screenPublished
   const replayStillPending = cameraStillPending || screenStillPending
@@ -523,7 +815,9 @@ async function publishRuntimeBindingResult(
       workspaceId: binding.workspaceId,
       runtimeSessionId: binding.runtimeSessionId,
       ...expectedPublicationState,
+      ...publicationLifecycleFilter(binding),
       purgePersonalData: { $ne: true },
+      pendingResultPayloadJson: JSON.stringify(payload),
     },
     {
       $set: {
@@ -532,6 +826,9 @@ async function publishRuntimeBindingResult(
         publishedAt: now,
         publishCheckedAt: now,
         publishFailureCount: 0,
+        ...(mediaCompletionDeadlineAt
+          ? { mediaCompletionDeadlineAt }
+          : {}),
         ...(cameraWasPending
           ? cameraPublished
             ? {
@@ -554,6 +851,12 @@ async function publishRuntimeBindingResult(
               }
             : { screenMediaStatus: 'pending' }
           : {}),
+        ...(mediaCompletion?.camera.status === 'unavailable'
+          ? { cameraMediaUnavailableReportedAt: now }
+          : {}),
+        ...(mediaCompletion?.screen.status === 'unavailable'
+          ? { screenMediaUnavailableReportedAt: now }
+          : {}),
         ...(replayStillPending
           ? { publishRetryAt: new Date(now.getTime() + CAMERA_MEDIA_RETRY_MS) }
           : {}),
@@ -562,6 +865,7 @@ async function publishRuntimeBindingResult(
       $unset: {
         pendingMediaManifest: 1,
         publishFailureCode: 1,
+        ...(!replayStillPending ? { pendingResultPayloadJson: 1 } : {}),
         ...(!replayStillPending ? { publishRetryAt: 1 } : {}),
       },
     },
@@ -627,6 +931,16 @@ export async function publishCompletedRuntimeResults(
             {
               publishedRevision: { $gte: RESULT_REVISION, $lt: MAX_RESULT_REVISION },
               screenMediaStatus: 'pending',
+            },
+            {
+              publishedRevision: { $gte: RESULT_REVISION, $lt: MAX_RESULT_REVISION },
+              cameraMediaStatus: 'unavailable',
+              cameraMediaUnavailableReportedAt: { $exists: false },
+            },
+            {
+              publishedRevision: { $gte: RESULT_REVISION, $lt: MAX_RESULT_REVISION },
+              screenMediaStatus: 'unavailable',
+              screenMediaUnavailableReportedAt: { $exists: false },
             },
           ],
         },

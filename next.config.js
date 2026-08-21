@@ -3,6 +3,13 @@ const nextConfig = {
   reactStrictMode: false, // disabled to prevent double-invocation of interview logic
   output: 'standalone', // required for Docker multi-stage build
   poweredByHeader: false, // security: don't reveal framework
+  // Compile a nonsecret release marker into server and browser bundles. Health
+  // must prove what `next build` saw, independently of the runtime manifest.
+  env: {
+    HIRE_MULTIMODAL_BUILD_ENABLED: String(
+      process.env.NEXT_PUBLIC_FEATURE_MULTIMODAL === 'true',
+    ),
+  },
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'lh3.googleusercontent.com' },

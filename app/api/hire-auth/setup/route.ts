@@ -4,6 +4,7 @@ import { completeMemberSetup } from '@hire/services/memberAuthService'
 import { AppError } from '@shared/errors'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { setHireMemberCookie } from '../_lib/cookie'
+import { revokeLegacyRequestHireMemberSession } from '../_lib/memberSession'
 import { clientIp, hasTrustedOrigin } from '../_lib/request'
 
 const SetupSchema = z
@@ -38,6 +39,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = SetupSchema.parse(await req.json())
     const auth = await completeMemberSetup(body.credential, body.password)
+    await revokeLegacyRequestHireMemberSession(req)
     const response = NextResponse.json({
       ok: true,
       workspace: { id: auth.workspace._id.toString(), name: auth.workspace.name },

@@ -239,6 +239,26 @@ describe("Hire supplemental-observation ingestion", () => {
     );
   });
 
+  it("persists the exact digest-covered recorder clock without recalculation", async () => {
+    const base = payload().report;
+    const input = payload({
+      report: {
+        ...base,
+        playbackClock: {
+          protocolVersion: 1,
+          cameraRecorderStartOffsetMs: 320,
+        },
+      },
+    });
+
+    await expect(ingestHireMultimodalObservation(input)).resolves.toEqual({
+      outcome: "processed",
+    });
+    expect(
+      mocks.observationCreate.mock.calls[0][0][0].report.playbackClock,
+    ).toEqual(input.report.playbackClock);
+  });
+
   it("accepts V6 entire-display validation events under the V3 policy", async () => {
     const input = payload({
       report: {

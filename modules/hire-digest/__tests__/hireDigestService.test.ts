@@ -22,10 +22,11 @@ const mocks = vi.hoisted(() => ({
   outboxUpdateOne: vi.fn(),
   outboxUpdateMany: vi.fn(),
   outboxFind: vi.fn(),
-  jobCount: vi.fn(),
+  jobFind: vi.fn(),
   applicationCount: vi.fn(),
   roundCount: vi.fn(),
   deliveryCount: vi.fn(),
+  observationAggregate: vi.fn(),
   testDriveFind: vi.fn(),
   privacyFind: vi.fn(),
   privacyFilter: vi.fn(),
@@ -54,6 +55,15 @@ function query<T>(value: T) {
 
 function singleQuery<T>(value: T) {
   return { select: vi.fn().mockResolvedValue(value) }
+}
+
+function aggregateQuery<T>(value: T) {
+  const result = {
+    session: vi.fn(),
+    exec: vi.fn().mockResolvedValue(value),
+  }
+  result.session.mockReturnValue(result)
+  return result
 }
 
 function privacyRequestMatchesFilter(
@@ -103,7 +113,7 @@ vi.mock('@hire/models/HireHumanRound', () => ({
   HireHumanRound: { countDocuments: mocks.roundCount },
 }))
 vi.mock('@hire/models/HireJob', () => ({
-  HireJob: { countDocuments: mocks.jobCount },
+  HireJob: { find: mocks.jobFind },
 }))
 vi.mock('@hire/models/HirePrivacyRequest', () => ({
   HirePrivacyRequest: { find: mocks.privacyFind },
@@ -117,6 +127,9 @@ vi.mock('@hire/models/HireWorkspaceMember', () => ({
 }))
 vi.mock('@/modules/hire-onboarding/models/HireOnboardingTestDrive', () => ({
   HireOnboardingTestDrive: { find: mocks.testDriveFind },
+}))
+vi.mock('@/modules/hire-multimodal/models/HireMultimodalObservation', () => ({
+  HireMultimodalObservation: { aggregate: mocks.observationAggregate },
 }))
 vi.mock('@shared/services/emailService', () => ({
   sendEmail: mocks.sendEmail,
@@ -148,6 +161,7 @@ function outbox(overrides: Record<string, unknown> = {}) {
       awaitingDecision: 1,
       pendingScorecards: 3,
       terminalKitDeliveryFailures: 0,
+      validationAttentionInterviews: 0,
     },
     status: 'sending',
     sendAfter: new Date('2026-08-14T09:00:00.000Z'),
@@ -173,10 +187,14 @@ beforeEach(() => {
   mocks.connect.mockResolvedValue(undefined)
   mocks.memberTransaction.mockImplementation(async (_authority: unknown, work: (session: object) => unknown) => work({}))
   mocks.egressTransaction.mockImplementation(async (input: { work: (session: object) => unknown }) => input.work({}))
-  mocks.jobCount.mockResolvedValue(2)
+  mocks.jobFind.mockReturnValue(query([
+    { _id: new mongoose.Types.ObjectId('4'.repeat(24)) },
+    { _id: new mongoose.Types.ObjectId('5'.repeat(24)) },
+  ]))
   mocks.applicationCount.mockResolvedValue(1)
   mocks.roundCount.mockResolvedValue(3)
   mocks.deliveryCount.mockResolvedValue(0)
+  mocks.observationAggregate.mockReturnValue(aggregateQuery([]))
   mocks.testDriveFind.mockReturnValue(query([]))
   mocks.privacyFind.mockReturnValue(query([]))
   mocks.privacyFilter.mockImplementation((now: Date) => ({
@@ -198,6 +216,7 @@ beforeEach(() => {
 
 describe('Hire daily digest service', () => {
   it('builds a workspace-scoped aggregate-only snapshot with no candidate data', async () => {
+    mocks.observationAggregate.mockReturnValue(aggregateQuery([{ count: 2 }]))
     const payload = await buildHireDigestPayload({
       workspaceId: new mongoose.Types.ObjectId(IDS.workspace),
       workspaceName: 'Acme',
@@ -210,11 +229,53 @@ describe('Hire daily digest service', () => {
       awaitingDecision: 1,
       pendingScorecards: 3,
       terminalKitDeliveryFailures: 0,
+      validationAttentionInterviews: 2,
     })
     expect(JSON.stringify(payload)).not.toMatch(/candidateId|email|resume|capability|decisionNote/i)
-    for (const fn of [mocks.jobCount, mocks.applicationCount, mocks.roundCount, mocks.deliveryCount]) {
+    for (const fn of [mocks.applicationCount, mocks.roundCount, mocks.deliveryCount]) {
       expect(fn).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: expect.anything() }), undefined)
     }
+    expect(mocks.jobFind).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: expect.anything(),
+      status: 'open',
+    }))
+    const [observationPipeline] = mocks.observationAggregate.mock.calls[0]
+    expect(observationPipeline[0]).toEqual({
+      $match: expect.objectContaining({
+        workspaceId: expect.anything(),
+        jobId: {
+          $in: [
+            new mongoose.Types.ObjectId('4'.repeat(24)),
+            new mongoose.Types.ObjectId('5'.repeat(24)),
+          ],
+        },
+      }),
+    })
+    expect(observationPipeline).toEqual(expect.arrayContaining([
+      {
+        $group: {
+          _id: {
+            applicationId: '$applicationId',
+            roundId: '$roundId',
+            runtimeSessionId: '$runtimeSessionId',
+          },
+          latest: { $first: '$$ROOT' },
+        },
+      },
+      {
+        $match: {
+          $and: expect.arrayContaining([
+            {
+              $or: [
+                { 'report.status': 'insufficient_signal' },
+                { 'report.events.0': { $exists: true } },
+              ],
+            },
+          ]),
+        },
+      },
+      { $count: 'count' },
+    ]))
   })
 
   it('excludes every retained onboarding test-drive coordinate before digest aggregation', async () => {
@@ -224,6 +285,9 @@ describe('Hire daily digest service', () => {
       applicationId: new mongoose.Types.ObjectId('6'.repeat(24)),
     }
     mocks.testDriveFind.mockReturnValue(query([testDrive]))
+    mocks.jobFind.mockReturnValue(query([
+      { _id: new mongoose.Types.ObjectId('5'.repeat(24)) },
+    ]))
 
     await buildHireDigestPayload({
       workspaceId: new mongoose.Types.ObjectId(IDS.workspace),
@@ -231,7 +295,10 @@ describe('Hire daily digest service', () => {
       now: new Date('2026-08-14T09:00:00.000Z'),
     })
 
-    expect(mocks.jobCount).toHaveBeenCalledWith(expect.objectContaining({ _id: { $nin: [testDrive.jobId] } }), undefined)
+    expect(mocks.jobFind).toHaveBeenCalledWith(expect.objectContaining({
+      _id: { $nin: [testDrive.jobId] },
+      status: 'open',
+    }))
     for (const fn of [mocks.applicationCount, mocks.roundCount, mocks.deliveryCount]) {
       expect(fn).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -242,6 +309,12 @@ describe('Hire daily digest service', () => {
         undefined,
       )
     }
+    const [observationPipeline] = mocks.observationAggregate.mock.calls[0]
+    expect(observationPipeline[0].$match).toMatchObject({
+      jobId: { $in: [new mongoose.Types.ObjectId('5'.repeat(24))] },
+      candidateId: { $nin: [testDrive.candidateId] },
+      applicationId: { $nin: [testDrive.applicationId] },
+    })
   })
 
   it('excludes only time-active privacy and anonymized candidate coordinates before digest aggregation', async () => {
@@ -280,6 +353,10 @@ describe('Hire daily digest service', () => {
         undefined,
       )
     }
+    const [observationPipeline] = mocks.observationAggregate.mock.calls[0]
+    expect(observationPipeline[0].$match.candidateId).toEqual({
+      $nin: [processingCandidateId, anonymizedCandidateId],
+    })
     expect(mocks.privacyFind).toHaveBeenCalledWith({
       workspaceId: expect.anything(),
       live: true,

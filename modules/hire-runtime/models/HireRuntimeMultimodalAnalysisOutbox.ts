@@ -14,6 +14,8 @@ export interface IHireRuntimeMultimodalAnalysisOutbox extends Document {
   runtimeSessionId: mongoose.Types.ObjectId
   attempt: number
   revision: 1
+  /** Monotonic marker for rows that reserve an exact v2 payload before send. */
+  payloadSnapshotProtocolVersion?: 1
   consentVersion: string
   policyVersion: string
   eventId: string
@@ -21,11 +23,17 @@ export interface IHireRuntimeMultimodalAnalysisOutbox extends Document {
   capturedAt: Date
   landmarkArtifact?: {
     sourceKey: string
+    objectKeyNonce?: string
     contentType: 'application/json'
     sizeBytes: number
     sha256: string
   }
-  status: 'pending' | 'published' | 'stale'
+  /** Exact serialized bridge payload, reserved once before the first send. */
+  payloadSnapshotJson?: string
+  status: 'staging' | 'staging_cleanup' | 'pending' | 'published' | 'stale'
+  /** Token-fenced lease held only while a landmark object is being staged. */
+  stagingLeaseToken?: string
+  stagingLeaseExpiresAt?: Date
   publishLeaseToken?: string
   publishLeaseExpiresAt?: Date
   publishAttemptCount: number
@@ -38,7 +46,27 @@ export interface IHireRuntimeMultimodalAnalysisOutbox extends Document {
 
 const HireRuntimeMultimodalAnalysisArtifactSchema = new Schema(
   {
-    sourceKey: { type: String, required: true, maxlength: 1_024, immutable: true },
+    sourceKey: {
+      type: String,
+      required: true,
+      maxlength: 1_024,
+      immutable: true,
+      validate: {
+        validator(this: { objectKeyNonce?: string }, sourceKey: string) {
+          const v2 = /^landmarks\/v2\/[a-f0-9]{64}$/.test(sourceKey)
+          if (sourceKey.startsWith('landmarks/v2/') && !v2) return false
+          return v2
+            ? /^[a-f0-9]{64}$/.test(this.objectKeyNonce ?? '')
+            : this.objectKeyNonce === undefined
+        },
+        message: 'Runtime landmark key and object-key nonce do not match',
+      },
+    },
+    objectKeyNonce: {
+      type: String,
+      match: /^[a-f0-9]{64}$/,
+      immutable: true,
+    },
     contentType: {
       type: String,
       enum: ['application/json'],
@@ -66,6 +94,10 @@ const HireRuntimeMultimodalAnalysisOutboxSchema =
       runtimeSessionId: { type: Schema.Types.ObjectId, required: true, immutable: true },
       attempt: { type: Number, required: true, min: 1, max: 10, immutable: true },
       revision: { type: Number, required: true, enum: [1], immutable: true },
+      payloadSnapshotProtocolVersion: {
+        type: Number,
+        enum: [1],
+      },
       consentVersion: { type: String, required: true, maxlength: 80, immutable: true },
       policyVersion: { type: String, required: true, maxlength: 80, immutable: true },
       eventId: { type: String, required: true, match: /^[a-f0-9]{64}$/, immutable: true },
@@ -77,7 +109,14 @@ const HireRuntimeMultimodalAnalysisOutboxSchema =
       },
       capturedAt: { type: Date, required: true, immutable: true },
       landmarkArtifact: { type: HireRuntimeMultimodalAnalysisArtifactSchema },
-      status: { type: String, enum: ['pending', 'published', 'stale'], required: true },
+      payloadSnapshotJson: { type: String, maxlength: 12 * 1024 * 1024 },
+      status: {
+        type: String,
+        enum: ['staging', 'staging_cleanup', 'pending', 'published', 'stale'],
+        required: true,
+      },
+      stagingLeaseToken: { type: String, maxlength: 64 },
+      stagingLeaseExpiresAt: { type: Date },
       publishLeaseToken: { type: String, maxlength: 64 },
       publishLeaseExpiresAt: { type: Date },
       publishAttemptCount: { type: Number, required: true, default: 0, min: 0, max: 20 },
@@ -89,7 +128,13 @@ const HireRuntimeMultimodalAnalysisOutboxSchema =
   )
 
 HireRuntimeMultimodalAnalysisOutboxSchema.index(
-  { workspaceId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+  {
+    workspaceId: 1,
+    roundId: 1,
+    runtimeSessionId: 1,
+    attempt: 1,
+    revision: 1,
+  },
   { unique: true },
 )
 HireRuntimeMultimodalAnalysisOutboxSchema.index(

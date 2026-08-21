@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   guestUpdateMany: vi.fn(),
   attemptUpdateMany: vi.fn(),
   handoffUpdateMany: vi.fn(),
+  ingestionEventUpdateMany: vi.fn(),
   mediaUpdateMany: vi.fn(),
   resultUpdateMany: vi.fn(),
   multimodalObservationDeleteMany: vi.fn(),
@@ -88,6 +89,9 @@ vi.mock('../models/HireInterviewAttempt', () => ({
 }))
 vi.mock('../models/HireEngineHandoff', () => ({
   HireEngineHandoff: { updateMany: mocks.handoffUpdateMany },
+}))
+vi.mock('../models/HireEngineIngestionEvent', () => ({
+  HireEngineIngestionEvent: { updateMany: mocks.ingestionEventUpdateMany },
 }))
 vi.mock('../models/HireMediaAsset', () => ({
   HireMediaAsset: { updateMany: mocks.mediaUpdateMany },
@@ -223,6 +227,7 @@ beforeEach(() => {
     mocks.guestUpdateMany,
     mocks.attemptUpdateMany,
     mocks.handoffUpdateMany,
+    mocks.ingestionEventUpdateMany,
     mocks.mediaUpdateMany,
     mocks.resultUpdateMany,
     mocks.multimodalObservationDeleteMany,
@@ -337,6 +342,14 @@ describe('verified Hire candidate deletion', () => {
           overwriteImmutable: true,
         },
       })),
+      { session: dbSession },
+    )
+    expect(mocks.ingestionEventUpdateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: WORKSPACE_ID,
+        applicationId: { $in: [APPLICATION_A, APPLICATION_B] },
+      },
+      { $set: { media: [] } },
       { session: dbSession },
     )
     expect(mocks.applicationUpdateMany).toHaveBeenCalledWith(
@@ -566,6 +579,25 @@ describe('verified Hire candidate deletion', () => {
       expect(filter).toMatchObject({ workspaceId: WORKSPACE_ID })
       expect(filter).not.toMatchObject({ workspaceId: OTHER_WORKSPACE_ID })
     }
+  })
+
+  it('scrubs legacy ingestion media by candidate-owned application when round rows are absent', async () => {
+    mocks.applicationFind.mockReturnValueOnce(query([{ _id: APPLICATION_A }]))
+    mocks.roundFind.mockReturnValue(query([]))
+
+    await applyVerifiedHirePrivacyRequest({
+      requestCapability: CAPABILITY,
+      now: NOW,
+    })
+
+    expect(mocks.ingestionEventUpdateMany).toHaveBeenCalledWith(
+      {
+        workspaceId: WORKSPACE_ID,
+        applicationId: { $in: [APPLICATION_A] },
+      },
+      { $set: { media: [] } },
+      { session: dbSession },
+    )
   })
 
   it('does not resolve until the immediate transactional PII cleanup finishes', async () => {

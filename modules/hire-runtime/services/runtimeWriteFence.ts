@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { isCanonicalR2Key } from '@shared/storage/r2'
 import {
   HIRE_RUNTIME_STORAGE_CAPABILITY_MS,
@@ -12,6 +13,10 @@ export class RuntimeWriteFenceError extends Error {
   constructor(
     message: string,
     readonly status: 404 | 410 | 503,
+    readonly code:
+      | 'ACCOUNT_UNAVAILABLE'
+      | 'MEDIA_TERMINAL'
+      | 'RUNTIME_WRITE_UNAVAILABLE' = 'RUNTIME_WRITE_UNAVAILABLE',
   ) {
     super(message)
     this.name = 'RuntimeWriteFenceError'
@@ -21,6 +26,14 @@ export class RuntimeWriteFenceError extends Error {
 export { runtimeWriteDrainMs }
 
 const MAX_RESULT_REVISION = 10
+const REPLAY_WRITE_RESERVATION_MS = HIRE_RUNTIME_WRITE_DRAIN_MS
+
+export type RuntimeReplayWriteKind = 'camera' | 'screen'
+
+export interface RuntimeReplayWriteReservation {
+  reservationId: string
+  kind: RuntimeReplayWriteKind
+}
 
 function isReplayContinuationTarget(pathname: string, method: string): boolean {
   return method.toUpperCase() === 'POST' && (
@@ -75,9 +88,164 @@ export async function claimRuntimeWriteCapability(input: {
     { new: true },
   )
   if (!binding) {
-    throw new RuntimeWriteFenceError('Runtime binding is revoked or unavailable', 410)
+    const denied = await HireRuntimeBinding.findOne({
+      workspaceId: input.workspaceId,
+      principalId: input.principalId,
+    })
+      .select('status revokedAt purgePersonalData')
+      .lean<{
+        status?: string
+        revokedAt?: Date
+        purgePersonalData?: boolean
+      }>()
+    const privacyTerminal =
+      !denied ||
+      denied.status === 'revoked' ||
+      Boolean(denied.revokedAt) ||
+      denied.purgePersonalData === true
+    throw new RuntimeWriteFenceError(
+      'Runtime binding is revoked or unavailable',
+      410,
+      privacyTerminal ? 'ACCOUNT_UNAVAILABLE' : 'MEDIA_TERMINAL',
+    )
   }
   return binding
+}
+
+function replayTerminalClaimScope(
+  kind: RuntimeReplayWriteKind,
+  now: Date,
+): Record<string, unknown> {
+  const tokenField = kind === 'camera'
+    ? 'cameraMediaTerminalClaimToken'
+    : 'screenMediaTerminalClaimToken'
+  const expiresAtField = kind === 'camera'
+    ? 'cameraMediaTerminalClaimExpiresAt'
+    : 'screenMediaTerminalClaimExpiresAt'
+  return {
+    $or: [
+      { [tokenField]: { $exists: false } },
+      { [expiresAtField]: { $lte: now } },
+    ],
+  }
+}
+
+function replayReservationStatusScope(
+  kind: RuntimeReplayWriteKind,
+): Record<string, unknown> {
+  const mediaStatusField = kind === 'camera'
+    ? 'cameraMediaStatus'
+    : 'screenMediaStatus'
+  return {
+    $or: [
+      {
+        status: 'active',
+        [mediaStatusField]: { $nin: ['published', 'unavailable'] },
+      },
+      {
+        status: 'completed',
+        publishedRevision: { $gte: 1, $lt: MAX_RESULT_REVISION },
+        [mediaStatusField]: 'pending',
+      },
+    ],
+  }
+}
+
+/**
+ * Reserve each consent-required replay kind before an upstream endpoint can
+ * mint a capability, mutate R2, or associate an InterviewSession artifact.
+ * A crashed request leaves only a bounded drain entry; a successful request
+ * releases it after the durable capability/finalization checkpoint.
+ */
+export async function reserveRuntimeReplayWrites(input: {
+  workspaceId: string
+  bindingId: string
+  principalId: string
+  runtimeSessionId: string
+  kinds: RuntimeReplayWriteKind[]
+  now?: Date
+}): Promise<RuntimeReplayWriteReservation[]> {
+  const kinds = Array.from(new Set(input.kinds))
+  if (kinds.length === 0) return []
+  const now = input.now ?? new Date()
+  const expiresAt = new Date(now.getTime() + REPLAY_WRITE_RESERVATION_MS)
+  const reservations: RuntimeReplayWriteReservation[] = []
+
+  // Retire crashed reservations opportunistically so the array stays bounded.
+  await HireRuntimeBinding.updateOne(
+    {
+      _id: input.bindingId,
+      workspaceId: input.workspaceId,
+      principalId: input.principalId,
+      runtimeSessionId: input.runtimeSessionId,
+    },
+    {
+      $pull: { mediaWriteReservations: { expiresAt: { $lte: now } } },
+    },
+  )
+
+  try {
+    for (const kind of kinds) {
+      const reservationId = randomBytes(32).toString('hex')
+      const reserved = await HireRuntimeBinding.findOneAndUpdate(
+        {
+          _id: input.bindingId,
+          workspaceId: input.workspaceId,
+          principalId: input.principalId,
+          runtimeSessionId: input.runtimeSessionId,
+          mediaCompletionContractVersion: 1,
+          revokedAt: { $exists: false },
+          purgePersonalData: { $ne: true },
+          $and: [
+            replayReservationStatusScope(kind),
+            replayTerminalClaimScope(kind, now),
+          ],
+        },
+        {
+          $push: {
+            mediaWriteReservations: { reservationId, kind, expiresAt },
+          },
+        },
+        { new: true },
+      )
+      if (!reserved) {
+        throw new RuntimeWriteFenceError(
+          'Runtime replay delivery is terminalizing or unavailable',
+          410,
+          'MEDIA_TERMINAL',
+        )
+      }
+      reservations.push({ reservationId, kind })
+    }
+    return reservations
+  } catch (error) {
+    await releaseRuntimeReplayWriteReservations({
+      workspaceId: input.workspaceId,
+      bindingId: input.bindingId,
+      reservations,
+    })
+    throw error
+  }
+}
+
+export async function releaseRuntimeReplayWriteReservations(input: {
+  workspaceId: string
+  bindingId: string
+  reservations: RuntimeReplayWriteReservation[]
+}): Promise<void> {
+  if (input.reservations.length === 0) return
+  await HireRuntimeBinding.updateOne(
+    { _id: input.bindingId, workspaceId: input.workspaceId },
+    {
+      $pull: {
+        mediaWriteReservations: {
+          reservationId: {
+            $in: input.reservations.map((reservation) => reservation.reservationId),
+          },
+        },
+      },
+    },
+  )
 }
 
 function assertCapabilityKey(input: {
@@ -107,6 +275,11 @@ function capabilityKind(key: string): 'recording' | 'screen-recording' | 'audio-
 
 function storageCapabilityStatusScope(key: string): Record<string, unknown> {
   const kind = capabilityKind(key)
+  const activeScope = kind === 'recording'
+    ? { status: { $in: ['provisioned', 'active'] }, cameraMediaStatus: { $ne: 'unavailable' } }
+    : kind === 'screen-recording'
+      ? { status: { $in: ['provisioned', 'active'] }, screenMediaStatus: { $ne: 'unavailable' } }
+      : { status: { $in: ['provisioned', 'active'] } }
   const replayScope = kind === 'recording'
     ? {
         status: 'completed',
@@ -122,8 +295,8 @@ function storageCapabilityStatusScope(key: string): Record<string, unknown> {
         }
       : null
   return replayScope
-    ? { $or: [{ status: { $in: ['provisioned', 'active'] } }, replayScope] }
-    : { status: { $in: ['provisioned', 'active'] } }
+    ? { $or: [activeScope, replayScope] }
+    : activeScope
 }
 
 export async function recordRuntimeStorageCapability(input: {
@@ -219,5 +392,6 @@ export function assertRuntimeWritesDrained(
 export const __runtimeWriteFence = {
   RUNTIME_WRITE_DRAIN_MS: HIRE_RUNTIME_WRITE_DRAIN_MS,
   RUNTIME_STORAGE_CAPABILITY_MS: HIRE_RUNTIME_STORAGE_CAPABILITY_MS,
+  REPLAY_WRITE_RESERVATION_MS,
   assertCapabilityKey,
 }

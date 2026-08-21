@@ -31,8 +31,10 @@ function getReportedDisplaySurface(track: MediaStreamTrack): string | null {
 
 /**
  * Browsers are required to let the candidate choose a capture source. We accept
- * the share only when its video track is live and, when the browser exposes the
- * source type, it identifies the source as the entire monitor.
+ * the share only when its video track is live and the browser positively
+ * identifies the source as the entire monitor. Missing source metadata cannot
+ * prove the compulsory entire-display consent condition and therefore fails
+ * closed.
  */
 export function hasLiveHireInterviewDisplayShare(stream: MediaStream | null) {
   const track = stream?.getVideoTracks()[0]
@@ -45,8 +47,7 @@ export function hasLiveHireInterviewDisplayShare(stream: MediaStream | null) {
     return false
   }
 
-  const displaySurface = getReportedDisplaySurface(track)
-  return displaySurface === null || displaySurface === 'monitor'
+  return getReportedDisplaySurface(track) === 'monitor'
 }
 
 /** Requests video-only full-display capture from a candidate gesture. */
@@ -85,7 +86,7 @@ export async function requestHireInterviewDisplayShare() {
   }
 
   const displaySurface = getReportedDisplaySurface(videoTrack)
-  if (displaySurface !== null && displaySurface !== 'monitor') {
+  if (displaySurface !== 'monitor') {
     stopStream(stream)
     throw new HireInterviewDisplayShareError(
       'wrong_surface',

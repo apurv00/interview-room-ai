@@ -56,6 +56,7 @@ const {
     HireMediaAsset: {
       ...child(),
       find: vi.fn(),
+      findOneAndUpdate: vi.fn(),
       updateOne: vi.fn(),
       exists: vi.fn(),
     },
@@ -155,8 +156,10 @@ function queryResult<T>(value: T) {
 
 function mediaQuery(value: unknown[]) {
   return {
-    sort: vi.fn().mockReturnValue({
-      limit: vi.fn().mockResolvedValue(value),
+    select: vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue(value),
+      }),
     }),
   }
 }
@@ -188,7 +191,8 @@ beforeEach(() => {
   models.HireWorkspace.exists.mockReturnValue(sessionResult({ _id: WORKSPACE_ID }))
   models.HireWorkspace.deleteOne.mockResolvedValue({ deletedCount: 1 })
   models.HireMediaAsset.find.mockReturnValue(mediaQuery([]))
-  models.HireMediaAsset.updateOne.mockResolvedValue({ matchedCount: 1 })
+  models.HireMediaAsset.findOneAndUpdate.mockResolvedValue(null)
+  models.HireMediaAsset.updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   models.HireMediaAsset.exists.mockReturnValue(sessionResult(null))
   models.HireRound.find.mockReturnValue(runtimeRoundQuery([]))
   models.HireRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
@@ -266,10 +270,13 @@ describe('workspace hard purge', () => {
       roundId: new mongoose.Types.ObjectId(),
       attemptId: new mongoose.Types.ObjectId(),
       objectKey: 'hire-media/ws/app/round/attempt/asset/photo.jpg',
+      kind: 'identity_photo' as const,
+      state: 'ready',
     }
     models.HireMediaAsset.find
       .mockReturnValueOnce(mediaQuery([asset]))
       .mockReturnValueOnce(mediaQuery([]))
+    models.HireMediaAsset.findOneAndUpdate.mockResolvedValue(asset)
     const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn().mockResolvedValue(undefined) }
     const assessmentExportTarget = {
       key: 'hire-assessment-exports/v1/ws/job/app/candidate/export.pdf',
@@ -304,12 +311,31 @@ describe('workspace hard purge', () => {
     expect(mockBrandingDelete).toHaveBeenCalledWith({
       key: `hire-workspace-branding/${WORKSPACE_ID.toString()}/logo`,
     })
+    const purgeClaimId = models.HireMediaAsset.findOneAndUpdate.mock.calls[0][1].$set.purgeClaimId
     expect(models.HireMediaAsset.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ _id: ASSET_ID, workspaceId: WORKSPACE_ID }),
+      expect.objectContaining({
+        _id: ASSET_ID,
+        workspaceId: WORKSPACE_ID,
+        state: 'purge_claimed',
+        purgeClaimId,
+      }),
       expect.objectContaining({ $set: { state: 'purged', purgedAt: NOW } }),
     )
     for (const [name, model] of Object.entries(models)) {
       if (name === 'HireWorkspace' || !('deleteMany' in model)) continue
+      if (name === 'HireMediaAsset') {
+        expect(model.deleteMany).toHaveBeenCalledWith(
+          {
+            workspaceId: WORKSPACE_ID,
+            state: 'purged',
+            purgedAt: { $exists: true },
+            ingestionLeaseId: { $exists: false },
+            ingestionLeaseExpiresAt: { $exists: false },
+          },
+          { session },
+        )
+        continue
+      }
       expect(model.deleteMany, name).toHaveBeenCalledWith(
         { workspaceId: WORKSPACE_ID },
         { session },
@@ -421,8 +447,19 @@ describe('workspace hard purge', () => {
         roundId: new mongoose.Types.ObjectId(),
         attemptId: new mongoose.Types.ObjectId(),
         objectKey: 'hire-media/private.jpg',
+        state: 'ready',
       },
     ]))
+    models.HireMediaAsset.findOneAndUpdate.mockImplementation(async (_filter, update) => ({
+      _id: ASSET_ID,
+      workspaceId: WORKSPACE_ID,
+      applicationId: new mongoose.Types.ObjectId(),
+      roundId: new mongoose.Types.ObjectId(),
+      attemptId: new mongoose.Types.ObjectId(),
+      objectKey: 'hire-media/private.jpg',
+      state: 'purge_claimed',
+      purgeClaimId: update.$set.purgeClaimId,
+    }))
     const storage = {
       upload: vi.fn(),
       signRead: vi.fn(),
@@ -436,9 +473,21 @@ describe('workspace hard purge', () => {
       clock: () => NOW,
     })
 
+    const purgeClaimId = models.HireMediaAsset.findOneAndUpdate.mock.calls[0][1].$set.purgeClaimId
     expect(report.failed).toBe(1)
     expect(report.purged).toBe(0)
     expect(session.withTransaction).not.toHaveBeenCalled()
+    expect(models.HireMediaAsset.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: ASSET_ID,
+        state: 'purge_claimed',
+        purgeClaimId,
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ state: 'purge_failed' }),
+        $unset: expect.objectContaining({ purgeClaimId: 1, purgeClaimedAt: 1 }),
+      }),
+    )
     expect(models.HireWorkspace.updateOne).toHaveBeenLastCalledWith(
       expect.objectContaining({ _id: WORKSPACE_ID, purgeState: 'claimed' }),
       expect.objectContaining({
@@ -570,5 +619,139 @@ describe('workspace hard purge', () => {
 
     expect(report).toMatchObject({ scanned: 1, claimed: 0, failed: 1, purged: 0 })
     expect(models.HireMediaAsset.find).not.toHaveBeenCalled()
+  })
+
+  it('waits for an active staging writer lease without deleting its object or graph', async () => {
+    models.HireMediaAsset.find.mockReturnValue(mediaQuery([{
+      _id: ASSET_ID,
+      workspaceId: WORKSPACE_ID,
+      applicationId: new mongoose.Types.ObjectId(),
+      roundId: new mongoose.Types.ObjectId(),
+      attemptId: new mongoose.Types.ObjectId(),
+      objectKey: 'hire-media/in-flight.webm',
+      kind: 'camera_recording' as const,
+      state: 'staging',
+      ingestionLeaseId: 'writer-lease',
+      ingestionLeaseExpiresAt: new Date(NOW.getTime() + 60_000),
+      createdAt: NOW,
+    }]))
+    const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() }
+
+    const report = await purgeDueHireWorkspaces({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+      storage,
+      clock: () => NOW,
+    })
+
+    expect(report).toMatchObject({ claimed: 1, purged: 0, failed: 1, mediaObjectsDeleted: 0 })
+    expect(models.HireMediaAsset.findOneAndUpdate).not.toHaveBeenCalled()
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(session.withTransaction).not.toHaveBeenCalled()
+    expect(models.HireMediaAsset.deleteMany).not.toHaveBeenCalled()
+  })
+
+  it('reclaims an expired media purge claim with an exact old-token CAS', async () => {
+    const oldClaimedAt = new Date(NOW.getTime() - 16 * 60 * 1000)
+    const asset = {
+      _id: ASSET_ID,
+      workspaceId: WORKSPACE_ID,
+      applicationId: new mongoose.Types.ObjectId(),
+      roundId: new mongoose.Types.ObjectId(),
+      attemptId: new mongoose.Types.ObjectId(),
+      objectKey: 'hire-media/stale-claim.webm',
+      kind: 'camera_recording' as const,
+      state: 'purge_claimed',
+      purgeClaimId: 'old-purge-claim',
+      purgeClaimedAt: oldClaimedAt,
+    }
+    models.HireMediaAsset.find
+      .mockReturnValueOnce(mediaQuery([asset]))
+      .mockReturnValueOnce(mediaQuery([]))
+    models.HireMediaAsset.findOneAndUpdate.mockImplementation(async (_filter, update) => ({
+      ...asset,
+      purgeClaimId: update.$set.purgeClaimId,
+      purgeClaimedAt: update.$set.purgeClaimedAt,
+    }))
+    const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() }
+
+    const report = await purgeDueHireWorkspaces({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+      storage,
+      clock: () => NOW,
+    })
+
+    const claimFilter = models.HireMediaAsset.findOneAndUpdate.mock.calls[0][0]
+    const newClaimId = models.HireMediaAsset.findOneAndUpdate.mock.calls[0][1].$set.purgeClaimId
+    expect(claimFilter.$or).toEqual(expect.arrayContaining([{
+      state: 'purge_claimed',
+      purgeClaimId: 'old-purge-claim',
+      purgeClaimedAt: oldClaimedAt,
+    }]))
+    expect(newClaimId).not.toBe('old-purge-claim')
+    expect(models.HireMediaAsset.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'purge_claimed', purgeClaimId: newClaimId }),
+      expect.objectContaining({ $set: { state: 'purged', purgedAt: NOW } }),
+    )
+    expect(storage.delete).toHaveBeenCalledOnce()
+    expect(report).toMatchObject({ purged: 1, failed: 0, mediaObjectsDeleted: 1 })
+  })
+
+  it('does not steal a fresh media purge claim and retains the graph for retry', async () => {
+    const asset = {
+      _id: ASSET_ID,
+      workspaceId: WORKSPACE_ID,
+      applicationId: new mongoose.Types.ObjectId(),
+      roundId: new mongoose.Types.ObjectId(),
+      attemptId: new mongoose.Types.ObjectId(),
+      objectKey: 'hire-media/fresh-claim.webm',
+      kind: 'camera_recording' as const,
+      state: 'purge_claimed',
+      purgeClaimId: 'fresh-purge-claim',
+      purgeClaimedAt: new Date(NOW.getTime() - 60 * 1000),
+    }
+    models.HireMediaAsset.find.mockReturnValue(mediaQuery([asset]))
+    const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() }
+
+    const report = await purgeDueHireWorkspaces({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+      storage,
+      clock: () => NOW,
+    })
+
+    const claimFilter = models.HireMediaAsset.findOneAndUpdate.mock.calls[0][0]
+    expect(claimFilter.$or).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'purge_claimed' }),
+    ]))
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(models.HireMediaAsset.deleteMany).not.toHaveBeenCalled()
+    expect(models.HireWorkspace.deleteOne).not.toHaveBeenCalled()
+    expect(report).toMatchObject({ claimed: 1, purged: 0, failed: 1, mediaObjectsDeleted: 0 })
+  })
+
+  it('does not remove the graph for a purged row without its delete acknowledgement timestamp', async () => {
+    models.HireMediaAsset.exists.mockReturnValue(sessionResult({ _id: ASSET_ID }))
+
+    const report = await purgeDueHireWorkspaces({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+      storage: { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() },
+      clock: () => NOW,
+    })
+
+    expect(report).toMatchObject({ claimed: 1, purged: 0, failed: 1 })
+    expect(models.HireMediaAsset.exists).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      $or: [
+        { state: { $ne: 'purged' } },
+        { purgedAt: { $exists: false } },
+        { ingestionLeaseId: { $exists: true } },
+        { ingestionLeaseExpiresAt: { $exists: true } },
+      ],
+    })
+    expect(models.HireMediaAsset.deleteMany).not.toHaveBeenCalled()
+    expect(models.HireWorkspace.deleteOne).not.toHaveBeenCalled()
   })
 })

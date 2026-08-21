@@ -21,3 +21,4 @@ export { HireWorkspaceMember } from './models/HireWorkspaceMember'
 // onboarding service or raw invite flow, so synthetic test drives cannot
 // alter operational counts delivered to a real member.
 export { HireOnboardingTestDrive } from '../hire-onboarding/models/HireOnboardingTestDrive'
+export { HireMultimodalObservation } from '../hire-multimodal/models/HireMultimodalObservation'

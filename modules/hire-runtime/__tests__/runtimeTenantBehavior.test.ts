@@ -23,6 +23,7 @@ vi.mock('@shared/db/models/User', () => ({ User: {} }))
 
 import {
   activeBindingForPrincipal,
+  completionBoundaryForPrincipal,
   completionBindingForPrincipal,
 } from '../services/bindingService'
 import { claimRuntimeWriteCapability } from '../services/runtimeWriteFence'
@@ -36,11 +37,22 @@ const bindingA = {
   principalId: { toString: () => PRINCIPAL_ID },
 }
 
+function bindingQuery(value: unknown) {
+  const promise = Promise.resolve(value)
+  const query = {
+    select: vi.fn(),
+    lean: vi.fn().mockResolvedValue(value),
+    then: promise.then.bind(promise),
+  }
+  query.select.mockReturnValue(query)
+  return query
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.connect.mockResolvedValue(undefined)
-  mocks.findOne.mockImplementation(async (filter) =>
-    filter.workspaceId === WORKSPACE_A ? bindingA : null,
+  mocks.findOne.mockImplementation((filter) =>
+    bindingQuery(filter.workspaceId === WORKSPACE_A ? bindingA : null),
   )
   mocks.findOneAndUpdate.mockImplementation(async (filter) =>
     filter.workspaceId === WORKSPACE_A ? bindingA : null,
@@ -98,5 +110,30 @@ describe('isolated runtime two-tenant behavior', () => {
       purgePersonalData: { $ne: true },
     })
     expect(mocks.findOne.mock.calls[0][0]).not.toHaveProperty('inviteExpiresAt')
+  })
+
+  it.each([
+    ['revoked', { ...bindingA, status: 'revoked', revokedAt: new Date() }],
+    [
+      'purging',
+      {
+        ...bindingA,
+        status: 'revoked',
+        purgePersonalData: true,
+        runtimeSessionId: undefined,
+      },
+    ],
+  ] as const)('returns a completion-only %s privacy boundary', async (reason, binding) => {
+    mocks.findOne.mockResolvedValueOnce(binding)
+
+    await expect(completionBoundaryForPrincipal({
+      workspaceId: WORKSPACE_A,
+      principalId: PRINCIPAL_ID,
+    })).resolves.toEqual({ state: 'account_unavailable', reason })
+
+    expect(mocks.findOne).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_A,
+      principalId: PRINCIPAL_ID,
+    })
   })
 })

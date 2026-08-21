@@ -62,6 +62,11 @@ export interface IHireRuntimeMultimodalObservationOutbox extends Document {
       startMs: number
       endMs: number
     }>
+    playbackClock?: {
+      protocolVersion: 1
+      cameraRecorderStartOffsetMs?: number
+      screenRecorderStartOffsetMs?: number
+    }
   }
   status: 'pending' | 'published' | 'stale'
   publishLeaseToken?: string
@@ -73,6 +78,23 @@ export interface IHireRuntimeMultimodalObservationOutbox extends Document {
   createdAt: Date
   updatedAt: Date
 }
+
+const HireRuntimeObservationPlaybackClockSchema = new Schema(
+  {
+    protocolVersion: { type: Number, enum: [1], required: true },
+    cameraRecorderStartOffsetMs: {
+      type: Number,
+      min: 0,
+      max: 30 * 60 * 1_000,
+    },
+    screenRecorderStartOffsetMs: {
+      type: Number,
+      min: 0,
+      max: 30 * 60 * 1_000,
+    },
+  },
+  { _id: false, strict: 'throw' },
+)
 
 const HireRuntimeMultimodalObservationOutboxSchema =
   new Schema<IHireRuntimeMultimodalObservationOutbox>(
@@ -186,6 +208,9 @@ const HireRuntimeMultimodalObservationOutboxSchema =
           ],
           required: true,
           default: [],
+        },
+        playbackClock: {
+          type: HireRuntimeObservationPlaybackClockSchema,
         },
       },
       status: { type: String, enum: ['pending', 'published', 'stale'], required: true },

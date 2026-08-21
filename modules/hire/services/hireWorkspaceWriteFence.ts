@@ -25,15 +25,6 @@ export async function withActiveHireWorkspaceWriteTransaction<T>(
   let completed = false
   try {
     await session.withTransaction(async () => {
-      const member = await HireWorkspaceMember.exists({
-        _id: authorityMemberId,
-        workspaceId,
-        authState: 'active',
-      }).session(session)
-      if (!member) {
-        throw new AppError('Workspace write authority is no longer active', 403, 'MEMBER_REMOVED')
-      }
-
       const claim = await HireWorkspace.updateOne(
         { _id: workspaceId, ...activeHireWorkspaceLifecycleFilter() },
         { $inc: { writeFenceVersion: 1 } },
@@ -45,6 +36,19 @@ export async function withActiveHireWorkspaceWriteTransaction<T>(
           410,
           'WORKSPACE_DELETION_PENDING',
         )
+      }
+
+      const memberClaim = await HireWorkspaceMember.updateOne(
+        {
+          _id: authorityMemberId,
+          workspaceId,
+          authState: 'active',
+        },
+        { $inc: { workspaceWriteFenceVersion: 1 } },
+        { session },
+      )
+      if (memberClaim.matchedCount !== 1) {
+        throw new AppError('Workspace write authority is no longer active', 403, 'MEMBER_REMOVED')
       }
       result = await work(session)
       completed = true

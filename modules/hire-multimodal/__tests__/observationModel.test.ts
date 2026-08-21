@@ -23,6 +23,21 @@ describe('Hire supplemental-observation model', () => {
         'report.capture.speechVideoCorroboration',
       ),
     ).toBeDefined()
+    expect(
+      HireMultimodalObservation.schema.path(
+        'report.playbackClock.protocolVersion',
+      ),
+    ).toBeDefined()
+    expect(
+      HireMultimodalObservation.schema.path(
+        'report.playbackClock.cameraRecorderStartOffsetMs',
+      ),
+    ).toBeDefined()
+    expect(
+      HireMultimodalObservation.schema.path(
+        'report.playbackClock.screenRecorderStartOffsetMs',
+      ),
+    ).toBeDefined()
     expect(HireMultimodalObservation.schema.path('report.browserFocus')).toBeUndefined()
   })
 })

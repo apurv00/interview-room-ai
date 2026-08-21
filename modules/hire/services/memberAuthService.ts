@@ -17,7 +17,8 @@ import { buildMemberSetupEmail } from '../emails/memberSetupEmail'
 import { connectHireControlDB } from './hireControlBoundary'
 
 export const HIRE_MEMBER_COOKIE =
-  process.env.NODE_ENV === 'production' ? '__Secure-ipg-hire-member' : 'ipg-hire-member'
+  process.env.NODE_ENV === 'production' ? '__Host-ipg-hire-member' : 'ipg-hire-member'
+export const HIRE_MEMBER_LEGACY_COOKIE = '__Secure-ipg-hire-member'
 export const HIRE_MEMBER_SESSION_DAYS = 7
 export const HIRE_MEMBER_SETUP_HOURS = 24
 const WORKSPACE_ID_PATTERN = /^[a-f0-9]{24}$/i

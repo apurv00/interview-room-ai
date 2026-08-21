@@ -163,7 +163,17 @@ describe('isolated runtime revocation and privacy purge', () => {
     })
     expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1]).toMatchObject({
       $set: { personalDataPurgedAt: expect.any(Date) },
-      $unset: { runtimeSessionId: 1, pendingMediaManifest: 1 },
+      $unset: {
+        runtimeSessionId: 1,
+        pendingMediaManifest: 1,
+        authTicketGeneration: 1,
+        authTicketHandoffNonce: 1,
+        authTicketState: 1,
+        authTicketDigest: 1,
+        authTicketExpiresAt: 1,
+        authTicketIssuedAt: 1,
+        authTicketConsumedAt: 1,
+      },
     })
   })
 

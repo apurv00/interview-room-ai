@@ -37,16 +37,18 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.connect.mockResolvedValue(undefined)
   mocks.findOne.mockReturnValue({
-    lean: async () => ({
-      _id: objectId(IDS.assetId),
-      workspaceId: objectId(IDS.workspaceId),
-      applicationId: objectId(IDS.applicationId),
-      jobId: objectId(IDS.jobId),
-      candidateId: objectId(IDS.candidateId),
-      roundId: objectId(IDS.roundId),
-      attemptId: objectId(IDS.attemptId),
-      objectKey: 'hire-media/scoped-screen-recording.webm',
-      kind: 'screen_recording',
+    select: vi.fn().mockReturnValue({
+      lean: async () => ({
+        _id: objectId(IDS.assetId),
+        workspaceId: objectId(IDS.workspaceId),
+        applicationId: objectId(IDS.applicationId),
+        jobId: objectId(IDS.jobId),
+        candidateId: objectId(IDS.candidateId),
+        roundId: objectId(IDS.roundId),
+        attemptId: objectId(IDS.attemptId),
+        objectKey: 'hire-media/scoped-screen-recording.webm',
+        kind: 'screen_recording',
+      }),
     }),
   })
   mocks.exists.mockResolvedValue({ _id: objectId(IDS.assetId) })
@@ -78,6 +80,15 @@ describe('Hire shared-display media access', () => {
 
     expect(mocks.signDownload).toHaveBeenCalledWith({
       key: 'hire-media/scoped-screen-recording.webm',
+      coordinate: {
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        roundId: IDS.roundId,
+        attemptId: IDS.attemptId,
+        assetId: IDS.assetId,
+      },
+      kind: 'screen-recording',
+      objectKeyNonce: undefined,
       expiresInSeconds: 300,
     })
     expect(mocks.exists).toHaveBeenCalledWith({

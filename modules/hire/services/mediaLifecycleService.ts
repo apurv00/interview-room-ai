@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import mongoose from 'mongoose'
 import { HireMediaAsset, type IHireMediaAsset } from '../models/HireMediaAsset'
 import { HireJob } from '../models/HireJob'
@@ -21,6 +22,7 @@ import {
 } from '@hire/policies/aiInterviewConsent'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
+  hireMediaStorageKindForAsset,
   hireMediaStorage,
   type HireMediaCoordinate,
   type HireMediaStoragePort,
@@ -318,12 +320,12 @@ export async function cancelFutureHireJobMediaPurge(input: {
 }): Promise<number> {
   await connectHireControlDB()
   const reopenedAt = input.reopenedAt ?? new Date()
-  const [media, observations] = await Promise.all([
+  const [readyMedia, stagingMedia, failedMedia, observations] = await Promise.all([
     HireMediaAsset.updateMany(
       {
         workspaceId: input.workspaceId,
         jobId: input.jobId,
-        state: { $in: ['ready', 'purge_failed', 'staging'] },
+        state: 'ready',
         purgeReason: 'job_closed',
         purgeEligibleAt: { $gt: reopenedAt },
       },
@@ -331,10 +333,50 @@ export async function cancelFutureHireJobMediaPurge(input: {
         $unset: {
           purgeEligibleAt: 1,
           purgeReason: 1,
+          purgeClaimId: 1,
           purgeClaimedAt: 1,
           purgeFailureCode: 1,
         },
-        $set: { state: 'ready' },
+      },
+    ),
+    HireMediaAsset.updateMany(
+      {
+        workspaceId: input.workspaceId,
+        jobId: input.jobId,
+        state: 'staging',
+        purgeReason: 'job_closed',
+        purgeEligibleAt: { $gt: reopenedAt },
+      },
+      {
+        $unset: {
+          purgeEligibleAt: 1,
+          purgeReason: 1,
+          purgeClaimId: 1,
+          purgeClaimedAt: 1,
+          purgeFailureCode: 1,
+        },
+      },
+    ),
+    HireMediaAsset.updateMany(
+      {
+        workspaceId: input.workspaceId,
+        jobId: input.jobId,
+        state: 'purge_failed',
+        purgeReason: 'job_closed',
+        purgeEligibleAt: { $gt: reopenedAt },
+      },
+      {
+        $set: {
+          purgeEligibleAt: reopenedAt,
+          purgeReason: 'stale_staging',
+        },
+        $unset: {
+          active: 1,
+          ingestionLeaseId: 1,
+          ingestionLeaseExpiresAt: 1,
+          purgeClaimId: 1,
+          purgeClaimedAt: 1,
+        },
       },
     ),
     cancelFutureHireMultimodalObservationRetention({
@@ -343,7 +385,10 @@ export async function cancelFutureHireJobMediaPurge(input: {
       reopenedAt,
     }),
   ])
-  return (media.modifiedCount ?? 0) + observations
+  return (readyMedia.modifiedCount ?? 0)
+    + (stagingMedia.modifiedCount ?? 0)
+    + (failedMedia.modifiedCount ?? 0)
+    + observations
 }
 
 function coordinate(asset: IHireMediaAsset): HireMediaCoordinate {
@@ -374,7 +419,12 @@ async function completeSatisfiedPrivacyRequests(workspaceId: string): Promise<nu
     const remaining = await HireMediaAsset.exists({
       workspaceId,
       candidateId: request.candidateId,
-      state: { $ne: 'purged' },
+      $or: [
+        { state: { $ne: 'purged' } },
+        { purgedAt: { $exists: false } },
+        { ingestionLeaseId: { $exists: true } },
+        { ingestionLeaseExpiresAt: { $exists: true } },
+      ],
     })
     if (remaining) continue
     const runtimePurgePending = await HireRound.exists({
@@ -408,28 +458,70 @@ export async function markStaleHireMediaForPurge(input: {
 }): Promise<number> {
   await connectHireControlDB()
   const now = input.now ?? new Date()
-  const result = await HireMediaAsset.updateMany(
+  const recoverableLease = {
+    $or: [
+      { ingestionLeaseExpiresAt: { $lte: now } },
+      {
+        createdAt: { $lte: new Date(now.getTime() - STALE_STAGING_MS) },
+        $or: [
+          { ingestionLeaseId: { $exists: false } },
+          { ingestionLeaseExpiresAt: { $exists: false } },
+        ],
+      },
+    ],
+  }
+  const retainedDeadline = await HireMediaAsset.updateMany(
     {
       workspaceId: input.workspaceId,
       state: 'staging',
-      createdAt: { $lte: new Date(now.getTime() - STALE_STAGING_MS) },
-      purgeEligibleAt: { $exists: false },
+      purgeEligibleAt: { $exists: true },
+      ...recoverableLease,
     },
     {
       $set: {
-        purgeEligibleAt: now,
-        purgeReason: 'stale_staging',
+        state: 'purge_failed',
+        purgeFailureCode: 'STALE_INGESTION_LEASE',
+      },
+      $unset: {
+        active: 1,
+        ingestionLeaseId: 1,
+        ingestionLeaseExpiresAt: 1,
+        purgeClaimId: 1,
+        purgeClaimedAt: 1,
       },
     },
   )
-  return result.modifiedCount ?? 0
+  const newlyDue = await HireMediaAsset.updateMany(
+    {
+      workspaceId: input.workspaceId,
+      state: 'staging',
+      purgeEligibleAt: { $exists: false },
+      ...recoverableLease,
+    },
+    {
+      $set: {
+        state: 'purge_failed',
+        purgeEligibleAt: now,
+        purgeReason: 'stale_staging',
+        purgeFailureCode: 'STALE_INGESTION_LEASE',
+      },
+      $unset: {
+        active: 1,
+        ingestionLeaseId: 1,
+        ingestionLeaseExpiresAt: 1,
+        purgeClaimId: 1,
+        purgeClaimedAt: 1,
+      },
+    },
+  )
+  return (retainedDeadline.modifiedCount ?? 0) + (newlyDue.modifiedCount ?? 0)
 }
 
 async function recoverStaleHireMediaPurgeClaims(input: {
   workspaceId: string
   now: Date
 }): Promise<number> {
-  const result = await HireMediaAsset.updateMany(
+  const staleClaims = await HireMediaAsset.find(
     {
       workspaceId: input.workspaceId,
       state: 'purge_claimed',
@@ -437,15 +529,38 @@ async function recoverStaleHireMediaPurgeClaims(input: {
         $lte: new Date(input.now.getTime() - STALE_PURGE_CLAIM_MS),
       },
     },
-    {
-      $set: {
-        state: 'purge_failed',
-        purgeFailureCode: 'STALE_PURGE_CLAIM',
-      },
-      $unset: { purgeClaimedAt: 1, active: 1 },
-    },
   )
-  return result.modifiedCount ?? 0
+    .sort({ purgeClaimedAt: 1, _id: 1 })
+    .limit(DEFAULT_PURGE_BATCH_SIZE)
+  let recovered = 0
+  for (const staleClaim of staleClaims) {
+    const result = await HireMediaAsset.updateOne(
+      {
+        _id: staleClaim._id,
+        workspaceId: input.workspaceId,
+        state: 'purge_claimed',
+        purgeClaimedAt: staleClaim.purgeClaimedAt,
+        ...(staleClaim.purgeClaimId
+          ? { purgeClaimId: staleClaim.purgeClaimId }
+          : { purgeClaimId: { $exists: false } }),
+      },
+      {
+        $set: {
+          state: 'purge_failed',
+          purgeFailureCode: 'STALE_PURGE_CLAIM',
+        },
+        $unset: {
+          purgeClaimId: 1,
+          purgeClaimedAt: 1,
+          active: 1,
+          ingestionLeaseId: 1,
+          ingestionLeaseExpiresAt: 1,
+        },
+      },
+    )
+    recovered += result.modifiedCount ?? 0
+  }
+  return recovered
 }
 
 export async function purgeDueHireMedia(input: {
@@ -481,15 +596,19 @@ export async function purgeDueHireMedia(input: {
   }
   const due = await HireMediaAsset.find({
     workspaceId: input.workspaceId,
-    state: { $in: ['ready', 'purge_failed', 'staging'] },
+    state: { $in: ['ready', 'purge_failed'] },
     purgeEligibleAt: { $lte: now },
+    ingestionLeaseId: { $exists: false },
+    ingestionLeaseExpiresAt: { $exists: false },
   })
+    .select('+objectKeyNonce')
     .sort({ purgeEligibleAt: 1, _id: 1 })
     .limit(batchSize)
 
   let purged = 0
   let failed = 0
   for (const candidate of due) {
+    const purgeClaimId = randomUUID()
     const asset = await HireMediaAsset.findOneAndUpdate(
       {
         _id: candidate._id,
@@ -500,18 +619,28 @@ export async function purgeDueHireMedia(input: {
         roundId: candidate.roundId,
         attemptId: candidate.attemptId,
         objectKey: candidate.objectKey,
-        state: { $in: ['ready', 'purge_failed', 'staging'] },
+        ...(candidate.objectKeyNonce
+          ? { objectKeyNonce: candidate.objectKeyNonce }
+          : { objectKeyNonce: { $exists: false } }),
+        state: { $in: ['ready', 'purge_failed'] },
         purgeEligibleAt: { $lte: now },
+        ingestionLeaseId: { $exists: false },
+        ingestionLeaseExpiresAt: { $exists: false },
       },
       {
-        $set: { state: 'purge_claimed', purgeClaimedAt: now },
+        $set: { state: 'purge_claimed', purgeClaimId, purgeClaimedAt: now },
         $unset: { active: 1, purgeFailureCode: 1 },
       },
       { new: true },
     )
     if (!asset) continue
     try {
-      await storage.delete({ key: asset.objectKey, coordinate: coordinate(asset) })
+      await storage.delete({
+        key: asset.objectKey,
+        coordinate: coordinate(asset),
+        kind: hireMediaStorageKindForAsset(candidate.kind),
+        objectKeyNonce: candidate.objectKeyNonce,
+      })
       const result = await HireMediaAsset.updateOne(
         {
           _id: asset._id,
@@ -521,32 +650,48 @@ export async function purgeDueHireMedia(input: {
           attemptId: asset.attemptId,
           objectKey: asset.objectKey,
           state: 'purge_claimed',
+          purgeClaimId,
         },
         {
           $set: { state: 'purged', purgedAt: now },
-          $unset: { purgeClaimedAt: 1, purgeFailureCode: 1, active: 1 },
+          $unset: {
+            purgeClaimId: 1,
+            purgeClaimedAt: 1,
+            purgeFailureCode: 1,
+            active: 1,
+            ingestionLeaseId: 1,
+            ingestionLeaseExpiresAt: 1,
+          },
         },
       )
       purged += result.modifiedCount ?? 0
     } catch (error) {
-      failed++
-      await HireMediaAsset.updateOne(
+      const result = await HireMediaAsset.updateOne(
         {
           _id: asset._id,
           workspaceId: input.workspaceId,
           applicationId: asset.applicationId,
           roundId: asset.roundId,
           attemptId: asset.attemptId,
+          objectKey: asset.objectKey,
           state: 'purge_claimed',
+          purgeClaimId,
         },
         {
           $set: {
             state: 'purge_failed',
             purgeFailureCode: failureCode(error),
           },
-          $unset: { purgeClaimedAt: 1, active: 1 },
+          $unset: {
+            purgeClaimId: 1,
+            purgeClaimedAt: 1,
+            active: 1,
+            ingestionLeaseId: 1,
+            ingestionLeaseExpiresAt: 1,
+          },
         },
       )
+      failed += result.modifiedCount ?? 0
     }
   }
 

@@ -129,6 +129,35 @@ describe('Hire-native multimodal capture', () => {
     })
   })
 
+  it('preserves an exact optional recorder clock in the immutable report', async () => {
+    const exactCapture = {
+      ...capture(),
+      playbackClock: {
+        protocolVersion: 1 as const,
+        cameraRecorderStartOffsetMs: 325,
+      },
+    }
+
+    expect(
+      __hireRuntimeMultimodalCapture.deriveHireRuntimeObservationReport(
+        exactCapture,
+      ).playbackClock,
+    ).toEqual(exactCapture.playbackClock)
+
+    await expect(
+      captureHireRuntimeMultimodalObservation({
+        workspaceId: IDS.workspace,
+        principalId: IDS.principal,
+        capture: exactCapture,
+      }),
+    ).resolves.toBe('accepted')
+
+    const [, update] = mocks.outboxFindOneAndUpdate.mock.calls[0]
+    expect(update.$setOnInsert.report.playbackClock).toEqual(
+      exactCapture.playbackClock,
+    )
+  })
+
   it('never creates an outbox row for an existing v2 consent receipt', async () => {
     mocks.bindingFindOne.mockResolvedValue(
       binding({ consentVersion: 'hire-ai-v2-2026-08' }),

@@ -1,6 +1,14 @@
-export type IpgDeploymentSurface = 'b2c' | 'hire-control' | 'hire-engine'
+import {
+  deploymentSurfaceIdentity,
+  type IpgDeploymentSurface,
+} from './deploymentSurfaceIdentity'
+import { hireIngestionRevisionProtocolState } from '../contracts/hireIngestionRevisionProtocol'
+
+export type { IpgDeploymentSurface } from './deploymentSurfaceIdentity'
 
 type DeploymentEnvironment = Record<string, string | undefined>
+
+const FULL_GIT_SHA = /^[a-f0-9]{40}$/i
 
 const DATABASE_SENTINELS = [
   'B2C_DATABASE_NAME',
@@ -53,11 +61,13 @@ function requireProductionHttpsUrl(
   expectedHostname: string | undefined,
   issues: Set<string>,
 ): void {
-  const raw = env[name]?.trim()
+  const configuredValue = env[name]
+  const raw = configuredValue?.trim()
   if (!raw) return
   try {
     const parsed = new URL(raw)
     if (
+      configuredValue !== raw ||
       parsed.protocol !== 'https:' ||
       parsed.username ||
       parsed.password ||
@@ -72,12 +82,20 @@ function requireProductionHttpsUrl(
   }
 }
 
+function normalizedOrigin(value: string | undefined): string | null {
+  const raw = value?.trim()
+  if (!raw) return null
+  try {
+    return new URL(raw).origin
+  } catch {
+    return null
+  }
+}
+
 export function currentDeploymentSurface(
   env: DeploymentEnvironment = process.env,
 ): IpgDeploymentSurface {
-  if (env.IPG_SURFACE === 'hire-control') return 'hire-control'
-  if (env.IPG_SURFACE === 'hire-engine') return 'hire-engine'
-  return 'b2c'
+  return deploymentSurfaceIdentity(env).surface
 }
 
 /**
@@ -90,7 +108,11 @@ export function currentDeploymentSurface(
 export function hireDeploymentConfigurationIssues(
   env: DeploymentEnvironment = process.env,
 ): string[] {
-  const surface = currentDeploymentSurface(env)
+  const surfaceIdentity = deploymentSurfaceIdentity(env)
+  if (surfaceIdentity.configurationIssue) {
+    return [surfaceIdentity.configurationIssue]
+  }
+  const surface = surfaceIdentity.surface
   if (surface === 'b2c') return []
 
   const issues = new Set<string>()
@@ -113,15 +135,29 @@ export function hireDeploymentConfigurationIssues(
   requireDistinct(env, DATABASE_SENTINELS, 'collision:database-names', issues)
   requireDistinct(env, INNGEST_SENTINELS, 'collision:inngest-app-ids', issues)
 
+  for (const name of DATABASE_SENTINELS) {
+    if (configured(env, name) && env[name] !== env[name]?.trim()) {
+      issues.add(`invalid:${name}`)
+    }
+  }
+
+  if (!FULL_GIT_SHA.test(env.DEPLOYMENT_COMMIT_SHA?.trim() ?? '')) {
+    issues.add('invalid:DEPLOYMENT_COMMIT_SHA')
+  }
+
   if ((env.HIRE_ENGINE_BRIDGE_SECRET?.trim().length ?? 0) < 32) {
     issues.add('weak:HIRE_ENGINE_BRIDGE_SECRET')
   }
-
-  const expectedInngestId =
+  const expectedInngestIdName =
     surface === 'hire-control'
-      ? env.HIRE_CONTROL_INNGEST_APP_ID?.trim()
-      : env.HIRE_RUNTIME_INNGEST_APP_ID?.trim()
-  if (expectedInngestId && env.INNGEST_APP_ID?.trim() !== expectedInngestId) {
+      ? 'HIRE_CONTROL_INNGEST_APP_ID'
+      : 'HIRE_RUNTIME_INNGEST_APP_ID'
+  const expectedInngestId = env[expectedInngestIdName]?.trim()
+  if (
+    expectedInngestId &&
+    (env[expectedInngestIdName] !== expectedInngestId ||
+      env.INNGEST_APP_ID !== expectedInngestId)
+  ) {
     issues.add('mismatch:INNGEST_APP_ID')
   }
   if (surface === 'hire-control') {
@@ -129,12 +165,16 @@ export function hireDeploymentConfigurationIssues(
       env,
       [
         'NEXTAUTH_SECRET',
+        'HIRE_HANDOFF_ISSUANCE_MODE',
+        'HIRE_INGESTION_REVISION_PROTOCOL_MODE',
         'HIRE_PUBLIC_URL',
         'HIRE_ENGINE_RUNTIME_URL',
         'RESEND_API_KEY',
         'EMAIL_FROM',
         'HIRE_INVITE_DELIVERY_KEY_ID',
         'HIRE_INVITE_DELIVERY_KEY',
+        'HIRE_ACCOUNT_BRIDGE_KEY_ID',
+        'HIRE_ACCOUNT_BRIDGE_SECRET',
         'INNGEST_EVENT_KEY',
         'R2_ACCOUNT_ID',
         'R2_ACCESS_KEY_ID',
@@ -149,6 +189,44 @@ export function hireDeploymentConfigurationIssues(
     )
     if ((env.NEXTAUTH_SECRET?.trim().length ?? 0) < 32) {
       issues.add('weak:NEXTAUTH_SECRET')
+    }
+    if ((env.HIRE_ACCOUNT_BRIDGE_SECRET?.trim().length ?? 0) < 32) {
+      issues.add('weak:HIRE_ACCOUNT_BRIDGE_SECRET')
+    }
+    if (
+      configured(env, 'HIRE_ACCOUNT_BRIDGE_SECRET') &&
+      env.HIRE_ACCOUNT_BRIDGE_SECRET === env.HIRE_ENGINE_BRIDGE_SECRET
+    ) {
+      issues.add('collision:bridge-secrets')
+    }
+    const handoffIssuanceMode = env.HIRE_HANDOFF_ISSUANCE_MODE?.trim()
+    if (!['open', 'draining', 'smoke'].includes(handoffIssuanceMode ?? '')) {
+      issues.add('invalid:HIRE_HANDOFF_ISSUANCE_MODE')
+    }
+    if (
+      handoffIssuanceMode === 'smoke' &&
+      Buffer.byteLength(env.HIRE_HANDOFF_SMOKE_TOKEN?.trim() ?? '', 'utf8') < 32
+    ) {
+      issues.add('weak:HIRE_HANDOFF_SMOKE_TOKEN')
+    }
+    const ingestionProtocol = hireIngestionRevisionProtocolState(env)
+    if (
+      !ingestionProtocol.explicitlyConfigured ||
+      !['draining', 'required'].includes(ingestionProtocol.mode)
+    ) {
+      issues.add('invalid:HIRE_INGESTION_REVISION_PROTOCOL_MODE')
+    }
+    if (env.NODE_ENV === 'production' && ingestionProtocol.mode === 'draining') {
+      if (!ingestionProtocol.drainMarkerValid) {
+        issues.add('invalid:HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT')
+      }
+    }
+    if (
+      env.NODE_ENV === 'production' &&
+      ingestionProtocol.mode === 'required' &&
+      !ingestionProtocol.releaseReady
+    ) {
+      issues.add('not-ready:HIRE_INGESTION_REVISION_PROTOCOL')
     }
     if (!canonicalBase64Bytes(env.HIRE_INVITE_DELIVERY_KEY, 32)) {
       issues.add('invalid:HIRE_INVITE_DELIVERY_KEY')
@@ -180,7 +258,8 @@ export function hireDeploymentConfigurationIssues(
     )
     if (
       configured(env, 'HIRE_PUBLIC_URL') &&
-      env.HIRE_PUBLIC_URL?.trim() === env.HIRE_ENGINE_RUNTIME_URL?.trim()
+      normalizedOrigin(env.HIRE_PUBLIC_URL) ===
+        normalizedOrigin(env.HIRE_ENGINE_RUNTIME_URL)
     ) {
       issues.add('collision:hire-origins')
     }
@@ -195,6 +274,7 @@ export function hireDeploymentConfigurationIssues(
         'NEXTAUTH_SECRET',
         'HIRE_RUNTIME_NEXTAUTH_SECRET',
         'HIRE_RUNTIME_FENCE_SECRET',
+        'HIRE_CONTROL_URL',
         'HIRE_CONTROL_INTERNAL_URL',
         'HIRE_ENGINE_RUNTIME_URL',
         'NEXTAUTH_URL',
@@ -206,6 +286,7 @@ export function hireDeploymentConfigurationIssues(
         'HIRE_RUNTIME_R2_ACCESS_KEY_ID',
         'HIRE_RUNTIME_R2_SECRET_ACCESS_KEY',
         'HIRE_RUNTIME_R2_BUCKET_NAME',
+        'NEXT_PUBLIC_FEATURE_MULTIMODAL',
       ],
       issues,
     )
@@ -217,6 +298,9 @@ export function hireDeploymentConfigurationIssues(
     }
     if ((env.HIRE_RUNTIME_FENCE_SECRET?.trim().length ?? 0) < 32) {
       issues.add('weak:HIRE_RUNTIME_FENCE_SECRET')
+    }
+    if (env.NEXT_PUBLIC_FEATURE_MULTIMODAL !== 'true') {
+      issues.add('invalid:NEXT_PUBLIC_FEATURE_MULTIMODAL')
     }
     if (
       configured(env, 'NEXTAUTH_SECRET') &&
@@ -233,11 +317,14 @@ export function hireDeploymentConfigurationIssues(
       if (
         configured(env, engineName) &&
         configured(env, runtimeName) &&
-        env[engineName]?.trim() !== env[runtimeName]?.trim()
+        (env[engineName] !== env[engineName]?.trim() ||
+          env[runtimeName] !== env[runtimeName]?.trim() ||
+          env[engineName] !== env[runtimeName])
       ) {
         issues.add(`mismatch:${engineName}`)
       }
     }
+    requireProductionHttpsUrl(env, 'HIRE_CONTROL_URL', undefined, issues)
     requireProductionHttpsUrl(env, 'HIRE_CONTROL_INTERNAL_URL', undefined, issues)
     requireProductionHttpsUrl(
       env,
@@ -248,14 +335,21 @@ export function hireDeploymentConfigurationIssues(
     requireProductionHttpsUrl(env, 'NEXTAUTH_URL', undefined, issues)
     if (
       configured(env, 'NEXTAUTH_URL') &&
-      env.NEXTAUTH_URL?.trim() !== env.HIRE_ENGINE_RUNTIME_URL?.trim()
+      env.NEXTAUTH_URL !== env.HIRE_ENGINE_RUNTIME_URL
     ) {
       issues.add('mismatch:NEXTAUTH_URL')
     }
     if (
       configured(env, 'HIRE_CONTROL_INTERNAL_URL') &&
-      env.HIRE_CONTROL_INTERNAL_URL?.trim() ===
-        env.HIRE_ENGINE_RUNTIME_URL?.trim()
+      normalizedOrigin(env.HIRE_CONTROL_INTERNAL_URL) ===
+        normalizedOrigin(env.HIRE_ENGINE_RUNTIME_URL)
+    ) {
+      issues.add('collision:hire-origins')
+    }
+    if (
+      configured(env, 'HIRE_CONTROL_URL') &&
+      normalizedOrigin(env.HIRE_CONTROL_URL) ===
+        normalizedOrigin(env.HIRE_ENGINE_RUNTIME_URL)
     ) {
       issues.add('collision:hire-origins')
     }

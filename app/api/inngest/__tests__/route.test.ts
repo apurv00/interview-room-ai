@@ -184,6 +184,105 @@ vi.mock("@modules/hire-multimodal/jobs/hireMultimodalAnalysisJob", () => ({
 
 import "../route";
 
+const sharedHireEnvironment = {
+  MONGODB_URI: "mongodb://mongo.example/ipg-hire-control",
+  REDIS_URL: "rediss://redis.example",
+  HEALTH_CHECK_TOKEN: "health-secret",
+  DEPLOYMENT_COMMIT_SHA: "a".repeat(40),
+  HIRE_ENGINE_BRIDGE_KEY_ID: "hire-bridge-current",
+  HIRE_ENGINE_BRIDGE_SECRET: "b".repeat(64),
+  B2C_DATABASE_NAME: "ipg-b2c",
+  HIRE_CONTROL_DATABASE_NAME: "ipg-hire-control",
+  HIRE_RUNTIME_DATABASE_NAME: "ipg-hire-runtime",
+  B2C_INNGEST_APP_ID: "ipg-b2c-production",
+  HIRE_CONTROL_INNGEST_APP_ID: "ipg-hire-control-production",
+  HIRE_RUNTIME_INNGEST_APP_ID: "ipg-hire-runtime-production",
+  INNGEST_SIGNING_KEY: "signkey-test",
+};
+
+const controlHireEnvironment = {
+  ...sharedHireEnvironment,
+  IPG_SURFACE: "hire-control",
+  INNGEST_APP_ID: "ipg-hire-control-production",
+  INNGEST_EVENT_KEY: "event-key",
+  NEXTAUTH_SECRET: "c".repeat(64),
+  HIRE_HANDOFF_ISSUANCE_MODE: "open",
+  HIRE_INGESTION_REVISION_PROTOCOL_MODE: "required",
+  HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: "2026-08-20T00:00:00.000Z",
+  HIRE_PUBLIC_URL: "https://hire.interviewprep.guru",
+  HIRE_ENGINE_RUNTIME_URL: "https://engine.hire.interviewprep.guru",
+  RESEND_API_KEY: "re_test",
+  EMAIL_FROM: "IPG Hire <hire@send.interviewprep.guru>",
+  HIRE_INVITE_DELIVERY_KEY_ID: "invite-delivery-current",
+  HIRE_INVITE_DELIVERY_KEY: Buffer.alloc(32, 7).toString("base64"),
+  HIRE_ACCOUNT_BRIDGE_KEY_ID: "account-bridge-current",
+  HIRE_ACCOUNT_BRIDGE_SECRET: "a".repeat(64),
+  R2_ACCOUNT_ID: "control-account",
+  R2_ACCESS_KEY_ID: "control-key",
+  R2_SECRET_ACCESS_KEY: "control-secret",
+  R2_BUCKET_NAME: "control-media",
+  HIRE_RUNTIME_R2_ACCOUNT_ID: "runtime-account",
+  HIRE_RUNTIME_R2_ACCESS_KEY_ID: "runtime-key",
+  HIRE_RUNTIME_R2_SECRET_ACCESS_KEY: "runtime-secret",
+  HIRE_RUNTIME_R2_BUCKET_NAME: "runtime-media",
+};
+
+const runtimeHireEnvironment = {
+  ...sharedHireEnvironment,
+  IPG_SURFACE: "hire-engine",
+  MONGODB_URI: "mongodb://mongo.example/ipg-hire-runtime",
+  INNGEST_APP_ID: "ipg-hire-runtime-production",
+  INNGEST_EVENT_KEY: undefined,
+  NEXTAUTH_SECRET: "middleware-secret".repeat(3),
+  NEXTAUTH_URL: "https://engine.hire.interviewprep.guru",
+  HIRE_RUNTIME_NEXTAUTH_SECRET: "r".repeat(64),
+  HIRE_RUNTIME_FENCE_SECRET: "f".repeat(64),
+  HIRE_CONTROL_URL: "https://hire.interviewprep.guru",
+  HIRE_CONTROL_INTERNAL_URL: "https://hire.interviewprep.guru",
+  HIRE_ENGINE_RUNTIME_URL: "https://engine.hire.interviewprep.guru",
+  R2_ACCOUNT_ID: "runtime-account",
+  R2_ACCESS_KEY_ID: "runtime-key",
+  R2_SECRET_ACCESS_KEY: "runtime-secret",
+  R2_BUCKET_NAME: "runtime-media",
+  HIRE_RUNTIME_R2_ACCOUNT_ID: "runtime-account",
+  HIRE_RUNTIME_R2_ACCESS_KEY_ID: "runtime-key",
+  HIRE_RUNTIME_R2_SECRET_ACCESS_KEY: "runtime-secret",
+  HIRE_RUNTIME_R2_BUCKET_NAME: "runtime-media",
+  NEXT_PUBLIC_FEATURE_MULTIMODAL: "true",
+};
+
+async function withEnvironment(
+  environment: Record<string, string | undefined>,
+  run: () => Promise<void>,
+): Promise<void> {
+  const previous = new Map(
+    Object.keys(environment).map((name) => [name, process.env[name]]),
+  );
+  try {
+    for (const [name, value] of Object.entries(environment)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await run();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+async function expectUnavailableRoute(
+  route: typeof import("../route"),
+): Promise<void> {
+  for (const handler of [route.GET, route.POST, route.PUT]) {
+    const response = await (handler as unknown as () => Promise<Response>)();
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("60");
+  }
+  expect(mockServe).not.toHaveBeenCalled();
+}
+
 describe("Inngest route registration", () => {
   it("serves the Jobs retention sweep exactly once", () => {
     expect(mockServe).toHaveBeenCalledOnce();
@@ -218,9 +317,7 @@ describe("Inngest route registration", () => {
   });
 
   it("registers lifecycle retention only on the Hire control surface", async () => {
-    const previousSurface = process.env.IPG_SURFACE;
-    try {
-      process.env.IPG_SURFACE = "hire-control";
+    await withEnvironment(controlHireEnvironment, async () => {
       mockServe.mockClear();
       vi.resetModules();
       await import("../route");
@@ -299,16 +396,11 @@ describe("Inngest route registration", () => {
       ).toHaveLength(1);
       expect(options.functions).toHaveLength(21);
       expect(options.functions).not.toContain(retentionJob);
-    } finally {
-      if (previousSurface === undefined) delete process.env.IPG_SURFACE;
-      else process.env.IPG_SURFACE = previousSurface;
-    }
+    });
   });
 
   it("registers only Hire runtime jobs on the runtime surface", async () => {
-    const previousSurface = process.env.IPG_SURFACE;
-    try {
-      process.env.IPG_SURFACE = "hire-engine";
+    await withEnvironment(runtimeHireEnvironment, async () => {
       mockServe.mockClear();
       vi.resetModules();
       await import("../route");
@@ -321,9 +413,101 @@ describe("Inngest route registration", () => {
         "hire-runtime-multimodal-observation-publisher",
         "hire-runtime-multimodal-analysis-publisher",
       ]);
+    });
+  });
+
+  it.each([undefined, "ipg-b2c-production"])(
+    "refuses Hire registration when INNGEST_APP_ID is %s",
+    async (appId) => {
+      await withEnvironment(
+        { ...controlHireEnvironment, INNGEST_APP_ID: appId },
+        async () => {
+          mockServe.mockClear();
+          vi.resetModules();
+          const route = await import("../route");
+          await expectUnavailableRoute(route);
+        },
+      );
+    },
+  );
+
+  it.each([undefined, "hire-engnie", " hire-engine ", "   "])(
+    "refuses registration for a Hire manifest with invalid surface %s",
+    async (surface) => {
+      const previousSurface = process.env.IPG_SURFACE;
+      const previousControlDb = process.env.HIRE_CONTROL_DATABASE_NAME;
+      const previousRuntimeDb = process.env.HIRE_RUNTIME_DATABASE_NAME;
+      try {
+        if (surface === undefined) delete process.env.IPG_SURFACE;
+        else process.env.IPG_SURFACE = surface;
+        process.env.HIRE_CONTROL_DATABASE_NAME = "ipg-hire-control";
+        process.env.HIRE_RUNTIME_DATABASE_NAME = "ipg-hire-runtime";
+        mockServe.mockClear();
+        vi.resetModules();
+        const route = await import("../route");
+        await expectUnavailableRoute(route);
+      } finally {
+        if (previousSurface === undefined) delete process.env.IPG_SURFACE;
+        else process.env.IPG_SURFACE = previousSurface;
+        if (previousControlDb === undefined)
+          delete process.env.HIRE_CONTROL_DATABASE_NAME;
+        else process.env.HIRE_CONTROL_DATABASE_NAME = previousControlDb;
+        if (previousRuntimeDb === undefined)
+          delete process.env.HIRE_RUNTIME_DATABASE_NAME;
+        else process.env.HIRE_RUNTIME_DATABASE_NAME = previousRuntimeDb;
+      }
+    },
+  );
+
+  it("refuses registration for a Hire-only manifest without DB markers", async () => {
+    const previous = {
+      surface: process.env.IPG_SURFACE,
+      controlDb: process.env.HIRE_CONTROL_DATABASE_NAME,
+      runtimeDb: process.env.HIRE_RUNTIME_DATABASE_NAME,
+      runtimeUrl: process.env.HIRE_ENGINE_RUNTIME_URL,
+    };
+    try {
+      delete process.env.IPG_SURFACE;
+      delete process.env.HIRE_CONTROL_DATABASE_NAME;
+      delete process.env.HIRE_RUNTIME_DATABASE_NAME;
+      process.env.HIRE_ENGINE_RUNTIME_URL = "https://engine.example.test";
+      mockServe.mockClear();
+      vi.resetModules();
+      const route = await import("../route");
+      await expectUnavailableRoute(route);
+    } finally {
+      if (previous.surface === undefined) delete process.env.IPG_SURFACE;
+      else process.env.IPG_SURFACE = previous.surface;
+      if (previous.controlDb === undefined)
+        delete process.env.HIRE_CONTROL_DATABASE_NAME;
+      else process.env.HIRE_CONTROL_DATABASE_NAME = previous.controlDb;
+      if (previous.runtimeDb === undefined)
+        delete process.env.HIRE_RUNTIME_DATABASE_NAME;
+      else process.env.HIRE_RUNTIME_DATABASE_NAME = previous.runtimeDb;
+      if (previous.runtimeUrl === undefined)
+        delete process.env.HIRE_ENGINE_RUNTIME_URL;
+      else process.env.HIRE_ENGINE_RUNTIME_URL = previous.runtimeUrl;
+    }
+  });
+
+  it("keeps B2C workers when the surface is explicitly B2C with Hire markers", async () => {
+    const previousSurface = process.env.IPG_SURFACE;
+    const previousControlDb = process.env.HIRE_CONTROL_DATABASE_NAME;
+    try {
+      process.env.IPG_SURFACE = "b2c";
+      process.env.HIRE_CONTROL_DATABASE_NAME = "ipg-hire-control";
+      mockServe.mockClear();
+      vi.resetModules();
+      await import("../route");
+      const options = mockServe.mock.calls[0][0] as { functions: unknown[] };
+      expect(options.functions).toContain(paymentRecoveryJob);
+      expect(options.functions).toContain(retentionJob);
     } finally {
       if (previousSurface === undefined) delete process.env.IPG_SURFACE;
       else process.env.IPG_SURFACE = previousSurface;
+      if (previousControlDb === undefined)
+        delete process.env.HIRE_CONTROL_DATABASE_NAME;
+      else process.env.HIRE_CONTROL_DATABASE_NAME = previousControlDb;
     }
   });
 });

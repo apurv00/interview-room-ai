@@ -12,6 +12,7 @@ describe('Hire daily digest email', () => {
         awaitingDecision: 3,
         pendingScorecards: 1,
         terminalKitDeliveryFailures: 4,
+        validationAttentionInterviews: 2,
       },
     })
     expect(email.subject).toBe('<Acme & Co>: daily hiring summary')
@@ -20,6 +21,24 @@ describe('Hire daily digest email', () => {
     expect(email.html).toContain('/workspace/overview')
     expect(email.html).not.toContain('candidate@example.com')
     expect(email.text).toContain('2 open jobs')
+    expect(email.text).toContain('2 interview validation timelines available')
     expect(email.text).not.toMatch(/resume|transcript|capability|report attachment|candidate email/i)
+  })
+
+  it('does not invent a zero validation count for a legacy pending snapshot', () => {
+    const email = buildHireDailyDigestEmail({
+      recipientName: 'Member',
+      payload: {
+        workspaceName: 'Acme',
+        generatedAt: new Date('2026-08-14T09:00:00.000Z'),
+        openJobs: 1,
+        awaitingDecision: 0,
+        pendingScorecards: 0,
+        terminalKitDeliveryFailures: 0,
+      },
+    })
+
+    expect(email.text).not.toMatch(/validation timeline/i)
+    expect(email.html).not.toMatch(/validation timeline/i)
   })
 })

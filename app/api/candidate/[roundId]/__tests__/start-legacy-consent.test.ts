@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   checkRateLimit: vi.fn(),
@@ -60,9 +60,10 @@ function selected(value: unknown) {
   }
 }
 
-function request() {
+function request(headers?: Record<string, string>) {
   return new NextRequest(`http://localhost/api/candidate/${SCOPE.roundId}/start`, {
     method: 'POST',
+    headers,
   })
 }
 
@@ -104,7 +105,45 @@ beforeEach(() => {
   mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 1 })
 })
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 describe('POST /api/candidate/[roundId]/start legacy consent', () => {
+  it('blocks before attempt creation while issuance is draining', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('HIRE_HANDOFF_ISSUANCE_MODE', 'draining')
+
+    const response = await POST(request(), { params: { roundId: SCOPE.roundId } })
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('retry-after')).toBe('30')
+    expect(await response.json()).toMatchObject({ code: 'HANDOFF_ISSUANCE_PAUSED' })
+    expect(mocks.checkRateLimit).not.toHaveBeenCalled()
+    expect(mocks.requireHireGuest).not.toHaveBeenCalled()
+    expect(mocks.startHireInterviewAttempt).not.toHaveBeenCalled()
+    expect(mocks.issueHireEngineHandoff).not.toHaveBeenCalled()
+  })
+
+  it('keeps public issuance blocked in smoke mode and permits only the operator path', async () => {
+    const token = 's'.repeat(64)
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('HIRE_HANDOFF_ISSUANCE_MODE', 'smoke')
+    vi.stubEnv('HIRE_HANDOFF_SMOKE_TOKEN', token)
+
+    const publicResponse = await POST(request(), { params: { roundId: SCOPE.roundId } })
+    expect(publicResponse.status).toBe(503)
+    expect(mocks.startHireInterviewAttempt).not.toHaveBeenCalled()
+
+    const smokeResponse = await POST(
+      request({ 'x-hire-handoff-smoke-token': token }),
+      { params: { roundId: SCOPE.roundId } },
+    )
+    expect(smokeResponse.status).toBe(200)
+    expect(mocks.startHireInterviewAttempt).toHaveBeenCalledOnce()
+    expect(mocks.issueHireEngineHandoff).toHaveBeenCalledOnce()
+  })
+
   it('issues a handoff from the active v2 attempt receipt rather than upgrading it to v3', async () => {
     const response = await POST(request(), { params: { roundId: SCOPE.roundId } })
 

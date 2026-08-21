@@ -159,6 +159,11 @@ export function useHireInterviewIntegrityGate({
     return elapsedMsFromTimestamp(Date.now(), startedAtRef.current)
   }, [])
 
+  const elapsedMsAt = useCallback((timestamp: number): number | null => {
+    if (!Number.isFinite(timestamp) || startedAtRef.current === null) return null
+    return elapsedMsFromTimestamp(timestamp, startedAtRef.current)
+  }, [])
+
   const reportCompletedInterruption = useCallback(
     (kind: HireInterviewIntegrityEventKind, startMs: number, endMs: number) => {
       const normalizedStartMs = elapsedMsFromTimestamp(startMs, startedAtRef.current)
@@ -524,5 +529,6 @@ export function useHireInterviewIntegrityGate({
     recheck: validateAndEnterFullscreen,
     markInterviewComplete,
     elapsedMs,
+    elapsedMsAt,
   }
 }

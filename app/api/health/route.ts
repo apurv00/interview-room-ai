@@ -3,9 +3,17 @@ import {
   currentDeploymentSurface,
   hireDeploymentConfigurationIssues,
 } from '@shared/surfaces/hireDeploymentReadiness'
+import {
+  HIRE_MEDIA_OBJECT_PROTOCOL,
+  HIRE_RUNTIME_LANDMARK_OBJECT_PROTOCOL,
+} from '@shared/contracts/hireMediaObjectProtocol'
+import { hireIngestionRevisionProtocolState } from '@shared/contracts/hireIngestionRevisionProtocol'
+import { hireHandoffIssuanceState } from '../candidate/_lib/hireHandoffIssuanceGate'
 import { deploymentCommitOf } from './deploymentIdentity'
 
 export const dynamic = 'force-dynamic'
+const HIRE_MULTIMODAL_BUILD_ENABLED =
+  process.env.HIRE_MULTIMODAL_BUILD_ENABLED === 'true'
 
 // NOTE: Heavy deps (`mongoose`, `@shared/db/connection`, `@shared/redis`) are
 // dynamic-imported inside each handler on purpose. If we imported them at
@@ -23,7 +31,11 @@ export const dynamic = 'force-dynamic'
  */
 export async function HEAD() {
   try {
-    if (hireDeploymentConfigurationIssues().length > 0) {
+    const surface = currentDeploymentSurface()
+    if (
+      hireDeploymentConfigurationIssues().length > 0 ||
+      (surface === 'hire-engine' && !HIRE_MULTIMODAL_BUILD_ENABLED)
+    ) {
       return new NextResponse(null, { status: 503 })
     }
     const { connectDB } = await import('@shared/db/connection')
@@ -54,12 +66,56 @@ export async function GET(req: NextRequest) {
     req.headers.get('authorization')?.replace('Bearer ', '') ||
     req.nextUrl.searchParams.get('token')
   const releaseGateAuthenticated = !!token && provided === token
+  const configurationIssues = hireDeploymentConfigurationIssues()
+  const surface = currentDeploymentSurface()
+  const browserBuildReady =
+    surface !== 'hire-engine' || HIRE_MULTIMODAL_BUILD_ENABLED
   if (!releaseGateAuthenticated) {
-    return NextResponse.json({ status: 'ok' }, { status: 200 })
+    const configured = configurationIssues.length === 0 && browserBuildReady
+    return NextResponse.json(
+      { status: configured ? 'ok' : 'degraded' },
+      { status: configured ? 200 : 503 },
+    )
   }
   const checks: Record<string, 'ok' | 'error'> = {}
-  const configurationIssues = hireDeploymentConfigurationIssues()
   checks.configuration = configurationIssues.length === 0 ? 'ok' : 'error'
+  if (surface === 'hire-engine') {
+    checks.hireBrowserBuild = HIRE_MULTIMODAL_BUILD_ENABLED ? 'ok' : 'error'
+  }
+  if (configurationIssues.length > 0 || !browserBuildReady) {
+    const response = NextResponse.json(
+      {
+        status: 'degraded',
+        checks,
+        surface,
+        configurationIssues,
+        hireInterviewBuild: surface === 'hire-engine'
+          ? { multimodal: HIRE_MULTIMODAL_BUILD_ENABLED }
+          : null,
+        handoffIssuance:
+          surface === 'hire-control' ? hireHandoffIssuanceState() : null,
+        releaseGateAuthenticated,
+        deploymentCommit: deploymentCommitOf(),
+        hireMediaObjectProtocol:
+          surface === 'hire-control'
+            ? HIRE_MEDIA_OBJECT_PROTOCOL
+            : 'not-applicable',
+        hireRuntimeLandmarkObjectProtocol:
+          surface === 'hire-engine'
+            ? HIRE_RUNTIME_LANDMARK_OBJECT_PROTOCOL
+            : 'not-applicable',
+        hireIngestionRevisionProtocol:
+          surface === 'hire-control'
+            ? hireIngestionRevisionProtocolState()
+            : 'not-applicable',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+      },
+      { status: 503 },
+    )
+    response.headers.set('Cache-Control', 'private, no-store')
+    return response
+  }
 
   try {
     const { connectDB } = await import('@shared/db/connection')
@@ -84,10 +140,27 @@ export async function GET(req: NextRequest) {
     {
       status: allOk ? 'healthy' : 'degraded',
       checks,
-      surface: currentDeploymentSurface(),
+      surface,
+      handoffIssuance:
+        surface === 'hire-control' ? hireHandoffIssuanceState() : null,
       configurationIssues,
+      hireInterviewBuild: releaseGateAuthenticated && surface === 'hire-engine'
+        ? { multimodal: HIRE_MULTIMODAL_BUILD_ENABLED }
+        : null,
       releaseGateAuthenticated,
       deploymentCommit: releaseGateAuthenticated ? deploymentCommitOf() : null,
+      hireMediaObjectProtocol:
+        surface === 'hire-control'
+          ? HIRE_MEDIA_OBJECT_PROTOCOL
+          : 'not-applicable',
+      hireRuntimeLandmarkObjectProtocol:
+        surface === 'hire-engine'
+          ? HIRE_RUNTIME_LANDMARK_OBJECT_PROTOCOL
+          : 'not-applicable',
+      hireIngestionRevisionProtocol:
+        surface === 'hire-control'
+          ? hireIngestionRevisionProtocolState()
+          : 'not-applicable',
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
     },

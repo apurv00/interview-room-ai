@@ -26,6 +26,11 @@ import {
   HireJob,
   HireJobRequirementVersion,
   HireMediaAsset,
+  HireMultimodalAnalysis,
+  HireMultimodalAnalysisIngestionEvent,
+  HireMultimodalObservation,
+  HireMultimodalObservationIngestionEvent,
+  HireMultimodalObservationPurgeObligation,
   HirePrivacyRequest,
   HireReportExport,
   HireRound,
@@ -38,6 +43,7 @@ import {
   connectHireControlDB,
   deleteHireAssessmentExportObjects,
   deliverRuntimeRevocation,
+  hireMediaStorageKindForAsset,
   hireMediaStorage,
   revokeCandidateStatusLinksForScope,
   type HireAssessmentExportCleanupTarget,
@@ -53,6 +59,8 @@ import {
 export const HIRE_ONBOARDING_TEST_DRIVE_CLEANUP_LIMIT = 20
 const TEST_DRIVE_CLEANUP_LEASE_MS = 15 * 60 * 1000
 const TEST_DRIVE_MEDIA_DELETE_BATCH_SIZE = 25
+const TEST_DRIVE_LEGACY_STAGING_GRACE_MS = 60 * 60 * 1000
+const TEST_DRIVE_STALE_MEDIA_PURGE_CLAIM_MS = 15 * 60 * 1000
 const RUNTIME_REVOCATION_DELIVERY_BATCH_SIZE = 10
 const TEST_DRIVE_RETENTION_PURGE_REASON = 'Practice test-drive retention elapsed'
 
@@ -155,6 +163,21 @@ function mediaCoordinate(asset: {
 function cleanupFailureCode(error: unknown): string {
   if (error instanceof Error && error.name) return error.name.slice(0, 120)
   return 'TEST_DRIVE_CLEANUP_FAILED'
+}
+
+function stagingWriterStillOwnsTestDriveMedia(asset: {
+  state: string
+  ingestionLeaseId?: string
+  ingestionLeaseExpiresAt?: Date
+  createdAt?: Date
+}, now: Date): boolean {
+  if (asset.state !== 'staging') return false
+  if (asset.ingestionLeaseExpiresAt) {
+    return asset.ingestionLeaseExpiresAt.getTime() > now.getTime()
+  }
+  if (asset.ingestionLeaseId) return true
+  return !asset.createdAt
+    || asset.createdAt.getTime() > now.getTime() - TEST_DRIVE_LEGACY_STAGING_GRACE_MS
 }
 
 function boundedLimit(value: number | undefined): number {
@@ -720,37 +743,127 @@ async function deleteTestDriveMedia(input: {
       ...scope,
       state: { $ne: 'purged' },
     })
+      .select('+objectKeyNonce')
       .sort({ _id: 1 })
       .limit(TEST_DRIVE_MEDIA_DELETE_BATCH_SIZE)
     if (assets.length === 0) return deleted
 
+    const claimAt = input.clock()
+    if (assets.some((asset) => stagingWriterStillOwnsTestDriveMedia(asset, claimAt))) {
+      throw new Error('Test-drive media ingestion lease is still active')
+    }
+
     let firstFailure: unknown
-    for (const asset of assets) {
+    for (const candidate of assets) {
+      const purgeClaimId = randomUUID()
       try {
-        // DELETE is idempotent. A crash after object acknowledgement but
-        // before this row update safely repeats the exact-coordinate delete.
+        const asset = await HireMediaAsset.findOneAndUpdate(
+          {
+            _id: candidate._id,
+            ...scope,
+            objectKey: candidate.objectKey,
+            ...(candidate.objectKeyNonce
+              ? { objectKeyNonce: candidate.objectKeyNonce }
+              : { objectKeyNonce: { $exists: false } }),
+            $or: [
+              { state: { $in: ['ready', 'purge_failed'] } },
+              {
+                state: 'staging',
+                ingestionLeaseExpiresAt: { $lte: claimAt },
+              },
+              {
+                state: 'staging',
+                ingestionLeaseId: { $exists: false },
+                ingestionLeaseExpiresAt: { $exists: false },
+                createdAt: {
+                  $lte: new Date(claimAt.getTime() - TEST_DRIVE_LEGACY_STAGING_GRACE_MS),
+                },
+              },
+              ...(candidate.state === 'purge_claimed'
+                && candidate.purgeClaimedAt
+                && candidate.purgeClaimedAt.getTime()
+                  <= claimAt.getTime() - TEST_DRIVE_STALE_MEDIA_PURGE_CLAIM_MS
+                ? [{
+                    state: 'purge_claimed' as const,
+                    purgeClaimedAt: candidate.purgeClaimedAt,
+                    ...(candidate.purgeClaimId
+                      ? { purgeClaimId: candidate.purgeClaimId }
+                      : { purgeClaimId: { $exists: false } }),
+                  }]
+                : []),
+            ],
+          },
+          {
+            $set: {
+              state: 'purge_claimed',
+              purgeClaimId,
+              purgeClaimedAt: claimAt,
+            },
+            $unset: {
+              active: 1,
+              ingestionLeaseId: 1,
+              ingestionLeaseExpiresAt: 1,
+              purgeFailureCode: 1,
+            },
+          },
+          { new: true },
+        )
+        if (!asset) throw new Error('Test-drive media purge claim is no longer authoritative')
+        // Logical deletion is idempotent: legacy keys are physically deleted,
+        // while v2 keys receive the same permanent zero-byte seal on retry.
         await input.storage.delete({
           key: asset.objectKey,
           coordinate: mediaCoordinate(asset),
+          kind: hireMediaStorageKindForAsset(candidate.kind),
+          objectKeyNonce: candidate.objectKeyNonce,
         })
-        await HireMediaAsset.updateOne(
+        const finalized = await HireMediaAsset.updateOne(
           {
             _id: asset._id,
             ...scope,
             objectKey: asset.objectKey,
-            state: { $ne: 'purged' },
+            state: 'purge_claimed',
+            purgeClaimId,
           },
           {
             $set: { state: 'purged', purgedAt: input.clock() },
             $unset: {
               active: 1,
+              ingestionLeaseId: 1,
+              ingestionLeaseExpiresAt: 1,
+              purgeClaimId: 1,
               purgeClaimedAt: 1,
               purgeFailureCode: 1,
             },
           },
         )
-        deleted += 1
+        if (finalized.modifiedCount !== 1) {
+          throw new Error('Test-drive media purge claim changed before finalization')
+        }
+        deleted += finalized.modifiedCount
       } catch (error) {
+        await HireMediaAsset.updateOne(
+          {
+            _id: candidate._id,
+            ...scope,
+            objectKey: candidate.objectKey,
+            state: 'purge_claimed',
+            purgeClaimId,
+          },
+          {
+            $set: {
+              state: 'purge_failed',
+              purgeFailureCode: cleanupFailureCode(error),
+            },
+            $unset: {
+              purgeClaimId: 1,
+              purgeClaimedAt: 1,
+              active: 1,
+              ingestionLeaseId: 1,
+              ingestionLeaseExpiresAt: 1,
+            },
+          },
+        )
         firstFailure ??= error
       }
     }
@@ -789,7 +902,12 @@ async function deleteClaimedTestDriveGraph(input: {
       const scope = testDriveScope(testDrive)
       const unacknowledgedMedia = await HireMediaAsset.exists({
         ...scope,
-        state: { $ne: 'purged' },
+        $or: [
+          { state: { $ne: 'purged' } },
+          { purgedAt: { $exists: false } },
+          { ingestionLeaseId: { $exists: true } },
+          { ingestionLeaseExpiresAt: { $exists: true } },
+        ],
       }).session(session)
       if (unacknowledgedMedia) {
         throw new Error('Test-drive media deletion has not been acknowledged')
@@ -857,9 +975,35 @@ async function deleteClaimedTestDriveGraph(input: {
         },
         { session },
       )
+      const multimodalEventScope = {
+        workspaceId: testDrive.workspaceId,
+        applicationId: testDrive.applicationId,
+        candidateId: testDrive.candidateId,
+        roundId: testDrive.roundId,
+      }
+      await HireMultimodalObservationIngestionEvent.deleteMany(
+        multimodalEventScope,
+        { session },
+      )
+      await HireMultimodalObservation.deleteMany(scope, { session })
+      await HireMultimodalObservationPurgeObligation.deleteMany(scope, { session })
+      await HireMultimodalAnalysisIngestionEvent.deleteMany(
+        multimodalEventScope,
+        { session },
+      )
+      await HireMultimodalAnalysis.deleteMany(scope, { session })
       await HireInterviewResult.deleteMany(scope, { session })
       await HireInterviewAttempt.deleteMany(scope, { session })
-      await HireMediaAsset.deleteMany(scope, { session })
+      await HireMediaAsset.deleteMany(
+        {
+          ...scope,
+          state: 'purged',
+          purgedAt: { $exists: true },
+          ingestionLeaseId: { $exists: false },
+          ingestionLeaseExpiresAt: { $exists: false },
+        },
+        { session },
+      )
       // Screening confirmation stores candidate/application snapshots and a
       // durable email-dispatch plan. These exact synthetic job rows must not
       // survive as either a reportable gate or a future delivery egress.
@@ -1054,7 +1198,10 @@ export async function purgeDueHireOnboardingTestDrives(input: {
 export const __hireOnboardingTestDriveLifecycle = {
   TEST_DRIVE_CLEANUP_LEASE_MS,
   TEST_DRIVE_MEDIA_DELETE_BATCH_SIZE,
+  TEST_DRIVE_LEGACY_STAGING_GRACE_MS,
+  TEST_DRIVE_STALE_MEDIA_PURGE_CLAIM_MS,
   RUNTIME_REVOCATION_DELIVERY_BATCH_SIZE,
   mediaCoordinate,
   cleanupFailureCode,
+  stagingWriterStillOwnsTestDriveMedia,
 }

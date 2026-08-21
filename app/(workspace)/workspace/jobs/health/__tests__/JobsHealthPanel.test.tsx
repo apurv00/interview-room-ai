@@ -58,6 +58,8 @@ describe("JobsHealthPanel", () => {
                 thresholdDays: 6,
               },
               { kind: "pending_human_scorecards", count: 1 },
+              { kind: "failed_multimodal_analyses", count: 2 },
+              { kind: "interview_validation_attention", count: 3 },
             ],
             candidateName: "PRIVATE_CANDIDATE_NAME",
             rawAi: "PRIVATE_RAW_AI",
@@ -74,10 +76,14 @@ describe("JobsHealthPanel", () => {
     ).toBeTruthy();
     expect(screen.getByText("2 in Shortlist for 8+ days")).toBeTruthy();
     expect(screen.getByText("Department: Engineering")).toBeTruthy();
+    expect(screen.getByText("2 interview analyses needing retry")).toBeTruthy();
+    expect(
+      screen.getByText("3 interview validation timelines available"),
+    ).toBeTruthy();
     expect(
       screen.getByRole("link", { name: "View performance" }),
     ).toHaveAttribute("href", `/workspace/jobs/${jobId}/performance`);
-    expect(fetchMock).toHaveBeenCalledWith("/api/workspace/jobs/health", {
+    expect(fetchMock).toHaveBeenCalledWith("/api/workspace/jobs/health?contractVersion=2", {
       cache: "no-store",
     });
     expect(

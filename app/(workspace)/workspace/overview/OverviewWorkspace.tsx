@@ -37,7 +37,10 @@ export default function OverviewWorkspace() {
     setError(null);
     try {
       setOverview(
-        await readOperationsResponse("/api/workspace/overview", overviewFrom),
+        await readOperationsResponse(
+          "/api/workspace/overview?contractVersion=2",
+          overviewFrom,
+        ),
       );
     } catch (cause) {
       setError(
@@ -64,7 +67,10 @@ export default function OverviewWorkspace() {
   }
 
   const totalActions = overview.actionInbox.items.reduce(
-    (total, item) => total + item.count,
+    (total, item) =>
+      item.kind === "interview_validation_attention"
+        ? total
+        : total + item.count,
     0,
   );
   const actionItems = overview.actionInbox.items.filter(
@@ -174,7 +180,10 @@ export default function OverviewWorkspace() {
                 </span>
                 <Badge
                   variant={
-                    item.kind === "terminal_human_kit_delivery_failures"
+                    item.kind === "interview_validation_attention"
+                      ? "default"
+                      : item.kind === "terminal_human_kit_delivery_failures"
+                      || item.kind === "failed_multimodal_analyses"
                       ? "danger"
                       : "caution"
                   }

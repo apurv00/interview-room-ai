@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => {
     bindingExists: vi.fn(),
     rawDelete: vi.fn(),
     observationDelete: vi.fn(),
+    analysisFind: vi.fn(),
     analysisDelete: vi.fn(),
     observationRetentionTombstoneDelete: vi.fn(),
   }
@@ -93,7 +94,10 @@ vi.mock('../models/HireRuntimeMultimodalObservationOutbox', () => ({
   HireRuntimeMultimodalObservationOutbox: { deleteMany: mocks.observationDelete },
 }))
 vi.mock('../models/HireRuntimeMultimodalAnalysisOutbox', () => ({
-  HireRuntimeMultimodalAnalysisOutbox: { deleteMany: mocks.analysisDelete },
+  HireRuntimeMultimodalAnalysisOutbox: {
+    find: mocks.analysisFind,
+    deleteMany: mocks.analysisDelete,
+  },
 }))
 vi.mock('../models/HireRuntimeMultimodalObservationRetentionTombstone', () => ({
   HireRuntimeMultimodalObservationRetentionTombstone: {
@@ -115,6 +119,13 @@ const APPLICATION_ID = new mongoose.Types.ObjectId('1'.repeat(24))
 const CAMERA_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-1723248000000.webm`
 const SCREEN_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-screen-1723248000002.webm`
 const AUDIO_KEY = `recordings/${PRINCIPAL_ID}/${SESSION_ID}-audio-1723248000001.webm`
+const SECOND_SESSION_ID = new mongoose.Types.ObjectId('2'.repeat(24))
+const LANDMARK_KEY = `landmarks/v2/${'a'.repeat(64)}`
+const SECOND_LANDMARK_KEY = `landmarks/v2/${'b'.repeat(64)}`
+const ORPHAN_LANDMARK_KEY = `landmarks/v2/${'c'.repeat(64)}`
+const LANDMARK_NONCE = '3'.repeat(64)
+const SECOND_LANDMARK_NONCE = '4'.repeat(64)
+const ORPHAN_LANDMARK_NONCE = '5'.repeat(64)
 
 function selected(value: unknown) {
   return { select: () => ({ lean: async () => value }) }
@@ -170,6 +181,7 @@ beforeEach(() => {
     recordingR2Key: CAMERA_KEY,
   }]))
   mocks.userFind.mockReturnValue(selected(null))
+  mocks.analysisFind.mockReturnValue(selected([]))
   mocks.usageFence.mockImplementation(async () => mocks.events.push('usage-fence'))
   mocks.redisDelete.mockImplementation(async () => {
     mocks.events.push('redis-cache-purge')
@@ -304,6 +316,105 @@ describe('complete isolated runtime personal-data cascade', () => {
       status: 'revoked',
       purgePersonalData: true,
     })
+  })
+
+  it('deletes every exact raw-landmark outbox artifact across attempts before removing the outboxes', async () => {
+    mocks.analysisFind.mockReturnValue(selected([
+      {
+        attempt: 1,
+        runtimeSessionId: SESSION_ID,
+        landmarkArtifact: {
+          sourceKey: LANDMARK_KEY,
+          objectKeyNonce: LANDMARK_NONCE,
+        },
+      },
+      {
+        attempt: 2,
+        runtimeSessionId: SECOND_SESSION_ID,
+        landmarkArtifact: {
+          sourceKey: SECOND_LANDMARK_KEY,
+          objectKeyNonce: SECOND_LANDMARK_NONCE,
+        },
+      },
+    ]))
+
+    await expect(
+      purgeRuntimePrincipalData({ binding: binding() as never, roundId: ROUND_ID }),
+    ).resolves.toBeInstanceOf(Date)
+
+    expect(mocks.analysisFind).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      applicationId: APPLICATION_ID,
+      roundId: new mongoose.Types.ObjectId(ROUND_ID),
+      principalId: PRINCIPAL_ID,
+    })
+    expect(mocks.deleteObjects).toHaveBeenCalledWith({
+      principalId: PRINCIPAL_ID.toString(),
+      objects: expect.arrayContaining([
+        {
+          key: LANDMARK_KEY,
+          runtimeSessionId: SESSION_ID.toString(),
+          objectKeyNonce: LANDMARK_NONCE,
+        },
+        {
+          key: SECOND_LANDMARK_KEY,
+          runtimeSessionId: SECOND_SESSION_ID.toString(),
+          objectKeyNonce: SECOND_LANDMARK_NONCE,
+        },
+      ]),
+    })
+    expect(mocks.events.indexOf('delete-r2')).toBeLessThan(
+      mocks.events.indexOf('multimodal-analyses'),
+    )
+  })
+
+  it('retains exact landmark inventories on R2 failure and retries them before deleting outboxes', async () => {
+    mocks.analysisFind.mockReturnValue(selected([{
+      runtimeSessionId: SESSION_ID,
+      landmarkArtifact: {
+        sourceKey: LANDMARK_KEY,
+        objectKeyNonce: LANDMARK_NONCE,
+      },
+    }]))
+    mocks.deleteObjects.mockRejectedValueOnce(new Error('R2 unavailable'))
+    const purgeBinding = binding({
+      issuedObjectCapabilities: [{
+        key: ORPHAN_LANDMARK_KEY,
+        objectKeyNonce: ORPHAN_LANDMARK_NONCE,
+        runtimeSessionId: SESSION_ID,
+        expiresAt: new Date('2026-08-10T00:00:00.000Z'),
+      }],
+    })
+
+    await expect(
+      purgeRuntimePrincipalData({ binding: purgeBinding as never, roundId: ROUND_ID }),
+    ).rejects.toThrow('R2 unavailable')
+
+    expect(mocks.analysisDelete).not.toHaveBeenCalled()
+    expect(mocks.observationDelete).not.toHaveBeenCalled()
+    expect(mocks.sessionDelete).not.toHaveBeenCalled()
+    expect(mocks.userDelete).not.toHaveBeenCalled()
+
+    await expect(
+      purgeRuntimePrincipalData({ binding: purgeBinding as never, roundId: ROUND_ID }),
+    ).resolves.toBeInstanceOf(Date)
+
+    expect(mocks.deleteObjects).toHaveBeenCalledTimes(2)
+    for (const [{ objects }] of mocks.deleteObjects.mock.calls) {
+      expect(objects).toEqual(expect.arrayContaining([
+        {
+          key: ORPHAN_LANDMARK_KEY,
+          runtimeSessionId: SESSION_ID.toString(),
+          objectKeyNonce: ORPHAN_LANDMARK_NONCE,
+        },
+        {
+          key: LANDMARK_KEY,
+          runtimeSessionId: SESSION_ID.toString(),
+          objectKeyNonce: LANDMARK_NONCE,
+        },
+      ]))
+    }
+    expect(mocks.analysisDelete).toHaveBeenCalledOnce()
   })
 
   it('rejects a foreign-workspace binding before any purge side effect', async () => {

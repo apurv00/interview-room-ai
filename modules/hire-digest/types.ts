@@ -30,6 +30,9 @@ export interface HireDigestPayload {
   awaitingDecision: number
   pendingScorecards: number
   terminalKitDeliveryFailures: number
+  /** Latest per-session observation timelines with events or insufficient signal. */
+  /** Absent only on legacy pending outboxes created before this aggregate existed. */
+  validationAttentionInterviews?: number
 }
 
 export interface HireDigestMemberView {

@@ -12,18 +12,22 @@ import {
 import { aggregateFacialData, extractProsody } from '@interview'
 import type { FacialFrame, WhisperSegment, WhisperWord } from '@shared/types/multimodal'
 import {
+  activeHirePrivacyRequestFilter,
   assertHireMediaKeyScope,
   connectHireControlDB,
   HireMediaAsset,
   HirePrivacyRequest,
   HireRound,
 } from '@hire'
-import { HireMultimodalAnalysis } from '../models'
+import {
+  HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS,
+  HireMultimodalAnalysis,
+} from '../models'
 import { runHireMultimodalFusion, type HireMultimodalContentSignal } from './hireMultimodalFusionService'
 
 const PROCESSING_LEASE_MS = 10 * 60 * 1_000
 const MAX_LANDMARK_BYTES = HIRE_MULTIMODAL_ANALYSIS_MAX_ARTIFACT_BYTES
-const MAX_AUTOMATIC_RETRY_ATTEMPTS = 3
+const MAX_AUTOMATIC_RETRY_ATTEMPTS = HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS
 const RETRY_BASE_MS = 5 * 60 * 1_000
 
 const StoredLandmarkArtifactSchema = z.object({
@@ -113,7 +117,9 @@ async function loadFrames(analysis: AnalysisDocumentShape): Promise<FacialFrame[
     attemptId: analysis.attemptId,
     kind: 'facial_landmarks',
     state: 'ready',
-  }).lean()
+  })
+    .select('+objectKeyNonce')
+    .lean()
   if (!asset || asset.bytes > MAX_LANDMARK_BYTES || asset.contentType !== 'application/json') {
     throw new Error('Private facial landmark artifact is unavailable')
   }
@@ -123,7 +129,7 @@ async function loadFrames(analysis: AnalysisDocumentShape): Promise<FacialFrame[
     roundId: asset.roundId.toString(),
     attemptId: asset.attemptId.toString(),
     assetId: asset._id.toString(),
-  })
+  }, 'facial-landmarks', asset.objectKeyNonce)
   const storage = controlR2Client()
   const object = await storage.client.send(
     new GetObjectCommand({ Bucket: storage.bucket, Key: asset.objectKey }),
@@ -259,7 +265,7 @@ async function canProcessAnalysis(analysis: AnalysisDocumentShape): Promise<bool
     HirePrivacyRequest.exists({
       workspaceId: analysis.workspaceId,
       candidateId: analysis.candidateId,
-      live: true,
+      ...activeHirePrivacyRequestFilter(new Date()),
     }),
   ])
   return Boolean(current) && !privacy
@@ -432,7 +438,7 @@ export async function markHireMultimodalAnalysisFailed(input: {
       workspaceId: input.workspaceId,
       status: { $in: ['pending', 'processing'] },
       $or: [
-        { retryAttemptCount: { $lt: MAX_AUTOMATIC_RETRY_ATTEMPTS } },
+        { retryAttemptCount: { $lt: MAX_AUTOMATIC_RETRY_ATTEMPTS - 1 } },
         { retryAttemptCount: { $exists: false } },
       ],
     },
@@ -456,7 +462,10 @@ export async function markHireMultimodalAnalysisFailed(input: {
       status: { $in: ['pending', 'processing'] },
     },
     {
-      $set: failureState,
+      $set: {
+        ...failureState,
+        retryAttemptCount: MAX_AUTOMATIC_RETRY_ATTEMPTS,
+      },
       $unset: { processingLeaseExpiresAt: 1, retryAt: 1 },
     },
   )
@@ -500,6 +509,7 @@ export async function recoverPendingHireMultimodalAnalyses(input: {
 }
 
 export const __hireMultimodalAnalysisProcessing = {
+  canProcessAnalysis,
   questionWindows,
   liveWords,
   contentSignals,

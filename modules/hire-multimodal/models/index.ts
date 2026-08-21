@@ -13,6 +13,7 @@ export {
 } from "./HireMultimodalObservationPurgeObligation";
 export {
   HireMultimodalAnalysis,
+  HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS,
   HIRE_MULTIMODAL_ANALYSIS_STATUSES,
   type HireMultimodalAnalysisStatus,
   type HireMultimodalAnalysisTimelineEvent,

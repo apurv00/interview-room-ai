@@ -5,6 +5,8 @@ import {
   HIRE_MULTIMODAL_OBSERVATION_MAX_EVENTS,
   HIRE_MULTIMODAL_OBSERVATION_MAX_REVISIONS,
   HIRE_MULTIMODAL_OBSERVATION_MAX_SPEECH_VIDEO_SAMPLES,
+  HIRE_MULTIMODAL_OBSERVATION_PLAYBACK_CLOCK_PROTOCOL_VERSION,
+  type HireMultimodalObservationPlaybackClock,
   type HireMultimodalObservationSpeechVideoSample,
 } from '@shared/contracts/hireMultimodalObservationBridge'
 import type { ReplayUploadIntent } from './resumableUpload'
@@ -124,6 +126,53 @@ function validSpeechSample(
   )
 }
 
+/**
+ * Converts MediaRecorder wall-clock starts onto the canonical integrity
+ * timeline. Missing/invalid authority is omitted so a legacy or failed
+ * recorder can never acquire a guessed seek offset.
+ */
+export function buildHireInterviewPlaybackClock(input: {
+  cameraRecorderStartedAtMs?: number | null
+  screenRecorderStartedAtMs?: number | null
+  elapsedMsAt: (timestamp: number) => number | null
+}): HireMultimodalObservationPlaybackClock | undefined {
+  const offsetFor = (startedAtMs: number | null | undefined) => {
+    if (startedAtMs === null || startedAtMs === undefined) return undefined
+    const offset = input.elapsedMsAt(startedAtMs)
+    if (
+      offset === null ||
+      !Number.isFinite(offset) ||
+      offset < 0 ||
+      offset > HIRE_MULTIMODAL_OBSERVATION_MAX_DURATION_MS
+    ) {
+      return undefined
+    }
+    return Math.round(offset)
+  }
+  const cameraRecorderStartOffsetMs = offsetFor(
+    input.cameraRecorderStartedAtMs,
+  )
+  const screenRecorderStartOffsetMs = offsetFor(
+    input.screenRecorderStartedAtMs,
+  )
+  if (
+    cameraRecorderStartOffsetMs === undefined &&
+    screenRecorderStartOffsetMs === undefined
+  ) {
+    return undefined
+  }
+  return {
+    protocolVersion:
+      HIRE_MULTIMODAL_OBSERVATION_PLAYBACK_CLOCK_PROTOCOL_VERSION,
+    ...(cameraRecorderStartOffsetMs !== undefined
+      ? { cameraRecorderStartOffsetMs }
+      : {}),
+    ...(screenRecorderStartOffsetMs !== undefined
+      ? { screenRecorderStartOffsetMs }
+      : {}),
+  }
+}
+
 function responseOutcome(value: unknown): Exclude<
   HireInterviewIntegrityFlushOutcome,
   'unchanged' | 'cancelled' | 'unavailable'
@@ -221,6 +270,9 @@ export function createHireInterviewIntegrityReporter(input: {
               })),
             }
           : { available: false, hiddenSpans: [] },
+        ...(capture?.playbackClock
+          ? { playbackClock: { ...capture.playbackClock } }
+          : {}),
         integrity: {
           browserFocus: { available: availability.browserFocus },
           fullscreen: { available: availability.fullscreen },

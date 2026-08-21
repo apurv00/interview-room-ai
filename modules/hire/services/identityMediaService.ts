@@ -1,10 +1,14 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import mongoose from 'mongoose'
 import sharp from 'sharp'
 import { HireConsentReceipt } from '../models/HireConsentReceipt'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
 import { HireJob } from '../models/HireJob'
-import { HireMediaAsset, type IHireMediaAsset } from '../models/HireMediaAsset'
+import {
+  createHireMediaIngestionLease,
+  HireMediaAsset,
+  type IHireMediaAsset,
+} from '../models/HireMediaAsset'
 import { HireRound } from '../models/HireRound'
 import { HireWorkspace } from '../models/HireWorkspace'
 import {
@@ -13,12 +17,19 @@ import {
 } from '../policies/aiInterviewConsent'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
+  HIRE_MEDIA_LEASE_CLEANUP_MARGIN_MS,
+  HIRE_MEDIA_WRITE_TIMEOUT_MS,
   hireMediaKey,
   hireMediaStorage,
+  type HireMediaCoordinate,
   type HireMediaStoragePort,
 } from './hireMediaStorage'
 import type { HireGuestScope } from './identityConsentService'
 import { addCalendarMonths } from './mediaLifecycleService'
+import {
+  claimHireCandidatePiiWriteFence,
+  HireCandidatePiiTombstoneError,
+} from './hireCandidatePrivacyWriteFence'
 
 export const MAX_IDENTITY_PHOTO_INPUT_BYTES = 3 * 1024 * 1024
 export const MAX_IDENTITY_PHOTO_EDGE = 1280
@@ -172,6 +183,156 @@ async function resolveAttemptConsent(
   }
 }
 
+async function compensateFailedIdentityPhoto(input: {
+  assetId: mongoose.Types.ObjectId
+  scope: HireGuestScope
+  objectKey: string
+  objectKeyNonce: string
+  coordinate: HireMediaCoordinate
+  storage: HireMediaStoragePort
+  now: Date
+  ingestionLeaseId: string
+  purgeReason: 'privacy_request' | 'stale_staging'
+  failureCode: 'UPLOAD_FAILED_OR_UNCERTAIN' | 'ATTACH_FAILED'
+}): Promise<void> {
+  const stagingScope = {
+    _id: input.assetId,
+    workspaceId: input.scope.workspaceId,
+    applicationId: input.scope.applicationId,
+    jobId: input.scope.jobId,
+    candidateId: input.scope.candidateId,
+    roundId: input.scope.roundId,
+    attemptId: input.scope.attemptId,
+    kind: 'identity_photo' as const,
+    objectKey: input.objectKey,
+    state: 'staging' as const,
+    ingestionLeaseId: input.ingestionLeaseId,
+  }
+
+  const purgeClaimId = randomUUID()
+
+  // Claim cleanup before touching storage. If the final attachment transaction
+  // committed but returned an unknown result, the row is already ready with its
+  // lease cleared, so this CAS misses and its valid active object is preserved.
+  let claimed: IHireMediaAsset | null = null
+  try {
+    claimed = await HireMediaAsset.findOneAndUpdate(
+      stagingScope,
+      {
+        $set: {
+          state: 'purge_claimed',
+          purgeClaimId,
+          purgeClaimedAt: input.now,
+          purgeEligibleAt: input.now,
+          purgeReason: input.purgeReason,
+          purgeFailureCode: input.failureCode,
+        },
+        $unset: {
+          active: 1,
+          ingestionLeaseId: 1,
+          ingestionLeaseExpiresAt: 1,
+          purgedAt: 1,
+        },
+      },
+      { new: true },
+    )
+  } catch {
+    // Leased staging remains durable and becomes recoverable at lease expiry.
+    return
+  }
+  if (!claimed) return
+
+  const claimScope = {
+    _id: input.assetId,
+    workspaceId: input.scope.workspaceId,
+    applicationId: input.scope.applicationId,
+    jobId: input.scope.jobId,
+    candidateId: input.scope.candidateId,
+    roundId: input.scope.roundId,
+    attemptId: input.scope.attemptId,
+    kind: 'identity_photo' as const,
+    objectKey: input.objectKey,
+    state: 'purge_claimed' as const,
+    purgeClaimId,
+  }
+
+  try {
+    // The unconditional tombstone linearizes against the conditional media
+    // PutObject in either order, including after an ambiguous client result.
+    await input.storage.delete({
+      key: input.objectKey,
+      coordinate: input.coordinate,
+      kind: 'identity-photo',
+      objectKeyNonce: input.objectKeyNonce,
+    })
+  } catch {
+    await HireMediaAsset.updateOne(
+      claimScope,
+      {
+        $set: {
+          state: 'purge_failed',
+          purgeEligibleAt: input.now,
+          purgeReason: input.purgeReason,
+          purgeFailureCode: `${input.failureCode}_TOMBSTONE_FAILED`,
+        },
+        $unset: {
+          active: 1,
+          purgeClaimId: 1,
+          purgeClaimedAt: 1,
+          purgedAt: 1,
+        },
+      },
+    ).catch(() => undefined)
+    return
+  }
+
+  await HireMediaAsset.updateOne(
+    claimScope,
+    {
+      $set: {
+        state: 'purged',
+        purgedAt: input.now,
+        purgeEligibleAt: input.now,
+        purgeReason: input.purgeReason,
+      },
+      $unset: {
+        active: 1,
+        purgeClaimId: 1,
+        purgeClaimedAt: 1,
+        purgeFailureCode: 1,
+      },
+    },
+  ).catch(() => undefined)
+}
+
+async function claimHireJobMediaRetention(
+  scope: Pick<HireGuestScope, 'workspaceId' | 'jobId'>,
+  session: mongoose.ClientSession,
+): Promise<{ purgeEligibleAt: Date; purgeReason: 'job_closed' } | undefined> {
+  const job = await HireJob.findOneAndUpdate(
+    { _id: scope.jobId, workspaceId: scope.workspaceId },
+    { $inc: { intakeWriteVersion: 1 } },
+    {
+      new: true,
+      session,
+      projection: { status: 1, closedAt: 1 },
+    },
+  )
+  if (!job) {
+    throw new HireIdentityMediaError(
+      'This interview job no longer exists',
+      'ROUND_INVALID',
+      410,
+    )
+  }
+  return job.status === 'closed' && job.closedAt
+    ? {
+        purgeEligibleAt: addCalendarMonths(job.closedAt, 6),
+        purgeReason: 'job_closed',
+      }
+    : undefined
+}
+
 export async function saveHireIdentityPhoto(input: {
   scope: HireGuestScope
   body: Buffer
@@ -207,25 +368,11 @@ export async function saveHireIdentityPhoto(input: {
     )
   }
 
-  const job = await HireJob.findOne({
-    _id: input.scope.jobId,
-    workspaceId: input.scope.workspaceId,
-  })
-    .select('status closedAt')
-    .lean()
-  if (!job) {
-    throw new HireIdentityMediaError(
-      'This interview job no longer exists',
-      'ROUND_INVALID',
-      410,
-    )
-  }
-  const jobPurgeEligibleAt =
-    job.status === 'closed' && job.closedAt
-      ? addCalendarMonths(job.closedAt, 6)
-      : undefined
-
   const assetId = new mongoose.Types.ObjectId()
+  const objectKeyNonce = randomBytes(32).toString('hex')
+  // Retention tests may supply a historical business timestamp. The ingestion
+  // lease is concurrency control, so it must always be based on wall-clock time.
+  const ingestionLease = createHireMediaIngestionLease()
   const coordinate = {
     workspaceId: input.scope.workspaceId,
     applicationId: input.scope.applicationId,
@@ -233,59 +380,146 @@ export async function saveHireIdentityPhoto(input: {
     attemptId: input.scope.attemptId,
     assetId: assetId.toString(),
   }
-  const objectKey = hireMediaKey(coordinate, 'identity-photo')
-  const asset = await HireMediaAsset.create({
-    _id: assetId,
-    workspaceId: input.scope.workspaceId,
-    applicationId: input.scope.applicationId,
-    jobId: input.scope.jobId,
-    candidateId: input.scope.candidateId,
-    roundId: input.scope.roundId,
-    attemptId: input.scope.attemptId,
-    kind: 'identity_photo',
-    state: 'staging',
-    objectKey,
-    contentType: normalized.contentType,
-    bytes: normalized.body.byteLength,
-    sha256: normalized.sha256,
-    width: normalized.width,
-    height: normalized.height,
-    capturedAt: now,
-    ...(jobPurgeEligibleAt
-      ? { purgeEligibleAt: jobPurgeEligibleAt, purgeReason: 'job_closed' }
-      : {}),
-  })
-
+  const objectKey = hireMediaKey(
+    coordinate,
+    'identity-photo',
+    objectKeyNonce,
+  )
+  const stageSession = await mongoose.startSession()
   try {
-    await storage.upload({
-      key: objectKey,
-      body: normalized.body,
-      contentType: normalized.contentType,
+    await stageSession.withTransaction(async () => {
+      // Keep the lock order aligned with workspace deletion: workspace root
+      // first, candidate privacy row second, then the child staging record.
+      const workspaceFence = await HireWorkspace.updateOne(
+        {
+          _id: input.scope.workspaceId,
+          $or: [
+            { lifecycleState: 'active' },
+            { lifecycleState: { $exists: false } },
+          ],
+        },
+        { $inc: { writeFenceVersion: 1 } },
+        { session: stageSession },
+      )
+      if (workspaceFence.matchedCount !== 1) {
+        throw new HireIdentityMediaError(
+          'This interview invitation is no longer valid',
+          'ROUND_INVALID',
+          410,
+        )
+      }
+      await claimHireCandidatePiiWriteFence({
+        workspaceId: input.scope.workspaceId,
+        candidateId: input.scope.candidateId,
+        session: stageSession,
+      })
+      const retention = await claimHireJobMediaRetention(
+        input.scope,
+        stageSession,
+      )
+      await HireMediaAsset.create(
+        [
+          {
+            _id: assetId,
+            workspaceId: input.scope.workspaceId,
+            applicationId: input.scope.applicationId,
+            jobId: input.scope.jobId,
+            candidateId: input.scope.candidateId,
+            roundId: input.scope.roundId,
+            attemptId: input.scope.attemptId,
+            kind: 'identity_photo',
+            state: 'staging',
+            ...ingestionLease,
+            objectKey,
+            objectKeyNonce,
+            contentType: normalized.contentType,
+            bytes: normalized.body.byteLength,
+            sha256: normalized.sha256,
+            width: normalized.width,
+            height: normalized.height,
+            capturedAt: now,
+            ...retention,
+          },
+        ],
+        { session: stageSession },
+      )
     })
   } catch (error) {
-    await HireMediaAsset.updateOne(
-      {
-        _id: assetId,
-        workspaceId: input.scope.workspaceId,
-        applicationId: input.scope.applicationId,
-        roundId: input.scope.roundId,
-        attemptId: input.scope.attemptId,
-        state: 'staging',
-      },
-      {
-        $set: {
-          purgeEligibleAt: now,
-          purgeReason: 'stale_staging',
-          purgeFailureCode: 'UPLOAD_FAILED_OR_UNCERTAIN',
-        },
-      },
+    if (error instanceof HireCandidatePiiTombstoneError) {
+      throw new HireIdentityMediaError(
+        'This interview invitation is no longer valid',
+        'ROUND_INVALID',
+        410,
+      )
+    }
+    throw error
+  } finally {
+    await stageSession.endSession()
+  }
+
+  const remainingLeaseMs =
+    ingestionLease.ingestionLeaseExpiresAt.getTime() - Date.now()
+  const uploadBudgetMs = Math.min(
+    HIRE_MEDIA_WRITE_TIMEOUT_MS,
+    remainingLeaseMs - HIRE_MEDIA_LEASE_CLEANUP_MARGIN_MS,
+  )
+  if (uploadBudgetMs <= 0) {
+    const error = new Error(
+      'Hire identity media lease has insufficient time to start an upload',
     )
+    await compensateFailedIdentityPhoto({
+      assetId,
+      scope: input.scope,
+      objectKey,
+      objectKeyNonce,
+      coordinate,
+      storage,
+      now,
+      ingestionLeaseId: ingestionLease.ingestionLeaseId,
+      purgeReason: 'stale_staging',
+      failureCode: 'UPLOAD_FAILED_OR_UNCERTAIN',
+    })
+    throw error
+  }
+
+  const uploadController = new AbortController()
+  const uploadDeadline = setTimeout(() => {
+    uploadController.abort(new Error('Hire identity media upload timed out'))
+  }, uploadBudgetMs)
+  try {
+    try {
+      await storage.upload({
+        key: objectKey,
+        coordinate,
+        kind: 'identity-photo',
+        objectKeyNonce,
+        body: normalized.body,
+        contentType: normalized.contentType,
+        signal: uploadController.signal,
+      })
+    } finally {
+      clearTimeout(uploadDeadline)
+    }
+  } catch (error) {
+    await compensateFailedIdentityPhoto({
+      assetId,
+      scope: input.scope,
+      objectKey,
+      objectKeyNonce,
+      coordinate,
+      storage,
+      now,
+      ingestionLeaseId: ingestionLease.ingestionLeaseId,
+      purgeReason: 'stale_staging',
+      failureCode: 'UPLOAD_FAILED_OR_UNCERTAIN',
+    })
     throw error
   }
 
   const dbSession = await mongoose.startSession()
   try {
     await dbSession.withTransaction(async () => {
+      // Preserve workspace-root-first lock ordering during final attachment.
       const workspaceFence = await HireWorkspace.updateOne(
         {
           _id: input.scope.workspaceId,
@@ -304,6 +538,15 @@ export async function saveHireIdentityPhoto(input: {
           410,
         )
       }
+      // Verified candidate deletion and identity-photo attachment claim this
+      // same row. Whichever transaction loses must retry against the winner's
+      // state, so an upload cannot become active behind a privacy tombstone.
+      await claimHireCandidatePiiWriteFence({
+        workspaceId: input.scope.workspaceId,
+        candidateId: input.scope.candidateId,
+        session: dbSession,
+      })
+      const retention = await claimHireJobMediaRetention(input.scope, dbSession)
       await HireMediaAsset.updateMany(
         {
           workspaceId: input.scope.workspaceId,
@@ -328,17 +571,19 @@ export async function saveHireIdentityPhoto(input: {
           roundId: input.scope.roundId,
           attemptId: input.scope.attemptId,
           state: 'staging',
+          ingestionLeaseId: ingestionLease.ingestionLeaseId,
+          ingestionLeaseExpiresAt: { $gt: new Date() },
         },
         {
           $set: {
             state: 'ready',
             active: true,
-            ...(jobPurgeEligibleAt
-              ? { purgeEligibleAt: jobPurgeEligibleAt, purgeReason: 'job_closed' }
-              : {}),
+            ...retention,
           },
           $unset: {
-            ...(!jobPurgeEligibleAt ? { purgeEligibleAt: 1, purgeReason: 1 } : {}),
+            ...(!retention ? { purgeEligibleAt: 1, purgeReason: 1 } : {}),
+            ingestionLeaseId: 1,
+            ingestionLeaseExpiresAt: 1,
             purgeFailureCode: 1,
           },
         },
@@ -370,23 +615,26 @@ export async function saveHireIdentityPhoto(input: {
       }
     })
   } catch (error) {
-    await HireMediaAsset.updateOne(
-      {
-        _id: assetId,
-        workspaceId: input.scope.workspaceId,
-        applicationId: input.scope.applicationId,
-        roundId: input.scope.roundId,
-        attemptId: input.scope.attemptId,
-      },
-      {
-        $set: {
-          purgeEligibleAt: now,
-          purgeReason: 'stale_staging',
-          purgeFailureCode: 'ATTACH_FAILED',
-        },
-        $unset: { active: 1 },
-      },
-    )
+    const privacyWon = error instanceof HireCandidatePiiTombstoneError
+    await compensateFailedIdentityPhoto({
+      assetId,
+      scope: input.scope,
+      objectKey,
+      objectKeyNonce,
+      coordinate,
+      storage,
+      now,
+      ingestionLeaseId: ingestionLease.ingestionLeaseId,
+      purgeReason: privacyWon ? 'privacy_request' : 'stale_staging',
+      failureCode: 'ATTACH_FAILED',
+    })
+    if (privacyWon) {
+      throw new HireIdentityMediaError(
+        'This interview invitation is no longer valid',
+        'ROUND_INVALID',
+        410,
+      )
+    }
     throw error
   } finally {
     await dbSession.endSession()

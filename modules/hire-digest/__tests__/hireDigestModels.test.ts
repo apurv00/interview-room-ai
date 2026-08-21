@@ -38,6 +38,7 @@ function outbox(overrides: Record<string, unknown> = {}) {
       awaitingDecision: 3,
       pendingScorecards: 1,
       terminalKitDeliveryFailures: 0,
+      validationAttentionInterviews: 0,
     },
     status: 'pending',
     sendAfter: new Date('2026-08-14T09:00:00.000Z'),

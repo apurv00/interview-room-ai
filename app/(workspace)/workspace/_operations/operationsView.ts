@@ -33,6 +33,8 @@ const ACTION_KINDS = [
   "pending_human_scorecards",
   "terminal_human_kit_delivery_failures",
   "external_verdicts_received",
+  "failed_multimodal_analyses",
+  "interview_validation_attention",
 ] as const;
 const CONVERSION_STAGES = [
   "screened",
@@ -579,6 +581,8 @@ export const operationsLabels: Record<ActionKind | "stuck_in_stage", string> = {
   pending_human_scorecards: "Human scorecards pending",
   terminal_human_kit_delivery_failures: "Interview-kit delivery failures",
   external_verdicts_received: "External verdicts received",
+  failed_multimodal_analyses: "Interview analyses needing retry",
+  interview_validation_attention: "Interview validation timelines available",
   stuck_in_stage: "Candidates waiting in a stage",
 };
 

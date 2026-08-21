@@ -22,8 +22,8 @@ export interface RuntimeWriteTargetBinding {
   status: string
   consentVersion: string
   publishedRevision?: number
-  cameraMediaStatus?: 'pending' | 'published'
-  screenMediaStatus?: 'pending' | 'published'
+  cameraMediaStatus?: 'pending' | 'published' | 'unavailable'
+  screenMediaStatus?: 'pending' | 'published' | 'unavailable'
   workspaceId: string
   applicationId: string
   roundId: string
@@ -393,11 +393,49 @@ function replayKindFromBodyType(
   return type
 }
 
+function replayKindForTerminalFence(
+  input: RuntimeWriteTargetGuardInput,
+  target: NonNullable<ReturnType<typeof resolveHireRuntimeWriteTarget>>,
+): ReplayRecordingKind | null {
+  const body = input.requestBody ?? {}
+  if (
+    target.coordinates === 'recording-artifact' ||
+    target.coordinates === 'storage-presign'
+  ) {
+    return body.type === 'recording' || body.type === 'screen-recording'
+      ? body.type
+      : null
+  }
+  if (target.coordinates !== 'storage-multipart' || body.action === 'abort') {
+    return null
+  }
+  if (body.action === 'create') {
+    return body.type === 'recording' || body.type === 'screen-recording'
+      ? body.type
+      : null
+  }
+  if (typeof body.key !== 'string') return null
+  const kind = recordingIdentity(body.key).kind
+  return kind === 'audio-recording' ? null : kind
+}
+
 function assertPostResultReplayWrite(
   input: RuntimeWriteTargetGuardInput,
   target: NonNullable<ReturnType<typeof resolveHireRuntimeWriteTarget>>,
 ): void {
   const { binding } = input
+  const terminalKind = replayKindForTerminalFence(input, target)
+  const terminalStatus = terminalKind === 'recording'
+    ? binding.cameraMediaStatus
+    : terminalKind === 'screen-recording'
+      ? binding.screenMediaStatus
+      : undefined
+  if (terminalStatus === 'unavailable') {
+    throw new RuntimeWriteTargetGuardError(
+      'Runtime replay upload is terminally unavailable',
+      410,
+    )
+  }
   if (binding.publishedRevision === undefined) return
   if (
     !Number.isInteger(binding.publishedRevision) ||

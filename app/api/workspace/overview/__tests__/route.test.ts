@@ -55,4 +55,41 @@ describe("GET /api/workspace/overview", () => {
       actionInbox: { items: [] },
     });
   });
+
+  it("keeps legacy clients compatible until they explicitly request contract v2", async () => {
+    mocks.readOverview.mockResolvedValue({
+      kpis: {},
+      actionInbox: {
+        items: [
+          { kind: "candidates_awaiting_decision", count: 1 },
+          { kind: "interview_validation_attention", count: 2 },
+        ],
+      },
+    });
+
+    const legacy = await GET(
+      new Request("https://hire.example/api/workspace/overview") as never,
+    );
+    await expect(legacy.json()).resolves.toEqual({
+      kpis: {},
+      actionInbox: {
+        items: [{ kind: "candidates_awaiting_decision", count: 1 }],
+      },
+    });
+
+    const v2 = await GET(
+      new Request(
+        "https://hire.example/api/workspace/overview?contractVersion=2",
+      ) as never,
+    );
+    await expect(v2.json()).resolves.toEqual({
+      kpis: {},
+      actionInbox: {
+        items: [
+          { kind: "candidates_awaiting_decision", count: 1 },
+          { kind: "interview_validation_attention", count: 2 },
+        ],
+      },
+    });
+  });
 });

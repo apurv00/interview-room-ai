@@ -7,9 +7,12 @@ import { aiLogger } from '@shared/logger'
 import { redis } from '@shared/redis'
 import { getPlanLimits } from '@shared/services/stripe'
 import {
-  HIRE_MEMBER_COOKIE,
-  resolveHireMemberSession,
-} from '@hire/services/memberAuthService'
+  applyHireMemberRequestCookies,
+  resolveHireMemberRequestSession,
+  type HireMemberRequestSession,
+} from '../../hire-auth/_lib/memberSession'
+import { hasTrustedOriginForMutation } from '../../hire-auth/_lib/request'
+import { resolveHireMemberSession } from '@hire/services/memberAuthService'
 import { getWorkspaceForUser } from '@hire/services/workspaceService'
 
 export interface HireApiUser {
@@ -53,6 +56,11 @@ type ResolvedPrincipal = {
   workspaceIdAtEntry?: string | null
 }
 
+type PrincipalResolution = {
+  principal: ResolvedPrincipal | null
+  memberSession: HireMemberRequestSession
+}
+
 function isWorkspaceBootstrapRequest(req: NextRequest): boolean {
   return (
     req.nextUrl.pathname === '/api/workspace' &&
@@ -60,24 +68,27 @@ function isWorkspaceBootstrapRequest(req: NextRequest): boolean {
   )
 }
 
-async function resolvePrincipal(req: NextRequest): Promise<ResolvedPrincipal | null> {
-  const rawHireToken = req.cookies.get(HIRE_MEMBER_COOKIE)?.value
-  const hire = await resolveHireMemberSession(rawHireToken)
+async function resolvePrincipal(req: NextRequest): Promise<PrincipalResolution> {
+  const memberSession = await resolveHireMemberRequestSession(req)
+  const hire = memberSession.auth
   if (hire) {
     return {
-      kind: 'hire_member',
-      rawHireToken,
-      user: {
-        id: `hire-member:${hire.workspace._id.toString()}:${hire.membership._id.toString()}`,
-        email: hire.membership.email,
-        role: hire.membership.role,
-        plan: 'free',
+      memberSession,
+      principal: {
+        kind: 'hire_member',
+        rawHireToken: memberSession.sessionCredential,
+        user: {
+          id: `hire-member:${hire.workspace._id.toString()}:${hire.membership._id.toString()}`,
+          email: hire.membership.email,
+          role: hire.membership.role,
+          plan: 'free',
+        },
       },
     }
   }
 
   const session = await getServerSession(authOptions)
-  if (!session?.user?.id) return null
+  if (!session?.user?.id) return { principal: null, memberSession }
   const user: HireApiUser = {
     id: session.user.id,
     email: session.user.email,
@@ -90,10 +101,13 @@ async function resolvePrincipal(req: NextRequest): Promise<ResolvedPrincipal | n
     email: user.email,
   })
   return {
-    kind: 'b2c',
-    user,
-    workspaceIdAtEntry:
-      workspaceAtEntry?.workspace._id.toString() ?? null,
+    memberSession,
+    principal: {
+      kind: 'b2c',
+      user,
+      workspaceIdAtEntry:
+        workspaceAtEntry?.workspace._id.toString() ?? null,
+    },
   }
 }
 
@@ -139,6 +153,11 @@ export function composeHireApiRoute<T = unknown>(options: ComposeHireOptions<T>)
     req: NextRequest,
     context?: { params?: Record<string, string> }
   ): Promise<NextResponse> => {
+    let memberSession: HireMemberRequestSession | undefined
+    const finalize = (response: NextResponse): NextResponse =>
+      memberSession
+        ? applyHireMemberRequestCookies(response, memberSession)
+        : response
     try {
       if (
         process.env.NODE_ENV === 'production' &&
@@ -149,9 +168,19 @@ export function composeHireApiRoute<T = unknown>(options: ComposeHireOptions<T>)
           { status: 503 },
         )
       }
-      const principal = await resolvePrincipal(req)
+      if (!hasTrustedOriginForMutation(req)) {
+        return NextResponse.json(
+          { error: 'Invalid request origin' },
+          { status: 403 },
+        )
+      }
+      const resolution = await resolvePrincipal(req)
+      memberSession = resolution.memberSession
+      const principal = resolution.principal
       if (!principal) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        return finalize(
+          NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+        )
       }
 
       try {
@@ -162,12 +191,14 @@ export function composeHireApiRoute<T = unknown>(options: ComposeHireOptions<T>)
         const current = await redis.incr(key)
         if (current === 1) await redis.pexpire(key, options.rateLimit.windowMs)
         if (current > max) {
-          return NextResponse.json(
-            { error: 'Rate limit exceeded. Try again later.' },
-            {
-              status: 429,
-              headers: { 'Retry-After': String(Math.ceil(options.rateLimit.windowMs / 1000)) },
-            }
+          return finalize(
+            NextResponse.json(
+              { error: 'Rate limit exceeded. Try again later.' },
+              {
+                status: 429,
+                headers: { 'Retry-After': String(Math.ceil(options.rateLimit.windowMs / 1000)) },
+              },
+            ),
           )
         }
       } catch (err) {
@@ -188,7 +219,7 @@ export function composeHireApiRoute<T = unknown>(options: ComposeHireOptions<T>)
       } catch (handlerError) {
         try {
           if (!(await principalStillActive(principal, req))) {
-            return accountUnavailableResponse()
+            return finalize(accountUnavailableResponse())
           }
         } catch (recheckError) {
           // Preserve the handler's original AppError/diagnostic contract if
@@ -203,30 +234,39 @@ export function composeHireApiRoute<T = unknown>(options: ComposeHireOptions<T>)
 
       // Removal/account-deletion racing a read cannot release private output.
       if (!(await principalStillActive(principal, req))) {
-        return accountUnavailableResponse()
+        return finalize(accountUnavailableResponse())
       }
-      return response
+      return finalize(response)
     } catch (err) {
       if (err instanceof ZodError) {
-        return NextResponse.json(
-          {
-            error: 'Validation failed',
-            details: err.issues.map((issue) => ({
-              path: issue.path.join('.'),
-              message: issue.message,
-            })),
-          },
-          { status: 400 }
+        return finalize(
+          NextResponse.json(
+            {
+              error: 'Validation failed',
+              details: err.issues.map((issue) => ({
+                path: issue.path.join('.'),
+                message: issue.message,
+              })),
+            },
+            { status: 400 },
+          ),
         )
       }
       if (err instanceof AppError) {
-        return NextResponse.json(
-          { error: err.message, code: err.code },
-          { status: err.statusCode }
+        return finalize(
+          NextResponse.json(
+            { error: err.message, code: err.code },
+            { status: err.statusCode },
+          ),
         )
       }
       aiLogger.error({ err, path: req.nextUrl.pathname }, 'Unhandled Hire workspace error')
-      return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+      return finalize(
+        NextResponse.json(
+          { error: 'Internal server error' },
+          { status: 500 },
+        ),
+      )
     }
   }
 }

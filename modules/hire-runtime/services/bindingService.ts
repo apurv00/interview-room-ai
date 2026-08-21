@@ -89,6 +89,8 @@ export async function provisionRuntimeBinding(
       consentVersion: envelope.consentVersion,
       consentAt: new Date(envelope.consentAt),
       inviteExpiresAt: new Date(envelope.inviteExpiresAt),
+      resultPayloadSnapshotProtocolVersion: 1,
+      mediaCompletionContractVersion: 1,
       status: 'provisioned',
       attemptCount: 0,
     })
@@ -173,6 +175,38 @@ export async function completionBindingForPrincipal(
     throw new HireRuntimeBindingError('Runtime binding unavailable', 'not_found', 404)
   }
   return binding
+}
+
+/**
+ * Completion-page authority includes a privacy-terminal outcome so the last
+ * authenticated tab can discard local IndexedDB media and sign out. Other
+ * runtime callers keep the narrower completionBindingForPrincipal contract.
+ */
+export async function completionBoundaryForPrincipal(input: {
+  workspaceId: string
+  principalId: string
+}): Promise<
+  | { state: 'available'; binding: IHireRuntimeBinding }
+  | { state: 'account_unavailable'; reason: 'revoked' | 'purging' }
+> {
+  await connectHireRuntimeDB()
+  const binding = await HireRuntimeBinding.findOne({
+    workspaceId: input.workspaceId,
+    principalId: input.principalId,
+  })
+  if (!binding) {
+    throw new HireRuntimeBindingError('Runtime binding unavailable', 'not_found', 404)
+  }
+  if (binding.purgePersonalData === true) {
+    return { state: 'account_unavailable', reason: 'purging' }
+  }
+  if (binding.status === 'revoked' || binding.revokedAt) {
+    return { state: 'account_unavailable', reason: 'revoked' }
+  }
+  if (binding.status !== 'active' && binding.status !== 'completed') {
+    throw new HireRuntimeBindingError('Runtime binding unavailable', 'not_found', 404)
+  }
+  return { state: 'available', binding }
 }
 
 export async function acquireSessionProvisioningLease(

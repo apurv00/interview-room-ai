@@ -19,7 +19,8 @@ function safeOrigin(value: string | undefined, fallback: string): string {
 }
 
 /** Authenticate the workspace creator on the B2C origin, then return to the
- * isolated Hire control plane with the domain-scoped HR session cookie. */
+ * isolated Hire control plane. Direct Hire-member sessions use a host-only
+ * cookie and are never shared with the B2C sibling origin. */
 export async function GET() {
   const b2cOrigin = safeOrigin(
     process.env.B2C_PUBLIC_URL || process.env.APP_URL,

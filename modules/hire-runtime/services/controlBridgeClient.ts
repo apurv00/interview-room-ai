@@ -14,6 +14,10 @@ import {
   type HireMultimodalAnalysisIngestion,
 } from '@shared/contracts/hireMultimodalAnalysisBridge'
 import { createInternalServiceHeaders } from '@shared/services/internalServiceAuth'
+import {
+  HIRE_INGESTION_REVISION_PROTOCOL_HEADER,
+  HIRE_INGESTION_REVISION_PROTOCOL_VERSION,
+} from '@shared/contracts/hireIngestionRevisionProtocol'
 import { assertHireRuntimeSurface } from './runtimeBoundary'
 
 export class HireControlBridgeError extends Error {
@@ -44,10 +48,20 @@ function controlBaseUrl(): string {
 const HANDOFF_TIMEOUT_MS = 15_000
 const RESULT_INGESTION_TIMEOUT_MS = 4 * 60 * 1_000
 
+function handoffRequestId(code: string, clientNonce: string): string {
+  return createHash('sha256')
+    .update('ipg-hire-handoff-request:v2\0')
+    .update(code.toLowerCase())
+    .update('\0')
+    .update(clientNonce.toLowerCase())
+    .digest('hex')
+}
+
 async function postControl(
   path: string,
   value: unknown,
   timeoutMs = HANDOFF_TIMEOUT_MS,
+  revisionProtocol = false,
 ): Promise<unknown> {
   const body = JSON.stringify(value)
   const response = await fetch(new URL(path, controlBaseUrl()), {
@@ -55,6 +69,12 @@ async function postControl(
     headers: {
       'Content-Type': 'application/json',
       ...createInternalServiceHeaders({ method: 'POST', path, body }),
+      ...(revisionProtocol
+        ? {
+            [HIRE_INGESTION_REVISION_PROTOCOL_HEADER]:
+              HIRE_INGESTION_REVISION_PROTOCOL_VERSION,
+          }
+        : {}),
     },
     body,
     cache: 'no-store',
@@ -77,8 +97,9 @@ async function postControl(
 
 export async function exchangeHandoffWithControl(
   code: string,
+  clientNonce: string,
 ): Promise<HireEngineHandoffEnvelope> {
-  const requestId = createHash('sha256').update(code.toLowerCase()).digest('hex')
+  const requestId = handoffRequestId(code, clientNonce)
   const response = await postControl('/api/internal/hire/engine/exchange', {
     code: code.toLowerCase(),
     requestId,
@@ -94,6 +115,7 @@ export async function publishResultToControl(
     '/api/internal/hire/engine/results',
     payload,
     RESULT_INGESTION_TIMEOUT_MS,
+    true,
   )) as { ok?: unknown; outcome?: unknown }
   if (
     response.ok !== true ||
@@ -135,6 +157,7 @@ export async function publishMultimodalAnalysisToControl(
     '/api/internal/hire/engine/multimodal-analysis',
     payload,
     RESULT_INGESTION_TIMEOUT_MS,
+    true,
   )) as { ok?: unknown; outcome?: unknown }
   if (
     response.ok !== true ||
@@ -152,4 +175,5 @@ export async function publishMultimodalAnalysisToControl(
 export const __controlBridgeClient = {
   HANDOFF_TIMEOUT_MS,
   RESULT_INGESTION_TIMEOUT_MS,
+  handoffRequestId,
 }

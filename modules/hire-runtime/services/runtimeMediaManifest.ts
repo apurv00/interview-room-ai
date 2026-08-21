@@ -3,6 +3,7 @@ import {
   AbortMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
 import {
@@ -17,6 +18,12 @@ interface RuntimeMediaCandidate {
   sizeBytes?: number | null
   contentType: string
 }
+
+const RUNTIME_LANDMARK_V2_KEY_PATTERN =
+  /^landmarks\/v2\/([a-f0-9]{64})$/
+const RUNTIME_LANDMARK_V2_SCOPE_DOMAIN =
+  'interview-room-ai:hire-runtime-landmark:v2\0'
+const RUNTIME_LANDMARK_TOMBSTONE_CONTENT_TYPE = 'application/octet-stream'
 
 type ResolvedRuntimeMediaCandidate = Omit<
   RuntimeMediaCandidate,
@@ -46,6 +53,92 @@ function runtimeBucket(): string {
   return value
 }
 
+function runtimeLandmarkScopeDigest(input: {
+  principalId: string
+  runtimeSessionId: string
+  objectKeyNonce: string
+}): string {
+  const principalId = input.principalId.toLowerCase()
+  const runtimeSessionId = input.runtimeSessionId.toLowerCase()
+  const objectKeyNonce = input.objectKeyNonce.toLowerCase()
+  if (
+    !/^[a-f0-9]{24}$/.test(principalId) ||
+    !/^[a-f0-9]{24}$/.test(runtimeSessionId) ||
+    !/^[a-f0-9]{64}$/.test(objectKeyNonce)
+  ) {
+    throw new Error('Runtime landmark coordinates are invalid')
+  }
+  return createHash('sha256')
+    .update(RUNTIME_LANDMARK_V2_SCOPE_DOMAIN)
+    .update(principalId)
+    .update('\0')
+    .update(runtimeSessionId)
+    .update('\0')
+    .update(objectKeyNonce)
+    .digest('hex')
+}
+
+/** Mint an opaque key whose digest is still bound to one principal/session. */
+export function runtimeLandmarkV2Key(input: {
+  principalId: string
+  runtimeSessionId: string
+  objectKeyNonce: string
+}): string {
+  const objectKeyNonce = input.objectKeyNonce.toLowerCase()
+  const digest = runtimeLandmarkScopeDigest({ ...input, objectKeyNonce })
+  return `landmarks/v2/${digest}`
+}
+
+export function isRuntimeLandmarkV2Key(key: string): boolean {
+  return RUNTIME_LANDMARK_V2_KEY_PATTERN.test(key)
+}
+
+function assertRuntimeLandmarkV2KeyScope(input: {
+  key: string
+  principalId: string
+  runtimeSessionId: string
+  objectKeyNonce?: string
+}): void {
+  const match = RUNTIME_LANDMARK_V2_KEY_PATTERN.exec(input.key)
+  if (!match) throw new Error('Runtime landmark v2 key is not canonical')
+  if (!input.objectKeyNonce) {
+    throw new Error('Runtime landmark v2 object-key nonce is required')
+  }
+  const expected = runtimeLandmarkV2Key({
+    principalId: input.principalId,
+    runtimeSessionId: input.runtimeSessionId,
+    objectKeyNonce: input.objectKeyNonce,
+  })
+  if (expected !== input.key.toLowerCase()) {
+    throw new Error('Runtime landmark v2 key crossed its principal/session boundary')
+  }
+}
+
+/**
+ * A conditional write is the write half of the v2 landmark deletion protocol.
+ * Once an unconditional zero-byte seal wins this key, a delayed PII write can
+ * no longer replace it.
+ */
+export async function uploadRuntimeLandmarkObject(input: {
+  key: string
+  principalId: string
+  runtimeSessionId: string
+  objectKeyNonce: string
+  body: Buffer | Uint8Array
+}): Promise<void> {
+  assertRuntimeLandmarkV2KeyScope(input)
+  await runtimeR2Client().send(
+    new PutObjectCommand({
+      Bucket: runtimeBucket(),
+      Key: input.key,
+      Body: input.body,
+      ContentType: 'application/json',
+      CacheControl: 'private, no-store',
+      IfNoneMatch: '*',
+    }),
+  )
+}
+
 function assertRuntimeRecordingKey(input: {
   key: string
   principalId: string
@@ -67,7 +160,20 @@ function assertRuntimePersonalObjectKey(input: {
   key: string
   principalId: string
   runtimeSessionId?: string
+  objectKeyNonce?: string
 }): void {
+  if (isRuntimeLandmarkV2Key(input.key)) {
+    if (!input.runtimeSessionId) {
+      throw new Error('Runtime session authority is required for session media')
+    }
+    assertRuntimeLandmarkV2KeyScope({
+      key: input.key,
+      principalId: input.principalId,
+      runtimeSessionId: input.runtimeSessionId,
+      objectKeyNonce: input.objectKeyNonce,
+    })
+    return
+  }
   if (!isCanonicalR2Key(input.key)) {
     throw new Error('Runtime personal-data key is not canonical')
   }
@@ -219,16 +325,50 @@ export async function deleteRuntimeMediaManifest(input: {
  */
 export async function deleteRuntimePersonalObjects(input: {
   principalId: string
-  objects: Array<{ key: string; runtimeSessionId?: string }>
+  objects: Array<{
+    key: string
+    runtimeSessionId?: string
+    objectKeyNonce?: string
+  }>
 }): Promise<void> {
   for (const object of input.objects) {
     assertRuntimePersonalObjectKey({
       key: object.key,
       principalId: input.principalId,
       runtimeSessionId: object.runtimeSessionId,
+      objectKeyNonce: object.objectKeyNonce,
     })
   }
-  await deleteRuntimeObjects(input.objects.map((object) => object.key))
+  const uniqueObjects = Array.from(
+    new Map(input.objects.map((object) => [object.key, object])).values(),
+  )
+  if (uniqueObjects.length === 0) return
+  const client = runtimeR2Client()
+  const bucket = runtimeBucket()
+  for (const object of uniqueObjects) {
+    if (isRuntimeLandmarkV2Key(object.key)) {
+      // Every v2 upload is If-None-Match:*. The unconditional seal is
+      // therefore a permanent logical delete even if an accepted upload
+      // response is delayed until after cleanup begins.
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: object.key,
+          Body: new Uint8Array(0),
+          ContentLength: 0,
+          ContentType: RUNTIME_LANDMARK_TOMBSTONE_CONTENT_TYPE,
+          CacheControl: 'private, no-store',
+          Metadata: { 'hire-runtime-landmark-tombstone': 'v2' },
+        }),
+      )
+      continue
+    }
+    // Legacy landmark, recording, and document objects were not written
+    // conditionally, so retain the existing idempotent DeleteObject path.
+    await client.send(
+      new DeleteObjectCommand({ Bucket: bucket, Key: object.key }),
+    )
+  }
 }
 
 /** Abort inventoried multipart uploads; an already absent upload is success. */
@@ -272,4 +412,5 @@ export async function abortRuntimeMultipartUploads(input: {
 export const __runtimeMediaManifest = {
   assertRuntimeRecordingKey,
   assertRuntimePersonalObjectKey,
+  assertRuntimeLandmarkV2KeyScope,
 }

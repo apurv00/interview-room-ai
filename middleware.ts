@@ -10,9 +10,11 @@ import {
   guestRoundIdFromEmail,
 } from '@shared/auth/guestScope'
 import { runtimeWriteDrainMs } from '@shared/contracts/hireRuntimeWriteFence'
+import { deploymentSurfaceIdentity } from '@shared/surfaces/deploymentSurfaceIdentity'
 
-const isHireRuntimeSurface = process.env.IPG_SURFACE === 'hire-engine'
-const isHireControlSurface = process.env.IPG_SURFACE === 'hire-control'
+const deploymentSurface = deploymentSurfaceIdentity()
+const isHireRuntimeSurface = deploymentSurface.surface === 'hire-engine'
+const isHireControlSurface = deploymentSurface.surface === 'hire-control'
 const HIRE_RUNTIME_FENCE_BYPASS_HEADER = 'x-ipg-hire-runtime-fence-bypass'
 const HIRE_CONTROL_PUBLIC_POLICY_PATHS = new Set([
   '/privacy',
@@ -670,6 +672,12 @@ const authenticatedMiddleware = withAuth(
 )
 
 export default function middleware(req: NextRequest, event: NextFetchEvent) {
+  if (deploymentSurface.configurationIssue) {
+    return new NextResponse('Service unavailable', {
+      status: 503,
+      headers: { 'Cache-Control': 'private, no-store' },
+    })
+  }
   if (isCandidateStatusSessionlessPath(req.nextUrl.pathname)) {
     return candidateStatusSessionlessMiddleware(req)
   }

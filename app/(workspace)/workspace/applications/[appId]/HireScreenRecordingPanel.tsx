@@ -1,6 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type {
+  HireRecordingPlaybackRequest,
+  HireRecordingUnavailableReason,
+} from "./HireInterviewRecordingPanel";
 
 export type HireScreenRecordingView =
   | {
@@ -9,11 +13,13 @@ export type HireScreenRecordingView =
       capturedAt: string;
       bytes: number;
     }
-  | { status: "capturing" | "awaiting_transfer" | "removed" };
+  | { status: "capturing" | "awaiting_transfer" | "removed" }
+  | { status: "unavailable"; reason: HireRecordingUnavailableReason };
 
 interface Props {
   applicationId: string;
   recording: HireScreenRecordingView | null | undefined;
+  playbackRequest?: HireRecordingPlaybackRequest;
 }
 
 function formatBytes(bytes: number): string {
@@ -23,6 +29,21 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
+function unavailableDescription(reason: HireRecordingUnavailableReason): string {
+  switch (reason) {
+    case "capture_failed":
+      return "The shared display could not be captured for this interview.";
+    case "durable_queue_failed":
+      return "The shared display recording could not be retained for delivery.";
+    case "upload_rejected":
+      return "The recording service could not accept the shared display recording.";
+    case "retry_exhausted":
+      return "Shared display delivery did not complete after bounded retries.";
+    case "upload_expired":
+      return "The shared display upload window expired before transfer completed.";
+  }
+}
+
 /**
  * Display playback remains capability-gated: the detail response contains
  * only an opaque asset id, and the member explicitly mints a short-lived URL.
@@ -30,29 +51,69 @@ function formatBytes(bytes: number): string {
 export default function HireScreenRecordingPanel({
   applicationId,
   recording,
+  playbackRequest,
 }: Props) {
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const openingRef = useRef(false);
+  const capabilityControllerRef = useRef<AbortController | null>(null);
+  const capabilityEpochRef = useRef(0);
+  const pendingSeekMsRef = useRef<number | null>(null);
+  const handledPlaybackRequestIdRef = useRef<number | null>(null);
+  const descriptionId = useId();
   const readyRecording = recording?.status === "ready" ? recording : null;
   const assetId = readyRecording?.assetId ?? null;
 
   useEffect(() => {
+    capabilityEpochRef.current += 1;
+    capabilityControllerRef.current?.abort();
+    capabilityControllerRef.current = null;
+    openingRef.current = false;
     setUrl(null);
     setLoading(false);
     setError(null);
+    pendingSeekMsRef.current = null;
+    return () => {
+      capabilityEpochRef.current += 1;
+      capabilityControllerRef.current?.abort();
+      capabilityControllerRef.current = null;
+      openingRef.current = false;
+    };
   }, [recording?.status, assetId]);
 
-  if (!recording) return null;
+  const applyPendingSeek = useCallback(() => {
+    const video = videoRef.current;
+    const pendingMs = pendingSeekMsRef.current;
+    if (!video || pendingMs === null || video.readyState < 1) return;
+    const requestedSeconds = Math.max(0, pendingMs / 1_000);
+    video.currentTime = Number.isFinite(video.duration)
+      ? Math.min(requestedSeconds, Math.max(0, video.duration))
+      : requestedSeconds;
+    pendingSeekMsRef.current = null;
+    video.focus();
+    void video.play().catch(() => undefined);
+  }, []);
 
-  async function openRecording() {
-    if (!readyRecording || loading) return;
+  const handleLoadedMetadata = useCallback(() => {
+    const hadPendingSeek = pendingSeekMsRef.current !== null;
+    applyPendingSeek();
+    if (!hadPendingSeek) videoRef.current?.focus();
+  }, [applyPendingSeek]);
+
+  const openRecording = useCallback(async () => {
+    if (!readyRecording || openingRef.current) return;
+    const requestEpoch = capabilityEpochRef.current;
+    const controller = new AbortController();
+    capabilityControllerRef.current = controller;
+    openingRef.current = true;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch(
         `/api/workspace/applications/${encodeURIComponent(applicationId)}/media/${encodeURIComponent(readyRecording.assetId)}`,
-        { cache: "no-store" },
+        { cache: "no-store", signal: controller.signal },
       );
       if (!response.ok) throw new Error("display recording unavailable");
       const body = (await response.json()) as {
@@ -66,15 +127,50 @@ export default function HireScreenRecordingPanel({
       ) {
         throw new Error("display recording unavailable");
       }
+      if (
+        controller.signal.aborted ||
+        capabilityEpochRef.current !== requestEpoch
+      ) {
+        return;
+      }
       setUrl(body.url);
-    } catch {
+    } catch (cause) {
+      if (
+        controller.signal.aborted ||
+        capabilityEpochRef.current !== requestEpoch ||
+        (cause instanceof DOMException && cause.name === "AbortError")
+      ) {
+        return;
+      }
       setError(
         "The shared display recording is unavailable right now. Try reloading playback access.",
       );
     } finally {
-      setLoading(false);
+      if (capabilityControllerRef.current === controller) {
+        capabilityControllerRef.current = null;
+        openingRef.current = false;
+        setLoading(false);
+      }
     }
-  }
+  }, [applicationId, readyRecording]);
+
+  useEffect(() => {
+    if (
+      !playbackRequest ||
+      !readyRecording ||
+      handledPlaybackRequestIdRef.current === playbackRequest.id
+    ) {
+      return;
+    }
+    // One observation request may cause one capability mint and seek. A
+    // parent refresh or a playback error must not replay that command.
+    handledPlaybackRequestIdRef.current = playbackRequest.id;
+    pendingSeekMsRef.current = playbackRequest.startMs;
+    if (url) applyPendingSeek();
+    else void openRecording();
+  }, [applyPendingSeek, openRecording, playbackRequest, readyRecording, url]);
+
+  if (!recording) return null;
 
   const status = (() => {
     switch (recording.status) {
@@ -95,6 +191,11 @@ export default function HireScreenRecordingPanel({
           description:
             "This interview media was removed under the retention or deletion policy.",
         };
+      case "unavailable":
+        return {
+          label: "Display recording unavailable",
+          description: unavailableDescription(recording.reason),
+        };
       case "ready":
         return {
           label: "Shared display recording",
@@ -111,7 +212,9 @@ export default function HireScreenRecordingPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-[#0f1419]">{status.label}</p>
-          <p className="mt-1 text-xs text-[#536471]">{status.description}</p>
+          <p id={descriptionId} className="mt-1 text-xs text-[#536471]">
+            {status.description}
+          </p>
         </div>
         {recording.status === "ready" && !url && (
           <button
@@ -128,10 +231,15 @@ export default function HireScreenRecordingPanel({
       {recording.status === "ready" && url && (
         <div className="mt-3 space-y-2">
           <video
+            ref={videoRef}
             controls
+            tabIndex={0}
             preload="metadata"
             src={url}
+            aria-label="Private shared display recording"
+            aria-describedby={descriptionId}
             className="w-full rounded-lg bg-black"
+            onLoadedMetadata={handleLoadedMetadata}
             onError={() => {
               setUrl(null);
               setError(
@@ -155,7 +263,11 @@ export default function HireScreenRecordingPanel({
         </div>
       )}
 
-      {error && <p className="mt-2 text-xs text-[#b42318]">{error}</p>}
+      {error && (
+        <p role="alert" className="mt-2 text-xs text-[#b42318]">
+          {error}
+        </p>
+      )}
     </section>
   );
 }

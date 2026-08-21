@@ -18,6 +18,12 @@ import { clearAllInterviewStorage } from '@shared/storageKeys'
 
 export type ReplayUploadKind = 'camera' | 'screen'
 export type ReplayUploadStatus = 'uploaded' | 'queued' | 'dropped'
+export type RequiredReplayUnavailableReason =
+  | 'capture_failed'
+  | 'durable_queue_failed'
+  | 'upload_rejected'
+  | 'retry_exhausted'
+  | 'upload_expired'
 
 export interface ReplayUploadResult {
   status: ReplayUploadStatus
@@ -47,6 +53,12 @@ export interface DrainReplayUploadsResult {
   dropped: number
   /** Records skipped because another tab/invocation holds an active lease. */
   skipped: number
+}
+
+export interface RequiredHireReplaySettlement {
+  uploadedKinds: ReplayUploadKind[]
+  pendingKinds: ReplayUploadKind[]
+  acknowledgedUnavailableKinds: ReplayUploadKind[]
 }
 
 interface UploadedPart {
@@ -80,6 +92,11 @@ interface QueuedReplayUpload {
   // a crashed tab cannot block retries forever.
   leaseHolder?: string
   leaseExpiresAt?: number
+  /** Missing means a legacy pending row written before this contract. */
+  deliveryState?: 'pending' | 'unavailable'
+  /** Required Hire evidence always uses the durable multipart path. */
+  requiredDelivery?: boolean
+  unavailableReason?: RequiredReplayUnavailableReason
 }
 
 interface MultipartCreateResponse {
@@ -96,11 +113,21 @@ class PermanentMultipartUploadError extends Error {
   }
 }
 
+class MultipartUploadGoneError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'MultipartUploadGoneError'
+  }
+}
+
 async function isTerminalAccountBoundary(response: Response): Promise<boolean> {
-  if (response.status !== 401 && response.status !== 409) return false
+  if (response.status !== 401 && response.status !== 409 && response.status !== 410) {
+    return false
+  }
   const readable = typeof response.clone === 'function' ? response.clone() : response
   const body = await readable.json().catch(() => null) as { code?: unknown } | null
-  return (response.status === 401 && body?.code === 'ACCOUNT_UNAVAILABLE') ||
+  return ((response.status === 401 || response.status === 410) &&
+      body?.code === 'ACCOUNT_UNAVAILABLE') ||
     (response.status === 409 && body?.code === 'SESSION_CHANGED')
 }
 
@@ -114,10 +141,16 @@ function isPermanentMultipartUploadError(err: unknown): err is PermanentMultipar
   return err instanceof PermanentMultipartUploadError
 }
 
+function isMultipartUploadGoneError(err: unknown): err is MultipartUploadGoneError {
+  return err instanceof MultipartUploadGoneError
+}
+
 const DEFAULT_PART_SIZE_BYTES = 8 * 1024 * 1024
 const DIRECT_UPLOAD_LIMIT_BYTES = 20 * 1024 * 1024
 const MAX_PART_RETRIES = 3
 const MAX_CONCURRENT_PARTS = 3
+const INDEXED_DB_OPEN_TIMEOUT_MS = 2_000
+const INDEXED_DB_TRANSACTION_TIMEOUT_MS = 2_000
 
 // Layer 2/3 — concurrency control + zombie cleanup constants.
 //
@@ -183,7 +216,36 @@ function openDb(operation: ReplayUploadOperation): Promise<OpenReplayUploadDb | 
   assertReplayUploadOperationActive(operation)
   if (!isBrowserStorageAvailable()) return Promise.resolve(null)
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(REPLAY_UPLOAD_DB_NAME, REPLAY_UPLOAD_DB_VERSION)
+    let request: IDBOpenDBRequest
+    let settled = false
+    let timeout: number | undefined
+    const finish = (value: OpenReplayUploadDb | null, error?: unknown) => {
+      if (settled) return
+      settled = true
+      if (timeout !== undefined) window.clearTimeout(timeout)
+      operation.signal.removeEventListener('abort', onAbort)
+      if (error !== undefined) reject(error)
+      else resolve(value)
+    }
+    const onAbort = () => {
+      try {
+        assertReplayUploadOperationActive(operation)
+        finish(null)
+      } catch (error) {
+        finish(null, error)
+      }
+    }
+    timeout = window.setTimeout(
+      () => finish(null),
+      INDEXED_DB_OPEN_TIMEOUT_MS,
+    )
+    operation.signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      request = indexedDB.open(REPLAY_UPLOAD_DB_NAME, REPLAY_UPLOAD_DB_VERSION)
+    } catch {
+      finish(null)
+      return
+    }
     request.onupgradeneeded = () => {
       const db = request.result
       if (!db.objectStoreNames.contains(REPLAY_UPLOAD_STORE_NAME)) {
@@ -192,15 +254,20 @@ function openDb(operation: ReplayUploadOperation): Promise<OpenReplayUploadDb | 
     }
     request.onsuccess = () => {
       const db = request.result
+      if (settled) {
+        db.close()
+        return
+      }
       try {
         assertReplayUploadOperationActive(operation)
-        resolve({ db, untrack: trackReplayUploadDatabase(db) })
+        finish({ db, untrack: trackReplayUploadDatabase(db) })
       } catch (error) {
         db.close()
-        reject(error)
+        finish(null, error)
       }
     }
-    request.onerror = () => resolve(null)
+    request.onerror = () => finish(null)
+    request.onblocked = () => finish(null)
   })
 }
 
@@ -214,28 +281,66 @@ async function withStore<T>(
   if (!opened) return null
   const { db, untrack } = opened
   return new Promise((resolve, reject) => {
+    let settled = false
+    let timeout: number | undefined
     let requestResult: T | null = null
     let requestSucceeded = false
-    const tx = db.transaction(REPLAY_UPLOAD_STORE_NAME, mode)
+    let tx: IDBTransaction
+    try {
+      tx = db.transaction(REPLAY_UPLOAD_STORE_NAME, mode)
+    } catch {
+      untrack()
+      db.close()
+      resolve(null)
+      return
+    }
     const unbindAbort = bindReplayUploadTransaction(operation, tx)
-    const request = callback(tx.objectStore(REPLAY_UPLOAD_STORE_NAME))
-
-    const finish = (result: T | null) => {
+    const cleanup = () => {
+      if (timeout !== undefined) window.clearTimeout(timeout)
+      operation.signal.removeEventListener('abort', finishCancelledOrNull)
       unbindAbort()
       untrack()
       db.close()
+    }
+    const finish = (result: T | null) => {
+      if (settled) return
+      settled = true
+      cleanup()
       resolve(result)
     }
     const finishCancelledOrNull = () => {
-      unbindAbort()
-      untrack()
-      db.close()
+      if (settled) return
+      settled = true
+      cleanup()
       try {
         assertReplayUploadOperationActive(operation)
         resolve(null)
       } catch (error) {
         reject(error)
       }
+    }
+
+    timeout = window.setTimeout(() => {
+      try {
+        tx.abort()
+      } catch {
+        // The transaction may already have settled at the deadline.
+      }
+      finishCancelledOrNull()
+    }, INDEXED_DB_TRANSACTION_TIMEOUT_MS)
+    operation.signal.addEventListener('abort', finishCancelledOrNull, { once: true })
+
+    let request: IDBRequest<T>
+    try {
+      request = callback(tx.objectStore(REPLAY_UPLOAD_STORE_NAME))
+    } catch {
+      try {
+        tx.abort()
+      } catch {
+        // Object-store access may fail after transaction construction.
+      }
+      finishCancelledOrNull()
+      return
     }
 
     request.onsuccess = () => {
@@ -251,9 +356,9 @@ async function withStore<T>(
         assertReplayUploadOperationActive(operation)
         finish(requestSucceeded ? requestResult : null)
       } catch (error) {
-        unbindAbort()
-        untrack()
-        db.close()
+        if (settled) return
+        settled = true
+        cleanup()
         reject(error)
       }
     }
@@ -276,6 +381,73 @@ async function deleteUpload(id: string, operation: ReplayUploadOperation): Promi
 
 async function getAllUploads(operation: ReplayUploadOperation): Promise<QueuedReplayUpload[]> {
   return (await withStore('readonly', (store) => store.getAll(), operation)) ?? []
+}
+
+function isUnavailableRecord(
+  record: QueuedReplayUpload,
+): record is QueuedReplayUpload & {
+  deliveryState: 'unavailable'
+  unavailableReason: RequiredReplayUnavailableReason
+} {
+  return (
+    record.deliveryState === 'unavailable' &&
+    record.unavailableReason !== undefined
+  )
+}
+
+function unavailableRecord(
+  record: QueuedReplayUpload,
+  reason: RequiredReplayUnavailableReason,
+): QueuedReplayUpload {
+  return {
+    ...record,
+    blob: new Blob([], { type: record.contentType || 'video/webm' }),
+    sizeBytes: 0,
+    parts: [],
+    attempts: 0,
+    deliveryState: 'unavailable',
+    requiredDelivery: true,
+    unavailableReason: reason,
+    leaseHolder: undefined,
+    leaseExpiresAt: undefined,
+  }
+}
+
+/**
+ * Persist capture/queue failure before navigation. The marker contains no
+ * media bytes and remains until the authenticated completion endpoint has
+ * durably recorded the unavailable evidence kind.
+ */
+export async function recordRequiredReplayUnavailable(
+  sessionId: string,
+  kind: ReplayUploadKind,
+  reason: RequiredReplayUnavailableReason,
+  intent?: ReplayUploadIntent,
+): Promise<boolean> {
+  const operation = beginReplayUploadOperation(intent?.privacyGeneration)
+  try {
+    const record: QueuedReplayUpload = {
+      id: `${sessionId}:${kind}:terminal-unavailable`,
+      sessionId,
+      kind,
+      blob: new Blob([], { type: 'video/webm' }),
+      sizeBytes: 0,
+      contentType: 'video/webm',
+      ...(intent?.originUserId ? { originUserId: intent.originUserId } : {}),
+      createdAt: Date.now(),
+      parts: [],
+      attempts: 0,
+      deliveryState: 'unavailable',
+      requiredDelivery: true,
+      unavailableReason: reason,
+    }
+    return await putUpload(record, operation)
+  } catch (error) {
+    if (isReplayUploadPrivacyCancellation(error, operation)) return false
+    throw error
+  } finally {
+    finishReplayUploadOperation(operation)
+  }
 }
 
 async function postMultipart<T>(
@@ -303,12 +475,33 @@ async function postMultipart<T>(
     const responseText = await res.text().catch(() => '')
     assertReplayUploadOperationActive(operation)
     const message = `Multipart API failed: ${res.status}${responseText ? ` ${responseText.slice(0, 300)}` : ''}`
-    // 410 Gone (R2 multipart aborted/expired — handled by server route).
-    // 401/403 mean the user is signed out: retrying with the same cookie will
+    // 410 means this multipart identity has expired. The Blob remains durable
+    // and the next bounded attempt mints a fresh key/uploadId. 401/403 mean
+    // the user is signed out: retrying with the same cookie will
     // never succeed; the record is unrecoverable from this client. Marking
     // them permanent prevents an infinite retry loop that would otherwise
     // pile up zombie records on every page mount.
-    if (res.status === 410 || res.status === 401 || res.status === 403) {
+    if (res.status === 410) {
+      const responseBody = (() => {
+        try {
+          return JSON.parse(responseText) as { code?: unknown }
+        } catch {
+          return null
+        }
+      })()
+      if (responseBody?.code === 'ACCOUNT_UNAVAILABLE') {
+        await establishAccountUnavailableBoundary()
+        assertReplayUploadOperationActive(operation)
+      }
+      if (
+        responseBody?.code === 'MEDIA_TERMINAL' ||
+        responseBody?.code === 'RUNTIME_WRITE_UNAVAILABLE'
+      ) {
+        throw new PermanentMultipartUploadError(message)
+      }
+      throw new MultipartUploadGoneError(message)
+    }
+    if (res.status === 401 || res.status === 403) {
       throw new PermanentMultipartUploadError(message)
     }
     throw new Error(message)
@@ -316,6 +509,23 @@ async function postMultipart<T>(
   const result = await res.json() as T
   assertReplayUploadOperationActive(operation)
   return result
+}
+
+function resetGoneMultipart(
+  record: QueuedReplayUpload,
+  error: MultipartUploadGoneError,
+): QueuedReplayUpload {
+  return {
+    ...record,
+    key: undefined,
+    uploadId: undefined,
+    partSizeBytes: undefined,
+    parts: [],
+    attempts: record.attempts + 1,
+    lastError: error.message,
+    leaseHolder: undefined,
+    leaseExpiresAt: undefined,
+  }
 }
 
 function normaliseEtag(etag: string | null): string {
@@ -647,6 +857,7 @@ export async function uploadReplayRecording(
   blob: Blob,
   durationSeconds?: number,
   intent?: ReplayUploadIntent,
+  options: { requiredDelivery?: boolean } = {},
 ): Promise<ReplayUploadResult> {
   const operation = beginReplayUploadOperation(intent?.privacyGeneration)
   const contentType = blob.type || 'video/webm'
@@ -655,7 +866,11 @@ export async function uploadReplayRecording(
     // recording must enter the durable IndexedDB-backed multipart queue so a
     // transient presign, upload, or finalize failure cannot silently drop it.
     // Camera keeps its established direct-upload fast path.
-    if (kind !== 'screen' && blob.size <= DIRECT_UPLOAD_LIMIT_BYTES) {
+    if (
+      options.requiredDelivery !== true &&
+      kind !== 'screen' &&
+      blob.size <= DIRECT_UPLOAD_LIMIT_BYTES
+    ) {
       try {
         const uploaded = await uploadDirect(
           sessionId,
@@ -687,6 +902,8 @@ export async function uploadReplayRecording(
       createdAt: Date.now(),
       parts: [],
       attempts: 0,
+      deliveryState: 'pending',
+      ...(options.requiredDelivery ? { requiredDelivery: true } : {}),
       // Layer 2 — stamp our lease BEFORE putUpload so any drainQueuedReplayUploads
       // running concurrently in this same tab sees an active lease on the very
       // first read. Combined with the inFlightRecordIds Set acquired below, this
@@ -706,8 +923,38 @@ export async function uploadReplayRecording(
       if (isReplayUploadPrivacyCancellation(err, operation)) {
         return { status: 'dropped' }
       }
+      if (isMultipartUploadGoneError(err)) {
+        const latest = (await getAllUploads(operation)).find(
+          (candidate) => candidate.id === record.id,
+        ) ?? record
+        const reset = resetGoneMultipart(latest, err)
+        if (isExhaustedRetries(reset)) {
+          if (options.requiredDelivery) {
+            await putUpload(unavailableRecord(reset, 'upload_expired'), operation)
+          } else {
+            await deleteUpload(record.id, operation)
+          }
+          return { status: 'dropped' }
+        }
+        await putUpload(reset, operation)
+        console.warn(
+          'Replay multipart upload expired; queued with a fresh upload identity',
+          err,
+        )
+        return { status: 'queued' }
+      }
       if (isPermanentMultipartUploadError(err)) {
-        await deleteUpload(record.id, operation)
+        if (options.requiredDelivery) {
+          const latest = (await getAllUploads(operation)).find(
+            (candidate) => candidate.id === record.id,
+          )
+          await putUpload(
+            unavailableRecord(latest ?? record, 'upload_rejected'),
+            operation,
+          )
+        } else {
+          await deleteUpload(record.id, operation)
+        }
         console.warn('Replay multipart upload permanently dropped', err)
         return { status: 'dropped' }
       }
@@ -724,6 +971,11 @@ export async function uploadReplayRecording(
           leaseHolder: undefined,
           leaseExpiresAt: undefined,
         }, operation)
+      } else if (options.requiredDelivery) {
+        await putUpload(
+          unavailableRecord(record, 'durable_queue_failed'),
+          operation,
+        )
       }
       if (wasQueued) {
         console.warn('Replay multipart upload queued for retry', err)
@@ -759,6 +1011,7 @@ export async function hasQueuedReplayUpload(
       (record) =>
         record.sessionId === sessionId &&
         record.kind === kind &&
+        !isUnavailableRecord(record) &&
         !isExpiredRecord(record) &&
         !isExhaustedRetries(record)
     )
@@ -781,13 +1034,31 @@ export async function drainQueuedReplayUploads(): Promise<DrainReplayUploadsResu
   try {
     records = await getAllUploads(operation)
     for (const record of records) {
+      // Required Hire terminal markers are retained until the authenticated
+      // completion contract records them server-side. Ordinary feedback-page
+      // drains must never upload or discard these zero-byte markers.
+      if (isUnavailableRecord(record)) {
+        skipped++
+        continue
+      }
       // Layer 3 — backstop caps. A record that is older than the R2 multipart
       // TTL or that has burned through its retry budget cannot be recovered;
-      // drop it (and best-effort tell the server to release R2 parts) instead
-      // of looping forever on every page mount.
+      // retain required Hire evidence as a terminal marker after best-effort
+      // multipart cleanup. Non-required/legacy rows keep their historical
+      // zombie cleanup behaviour.
       if (isExpiredRecord(record) || isExhaustedRetries(record)) {
         await serverAbort(record, operation)
-        await deleteUpload(record.id, operation)
+        if (record.requiredDelivery) {
+          await putUpload(
+            unavailableRecord(
+              record,
+              isExpiredRecord(record) ? 'upload_expired' : 'retry_exhausted',
+            ),
+            operation,
+          )
+        } else {
+          await deleteUpload(record.id, operation)
+        }
         dropped++
         console.info('Replay upload dropped (zombie cleanup)', {
           id: record.id,
@@ -813,8 +1084,32 @@ export async function drainQueuedReplayUploads(): Promise<DrainReplayUploadsResu
         uploaded++
       } catch (err) {
         if (isReplayUploadPrivacyCancellation(err, operation)) throw err
-        if (isPermanentMultipartUploadError(err)) {
-          await deleteUpload(leased.id, operation)
+        if (isMultipartUploadGoneError(err)) {
+          const latest = (await getAllUploads(operation)).find(
+            (candidate) => candidate.id === leased.id,
+          ) ?? leased
+          const reset = resetGoneMultipart(latest, err)
+          if (isExhaustedRetries(reset)) {
+            if (leased.requiredDelivery) {
+              await putUpload(unavailableRecord(reset, 'upload_expired'), operation)
+            } else {
+              await deleteUpload(leased.id, operation)
+            }
+            dropped++
+          } else {
+            await putUpload(reset, operation)
+            queued++
+          }
+          console.warn('Queued replay multipart expired; reset for retry', err)
+        } else if (isPermanentMultipartUploadError(err)) {
+          if (leased.requiredDelivery) {
+            await putUpload(
+              unavailableRecord(leased, 'upload_rejected'),
+              operation,
+            )
+          } else {
+            await deleteUpload(leased.id, operation)
+          }
           dropped++
           console.warn('Queued replay upload permanently dropped', err)
         } else {
@@ -854,4 +1149,252 @@ export async function drainQueuedReplayUploads(): Promise<DrainReplayUploadsResu
     finishReplayUploadOperation(operation)
   }
   return { attempted: records.length, uploaded, queued, dropped, skipped }
+}
+
+async function acknowledgeUnavailableRecord(
+  record: QueuedReplayUpload & {
+    deliveryState: 'unavailable'
+    unavailableReason: RequiredReplayUnavailableReason
+  },
+  operation: ReplayUploadOperation,
+): Promise<boolean> {
+  assertReplayUploadOperationActive(operation)
+  const response = await fetch('/api/hire-engine/completion-status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: 'same-origin',
+    cache: 'no-store',
+    body: JSON.stringify({
+      action: 'mark-unavailable',
+      sessionId: record.sessionId,
+      kind: record.kind,
+      reason: record.unavailableReason,
+    }),
+    signal: operation.signal,
+  })
+  assertReplayUploadOperationActive(operation)
+  if (await isTerminalAccountBoundary(response)) {
+    await establishAccountUnavailableBoundary()
+    assertReplayUploadOperationActive(operation)
+  }
+  if (response.ok) return true
+  if (response.status !== 409) return false
+  const payload = await response.json().catch(() => null) as {
+    code?: unknown
+  } | null
+  // A concurrent publisher won with stronger evidence. The local terminal
+  // marker is obsolete and may be discarded without weakening truthfulness.
+  return payload?.code === 'MEDIA_ALREADY_PUBLISHED'
+}
+
+/**
+ * Perform one bounded, session-scoped settlement pass for required Hire
+ * camera/display evidence. This is deliberately not a poller: callers show a
+ * manual retry state when work is still in flight or the deadline expires.
+ */
+export async function settleRequiredHireReplayUploads(input: {
+  sessionId: string
+  kinds: ReplayUploadKind[]
+  timeoutMs?: number
+}): Promise<RequiredHireReplaySettlement> {
+  const kinds = Array.from(new Set(input.kinds))
+  const operation = beginReplayUploadOperation()
+  const uploadedKinds = new Set<ReplayUploadKind>()
+  const pendingKinds = new Set<ReplayUploadKind>()
+  const acknowledgedUnavailableKinds = new Set<ReplayUploadKind>()
+  const timeout = window.setTimeout(
+    () => operation.controller.abort(),
+    Math.max(1, input.timeoutMs ?? 8_000),
+  )
+
+  const settleUnavailable = async (record: QueuedReplayUpload) => {
+    if (!isUnavailableRecord(record)) return false
+    if (await acknowledgeUnavailableRecord(record, operation)) {
+      await deleteUpload(record.id, operation)
+      acknowledgedUnavailableKinds.add(record.kind)
+      return true
+    }
+    pendingKinds.add(record.kind)
+    return false
+  }
+
+  try {
+    const storedRecords = await withStore(
+      'readonly',
+      (store) => store.getAll(),
+      operation,
+    )
+    if (storedRecords === null) {
+      if (!isBrowserStorageAvailable()) {
+        // Some embedded/private browser contexts expose no IndexedDB at all.
+        // There cannot be a recoverable durable row in that environment, so
+        // ask the authenticated server to terminalize each required kind now.
+        // Its capability/reservation/artifact CAS remains authoritative if an
+        // in-memory upload is concurrently crossing the write fence.
+        for (const kind of kinds) {
+          const terminal = unavailableRecord(
+            {
+              id: `${input.sessionId}:${kind}:no-durable-store`,
+              sessionId: input.sessionId,
+              kind,
+              blob: new Blob([], { type: 'video/webm' }),
+              sizeBytes: 0,
+              contentType: 'video/webm',
+              createdAt: Date.now(),
+              parts: [],
+              attempts: 0,
+              requiredDelivery: true,
+            },
+            'durable_queue_failed',
+          )
+          if (await acknowledgeUnavailableRecord(
+            terminal as QueuedReplayUpload & {
+              deliveryState: 'unavailable'
+              unavailableReason: RequiredReplayUnavailableReason
+            },
+            operation,
+          )) {
+            acknowledgedUnavailableKinds.add(kind)
+          } else {
+            pendingKinds.add(kind)
+          }
+        }
+        return {
+          uploadedKinds: [],
+          pendingKinds: Array.from(pendingKinds),
+          acknowledgedUnavailableKinds: Array.from(
+            acknowledgedUnavailableKinds,
+          ),
+        }
+      }
+      // A blocked/open/transaction timeout is not evidence that the Blob is
+      // absent. Preserve the server's pending state and let an explicit retry
+      // reopen the queue instead of fabricating terminal unavailability.
+      kinds.forEach((kind) => pendingKinds.add(kind))
+      return {
+        uploadedKinds: [],
+        pendingKinds: Array.from(pendingKinds),
+        acknowledgedUnavailableKinds: [],
+      }
+    }
+    const records = storedRecords.filter(
+      (record) =>
+        record.sessionId === input.sessionId && kinds.includes(record.kind),
+    )
+    const representedKinds = new Set(records.map((record) => record.kind))
+    for (const kind of kinds) {
+      if (representedKinds.has(kind)) continue
+      // There is no recoverable browser payload for a server-required kind.
+      // Persist a zero-byte retry marker where possible, then let the server
+      // make the authoritative decision: it rejects this transition if an
+      // object, multipart capability, or finalized artifact is still live.
+      const terminal: QueuedReplayUpload = {
+        id: `${input.sessionId}:${kind}:terminal-unavailable`,
+        sessionId: input.sessionId,
+        kind,
+        blob: new Blob([], { type: 'video/webm' }),
+        sizeBytes: 0,
+        contentType: 'video/webm',
+        createdAt: Date.now(),
+        parts: [],
+        attempts: 0,
+        deliveryState: 'unavailable',
+        requiredDelivery: true,
+        unavailableReason: 'durable_queue_failed',
+      }
+      await putUpload(terminal, operation)
+      await settleUnavailable(terminal)
+    }
+    for (const original of records) {
+      if (isUnavailableRecord(original)) {
+        await settleUnavailable(original)
+        continue
+      }
+
+      if (isExpiredRecord(original) || isExhaustedRetries(original)) {
+        await serverAbort(original, operation)
+        const terminal = unavailableRecord(
+          original,
+          isExpiredRecord(original) ? 'upload_expired' : 'retry_exhausted',
+        )
+        await putUpload(terminal, operation)
+        await settleUnavailable(terminal)
+        continue
+      }
+
+      const leased = await tryAcquireLease(original, operation)
+      if (!leased) {
+        pendingKinds.add(original.kind)
+        continue
+      }
+      try {
+        await uploadMultipartRecord(leased, operation)
+        uploadedKinds.add(leased.kind)
+      } catch (error) {
+        if (isReplayUploadPrivacyCancellation(error, operation)) throw error
+        if (isMultipartUploadGoneError(error)) {
+          const latest = (await getAllUploads(operation)).find(
+            (record) => record.id === leased.id,
+          ) ?? leased
+          const reset = resetGoneMultipart(latest, error)
+          if (isExhaustedRetries(reset)) {
+            const terminal = unavailableRecord(reset, 'upload_expired')
+            await putUpload(terminal, operation)
+            await settleUnavailable(terminal)
+          } else {
+            await putUpload(reset, operation)
+            pendingKinds.add(leased.kind)
+          }
+          continue
+        }
+        if (isPermanentMultipartUploadError(error)) {
+          const terminal = unavailableRecord(leased, 'upload_rejected')
+          await putUpload(terminal, operation)
+          await settleUnavailable(terminal)
+          continue
+        }
+
+        const latest = (await getAllUploads(operation)).find(
+          (record) => record.id === leased.id,
+        )
+        if (!latest) {
+          pendingKinds.add(leased.kind)
+          continue
+        }
+        const attempts = latest.attempts + 1
+        if (attempts >= MAX_DRAIN_ATTEMPTS) {
+          await serverAbort(latest, operation)
+          const terminal = unavailableRecord(latest, 'retry_exhausted')
+          await putUpload(terminal, operation)
+          await settleUnavailable(terminal)
+        } else {
+          await putUpload(
+            {
+              ...latest,
+              attempts,
+              lastError: error instanceof Error ? error.message : String(error),
+              leaseHolder: undefined,
+              leaseExpiresAt: undefined,
+            },
+            operation,
+          )
+          pendingKinds.add(leased.kind)
+        }
+      } finally {
+        releaseLease(leased.id)
+      }
+    }
+  } catch (error) {
+    if (!isReplayUploadPrivacyCancellation(error, operation)) throw error
+    kinds.forEach((kind) => pendingKinds.add(kind))
+  } finally {
+    window.clearTimeout(timeout)
+    finishReplayUploadOperation(operation)
+  }
+
+  return {
+    uploadedKinds: Array.from(uploadedKinds),
+    pendingKinds: Array.from(pendingKinds),
+    acknowledgedUnavailableKinds: Array.from(acknowledgedUnavailableKinds),
+  }
 }

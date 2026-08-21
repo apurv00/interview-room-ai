@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resultFind: vi.fn(),
   photoFind: vi.fn(),
   attemptFind: vi.fn(),
+  ingestionFind: vi.fn(),
   observationFind: vi.fn(),
   analysisViews: vi.fn(),
 }));
@@ -36,6 +37,7 @@ vi.mock("@hire", () => ({
   HireInterviewResult: { find: mocks.resultFind },
   HireMediaAsset: { find: mocks.photoFind },
   HireInterviewAttempt: { find: mocks.attemptFind },
+  HireEngineIngestionEvent: { find: mocks.ingestionFind },
 }));
 vi.mock("@modules/hire-multimodal/models/HireMultimodalObservation", () => ({
   HireMultimodalObservation: { find: mocks.observationFind },
@@ -85,7 +87,13 @@ beforeEach(() => {
   mocks.inviteViews.mockResolvedValue(new Map());
   mocks.resultFind.mockReturnValue(selected([]));
   mocks.photoFind.mockReturnValue(selected([]));
-  mocks.attemptFind.mockReturnValue(selected([]));
+  mocks.attemptFind.mockReturnValue(selected([{
+    _id: objectId(IDS.attempt),
+    roundId: objectId(IDS.round),
+    sequence: 1,
+    status: "completed",
+  }]));
+  mocks.ingestionFind.mockReturnValue(selected([]));
   mocks.observationFind.mockReturnValue(selected([]));
   mocks.analysisViews.mockResolvedValue([]);
 });
@@ -108,6 +116,56 @@ describe("application supplemental-observation read fence", () => {
         { purgeEligibleAt: { $exists: false } },
         { purgeEligibleAt: { $gt: expect.any(Date) } },
       ],
+    });
+  });
+
+  it("returns the exact optional playback-clock offsets in the recruiter DTO", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [{
+        _id: objectId(IDS.round),
+        status: "completed",
+        consentVersion: "hire-ai-v6-2026-08-20",
+      }],
+      humanRounds: [],
+    });
+    mocks.observationFind.mockReturnValueOnce(selected([{
+      roundId: objectId(IDS.round),
+      runtimeSessionId: objectId(IDS.runtimeSession),
+      revision: 2,
+      observedAt: new Date("2026-08-21T10:00:00.000Z"),
+      report: {
+        status: "completed",
+        capture: {
+          camera: "captured",
+          browserVisibility: "captured",
+          displayShare: "captured",
+        },
+        events: [],
+        playbackClock: {
+          protocolVersion: 1,
+          cameraRecorderStartOffsetMs: 250,
+          screenRecorderStartOffsetMs: 75,
+        },
+      },
+    }]));
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+    const body = await response.json();
+
+    expect(
+      body.rounds[0].supplementalObservations[0].report.playbackClock,
+    ).toEqual({
+      protocolVersion: 1,
+      cameraRecorderStartOffsetMs: 250,
+      screenRecorderStartOffsetMs: 75,
     });
   });
 
@@ -328,6 +386,202 @@ describe("application supplemental-observation read fence", () => {
     expect(body.rounds[0].interviewRecording).toEqual({
       status: "awaiting_transfer",
     });
+  });
+
+  it("returns the latest versioned terminal media reason instead of polling forever", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [{
+        _id: objectId(IDS.round),
+        status: "completed",
+        consentVersion: "hire-ai-v6-2026-08-20",
+      }],
+      humanRounds: [],
+    });
+    mocks.resultFind.mockReturnValueOnce(
+      selected([{
+        roundId: objectId(IDS.round),
+        attemptId: objectId(IDS.attempt),
+        piiPurgedAt: undefined,
+      }]),
+    );
+    mocks.attemptFind.mockReturnValueOnce(
+      selected([{
+        _id: objectId(IDS.attempt),
+        roundId: objectId(IDS.round),
+        sequence: 1,
+        status: "completed",
+      }]),
+    );
+    mocks.ingestionFind.mockReturnValueOnce(
+      selected([{
+        roundId: objectId(IDS.round),
+        attempt: 1,
+        revision: 2,
+        mediaCompletion: {
+          contractVersion: 1,
+          camera: { status: "unavailable", reason: "retry_exhausted" },
+          screen: { status: "unavailable", reason: "upload_expired" },
+        },
+      }]),
+    );
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+
+    const body = await response.json();
+    expect(body.rounds[0].interviewRecording).toEqual({
+      status: "unavailable",
+      reason: "retry_exhausted",
+    });
+    expect(body.rounds[0].screenRecording).toEqual({
+      status: "unavailable",
+      reason: "upload_expired",
+    });
+  });
+
+  it("does not reuse terminal media from an older attempt", async () => {
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [{ _id: objectId(IDS.round), status: "completed" }],
+      humanRounds: [],
+    });
+    mocks.attemptFind.mockReturnValueOnce(
+      selected([{
+        _id: objectId("8".repeat(24)),
+        roundId: objectId(IDS.round),
+        sequence: 2,
+        status: "completed",
+      }]),
+    );
+    mocks.ingestionFind.mockReturnValueOnce(
+      selected([{
+        roundId: objectId(IDS.round),
+        attempt: 1,
+        revision: 3,
+        mediaCompletion: {
+          contractVersion: 1,
+          camera: { status: "unavailable", reason: "upload_expired" },
+          screen: { status: "not_required" },
+        },
+      }]),
+    );
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+
+    const body = await response.json();
+    expect(body.rounds[0].interviewRecording).toEqual({
+      status: "awaiting_transfer",
+    });
+  });
+
+  it("binds results, ready assets, and terminal media to one latest attempt", async () => {
+    const latestAttemptId = "7".repeat(24);
+    mocks.detail.mockResolvedValueOnce({
+      application: { _id: IDS.application },
+      candidate: { resumeText: "" },
+      job: {},
+      rounds: [{
+        _id: objectId(IDS.round),
+        status: "completed",
+        consentVersion: "hire-ai-v6-2026-08-20",
+      }],
+      humanRounds: [],
+    });
+    mocks.attemptFind.mockReturnValueOnce(selected([
+      {
+        _id: objectId(IDS.attempt),
+        roundId: objectId(IDS.round),
+        sequence: 1,
+        status: "completed",
+      },
+      {
+        _id: objectId(latestAttemptId),
+        roundId: objectId(IDS.round),
+        sequence: 2,
+        status: "completed",
+      },
+    ]));
+    mocks.resultFind.mockReturnValueOnce(selected([
+      {
+        roundId: objectId(IDS.round),
+        attemptId: objectId(latestAttemptId),
+        projection: { overallScore: 91, marker: "latest" },
+        evidenceIndex: ["latest-evidence"],
+      },
+      {
+        roundId: objectId(IDS.round),
+        attemptId: objectId(IDS.attempt),
+        projection: { overallScore: 12, marker: "older" },
+        evidenceIndex: ["older-evidence"],
+      },
+    ]));
+    mocks.photoFind.mockReturnValueOnce(selected([
+      {
+        _id: objectId(IDS.recording),
+        kind: "camera_recording",
+        roundId: objectId(IDS.round),
+        attemptId: objectId(IDS.attempt),
+        capturedAt: new Date("2026-08-20T12:00:00.000Z"),
+        bytes: 42_000,
+      },
+      {
+        _id: objectId(IDS.screenRecording),
+        kind: "screen_recording",
+        roundId: objectId(IDS.round),
+        attemptId: objectId(IDS.attempt),
+        capturedAt: new Date("2026-08-20T12:00:00.000Z"),
+        bytes: 84_000,
+      },
+    ]));
+    mocks.ingestionFind.mockReturnValueOnce(selected([{
+      roundId: objectId(IDS.round),
+      attempt: 2,
+      revision: 3,
+      mediaCompletion: {
+        contractVersion: 1,
+        camera: { status: "unavailable", reason: "retry_exhausted" },
+        screen: { status: "unavailable", reason: "upload_expired" },
+      },
+    }]));
+
+    const response = await GET(
+      new Request(
+        `https://hire.example/api/workspace/applications/${IDS.application}`,
+      ) as never,
+      { params: { appId: IDS.application } },
+    );
+
+    const body = await response.json();
+    expect(body.rounds[0]).toMatchObject({
+      assessment: { overallScore: 91, marker: "latest" },
+      evidenceIndex: ["latest-evidence"],
+      interviewRecording: {
+        status: "unavailable",
+        reason: "retry_exhausted",
+      },
+      screenRecording: {
+        status: "unavailable",
+        reason: "upload_expired",
+      },
+    });
+    expect(mocks.ingestionFind).toHaveBeenCalledWith(expect.objectContaining({
+      status: "processed",
+      terminalOutcome: "processed",
+    }));
   });
 
   it("adds the complete native Hire analysis only to its matching round", async () => {

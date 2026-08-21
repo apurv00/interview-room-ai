@@ -8,6 +8,8 @@ import { z } from 'zod'
  */
 
 export const HIRE_ENGINE_BRIDGE_SCHEMA_VERSION = 1 as const
+export const HIRE_ENGINE_HANDOFF_SCHEMA_VERSION = 2 as const
+export const HIRE_ENGINE_RESULT_MAX_BODY_BYTES = 2 * 1024 * 1024
 
 export const MongoObjectIdStringSchema = z
   .string()
@@ -44,10 +46,14 @@ export const HireEngineExchangeRequestSchema = z
 
 export const HireEngineHandoffEnvelopeSchema = z
   .object({
-    schemaVersion: z.literal(HIRE_ENGINE_BRIDGE_SCHEMA_VERSION),
+    schemaVersion: z.literal(HIRE_ENGINE_HANDOFF_SCHEMA_VERSION),
     workspaceId: MongoObjectIdStringSchema,
     applicationId: MongoObjectIdStringSchema,
     roundId: MongoObjectIdStringSchema,
+    // Monotonic per round and allocated by the control-plane transaction.
+    // Runtime uses this durable ordering to reject an older handoff that
+    // arrives after a newer recovery link has already rotated auth state.
+    handoffGeneration: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
     nonce: Sha256HexSchema,
     issuedAt: IsoDateTimeSchema,
     expiresAt: IsoDateTimeSchema,
@@ -115,6 +121,45 @@ export const HireEngineMediaArtifactSchema = z
   })
   .strict()
 
+export const HireEngineMediaUnavailableReasonSchema = z.enum([
+  'capture_failed',
+  'durable_queue_failed',
+  'upload_rejected',
+  'retry_exhausted',
+  'upload_expired',
+])
+
+const HireEngineRequiredMediaCompletionSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('pending') }).strict(),
+  z.object({ status: z.literal('published') }).strict(),
+  z
+    .object({
+      status: z.literal('unavailable'),
+      reason: HireEngineMediaUnavailableReasonSchema,
+    })
+    .strict(),
+])
+
+const HireEngineScreenMediaCompletionSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('not_required') }).strict(),
+  z.object({ status: z.literal('pending') }).strict(),
+  z.object({ status: z.literal('published') }).strict(),
+  z
+    .object({
+      status: z.literal('unavailable'),
+      reason: HireEngineMediaUnavailableReasonSchema,
+    })
+    .strict(),
+])
+
+export const HireEngineMediaCompletionSchema = z
+  .object({
+    contractVersion: z.literal(1),
+    camera: HireEngineRequiredMediaCompletionSchema,
+    screen: HireEngineScreenMediaCompletionSchema,
+  })
+  .strict()
+
 export const HireEngineTranscriptEntrySchema = z
   .object({
     speaker: z.enum(['interviewer', 'candidate']),
@@ -142,6 +187,10 @@ export const HireEngineResultIngestionSchema = z
     results: HireEngineResultSchema,
     transcript: z.array(HireEngineTranscriptEntrySchema).max(5_000),
     media: z.array(HireEngineMediaArtifactSchema).max(8).default([]),
+    // Optional preserves bridge compatibility with runtimes deployed before
+    // the durable media-completion contract. Versioned workers always send
+    // it so recruiter clients never infer a transfer state indefinitely.
+    mediaCompletion: HireEngineMediaCompletionSchema.optional(),
   })
   .strict()
 
@@ -163,6 +212,10 @@ export const HireEngineRevocationSchema = z
 export const HireRuntimeHandoffRequestSchema = z
   .object({
     code: z.string().regex(/^[a-f0-9]{24}\.[a-f0-9]{64}$/i),
+    // Generated independently inside the candidate's browser and kept only in
+    // this tab. The runtime folds it into the control-plane request binding so
+    // the already-bound URL capability cannot be replayed from another tab.
+    clientNonce: Sha256HexSchema,
   })
   .strict()
 
@@ -181,6 +234,9 @@ export type HireEngineConfig = z.infer<typeof HireEngineConfigSchema>
 export type HireEngineExchangeRequest = z.infer<typeof HireEngineExchangeRequestSchema>
 export type HireEngineHandoffEnvelope = z.infer<typeof HireEngineHandoffEnvelopeSchema>
 export type HireEngineResult = z.infer<typeof HireEngineResultSchema>
+export type HireEngineMediaCompletion = z.infer<
+  typeof HireEngineMediaCompletionSchema
+>
 export type HireEngineResultIngestion = z.infer<typeof HireEngineResultIngestionSchema>
 export type HireEngineRevocation = z.infer<typeof HireEngineRevocationSchema>
 export type HireRuntimeBootstrapResponse = z.infer<

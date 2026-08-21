@@ -137,11 +137,38 @@ export const HireMultimodalAnalysisArtifactSchema = z
         (value) => !value.includes('..') && !value.startsWith('/'),
         'Unsafe object key',
       ),
+    /** Required for digest-only v2 source keys; absent on coordinate-bound v1. */
+    objectKeyNonce: Sha256HexSchema.optional(),
     contentType: z.literal('application/json'),
     sizeBytes: z.number().int().min(1).max(HIRE_MULTIMODAL_ANALYSIS_MAX_ARTIFACT_BYTES),
     sha256: Sha256HexSchema,
   })
   .strict()
+  .superRefine((artifact, context) => {
+    const v2 = /^landmarks\/v2\/[a-f0-9]{64}$/.test(artifact.sourceKey)
+    const runtimeV2Namespace = artifact.sourceKey.startsWith('landmarks/v2/')
+    if (runtimeV2Namespace && !v2) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sourceKey'],
+        message: 'Runtime landmark v2 key is not canonical',
+      })
+    }
+    if (v2 && !artifact.objectKeyNonce) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['objectKeyNonce'],
+        message: 'Runtime landmark v2 object-key nonce is required',
+      })
+    }
+    if (!v2 && artifact.objectKeyNonce) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['objectKeyNonce'],
+        message: 'Legacy landmark artifact cannot carry an object-key nonce',
+      })
+    }
+  })
 
 export const HireMultimodalAnalysisTranscriptEntrySchema = z
   .object({

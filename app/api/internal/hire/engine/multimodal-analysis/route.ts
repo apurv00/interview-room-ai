@@ -4,6 +4,10 @@ import { verifyInternalServiceRequest } from '@shared/services/internalServiceAu
 import { inngest } from '@shared/services/inngest'
 import { HIRE_MULTIMODAL_ANALYSIS_CAPTURE_MAX_BODY_BYTES } from '@shared/contracts/hireMultimodalAnalysisBridge'
 import {
+  HIRE_INGESTION_REVISION_PROTOCOL_HEADER,
+  evaluateHireIngestionRevisionProtocol,
+} from '@shared/contracts/hireIngestionRevisionProtocol'
+import {
   HireMultimodalAnalysisIngestionError,
   ingestHireMultimodalAnalysis,
 } from '@modules/hire-multimodal/services/analysisIngestionService'
@@ -30,6 +34,18 @@ export async function POST(req: NextRequest) {
   if (!auth.ok) {
     const status = auth.reason === 'replay-store-unavailable' ? 503 : 401
     return NextResponse.json({ error: 'Service authentication failed' }, { status })
+  }
+  const protocol = evaluateHireIngestionRevisionProtocol({
+    requestVersion: req.headers.get(HIRE_INGESTION_REVISION_PROTOCOL_HEADER),
+  })
+  if (!protocol.ok) {
+    return NextResponse.json(
+      { error: 'Hire ingestion revision protocol is unavailable' },
+      {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store', 'Retry-After': '60' },
+      },
+    )
   }
   try {
     const payload = JSON.parse(body) as { workspaceId?: unknown }

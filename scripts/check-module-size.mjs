@@ -46,7 +46,14 @@ const BUDGETS = {
   // display recorder. This is live-session runtime wiring, not the legacy
   // post-interview analysis slice ADR 0006 identifies for a future structural
   // extraction. The cap retains 132 LOC of deliberate headroom; see ADR 0040.
-  'modules/interview': { maxLOC: 31_100, maxFiles: 142 },
+  // Bumped LOC 31.1k → 31.6k on 2026-08-21 for the bounded, durable Hire
+  // replay queue/completion state machine: required multipart persistence,
+  // expired-upload identity reset, terminal evidence markers, and abortable
+  // IndexedDB settlement. See ADR 0042.
+  // Bumped LOC 31.6k → 31.7k on 2026-08-21 for recorder-boundary clock
+  // capture that maps recruiter evidence seeks to the canonical integrity
+  // timeline. Measured at 31,631 LOC / 130 files; see ADR 0045.
+  'modules/interview': { maxLOC: 31_700, maxFiles: 142 },
   'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
   // Bumped maxFiles 80 → 82 on 2026-06-09 (PR #435): adds ONE counted file —
   // services/resolvePathwayNextHref.ts, the server-side CTA next-step resolver
@@ -93,7 +100,13 @@ const BUDGETS = {
   // lifecycle obligations. The native multimodal release adds one deliberately
   // tiny, two-export boundary facade so its isolated module never imports the
   // broad Hire barrel; retain a one-file allowance for that seam. See ADR 0039.
-  'modules/hire':      { maxLOC: 26_000, maxFiles: 91 },
+  // Deletion linearization first introduced opaque nonce-bound keys,
+  // conditional writes, permanent same-key seals, leases, and claim tokens.
+  // Revision-safe ingestion then adds one shared reservation authority,
+  // drained attempt migration, media checkpoints, transactional activation,
+  // and immutable retry snapshots. In the integrated remediation stack the
+  // measured core is 27,957 LOC / 92 files. See ADRs 0041 and 0043.
+  'modules/hire':      { maxLOC: 28_100, maxFiles: 92 },
   // A bounded control-plane authority for Hire-native supplemental interview
   // observations. It cannot write assessments, decisions, exports, or raw
   // camera data; see ADR 0039.
@@ -208,7 +221,14 @@ const BUDGETS = {
   // Bumped LOC 26k → 26.2k on 2026-08-20 for the versioned cross-surface Hire
   // interview-integrity bridge. It adds only wire contracts and preserves
   // V1/V2 compatibility; see ADR 0040.
-  'shared':            { maxLOC: 26_200, maxFiles: 180 },
+  // Bumped LOC 26.2k → 26.3k on 2026-08-21 for the fail-closed deployment
+  // identity/Mongo boundary and attempt-aware ingestion protocol. Their two
+  // distinct authority files bring the integrated stack to 26,365 LOC / 182
+  // files; see ADRs 0043 and 0044.
+  // Bumped LOC 26.4k → 26.6k on 2026-08-21 for the exact runtime-landmark
+  // authority and recorder-clock wire contracts. Measured at 26,533 LOC /
+  // 182 files; see ADR 0045.
+  'shared':            { maxLOC: 26_600, maxFiles: 182 },
   // Added 2026-07-16 (readiness PR-R1): modules/jobs had NO budget row —
   // generous tripwire per this file's philosophy. Same ADR as above.
   // Bumped maxLOC 14,000 → 16,000 on 2026-07-22 for the bounded A08

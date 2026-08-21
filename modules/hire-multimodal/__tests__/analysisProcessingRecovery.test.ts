@@ -3,13 +3,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   analysisUpdateOne: vi.fn(),
+  analysisExists: vi.fn(),
   analysisFind: vi.fn(),
+  privacyExists: vi.fn(),
 }))
 
 vi.mock('@hire', () => ({
   HireMediaAsset: {},
-  HirePrivacyRequest: {},
+  HirePrivacyRequest: { exists: mocks.privacyExists },
   HireRound: {},
+  activeHirePrivacyRequestFilter: (now: Date) => ({
+    live: true,
+    $or: [
+      { status: 'processing' },
+      { status: 'pending_verification', verificationExpiresAt: { $gt: now } },
+    ],
+  }),
   assertHireMediaKeyScope: vi.fn(),
   connectHireControlDB: mocks.connect,
 }))
@@ -18,7 +27,9 @@ vi.mock('@interview', () => ({
   extractProsody: vi.fn(),
 }))
 vi.mock('../models', () => ({
+  HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS: 3,
   HireMultimodalAnalysis: {
+    exists: mocks.analysisExists,
     updateOne: mocks.analysisUpdateOne,
     find: mocks.analysisFind,
   },
@@ -40,6 +51,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.connect.mockResolvedValue(undefined)
   mocks.analysisUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.analysisExists.mockResolvedValue(true)
+  mocks.privacyExists.mockResolvedValue(false)
   mocks.analysisFind.mockReturnValue({
     sort: () => ({
       limit: () => ({
@@ -50,6 +63,37 @@ beforeEach(() => {
 })
 
 describe('Hire multimodal analysis processing recovery', () => {
+  it('ignores expired privacy requests through the canonical active predicate and blocks active ones', async () => {
+    const analysis = {
+      _id: ANALYSIS_ID,
+      workspaceId: WORKSPACE_ID,
+      applicationId: 'c'.repeat(24),
+      candidateId: 'd'.repeat(24),
+      status: 'processing',
+    }
+
+    await expect(
+      __hireMultimodalAnalysisProcessing.canProcessAnalysis(analysis as never),
+    ).resolves.toBe(true)
+    expect(mocks.privacyExists).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: WORKSPACE_ID,
+      candidateId: analysis.candidateId,
+      live: true,
+      $or: [
+        { status: 'processing' },
+        {
+          status: 'pending_verification',
+          verificationExpiresAt: { $gt: expect.any(Date) },
+        },
+      ],
+    }))
+
+    mocks.privacyExists.mockResolvedValueOnce(true)
+    await expect(
+      __hireMultimodalAnalysisProcessing.canProcessAnalysis(analysis as never),
+    ).resolves.toBe(false)
+  })
+
   it('claims a processing report at its exact lease expiry and includes due retryable failures', () => {
     const now = new Date('2026-08-17T10:00:00.000Z')
     const clauses = __hireMultimodalAnalysisProcessing.dueAnalysisClaimClauses(now)
@@ -81,6 +125,16 @@ describe('Hire multimodal analysis processing recovery', () => {
       expect.objectContaining({
         _id: ANALYSIS_ID,
         status: { $in: ['pending', 'processing'] },
+        $or: [
+          {
+            retryAttemptCount: {
+              $lt:
+                __hireMultimodalAnalysisProcessing.MAX_AUTOMATIC_RETRY_ATTEMPTS -
+                1,
+            },
+          },
+          { retryAttemptCount: { $exists: false } },
+        ],
       }),
       expect.objectContaining({
         $set: expect.objectContaining({
@@ -104,7 +158,11 @@ describe('Hire multimodal analysis processing recovery', () => {
 
     expect(mocks.analysisUpdateOne).toHaveBeenCalledTimes(2)
     expect(mocks.analysisUpdateOne.mock.calls[1][1]).toEqual(expect.objectContaining({
-      $set: expect.objectContaining({ status: 'failed' }),
+      $set: expect.objectContaining({
+        status: 'failed',
+        retryAttemptCount:
+          __hireMultimodalAnalysisProcessing.MAX_AUTOMATIC_RETRY_ATTEMPTS,
+      }),
       $unset: expect.objectContaining({ processingLeaseExpiresAt: 1, retryAt: 1 }),
     }))
   })

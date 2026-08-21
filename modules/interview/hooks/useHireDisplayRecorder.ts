@@ -20,6 +20,8 @@ export interface UseHireDisplayRecorderReturn {
   hasTerminalFailure: boolean
   setSource: (stream: MediaStream | null) => void
   stopRecording: () => Promise<Blob | null>
+  /** Wall-clock timestamp captured at the stable display recorder's t=0. */
+  getStartedAtMs: () => number | null
 }
 
 /**
@@ -32,6 +34,7 @@ export function useHireDisplayRecorder(): UseHireDisplayRecorderReturn {
     isRecording,
     startRecording: startMediaRecording,
     stopRecording: stopMediaRecording,
+    getStartedAtMs,
   } = useMediaRecorder()
   const [error, setError] = useState<string | null>(null)
   const [recordingStarted, setRecordingStarted] = useState(false)
@@ -318,5 +321,6 @@ export function useHireDisplayRecorder(): UseHireDisplayRecorderReturn {
     hasTerminalFailure,
     setSource,
     stopRecording,
+    getStartedAtMs,
   }
 }

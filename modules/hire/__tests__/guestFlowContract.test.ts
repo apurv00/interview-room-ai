@@ -110,10 +110,11 @@ describe('unchanged engine provisioning contract', () => {
 
 describe('identity-free bridge contract', () => {
   const envelope = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     workspaceId: IDS.workspace,
     applicationId: IDS.application,
     roundId: IDS.round,
+    handoffGeneration: 1,
     nonce: 'cd'.repeat(32),
     issuedAt: '2026-08-10T00:00:00.000Z',
     expiresAt: '2026-08-10T00:01:00.000Z',

@@ -9,7 +9,7 @@ const base = {
   MONGODB_URI: 'mongodb://mongo.example/ipg-hire-control',
   REDIS_URL: 'rediss://redis.example',
   HEALTH_CHECK_TOKEN: 'health-secret',
-  DEPLOYMENT_COMMIT_SHA: '0123456789abcdef',
+  DEPLOYMENT_COMMIT_SHA: '0123456789abcdef0123456789abcdef01234567',
   HIRE_ENGINE_BRIDGE_KEY_ID: 'hire-bridge-2026-08',
   HIRE_ENGINE_BRIDGE_SECRET: 'b'.repeat(64),
   B2C_DATABASE_NAME: 'ipg-b2c',
@@ -19,6 +19,7 @@ const base = {
   HIRE_CONTROL_INNGEST_APP_ID: 'ipg-hire-control-production',
   HIRE_RUNTIME_INNGEST_APP_ID: 'ipg-hire-runtime-production',
   INNGEST_SIGNING_KEY: 'signkey-test',
+  NEXT_PUBLIC_FEATURE_MULTIMODAL: 'true',
 }
 
 const control = {
@@ -27,12 +28,17 @@ const control = {
   INNGEST_APP_ID: 'ipg-hire-control-production',
   INNGEST_EVENT_KEY: 'event-key',
   NEXTAUTH_SECRET: 'c'.repeat(64),
+  HIRE_HANDOFF_ISSUANCE_MODE: 'open',
+  HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'required',
+  HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: '2026-08-20T00:00:00.000Z',
   HIRE_PUBLIC_URL: 'https://hire.interviewprep.guru',
   HIRE_ENGINE_RUNTIME_URL: 'https://engine.hire.interviewprep.guru',
   RESEND_API_KEY: 're_test',
   EMAIL_FROM: 'IPG Hire <hire@send.interviewprep.guru>',
   HIRE_INVITE_DELIVERY_KEY_ID: 'invite-delivery-2026-08',
   HIRE_INVITE_DELIVERY_KEY: Buffer.alloc(32, 7).toString('base64'),
+  HIRE_ACCOUNT_BRIDGE_KEY_ID: 'account-bridge-2026-08',
+  HIRE_ACCOUNT_BRIDGE_SECRET: 'a'.repeat(64),
   R2_ACCOUNT_ID: 'control-account',
   R2_ACCESS_KEY_ID: 'control-key',
   R2_SECRET_ACCESS_KEY: 'control-secret',
@@ -52,6 +58,7 @@ const runtime = {
   NEXTAUTH_URL: 'https://engine.hire.interviewprep.guru',
   HIRE_RUNTIME_NEXTAUTH_SECRET: 'r'.repeat(64),
   HIRE_RUNTIME_FENCE_SECRET: 'f'.repeat(64),
+  HIRE_CONTROL_URL: 'https://hire.interviewprep.guru',
   HIRE_CONTROL_INTERNAL_URL: 'https://hire.interviewprep.guru',
   HIRE_ENGINE_RUNTIME_URL: 'https://engine.hire.interviewprep.guru',
   R2_ACCOUNT_ID: 'runtime-account',
@@ -70,9 +77,98 @@ describe('Hire deployment readiness', () => {
     expect(hireDeploymentConfigurationIssues({})).toEqual([])
   })
 
+  it('fails closed when a Hire manifest omits or mistypes its surface identity', () => {
+    expect(hireDeploymentConfigurationIssues({
+      HIRE_CONTROL_DATABASE_NAME: 'ipg-hire-control',
+      HIRE_RUNTIME_DATABASE_NAME: 'ipg-hire-runtime',
+    })).toEqual(['missing:IPG_SURFACE'])
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      IPG_SURFACE: 'hire-contorl',
+    })).toEqual(['invalid:IPG_SURFACE'])
+    expect(hireDeploymentConfigurationIssues({
+      HIRE_ENGINE_RUNTIME_URL: 'https://engine.example.test',
+    })).toEqual(['missing:IPG_SURFACE'])
+    expect(hireDeploymentConfigurationIssues({
+      HIRE_ENGINE_BRIDGE_SECRET_PREVIOUS: 'p'.repeat(64),
+    })).toEqual(['missing:IPG_SURFACE'])
+    expect(hireDeploymentConfigurationIssues({
+      HIRE_HANDOFF_ISSUANCE_MODE: 'open',
+    })).toEqual(['missing:IPG_SURFACE'])
+    expect(hireDeploymentConfigurationIssues({
+      HIRE_FUTURE_RELEASE_MARKER: 'enabled',
+    })).toEqual(['missing:IPG_SURFACE'])
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      IPG_SURFACE: ' hire-engine ',
+    })).toEqual(['invalid:IPG_SURFACE'])
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      IPG_SURFACE: '   ',
+    })).toEqual(['invalid:IPG_SURFACE'])
+    expect(hireDeploymentConfigurationIssues({
+      IPG_SURFACE: 'b2c',
+      HIRE_CONTROL_DATABASE_NAME: 'ipg-hire-control',
+      HIRE_ENGINE_RUNTIME_URL: 'https://engine.example.test',
+    })).toEqual([])
+  })
+
   it('accepts an isolated production control-plane manifest', () => {
     expect(currentDeploymentSurface(control)).toBe('hire-control')
     expect(hireDeploymentConfigurationIssues(control)).toEqual([])
+  })
+
+  it('does not require the browser-only build flag on control', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      NEXT_PUBLIC_FEATURE_MULTIMODAL: undefined,
+    })).toEqual([])
+  })
+
+  it('requires an explicit issuance mode and a strong token only for smoke mode', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_HANDOFF_ISSUANCE_MODE: undefined,
+    })).toEqual(expect.arrayContaining([
+      'missing:HIRE_HANDOFF_ISSUANCE_MODE',
+      'invalid:HIRE_HANDOFF_ISSUANCE_MODE',
+    ]))
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_HANDOFF_ISSUANCE_MODE: 'draining',
+    })).toEqual([])
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_HANDOFF_ISSUANCE_MODE: 'smoke',
+      HIRE_HANDOFF_SMOKE_TOKEN: 'short',
+    })).toContain('weak:HIRE_HANDOFF_SMOKE_TOKEN')
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_HANDOFF_ISSUANCE_MODE: 'smoke',
+      HIRE_HANDOFF_SMOKE_TOKEN: 's'.repeat(64),
+    })).toEqual([])
+  })
+
+  it('requires a release-aware ingestion protocol while allowing an intentional drain', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: undefined,
+    })).toEqual(expect.arrayContaining([
+      'missing:HIRE_INGESTION_REVISION_PROTOCOL_MODE',
+      'invalid:HIRE_INGESTION_REVISION_PROTOCOL_MODE',
+    ]))
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'disabled',
+    })).toContain('invalid:HIRE_INGESTION_REVISION_PROTOCOL_MODE')
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_INGESTION_REVISION_PROTOCOL_MODE: 'draining',
+    })).toEqual([])
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_INGESTION_REVISION_PROTOCOL_DRAIN_STARTED_AT: undefined,
+    })).toContain('not-ready:HIRE_INGESTION_REVISION_PROTOCOL')
   })
 
   it('accepts bounded invite-delivery key rotation and rejects unsafe key manifests', () => {
@@ -93,9 +189,83 @@ describe('Hire deployment readiness', () => {
     ]))
   })
 
+  it('requires the account-deletion bridge on the control plane', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_ACCOUNT_BRIDGE_KEY_ID: undefined,
+      HIRE_ACCOUNT_BRIDGE_SECRET: 'short',
+    })).toEqual(expect.arrayContaining([
+      'missing:HIRE_ACCOUNT_BRIDGE_KEY_ID',
+      'weak:HIRE_ACCOUNT_BRIDGE_SECRET',
+    ]))
+  })
+
+  it('keeps account-deletion and engine bridge credentials compartmentalized', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_ACCOUNT_BRIDGE_SECRET: control.HIRE_ENGINE_BRIDGE_SECRET,
+    })).toContain('collision:bridge-secrets')
+  })
+
   it('accepts an isolated production runtime manifest', () => {
     expect(currentDeploymentSurface(runtime)).toBe('hire-engine')
     expect(hireDeploymentConfigurationIssues(runtime)).toEqual([])
+  })
+
+  it('rejects whitespace that would change the actual Inngest app identity', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      INNGEST_APP_ID: ` ${control.INNGEST_APP_ID} `,
+    })).toContain('mismatch:INNGEST_APP_ID')
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      HIRE_RUNTIME_INNGEST_APP_ID:
+        ` ${runtime.HIRE_RUNTIME_INNGEST_APP_ID} `,
+    })).toContain('mismatch:INNGEST_APP_ID')
+  })
+
+  it('requires an exact full deployment commit SHA', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      DEPLOYMENT_COMMIT_SHA: '0123456789abcdef',
+    })).toContain('invalid:DEPLOYMENT_COMMIT_SHA')
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      DEPLOYMENT_COMMIT_SHA: 'g'.repeat(40),
+    })).toContain('invalid:DEPLOYMENT_COMMIT_SHA')
+  })
+
+  it('requires the Hire browser feature flag in the built deployment manifest', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      NEXT_PUBLIC_FEATURE_MULTIMODAL: undefined,
+    })).toEqual(expect.arrayContaining([
+      'missing:NEXT_PUBLIC_FEATURE_MULTIMODAL',
+      'invalid:NEXT_PUBLIC_FEATURE_MULTIMODAL',
+    ]))
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      NEXT_PUBLIC_FEATURE_MULTIMODAL: 'false',
+    })).toContain('invalid:NEXT_PUBLIC_FEATURE_MULTIMODAL')
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      NEXT_PUBLIC_FEATURE_MULTIMODAL: ' true ',
+    })).toContain('invalid:NEXT_PUBLIC_FEATURE_MULTIMODAL')
+  })
+
+  it('requires an isolated HTTPS browser-facing control URL on runtime', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      HIRE_CONTROL_URL: undefined,
+    })).toContain('missing:HIRE_CONTROL_URL')
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      HIRE_CONTROL_URL: 'http://hire.example.test',
+    })).toContain('invalid:HIRE_CONTROL_URL')
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      HIRE_CONTROL_URL: `${runtime.HIRE_ENGINE_RUNTIME_URL}/control`,
+    })).toContain('collision:hire-origins')
   })
 
   it('requires a strong runtime middleware secret distinct from the runtime session secret', () => {
@@ -138,6 +308,45 @@ describe('Hire deployment readiness', () => {
         'collision:hire-origins',
       ]),
     )
+  })
+
+  it.each([
+    'B2C_DATABASE_NAME',
+    'HIRE_CONTROL_DATABASE_NAME',
+    'HIRE_RUNTIME_DATABASE_NAME',
+  ] as const)('rejects whitespace in exact database identity %s', (name) => {
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      [name]: ` ${runtime[name]} `,
+    })).toContain(`invalid:${name}`)
+  })
+
+  it('compares service isolation by URL origin, not raw URL text', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_PUBLIC_URL: 'https://hire.example.test/control',
+      HIRE_ENGINE_RUNTIME_URL: 'https://hire.example.test/engine',
+    })).toContain('collision:hire-origins')
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      HIRE_CONTROL_INTERNAL_URL: 'https://hire.example.test/control',
+      HIRE_ENGINE_RUNTIME_URL: 'https://hire.example.test/engine/',
+      NEXTAUTH_URL: 'https://hire.example.test/engine',
+    })).toContain('collision:hire-origins')
+  })
+
+  it('rejects whitespace-normalized service URLs that consumers read raw', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_PUBLIC_URL: ` ${control.HIRE_PUBLIC_URL}`,
+    })).toContain('invalid:HIRE_PUBLIC_URL')
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      NEXTAUTH_URL: `${runtime.NEXTAUTH_URL} `,
+    })).toEqual(expect.arrayContaining([
+      'invalid:NEXTAUTH_URL',
+      'mismatch:NEXTAUTH_URL',
+    ]))
   })
 
   it('accepts shared R2 credentials and arbitrary distinct HTTPS origins', () => {
@@ -191,6 +400,18 @@ describe('Hire deployment readiness', () => {
         'mismatch:R2_ACCESS_KEY_ID',
       ]),
     )
+  })
+
+  it.each([
+    'R2_ACCOUNT_ID',
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
+    'R2_BUCKET_NAME',
+  ] as const)('rejects whitespace in the exact runtime storage alias %s', (name) => {
+    expect(hireDeploymentConfigurationIssues({
+      ...runtime,
+      [name]: ` ${runtime[name]} `,
+    })).toContain(`mismatch:${name}`)
   })
 
   it('lists missing production dependencies without exposing values', () => {
