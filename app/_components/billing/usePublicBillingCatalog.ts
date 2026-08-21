@@ -177,16 +177,11 @@ export function usePublicBillingCatalog(
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') refreshIfExpired()
     }
-    const expiryTimer = window.setTimeout(
-      refreshWhenVisible,
-      Math.max(0, cacheExpiresAt - Date.now()),
-    )
     window.addEventListener('online', refreshWhenVisible)
     window.addEventListener('pageshow', refreshWhenVisible)
     document.addEventListener('visibilitychange', refreshWhenVisible)
 
     return () => {
-      window.clearTimeout(expiryTimer)
       window.removeEventListener('online', refreshWhenVisible)
       window.removeEventListener('pageshow', refreshWhenVisible)
       document.removeEventListener('visibilitychange', refreshWhenVisible)

@@ -186,6 +186,46 @@ describe('usePublicBillingCatalog request lifecycle', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
+  it('does not poll while the homepage remains open after the TTL', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-22T00:00:00.000Z'))
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(catalogV1))
+      .mockResolvedValueOnce(response(catalogV2))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<CatalogState cachePolicy="homepage-memory" />)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.getByTestId('catalog-state')).toHaveTextContent(
+      'catalog-cache-v1',
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(
+        HOMEPAGE_CATALOG_CACHE_TTL_MS * 2,
+      )
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('catalog-state')).toHaveTextContent(
+      'catalog-cache-v1',
+    )
+
+    act(() => {
+      fireEvent(window, new Event('pageshow'))
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('catalog-state')).toHaveTextContent(
+      'catalog-cache-v2',
+    )
+  })
+
   it('never caches failed or malformed catalog responses', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({ error: 'unavailable' }, 503))
