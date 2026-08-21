@@ -46,6 +46,11 @@ const mocks = vi.hoisted(() => ({
   handoffUpdateMany: vi.fn(),
   handoffDeleteMany: vi.fn(),
   ingestionDeleteMany: vi.fn(),
+  multimodalObservationIngestionDeleteMany: vi.fn(),
+  multimodalObservationDeleteMany: vi.fn(),
+  multimodalObservationPurgeObligationDeleteMany: vi.fn(),
+  multimodalAnalysisIngestionDeleteMany: vi.fn(),
+  multimodalAnalysisDeleteMany: vi.fn(),
   attemptUpdateMany: vi.fn(),
   attemptDeleteMany: vi.fn(),
   consentDeleteMany: vi.fn(),
@@ -62,6 +67,7 @@ const mocks = vi.hoisted(() => ({
   resultDeleteMany: vi.fn(),
   deliveryDeleteMany: vi.fn(),
   mediaFind: vi.fn(),
+  mediaFindOneAndUpdate: vi.fn(),
   mediaUpdateOne: vi.fn(),
   mediaExists: vi.fn(),
   mediaDeleteMany: vi.fn(),
@@ -90,6 +96,8 @@ vi.mock('../../hire/onboardingLifecycleBoundary', () => ({
   cancelHireAssessmentExports: (...args: unknown[]) => mocks.assessmentCancel(...args),
   deleteHireAssessmentExportObjects: (...args: unknown[]) => mocks.assessmentDeleteObjects(...args),
   cancelHireReportExportsForLifecycle: (...args: unknown[]) => mocks.reportCancel(...args),
+  hireMediaStorageKindForAsset: (kind: string) =>
+    kind.replaceAll('_', '-'),
   HireWorkspace: { exists: (...args: unknown[]) => mocks.workspaceExists(...args) },
   HireCandidateStatusLink: {
     deleteMany: (...args: unknown[]) => mocks.statusDeleteMany(...args),
@@ -123,6 +131,22 @@ vi.mock('../../hire/onboardingLifecycleBoundary', () => ({
   HireEngineIngestionEvent: {
     deleteMany: (...args: unknown[]) => mocks.ingestionDeleteMany(...args),
   },
+  HireMultimodalObservationIngestionEvent: {
+    deleteMany: (...args: unknown[]) => mocks.multimodalObservationIngestionDeleteMany(...args),
+  },
+  HireMultimodalObservation: {
+    deleteMany: (...args: unknown[]) => mocks.multimodalObservationDeleteMany(...args),
+  },
+  HireMultimodalObservationPurgeObligation: {
+    deleteMany: (...args: unknown[]) =>
+      mocks.multimodalObservationPurgeObligationDeleteMany(...args),
+  },
+  HireMultimodalAnalysisIngestionEvent: {
+    deleteMany: (...args: unknown[]) => mocks.multimodalAnalysisIngestionDeleteMany(...args),
+  },
+  HireMultimodalAnalysis: {
+    deleteMany: (...args: unknown[]) => mocks.multimodalAnalysisDeleteMany(...args),
+  },
   HireGuestSession: {
     updateMany: (...args: unknown[]) => mocks.guestUpdateMany(...args),
     deleteMany: (...args: unknown[]) => mocks.guestDeleteMany(...args),
@@ -153,6 +177,7 @@ vi.mock('../../hire/onboardingLifecycleBoundary', () => ({
   },
   HireMediaAsset: {
     find: (...args: unknown[]) => mocks.mediaFind(...args),
+    findOneAndUpdate: (...args: unknown[]) => mocks.mediaFindOneAndUpdate(...args),
     updateOne: (...args: unknown[]) => mocks.mediaUpdateOne(...args),
     exists: (...args: unknown[]) => mocks.mediaExists(...args),
     deleteMany: (...args: unknown[]) => mocks.mediaDeleteMany(...args),
@@ -201,8 +226,10 @@ function sessionQuery<T>(value: T) {
 
 function mediaQuery(value: unknown[]) {
   return {
-    sort: vi.fn().mockReturnValue({
-      limit: vi.fn().mockResolvedValue(value),
+    select: vi.fn().mockReturnValue({
+      sort: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue(value),
+      }),
     }),
   }
 }
@@ -268,6 +295,11 @@ beforeEach(() => {
   mocks.handoffUpdateMany.mockResolvedValue({ modifiedCount: 1 })
   mocks.handoffDeleteMany.mockResolvedValue({ deletedCount: 1 })
   mocks.ingestionDeleteMany.mockResolvedValue({ deletedCount: 1 })
+  mocks.multimodalObservationIngestionDeleteMany.mockResolvedValue({ deletedCount: 1 })
+  mocks.multimodalObservationDeleteMany.mockResolvedValue({ deletedCount: 1 })
+  mocks.multimodalObservationPurgeObligationDeleteMany.mockResolvedValue({ deletedCount: 1 })
+  mocks.multimodalAnalysisIngestionDeleteMany.mockResolvedValue({ deletedCount: 1 })
+  mocks.multimodalAnalysisDeleteMany.mockResolvedValue({ deletedCount: 1 })
   mocks.attemptUpdateMany.mockResolvedValue({ modifiedCount: 1 })
   mocks.attemptDeleteMany.mockResolvedValue({ deletedCount: 1 })
   mocks.consentDeleteMany.mockResolvedValue({ deletedCount: 1 })
@@ -284,7 +316,8 @@ beforeEach(() => {
   mocks.resultDeleteMany.mockResolvedValue({ deletedCount: 1 })
   mocks.deliveryDeleteMany.mockResolvedValue({ deletedCount: 1 })
   mocks.mediaFind.mockReturnValue(mediaQuery([]))
-  mocks.mediaUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.mediaFindOneAndUpdate.mockResolvedValue(null)
+  mocks.mediaUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
   mocks.mediaExists.mockReturnValue(sessionQuery(null))
   mocks.mediaDeleteMany.mockResolvedValue({ deletedCount: 1 })
   mocks.applicationExists.mockReturnValue(sessionQuery(null))
@@ -468,6 +501,12 @@ describe('Hire onboarding test-drive lifecycle', () => {
     })
     const deletionOrder = [
       mocks.ingestionDeleteMany,
+      mocks.multimodalObservationIngestionDeleteMany,
+      mocks.multimodalObservationDeleteMany,
+      mocks.multimodalObservationPurgeObligationDeleteMany,
+      mocks.multimodalAnalysisIngestionDeleteMany,
+      mocks.multimodalAnalysisDeleteMany,
+      mocks.resultDeleteMany,
       mocks.statusDeleteMany,
       mocks.verdictDeleteMany,
       mocks.shareDeleteMany,
@@ -490,6 +529,37 @@ describe('Hire onboarding test-drive lifecycle', () => {
       { session: transactionSession },
     )
     expect(mocks.statusDeleteMany).toHaveBeenCalledWith(scope, { session: transactionSession })
+    const multimodalEventScope = {
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      candidateId: IDS.candidate,
+      roundId: IDS.round,
+    }
+    expect(mocks.multimodalObservationIngestionDeleteMany).toHaveBeenCalledOnce()
+    expect(mocks.multimodalObservationIngestionDeleteMany).toHaveBeenCalledWith(
+      multimodalEventScope,
+      { session: transactionSession },
+    )
+    expect(mocks.multimodalObservationDeleteMany).toHaveBeenCalledOnce()
+    expect(mocks.multimodalObservationDeleteMany).toHaveBeenCalledWith(
+      scope,
+      { session: transactionSession },
+    )
+    expect(mocks.multimodalObservationPurgeObligationDeleteMany).toHaveBeenCalledOnce()
+    expect(mocks.multimodalObservationPurgeObligationDeleteMany).toHaveBeenCalledWith(
+      scope,
+      { session: transactionSession },
+    )
+    expect(mocks.multimodalAnalysisIngestionDeleteMany).toHaveBeenCalledOnce()
+    expect(mocks.multimodalAnalysisIngestionDeleteMany).toHaveBeenCalledWith(
+      multimodalEventScope,
+      { session: transactionSession },
+    )
+    expect(mocks.multimodalAnalysisDeleteMany).toHaveBeenCalledOnce()
+    expect(mocks.multimodalAnalysisDeleteMany).toHaveBeenCalledWith(
+      scope,
+      { session: transactionSession },
+    )
     expect(mocks.reportDeleteMany).toHaveBeenCalledWith(
       { workspaceId: IDS.workspace, jobId: IDS.job },
       { session: transactionSession },
@@ -507,6 +577,19 @@ describe('Hire onboarding test-drive lifecycle', () => {
     )
     expect(mocks.privacyRequestDeleteMany).toHaveBeenCalledWith(
       { workspaceId: IDS.workspace, candidateId: IDS.candidate },
+      { session: transactionSession },
+    )
+    expect(mocks.mediaDeleteMany).toHaveBeenCalledWith(
+      {
+        workspaceId: IDS.workspace,
+        applicationId: IDS.application,
+        jobId: IDS.job,
+        candidateId: IDS.candidate,
+        state: 'purged',
+        purgedAt: { $exists: true },
+        ingestionLeaseId: { $exists: false },
+        ingestionLeaseExpiresAt: { $exists: false },
+      },
       { session: transactionSession },
     )
   })
@@ -621,6 +704,269 @@ describe('Hire onboarding test-drive lifecycle', () => {
     )
   })
 
+  it('token-fences media deletion and finalization before deleting the synthetic graph', async () => {
+    const asset = {
+      _id: new mongoose.Types.ObjectId('888888888888888888888888'),
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+      roundId: IDS.round,
+      attemptId: new mongoose.Types.ObjectId('999999999999999999999999'),
+      objectKey: 'hire-media/test-drive/camera.webm',
+      kind: 'camera_recording' as const,
+      state: 'ready',
+      createdAt: NOW,
+    }
+    mocks.mediaFind
+      .mockReturnValueOnce(mediaQuery([asset]))
+      .mockReturnValueOnce(mediaQuery([]))
+    mocks.mediaFindOneAndUpdate.mockImplementation(async (_filter, update) => ({
+      ...asset,
+      state: 'purge_claimed',
+      purgeClaimId: update.$set.purgeClaimId,
+    }))
+    const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() }
+
+    const result = await purgeHireOnboardingTestDrive({
+      workspaceId: IDS.workspace.toString(),
+      testDriveId: IDS.testDrive.toString(),
+      now: NOW,
+      clock: () => NOW,
+      storage,
+    })
+
+    const purgeClaimId = mocks.mediaFindOneAndUpdate.mock.calls[0][1].$set.purgeClaimId
+    expect(result).toMatchObject({ purged: true, failed: false, mediaObjectsDeleted: 1 })
+    expect(storage.delete).toHaveBeenCalledOnce()
+    expect(mocks.mediaFindOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: asset._id,
+        $or: expect.arrayContaining([
+          { state: { $in: ['ready', 'purge_failed'] } },
+        ]),
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ state: 'purge_claimed', purgeClaimId }),
+      }),
+      { new: true },
+    )
+    expect(mocks.mediaUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: asset._id,
+        state: 'purge_claimed',
+        purgeClaimId,
+      }),
+      expect.objectContaining({
+        $set: { state: 'purged', purgedAt: NOW },
+        $unset: expect.objectContaining({
+          purgeClaimId: 1,
+          ingestionLeaseId: 1,
+          ingestionLeaseExpiresAt: 1,
+        }),
+      }),
+    )
+  })
+
+  it('waits for an active staging writer lease and retains the cleanup marker plus graph', async () => {
+    mocks.mediaFind.mockReturnValue(mediaQuery([{
+      _id: new mongoose.Types.ObjectId('888888888888888888888888'),
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+      roundId: IDS.round,
+      attemptId: new mongoose.Types.ObjectId('999999999999999999999999'),
+      objectKey: 'hire-media/test-drive/in-flight.webm',
+      kind: 'camera_recording' as const,
+      state: 'staging',
+      ingestionLeaseId: 'writer-lease',
+      ingestionLeaseExpiresAt: new Date(NOW.getTime() + 60_000),
+      createdAt: NOW,
+    }]))
+    const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() }
+
+    const result = await purgeHireOnboardingTestDrive({
+      workspaceId: IDS.workspace.toString(),
+      testDriveId: IDS.testDrive.toString(),
+      now: NOW,
+      clock: () => NOW,
+      storage,
+    })
+
+    expect(result).toMatchObject({ claimed: true, purged: false, failed: true, mediaObjectsDeleted: 0 })
+    expect(mocks.mediaFindOneAndUpdate).not.toHaveBeenCalled()
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(mocks.mediaDeleteMany).not.toHaveBeenCalled()
+    expect(mocks.testDriveDeleteOne).not.toHaveBeenCalled()
+  })
+
+  it('reclaims an expired media purge claim with its old token and timestamp', async () => {
+    const oldClaimedAt = new Date(NOW.getTime() - 16 * 60 * 1000)
+    const asset = {
+      _id: new mongoose.Types.ObjectId('888888888888888888888888'),
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+      roundId: IDS.round,
+      attemptId: new mongoose.Types.ObjectId('999999999999999999999999'),
+      objectKey: 'hire-media/test-drive/stale-claim.webm',
+      kind: 'camera_recording' as const,
+      state: 'purge_claimed',
+      purgeClaimId: 'old-purge-claim',
+      purgeClaimedAt: oldClaimedAt,
+      createdAt: NOW,
+    }
+    mocks.mediaFind
+      .mockReturnValueOnce(mediaQuery([asset]))
+      .mockReturnValueOnce(mediaQuery([]))
+    mocks.mediaFindOneAndUpdate.mockImplementation(async (_filter, update) => ({
+      ...asset,
+      purgeClaimId: update.$set.purgeClaimId,
+      purgeClaimedAt: update.$set.purgeClaimedAt,
+    }))
+    const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() }
+
+    const result = await purgeHireOnboardingTestDrive({
+      workspaceId: IDS.workspace.toString(),
+      testDriveId: IDS.testDrive.toString(),
+      now: NOW,
+      clock: () => NOW,
+      storage,
+    })
+
+    const claimFilter = mocks.mediaFindOneAndUpdate.mock.calls[0][0]
+    const newClaimId = mocks.mediaFindOneAndUpdate.mock.calls[0][1].$set.purgeClaimId
+    expect(claimFilter.$or).toEqual(expect.arrayContaining([{
+      state: 'purge_claimed',
+      purgeClaimId: 'old-purge-claim',
+      purgeClaimedAt: oldClaimedAt,
+    }]))
+    expect(newClaimId).not.toBe('old-purge-claim')
+    expect(mocks.mediaUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'purge_claimed', purgeClaimId: newClaimId }),
+      expect.objectContaining({ $set: { state: 'purged', purgedAt: NOW } }),
+    )
+    expect(storage.delete).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ purged: true, failed: false, mediaObjectsDeleted: 1 })
+  })
+
+  it('does not steal a fresh media purge claim and retains the cleanup marker plus graph', async () => {
+    const asset = {
+      _id: new mongoose.Types.ObjectId('888888888888888888888888'),
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+      roundId: IDS.round,
+      attemptId: new mongoose.Types.ObjectId('999999999999999999999999'),
+      objectKey: 'hire-media/test-drive/fresh-claim.webm',
+      kind: 'camera_recording' as const,
+      state: 'purge_claimed',
+      purgeClaimId: 'fresh-purge-claim',
+      purgeClaimedAt: new Date(NOW.getTime() - 60 * 1000),
+      createdAt: NOW,
+    }
+    mocks.mediaFind.mockReturnValue(mediaQuery([asset]))
+    const storage = { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() }
+
+    const result = await purgeHireOnboardingTestDrive({
+      workspaceId: IDS.workspace.toString(),
+      testDriveId: IDS.testDrive.toString(),
+      now: NOW,
+      clock: () => NOW,
+      storage,
+    })
+
+    const claimFilter = mocks.mediaFindOneAndUpdate.mock.calls[0][0]
+    expect(claimFilter.$or).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'purge_claimed' }),
+    ]))
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(mocks.mediaDeleteMany).not.toHaveBeenCalled()
+    expect(mocks.testDriveDeleteOne).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ claimed: true, purged: false, failed: true, mediaObjectsDeleted: 0 })
+  })
+
+  it('releases a failed media delete only under its purge token and retains the graph', async () => {
+    const asset = {
+      _id: new mongoose.Types.ObjectId('888888888888888888888888'),
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+      roundId: IDS.round,
+      attemptId: new mongoose.Types.ObjectId('999999999999999999999999'),
+      objectKey: 'hire-media/test-drive/camera.webm',
+      kind: 'camera_recording' as const,
+      state: 'ready',
+      createdAt: NOW,
+    }
+    mocks.mediaFind.mockReturnValue(mediaQuery([asset]))
+    mocks.mediaFindOneAndUpdate.mockImplementation(async (_filter, update) => ({
+      ...asset,
+      state: 'purge_claimed',
+      purgeClaimId: update.$set.purgeClaimId,
+    }))
+    const storage = {
+      upload: vi.fn(),
+      signRead: vi.fn(),
+      delete: vi.fn().mockRejectedValue(new Error('R2 unavailable')),
+    }
+
+    const result = await purgeHireOnboardingTestDrive({
+      workspaceId: IDS.workspace.toString(),
+      testDriveId: IDS.testDrive.toString(),
+      now: NOW,
+      clock: () => NOW,
+      storage,
+    })
+
+    const purgeClaimId = mocks.mediaFindOneAndUpdate.mock.calls[0][1].$set.purgeClaimId
+    expect(result).toMatchObject({ claimed: true, purged: false, failed: true, mediaObjectsDeleted: 0 })
+    expect(mocks.mediaUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: asset._id,
+        state: 'purge_claimed',
+        purgeClaimId,
+      }),
+      expect.objectContaining({
+        $set: { state: 'purge_failed', purgeFailureCode: 'Error' },
+        $unset: expect.objectContaining({ purgeClaimId: 1, purgeClaimedAt: 1 }),
+      }),
+    )
+    expect(mocks.mediaDeleteMany).not.toHaveBeenCalled()
+    expect(mocks.testDriveDeleteOne).not.toHaveBeenCalled()
+  })
+
+  it('blocks graph deletion when purged media lacks its acknowledgement timestamp', async () => {
+    mocks.mediaExists.mockReturnValue(sessionQuery({ _id: 'malformed-purged-row' }))
+
+    const result = await purgeHireOnboardingTestDrive({
+      workspaceId: IDS.workspace.toString(),
+      testDriveId: IDS.testDrive.toString(),
+      now: NOW,
+      clock: () => NOW,
+    })
+
+    expect(result).toMatchObject({ claimed: true, purged: false, failed: true })
+    expect(mocks.mediaExists).toHaveBeenCalledWith({
+      workspaceId: IDS.workspace,
+      applicationId: IDS.application,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+      $or: [
+        { state: { $ne: 'purged' } },
+        { purgedAt: { $exists: false } },
+        { ingestionLeaseId: { $exists: true } },
+        { ingestionLeaseExpiresAt: { $exists: true } },
+      ],
+    })
+    expect(mocks.mediaDeleteMany).not.toHaveBeenCalled()
+    expect(mocks.testDriveDeleteOne).not.toHaveBeenCalled()
+  })
+
   it('uses only the narrow lifecycle facade, never the Hire root, B2C, or an engine/runtime implementation', () => {
     const source = readFileSync(
       resolve(process.cwd(), 'modules/hire-onboarding/services/testDriveLifecycleService.ts'),
@@ -628,6 +974,7 @@ describe('Hire onboarding test-drive lifecycle', () => {
     )
     expect(source).toContain("from '../../hire/onboardingLifecycleBoundary'")
     expect(source).not.toMatch(/from ['"]@hire['"]/)
+    expect(source).not.toMatch(/from ['"][^'"]*hire-multimodal[^'"]*['"]/)
     expect(source).not.toMatch(/from ['"][^'"]*(?:b2c|engine|runtime)[^'"]*['"]/i)
   })
 })

@@ -93,7 +93,12 @@ const BUDGETS = {
   // lifecycle obligations. The native multimodal release adds one deliberately
   // tiny, two-export boundary facade so its isolated module never imports the
   // broad Hire barrel; retain a one-file allowance for that seam. See ADR 0039.
-  'modules/hire':      { maxLOC: 26_000, maxFiles: 91 },
+  // Bumped LOC 26k → 26.6k on 2026-08-21 for the deletion-linearization
+  // hotfix: opaque nonce-bound keys, conditional writes, permanent same-key
+  // seals, leases, and claim tokens order object storage with privacy and graph
+  // deletion. Measured core is 26,544 LOC / 91 files, leaving 56 LOC and no
+  // file-count headroom. See ADR 0041.
+  'modules/hire':      { maxLOC: 26_600, maxFiles: 91 },
   // A bounded control-plane authority for Hire-native supplemental interview
   // observations. It cannot write assessments, decisions, exports, or raw
   // camera data; see ADR 0039.

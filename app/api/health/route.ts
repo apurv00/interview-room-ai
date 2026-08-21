@@ -3,6 +3,7 @@ import {
   currentDeploymentSurface,
   hireDeploymentConfigurationIssues,
 } from '@shared/surfaces/hireDeploymentReadiness'
+import { HIRE_MEDIA_OBJECT_PROTOCOL } from '@shared/contracts/hireMediaObjectProtocol'
 import { deploymentCommitOf } from './deploymentIdentity'
 
 export const dynamic = 'force-dynamic'
@@ -58,6 +59,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ status: 'ok' }, { status: 200 })
   }
   const checks: Record<string, 'ok' | 'error'> = {}
+  const surface = currentDeploymentSurface()
   const configurationIssues = hireDeploymentConfigurationIssues()
   checks.configuration = configurationIssues.length === 0 ? 'ok' : 'error'
 
@@ -84,10 +86,14 @@ export async function GET(req: NextRequest) {
     {
       status: allOk ? 'healthy' : 'degraded',
       checks,
-      surface: currentDeploymentSurface(),
+      surface,
       configurationIssues,
       releaseGateAuthenticated,
       deploymentCommit: releaseGateAuthenticated ? deploymentCommitOf() : null,
+      hireMediaObjectProtocol:
+        surface === 'hire-control'
+          ? HIRE_MEDIA_OBJECT_PROTOCOL
+          : 'not-applicable',
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
     },

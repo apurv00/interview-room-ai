@@ -41,6 +41,7 @@ import {
 import { connectHireControlDB } from './hireControlBoundary'
 import { deliverRuntimeRevocation } from './engineRevocationService'
 import {
+  hireMediaStorageKindForAsset,
   hireMediaStorage,
   type HireMediaCoordinate,
   type HireMediaStoragePort,
@@ -70,6 +71,8 @@ import {
 const MEDIA_DELETE_BATCH_SIZE = 100
 const RUNTIME_PURGE_DELIVERY_BATCH_SIZE = 25
 const PURGE_LEASE_MS = 30 * 60 * 1000
+const LEGACY_STAGING_GRACE_MS = 60 * 60 * 1000
+const STALE_MEDIA_PURGE_CLAIM_MS = 15 * 60 * 1000
 
 /**
  * Deliberate inventory of the complete Hire control-plane graph. The runtime
@@ -149,6 +152,16 @@ function purgeFailureMessage(error: unknown): string {
     ? `${error.name}: ${error.message}`
     : 'Workspace purge failed'
   return value.slice(0, 500)
+}
+
+function stagingWriterStillOwns(asset: IHireMediaAsset, now: Date): boolean {
+  if (asset.state !== 'staging') return false
+  if (asset.ingestionLeaseExpiresAt) {
+    return asset.ingestionLeaseExpiresAt.getTime() > now.getTime()
+  }
+  if (asset.ingestionLeaseId) return true
+  return !asset.createdAt
+    || asset.createdAt.getTime() > now.getTime() - LEGACY_STAGING_GRACE_MS
 }
 
 async function claimWorkspaceForPurge(
@@ -234,37 +247,125 @@ async function deleteWorkspaceMedia(
       workspaceId,
       state: { $ne: 'purged' },
     })
+      .select('+objectKeyNonce')
       .sort({ _id: 1 })
       .limit(MEDIA_DELETE_BATCH_SIZE)
     if (assets.length === 0) return deleted
 
+    const claimAt = clock()
+    if (assets.some((asset) => stagingWriterStillOwns(asset, claimAt))) {
+      throw new Error('Workspace media ingestion lease is still active')
+    }
+
     let firstFailure: unknown
-    for (const asset of assets) {
+    for (const candidate of assets) {
+      const purgeClaimId = randomUUID()
       try {
-        // S3/R2 DELETE is idempotent. A crash after this acknowledgement but
-        // before the database update safely repeats the same delete on retry.
+        const asset = await HireMediaAsset.findOneAndUpdate(
+          {
+            _id: candidate._id,
+            workspaceId,
+            objectKey: candidate.objectKey,
+            ...(candidate.objectKeyNonce
+              ? { objectKeyNonce: candidate.objectKeyNonce }
+              : { objectKeyNonce: { $exists: false } }),
+            $or: [
+              { state: { $in: ['ready', 'purge_failed'] } },
+              {
+                state: 'staging',
+                ingestionLeaseExpiresAt: { $lte: claimAt },
+              },
+              {
+                state: 'staging',
+                ingestionLeaseId: { $exists: false },
+                ingestionLeaseExpiresAt: { $exists: false },
+                createdAt: { $lte: new Date(claimAt.getTime() - LEGACY_STAGING_GRACE_MS) },
+              },
+              ...(candidate.state === 'purge_claimed'
+                && candidate.purgeClaimedAt
+                && candidate.purgeClaimedAt.getTime()
+                  <= claimAt.getTime() - STALE_MEDIA_PURGE_CLAIM_MS
+                ? [{
+                    state: 'purge_claimed' as const,
+                    purgeClaimedAt: candidate.purgeClaimedAt,
+                    ...(candidate.purgeClaimId
+                      ? { purgeClaimId: candidate.purgeClaimId }
+                      : { purgeClaimId: { $exists: false } }),
+                  }]
+                : []),
+            ],
+          },
+          {
+            $set: {
+              state: 'purge_claimed',
+              purgeClaimId,
+              purgeClaimedAt: claimAt,
+            },
+            $unset: {
+              active: 1,
+              ingestionLeaseId: 1,
+              ingestionLeaseExpiresAt: 1,
+              purgeFailureCode: 1,
+            },
+          },
+          { new: true },
+        )
+        if (!asset) throw new Error('Workspace media purge claim is no longer authoritative')
+        // Logical deletion is idempotent: legacy keys are physically deleted,
+        // while v2 keys receive the same permanent zero-byte seal on retry.
         await storage.delete({
           key: asset.objectKey,
           coordinate: mediaCoordinate(asset),
+          kind: hireMediaStorageKindForAsset(candidate.kind),
+          objectKeyNonce: candidate.objectKeyNonce,
         })
-        await HireMediaAsset.updateOne(
+        const finalized = await HireMediaAsset.updateOne(
           {
             _id: asset._id,
             workspaceId,
             objectKey: asset.objectKey,
-            state: { $ne: 'purged' },
+            state: 'purge_claimed',
+            purgeClaimId,
           },
           {
             $set: { state: 'purged', purgedAt: clock() },
             $unset: {
               active: 1,
+              ingestionLeaseId: 1,
+              ingestionLeaseExpiresAt: 1,
+              purgeClaimId: 1,
               purgeClaimedAt: 1,
               purgeFailureCode: 1,
             },
           },
         )
-        deleted += 1
+        if (finalized.modifiedCount !== 1) {
+          throw new Error('Workspace media purge claim changed before finalization')
+        }
+        deleted += finalized.modifiedCount
       } catch (error) {
+        await HireMediaAsset.updateOne(
+          {
+            _id: candidate._id,
+            workspaceId,
+            objectKey: candidate.objectKey,
+            state: 'purge_claimed',
+            purgeClaimId,
+          },
+          {
+            $set: {
+              state: 'purge_failed',
+              purgeFailureCode: purgeFailureMessage(error).slice(0, 160),
+            },
+            $unset: {
+              purgeClaimId: 1,
+              purgeClaimedAt: 1,
+              active: 1,
+              ingestionLeaseId: 1,
+              ingestionLeaseExpiresAt: 1,
+            },
+          },
+        )
         firstFailure ??= error
       }
     }
@@ -374,7 +475,16 @@ async function deleteWorkspaceGraphChildren(
   await HireMultimodalAnalysis.deleteMany({ workspaceId }, { session })
   await HireInterviewResult.deleteMany({ workspaceId }, { session })
   await HireInterviewAttempt.deleteMany({ workspaceId }, { session })
-  await HireMediaAsset.deleteMany({ workspaceId }, { session })
+  await HireMediaAsset.deleteMany(
+    {
+      workspaceId,
+      state: 'purged',
+      purgedAt: { $exists: true },
+      ingestionLeaseId: { $exists: false },
+      ingestionLeaseExpiresAt: { $exists: false },
+    },
+    { session },
+  )
   await HirePrivacyRequest.deleteMany({ workspaceId }, { session })
   await HireEmailOutbox.deleteMany({ workspaceId }, { session })
   // Member operational-mail rows include a private recipient snapshot. They
@@ -455,7 +565,12 @@ async function deleteClaimedWorkspaceGraph(
 
       const unacknowledgedMedia = await HireMediaAsset.exists({
         workspaceId,
-        state: { $ne: 'purged' },
+        $or: [
+          { state: { $ne: 'purged' } },
+          { purgedAt: { $exists: false } },
+          { ingestionLeaseId: { $exists: true } },
+          { ingestionLeaseExpiresAt: { $exists: true } },
+        ],
       }).session(session)
       if (unacknowledgedMedia) {
         throw new Error('Workspace media deletion has not been acknowledged')
@@ -569,7 +684,10 @@ export const __workspacePurge = {
   MEDIA_DELETE_BATCH_SIZE,
   RUNTIME_PURGE_DELIVERY_BATCH_SIZE,
   PURGE_LEASE_MS,
+  LEGACY_STAGING_GRACE_MS,
+  STALE_MEDIA_PURGE_CLAIM_MS,
   mediaCoordinate,
+  stagingWriterStillOwns,
   deleteWorkspaceLogo,
   purgeFailureMessage,
 }

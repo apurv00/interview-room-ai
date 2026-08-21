@@ -96,6 +96,8 @@
     "backfill:hire-job-departments": "tsx -r dotenv/config scripts/backfill-hire-job-departments.ts",
     "check:hire-job-departments": "tsx -r dotenv/config scripts/backfill-hire-job-departments.ts --check",
     "check:jobs-source-control": "tsx scripts/check-jobs-source-control.ts",
+    "check:hire-media-r2-protocol": "node scripts/check-hire-media-r2-protocol.mjs",
+    "reconcile:hire-media-v1": "node scripts/reconcile-hire-media-v1.mjs",
     "report:jobs-discovery-quality": "tsx -r dotenv/config scripts/report-jobs-discovery-quality.ts",
     "smoke:jobs-source-control": "tsx scripts/smoke-jobs-source-control.ts"
   },

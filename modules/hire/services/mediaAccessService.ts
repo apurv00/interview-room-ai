@@ -3,6 +3,7 @@ import { HireMediaAsset } from '../models/HireMediaAsset'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
   HIRE_MEDIA_DOWNLOAD_TTL_SECONDS,
+  hireMediaStorageKindForAsset,
   hireMediaStorage,
   type HireMediaStoragePort,
 } from './hireMediaStorage'
@@ -54,11 +55,22 @@ export async function createHireMediaDownloadCapability(input: {
     // report/timeline data and the recorded video through separate assets.
     kind: { $ne: 'facial_landmarks' },
     ...availableAt(now),
-  }).lean()
+  })
+    .select('+objectKeyNonce')
+    .lean()
   if (!asset) throw new HireMediaAccessError()
 
   const url = await storage.signDownload({
     key: asset.objectKey,
+    coordinate: {
+      workspaceId: asset.workspaceId.toString(),
+      applicationId: asset.applicationId.toString(),
+      roundId: asset.roundId.toString(),
+      attemptId: asset.attemptId.toString(),
+      assetId: asset._id.toString(),
+    },
+    kind: hireMediaStorageKindForAsset(asset.kind),
+    objectKeyNonce: asset.objectKeyNonce,
     expiresInSeconds: HIRE_MEDIA_DOWNLOAD_TTL_SECONDS,
   })
 

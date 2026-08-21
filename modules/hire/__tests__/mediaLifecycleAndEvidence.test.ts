@@ -5,6 +5,10 @@ import type {
 } from '../models/HireInterviewResult'
 import { canonicalHireResultJson, __evidence } from '../services/evidenceService'
 import { addCalendarMonths } from '../services/mediaLifecycleService'
+import {
+  createHireMediaIngestionLease,
+  HIRE_MEDIA_INGESTION_LEASE_MS,
+} from '../models/HireMediaAsset'
 
 const ATTEMPT_ID = '444444444444444444444444'
 
@@ -55,6 +59,20 @@ describe('calendar-six-month retention', () => {
     ['2024-02-29T12:00:00.000Z', '2024-08-29T12:00:00.000Z'],
   ])('adds six calendar months to %s', (source, expected) => {
     expect(addCalendarMonths(new Date(source), 6).toISOString()).toBe(expected)
+  })
+})
+
+describe('media ingestion lease contract', () => {
+  it('creates a unique, bounded one-hour writer lease from the supplied clock', () => {
+    const now = new Date('2026-08-10T00:00:00.000Z')
+    const first = createHireMediaIngestionLease(now)
+    const second = createHireMediaIngestionLease(now)
+
+    expect(first.ingestionLeaseId).not.toBe(second.ingestionLeaseId)
+    expect(first.ingestionLeaseId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(first.ingestionLeaseExpiresAt.getTime()).toBe(
+      now.getTime() + HIRE_MEDIA_INGESTION_LEASE_MS,
+    )
   })
 })
 

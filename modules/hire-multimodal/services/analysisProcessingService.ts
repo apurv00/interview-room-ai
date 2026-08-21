@@ -113,7 +113,9 @@ async function loadFrames(analysis: AnalysisDocumentShape): Promise<FacialFrame[
     attemptId: analysis.attemptId,
     kind: 'facial_landmarks',
     state: 'ready',
-  }).lean()
+  })
+    .select('+objectKeyNonce')
+    .lean()
   if (!asset || asset.bytes > MAX_LANDMARK_BYTES || asset.contentType !== 'application/json') {
     throw new Error('Private facial landmark artifact is unavailable')
   }
@@ -123,7 +125,7 @@ async function loadFrames(analysis: AnalysisDocumentShape): Promise<FacialFrame[
     roundId: asset.roundId.toString(),
     attemptId: asset.attemptId.toString(),
     assetId: asset._id.toString(),
-  })
+  }, 'facial-landmarks', asset.objectKeyNonce)
   const storage = controlR2Client()
   const object = await storage.client.send(
     new GetObjectCommand({ Bucket: storage.bucket, Key: asset.objectKey }),

@@ -1,4 +1,26 @@
+import { randomUUID } from 'node:crypto'
 import mongoose, { Document, Model, Schema } from 'mongoose'
+
+export const HIRE_MEDIA_INGESTION_LEASE_MS = 60 * 60 * 1000
+
+export interface HireMediaIngestionLease {
+  ingestionLeaseId: string
+  ingestionLeaseExpiresAt: Date
+}
+
+/**
+ * Grants one writer exclusive authority to finish a staged media upload.
+ * Lifecycle workers must not purge a staging row while this lease is active,
+ * and writers must fence their final state transition with the returned ID.
+ */
+export function createHireMediaIngestionLease(
+  now: Date = new Date(),
+): HireMediaIngestionLease {
+  return {
+    ingestionLeaseId: randomUUID(),
+    ingestionLeaseExpiresAt: new Date(now.getTime() + HIRE_MEDIA_INGESTION_LEASE_MS),
+  }
+}
 
 export const HIRE_MEDIA_KINDS = [
   'identity_photo',
@@ -39,7 +61,11 @@ export interface IHireMediaAsset extends Document {
   kind: HireMediaKind
   state: HireMediaState
   active?: boolean
+  ingestionLeaseId?: string
+  ingestionLeaseExpiresAt?: Date
   objectKey: string
+  /** Required for v2 opaque keys; absent only on legacy coordinate-path keys. */
+  objectKeyNonce?: string
   contentType: string
   bytes: number
   sha256: string
@@ -48,6 +74,7 @@ export interface IHireMediaAsset extends Document {
   capturedAt: Date
   purgeEligibleAt?: Date
   purgeReason?: HireMediaPurgeReason
+  purgeClaimId?: string
   purgeClaimedAt?: Date
   purgeFailureCode?: string
   purgedAt?: Date
@@ -66,7 +93,20 @@ const HireMediaAssetSchema = new Schema<IHireMediaAsset>(
     kind: { type: String, enum: HIRE_MEDIA_KINDS, required: true, immutable: true },
     state: { type: String, enum: HIRE_MEDIA_STATES, required: true },
     active: { type: Boolean },
+    ingestionLeaseId: { type: String, maxlength: 80 },
+    ingestionLeaseExpiresAt: { type: Date },
     objectKey: { type: String, required: true, immutable: true, maxlength: 1000 },
+    objectKeyNonce: {
+      type: String,
+      immutable: true,
+      select: false,
+      required: function requiredV2ObjectKeyNonce(this: IHireMediaAsset) {
+        return this.objectKey.startsWith('hire-media/v2/')
+      },
+      minlength: 64,
+      maxlength: 64,
+      match: /^[a-f0-9]{64}$/,
+    },
     contentType: { type: String, required: true, immutable: true, maxlength: 100 },
     bytes: { type: Number, required: true, immutable: true, min: 1 },
     sha256: { type: String, required: true, immutable: true, match: /^[a-f0-9]{64}$/ },
@@ -75,6 +115,7 @@ const HireMediaAssetSchema = new Schema<IHireMediaAsset>(
     capturedAt: { type: Date, required: true, immutable: true },
     purgeEligibleAt: { type: Date },
     purgeReason: { type: String, enum: HIRE_MEDIA_PURGE_REASONS },
+    purgeClaimId: { type: String, maxlength: 80 },
     purgeClaimedAt: { type: Date },
     purgeFailureCode: { type: String, maxlength: 160 },
     purgedAt: { type: Date },

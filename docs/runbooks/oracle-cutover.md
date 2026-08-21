@@ -12,6 +12,11 @@ The current Hire-native multimodal release procedure is below. The remaining
 Vercel-to-Oracle cutover record is retained for audit history only and is
 explicitly superseded as live deployment guidance.
 
+The first release of Hire media object protocol
+`v2-opaque-nonce-if-none-match-zero-seal` must use the dedicated
+[`Hire media v2 cold-cutover runbook`](./hire-media-v2-cold-cutover.md). Its
+pause/drain/no-overlap procedure overrides the rolling deployment step below.
+
 ## Current Hire-native multimodal release procedure
 
 Use this procedure only from an approved, merged `main` commit. Record the

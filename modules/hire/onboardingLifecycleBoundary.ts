@@ -40,6 +40,7 @@ export {
 export { connectHireControlDB } from './services/hireControlBoundary'
 export { deliverRuntimeRevocation } from './services/engineRevocationService'
 export {
+  hireMediaStorageKindForAsset,
   hireMediaStorage,
   type HireMediaCoordinate,
   type HireMediaStoragePort,
@@ -56,3 +57,10 @@ export { HireCandidateStatusLink } from '../hire-status/models'
 export { revokeCandidateStatusLinksForScope } from '../hire-status/services/candidateStatusLinkService'
 export { HireReportExport } from '../hire-reports/models/HireReportExport'
 export { cancelHireReportExportsForLifecycle } from '../hire-reports/services/hireReportLifecycleService'
+export {
+  HireMultimodalAnalysis,
+  HireMultimodalAnalysisIngestionEvent,
+  HireMultimodalObservation,
+  HireMultimodalObservationIngestionEvent,
+  HireMultimodalObservationPurgeObligation,
+} from '../hire-multimodal/models'
