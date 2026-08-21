@@ -5,11 +5,13 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuthGate } from '@shared/providers/AuthGateProvider'
 import { track } from '@shared/analytics/track'
-import { PLANS } from '@shared/services/stripe'
+// eslint-disable-next-line no-restricted-imports -- direct import required: the @learn barrel transitively pulls server-only Mongoose services into this client component.
 import { usePathwayNextAction } from '@learn/hooks/usePathwayNextAction'
+import type { PublicBillingCatalog } from '@/app/_components/billing/billingClient'
+import { HomepagePricingPreview } from './HomepagePricingPreview'
 import {
   Play, Eye, Mic, Brain, Activity,
-  ChevronRight, ChevronDown, CheckCircle2, User,
+  ChevronRight, ChevronDown, User,
   AlertTriangle, TrendingDown, TrendingUp, BarChart3,
   MonitorPlay, Sparkles, FileText, BookOpen, RotateCcw, ArrowRight,
   ShieldCheck, Lock, Clock, Trash2
@@ -38,7 +40,13 @@ interface JourneyStep {
   core?: boolean
 }
 
-export default function MarketingHomepage() {
+interface MarketingHomepageProps {
+  readonly initialBillingCatalog: PublicBillingCatalog | null
+}
+
+export default function MarketingHomepage({
+  initialBillingCatalog,
+}: MarketingHomepageProps) {
   const [activeTab, setActiveTab] = useState(0)
   // Data-policy panel on the second scroll (FOLD 2). Default collapsed —
   // single toggle reveals all three points at once (not per-item FAQ).
@@ -679,77 +687,10 @@ export default function MarketingHomepage() {
       </section>
 
       {/* ── FOLD 7: PRICING ── */}
-      <section className="py-20 bg-white">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-14">
-            <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 mb-3">
-              Free. Because you should know what you&apos;re doing wrong before you pay to fix it.
-            </h2>
-            <p className="text-base text-slate-500">No credit card. No trial countdown.</p>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-5 max-w-4xl mx-auto">
-            <div className="bg-white border border-slate-200 rounded-2xl p-7 hover:shadow-lg hover:shadow-slate-100/50 transition-all flex flex-col">
-              <h3 className="text-xl font-bold text-slate-800 mb-1">Free</h3>
-              <div className="flex items-baseline gap-1 mb-6 pb-6 border-b border-slate-100">
-                <span className="text-4xl font-extrabold text-slate-800">$0</span>
-                <span className="text-slate-400">/ forever</span>
-              </div>
-              <ul className="space-y-3 mb-8 flex-1">
-                {[
-                  'Unlimited AI voice interviews',
-                  'Real-time face + voice + content coaching',
-                  '5-dimension scoring per question',
-                  '1 detailed video replay with full analysis per month',
-                  '20+ roles across 6 fields',
-                ].map((f, i) => (
-                  <li key={i} className="flex items-start gap-2.5 text-[14px] text-slate-600">
-                    <CheckCircle2 className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" /> {f}
-                  </li>
-                ))}
-              </ul>
-              <button
-                type="button"
-                onClick={handleStartCta}
-                className="block w-full py-3 text-[14px] font-semibold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors text-center"
-              >
-                Get Started Free
-              </button>
-            </div>
-
-            <div className="bg-slate-800 rounded-2xl p-7 relative flex flex-col">
-              <div className="absolute top-0 right-5 -translate-y-1/2 px-3 py-1 bg-blue-500 text-white text-[10px] font-semibold uppercase tracking-wider rounded-full">
-                Coming Soon
-              </div>
-              <h3 className="text-xl font-bold text-white mb-1">Pro</h3>
-              <div className="flex items-baseline gap-1 mb-6 pb-6 border-b border-slate-700">
-                {/* Price pulled from the shared PLANS config (source of truth)
-                    so this preview can never drift from /pricing again. */}
-                <span className="text-4xl font-extrabold text-white">${PLANS.pro.priceMonthly}</span>
-                <span className="text-slate-400">/ month</span>
-              </div>
-              <ul className="space-y-3 mb-8 flex-1">
-                {[
-                  { text: 'Everything in Free', bold: true },
-                  { text: 'Unlimited video replays with full analysis' },
-                  { text: 'Session comparison across attempts' },
-                  { text: 'Resume builder + ATS checker + JD tailor' },
-                  { text: 'JD-matched practice with gap analysis' },
-                  { text: 'Priority AI processing' },
-                ].map((f, i) => (
-                  <li key={i} className="flex items-start gap-2.5 text-[14px] text-slate-300">
-                    <CheckCircle2 className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
-                    {f.bold ? <strong className="text-white">{f.text}</strong> : f.text}
-                  </li>
-                ))}
-              </ul>
-              <Link href="/pricing" className="block w-full py-3 text-[14px] font-semibold rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors text-center">
-                Get Notified When Pro Launches
-              </Link>
-            </div>
-          </div>
-        </div>
-      </section>
+      <HomepagePricingPreview
+        initialCatalog={initialBillingCatalog}
+        onStartFree={handleStartCta}
+      />
 
       {/* ── FOLD 7.5: POPULAR GUIDES ── SEO topic-cluster anchors to hero guides */}
       <section className="py-20 bg-white border-t border-slate-200">
