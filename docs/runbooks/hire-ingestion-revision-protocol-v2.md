@@ -15,7 +15,7 @@ attempt-unaware indexes are being replaced.
    execution ceiling, so no old admitted request remains in flight.
 4. On `IPG_SURFACE=hire-control`, run
    `npm run prepare:hire-ingestion-revision-protocol -- --apply`.
-5. On `IPG_SURFACE=hire-runtime`, run the same apply command. The command
+5. On `IPG_SURFACE=hire-engine`, run the same apply command. The command
    refuses to mutate indexes unless draining mode and the elapsed timestamp
    are both present.
 6. Run `npm run check:hire-ingestion-revision-protocol` on both surfaces.

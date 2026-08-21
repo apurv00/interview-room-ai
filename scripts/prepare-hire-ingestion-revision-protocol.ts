@@ -14,6 +14,7 @@ import {
   HIRE_INGESTION_REVISION_PROTOCOL_VERSION,
   evaluateHireIngestionRevisionProtocol,
 } from '../shared/contracts/hireIngestionRevisionProtocol'
+import { deploymentSurfaceIdentity } from '../shared/surfaces/deploymentSurfaceIdentity'
 import { connectDB } from '../shared/db/connection'
 import { HireInterviewAttempt } from '../modules/hire/models/HireInterviewAttempt'
 import { HireEngineIngestionEvent } from '../modules/hire/models/HireEngineIngestionEvent'
@@ -25,7 +26,7 @@ import {
 import { HireRuntimeMultimodalAnalysisOutbox } from '../modules/hire-runtime/models/HireRuntimeMultimodalAnalysisOutbox'
 
 type Mode = 'plan' | 'check' | 'apply'
-type Surface = 'hire-control' | 'hire-runtime'
+type Surface = 'hire-control' | 'hire-engine'
 type IndexKey = Readonly<Record<string, 1 | -1>>
 
 interface IndexDefinition {
@@ -84,12 +85,14 @@ export function assertHireIngestionRevisionMigrationWindow(input: {
   }
 }
 
-function surface(): Surface {
-  const value = process.env.IPG_SURFACE
-  if (value !== 'hire-control' && value !== 'hire-runtime') {
-    throw new Error('IPG_SURFACE must be hire-control or hire-runtime')
+export function hireIngestionRevisionMigrationSurface(
+  environment: NodeJS.ProcessEnv,
+): Surface {
+  const identity = deploymentSurfaceIdentity(environment)
+  if (identity.configurationIssue || identity.surface === 'b2c') {
+    throw new Error('IPG_SURFACE must be hire-control or hire-engine')
   }
-  return value
+  return identity.surface
 }
 
 function assertExpectedDatabase(target: Surface): void {
@@ -298,11 +301,11 @@ export async function prepareHireIngestionRevisionProtocol(
   const mode = hireIngestionRevisionPreparationMode(argv)
   if (mode === 'plan') {
     console.log(
-      `Hire ingestion revision protocol v${HIRE_INGESTION_REVISION_PROTOCOL_VERSION}: deploy draining, wait ${HIRE_INGESTION_REVISION_DRAIN_MS}ms, --apply control/runtime, then enable required`,
+      `Hire ingestion revision protocol v${HIRE_INGESTION_REVISION_PROTOCOL_VERSION}: deploy draining, wait ${HIRE_INGESTION_REVISION_DRAIN_MS}ms, --apply control/engine, then enable required`,
     )
     return
   }
-  const target = surface()
+  const target = hireIngestionRevisionMigrationSurface(process.env)
   if (mode === 'apply') {
     assertHireIngestionRevisionMigrationWindow({ environment: process.env })
   } else if (process.env.HIRE_INGESTION_REVISION_PROTOCOL_MODE === 'required') {

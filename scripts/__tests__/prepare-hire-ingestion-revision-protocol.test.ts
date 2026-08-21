@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertHireIngestionRevisionMigrationWindow,
+  hireIngestionRevisionMigrationSurface,
   hireIngestionRevisionPreparationMode,
 } from '../prepare-hire-ingestion-revision-protocol'
 
@@ -14,6 +15,23 @@ describe('Hire ingestion revision migration command', () => {
     expect(() =>
       hireIngestionRevisionPreparationMode(['--apply', '--check']),
     ).toThrow('usage')
+  })
+
+  it('uses the same exact runtime surface identity as the deployment boundary', () => {
+    expect(
+      hireIngestionRevisionMigrationSurface({ IPG_SURFACE: 'hire-control' }),
+    ).toBe('hire-control')
+    expect(
+      hireIngestionRevisionMigrationSurface({ IPG_SURFACE: 'hire-engine' }),
+    ).toBe('hire-engine')
+    expect(() =>
+      hireIngestionRevisionMigrationSurface({ IPG_SURFACE: 'hire-runtime' }),
+    ).toThrow('hire-control or hire-engine')
+    expect(() =>
+      hireIngestionRevisionMigrationSurface({
+        IPG_SURFACE: ' hire-engine ',
+      }),
+    ).toThrow('hire-control or hire-engine')
   })
 
   it('refuses index mutation until ingress has drained for six minutes', () => {
