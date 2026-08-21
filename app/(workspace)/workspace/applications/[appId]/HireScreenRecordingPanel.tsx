@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { HireRecordingUnavailableReason } from "./HireInterviewRecordingPanel";
 
 export type HireScreenRecordingView =
   | {
@@ -9,7 +10,8 @@ export type HireScreenRecordingView =
       capturedAt: string;
       bytes: number;
     }
-  | { status: "capturing" | "awaiting_transfer" | "removed" };
+  | { status: "capturing" | "awaiting_transfer" | "removed" }
+  | { status: "unavailable"; reason: HireRecordingUnavailableReason };
 
 interface Props {
   applicationId: string;
@@ -21,6 +23,21 @@ function formatBytes(bytes: number): string {
     return `${Math.max(1, Math.round(bytes / 1_000))} KB`;
   }
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+function unavailableDescription(reason: HireRecordingUnavailableReason): string {
+  switch (reason) {
+    case "capture_failed":
+      return "The shared display could not be captured for this interview.";
+    case "durable_queue_failed":
+      return "The shared display recording could not be retained for delivery.";
+    case "upload_rejected":
+      return "The recording service could not accept the shared display recording.";
+    case "retry_exhausted":
+      return "Shared display delivery did not complete after bounded retries.";
+    case "upload_expired":
+      return "The shared display upload window expired before transfer completed.";
+  }
 }
 
 /**
@@ -94,6 +111,11 @@ export default function HireScreenRecordingPanel({
           label: "Display recording removed",
           description:
             "This interview media was removed under the retention or deletion policy.",
+        };
+      case "unavailable":
+        return {
+          label: "Display recording unavailable",
+          description: unavailableDescription(recording.reason),
         };
       case "ready":
         return {

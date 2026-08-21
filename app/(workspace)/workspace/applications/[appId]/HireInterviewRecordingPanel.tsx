@@ -2,6 +2,13 @@
 
 import { useEffect, useState } from "react";
 
+export type HireRecordingUnavailableReason =
+  | "capture_failed"
+  | "durable_queue_failed"
+  | "upload_rejected"
+  | "retry_exhausted"
+  | "upload_expired";
+
 export type HireInterviewRecordingView =
   | {
       status: "ready";
@@ -9,7 +16,8 @@ export type HireInterviewRecordingView =
       capturedAt: string;
       bytes: number;
     }
-  | { status: "capturing" | "awaiting_transfer" | "removed" };
+  | { status: "capturing" | "awaiting_transfer" | "removed" }
+  | { status: "unavailable"; reason: HireRecordingUnavailableReason };
 
 interface Props {
   applicationId: string;
@@ -19,6 +27,21 @@ interface Props {
 function formatBytes(bytes: number): string {
   if (bytes < 1_000_000) return `${Math.max(1, Math.round(bytes / 1_000))} KB`;
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+function unavailableDescription(reason: HireRecordingUnavailableReason): string {
+  switch (reason) {
+    case "capture_failed":
+      return "The recording could not be captured for this interview.";
+    case "durable_queue_failed":
+      return "The recording could not be retained for delivery.";
+    case "upload_rejected":
+      return "The recording service could not accept this recording.";
+    case "retry_exhausted":
+      return "Recording delivery did not complete after bounded retries.";
+    case "upload_expired":
+      return "The recording upload window expired before transfer completed.";
+  }
 }
 
 /**
@@ -86,6 +109,11 @@ export default function HireInterviewRecordingPanel({
           label: "Recording removed",
           description:
             "This interview media was removed under the retention or deletion policy.",
+        };
+      case "unavailable":
+        return {
+          label: "Recording unavailable",
+          description: unavailableDescription(recording.reason),
         };
       case "ready":
         return {

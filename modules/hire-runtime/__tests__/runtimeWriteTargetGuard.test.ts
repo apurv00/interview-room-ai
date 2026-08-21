@@ -297,6 +297,44 @@ describe('Hire runtime two-tenant coordinate guard', () => {
     })).not.toThrow()
   })
 
+  it('rejects a replay write after its required kind is terminally unavailable', () => {
+    expect(() => assertBound({
+      pathname: '/api/storage/multipart',
+      body: {
+        action: 'create',
+        type: 'recording',
+        sessionId: ids.sessionA,
+      },
+      binding: binding('A', { cameraMediaStatus: 'unavailable' }),
+    })).toThrow(/terminally unavailable/)
+
+    expect(() => assertBound({
+      pathname: '/api/storage/multipart',
+      body: {
+        action: 'sign-part',
+        type: 'screen-recording',
+        sessionId: ids.sessionA,
+        key: screenKeyA,
+        uploadId: 'screen-upload-A',
+        partNumber: 1,
+      },
+      binding: binding('A', {
+        screenMediaStatus: 'unavailable',
+        issuedObjectCapabilities: [{
+          key: screenKeyA,
+          runtimeSessionId: ids.sessionA,
+          expiresAt,
+        }],
+        issuedMultipartCapabilities: [{
+          key: screenKeyA,
+          runtimeSessionId: ids.sessionA,
+          uploadId: 'screen-upload-A',
+          expiresAt,
+        }],
+      }),
+    })).toThrow(/terminally unavailable/)
+  })
+
   it('admits display recording only for the exact V6 consent version', () => {
     const v5Binding = binding('A', {
       consentVersion: HIRE_AI_V5_CONSENT_VERSION,

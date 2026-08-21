@@ -2,6 +2,7 @@ import mongoose, { Document, Model, Schema } from 'mongoose'
 import type { HireEngineResultIngestion } from '@shared/contracts/hireEngineBridge'
 
 export type HireEngineIngestionEventStatus = 'received' | 'processed' | 'conflict'
+export type HireEngineIngestionTerminalOutcome = 'processed' | 'stale'
 
 export interface IHireEngineIngestionEvent extends Document {
   eventId: string
@@ -15,7 +16,7 @@ export interface IHireEngineIngestionEvent extends Document {
   media: Array<Record<string, unknown>>
   mediaCompletion?: HireEngineResultIngestion['mediaCompletion']
   status: HireEngineIngestionEventStatus
-  terminalOutcome?: 'processed' | 'stale'
+  terminalOutcome?: HireEngineIngestionTerminalOutcome
   conflictReason?: string
   processedAt?: Date
   createdAt: Date
@@ -51,7 +52,10 @@ const HireEngineIngestionEventSchema = new Schema<IHireEngineIngestionEvent>(
       required: true,
       default: 'received',
     },
-    terminalOutcome: { type: String, enum: ['processed', 'stale'] },
+    terminalOutcome: {
+      type: String,
+      enum: ['processed', 'stale'],
+    },
     conflictReason: { type: String, maxlength: 1_000 },
     processedAt: { type: Date },
   },

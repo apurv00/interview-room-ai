@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   HireInterviewAttempt,
   HireInterviewResult,
+  HireEngineIngestionEvent,
   HireMediaAsset,
   requireMembership,
   getApplicationDetail,
@@ -40,6 +41,7 @@ export const GET = composeHireApiRoute({
       results,
       media,
       attempts,
+      ingestionEvents,
       inviteDeliveryByRound,
       supplementalObservations,
       multimodalAnalyses,
@@ -68,6 +70,14 @@ export const GET = composeHireApiRoute({
       HireInterviewAttempt.find(scope)
         .select("roundId status startedAt completedAt sequence")
         .lean(),
+      HireEngineIngestionEvent.find({
+        ...scope,
+        status: "processed",
+        terminalOutcome: "processed",
+      })
+        .select("roundId attempt revision mediaCompletion")
+        .sort({ attempt: -1, revision: -1, processedAt: -1, _id: -1 })
+        .lean(),
       getAiInviteDeliveryViews(ctx, detail.rounds),
       HireMultimodalObservation.find({
         workspaceId: ctx.workspace._id,
@@ -89,8 +99,11 @@ export const GET = composeHireApiRoute({
         applicationId: detail.application._id.toString(),
       }),
     ]);
-    const resultByRound = new Map(
-      results.map((result) => [result.roundId.toString(), result]),
+    const resultByRoundAttempt = new Map(
+      results.map((result) => [
+        `${result.roundId.toString()}:${result.attemptId.toString()}`,
+        result,
+      ]),
     );
     const photoByRound = new Map<string, (typeof media)[number]>();
     const recordingByRoundAttempt = new Map<string, (typeof media)[number]>();
@@ -126,6 +139,23 @@ export const GET = composeHireApiRoute({
       if (!current || attempt.sequence > current.sequence) {
         latestAttemptByRound.set(key, attempt);
       }
+    }
+    const mediaCompletionByRound = new Map<
+      string,
+      {
+        attempt: number;
+        completion: NonNullable<
+          (typeof ingestionEvents)[number]["mediaCompletion"]
+        >;
+      }
+    >();
+    for (const event of ingestionEvents) {
+      const roundId = event.roundId.toString();
+      if (!event.mediaCompletion || mediaCompletionByRound.has(roundId)) continue;
+      mediaCompletionByRound.set(roundId, {
+        attempt: event.attempt,
+        completion: event.mediaCompletion,
+      });
     }
     const latestObservationByRuntimeSession = new Map<
       string,
@@ -183,19 +213,29 @@ export const GET = composeHireApiRoute({
         rounds: detail.rounds.map((round) => {
           const serialized = serializeRound(round);
           const roundId = round._id.toString();
-          const result = resultByRound.get(roundId);
-          const photo = photoByRound.get(roundId);
-          const recording = result
-            ? recordingByRoundAttempt.get(
-                `${roundId}:${result.attemptId.toString()}`,
-              )
-            : undefined;
-          const screenRecordingAsset = result
-            ? screenRecordingByRoundAttempt.get(
-                `${roundId}:${result.attemptId.toString()}`,
-              )
-            : undefined;
           const latestAttempt = latestAttemptByRound.get(roundId);
+          const attemptKey = latestAttempt
+            ? `${roundId}:${latestAttempt._id.toString()}`
+            : null;
+          const result = attemptKey
+            ? resultByRoundAttempt.get(attemptKey)
+            : undefined;
+          const photo = photoByRound.get(roundId);
+          const recording = attemptKey
+            ? recordingByRoundAttempt.get(attemptKey)
+            : undefined;
+          const screenRecordingAsset = attemptKey
+            ? screenRecordingByRoundAttempt.get(attemptKey)
+            : undefined;
+          const latestMediaCompletion = mediaCompletionByRound.get(roundId);
+          // A terminal status belongs to one exact engine attempt. Do not let
+          // an older attempt's unavailable result end polling for a newer
+          // in-progress/completed attempt on the same round.
+          const mediaCompletion =
+            latestAttempt &&
+            latestMediaCompletion?.attempt === latestAttempt.sequence
+              ? latestMediaCompletion.completion
+              : undefined;
           const interviewRecording = recording
             ? {
                 status: "ready" as const,
@@ -205,6 +245,11 @@ export const GET = composeHireApiRoute({
               }
             : result?.piiPurgedAt
               ? { status: "removed" as const }
+              : mediaCompletion?.camera.status === "unavailable"
+                ? {
+                    status: "unavailable" as const,
+                    reason: mediaCompletion.camera.reason,
+                  }
               : latestAttempt?.status === "in_progress"
                 ? { status: "capturing" as const }
                 : result ||
@@ -227,6 +272,11 @@ export const GET = composeHireApiRoute({
               ? null
               : result?.piiPurgedAt
                 ? { status: "removed" as const }
+                : mediaCompletion?.screen.status === "unavailable"
+                  ? {
+                      status: "unavailable" as const,
+                      reason: mediaCompletion.screen.reason,
+                    }
                 : latestAttempt?.status === "in_progress"
                   ? { status: "capturing" as const }
                   : result ||

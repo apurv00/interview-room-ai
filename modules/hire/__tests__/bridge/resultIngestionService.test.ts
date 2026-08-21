@@ -252,7 +252,12 @@ beforeEach(() => {
 describe('isolated engine result ingestion', () => {
   it('acknowledges but never persists PII/media behind a verified privacy tombstone', async () => {
     mocks.privacyExists.mockResolvedValueOnce({ _id: 'privacy-request' })
-    const input = payload()
+    const mediaCompletion = {
+      contractVersion: 1 as const,
+      camera: { status: 'published' as const },
+      screen: { status: 'not_required' as const },
+    }
+    const input = payload({ mediaCompletion })
 
     await expect(ingestHireEngineResult(input)).resolves.toEqual({
       outcome: 'processed',
@@ -264,6 +269,7 @@ describe('isolated engine result ingestion', () => {
       eventId: input.eventId,
       resultDigest: input.resultDigest,
       media: [],
+      mediaCompletion,
       status: 'received',
     })
     expect(mocks.roundUpdateOne).toHaveBeenCalledTimes(2)
@@ -800,6 +806,83 @@ describe('isolated engine result ingestion', () => {
       media: [],
       status: 'received',
     })
+    const [terminalFilter] = mocks.ingestionUpdateOne.mock.calls.find(
+      ([, update]) => update.$set?.terminalOutcome === 'processed',
+    ) ?? []
+    expect(terminalFilter).toMatchObject({
+      eventId: input.eventId,
+      runtimeSessionId: input.runtimeSessionId,
+      attempt: input.attempt,
+      revision: input.revision,
+      resultDigest: input.resultDigest,
+      status: 'received',
+    })
+    expect(terminalFilter).not.toHaveProperty('media')
+    expect(terminalFilter).not.toHaveProperty('mediaCompletion')
+  })
+
+  it('persists a versioned terminal media state on a status-only revision', async () => {
+    const mediaCompletion = {
+      contractVersion: 1 as const,
+      camera: { status: 'unavailable' as const, reason: 'retry_exhausted' as const },
+      screen: { status: 'not_required' as const },
+    }
+    const input = payload({
+      eventId: '9'.repeat(64),
+      revision: 3,
+      media: [],
+      mediaCompletion,
+    })
+    const withoutCompletion = payload({
+      eventId: input.eventId,
+      revision: input.revision,
+      media: [],
+    })
+    expect(input.resultDigest).not.toBe(withoutCompletion.resultDigest)
+    mocks.ingestionFindOne.mockReset()
+    mocks.ingestionFindOne
+      .mockReturnValueOnce(query(null))
+      .mockReturnValueOnce(query({
+        runtimeSessionId: objectId(IDS.runtimeSessionId),
+        attempt: 1,
+        revision: 2,
+        resultDigest: '1'.repeat(64),
+        status: 'processed',
+        terminalOutcome: 'processed',
+      }))
+    mocks.ingestMedia.mockResolvedValueOnce([])
+
+    await expect(ingestHireEngineResult(input)).resolves.toEqual({
+      outcome: 'processed',
+    })
+
+    expect(mocks.ingestionCreate.mock.calls[0][0][0]).toMatchObject({
+      eventId: input.eventId,
+      revision: 3,
+      media: [],
+      mediaCompletion,
+      status: 'received',
+    })
+    expect(mocks.ingestionFindOne).toHaveBeenNthCalledWith(2, {
+      workspaceId: IDS.workspaceId,
+      applicationId: IDS.applicationId,
+      roundId: IDS.roundId,
+      status: { $in: ['received', 'processed'] },
+    })
+    expect(mocks.ingestionUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId: input.eventId,
+        status: 'received',
+      }),
+      {
+        $set: {
+          status: 'processed',
+          terminalOutcome: 'processed',
+          processedAt: expect.any(Date),
+        },
+      },
+      { session: expect.anything() },
+    )
   })
 
   it('fails closed when scored output has no timestamped candidate evidence', async () => {

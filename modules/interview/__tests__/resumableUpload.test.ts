@@ -3,6 +3,8 @@ import {
   captureReplayUploadIntent,
   drainQueuedReplayUploads,
   getPartRange,
+  recordRequiredReplayUnavailable,
+  settleRequiredHireReplayUploads,
   uploadReplayRecording,
 } from '@interview/utils/resumableUpload'
 import { cancelAndPurgeReplayUploads } from '@shared/services/replayUploadPrivacy'
@@ -95,14 +97,16 @@ function largeReplayBlob(): Blob {
 }
 
 function installMultipartFetch(completeStatuses: { current: number[] }) {
+  let createCount = 0
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
     if (url === '/api/storage/multipart') {
       const body = JSON.parse(String(init?.body ?? '{}')) as { action?: string; partNumber?: number }
       if (body.action === 'create') {
+        createCount += 1
         return jsonResponse({
           key: RECORDING_KEY,
-          uploadId: 'upload-123',
+          uploadId: `upload-${createCount}`,
           contentType: 'video/webm',
           partSizeBytes: 64 * 1024 * 1024,
         })
@@ -389,6 +393,146 @@ describe('resumable replay upload helpers', () => {
     }
   })
 
+  it('settles a blocked queue open without waiting for browser intervention', async () => {
+    const request = {} as IDBOpenDBRequest
+    vi.stubGlobal('indexedDB', { open: () => request })
+
+    const queued = recordRequiredReplayUnavailable(
+      SESSION_ID,
+      'camera',
+      'durable_queue_failed',
+    )
+    request.onblocked?.(new Event('blocked') as IDBVersionChangeEvent)
+
+    await expect(queued).resolves.toBe(false)
+  })
+
+  it('keeps required media pending when queue inspection is blocked', async () => {
+    const request = {} as IDBOpenDBRequest
+    const fetchMock = vi.fn()
+    vi.stubGlobal('indexedDB', { open: () => request })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const settlement = settleRequiredHireReplayUploads({
+      sessionId: SESSION_ID,
+      kinds: ['camera'],
+    })
+    request.onblocked?.(new Event('blocked') as IDBVersionChangeEvent)
+
+    await expect(settlement).resolves.toEqual({
+      uploadedKinds: [],
+      pendingKinds: ['camera'],
+      acknowledgedUnavailableKinds: [],
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('terminalizes required media through the authenticated server when IndexedDB is absent', async () => {
+    vi.stubGlobal('indexedDB', undefined)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      expect(url).toBe('/api/hire-engine/completion-status')
+      expect(init).toMatchObject({
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+      })
+      expect(JSON.parse(String(init?.body))).toEqual({
+        action: 'mark-unavailable',
+        sessionId: SESSION_ID,
+        kind: 'camera',
+        reason: 'durable_queue_failed',
+      })
+      return jsonResponse({ recorded: true, state: 'completed' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(settleRequiredHireReplayUploads({
+      sessionId: SESSION_ID,
+      kinds: ['camera'],
+    })).resolves.toEqual({
+      uploadedKinds: [],
+      pendingKinds: [],
+      acknowledgedUnavailableKinds: ['camera'],
+    })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('times out a silent queue open and closes a handle that succeeds late', async () => {
+    vi.useFakeTimers()
+    try {
+      const close = vi.fn()
+      const request = {} as IDBOpenDBRequest
+      Object.defineProperty(request, 'result', {
+        value: { close },
+        configurable: true,
+      })
+      vi.stubGlobal('indexedDB', { open: () => request })
+      let settled = false
+      const queued = recordRequiredReplayUnavailable(
+        SESSION_ID,
+        'camera',
+        'durable_queue_failed',
+      ).then((value) => {
+        settled = true
+        return value
+      })
+
+      await vi.advanceTimersByTimeAsync(1_999)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(queued).resolves.toBe(false)
+
+      request.onsuccess?.(new Event('success'))
+      expect(close).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts and settles a silent queue transaction at its deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const abort = vi.fn()
+      const close = vi.fn()
+      const transaction = {
+        objectStore: () => ({ put: () => ({} as IDBRequest) }),
+        abort,
+        oncomplete: null,
+        onerror: null,
+        onabort: null,
+      } as unknown as IDBTransaction
+      const db = {
+        objectStoreNames: { contains: () => true },
+        transaction: vi.fn(() => transaction),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        close,
+      }
+      const request = {} as IDBOpenDBRequest
+      Object.defineProperty(request, 'result', { value: db, configurable: true })
+      vi.stubGlobal('indexedDB', { open: () => request })
+      const queued = recordRequiredReplayUnavailable(
+        SESSION_ID,
+        'screen',
+        'durable_queue_failed',
+      )
+      request.onsuccess?.(new Event('success'))
+
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      await expect(queued).resolves.toBe(false)
+      expect(abort).toHaveBeenCalledOnce()
+      expect(close).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('closes a late IndexedDB open without clearing a new account queue', async () => {
     vi.useFakeTimers()
     try {
@@ -447,15 +591,103 @@ describe('resumable replay upload helpers', () => {
     }
   })
 
-  it('drops queued multipart uploads permanently on 410 responses', async () => {
+  it('retains the Blob and mints a fresh multipart identity after a 410', async () => {
+    const stores = installFakeIndexedDb()
+    await drainQueuedReplayUploads()
     const completeStatuses = { current: [410] }
-    vi.stubGlobal('fetch', installMultipartFetch(completeStatuses))
+    const fetchMock = installMultipartFetch(completeStatuses)
+    vi.stubGlobal('fetch', fetchMock)
+    const blob = largeReplayBlob()
 
-    const result = await uploadReplayRecording('507f1f77bcf86cd799439011', 'camera', largeReplayBlob())
-    const drain = await drainQueuedReplayUploads()
+    const result = await uploadReplayRecording(SESSION_ID, 'camera', blob)
 
-    expect(result).toEqual({ status: 'dropped' })
-    expect(drain).toEqual({ attempted: 0, uploaded: 0, queued: 0, dropped: 0, skipped: 0 })
+    expect(result).toEqual({ status: 'queued' })
+    const reset = Array.from(stores.get('uploads')!.values())[0] as {
+      blob: Blob
+      key?: string
+      uploadId?: string
+      parts: unknown[]
+      attempts: number
+    }
+    expect(reset.blob.size).toBe(blob.size)
+    expect(reset.key).toBeUndefined()
+    expect(reset.uploadId).toBeUndefined()
+    expect(reset.parts).toEqual([])
+    expect(reset.attempts).toBe(1)
+
+    completeStatuses.current = [200]
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 1,
+      uploaded: 1,
+      queued: 0,
+      dropped: 0,
+      skipped: 0,
+    })
+    const creates = fetchMock.mock.calls
+      .filter(([input]) => input === '/api/storage/multipart')
+      .map(([, init]) => JSON.parse(String(init?.body ?? '{}')))
+      .filter((body) => body.action === 'create')
+    expect(creates).toHaveLength(2)
+    expect(stores.get('uploads')!.size).toBe(0)
+  })
+
+  it('does not recycle a multipart identity after an exact media-terminal 410', async () => {
+    const stores = installFakeIndexedDb()
+    await drainQueuedReplayUploads()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      if (url === '/api/storage/multipart') {
+        return jsonResponse({
+          error: 'runtime media terminal',
+          code: 'MEDIA_TERMINAL',
+        }, 410)
+      }
+      if (url === '/api/hire-engine/completion-status') {
+        return jsonResponse({ recorded: true, state: 'completed' })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(uploadReplayRecording(
+      SESSION_ID,
+      'camera',
+      largeReplayBlob(),
+      undefined,
+      captureReplayUploadIntent(USER_ID),
+      { requiredDelivery: true },
+    )).resolves.toEqual({ status: 'dropped' })
+
+    const marker = Array.from(stores.get('uploads')!.values())[0] as {
+      blob: Blob
+      deliveryState?: string
+      unavailableReason?: string
+      key?: string
+      uploadId?: string
+    }
+    expect(marker).toMatchObject({
+      deliveryState: 'unavailable',
+      unavailableReason: 'upload_rejected',
+    })
+    expect(marker.blob.size).toBe(0)
+    expect(marker.key).toBeUndefined()
+    expect(marker.uploadId).toBeUndefined()
+    expect(fetchMock.mock.calls.filter(([input]) =>
+      input === '/api/storage/multipart',
+    )).toHaveLength(1)
+
+    await expect(settleRequiredHireReplayUploads({
+      sessionId: SESSION_ID,
+      kinds: ['camera'],
+    })).resolves.toEqual({
+      uploadedKinds: [],
+      pendingKinds: [],
+      acknowledgedUnavailableKinds: ['camera'],
+    })
   })
 
   it('preserves intra-attempt progress when a queued retry fails (Codex P1 #339)', async () => {
@@ -552,6 +784,254 @@ describe('resumable replay upload helpers', () => {
       queued: 0,
       dropped: 0,
       skipped: 0,
+    })
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 0,
+      uploaded: 0,
+      queued: 0,
+      dropped: 0,
+      skipped: 0,
+    })
+  })
+
+  it('forces a small required Hire camera replay through the durable multipart queue', async () => {
+    const completeStatuses = { current: [200] }
+    const fetchMock = installMultipartFetch(completeStatuses)
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(uploadReplayRecording(
+      SESSION_ID,
+      'camera',
+      new Blob(['small required camera'], { type: 'video/webm' }),
+      undefined,
+      captureReplayUploadIntent(USER_ID),
+      { requiredDelivery: true },
+    )).resolves.toEqual({ status: 'uploaded' })
+
+    const urls = fetchMock.mock.calls.map(([input]) =>
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url,
+    )
+    expect(urls).toContain('/api/storage/multipart')
+    expect(urls).not.toContain('/api/storage/presign')
+  })
+
+  it('keeps a held required multipart finalization pending without racing or deleting it', async () => {
+    let releaseComplete: (() => void) | undefined
+    let markCompleteStarted: (() => void) | undefined
+    const completeStarted = new Promise<void>((resolve) => {
+      markCompleteStarted = resolve
+    })
+    const completeBarrier = new Promise<void>((resolve) => {
+      releaseComplete = resolve
+    })
+    let completeCalls = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      if (url === '/api/storage/multipart') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          action?: string
+          partNumber?: number
+        }
+        if (body.action === 'create') {
+          return jsonResponse({
+            key: RECORDING_KEY,
+            uploadId: 'held-required-upload',
+            contentType: 'video/webm',
+            partSizeBytes: 64 * 1024 * 1024,
+          })
+        }
+        if (body.action === 'sign-part') {
+          return jsonResponse({ url: 'https://r2.example/held-required-part' })
+        }
+        if (body.action === 'complete') {
+          completeCalls += 1
+          markCompleteStarted?.()
+          await completeBarrier
+          return jsonResponse({ key: RECORDING_KEY })
+        }
+      }
+      if (url === 'https://r2.example/held-required-part') {
+        return new Response('', { status: 200, headers: { ETag: '"held-etag"' } })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    const upload = uploadReplayRecording(
+      SESSION_ID,
+      'camera',
+      new Blob(['required camera'], { type: 'video/webm' }),
+      undefined,
+      captureReplayUploadIntent(USER_ID),
+      { requiredDelivery: true },
+    )
+    await completeStarted
+
+    await expect(settleRequiredHireReplayUploads({
+      sessionId: SESSION_ID,
+      kinds: ['camera'],
+      timeoutMs: 1_000,
+    })).resolves.toEqual({
+      uploadedKinds: [],
+      pendingKinds: ['camera'],
+      acknowledgedUnavailableKinds: [],
+    })
+    expect(completeCalls).toBe(1)
+
+    releaseComplete?.()
+    await expect(upload).resolves.toEqual({ status: 'uploaded' })
+    expect(completeCalls).toBe(1)
+  })
+
+  it('keeps a terminal required-upload failure until the authenticated server acknowledges it', async () => {
+    const actions: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      if (url === '/api/storage/multipart') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          action?: string
+          partNumber?: number
+        }
+        actions.push(String(body.action))
+        if (body.action === 'create') {
+          return jsonResponse({
+            key: RECORDING_KEY,
+            uploadId: 'terminal-required-upload',
+            contentType: 'video/webm',
+            partSizeBytes: 64 * 1024 * 1024,
+          })
+        }
+        if (body.action === 'sign-part') {
+          return jsonResponse({ url: 'https://r2.example/terminal-required-part' })
+        }
+        if (body.action === 'complete') {
+          return jsonResponse({ error: 'forbidden' }, 403)
+        }
+      }
+      if (url === 'https://r2.example/terminal-required-part') {
+        return new Response('', { status: 200, headers: { ETag: '"terminal-etag"' } })
+      }
+      if (url === '/api/hire-engine/completion-status') {
+        const body = JSON.parse(String(init?.body ?? '{}'))
+        expect(body).toEqual({
+          action: 'mark-unavailable',
+          sessionId: SESSION_ID,
+          kind: 'camera',
+          reason: 'upload_rejected',
+        })
+        return jsonResponse({ recorded: true, state: 'completed' })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(uploadReplayRecording(
+      SESSION_ID,
+      'camera',
+      new Blob(['required camera'], { type: 'video/webm' }),
+      undefined,
+      captureReplayUploadIntent(USER_ID),
+      { requiredDelivery: true },
+    )).resolves.toEqual({ status: 'dropped' })
+
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 1,
+      uploaded: 0,
+      queued: 0,
+      dropped: 0,
+      skipped: 1,
+    })
+    await expect(settleRequiredHireReplayUploads({
+      sessionId: SESSION_ID,
+      kinds: ['camera'],
+    })).resolves.toEqual({
+      uploadedKinds: [],
+      pendingKinds: [],
+      acknowledgedUnavailableKinds: ['camera'],
+    })
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 0,
+      uploaded: 0,
+      queued: 0,
+      dropped: 0,
+      skipped: 0,
+    })
+    expect(actions).toEqual(['create', 'sign-part', 'complete'])
+  })
+
+  it('persists a zero-byte terminal marker when required capture never materializes', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      if (url !== '/api/hire-engine/completion-status') {
+        throw new Error(`Unexpected fetch: ${url}`)
+      }
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        sessionId: SESSION_ID,
+        kind: 'screen',
+        reason: 'capture_failed',
+      })
+      return jsonResponse({ recorded: true, state: 'completed' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(recordRequiredReplayUnavailable(
+      SESSION_ID,
+      'screen',
+      'capture_failed',
+      captureReplayUploadIntent(USER_ID),
+    )).resolves.toBe(true)
+    await expect(settleRequiredHireReplayUploads({
+      sessionId: SESSION_ID,
+      kinds: ['screen'],
+    })).resolves.toEqual({
+      uploadedKinds: [],
+      pendingKinds: [],
+      acknowledgedUnavailableKinds: ['screen'],
+    })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('records a missing required queue row as terminal only after server acknowledgement', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      if (url !== '/api/hire-engine/completion-status') {
+        throw new Error(`Unexpected fetch: ${url}`)
+      }
+      expect(JSON.parse(String(init?.body))).toEqual({
+        action: 'mark-unavailable',
+        sessionId: SESSION_ID,
+        kind: 'camera',
+        reason: 'durable_queue_failed',
+      })
+      return jsonResponse({ recorded: true, state: 'completed' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(settleRequiredHireReplayUploads({
+      sessionId: SESSION_ID,
+      kinds: ['camera'],
+    })).resolves.toEqual({
+      uploadedKinds: [],
+      pendingKinds: [],
+      acknowledgedUnavailableKinds: ['camera'],
     })
     await expect(drainQueuedReplayUploads()).resolves.toEqual({
       attempted: 0,
@@ -732,6 +1212,73 @@ describe('resumable replay upload helpers', () => {
 
     const result = await drainQueuedReplayUploads()
     expect(result).toEqual({ attempted: 1, uploaded: 0, queued: 0, dropped: 1, skipped: 0 })
+    expect(stores.get('uploads')!.get(record.id)).toBeUndefined()
+  })
+
+  it('retains an exhausted required row until its terminal state is acknowledged', async () => {
+    const stores = installFakeIndexedDb()
+    await drainQueuedReplayUploads()
+
+    const record = {
+      id: 'required-exhausted:camera:0',
+      sessionId: SESSION_ID,
+      kind: 'camera' as const,
+      blob: new Blob(['required replay'], { type: 'video/webm' }),
+      sizeBytes: 15,
+      contentType: 'video/webm',
+      createdAt: Date.now(),
+      parts: [] as Array<{ partNumber: number; etag: string }>,
+      attempts: 5,
+      key: RECORDING_KEY,
+      uploadId: 'required-exhausted-upload',
+      partSizeBytes: 8 * 1024 * 1024,
+      deliveryState: 'pending' as const,
+      requiredDelivery: true,
+    }
+    stores.get('uploads')!.set(record.id, record)
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      if (url === '/api/storage/multipart') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { action?: string }
+        if (body.action === 'abort') return jsonResponse({ ok: true })
+      }
+      if (url === '/api/hire-engine/completion-status') {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          sessionId: SESSION_ID,
+          kind: 'camera',
+          reason: 'retry_exhausted',
+        })
+        return jsonResponse({ recorded: true, state: 'completed' })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }))
+
+    await expect(drainQueuedReplayUploads()).resolves.toEqual({
+      attempted: 1,
+      uploaded: 0,
+      queued: 0,
+      dropped: 1,
+      skipped: 0,
+    })
+    expect(stores.get('uploads')!.get(record.id)).toMatchObject({
+      deliveryState: 'unavailable',
+      unavailableReason: 'retry_exhausted',
+      sizeBytes: 0,
+    })
+
+    await expect(settleRequiredHireReplayUploads({
+      sessionId: SESSION_ID,
+      kinds: ['camera'],
+    })).resolves.toEqual({
+      uploadedKinds: [],
+      pendingKinds: [],
+      acknowledgedUnavailableKinds: ['camera'],
+    })
     expect(stores.get('uploads')!.get(record.id)).toBeUndefined()
   })
 
@@ -952,8 +1499,8 @@ describe('resumable replay upload helpers', () => {
     expect(completeCalls).toHaveLength(1)
   })
 
-  // ── Layer 4: 401 from server marks the record permanent ─────────────────
-  it('purges the full replay queue when multipart returns exact account-unavailable', async () => {
+  // ── Layer 4: exact privacy boundary invalidates every local operation ───
+  it('purges the full replay queue when multipart returns exact account-unavailable 410', async () => {
     const stores = installFakeIndexedDb()
     await drainQueuedReplayUploads()
 
@@ -984,7 +1531,7 @@ describe('resumable replay upload helpers', () => {
     const fetchMock = vi.fn(async () => jsonResponse({
       error: 'account unavailable',
       code: 'ACCOUNT_UNAVAILABLE',
-    }, 401))
+    }, 410))
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(drainQueuedReplayUploads()).resolves.toEqual({

@@ -87,6 +87,14 @@ function patchFor(
   }
 }
 
+function artifactVersionFieldFor(
+  type: RecordingArtifactType,
+): 'recordingArtifactVersion' | 'screenRecordingArtifactVersion' | null {
+  if (type === 'recording') return 'recordingArtifactVersion'
+  if (type === 'screen-recording') return 'screenRecordingArtifactVersion'
+  return null
+}
+
 export interface AssociateRecordingArtifactInput {
   userId: string
   sessionId: string
@@ -144,7 +152,12 @@ export async function associateRecordingArtifact(
 
     const updated = await InterviewSession.updateOne(
       { _id: sessionId, userId },
-      { $set: patchFor(type, key, sizeBytes, durationSeconds) },
+      {
+        $set: patchFor(type, key, sizeBytes, durationSeconds),
+        ...(artifactVersionFieldFor(type)
+          ? { $inc: { [artifactVersionFieldFor(type)!]: 1 } }
+          : {}),
+      },
       { session: mongoSession },
     )
     if ((updated.matchedCount ?? 0) !== 1) {

@@ -589,6 +589,10 @@ async function discardResultBehindPrivacyTombstone(
           workspaceId: payload.workspaceId,
           applicationId: payload.applicationId,
           roundId: payload.roundId,
+          runtimeSessionId: payload.runtimeSessionId,
+          revision: payload.revision,
+          attempt: payload.attempt,
+          resultDigest: payload.resultDigest,
           status: 'received',
         },
         {
@@ -987,6 +991,10 @@ export async function ingestHireEngineResult(
               workspaceId: payload.workspaceId,
               applicationId: payload.applicationId,
               roundId: payload.roundId,
+              runtimeSessionId: payload.runtimeSessionId,
+              revision: payload.revision,
+              attempt: payload.attempt,
+              resultDigest: payload.resultDigest,
               status: 'received',
             },
             {

@@ -5,8 +5,21 @@ import type {
 } from '@shared/contracts/hireEngineBridge'
 
 export type HireRuntimeBindingStatus = 'provisioned' | 'active' | 'completed' | 'revoked'
-export type HireRuntimeCameraMediaStatus = 'pending' | 'published'
-export type HireRuntimeScreenMediaStatus = 'pending' | 'published'
+export type HireRuntimeCameraMediaStatus =
+  | 'pending'
+  | 'published'
+  | 'unavailable'
+export type HireRuntimeScreenMediaStatus =
+  | 'pending'
+  | 'published'
+  | 'unavailable'
+export type HireRuntimeMediaUnavailableReason =
+  | 'capture_failed'
+  | 'durable_queue_failed'
+  | 'upload_rejected'
+  | 'retry_exhausted'
+  | 'upload_expired'
+export type HireRuntimeReplayMediaKind = 'camera' | 'screen'
 export type HireRuntimeAuthTicketState = 'issued' | 'consumed'
 
 export interface IHireRuntimeBinding extends Document {
@@ -34,6 +47,17 @@ export interface IHireRuntimeBinding extends Document {
   principalLeaseToken?: string
   principalLeaseExpiresAt?: Date
   runtimeWriteDrainUntil?: Date
+  /**
+   * Per-kind, pre-side-effect write reservations. A reservation is created
+   * after request validation but before R2/session mutation, then removed only
+   * after the durable capability/finalization checkpoint succeeds. Expiry is
+   * the bounded crash-recovery drain for a worker that dies mid-request.
+   */
+  mediaWriteReservations?: Array<{
+    reservationId: string
+    kind: HireRuntimeReplayMediaKind
+    expiresAt: Date
+  }>
   issuedObjectCapabilities?: Array<{
     key: string
     runtimeSessionId: mongoose.Types.ObjectId
@@ -56,6 +80,14 @@ export interface IHireRuntimeBinding extends Document {
    * immutable event instead of rebuilding it from a mutable engine session.
    */
   pendingResultPayloadJson?: string
+  /**
+   * Present only on bindings created after the durable candidate-media
+   * completion contract shipped. Missing is an intentional legacy marker:
+   * older attempts keep their historical completion behaviour instead of
+   * acquiring a new collection duty after the fact.
+   */
+  mediaCompletionContractVersion?: 1
+  mediaCompletionDeadlineAt?: Date
   publishedRevision?: number
   publishedDigest?: string
   publishedAt?: Date
@@ -68,10 +100,22 @@ export interface IHireRuntimeBinding extends Document {
    */
   cameraMediaStatus?: HireRuntimeCameraMediaStatus
   cameraMediaPublishedAt?: Date
+  cameraMediaUnavailableAt?: Date
+  cameraMediaUnavailableReason?: HireRuntimeMediaUnavailableReason
+  cameraMediaUnavailableReportedAt?: Date
+  cameraMediaTerminalClaimToken?: string
+  cameraMediaTerminalClaimExpiresAt?: Date
+  cameraMediaTerminalClaimArtifactVersion?: number
   /** Present only for screen-share-consented attempts. Missing legacy values
    * are terminal so an old attempt never acquires a new collection duty. */
   screenMediaStatus?: HireRuntimeScreenMediaStatus
   screenMediaPublishedAt?: Date
+  screenMediaUnavailableAt?: Date
+  screenMediaUnavailableReason?: HireRuntimeMediaUnavailableReason
+  screenMediaUnavailableReportedAt?: Date
+  screenMediaTerminalClaimToken?: string
+  screenMediaTerminalClaimExpiresAt?: Date
+  screenMediaTerminalClaimArtifactVersion?: number
   publishCheckedAt?: Date
   publishFailureCount?: number
   publishRetryAt?: Date
@@ -140,6 +184,27 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
     principalLeaseToken: { type: String, maxlength: 64 },
     principalLeaseExpiresAt: { type: Date },
     runtimeWriteDrainUntil: { type: Date },
+    mediaWriteReservations: {
+      type: [
+        new Schema(
+          {
+            reservationId: {
+              type: String,
+              required: true,
+              maxlength: 64,
+            },
+            kind: {
+              type: String,
+              enum: ['camera', 'screen'],
+              required: true,
+            },
+            expiresAt: { type: Date, required: true },
+          },
+          { _id: false, strict: 'throw' },
+        ),
+      ],
+      default: undefined,
+    },
     issuedObjectCapabilities: {
       type: [
         new Schema(
@@ -203,13 +268,55 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
       default: undefined,
     },
     pendingResultPayloadJson: { type: String, maxlength: 12 * 1024 * 1024 },
+    mediaCompletionContractVersion: {
+      type: Number,
+      enum: [1],
+      immutable: true,
+    },
+    mediaCompletionDeadlineAt: { type: Date },
     publishedRevision: { type: Number, min: 1, max: 10 },
     publishedDigest: { type: String, match: /^[a-f0-9]{64}$/ },
     publishedAt: { type: Date },
-    cameraMediaStatus: { type: String, enum: ['pending', 'published'] },
+    cameraMediaStatus: {
+      type: String,
+      enum: ['pending', 'published', 'unavailable'],
+    },
     cameraMediaPublishedAt: { type: Date },
-    screenMediaStatus: { type: String, enum: ['pending', 'published'] },
+    cameraMediaUnavailableAt: { type: Date },
+    cameraMediaUnavailableReason: {
+      type: String,
+      enum: [
+        'capture_failed',
+        'durable_queue_failed',
+        'upload_rejected',
+        'retry_exhausted',
+        'upload_expired',
+      ],
+    },
+    cameraMediaUnavailableReportedAt: { type: Date },
+    cameraMediaTerminalClaimToken: { type: String, maxlength: 64 },
+    cameraMediaTerminalClaimExpiresAt: { type: Date },
+    cameraMediaTerminalClaimArtifactVersion: { type: Number, min: 0 },
+    screenMediaStatus: {
+      type: String,
+      enum: ['pending', 'published', 'unavailable'],
+    },
     screenMediaPublishedAt: { type: Date },
+    screenMediaUnavailableAt: { type: Date },
+    screenMediaUnavailableReason: {
+      type: String,
+      enum: [
+        'capture_failed',
+        'durable_queue_failed',
+        'upload_rejected',
+        'retry_exhausted',
+        'upload_expired',
+      ],
+    },
+    screenMediaUnavailableReportedAt: { type: Date },
+    screenMediaTerminalClaimToken: { type: String, maxlength: 64 },
+    screenMediaTerminalClaimExpiresAt: { type: Date },
+    screenMediaTerminalClaimArtifactVersion: { type: Number, min: 0 },
     publishCheckedAt: { type: Date },
     publishFailureCount: { type: Number, min: 0, default: 0 },
     publishRetryAt: { type: Date },
@@ -235,6 +342,8 @@ HireRuntimeBindingSchema.index({
   publishedRevision: 1,
   cameraMediaStatus: 1,
   screenMediaStatus: 1,
+  cameraMediaUnavailableReportedAt: 1,
+  screenMediaUnavailableReportedAt: 1,
   publishRetryAt: 1,
   publishCheckedAt: 1,
   updatedAt: 1,

@@ -99,4 +99,17 @@ describe("HireScreenRecordingPanel", () => {
     );
     expect(screen.getByText("Display recording removed")).toBeTruthy();
   });
+
+  it("shows a neutral terminal delivery failure without a playback action", () => {
+    render(
+      <HireScreenRecordingPanel
+        applicationId="application-1"
+        recording={{ status: "unavailable", reason: "upload_expired" }}
+      />,
+    );
+
+    expect(screen.getByText("Display recording unavailable")).toBeTruthy();
+    expect(screen.getByText(/upload window expired/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Play shared display" })).toBeNull();
+  });
 });

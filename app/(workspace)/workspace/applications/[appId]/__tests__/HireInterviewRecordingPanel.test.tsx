@@ -77,4 +77,17 @@ describe('HireInterviewRecordingPanel', () => {
     expect(screen.getByText('Recording removed')).toBeTruthy()
     expect(screen.getByText(/retention or deletion policy/i)).toBeTruthy()
   })
+
+  it('shows a neutral terminal delivery failure without a playback action', () => {
+    render(
+      <HireInterviewRecordingPanel
+        applicationId="application-1"
+        recording={{ status: 'unavailable', reason: 'retry_exhausted' }}
+      />,
+    )
+
+    expect(screen.getByText('Recording unavailable')).toBeTruthy()
+    expect(screen.getByText(/bounded retries/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Play full interview' })).toBeNull()
+  })
 })

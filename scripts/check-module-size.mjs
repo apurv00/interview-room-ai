@@ -46,7 +46,11 @@ const BUDGETS = {
   // display recorder. This is live-session runtime wiring, not the legacy
   // post-interview analysis slice ADR 0006 identifies for a future structural
   // extraction. The cap retains 132 LOC of deliberate headroom; see ADR 0040.
-  'modules/interview': { maxLOC: 31_100, maxFiles: 142 },
+  // Bumped LOC 31.1k → 31.6k on 2026-08-21 for the bounded, durable Hire
+  // replay queue/completion state machine: required multipart persistence,
+  // expired-upload identity reset, terminal evidence markers, and abortable
+  // IndexedDB settlement. See ADR 0042.
+  'modules/interview': { maxLOC: 31_600, maxFiles: 142 },
   'modules/feedback':  { maxLOC: 10_000, maxFiles: 60 },
   // Bumped maxFiles 80 → 82 on 2026-06-09 (PR #435): adds ONE counted file —
   // services/resolvePathwayNextHref.ts, the server-side CTA next-step resolver

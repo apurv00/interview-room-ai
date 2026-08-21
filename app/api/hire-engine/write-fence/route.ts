@@ -4,8 +4,11 @@ import { authOptions } from '@shared/auth/authOptions'
 import {
   claimRuntimeWriteCapability,
   recordRuntimeStorageCapability,
+  releaseRuntimeReplayWriteReservations,
+  reserveRuntimeReplayWrites,
   RuntimeWriteFenceError,
   settleRuntimeMultipartCapability,
+  type RuntimeReplayWriteKind,
 } from '@modules/hire-runtime/services/runtimeWriteFence'
 import {
   assertRuntimeWriteTargetBound,
@@ -60,6 +63,41 @@ function parseJson(bytes: Uint8Array): Record<string, unknown> | null {
   } catch {
     return null
   }
+}
+
+function replayWriteKinds(
+  pathname: string,
+  body: Record<string, unknown> | null,
+): RuntimeReplayWriteKind[] {
+  if (!body) return []
+  const fromType = (value: unknown): RuntimeReplayWriteKind[] =>
+    value === 'recording'
+      ? ['camera']
+      : value === 'screen-recording'
+        ? ['screen']
+        : []
+
+  if (pathname === '/api/storage/presign') {
+    return body.action === 'upload' ? fromType(body.type) : []
+  }
+  if (pathname === '/api/storage/multipart') {
+    if (body.action === 'abort') return []
+    if (body.action === 'create') return fromType(body.type)
+    if (typeof body.key !== 'string') return []
+    return /-screen-\d{10,16}\.webm$/i.test(body.key)
+      ? ['screen']
+      : /\/[a-f0-9]{24}-\d{10,16}\.webm$/i.test(body.key)
+        ? ['camera']
+        : []
+  }
+  if (pathname === '/api/recordings/finalize') return fromType(body.type)
+  if (/^\/api\/interviews\/[a-f0-9]{24}$/i.test(pathname)) {
+    return [
+      ...(typeof body.recordingR2Key === 'string' ? ['camera' as const] : []),
+      ...(typeof body.screenRecordingR2Key === 'string' ? ['screen' as const] : []),
+    ]
+  }
+  return []
 }
 
 async function captureStorageCapability(input: {
@@ -178,47 +216,83 @@ async function handler(req: NextRequest): Promise<Response> {
       },
     })
 
+    const reservations = binding.mediaCompletionContractVersion === 1 &&
+      binding.runtimeSessionId
+      ? await reserveRuntimeReplayWrites({
+          workspaceId,
+          bindingId: binding._id.toString(),
+          principalId: binding.principalId.toString(),
+          runtimeSessionId: binding.runtimeSessionId.toString(),
+          kinds: replayWriteKinds(pathname, requestBody),
+        })
+      : []
+
     const headers = new Headers(req.headers)
     headers.delete('host')
     headers.delete('content-length')
     headers.set(BYPASS_HEADER, bypassSecret())
     headers.set(ORIGIN_USER_HEADER, binding.principalId.toString())
-    const upstream = await fetch(internalTargetUrl(req, pathname), {
-      method: req.method,
-      headers,
-      body: bytes.byteLength > 0 ? bytes : undefined,
-      cache: 'no-store',
-      redirect: 'manual',
-      signal: AbortSignal.timeout(295_000),
-    })
-    const responseBytes = new Uint8Array(await upstream.arrayBuffer())
-    if (upstream.ok) {
-      await captureStorageCapability({
-        pathname,
-        workspaceId,
-        bindingId: binding._id.toString(),
-        principalId: binding.principalId.toString(),
-        runtimeSessionId: binding.runtimeSessionId?.toString(),
-        requestBody,
-        responseBody: parseJson(responseBytes),
+    try {
+      const upstream = await fetch(internalTargetUrl(req, pathname), {
+        method: req.method,
+        headers,
+        body: bytes.byteLength > 0 ? bytes : undefined,
+        cache: 'no-store',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(295_000),
       })
+      const responseBytes = new Uint8Array(await upstream.arrayBuffer())
+      if (upstream.ok) {
+        await captureStorageCapability({
+          pathname,
+          workspaceId,
+          bindingId: binding._id.toString(),
+          principalId: binding.principalId.toString(),
+          runtimeSessionId: binding.runtimeSessionId?.toString(),
+          requestBody,
+          responseBody: parseJson(responseBytes),
+        })
+      }
+      // A response below 500 is authoritative: either the capability/finalize
+      // checkpoint succeeded or the target rejected before mutation. Unknown
+      // failures retain only the bounded reservation expiry.
+      if (upstream.ok || upstream.status < 500) {
+        await releaseRuntimeReplayWriteReservations({
+          workspaceId,
+          bindingId: binding._id.toString(),
+          reservations,
+        })
+      }
+      const responseHeaders = new Headers(upstream.headers)
+      responseHeaders.delete('content-length')
+      responseHeaders.delete('content-encoding')
+      responseHeaders.set('Cache-Control', 'private, no-store')
+      return new Response(responseBytes, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: responseHeaders,
+      })
+    } catch (error) {
+      // Do not eagerly release: the upstream may have committed before the
+      // transport/capability checkpoint failed. Expiry makes this conservative
+      // uncertainty bounded without permitting a false unavailable state.
+      throw error
     }
-    const responseHeaders = new Headers(upstream.headers)
-    responseHeaders.delete('content-length')
-    responseHeaders.delete('content-encoding')
-    responseHeaders.set('Cache-Control', 'private, no-store')
-    return new Response(responseBytes, {
-      status: upstream.status,
-      statusText: upstream.statusText,
-      headers: responseHeaders,
-    })
   } catch (error) {
     const status = error instanceof RuntimeWriteFenceError ||
       error instanceof RuntimeWriteTargetGuardError
       ? error.status
       : 503
+    const code = error instanceof RuntimeWriteFenceError
+      ? error.code
+      : error instanceof RuntimeWriteTargetGuardError && error.status === 410
+        ? 'MEDIA_TERMINAL'
+        : undefined
     return NextResponse.json(
-      { error: status === 404 ? 'Not found' : 'Runtime unavailable' },
+      {
+        error: status === 404 ? 'Not found' : 'Runtime unavailable',
+        ...(code ? { code } : {}),
+      },
       { status, headers: { 'Cache-Control': 'no-store' } },
     )
   }

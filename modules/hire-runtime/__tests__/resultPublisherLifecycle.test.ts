@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   publish: vi.fn(),
   buildMedia: vi.fn(),
   deleteMedia: vi.fn(),
+  terminalizeMedia: vi.fn(),
   events: [] as string[],
 }))
 
@@ -31,6 +33,9 @@ vi.mock('../services/controlBridgeClient', () => ({
 vi.mock('../services/runtimeMediaManifest', () => ({
   buildRuntimeMediaManifest: mocks.buildMedia,
   deleteRuntimeMediaManifest: mocks.deleteMedia,
+}))
+vi.mock('../services/mediaCompletionService', () => ({
+  terminalizeRuntimeReplayMedia: mocks.terminalizeMedia,
 }))
 
 import {
@@ -141,6 +146,7 @@ beforeEach(() => {
   mocks.deleteMedia.mockImplementation(async () => {
     mocks.events.push('delete')
   })
+  mocks.terminalizeMedia.mockResolvedValue('recorded')
   mocks.bindingUpdate.mockImplementation(async (_filter, update) => {
     if (update.$set?.pendingMediaManifest) mocks.events.push('stage')
     if (update.$set?.publishedRevision) mocks.events.push('complete')
@@ -243,6 +249,62 @@ describe('runtime result publication lifecycle', () => {
         status: 'completed',
       },
       $unset: { pendingMediaManifest: 1, publishRetryAt: 1 },
+    })
+  })
+
+  it('publishes a status-only terminal media revision and marks it reported', async () => {
+    mocks.sessionFindOne.mockReturnValueOnce(
+      sessionQuery(completedSession({
+        recordingR2Key: null,
+        recordingSizeBytes: null,
+        audioRecordingR2Key: audioManifest[0].sourceKey,
+        audioRecordingSizeBytes: audioManifest[0].sizeBytes,
+      })),
+    )
+    mocks.buildMedia.mockImplementationOnce(async (snapshot) => {
+      expect(snapshot).not.toHaveProperty('audioRecordingR2Key')
+      expect(snapshot).not.toHaveProperty('audioRecordingSizeBytes')
+      return []
+    })
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          status: 'completed',
+          consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+          mediaCompletionContractVersion: 1,
+          publishedRevision: 1,
+          attemptCount: 3,
+          cameraMediaStatus: 'unavailable',
+          cameraMediaUnavailableReason: 'retry_exhausted',
+        }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.publish).toHaveBeenCalledWith(expect.objectContaining({
+      attempt: 3,
+      revision: 2,
+      media: [],
+      mediaCompletion: {
+        contractVersion: 1,
+        camera: { status: 'unavailable', reason: 'retry_exhausted' },
+        screen: { status: 'not_required' },
+      },
+    }))
+    const payload = mocks.publish.mock.calls[0][0] as {
+      eventId: string
+      revision: number
+      resultDigest: string
+    }
+    expect(payload.eventId).toBe(createHash('sha256')
+      .update(`${ROUND_ID}:${SESSION_ID}:3:${payload.revision}:${payload.resultDigest}`)
+      .digest('hex'))
+    expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1]).toMatchObject({
+      $set: {
+        publishedRevision: 2,
+        cameraMediaUnavailableReportedAt: expect.any(Date),
+      },
+      $unset: { publishRetryAt: 1 },
     })
   })
 
@@ -365,6 +427,172 @@ describe('runtime result publication lifecycle', () => {
         publishedRevision: 1,
         cameraMediaStatus: 'pending',
         publishRetryAt: expect.any(Date),
+      },
+    })
+  })
+
+  it('publishes once without retrying a durably unavailable required camera', async () => {
+    mocks.sessionFindOne.mockReturnValueOnce(
+      sessionQuery(
+        completedSession({ recordingR2Key: null, recordingSizeBytes: null }),
+      ),
+    )
+    mocks.buildMedia.mockResolvedValueOnce([])
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+          mediaCompletionContractVersion: 1,
+          cameraMediaStatus: 'unavailable',
+          cameraMediaUnavailableReason: 'upload_rejected',
+        }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.buildMedia).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        recordingR2Key: expect.anything(),
+        recordingSizeBytes: expect.anything(),
+      }),
+    )
+    expect(mocks.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ revision: 1, media: [] }),
+    )
+    const [filter, update] = mocks.bindingUpdate.mock.calls.at(-1) ?? []
+    expect(filter).toMatchObject({
+      publishedRevision: { $exists: false },
+      cameraMediaStatus: 'unavailable',
+      screenMediaStatus: { $exists: false },
+    })
+    expect(update.$set).not.toHaveProperty('cameraMediaStatus')
+    expect(update.$set).not.toHaveProperty('publishRetryAt')
+    expect(update.$unset).toHaveProperty('publishRetryAt')
+  })
+
+  it('rejects stale staged replay media after terminal unavailability wins', async () => {
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+          mediaCompletionContractVersion: 1,
+          cameraMediaStatus: 'unavailable',
+          pendingMediaManifest: manifest,
+        }) as never,
+      ),
+    ).rejects.toThrow(/still has staged media/)
+
+    expect(mocks.publish).not.toHaveBeenCalled()
+    expect(mocks.deleteMedia).not.toHaveBeenCalled()
+  })
+
+  it('bounds server retries by terminalizing a missing replay after its durable deadline', async () => {
+    mocks.sessionFindOne.mockReturnValueOnce(
+      sessionQuery(
+        completedSession({ recordingR2Key: null, recordingSizeBytes: null }),
+      ),
+    )
+    const deadline = new Date(Date.now() - 60_000)
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+          mediaCompletionContractVersion: 1,
+          mediaCompletionDeadlineAt: deadline,
+          cameraMediaStatus: 'pending',
+        }) as never,
+      ),
+    ).resolves.toBe('skipped')
+
+    expect(mocks.publish).not.toHaveBeenCalled()
+    expect(mocks.deleteMedia).not.toHaveBeenCalled()
+    expect(mocks.terminalizeMedia).toHaveBeenCalledWith({
+      binding: expect.objectContaining({ cameraMediaStatus: 'pending' }),
+      kind: 'camera',
+      reason: 'upload_expired',
+      now: expect.any(Date),
+    })
+  })
+
+  it('does not extend a held runtime drain while expired media terminalization is deferred', async () => {
+    mocks.terminalizeMedia.mockResolvedValueOnce('in_flight')
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+          mediaCompletionContractVersion: 1,
+          mediaCompletionDeadlineAt: new Date(Date.now() - 60_000),
+          cameraMediaStatus: 'pending',
+          runtimeWriteDrainUntil: new Date(Date.now() + 60_000),
+        }) as never,
+      ),
+    ).resolves.toBe('skipped')
+
+    expect(mocks.terminalizeMedia).toHaveBeenCalledOnce()
+    expect(mocks.bindingUpdate).not.toHaveBeenCalled()
+    expect(mocks.sessionFindOne).not.toHaveBeenCalled()
+    expect(mocks.publish).not.toHaveBeenCalled()
+  })
+
+  it('publishes an artifact that finalized before an expired terminal claim', async () => {
+    mocks.terminalizeMedia.mockResolvedValueOnce('artifact_present')
+    mocks.buildMedia.mockResolvedValueOnce(manifest)
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+          mediaCompletionContractVersion: 1,
+          mediaCompletionDeadlineAt: new Date(Date.now() - 60_000),
+          cameraMediaStatus: 'pending',
+        }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.publish).toHaveBeenCalledWith(expect.objectContaining({
+      media: manifest,
+      mediaCompletion: expect.objectContaining({
+        camera: { status: 'published' },
+      }),
+    }))
+  })
+
+  it('does not expire a required replay while its multipart capability is live', async () => {
+    mocks.sessionFindOne.mockReturnValueOnce(
+      sessionQuery(
+        completedSession({ recordingR2Key: null, recordingSizeBytes: null }),
+      ),
+    )
+    mocks.buildMedia.mockResolvedValueOnce([])
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+          mediaCompletionContractVersion: 1,
+          mediaCompletionDeadlineAt: new Date(Date.now() - 60_000),
+          cameraMediaStatus: 'pending',
+          issuedMultipartCapabilities: [{
+            key: CAMERA_KEY,
+            uploadId: 'held-upload',
+            expiresAt: new Date(Date.now() + 60_000),
+          }],
+        }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.bindingUpdate.mock.calls).not.toContainEqual([
+      expect.anything(),
+      expect.objectContaining({
+        $set: expect.objectContaining({ cameraMediaStatus: 'unavailable' }),
+      }),
+    ])
+    expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1]).toMatchObject({
+      $set: {
+        cameraMediaStatus: 'pending',
+        publishedRevision: 1,
       },
     })
   })
@@ -525,6 +753,52 @@ describe('runtime result publication lifecycle', () => {
     })
   })
 
+  it('replays an expired staged snapshot before attempting media terminalization', async () => {
+    mocks.publish
+      .mockRejectedValueOnce(new Error('connection closed after control commit'))
+      .mockResolvedValueOnce('duplicate')
+    const contractBinding = {
+      consentVersion: HIRE_AI_V5_CONSENT_VERSION,
+      mediaCompletionContractVersion: 1,
+      cameraMediaStatus: 'pending',
+    }
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding(contractBinding) as never,
+      ),
+    ).rejects.toThrow('connection closed after control commit')
+    const firstPayload = mocks.publish.mock.calls[0][0]
+    const reservation = mocks.bindingUpdate.mock.calls.find(
+      ([, update]) => update.$set?.pendingResultPayloadJson,
+    )?.[1].$set
+    const expiredDeadline = new Date('2026-08-11T00:00:00.000Z')
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          ...contractBinding,
+          mediaCompletionDeadlineAt: expiredDeadline,
+          pendingMediaManifest: reservation?.pendingMediaManifest,
+          pendingResultPayloadJson: reservation?.pendingResultPayloadJson,
+        }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.terminalizeMedia).not.toHaveBeenCalled()
+    expect(mocks.sessionFindOne).toHaveBeenCalledOnce()
+    expect(mocks.publish.mock.calls[1][0]).toEqual(firstPayload)
+    expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1]).toMatchObject({
+      $set: {
+        mediaCompletionDeadlineAt: expiredDeadline,
+      },
+      $unset: {
+        pendingMediaManifest: 1,
+        pendingResultPayloadJson: 1,
+      },
+    })
+  })
+
   it('does not read or publish a stale scan row after privacy revocation wins', async () => {
     mocks.bindingUpdate.mockResolvedValueOnce({
       acknowledged: true,
@@ -589,6 +863,16 @@ describe('runtime result publication lifecycle', () => {
           {
             publishedRevision: { $gte: 1, $lt: 10 },
             screenMediaStatus: 'pending',
+          },
+          {
+            publishedRevision: { $gte: 1, $lt: 10 },
+            cameraMediaStatus: 'unavailable',
+            cameraMediaUnavailableReportedAt: { $exists: false },
+          },
+          {
+            publishedRevision: { $gte: 1, $lt: 10 },
+            screenMediaStatus: 'unavailable',
+            screenMediaUnavailableReportedAt: { $exists: false },
           },
         ],
       },

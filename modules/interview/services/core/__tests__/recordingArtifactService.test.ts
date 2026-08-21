@@ -144,15 +144,26 @@ describe('associateRecordingArtifact', () => {
           recordingSizeBytes: 4_096,
           recordingDurationSeconds: 87.5,
         },
+        $inc: { recordingArtifactVersion: 1 },
       },
       { session: mocks.mongoSession },
     )
   })
 
   it.each([
-    ['screen-recording', 'screenRecordingR2Key', 'screenRecordingSizeBytes'],
-    ['audio-recording', 'audioRecordingR2Key', 'audioRecordingSizeBytes'],
-  ] as const)('associates %s with only its type-specific fields', async (type, keyField, sizeField) => {
+    [
+      'screen-recording',
+      'screenRecordingR2Key',
+      'screenRecordingSizeBytes',
+      'screenRecordingArtifactVersion',
+    ],
+    ['audio-recording', 'audioRecordingR2Key', 'audioRecordingSizeBytes', null],
+  ] as const)('associates %s with only its type-specific fields', async (
+    type,
+    keyField,
+    sizeField,
+    versionField,
+  ) => {
     const key = keyFor(type)
 
     await associateRecordingArtifact({
@@ -170,7 +181,10 @@ describe('associateRecordingArtifact', () => {
     )
     expect(mocks.updateOne).toHaveBeenCalledWith(
       { _id: SESSION_ID, userId: USER_ID },
-      { $set: { [keyField]: key, [sizeField]: 512 } },
+      {
+        $set: { [keyField]: key, [sizeField]: 512 },
+        ...(versionField ? { $inc: { [versionField]: 1 } } : {}),
+      },
       { session: mocks.mongoSession },
     )
   })

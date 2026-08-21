@@ -53,6 +53,7 @@ import { STORAGE_KEYS } from '@shared/storageKeys'
 import {
   captureReplayUploadIntent,
   drainQueuedReplayUploads,
+  recordRequiredReplayUnavailable,
   uploadReplayRecording,
   type ReplayUploadResult,
 } from '@interview/utils/resumableUpload'
@@ -409,7 +410,27 @@ export default function InterviewPage() {
           cameraBlob,
           recordingDurationSeconds ?? undefined,
           replayUploadIntent,
-        )
+          { requiredDelivery: isHireInterview },
+        ).catch(async () => {
+          if (isHireInterview) {
+            await recordRequiredReplayUnavailable(
+              sessionId,
+              'camera',
+              'durable_queue_failed',
+              replayUploadIntent,
+            )
+          }
+          return { status: 'dropped' }
+        }),
+      )
+    } else if (isHireInterview) {
+      criticalUploads.push(
+        recordRequiredReplayUnavailable(
+          sessionId,
+          'camera',
+          'capture_failed',
+          replayUploadIntent,
+        ),
       )
     }
     if (screenBlob && isHireDisplayCaptureRequired) {
@@ -419,6 +440,24 @@ export default function InterviewPage() {
           'screen',
           screenBlob,
           undefined,
+          replayUploadIntent,
+          { requiredDelivery: true },
+        ).catch(async () => {
+          await recordRequiredReplayUnavailable(
+            sessionId,
+            'screen',
+            'durable_queue_failed',
+            replayUploadIntent,
+          )
+          return { status: 'dropped' }
+        }),
+      )
+    } else if (isHireDisplayCaptureRequired) {
+      criticalUploads.push(
+        recordRequiredReplayUnavailable(
+          sessionId,
+          'screen',
+          'capture_failed',
           replayUploadIntent,
         ),
       )
@@ -436,7 +475,8 @@ export default function InterviewPage() {
     }
 
     if (replayUploads.length > 0) {
-      Promise.allSettled(replayUploads).then((results) => {
+      const replaySettlement = Promise.allSettled(replayUploads)
+      void replaySettlement.then((results) => {
         const rejected = results.filter((r) => r.status === 'rejected').length
         const fulfilled = results.filter((r): r is PromiseFulfilledResult<ReplayUploadResult> => r.status === 'fulfilled')
         const queued = fulfilled.filter((r) => r.value.status === 'queued').length
@@ -456,6 +496,11 @@ export default function InterviewPage() {
           })
         }
       })
+      // Give required Hire replays a bounded chance to enter/finish the
+      // durable queue before navigation. The completion page retains the host
+      // identity and settles a held/queued row—or records durable terminal
+      // unavailability when no recoverable browser payload exists.
+      if (isHireInterview) criticalUploads.push(replaySettlement)
     }
 
     if (criticalUploads.length > 0) {
