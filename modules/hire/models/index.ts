@@ -212,4 +212,8 @@ export {
   type HireMediaPurgeReason,
   type IHireMediaAsset,
 } from './HireMediaAsset'
-export { HirePrivacyRequest, type IHirePrivacyRequest } from './HirePrivacyRequest'
+export {
+  HirePrivacyRequest,
+  activeHirePrivacyRequestFilter,
+  type IHirePrivacyRequest,
+} from './HirePrivacyRequest'

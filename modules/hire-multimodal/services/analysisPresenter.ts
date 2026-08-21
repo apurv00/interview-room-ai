@@ -1,5 +1,8 @@
 import type { FacialSegment, ProsodySegment } from '@shared/types/multimodal'
-import { HireMultimodalAnalysis } from '../models'
+import {
+  HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS,
+  HireMultimodalAnalysis,
+} from '../models'
 import type {
   HireMultimodalAnalysisStatus,
   HireMultimodalAnalysisSummary,
@@ -24,6 +27,7 @@ export interface HireMultimodalAnalysisView {
   completedAt?: string
   retryAt?: string
   retryAttemptCount: number
+  manualRetryAvailable: boolean
   durationMs: number
   facialFrameCount: number | null
   report?: {
@@ -73,6 +77,10 @@ export function presentHireMultimodalAnalysis(
     ...(analysis.completedAt ? { completedAt: analysis.completedAt.toISOString() } : {}),
     ...(analysis.retryAt ? { retryAt: analysis.retryAt.toISOString() } : {}),
     retryAttemptCount: analysis.retryAttemptCount ?? 0,
+    manualRetryAvailable:
+      analysis.status === 'failed' &&
+      (analysis.retryAttemptCount ?? 0) >=
+        HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS,
     durationMs: analysis.durationMs,
     facialFrameCount,
   }

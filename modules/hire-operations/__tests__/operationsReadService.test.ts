@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   deliveryAggregate: vi.fn(),
   resultAggregate: vi.fn(),
   verdictAggregate: vi.fn(),
+  analysisAggregate: vi.fn(),
   privacyRequestFind: vi.fn(),
   privacyFilter: vi.fn(),
   departmentFind: vi.fn(),
@@ -44,6 +45,11 @@ vi.mock("@hire-decisions/models", () => ({
 
 vi.mock("@hire-departments/models", () => ({
   HireDepartment: { find: mocks.departmentFind },
+}));
+
+vi.mock("@/modules/hire-multimodal/models", () => ({
+  HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS: 3,
+  HireMultimodalAnalysis: { aggregate: mocks.analysisAggregate },
 }));
 
 vi.mock("@/modules/hire-onboarding/services/testDriveService", () => ({
@@ -149,6 +155,7 @@ describe("Phase-5 operations read model", () => {
       },
       { $match: { [`__testDrive_${input.coordinate}.0`]: { $exists: false } } },
     ]);
+    mocks.analysisAggregate.mockResolvedValue([]);
   });
 
   it("builds aggregate-only overview and attention-sorted health without candidate data", () => {
@@ -200,6 +207,9 @@ describe("Phase-5 operations read model", () => {
       externalVerdicts: [
         { jobId: "job-a", applicationId: "app-a", candidateId: "candidate-a" },
       ],
+      failedAnalyses: [
+        { jobId: "job-a", applicationId: "app-a", candidateId: "candidate-a" },
+      ],
     } as never;
 
     const overview = __hireOperations.buildWorkspaceOverview(batch, NOW);
@@ -219,6 +229,7 @@ describe("Phase-5 operations read model", () => {
           { kind: "pending_human_scorecards", count: 1 },
           { kind: "terminal_human_kit_delivery_failures", count: 1 },
           { kind: "external_verdicts_received", count: 1 },
+          { kind: "failed_multimodal_analyses", count: 1 },
         ],
       },
     });
@@ -238,6 +249,7 @@ describe("Phase-5 operations read model", () => {
         },
         { kind: "candidates_awaiting_decision", count: 1 },
         { kind: "pending_human_scorecards", count: 1 },
+        { kind: "failed_multimodal_analyses", count: 1 },
       ]),
     );
     expect(JSON.stringify({ overview, health })).not.toContain(
@@ -398,6 +410,7 @@ describe("Phase-5 operations read model", () => {
     expect(mocks.humanRoundAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.deliveryAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.verdictAggregate).toHaveBeenCalledTimes(1);
+    expect(mocks.analysisAggregate).toHaveBeenCalledTimes(1);
     expect(mocks.privacyRequestFind).toHaveBeenCalledTimes(1);
     expect(mocks.departmentFind).toHaveBeenCalledTimes(1);
     const [applicationPipeline] = mocks.applicationAggregate.mock.calls[0];
@@ -407,6 +420,27 @@ describe("Phase-5 operations read model", () => {
         candidateId: { $in: ["222222222222222222222222"] },
       },
     });
+    const [analysisPipeline] = mocks.analysisAggregate.mock.calls[0];
+    expect(analysisPipeline[0]).toMatchObject({
+      $match: {
+        workspaceId: expect.anything(),
+        candidateId: { $in: ["222222222222222222222222"] },
+      },
+    });
+    expect(analysisPipeline).toEqual(expect.arrayContaining([
+      {
+        $group: {
+          _id: { applicationId: "$applicationId", roundId: "$roundId" },
+          latest: { $first: "$$ROOT" },
+        },
+      },
+      {
+        $match: expect.objectContaining({
+          status: "failed",
+          retryAttemptCount: { $gte: 3 },
+        }),
+      },
+    ]));
   });
 
   it("returns a workspace-scoped Department label with each job tracking row", async () => {

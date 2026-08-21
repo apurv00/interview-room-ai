@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import Button from "@shared/ui/Button";
+
 export interface HireMultimodalTimelineEventView {
   startMs: number;
   endMs: number;
@@ -44,6 +47,7 @@ export interface HireMultimodalAnalysisView {
   facialFrameCount: number | null;
   retryAt?: string;
   retryAttemptCount?: number;
+  manualRetryAvailable?: boolean;
   report?: {
     metrics: {
       bodyLanguageScore: number | null;
@@ -261,15 +265,57 @@ function MomentList({
  */
 export default function HireMultimodalAnalysisPanel({
   analysis,
+  applicationId,
+  onChanged,
 }: {
   analysis: HireMultimodalAnalysisView | null | undefined;
+  applicationId?: string;
+  onChanged?: () => Promise<void> | void;
 }) {
+  const [retrying, setRetrying] = useState(false);
+  const [retryMessage, setRetryMessage] = useState<string | null>(null);
+
   if (!analysis) return null;
 
   const copy = statusCopy(analysis.status);
   const report = analysis.report;
+  const analysisId = analysis.id;
+  const manualRetryAvailable = analysis.manualRetryAvailable === true;
   const failedRetryScheduled =
-    analysis.status === "failed" && typeof analysis.retryAt === "string";
+    analysis.status === "failed" &&
+    !manualRetryAvailable &&
+    typeof analysis.retryAt === "string";
+
+  async function retryAnalysis() {
+    if (!applicationId || !manualRetryAvailable || retrying) return;
+    setRetrying(true);
+    setRetryMessage(null);
+    try {
+      const response = await fetch(
+        `/api/workspace/applications/${encodeURIComponent(applicationId)}/multimodal-analysis/${encodeURIComponent(analysisId)}/retry`,
+        { method: "POST" },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setRetryMessage(
+          typeof body.error === "string"
+            ? body.error
+            : "Could not retry this analysis.",
+        );
+        return;
+      }
+      setRetryMessage(
+        body.dispatch === "recovery_pending"
+          ? "Retry queued. The recovery worker will pick it up shortly."
+          : "Retry queued.",
+      );
+      await onChanged?.();
+    } catch {
+      setRetryMessage("Could not retry this analysis. Check your connection.");
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   return (
     <section
@@ -290,7 +336,7 @@ export default function HireMultimodalAnalysisPanel({
       </div>
 
       {!report ? (
-        <div className="space-y-1 text-xs text-[#536471]">
+        <div className="space-y-3 text-xs text-[#536471]">
           <p>
             {analysis.status === "completed"
               ? "No report fields were generated for this recording."
@@ -300,6 +346,25 @@ export default function HireMultimodalAnalysisPanel({
                   : "No automatic retry remains for this analysis. The recording is still available for review."
                 : "This card refreshes automatically while analysis is pending."}
           </p>
+          {analysis.status === "failed" &&
+            manualRetryAvailable &&
+            applicationId && (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={retrying}
+                  onClick={() => void retryAnalysis()}
+                >
+                  {retrying ? "Retrying…" : "Retry analysis"}
+                </Button>
+                {retryMessage && (
+                  <p aria-live="polite" className="text-xs text-[#536471]">
+                    {retryMessage}
+                  </p>
+                )}
+              </div>
+            )}
         </div>
       ) : (
         <>

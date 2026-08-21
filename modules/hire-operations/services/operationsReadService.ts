@@ -16,6 +16,10 @@ import {
 } from "@hire-operations-boundary";
 import { HireExternalVerdict } from "@hire-decisions/models";
 import { HireDepartment } from "@hire-departments/models";
+import {
+  HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS,
+  HireMultimodalAnalysis,
+} from "@/modules/hire-multimodal/models";
 import { buildHireOnboardingTestDriveExclusionStages } from "@/modules/hire-onboarding/services/testDriveService";
 import type {
   HireOperationsActionInboxItem,
@@ -108,6 +112,12 @@ type OperationsVerdictRecord = {
   candidateId: IdLike;
 };
 
+type OperationsFailedAnalysisRecord = {
+  jobId: IdLike;
+  applicationId: IdLike;
+  candidateId: IdLike;
+};
+
 type OperationsResultRecord = {
   _id: IdLike;
   applicationId: IdLike;
@@ -130,6 +140,7 @@ type OperationsWorkspaceBatch = {
   humanRounds: OperationsHumanRoundRecord[];
   terminalDeliveries: OperationsDeliveryRecord[];
   externalVerdicts: OperationsVerdictRecord[];
+  failedAnalyses: OperationsFailedAnalysisRecord[];
 };
 
 /**
@@ -382,6 +393,10 @@ function overviewActionItems(
       kind: "external_verdicts_received",
       count: countForOpenJobs(batch.externalVerdicts, openJobIds),
     },
+    {
+      kind: "failed_multimodal_analyses",
+      count: countForOpenJobs(batch.failedAnalyses ?? [], openJobIds),
+    },
   ];
 }
 
@@ -391,6 +406,7 @@ function healthAttention(
   humanRounds: readonly OperationsHumanRoundRecord[],
   terminalDeliveries: readonly OperationsDeliveryRecord[],
   externalVerdicts: readonly OperationsVerdictRecord[],
+  failedAnalyses: readonly OperationsFailedAnalysisRecord[],
   now: Date,
 ): HireOperationsAttentionItem[] {
   // A held/closed requisition has no live operating-action requirement. Its
@@ -445,6 +461,12 @@ function healthAttention(
     attention.push({
       kind: "external_verdicts_received",
       count: externalVerdicts.length,
+    });
+  }
+  if (failedAnalyses.length > 0) {
+    attention.push({
+      kind: "failed_multimodal_analyses",
+      count: failedAnalyses.length,
     });
   }
 
@@ -506,6 +528,7 @@ function buildJobsHealth(
   const humanRoundsByJob = recordsByJob(batch.humanRounds);
   const terminalDeliveriesByJob = recordsByJob(batch.terminalDeliveries);
   const externalVerdictsByJob = recordsByJob(batch.externalVerdicts);
+  const failedAnalysesByJob = recordsByJob(batch.failedAnalyses ?? []);
   const departmentsById = departmentViewsById(batch.departments ?? []);
   // Close-out history remains available to the overview's median-time-to-close
   // KPI, but it is not live operational work. Keep it out of the health
@@ -519,6 +542,7 @@ function buildJobsHealth(
       const humanRounds = humanRoundsByJob.get(jobId) ?? [];
       const terminalDeliveries = terminalDeliveriesByJob.get(jobId) ?? [];
       const externalVerdicts = externalVerdictsByJob.get(jobId) ?? [];
+      const failedAnalyses = failedAnalysesByJob.get(jobId) ?? [];
       return {
         jobId,
         title: job.title,
@@ -532,6 +556,7 @@ function buildJobsHealth(
           humanRounds,
           terminalDeliveries,
           externalVerdicts,
+          failedAnalyses,
           now,
         ),
       };
@@ -795,10 +820,17 @@ async function readWorkspaceBatch(
       humanRounds: [],
       terminalDeliveries: [],
       externalVerdicts: [],
+      failedAnalyses: [],
     };
   }
   const baseScope = { workspaceId, candidateId: { $in: candidateIds } };
-  const [applications, humanRounds, terminalDeliveries, externalVerdicts] =
+  const [
+    applications,
+    humanRounds,
+    terminalDeliveries,
+    externalVerdicts,
+    failedAnalyses,
+  ] =
     await Promise.all([
       HireApplication.aggregate([
         { $match: baseScope },
@@ -864,6 +896,35 @@ async function readWorkspaceBatch(
         }),
         { $project: { _id: 0, jobId: 1, applicationId: 1, candidateId: 1 } },
       ]),
+      HireMultimodalAnalysis.aggregate([
+        { $match: baseScope },
+        ...excludeHireOnboardingTestDrives({
+          coordinate: "applicationId",
+          sourceIdField: "applicationId",
+        }),
+        ...excludeHireOnboardingTestDrives({ coordinate: "roundId" }),
+        { $sort: { capturedAt: -1, createdAt: -1, _id: -1 } },
+        {
+          $group: {
+            _id: { applicationId: "$applicationId", roundId: "$roundId" },
+            latest: { $first: "$$ROOT" },
+          },
+        },
+        { $replaceRoot: { newRoot: "$latest" } },
+        {
+          $match: {
+            status: "failed",
+            retryAttemptCount: {
+              $gte: HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS,
+            },
+            $or: [
+              { purgeEligibleAt: { $exists: false } },
+              { purgeEligibleAt: { $gt: now } },
+            ],
+          },
+        },
+        { $project: { _id: 0, jobId: 1, applicationId: 1, candidateId: 1 } },
+      ]),
     ]);
   return {
     jobs: jobs as unknown as OperationsJobRecord[],
@@ -873,6 +934,8 @@ async function readWorkspaceBatch(
     terminalDeliveries:
       terminalDeliveries as unknown as OperationsDeliveryRecord[],
     externalVerdicts: externalVerdicts as unknown as OperationsVerdictRecord[],
+    failedAnalyses:
+      failedAnalyses as unknown as OperationsFailedAnalysisRecord[],
   };
 }
 

@@ -1,8 +1,12 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import HireMultimodalAnalysisPanel from "../HireMultimodalAnalysisPanel";
 
 describe("HireMultimodalAnalysisPanel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("shows the complete persisted analysis report alongside all timeline and segment sections", () => {
     render(
       <HireMultimodalAnalysisPanel
@@ -164,10 +168,49 @@ describe("HireMultimodalAnalysisPanel", () => {
           durationMs: 90_000,
           facialFrameCount: null,
           retryAttemptCount: 3,
+          manualRetryAvailable: true,
         }}
       />,
     );
 
     expect(screen.getByText(/No automatic retry remains/i)).toBeTruthy();
+  });
+
+  it("requeues an exhausted analysis and refreshes the candidate card", async () => {
+    const onChanged = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ outcome: "requeued", dispatch: "sent" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <HireMultimodalAnalysisPanel
+        applicationId="application-1"
+        onChanged={onChanged}
+        analysis={{
+          id: "analysis-1",
+          roundId: "round-1",
+          attemptId: "attempt-1",
+          status: "failed",
+          capturedAt: "2026-08-17T12:00:00.000Z",
+          durationMs: 90_000,
+          facialFrameCount: null,
+          retryAttemptCount: 3,
+          manualRetryAvailable: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry analysis" }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workspace/applications/application-1/multimodal-analysis/analysis-1/retry",
+      { method: "POST" },
+    );
+    expect(screen.getByText("Retry queued.")).toBeTruthy();
   });
 });

@@ -42,6 +42,7 @@ function overview() {
         { kind: "pending_human_scorecards", count: 2 },
         { kind: "terminal_human_kit_delivery_failures", count: 0 },
         { kind: "external_verdicts_received", count: 1 },
+        { kind: "failed_multimodal_analyses", count: 2 },
       ],
     },
   };
@@ -64,6 +65,7 @@ describe("OverviewWorkspace", () => {
     expect(screen.getByText("Open jobs")).toBeTruthy();
     expect(screen.getByText("4 of 6 complete")).toBeTruthy();
     expect(screen.getByText("Candidates awaiting decision")).toBeTruthy();
+    expect(screen.getByText("Interview analyses needing retry")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Jobs health" })).toHaveAttribute(
       "href",
       "/workspace/jobs/health",

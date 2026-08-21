@@ -972,6 +972,8 @@ export default function ApplicationCardPage({
 
           <HireMultimodalAnalysisPanel
             analysis={round.multimodalAnalysis ?? null}
+            applicationId={application.id}
+            onChanged={load}
           />
 
           {round.assessment && (

@@ -14,6 +14,9 @@ export const HIRE_MULTIMODAL_ANALYSIS_STATUSES = [
 export type HireMultimodalAnalysisStatus =
   (typeof HIRE_MULTIMODAL_ANALYSIS_STATUSES)[number]
 
+/** Automatic worker attempts before a recruiter may explicitly requeue. */
+export const HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS = 3
+
 export interface HireMultimodalAnalysisTimelineEvent {
   startMs: number
   endMs: number
@@ -167,7 +170,13 @@ const HireMultimodalAnalysisSchema = new Schema<IHireMultimodalAnalysis>(
     liveTranscriptWords: { type: [HireMultimodalAnalysisLiveWordSchema], required: true, immutable: true },
     status: { type: String, enum: HIRE_MULTIMODAL_ANALYSIS_STATUSES, required: true },
     processingLeaseExpiresAt: { type: Date },
-    retryAttemptCount: { type: Number, required: true, default: 0, min: 0, max: 3 },
+    retryAttemptCount: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
+      max: HIRE_MULTIMODAL_ANALYSIS_MAX_RETRY_ATTEMPTS,
+    },
     retryAt: { type: Date },
     prosodySegments: { type: [Schema.Types.Mixed] },
     facialSegments: { type: [Schema.Types.Mixed] },

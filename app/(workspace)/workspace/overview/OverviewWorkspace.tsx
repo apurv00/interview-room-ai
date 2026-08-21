@@ -175,6 +175,7 @@ export default function OverviewWorkspace() {
                 <Badge
                   variant={
                     item.kind === "terminal_human_kit_delivery_failures"
+                      || item.kind === "failed_multimodal_analyses"
                       ? "danger"
                       : "caution"
                   }

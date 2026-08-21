@@ -22,6 +22,9 @@ const STATUS_VARIANT = {
 function attentionLabel(
   item: HireOperationsJobsHealth["jobs"][number]["attention"][number],
 ): string {
+  if (item.kind === "failed_multimodal_analyses") {
+    return `${item.count} interview ${item.count === 1 ? "analysis" : "analyses"} needing retry`;
+  }
   if (item.kind !== "stuck_in_stage") return operationsLabels[item.kind];
   return `${item.count} in ${stageLabels[item.stage!]} for ${item.oldestAgeDays}+ days`;
 }
@@ -166,6 +169,7 @@ export default function JobsHealthPanel() {
                       <Badge
                         variant={
                           item.kind === "terminal_human_kit_delivery_failures"
+                            || item.kind === "failed_multimodal_analyses"
                             ? "danger"
                             : "caution"
                         }

@@ -43,6 +43,12 @@ export interface IHireWorkspaceMember extends Document {
   passwordSetAt?: Date
   sessionVersion: number
   /**
+   * Monotonic serialization point for member-authorized workspace writes.
+   * Member removal writes this same document, so concurrent authority claims
+   * and removal cannot both commit under snapshot isolation.
+   */
+  workspaceWriteFenceVersion: number
+  /**
    * Monotonic member-owned egress fence for Hire operational mail. A digest
    * worker increments this in the same transaction as its exact outbox claim,
    * while member removal changes this document. That gives removal and email
@@ -91,6 +97,7 @@ const HireWorkspaceMemberSchema = new Schema<IHireWorkspaceMember>(
     passwordHash: { type: String, select: false },
     passwordSetAt: { type: Date },
     sessionVersion: { type: Number, default: 1, min: 1 },
+    workspaceWriteFenceVersion: { type: Number, default: 0, min: 0 },
     digestEgressFenceVersion: { type: Number, default: 0, min: 0 },
     removedAt: { type: Date },
     // Legacy B2C actor pointer retained for historical compatibility only.
