@@ -5,7 +5,7 @@ import { AppError } from '@shared/errors'
 const mocks = vi.hoisted(() => ({
   checkRateLimit: vi.fn(),
   hasTrustedOrigin: vi.fn(),
-  resolveHireMemberSession: vi.fn(),
+  resolveHireMemberRequestSession: vi.fn(),
   selfDeleteHireMember: vi.fn(),
   clearHireMemberCookie: vi.fn(),
 }))
@@ -20,9 +20,10 @@ vi.mock('../_lib/request', () => ({
 vi.mock('../_lib/cookie', () => ({
   clearHireMemberCookie: (...args: unknown[]) => mocks.clearHireMemberCookie(...args),
 }))
-vi.mock('@hire/services/memberAuthService', () => ({
-  HIRE_MEMBER_COOKIE: 'ipg-hire-member',
-  resolveHireMemberSession: (...args: unknown[]) => mocks.resolveHireMemberSession(...args),
+vi.mock('../_lib/memberSession', () => ({
+  resolveHireMemberRequestSession: (...args: unknown[]) =>
+    mocks.resolveHireMemberRequestSession(...args),
+  applyHireMemberRequestCookies: (response: unknown) => response,
 }))
 vi.mock('@hire/services/memberLifecycleService', () => ({
   selfDeleteHireMember: (...args: unknown[]) => mocks.selfDeleteHireMember(...args),
@@ -48,9 +49,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.hasTrustedOrigin.mockReturnValue(true)
   mocks.checkRateLimit.mockResolvedValue(null)
-  mocks.resolveHireMemberSession.mockResolvedValue({
-    workspace: { _id: '111111111111111111111111', name: 'Acme Hiring' },
-    membership: { _id: '222222222222222222222222', role: 'member' },
+  mocks.resolveHireMemberRequestSession.mockResolvedValue({
+    auth: {
+      workspace: { _id: '111111111111111111111111', name: 'Acme Hiring' },
+      membership: { _id: '222222222222222222222222', role: 'member' },
+    },
+    sessionCredential: 'raw-session',
+    clearLegacyCookie: false,
   })
 })
 
@@ -65,7 +70,9 @@ describe('DELETE /api/hire-auth/account', () => {
       ok: true,
       workspaceDeletionScheduled: false,
     })
-    expect(mocks.resolveHireMemberSession).toHaveBeenCalledWith('raw-session')
+    expect(mocks.resolveHireMemberRequestSession).toHaveBeenCalledWith(
+      expect.any(NextRequest),
+    )
     expect(mocks.selfDeleteHireMember).toHaveBeenCalledWith(
       expect.objectContaining({ membership: expect.objectContaining({ role: 'member' }) }),
       { operationId: OPERATION_ID },
@@ -74,7 +81,10 @@ describe('DELETE /api/hire-auth/account', () => {
   })
 
   it('does not accept a B2C session when the Hire member cookie is absent', async () => {
-    mocks.resolveHireMemberSession.mockResolvedValue(null)
+    mocks.resolveHireMemberRequestSession.mockResolvedValue({
+      auth: null,
+      clearLegacyCookie: false,
+    })
     const noCookie = new NextRequest(
       'https://hire.interviewprep.guru/api/hire-auth/account',
       {
@@ -90,7 +100,9 @@ describe('DELETE /api/hire-auth/account', () => {
     const response = await DELETE(noCookie)
 
     expect(response.status).toBe(401)
-    expect(mocks.resolveHireMemberSession).toHaveBeenCalledWith(undefined)
+    expect(mocks.resolveHireMemberRequestSession).toHaveBeenCalledWith(
+      expect.any(NextRequest),
+    )
     expect(mocks.selfDeleteHireMember).not.toHaveBeenCalled()
   })
 
@@ -116,6 +128,6 @@ describe('DELETE /api/hire-auth/account', () => {
 
     expect(response.status).toBe(403)
     expect(mocks.checkRateLimit).not.toHaveBeenCalled()
-    expect(mocks.resolveHireMemberSession).not.toHaveBeenCalled()
+    expect(mocks.resolveHireMemberRequestSession).not.toHaveBeenCalled()
   })
 })

@@ -1,32 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
-  HIRE_MEMBER_COOKIE,
-  resolveHireMemberSession,
-} from '@hire/services/memberAuthService'
+  applyHireMemberRequestCookies,
+  resolveHireMemberRequestSession,
+} from '../_lib/memberSession'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
-  const auth = await resolveHireMemberSession(
-    req.cookies.get(HIRE_MEMBER_COOKIE)?.value
-  )
+  const memberSession = await resolveHireMemberRequestSession(req)
+  const auth = memberSession.auth
   if (!auth) {
-    return NextResponse.json(
-      { authenticated: false },
-      { headers: { 'Cache-Control': 'private, no-store' } }
+    return applyHireMemberRequestCookies(
+      NextResponse.json(
+        { authenticated: false },
+        { headers: { 'Cache-Control': 'private, no-store' } },
+      ),
+      memberSession,
     )
   }
-  return NextResponse.json(
-    {
-      authenticated: true,
-      workspace: { id: auth.workspace._id.toString(), name: auth.workspace.name },
-      member: {
-        id: auth.membership._id.toString(),
-        name: auth.membership.name,
-        email: auth.membership.email,
-        role: auth.membership.role,
+  return applyHireMemberRequestCookies(
+    NextResponse.json(
+      {
+        authenticated: true,
+        workspace: { id: auth.workspace._id.toString(), name: auth.workspace.name },
+        member: {
+          id: auth.membership._id.toString(),
+          name: auth.membership.name,
+          email: auth.membership.email,
+          role: auth.membership.role,
+        },
       },
-    },
-    { headers: { 'Cache-Control': 'private, no-store' } }
+      { headers: { 'Cache-Control': 'private, no-store' } },
+    ),
+    memberSession,
   )
 }

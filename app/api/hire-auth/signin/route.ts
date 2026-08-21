@@ -4,6 +4,7 @@ import { authenticateHireMember } from '@hire/services/memberAuthService'
 import { AppError } from '@shared/errors'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { setHireMemberCookie } from '../_lib/cookie'
+import { revokeLegacyRequestHireMemberSession } from '../_lib/memberSession'
 import { clientIp, hasTrustedOrigin } from '../_lib/request'
 
 const SignInSchema = z.object({
@@ -27,6 +28,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = SignInSchema.parse(await req.json())
     const auth = await authenticateHireMember(body.workspaceId, body.email, body.password)
+    await revokeLegacyRequestHireMemberSession(req)
     const response = NextResponse.json({ ok: true })
     setHireMemberCookie(response, auth.sessionCredential, auth.expiresAt)
     return response

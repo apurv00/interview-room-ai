@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   authenticate: vi.fn(),
   completeSetup: vi.fn(),
   setCookie: vi.fn(),
+  revokeLegacy: vi.fn(),
 }))
 
 vi.mock('@hire/services/memberAuthService', () => ({
@@ -18,6 +19,11 @@ vi.mock('@shared/middleware/checkRateLimit', () => ({
 
 vi.mock('../_lib/cookie', () => ({
   setHireMemberCookie: (...args: unknown[]) => mocks.setCookie(...args),
+}))
+
+vi.mock('../_lib/memberSession', () => ({
+  revokeLegacyRequestHireMemberSession: (...args: unknown[]) =>
+    mocks.revokeLegacy(...args),
 }))
 
 vi.mock('../_lib/request', () => ({
@@ -49,6 +55,7 @@ beforeEach(() => {
   }
   mocks.authenticate.mockResolvedValue(auth)
   mocks.completeSetup.mockResolvedValue(auth)
+  mocks.revokeLegacy.mockResolvedValue(undefined)
 })
 
 describe('Hire auth workspace credentials', () => {
@@ -70,6 +77,7 @@ describe('Hire auth workspace credentials', () => {
       SESSION_CREDENTIAL,
       expect.any(Date),
     )
+    expect(mocks.revokeLegacy).toHaveBeenCalledWith(expect.any(NextRequest))
   })
 
   it('rejects password sign-in without a workspace coordinate', async () => {
@@ -91,6 +99,7 @@ describe('Hire auth workspace credentials', () => {
 
     expect(response.status).toBe(200)
     expect(mocks.completeSetup).toHaveBeenCalledWith(SESSION_CREDENTIAL, 'StrongPassword1')
+    expect(mocks.revokeLegacy).toHaveBeenCalledWith(expect.any(NextRequest))
 
     const rejected = await setup(request('/api/hire-auth/setup', {
       credential: 'b'.repeat(64),

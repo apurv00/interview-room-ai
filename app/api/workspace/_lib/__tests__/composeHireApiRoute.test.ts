@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server'
 const mocks = vi.hoisted(() => ({
   getServerSession: vi.fn(),
   resolveHireMemberSession: vi.fn(),
+  resolveHireMemberRequestSession: vi.fn(),
   getWorkspaceForUser: vi.fn(),
   incr: vi.fn(),
   pexpire: vi.fn(),
@@ -31,8 +32,12 @@ vi.mock('@shared/logger', () => ({
 }))
 
 vi.mock('@hire/services/memberAuthService', () => ({
-  HIRE_MEMBER_COOKIE: 'hire_member',
   resolveHireMemberSession: mocks.resolveHireMemberSession,
+}))
+
+vi.mock('../../../hire-auth/_lib/memberSession', () => ({
+  resolveHireMemberRequestSession: mocks.resolveHireMemberRequestSession,
+  applyHireMemberRequestCookies: (response: NextResponse) => response,
 }))
 
 vi.mock('@hire/services/workspaceService', () => ({
@@ -55,8 +60,11 @@ function workspaceContext(id: string) {
   }
 }
 
-function request(path: string, method = 'GET') {
-  return new NextRequest(`https://hire.interviewprep.guru${path}`, { method })
+function request(path: string, method = 'GET', origin?: string) {
+  return new NextRequest(`https://hire.interviewprep.guru${path}`, {
+    method,
+    ...(origin ? { headers: { origin } } : {}),
+  })
 }
 
 function route(handler = vi.fn(async () => NextResponse.json({ ok: true }))) {
@@ -70,8 +78,15 @@ describe('composeHireApiRoute B2C workspace bootstrap fence', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.NODE_ENV = 'test'
+    process.env.IPG_SURFACE = 'hire-control'
+    process.env.HIRE_PUBLIC_URL = 'https://hire.interviewprep.guru'
     mocks.getServerSession.mockResolvedValue({ user: USER })
     mocks.resolveHireMemberSession.mockResolvedValue(null)
+    mocks.resolveHireMemberRequestSession.mockResolvedValue({
+      auth: null,
+      clearLegacyCookie: false,
+      clearCurrentCookie: false,
+    })
     mocks.incr.mockResolvedValue(1)
     mocks.pexpire.mockResolvedValue(1)
   })
@@ -124,5 +139,110 @@ describe('composeHireApiRoute B2C workspace bootstrap fence', () => {
     await expect(response.json()).resolves.toMatchObject({
       code: 'ACCOUNT_UNAVAILABLE',
     })
+  })
+})
+
+describe('composeHireApiRoute trusted Origin fence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.NODE_ENV = 'production'
+    process.env.IPG_SURFACE = 'hire-control'
+    process.env.HIRE_PUBLIC_URL = 'https://hire.interviewprep.guru'
+    mocks.getServerSession.mockResolvedValue({ user: USER })
+    mocks.resolveHireMemberRequestSession.mockResolvedValue({
+      auth: null,
+      clearLegacyCookie: false,
+      clearCurrentCookie: false,
+    })
+    mocks.getWorkspaceForUser.mockResolvedValue(
+      workspaceContext('workspace-a'),
+    )
+    mocks.incr.mockResolvedValue(1)
+    mocks.pexpire.mockResolvedValue(1)
+  })
+
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE'])(
+    'rejects missing Origin on %s before authentication or mutation',
+    async (method) => {
+      const handler = vi.fn(async () => NextResponse.json({ mutated: true }))
+
+      const response = await route(handler)(
+        request('/api/workspace/members', method),
+      )
+
+      expect(response.status).toBe(403)
+      expect(mocks.resolveHireMemberRequestSession).not.toHaveBeenCalled()
+      expect(mocks.getServerSession).not.toHaveBeenCalled()
+      expect(handler).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects a sibling-origin representative workspace mutation', async () => {
+    const handler = vi.fn(async () => NextResponse.json({ mutated: true }))
+
+    const response = await route(handler)(
+      request(
+        '/api/workspace/members',
+        'POST',
+        'https://evil.interviewprep.guru',
+      ),
+    )
+
+    expect(response.status).toBe(403)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('allows the exact Hire Origin to reach a representative mutation', async () => {
+    const handler = vi.fn(async () => NextResponse.json({ mutated: true }))
+
+    const response = await route(handler)(
+      request(
+        '/api/workspace/members',
+        'POST',
+        'https://hire.interviewprep.guru',
+      ),
+    )
+
+    expect(response.status).toBe(200)
+    expect(handler).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a legacy-only member cookie so login CSRF cannot reach a mutation', async () => {
+    mocks.getServerSession.mockResolvedValue(null)
+    mocks.resolveHireMemberRequestSession.mockResolvedValue({
+      auth: null,
+      clearLegacyCookie: true,
+      clearCurrentCookie: false,
+    })
+    const handler = vi.fn(async () => NextResponse.json({ mutated: true }))
+    const legacyRequest = new NextRequest(
+      'https://hire.interviewprep.guru/api/workspace/members',
+      {
+        method: 'POST',
+        headers: {
+          origin: 'https://hire.interviewprep.guru',
+          cookie: `__Secure-ipg-hire-member=${'2'.repeat(24)}.${'b'.repeat(64)}`,
+        },
+      },
+    )
+
+    const response = await route(handler)(legacyRequest)
+
+    expect(response.status).toBe(401)
+    expect(mocks.resolveHireMemberRequestSession).toHaveBeenCalledWith(
+      legacyRequest,
+    )
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('allows a safe workspace read without Origin', async () => {
+    const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+
+    const response = await route(handler)(
+      request('/api/workspace/members', 'GET'),
+    )
+
+    expect(response.status).toBe(200)
+    expect(handler).toHaveBeenCalledOnce()
   })
 })
