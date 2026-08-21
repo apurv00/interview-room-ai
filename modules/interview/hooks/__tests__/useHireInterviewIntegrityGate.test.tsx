@@ -484,26 +484,37 @@ describe('useHireInterviewIntegrityGate', () => {
     }))
   })
 
-  it('accepts a live display when the browser does not report its surface type', async () => {
+  it('rejects a live display when the browser cannot prove its surface type', async () => {
     const camera = createStream()
     const monitorWithoutSurfaceMetadata = createDisplayStream()
     const getDisplayMedia = vi.fn<() => Promise<MediaStream>>()
       .mockResolvedValue(monitorWithoutSurfaceMetadata.stream)
     getUserMedia.mockResolvedValue(camera.stream)
     installDisplayMediaStub(getDisplayMedia)
+    const onEvent = vi.fn()
 
     const { result } = renderHook(() =>
       useHireInterviewIntegrityGate({
         enabled: true,
         displayCaptureRequired: true,
+        onEvent,
       }),
     )
 
     await act(async () => {
-      await expect(result.current.startAssessment()).resolves.toBe(true)
+      await expect(result.current.startAssessment()).resolves.toBe(false)
     })
 
-    expect(result.current.displayStream).toBe(monitorWithoutSurfaceMetadata.stream)
+    expect(result.current.hasStarted).toBe(false)
+    expect(result.current.displayStream).toBeNull()
+    expect(result.current.error).toContain('entire screen')
+    expect(monitorWithoutSurfaceMetadata.display.stop).toHaveBeenCalledTimes(1)
+    expect(onEvent).toHaveBeenCalledWith({
+      kind: 'screen_share_wrong_surface',
+      startMs: 0,
+      endMs: 0,
+      durationMs: 0,
+    })
   })
 
   it('does not activate browser enforcement outside Hire', () => {
