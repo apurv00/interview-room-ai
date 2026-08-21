@@ -164,6 +164,7 @@ export function hireDeploymentConfigurationIssues(
       env,
       [
         'NEXTAUTH_SECRET',
+        'HIRE_HANDOFF_ISSUANCE_MODE',
         'HIRE_PUBLIC_URL',
         'HIRE_ENGINE_RUNTIME_URL',
         'RESEND_API_KEY',
@@ -195,6 +196,16 @@ export function hireDeploymentConfigurationIssues(
       env.HIRE_ACCOUNT_BRIDGE_SECRET === env.HIRE_ENGINE_BRIDGE_SECRET
     ) {
       issues.add('collision:bridge-secrets')
+    }
+    const handoffIssuanceMode = env.HIRE_HANDOFF_ISSUANCE_MODE?.trim()
+    if (!['open', 'draining', 'smoke'].includes(handoffIssuanceMode ?? '')) {
+      issues.add('invalid:HIRE_HANDOFF_ISSUANCE_MODE')
+    }
+    if (
+      handoffIssuanceMode === 'smoke' &&
+      Buffer.byteLength(env.HIRE_HANDOFF_SMOKE_TOKEN?.trim() ?? '', 'utf8') < 32
+    ) {
+      issues.add('weak:HIRE_HANDOFF_SMOKE_TOKEN')
     }
     if (!canonicalBase64Bytes(env.HIRE_INVITE_DELIVERY_KEY, 32)) {
       issues.add('invalid:HIRE_INVITE_DELIVERY_KEY')

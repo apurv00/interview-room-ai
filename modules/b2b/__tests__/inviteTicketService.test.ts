@@ -3,12 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockRedisGet = vi.fn()
 const mockRedisSet = vi.fn()
 const mockRedisDel = vi.fn()
+const mockRedisEval = vi.fn()
 
 vi.mock('@shared/redis', () => ({
   redis: {
     get: (...args: unknown[]) => mockRedisGet(...args),
     set: (...args: unknown[]) => mockRedisSet(...args),
     del: (...args: unknown[]) => mockRedisDel(...args),
+    eval: (...args: unknown[]) => mockRedisEval(...args),
   },
 }))
 
@@ -32,6 +34,7 @@ describe('inviteTicketService', () => {
     mockRedisGet.mockReset()
     mockRedisSet.mockReset()
     mockRedisDel.mockReset()
+    mockRedisEval.mockReset()
   })
 
   describe('issueAuthTicket', () => {
@@ -76,63 +79,81 @@ describe('inviteTicketService', () => {
       const b = await issueAuthTicket(USER_ID, SESSION_ID)
       expect(a).not.toBe(b)
     })
+
   })
 
   describe('redeemAuthTicket', () => {
-    it('returns the payload and DELs the key before returning (single-use)', async () => {
-      mockRedisGet.mockResolvedValue(
+    it('atomically consumes the payload before returning it', async () => {
+      mockRedisEval.mockResolvedValue(
         JSON.stringify({ userId: USER_ID, sessionId: SESSION_ID }),
       )
-      mockRedisDel.mockResolvedValue(1)
       const ticket = 'a'.repeat(64)
       const result = await redeemAuthTicket(ticket)
       expect(result).toEqual({ userId: USER_ID, sessionId: SESSION_ID })
-      // DEL MUST run — single-use is the security property. If this
-      // regresses, replay attacks become possible.
-      expect(mockRedisDel).toHaveBeenCalledWith(`${__internals.TICKET_PREFIX}${ticket}`)
+      expect(mockRedisEval).toHaveBeenCalledWith(
+        __internals.REDEEM_TICKET_SCRIPT,
+        1,
+        `${__internals.TICKET_PREFIX}${ticket}`,
+      )
+      expect(mockRedisGet).not.toHaveBeenCalled()
+      expect(mockRedisDel).not.toHaveBeenCalled()
     })
 
     it('returns null for missing / already-redeemed tickets', async () => {
-      mockRedisGet.mockResolvedValue(null)
+      mockRedisEval.mockResolvedValue(null)
       const result = await redeemAuthTicket('a'.repeat(64))
       expect(result).toBeNull()
-      // Nothing to delete when the key is already gone.
-      expect(mockRedisDel).not.toHaveBeenCalled()
+    })
+
+    it('allows exactly one winner across concurrent redemption attempts', async () => {
+      let stored: string | null = JSON.stringify({
+        userId: USER_ID,
+        sessionId: SESSION_ID,
+      })
+      mockRedisEval.mockImplementation(async () => {
+        const claimed = stored
+        stored = null
+        return claimed
+      })
+
+      const outcomes = await Promise.all([
+        redeemAuthTicket('a'.repeat(64)),
+        redeemAuthTicket('a'.repeat(64)),
+      ])
+      expect(outcomes.filter(Boolean)).toEqual([
+        { userId: USER_ID, sessionId: SESSION_ID },
+      ])
     })
 
     it('rejects malformed tickets without touching Redis', async () => {
       expect(await redeemAuthTicket('')).toBeNull()
       expect(await redeemAuthTicket('too-short')).toBeNull()
       expect(await redeemAuthTicket(null as unknown as string)).toBeNull()
-      expect(mockRedisGet).not.toHaveBeenCalled()
+      expect(mockRedisEval).not.toHaveBeenCalled()
     })
 
     it('returns null when the stored payload is malformed', async () => {
-      mockRedisGet.mockResolvedValue(
+      mockRedisEval.mockResolvedValue(
         JSON.stringify({ userId: 'not-an-objectid', sessionId: SESSION_ID }),
       )
-      mockRedisDel.mockResolvedValue(1)
       const result = await redeemAuthTicket('a'.repeat(64))
       expect(result).toBeNull()
-      // DEL still runs because we delete before parsing — important for
-      // single-use, even in the malformed-payload branch.
-      expect(mockRedisDel).toHaveBeenCalled()
+      expect(mockRedisEval).toHaveBeenCalledTimes(1)
     })
 
     it('rejects a malformed optional organization boundary', async () => {
-      mockRedisGet.mockResolvedValue(JSON.stringify({
+      mockRedisEval.mockResolvedValue(JSON.stringify({
         userId: USER_ID,
         sessionId: SESSION_ID,
         organizationId: 'not-an-objectid',
       }))
-      mockRedisDel.mockResolvedValue(1)
 
       await expect(redeemAuthTicket('a'.repeat(64))).resolves.toBeNull()
-      expect(mockRedisDel).toHaveBeenCalled()
+      expect(mockRedisEval).toHaveBeenCalledTimes(1)
     })
 
     it('returns null when Redis throws', async () => {
-      mockRedisGet.mockRejectedValue(new Error('redis down'))
+      mockRedisEval.mockRejectedValue(new Error('redis down'))
       const result = await redeemAuthTicket('a'.repeat(64))
       expect(result).toBeNull()
     })

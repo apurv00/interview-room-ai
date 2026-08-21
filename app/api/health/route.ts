@@ -4,6 +4,7 @@ import {
   hireDeploymentConfigurationIssues,
 } from '@shared/surfaces/hireDeploymentReadiness'
 import { HIRE_MEDIA_OBJECT_PROTOCOL } from '@shared/contracts/hireMediaObjectProtocol'
+import { hireHandoffIssuanceState } from '../candidate/_lib/hireHandoffIssuanceGate'
 import { deploymentCommitOf } from './deploymentIdentity'
 
 export const dynamic = 'force-dynamic'
@@ -87,6 +88,8 @@ export async function GET(req: NextRequest) {
         hireInterviewBuild: surface === 'hire-engine'
           ? { multimodal: HIRE_MULTIMODAL_BUILD_ENABLED }
           : null,
+        handoffIssuance:
+          surface === 'hire-control' ? hireHandoffIssuanceState() : null,
         releaseGateAuthenticated,
         deploymentCommit: deploymentCommitOf(),
         hireMediaObjectProtocol:
@@ -126,6 +129,8 @@ export async function GET(req: NextRequest) {
       status: allOk ? 'healthy' : 'degraded',
       checks,
       surface,
+      handoffIssuance:
+        surface === 'hire-control' ? hireHandoffIssuanceState() : null,
       configurationIssues,
       hireInterviewBuild: releaseGateAuthenticated && surface === 'hire-engine'
         ? { multimodal: HIRE_MULTIMODAL_BUILD_ENABLED }

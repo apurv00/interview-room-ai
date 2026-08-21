@@ -4,6 +4,7 @@ import { startHireInterviewAttempt } from '@hire/services/identityMediaService'
 import { issueHireEngineHandoff } from '@hire/services/engineHandoffService'
 import { HireRound } from '@hire/models/HireRound'
 import { HireWorkspace } from '@hire/models/HireWorkspace'
+import { hireHandoffIssuanceAllowed } from '../../_lib/hireHandoffIssuanceGate'
 import { hireGuestErrorResponse, requireHireGuest } from '../../_lib/hireGuestHttp'
 
 export const dynamic = 'force-dynamic'
@@ -13,6 +14,21 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { roundId: string } },
 ) {
+  if (!hireHandoffIssuanceAllowed(req.headers)) {
+    return NextResponse.json(
+      {
+        error: 'Interview starts are temporarily paused',
+        code: 'HANDOFF_ISSUANCE_PAUSED',
+      },
+      {
+        status: 503,
+        headers: {
+          'Cache-Control': 'private, no-store',
+          'Retry-After': '30',
+        },
+      },
+    )
+  }
   const blocked = await checkRateLimit(params.roundId, {
     windowMs: 60_000,
     maxRequests: 8,

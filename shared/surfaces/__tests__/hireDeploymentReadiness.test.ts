@@ -28,6 +28,7 @@ const control = {
   INNGEST_APP_ID: 'ipg-hire-control-production',
   INNGEST_EVENT_KEY: 'event-key',
   NEXTAUTH_SECRET: 'c'.repeat(64),
+  HIRE_HANDOFF_ISSUANCE_MODE: 'open',
   HIRE_PUBLIC_URL: 'https://hire.interviewprep.guru',
   HIRE_ENGINE_RUNTIME_URL: 'https://engine.hire.interviewprep.guru',
   RESEND_API_KEY: 're_test',
@@ -119,6 +120,30 @@ describe('Hire deployment readiness', () => {
     expect(hireDeploymentConfigurationIssues({
       ...control,
       NEXT_PUBLIC_FEATURE_MULTIMODAL: undefined,
+    })).toEqual([])
+  })
+
+  it('requires an explicit issuance mode and a strong token only for smoke mode', () => {
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_HANDOFF_ISSUANCE_MODE: undefined,
+    })).toEqual(expect.arrayContaining([
+      'missing:HIRE_HANDOFF_ISSUANCE_MODE',
+      'invalid:HIRE_HANDOFF_ISSUANCE_MODE',
+    ]))
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_HANDOFF_ISSUANCE_MODE: 'draining',
+    })).toEqual([])
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_HANDOFF_ISSUANCE_MODE: 'smoke',
+      HIRE_HANDOFF_SMOKE_TOKEN: 'short',
+    })).toContain('weak:HIRE_HANDOFF_SMOKE_TOKEN')
+    expect(hireDeploymentConfigurationIssues({
+      ...control,
+      HIRE_HANDOFF_ISSUANCE_MODE: 'smoke',
+      HIRE_HANDOFF_SMOKE_TOKEN: 's'.repeat(64),
     })).toEqual([])
   })
 

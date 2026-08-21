@@ -8,6 +8,7 @@ import { z } from 'zod'
  */
 
 export const HIRE_ENGINE_BRIDGE_SCHEMA_VERSION = 1 as const
+export const HIRE_ENGINE_HANDOFF_SCHEMA_VERSION = 2 as const
 
 export const MongoObjectIdStringSchema = z
   .string()
@@ -44,10 +45,14 @@ export const HireEngineExchangeRequestSchema = z
 
 export const HireEngineHandoffEnvelopeSchema = z
   .object({
-    schemaVersion: z.literal(HIRE_ENGINE_BRIDGE_SCHEMA_VERSION),
+    schemaVersion: z.literal(HIRE_ENGINE_HANDOFF_SCHEMA_VERSION),
     workspaceId: MongoObjectIdStringSchema,
     applicationId: MongoObjectIdStringSchema,
     roundId: MongoObjectIdStringSchema,
+    // Monotonic per round and allocated by the control-plane transaction.
+    // Runtime uses this durable ordering to reject an older handoff that
+    // arrives after a newer recovery link has already rotated auth state.
+    handoffGeneration: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
     nonce: Sha256HexSchema,
     issuedAt: IsoDateTimeSchema,
     expiresAt: IsoDateTimeSchema,
@@ -163,6 +168,10 @@ export const HireEngineRevocationSchema = z
 export const HireRuntimeHandoffRequestSchema = z
   .object({
     code: z.string().regex(/^[a-f0-9]{24}\.[a-f0-9]{64}$/i),
+    // Generated independently inside the candidate's browser and kept only in
+    // this tab. The runtime folds it into the control-plane request binding so
+    // the already-bound URL capability cannot be replayed from another tab.
+    clientNonce: Sha256HexSchema,
   })
   .strict()
 

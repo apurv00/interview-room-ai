@@ -7,6 +7,7 @@ import type {
 export type HireRuntimeBindingStatus = 'provisioned' | 'active' | 'completed' | 'revoked'
 export type HireRuntimeCameraMediaStatus = 'pending' | 'published'
 export type HireRuntimeScreenMediaStatus = 'pending' | 'published'
+export type HireRuntimeAuthTicketState = 'issued' | 'consumed'
 
 export interface IHireRuntimeBinding extends Document {
   workspaceId: mongoose.Types.ObjectId
@@ -14,6 +15,13 @@ export interface IHireRuntimeBinding extends Document {
   roundId: mongoose.Types.ObjectId
   principalId: mongoose.Types.ObjectId
   handoffNonce: string
+  authTicketGeneration?: number
+  authTicketHandoffNonce?: string
+  authTicketState?: HireRuntimeAuthTicketState
+  authTicketDigest?: string
+  authTicketExpiresAt?: Date
+  authTicketIssuedAt?: Date
+  authTicketConsumedAt?: Date
   config: HireEngineConfig
   consentVersion: string
   consentAt: Date
@@ -90,6 +98,13 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
       unique: true,
       match: /^[a-f0-9]{64}$/,
     },
+    authTicketGeneration: { type: Number, min: 1 },
+    authTicketHandoffNonce: { type: String, match: /^[a-f0-9]{64}$/ },
+    authTicketState: { type: String, enum: ['issued', 'consumed'] },
+    authTicketDigest: { type: String, match: /^[a-f0-9]{64}$/ },
+    authTicketExpiresAt: { type: Date },
+    authTicketIssuedAt: { type: Date },
+    authTicketConsumedAt: { type: Date },
     config: {
       role: { type: String, required: true, maxlength: 100 },
       interviewType: { type: String, required: true, maxlength: 50 },

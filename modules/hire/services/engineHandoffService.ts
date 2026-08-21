@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import mongoose from 'mongoose'
 import {
-  HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
+  HIRE_ENGINE_HANDOFF_SCHEMA_VERSION,
   HireEngineConfigSchema,
   HireEngineExchangeRequestSchema,
   type HireEngineConfig,
@@ -108,16 +108,20 @@ export async function issueHireEngineHandoff(
           410,
         )
       }
-      const liveRound = await HireRound.exists({
-        _id: input.roundId,
-        workspaceId: input.workspaceId,
-        applicationId: input.applicationId,
-        inviteTokenExpiry: { $gt: now },
-        revokedAt: { $exists: false },
-        status: { $nin: ['completed', 'revoked'] },
-        consentVersion: input.consentVersion,
-        consentAt: input.consentAt,
-      }).session(dbSession)
+      const liveRound = await HireRound.findOneAndUpdate(
+        {
+          _id: input.roundId,
+          workspaceId: input.workspaceId,
+          applicationId: input.applicationId,
+          inviteTokenExpiry: { $gt: now },
+          revokedAt: { $exists: false },
+          status: { $nin: ['completed', 'revoked'] },
+          consentVersion: input.consentVersion,
+          consentAt: input.consentAt,
+        },
+        { $inc: { engineHandoffGeneration: 1 } },
+        { new: true, session: dbSession },
+      )
       if (!liveRound) {
         throw new HireEngineHandoffError(
           'This engine handoff is no longer valid',
@@ -126,13 +130,14 @@ export async function issueHireEngineHandoff(
         )
       }
 
-      // A fresh exchange supersedes any unredeemed code for this exact round.
+      // A fresh handoff supersedes every older code for this exact round,
+      // including one that was previously request-bound. This closes the
+      // delayed-response path after a candidate requests a recovery link.
       await HireEngineHandoff.updateMany(
         {
           workspaceId: input.workspaceId,
           applicationId: input.applicationId,
           roundId: input.roundId,
-          redeemedAt: { $exists: false },
           revokedAt: { $exists: false },
         },
         { $set: { revokedAt: now } },
@@ -143,6 +148,7 @@ export async function issueHireEngineHandoff(
           workspaceId: input.workspaceId,
           applicationId: input.applicationId,
           roundId: input.roundId,
+          handoffGeneration: liveRound.engineHandoffGeneration,
           codeHash: digest(secret),
           config,
           consentVersion: input.consentVersion,
@@ -219,12 +225,13 @@ export async function exchangeHireEngineHandoff(
       ? (handoff.config as unknown as { toObject: () => unknown }).toObject()
       : handoff.config
   return {
-    schemaVersion: HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
+    schemaVersion: HIRE_ENGINE_HANDOFF_SCHEMA_VERSION,
     workspaceId: handoff.workspaceId.toString(),
     applicationId: handoff.applicationId.toString(),
     roundId: handoff.roundId.toString(),
+    handoffGeneration: handoff.handoffGeneration,
     nonce: digest(`${handoff.codeHash}:${input.requestId}`),
-    issuedAt: now.toISOString(),
+    issuedAt: handoff.createdAt.toISOString(),
     expiresAt: envelopeExpiresAt.toISOString(),
     inviteExpiresAt: handoff.inviteExpiresAt.toISOString(),
     consentVersion: handoff.consentVersion,

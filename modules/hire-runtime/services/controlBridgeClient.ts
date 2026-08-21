@@ -44,6 +44,15 @@ function controlBaseUrl(): string {
 const HANDOFF_TIMEOUT_MS = 15_000
 const RESULT_INGESTION_TIMEOUT_MS = 4 * 60 * 1_000
 
+function handoffRequestId(code: string, clientNonce: string): string {
+  return createHash('sha256')
+    .update('ipg-hire-handoff-request:v2\0')
+    .update(code.toLowerCase())
+    .update('\0')
+    .update(clientNonce.toLowerCase())
+    .digest('hex')
+}
+
 async function postControl(
   path: string,
   value: unknown,
@@ -77,8 +86,9 @@ async function postControl(
 
 export async function exchangeHandoffWithControl(
   code: string,
+  clientNonce: string,
 ): Promise<HireEngineHandoffEnvelope> {
-  const requestId = createHash('sha256').update(code.toLowerCase()).digest('hex')
+  const requestId = handoffRequestId(code, clientNonce)
   const response = await postControl('/api/internal/hire/engine/exchange', {
     code: code.toLowerCase(),
     requestId,
@@ -152,4 +162,5 @@ export async function publishMultimodalAnalysisToControl(
 export const __controlBridgeClient = {
   HANDOFF_TIMEOUT_MS,
   RESULT_INGESTION_TIMEOUT_MS,
+  handoffRequestId,
 }

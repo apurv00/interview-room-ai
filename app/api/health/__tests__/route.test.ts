@@ -1,5 +1,5 @@
 /** @vitest-environment node */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
 const mocks = vi.hoisted(() => ({
@@ -14,20 +14,67 @@ vi.mock('@shared/redis', () => ({ redis: { ping: mocks.ping } }))
 import { deploymentCommitOf } from '../deploymentIdentity'
 import { GET, HEAD } from '../route'
 
-const originalHealthToken = process.env.HEALTH_CHECK_TOKEN
-const originalDeploymentCommit = process.env.DEPLOYMENT_COMMIT_SHA
-const originalSurface = process.env.IPG_SURFACE
-const originalControlDb = process.env.HIRE_CONTROL_DATABASE_NAME
+const originalEnvironment = { ...process.env }
+
+function configureControlHealth(
+  overrides: Record<string, string | undefined> = {},
+): void {
+  const environment: Record<string, string | undefined> = {
+    IPG_SURFACE: 'hire-control',
+    MONGODB_URI: 'mongodb://mongo.example/ipg-hire-control',
+    REDIS_URL: 'rediss://redis.example',
+    HEALTH_CHECK_TOKEN: 'gate-secret',
+    DEPLOYMENT_COMMIT_SHA: 'e'.repeat(40),
+    HIRE_ENGINE_BRIDGE_KEY_ID: 'hire-bridge-current',
+    HIRE_ENGINE_BRIDGE_SECRET: 'b'.repeat(64),
+    B2C_DATABASE_NAME: 'ipg-b2c',
+    HIRE_CONTROL_DATABASE_NAME: 'ipg-hire-control',
+    HIRE_RUNTIME_DATABASE_NAME: 'ipg-hire-runtime',
+    B2C_INNGEST_APP_ID: 'ipg-b2c-production',
+    HIRE_CONTROL_INNGEST_APP_ID: 'ipg-hire-control-production',
+    HIRE_RUNTIME_INNGEST_APP_ID: 'ipg-hire-runtime-production',
+    INNGEST_APP_ID: 'ipg-hire-control-production',
+    INNGEST_SIGNING_KEY: 'signkey-test',
+    INNGEST_EVENT_KEY: 'event-key',
+    NEXTAUTH_SECRET: 'n'.repeat(64),
+    HIRE_HANDOFF_ISSUANCE_MODE: 'open',
+    HIRE_HANDOFF_SMOKE_TOKEN: undefined,
+    HIRE_PUBLIC_URL: 'https://hire.interviewprep.guru',
+    HIRE_ENGINE_RUNTIME_URL: 'https://engine.hire.interviewprep.guru',
+    RESEND_API_KEY: 're_test',
+    EMAIL_FROM: 'IPG Hire <hire@send.interviewprep.guru>',
+    HIRE_INVITE_DELIVERY_KEY_ID: 'invite-delivery-current',
+    HIRE_INVITE_DELIVERY_KEY: Buffer.alloc(32, 7).toString('base64'),
+    HIRE_INVITE_DELIVERY_KEY_ID_PREVIOUS: undefined,
+    HIRE_INVITE_DELIVERY_KEY_PREVIOUS: undefined,
+    HIRE_ACCOUNT_BRIDGE_KEY_ID: 'account-bridge-current',
+    HIRE_ACCOUNT_BRIDGE_SECRET: 'a'.repeat(64),
+    R2_ACCOUNT_ID: 'control-account',
+    R2_ACCESS_KEY_ID: 'control-key',
+    R2_SECRET_ACCESS_KEY: 'control-secret',
+    R2_BUCKET_NAME: 'ipg-hire-control-media',
+    HIRE_RUNTIME_R2_ACCOUNT_ID: 'runtime-account',
+    HIRE_RUNTIME_R2_ACCESS_KEY_ID: 'runtime-key',
+    HIRE_RUNTIME_R2_SECRET_ACCESS_KEY: 'runtime-secret',
+    HIRE_RUNTIME_R2_BUCKET_NAME: 'ipg-hire-runtime-staging',
+    ...overrides,
+  }
+
+  for (const [name, value] of Object.entries(environment)) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+}
+
+beforeEach(() => {
+  process.env.IPG_SURFACE = 'b2c'
+})
 
 afterEach(() => {
-  if (originalHealthToken === undefined) delete process.env.HEALTH_CHECK_TOKEN
-  else process.env.HEALTH_CHECK_TOKEN = originalHealthToken
-  if (originalDeploymentCommit === undefined) delete process.env.DEPLOYMENT_COMMIT_SHA
-  else process.env.DEPLOYMENT_COMMIT_SHA = originalDeploymentCommit
-  if (originalSurface === undefined) delete process.env.IPG_SURFACE
-  else process.env.IPG_SURFACE = originalSurface
-  if (originalControlDb === undefined) delete process.env.HIRE_CONTROL_DATABASE_NAME
-  else process.env.HIRE_CONTROL_DATABASE_NAME = originalControlDb
+  for (const name of Object.keys(process.env)) {
+    if (!(name in originalEnvironment)) delete process.env[name]
+  }
+  Object.assign(process.env, originalEnvironment)
   vi.clearAllMocks()
 })
 
@@ -73,6 +120,32 @@ describe('GET deployment identity', () => {
       deploymentCommit: 'e'.repeat(40),
     })
     expect(gateResponse.headers.get('cache-control')).toBe('private, no-store')
+  })
+
+  it('exposes redacted control issuance-gate evidence only on authenticated health', async () => {
+    configureControlHealth({
+      HIRE_HANDOFF_ISSUANCE_MODE: 'smoke',
+      HIRE_HANDOFF_SMOKE_TOKEN: 's'.repeat(64),
+    })
+
+    const publicResponse = await GET(new NextRequest('https://example.test/api/health'))
+    expect(await publicResponse.json()).toEqual({ status: 'ok' })
+
+    const gateResponse = await GET(new NextRequest('https://example.test/api/health', {
+      headers: { authorization: 'Bearer gate-secret' },
+    }))
+    expect(gateResponse.status).toBe(200)
+    await expect(gateResponse.json()).resolves.toMatchObject({
+      surface: 'hire-control',
+      hireMediaObjectProtocol:
+        'v2-opaque-nonce-if-none-match-zero-seal',
+      handoffIssuance: {
+        mode: 'smoke',
+        explicitlyConfigured: true,
+        publicIssuanceOpen: false,
+        smokeReady: true,
+      },
+    })
   })
 })
 

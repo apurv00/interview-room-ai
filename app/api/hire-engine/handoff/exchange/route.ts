@@ -3,7 +3,6 @@ import { ZodError } from 'zod'
 import { HireRuntimeHandoffRequestSchema } from '@shared/contracts/hireEngineBridge'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { logger } from '@shared/logger'
-import { issueAuthTicket } from '@b2b/services/inviteTicketService'
 import { exchangeHandoffWithControl, HireControlBridgeError } from '@modules/hire-runtime/services/controlBridgeClient'
 import {
   activateRuntimeBinding,
@@ -11,6 +10,11 @@ import {
   provisionRuntimeBinding,
 } from '@modules/hire-runtime/services/bindingService'
 import { ensureRuntimePrincipal } from '@modules/hire-runtime/services/runtimePrincipalService'
+import {
+  issueRuntimeAuthTicket,
+  RUNTIME_AUTH_TICKET_CONSUMED,
+  RuntimeAuthTicketError,
+} from '@modules/hire-runtime/services/handoffAuthTicketService'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,7 +42,7 @@ export async function POST(req: NextRequest) {
   try {
     const input = HireRuntimeHandoffRequestSchema.parse(await req.json())
     stage = 'control_exchange'
-    const envelope = await exchangeHandoffWithControl(input.code)
+    const envelope = await exchangeHandoffWithControl(input.code, input.clientNonce)
     stage = 'binding_provision'
     const binding = await provisionRuntimeBinding(envelope)
     stage = 'principal_provision'
@@ -46,22 +50,32 @@ export async function POST(req: NextRequest) {
     if (!principal) {
       return NextResponse.json({ error: 'Service unavailable' }, { status: 503 })
     }
-    stage = 'auth_ticket'
-    const ticket = await issueAuthTicket(
-      binding.principalId.toString(),
-      binding.roundId.toString(),
-      binding.workspaceId.toString(),
-    )
-    if (!ticket) {
-      return NextResponse.json({ error: 'Service unavailable' }, { status: 503 })
-    }
     stage = 'binding_activation'
     await activateRuntimeBinding({
       workspaceId: binding.workspaceId.toString(),
       bindingId: binding._id.toString(),
     })
+    stage = 'auth_ticket'
+    const principalId = binding.principalId.toString()
+    const roundId = binding.roundId.toString()
+    const ticket = await issueRuntimeAuthTicket({
+      bindingId: binding._id.toString(),
+      workspaceId: binding.workspaceId.toString(),
+      principalId,
+      roundId,
+      envelope,
+    })
+    if (ticket === RUNTIME_AUTH_TICKET_CONSUMED) {
+      return NextResponse.json(
+        { error: 'This interview handoff is no longer available' },
+        { status: 410 },
+      )
+    }
+    if (!ticket) {
+      return NextResponse.json({ error: 'Service unavailable' }, { status: 503 })
+    }
     return NextResponse.json(
-      { ok: true, ticket },
+      { ok: true, ticket, principalId, roundId },
       { headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } },
     )
   } catch (error) {
@@ -77,6 +91,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'This interview handoff is unavailable' }, { status })
     }
     if (error instanceof HireRuntimeBindingError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
+    }
+    if (error instanceof RuntimeAuthTicketError) {
       return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
     }
     if (error instanceof ZodError || error instanceof SyntaxError) {

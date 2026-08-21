@@ -89,6 +89,8 @@ export interface IHireRound extends Document {
   consentVersion?: string
   consentUserAgent?: string
   preparedAt?: Date
+  /** Monotonic authority for ordering independently issued runtime links. */
+  engineHandoffGeneration?: number
   /** Opaque id from the physically isolated runtime database. It is not a
    * ref and can never be populated or dereferenced by the control plane. */
   runtimeSessionId?: mongoose.Types.ObjectId
@@ -170,6 +172,7 @@ const HireRoundSchema = new Schema<IHireRound>(
     consentVersion: { type: String, maxlength: 40 },
     consentUserAgent: { type: String, maxlength: 512 },
     preparedAt: { type: Date },
+    engineHandoffGeneration: { type: Number, min: 0, default: 0 },
     runtimeSessionId: { type: Schema.Types.ObjectId },
     resultId: { type: Schema.Types.ObjectId, ref: 'HireInterviewResult' },
     linkedAt: { type: Date },

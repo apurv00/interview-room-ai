@@ -23,6 +23,11 @@ describe('Hire runtime identity isolation', () => {
     expect(HireRuntimeBinding.schema.path('workspaceId')).toBeDefined()
     expect(HireRuntimeBinding.schema.path('applicationId')).toBeDefined()
     expect(HireRuntimeBinding.schema.path('roundId')).toBeDefined()
+    expect(HireRuntimeBinding.schema.path('authTicketGeneration')).toBeDefined()
+    expect(HireRuntimeBinding.schema.path('authTicketHandoffNonce')).toBeDefined()
+    expect(HireRuntimeBinding.schema.path('authTicketState')).toBeDefined()
+    expect(HireRuntimeBinding.schema.path('authTicketDigest')).toBeDefined()
+    expect(HireRuntimeBinding.schema.path('authTicketExpiresAt')).toBeDefined()
   })
 
   it('uses only a non-routable, round-scoped pseudonym', () => {

@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   findOneAndUpdate: vi.fn(),
   workspaceUpdateOne: vi.fn(),
-  roundExists: vi.fn(),
+  roundFindOneAndUpdate: vi.fn(),
   withTransaction: vi.fn(),
   endSession: vi.fn(),
 }))
@@ -26,7 +26,7 @@ vi.mock('../../models/HireWorkspace', () => ({
   HireWorkspace: { updateOne: mocks.workspaceUpdateOne },
 }))
 vi.mock('../../models/HireRound', () => ({
-  HireRound: { exists: mocks.roundExists },
+  HireRound: { findOneAndUpdate: mocks.roundFindOneAndUpdate },
 }))
 
 import {
@@ -60,7 +60,7 @@ beforeEach(() => {
   mocks.updateMany.mockResolvedValue({ matchedCount: 0 })
   mocks.create.mockResolvedValue({})
   mocks.workspaceUpdateOne.mockResolvedValue({ matchedCount: 1 })
-  mocks.roundExists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
+  mocks.roundFindOneAndUpdate.mockResolvedValue({ engineHandoffGeneration: 1 })
   mocks.withTransaction.mockImplementation(async (work: () => Promise<void>) => work())
   mocks.endSession.mockResolvedValue(undefined)
   startSessionSpy.mockResolvedValue({
@@ -100,13 +100,17 @@ describe('Hire control handoff service', () => {
       { $inc: { writeFenceVersion: 1 } },
       expect.objectContaining({ session: expect.anything() }),
     )
-    expect(mocks.roundExists).toHaveBeenCalledWith(
+    expect(mocks.roundFindOneAndUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         _id: IDS.roundId,
         workspaceId: IDS.workspaceId,
         applicationId: IDS.applicationId,
       }),
+      { $inc: { engineHandoffGeneration: 1 } },
+      expect.objectContaining({ new: true, session: expect.anything() }),
     )
+    expect(persisted.handoffGeneration).toBe(1)
+    expect(mocks.updateMany.mock.calls[0][0]).not.toHaveProperty('redeemedAt')
   })
 
   it('cannot mint a handoff after the workspace tombstone wins', async () => {
@@ -140,6 +144,8 @@ describe('Hire control handoff service', () => {
     }
     mocks.findOneAndUpdate.mockResolvedValue({
       codeHash: 'e'.repeat(64),
+      handoffGeneration: 1,
+      createdAt: NOW,
       workspaceId: { toString: () => IDS.workspaceId },
       applicationId: { toString: () => IDS.applicationId },
       roundId: { toString: () => IDS.roundId },
@@ -160,6 +166,7 @@ describe('Hire control handoff service', () => {
       NOW,
     )
     expect(envelope).toMatchObject(IDS)
+    expect(envelope).toMatchObject({ handoffGeneration: 1, issuedAt: NOW.toISOString() })
     expect(envelope.config).toEqual(persistedConfig)
     expect(mocks.findOneAndUpdate.mock.calls[0][0]).toMatchObject({
       workspaceId: IDS.workspaceId,
@@ -177,5 +184,58 @@ describe('Hire control handoff service', () => {
         NOW,
       ),
     ).rejects.toMatchObject<HireEngineHandoffError>({ code: 'expired', status: 410 })
+  })
+
+  it('allows only the first browser binding while keeping its exact retry idempotent', async () => {
+    const config = {
+      role: 'Backend engineer',
+      interviewType: 'behavioral',
+      experience: '3-6',
+      duration: 20,
+      jobDescription: 'Canonical JD',
+    }
+    const handoff = {
+      codeHash: 'e'.repeat(64),
+      handoffGeneration: 1,
+      createdAt: NOW,
+      workspaceId: { toString: () => IDS.workspaceId },
+      applicationId: { toString: () => IDS.applicationId },
+      roundId: { toString: () => IDS.roundId },
+      expiresAt: new Date('2026-08-10T00:01:00.000Z'),
+      inviteExpiresAt: new Date('2026-08-17T00:00:00.000Z'),
+      consentVersion: 'hire-ai-v1',
+      consentAt: new Date('2026-08-09T23:59:00.000Z'),
+      config,
+    }
+    let boundRequestId: string | undefined
+    mocks.findOneAndUpdate.mockImplementation(async (query: {
+      $or: Array<{ requestBindingHash?: unknown }>
+    }) => {
+      const requested = query.$or.find(
+        (entry) => typeof entry.requestBindingHash === 'string',
+      )?.requestBindingHash as string | undefined
+      if (boundRequestId && requested !== boundRequestId) return null
+      boundRequestId = requested
+      return handoff
+    })
+    const input = {
+      code: `${IDS.workspaceId}.${'f'.repeat(64)}`,
+      requestId: '1'.repeat(64),
+    }
+
+    const first = await exchangeHireEngineHandoff(input, NOW)
+    const retry = await exchangeHireEngineHandoff(
+      input,
+      new Date(NOW.getTime() + 5_000),
+    )
+    expect(retry.nonce).toBe(first.nonce)
+    expect(retry.issuedAt).toBe(first.issuedAt)
+    await expect(exchangeHireEngineHandoff({
+      ...input,
+      requestId: '2'.repeat(64),
+    }, NOW)).rejects.toMatchObject<HireEngineHandoffError>({
+      code: 'expired',
+      status: 410,
+    })
   })
 })

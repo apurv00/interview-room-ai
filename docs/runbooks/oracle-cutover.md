@@ -90,20 +90,87 @@ schema migration.
 
 ### 3. Manually deploy the Hire engine first, then control
 
-1. In Coolify, manually rebuild and deploy the Hire engine at the approved
-   commit, with the engine-only build and runtime flag from step 1. Confirm
-   the runtime index sequence above passed and verify authenticated health reports
-   `healthy`, MongoDB and Redis `ok`, `surface: hire-engine`,
-   `hireInterviewBuild.multimodal: true`, and that exact commit. The old control
-   cannot create a v6 handoff, so no validation/display capture is enabled
-   until the next step.
-2. In Coolify, manually deploy the Hire control service at the same commit.
-   Confirm the control index sequence above passed and verify the same authenticated
-   health, `surface: hire-control`, and exact-commit evidence before it can
-   issue v6 handoffs.
-3. Do not replace a failed Oracle deployment with a Vercel deployment; use the
-   prior known-good Coolify release only after preserving the relevant
-   operational evidence.
+The browser-bound handoff request is a strict wire change: an old handoff page
+cannot call the new exchange route, and a new page cannot call the old route.
+An overlapping Coolify rollout is forbidden. The control service has an
+executable runtime gate, `HIRE_HANDOFF_ISSUANCE_MODE`, with these exact states:
+
+- `open`: ordinary candidate starts may issue handoffs.
+- `draining`: every start returns `503 HANDOFF_ISSUANCE_PAUSED` before guest,
+  attempt, or handoff mutation.
+- `smoke`: ordinary starts remain blocked; only a request carrying the exact
+  server-only `x-hire-handoff-smoke-token` may proceed. The configured token
+  must contain at least 32 bytes and must never be exposed to browser code.
+
+Authenticated `GET /api/health` reports only the redacted mode,
+`publicIssuanceOpen`, and `smokeReady`; it never returns the token. A missing or
+invalid production mode fails closed as `draining` and also makes deployment
+configuration readiness fail.
+
+For the first deployment of this gate and strict wire, use the zero-overlap
+sequence below. If this is also the first media-object-v2 release, first
+complete every pre-start freeze, legacy reconciliation, storage conformance,
+and activation gate in the dedicated media-v2 cold-cutover runbook. Apply both
+runbooks together and let the stricter pause/drain condition win; neither a
+clean handoff drain nor a clean media scan substitutes for the other. Do not
+reorder or combine these stop/start actions:
+
+1. Configure the new control image with
+   `HIRE_HANDOFF_ISSUANCE_MODE=smoke` and a newly generated
+   `HIRE_HANDOFF_SMOKE_TOKEN`, but do not start it yet.
+2. Stop **all** old control containers. Retain Coolify replica/process evidence
+   and a timestamped probe showing the public candidate start endpoint cannot
+   return `2xx`. This full stop is the initial release's fail-closed issuance
+   fence because the old revision does not contain the new switch.
+3. From that stop timestamp, wait at least 75 seconds: the complete 60-second
+   code lifetime plus the 15-second runtime-to-control exchange timeout. Do not
+   infer the interval from a build or image-pull timestamp.
+4. Stop **all** old engine containers and retain zero-replica/process evidence.
+   Only after zero old engines is proved may the new exact-commit engine start.
+5. Start the new engine, then require authenticated health to report `healthy`,
+   MongoDB/Redis `ok`, `surface:"hire-engine"`,
+   `hireInterviewBuild.multimodal:true`, and the approved exact commit.
+6. Start the new exact-commit control in `smoke` mode. Require authenticated
+   health to report MongoDB/Redis `ok`, `surface:"hire-control"`, the same
+   commit, `hireMediaObjectProtocol:
+   "v2-opaque-nonce-if-none-match-zero-seal"`, and
+   `handoffIssuance={mode:"smoke",publicIssuanceOpen:false,smokeReady:true}`.
+   Also prove a normal start request still returns `503`. Do not open issuance
+   if any marker is missing, stale, or `not-applicable` on the wrong surface.
+7. Run the operator smoke below while public issuance remains closed. After the
+   entire handoff, sign-in, lobby, and canonical interview checks pass, change
+   only the control mode to `open`, restart it, and retain authenticated health
+   showing `publicIssuanceOpen:true` plus a normal candidate-start success.
+
+For later compatible releases, an already deployed control can first be moved
+to `draining`; retain its authenticated health evidence and the public `503`,
+then begin the same 75-second interval. For any future strict-wire change,
+still require zero old engine containers before a new engine starts.
+
+The smoke bypass does not replace normal guest authorization or CSRF. Use a
+dedicated non-production candidate/round whose valid production guest cookie
+and CSRF value were obtained through the ordinary consent flow. Load secrets
+from the approved secret runner without printing them, then execute:
+
+```sh
+SMOKE_RESPONSE_FILE="$(mktemp)"
+curl --silent --show-error --fail-with-body --request POST \
+  "${HIRE_PUBLIC_URL}/api/candidate/${SMOKE_ROUND_ID}/start" \
+  --header "Cookie: __Host-hire_guest=${SMOKE_GUEST_COOKIE}" \
+  --header "x-hire-csrf: ${SMOKE_GUEST_CSRF}" \
+  --header "x-hire-handoff-smoke-token: ${HIRE_HANDOFF_SMOKE_TOKEN}" \
+  --output "${SMOKE_RESPONSE_FILE}" \
+  --write-out 'status=%{http_code}\n'
+```
+
+Open the returned handoff only inside the controlled smoke browser, then
+securely delete `SMOKE_RESPONSE_FILE`; it contains a one-time capability and
+must not enter release logs or evidence. Retain only the status, timestamps,
+redacted health result, and final flow outcome. If the smoke fails, keep
+`smoke` mode in place. Once any new-wire
+handoff has been issued, rollback to a pre-contract engine is forbidden; fix
+forward or repeat the full fence with a compatible image. Do not replace a
+failed Oracle deployment with a Vercel deployment.
 
 ### 4. Sync and prove the Hire Inngest surfaces
 
@@ -221,6 +288,10 @@ Change for Oracle:
 - `DEPLOYMENT_COMMIT_SHA=$SOURCE_COMMIT`,
   `BILLING_ROLLOUT_COMMIT_SHA=$SOURCE_COMMIT`, and a stable
   `BILLING_ROLLOUT_DEPLOYMENT_ID`: self-hosted deployment identity.
+- On Hire control, `HIRE_HANDOFF_ISSUANCE_MODE`: explicit `open`, `draining`,
+  or `smoke`; absence is a production readiness failure and request-path
+  issuance fails closed. Configure `HIRE_HANDOFF_SMOKE_TOKEN` from the secret
+  store before using `smoke` mode; never expose it as a `NEXT_PUBLIC_*` value.
 
 Copy and verify from the provider/source of truth:
 

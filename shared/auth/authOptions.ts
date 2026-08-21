@@ -8,7 +8,6 @@ import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
 import clientPromise from '@shared/db/mongoClient'
 import { authLogger } from '@shared/logger'
-import { redeemAuthTicket } from '@b2b/services/inviteTicketService'
 import { resolveFirstPartyAuthRedirect } from './redirect'
 
 const isHireRuntime = process.env.IPG_SURFACE === 'hire-engine'
@@ -75,7 +74,15 @@ export const authOptions: NextAuthOptions = {
         const ticket = credentials?.ticket
         if (!ticket || typeof ticket !== 'string') return null
 
-        const payload = await redeemAuthTicket(ticket)
+        const payload = isHireRuntime
+          ? await import(
+              '@modules/hire-runtime/services/handoffAuthTicketService'
+            ).then(({ redeemRuntimeAuthTicket }) =>
+              redeemRuntimeAuthTicket(ticket),
+            )
+          : await import('@b2b/services/inviteTicketService').then(
+              ({ redeemAuthTicket }) => redeemAuthTicket(ticket),
+            )
         if (!payload) {
           authLogger.warn('invite-otp: ticket redemption failed')
           return null
