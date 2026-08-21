@@ -30,7 +30,18 @@ export {
   HireCandidatePiiTombstoneError,
 } from './services/hireCandidatePrivacyWriteFence'
 export { addCalendarMonths } from './services/mediaLifecycleService'
-export { ingestRuntimeMediaArtifacts } from './services/runtimeMediaIngestionService'
+export {
+  activateRuntimeMediaArtifacts,
+  HireRuntimeMediaStaleError,
+  ingestRuntimeMediaArtifacts,
+  quarantineRuntimeMediaAssets,
+} from './services/runtimeMediaIngestionService'
+export {
+  completeHireRoundIngestion,
+  releaseHireRoundIngestion,
+  reserveHireRoundIngestion,
+  type HireIngestionPriorOutcome,
+} from './services/ingestionRevisionReservationService'
 export { assertHireMediaKeyScope } from './services/hireMediaStorage'
 export {
   HIRE_AI_CONSENT_VERSION,

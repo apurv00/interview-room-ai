@@ -63,6 +63,8 @@ export interface IHireMediaAsset extends Document {
   active?: boolean
   ingestionLeaseId?: string
   ingestionLeaseExpiresAt?: Date
+  ingestionCheckpointKey?: string
+  ingestionCheckpointGeneration?: number
   objectKey: string
   /** Required for v2 opaque keys; absent only on legacy coordinate-path keys. */
   objectKeyNonce?: string
@@ -95,6 +97,19 @@ const HireMediaAssetSchema = new Schema<IHireMediaAsset>(
     active: { type: Boolean },
     ingestionLeaseId: { type: String, maxlength: 80 },
     ingestionLeaseExpiresAt: { type: Date },
+    ingestionCheckpointKey: {
+      type: String,
+      immutable: true,
+      minlength: 64,
+      maxlength: 64,
+      match: /^[a-f0-9]{64}$/,
+    },
+    ingestionCheckpointGeneration: {
+      type: Number,
+      immutable: true,
+      min: 0,
+      max: 100,
+    },
     objectKey: { type: String, required: true, immutable: true, maxlength: 1000 },
     objectKeyNonce: {
       type: String,
@@ -124,6 +139,16 @@ const HireMediaAssetSchema = new Schema<IHireMediaAsset>(
 )
 
 HireMediaAssetSchema.index({ objectKey: 1 }, { unique: true })
+HireMediaAssetSchema.index(
+  { ingestionCheckpointKey: 1, ingestionCheckpointGeneration: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      ingestionCheckpointKey: { $type: 'string' },
+      ingestionCheckpointGeneration: { $type: 'number' },
+    },
+  },
+)
 HireMediaAssetSchema.index(
   { workspaceId: 1, applicationId: 1, roundId: 1, attemptId: 1, kind: 1, active: 1 },
   { unique: true, partialFilterExpression: { active: true } }

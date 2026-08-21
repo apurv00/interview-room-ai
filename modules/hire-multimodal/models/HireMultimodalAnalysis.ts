@@ -186,7 +186,14 @@ const HireMultimodalAnalysisSchema = new Schema<IHireMultimodalAnalysis>(
 )
 
 HireMultimodalAnalysisSchema.index(
-  { workspaceId: 1, applicationId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+  {
+    workspaceId: 1,
+    applicationId: 1,
+    roundId: 1,
+    attemptId: 1,
+    runtimeSessionId: 1,
+    revision: 1,
+  },
   { unique: true },
 )
 HireMultimodalAnalysisSchema.index({ eventId: 1 }, { unique: true })

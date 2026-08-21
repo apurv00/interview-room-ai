@@ -309,6 +309,32 @@ function numericSummary(
   }
 }
 
+export async function assertHireInterviewResultCompatible(input: {
+  workspaceId: string
+  applicationId: string
+  roundId: string
+  attemptId: string
+  rawEngineOutput: unknown
+}): Promise<void> {
+  await connectHireControlDB()
+  const digest = rawDigest(input.rawEngineOutput)
+  const existing = await HireInterviewResult.findOne({
+    workspaceId: input.workspaceId,
+    applicationId: input.applicationId,
+    roundId: input.roundId,
+    attemptId: input.attemptId,
+  })
+    .select('rawDigest')
+    .lean()
+  if (existing && existing.rawDigest !== digest) {
+    throw new HireEvidenceError(
+      'This attempt already has a different immutable result',
+      'RESULT_CONFLICT',
+      409,
+    )
+  }
+}
+
 export async function persistHireInterviewResult(
   input: PersistHireInterviewResultInput,
 ): Promise<IHireInterviewResult> {
@@ -338,24 +364,6 @@ export async function persistHireInterviewResult(
     )
   }
 
-  const attempt = await HireInterviewAttempt.findOne({
-    _id: input.attemptId,
-    workspaceId: input.workspaceId,
-    applicationId: input.applicationId,
-    jobId: input.jobId,
-    candidateId: input.candidateId,
-    roundId: input.roundId,
-    status: { $in: ['in_progress', 'processing'] },
-    live: true,
-  }).lean()
-  if (!attempt) {
-    throw new HireEvidenceError(
-      'Interview attempt not found',
-      'ATTEMPT_NOT_FOUND',
-      404,
-    )
-  }
-
   const resultId = new mongoose.Types.ObjectId()
   const dbSession = await mongoose.startSession()
   try {
@@ -366,6 +374,23 @@ export async function persistHireInterviewResult(
         candidateId: input.candidateId,
         session: dbSession,
       })
+      const attempt = await HireInterviewAttempt.findOne({
+        _id: input.attemptId,
+        workspaceId: input.workspaceId,
+        applicationId: input.applicationId,
+        jobId: input.jobId,
+        candidateId: input.candidateId,
+        roundId: input.roundId,
+        status: { $in: ['in_progress', 'processing', 'revoked'] },
+      }).session(dbSession)
+      if (!attempt) {
+        throw new HireEvidenceError(
+          'Interview attempt not found',
+          'ATTEMPT_NOT_FOUND',
+          404,
+        )
+      }
+      const completedAfterRevoke = attempt.status === 'revoked'
       const created = await HireInterviewResult.create(
         [
           {
@@ -396,12 +421,13 @@ export async function persistHireInterviewResult(
           jobId: input.jobId,
           candidateId: input.candidateId,
           roundId: input.roundId,
-          status: { $in: ['in_progress', 'processing'] },
-          live: true,
+          status: attempt.status,
+          ...(completedAfterRevoke ? {} : { live: true }),
+          resultId: { $exists: false },
         },
         {
           $set: {
-            status: 'completed',
+            ...(completedAfterRevoke ? {} : { status: 'completed' }),
             resultId,
             completedAt: input.completedAt,
           },

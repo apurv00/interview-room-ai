@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 import mongoose from 'mongoose'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  HIRE_MEDIA_LEASE_CLEANUP_MARGIN_MS,
+  HIRE_MEDIA_WRITE_TIMEOUT_MS,
+  hireMediaKey,
+} from '../services/hireMediaStorage'
 
 const mocks = vi.hoisted(() => {
   class CandidatePiiTombstoneError extends Error {}
@@ -18,22 +23,25 @@ const mocks = vi.hoisted(() => {
     DeleteObjectCommand,
     s3Send: vi.fn(),
     connect: vi.fn(),
+    workspaceUpdateOne: vi.fn(),
     jobFindOneAndUpdate: vi.fn(),
     mediaFindOne: vi.fn(),
     mediaCreate: vi.fn(),
     mediaUpdateMany: vi.fn(),
     mediaFindOneAndUpdate: vi.fn(),
     mediaUpdateOne: vi.fn(),
-    workspaceUpdateOne: vi.fn(),
     candidateFence: vi.fn(),
-    createLease: vi.fn(),
   }
 })
 
 vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: class {
+    readonly endpoint: string
+    constructor(input: { endpoint: string }) {
+      this.endpoint = input.endpoint
+    }
     send(command: unknown, options?: { abortSignal?: AbortSignal }) {
-      return mocks.s3Send(command, options)
+      return mocks.s3Send(this.endpoint, command, options)
     }
   },
   GetObjectCommand: mocks.GetObjectCommand,
@@ -47,32 +55,32 @@ vi.mock('../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: mocks.candidateFence,
   HireCandidatePiiTombstoneError: mocks.CandidatePiiTombstoneError,
 }))
-vi.mock('../models/HireJob', () => ({
-  HireJob: { findOneAndUpdate: mocks.jobFindOneAndUpdate },
-}))
-vi.mock('../models/HireMediaAsset', () => ({
-  HIRE_MEDIA_INGESTION_LEASE_MS: 60 * 60 * 1000,
-  createHireMediaIngestionLease: mocks.createLease,
-  HireMediaAsset: {
-    findOne: mocks.mediaFindOne,
-    create: mocks.mediaCreate,
-    updateMany: mocks.mediaUpdateMany,
-    findOneAndUpdate: mocks.mediaFindOneAndUpdate,
-    updateOne: mocks.mediaUpdateOne,
-  },
-}))
 vi.mock('../models/HireWorkspace', () => ({
   HireWorkspace: { updateOne: mocks.workspaceUpdateOne },
 }))
+vi.mock('../models/HireJob', () => ({
+  HireJob: { findOneAndUpdate: mocks.jobFindOneAndUpdate },
+}))
+vi.mock('../models/HireMediaAsset', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../models/HireMediaAsset')>()
+  return {
+    ...actual,
+    HireMediaAsset: {
+      findOne: mocks.mediaFindOne,
+      create: mocks.mediaCreate,
+      updateMany: mocks.mediaUpdateMany,
+      findOneAndUpdate: mocks.mediaFindOneAndUpdate,
+      updateOne: mocks.mediaUpdateOne,
+    },
+  }
+})
 
 import {
   __runtimeMediaIngestion,
+  activateRuntimeMediaArtifacts,
+  HireRuntimeMediaStaleError,
   ingestRuntimeMediaArtifacts,
 } from '../services/runtimeMediaIngestionService'
-import {
-  HIRE_MEDIA_LEASE_CLEANUP_MARGIN_MS,
-  HIRE_MEDIA_WRITE_TIMEOUT_MS,
-} from '../services/hireMediaStorage'
 
 const IDS = {
   workspaceId: '111111111111111111111111',
@@ -83,14 +91,52 @@ const IDS = {
   attemptId: '666666666666666666666666',
   runtimeSessionId: '777777777777777777777777',
 }
+const INGESTION = {
+  ingestionStream: 'engine_result' as const,
+  ingestionAttempt: 2,
+  ingestionRevision: 3,
+  ingestionEventId: '8'.repeat(64),
+  ingestionDigest: '9'.repeat(64),
+}
 const BODY = Buffer.from('verified-runtime-media')
 const SHA256 = createHash('sha256').update(BODY).digest('hex')
 const SOURCE_KEY = `recordings/${__runtimeMediaIngestion.runtimePrincipalId(IDS.roundId)}/${IDS.runtimeSessionId}-1723248000000.webm`
-const SCREEN_SOURCE_KEY = `recordings/${__runtimeMediaIngestion.runtimePrincipalId(IDS.roundId)}/${IDS.runtimeSessionId}-screen-1723248000001.webm`
-const INGESTION_LEASE_ID = '11111111-2222-4333-8444-555555555555'
-const dbSession = {
-  withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
-  endSession: vi.fn().mockResolvedValue(undefined),
+const ARTIFACT = {
+  kind: 'recording' as const,
+  sourceKey: SOURCE_KEY,
+  contentType: 'video/webm',
+  sizeBytes: BODY.byteLength,
+  sha256: SHA256,
+}
+const INPUT = {
+  ...IDS,
+  ...INGESTION,
+  completedAt: new Date('2026-08-10T12:00:00.000Z'),
+  artifacts: [ARTIFACT],
+}
+
+let checkpoint: Record<string, any> | null
+let active: Record<string, any> | null
+let destinationBody: Buffer | undefined
+let destinationContentType: string | undefined
+
+function query(value: unknown) {
+  const promise = Promise.resolve(value)
+  const chain = {
+    sort: vi.fn(),
+    select: vi.fn(),
+    session: vi.fn(),
+    then: promise.then.bind(promise),
+    catch: promise.catch.bind(promise),
+  }
+  chain.sort.mockReturnValue(chain)
+  chain.select.mockReturnValue(chain)
+  chain.session.mockReturnValue(chain)
+  return chain
+}
+
+function objectId(value: string) {
+  return new mongoose.Types.ObjectId(value)
 }
 
 function isTombstone(
@@ -104,8 +150,106 @@ function isTombstone(
   )
 }
 
+const dbSession = {
+  withTransaction: vi.fn(async (work: () => Promise<void>) => work()),
+  endSession: vi.fn().mockResolvedValue(undefined),
+}
+
+function installDatabaseState(): void {
+  mocks.mediaFindOne.mockImplementation((filter: Record<string, unknown>) => {
+    if ('ingestionCheckpointKey' in filter) {
+      return query(
+        checkpoint?.ingestionCheckpointKey === filter.ingestionCheckpointKey
+          ? checkpoint
+          : null,
+      )
+    }
+    if (filter.active === true) {
+      return query(
+        active?.kind === filter.kind &&
+          active?.contentType === filter.contentType &&
+          active?.bytes === filter.bytes &&
+          active?.sha256 === filter.sha256
+          ? active
+          : null,
+      )
+    }
+    return query(null)
+  })
+  mocks.mediaCreate.mockImplementation(async (documents: Record<string, any>[]) => {
+    checkpoint = {
+      ...documents[0],
+      workspaceId: objectId(String(documents[0].workspaceId)),
+      applicationId: objectId(String(documents[0].applicationId)),
+      jobId: objectId(String(documents[0].jobId)),
+      candidateId: objectId(String(documents[0].candidateId)),
+      roundId: objectId(String(documents[0].roundId)),
+      attemptId: objectId(String(documents[0].attemptId)),
+    }
+    return [checkpoint]
+  })
+  mocks.mediaUpdateOne.mockImplementation(
+    async (filter: Record<string, any>, update: Record<string, any>) => {
+      if (checkpoint && filter.state === checkpoint.state) {
+        checkpoint = { ...checkpoint, ...(update.$set ?? {}) }
+      }
+      return { matchedCount: 1, modifiedCount: 1 }
+    },
+  )
+  mocks.mediaFindOneAndUpdate.mockImplementation(
+    async (filter: Record<string, any>, update: Record<string, any>) => {
+      if (filter.state !== 'staging' || checkpoint?.state !== 'staging') {
+        return null
+      }
+      checkpoint = { ...checkpoint, ...(update.$set ?? {}) }
+      if (update.$set?.state === 'ready') active = checkpoint
+      return checkpoint
+    },
+  )
+}
+
+function installStorage(): void {
+  mocks.s3Send.mockImplementation(
+    async (
+      endpoint: string,
+      command:
+        | InstanceType<typeof mocks.GetObjectCommand>
+        | InstanceType<typeof mocks.PutObjectCommand>,
+    ) => {
+      const runtime = endpoint.includes('runtime-account')
+      if (command instanceof mocks.GetObjectCommand) {
+        if (runtime) return { Body: Readable.from([BODY]) }
+        if (!destinationBody) {
+          throw Object.assign(new Error('missing'), {
+            name: 'NoSuchKey',
+            $metadata: { httpStatusCode: 404 },
+          })
+        }
+        return {
+          Body: Readable.from([destinationBody]),
+          ContentType: destinationContentType,
+        }
+      }
+      if (command instanceof mocks.PutObjectCommand) {
+        const chunks: Buffer[] = []
+        for await (const chunk of command.input.Body as AsyncIterable<Uint8Array>) {
+          chunks.push(Buffer.from(chunk))
+        }
+        destinationBody = Buffer.concat(chunks)
+        destinationContentType = String(command.input.ContentType)
+        return {}
+      }
+      return {}
+    },
+  )
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  checkpoint = null
+  active = null
+  destinationBody = undefined
+  destinationContentType = undefined
   vi.stubEnv('R2_ACCOUNT_ID', 'control-account')
   vi.stubEnv('R2_ACCESS_KEY_ID', 'control-key')
   vi.stubEnv('R2_SECRET_ACCESS_KEY', 'control-secret')
@@ -120,48 +264,20 @@ beforeEach(() => {
   dbSession.withTransaction.mockImplementation(
     async (work: () => Promise<void>) => work(),
   )
-  dbSession.endSession.mockResolvedValue(undefined)
   mocks.connect.mockResolvedValue(undefined)
-  mocks.jobFindOneAndUpdate.mockResolvedValue({ status: 'open' })
-  mocks.mediaFindOne.mockResolvedValue(null)
-  mocks.mediaCreate.mockImplementation(
-    async (input: Array<Record<string, unknown>>) => input,
-  )
-  mocks.mediaUpdateMany.mockResolvedValue({ modifiedCount: 0 })
-  mocks.mediaFindOneAndUpdate.mockResolvedValue({ state: 'purge_claimed' })
-  mocks.mediaUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.workspaceUpdateOne.mockResolvedValue({ matchedCount: 1 })
-  mocks.createLease.mockReturnValue({
-    ingestionLeaseId: INGESTION_LEASE_ID,
-    ingestionLeaseExpiresAt: new Date('2099-08-10T13:00:00.000Z'),
-  })
-  mocks.candidateFence
-    .mockResolvedValueOnce(undefined)
-    .mockRejectedValueOnce(
-      new mocks.CandidatePiiTombstoneError('verified deletion won'),
-    )
-  mocks.s3Send.mockImplementation(
-    async (command: InstanceType<typeof mocks.GetObjectCommand>) => {
-      if (command instanceof mocks.GetObjectCommand)
-        return { Body: Readable.from([BODY]) }
-      if (command instanceof mocks.PutObjectCommand) {
-        if (isTombstone(command)) return {}
-        for await (const _chunk of command.input
-          .Body as AsyncIterable<Uint8Array>) {
-          // Consume the upload so the production checksum transform is exercised.
-        }
-        return {}
-      }
-      return {}
-    },
-  )
+  mocks.jobFindOneAndUpdate.mockResolvedValue({ status: 'open' })
+  mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.mediaUpdateMany.mockResolvedValue({ matchedCount: 0, modifiedCount: 0 })
+  installDatabaseState()
+  installStorage()
 })
 
 afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-describe('runtime media versus verified deletion', () => {
+describe('runtime media durable checkpoint protocol', () => {
   it('keeps the object-write deadline strictly below the ingestion lease', async () => {
     const actualModel = await vi.importActual<
       typeof import('../models/HireMediaAsset')
@@ -169,655 +285,548 @@ describe('runtime media versus verified deletion', () => {
 
     expect(
       HIRE_MEDIA_WRITE_TIMEOUT_MS + HIRE_MEDIA_LEASE_CLEANUP_MARGIN_MS,
-    ).toBeLessThan(
-      actualModel.HIRE_MEDIA_INGESTION_LEASE_MS,
-    )
+    ).toBeLessThan(actualModel.HIRE_MEDIA_INGESTION_LEASE_MS)
   })
 
-  it('uses one write deadline signal across every artifact in the invocation', async () => {
+  it('uses one AbortSignal for destination verification, source GET, and conditional Put', async () => {
     const writeSignals: AbortSignal[] = []
-    mocks.candidateFence.mockReset()
-    mocks.candidateFence.mockResolvedValue(undefined)
-    mocks.mediaFindOneAndUpdate.mockResolvedValue({
-      _id: new mongoose.Types.ObjectId(),
-      state: 'ready',
-      active: true,
+    const storage = mocks.s3Send.getMockImplementation()!
+    mocks.s3Send.mockImplementation(async (...args: unknown[]) => {
+      const options = args[2] as { abortSignal?: AbortSignal } | undefined
+      if (options?.abortSignal) writeSignals.push(options.abortSignal)
+      return storage(
+        ...(args as [string, unknown, { abortSignal?: AbortSignal }?]),
+      )
     })
-    mocks.s3Send.mockImplementation(
-      async (
-        command: InstanceType<typeof mocks.GetObjectCommand>,
-        options?: { abortSignal?: AbortSignal },
-      ) => {
-        if (options?.abortSignal) writeSignals.push(options.abortSignal)
-        if (command instanceof mocks.GetObjectCommand)
-          return { Body: Readable.from([BODY]) }
-        if (command instanceof mocks.PutObjectCommand) {
-          if (isTombstone(command)) return {}
-          for await (const _chunk of command.input
-            .Body as AsyncIterable<Uint8Array>) {
-            // Consume both uploads so checksum verification completes.
-          }
-        }
-        return {}
-      },
-    )
 
-    await expect(
-      ingestRuntimeMediaArtifacts({
-        ...IDS,
-        completedAt: new Date('2026-08-10T12:00:00.000Z'),
-        artifacts: [
-          {
-            kind: 'recording',
-            sourceKey: SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-          {
-            kind: 'screen',
-            sourceKey: SCREEN_SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-        ],
-      }),
-    ).resolves.toHaveLength(2)
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).resolves.toHaveLength(1)
 
-    expect(writeSignals).toHaveLength(4)
+    expect(writeSignals).toHaveLength(3)
     expect(new Set(writeSignals).size).toBe(1)
-    expect(writeSignals[0].aborted).toBe(false)
-    const mediaPuts = mocks.s3Send.mock.calls
-      .map(([command]) => command)
-      .filter(
-        (command) =>
-          command instanceof mocks.PutObjectCommand && !isTombstone(command),
-      ) as Array<InstanceType<typeof mocks.PutObjectCommand>>
-    expect(mediaPuts).toHaveLength(2)
-    expect(mediaPuts.every((command) => command.input.IfNoneMatch === '*')).toBe(
-      true,
-    )
+    expect(writeSignals[0]?.aborted).toBe(false)
   })
 
-  it('claims workspace and candidate fences transactionally before staging or Put', async () => {
-    mocks.candidateFence.mockReset()
-    mocks.candidateFence.mockRejectedValueOnce(
-      new mocks.CandidatePiiTombstoneError('deletion already live'),
-    )
-
-    await expect(
-      ingestRuntimeMediaArtifacts({
-        ...IDS,
-        completedAt: new Date('2026-08-10T12:00:00.000Z'),
-        artifacts: [
-          {
-            kind: 'recording',
-            sourceKey: SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-        ],
-      }),
-    ).rejects.toBeInstanceOf(mocks.CandidatePiiTombstoneError)
-
-    expect(mocks.workspaceUpdateOne).toHaveBeenCalledWith(
-      {
-        _id: IDS.workspaceId,
-        $or: [
-          { lifecycleState: 'active' },
-          { lifecycleState: { $exists: false } },
-        ],
-      },
-      { $inc: { writeFenceVersion: 1 } },
-      { session: dbSession },
-    )
-    expect(mocks.candidateFence).toHaveBeenCalledWith({
-      workspaceId: IDS.workspaceId,
-      candidateId: IDS.candidateId,
-      session: dbSession,
-    })
-    expect(
-      mocks.workspaceUpdateOne.mock.invocationCallOrder[0],
-    ).toBeLessThan(mocks.candidateFence.mock.invocationCallOrder[0])
-    expect(mocks.mediaCreate).not.toHaveBeenCalled()
-    expect(mocks.s3Send).not.toHaveBeenCalled()
-  })
-
-  it('holds an ingestion lease through a deferred Put and seals only after privacy wins', async () => {
+  it('keeps the exact lease while Put is held and final privacy blocks activation', async () => {
     let notifyPutStarted!: () => void
     let releasePut!: () => void
     const putStarted = new Promise<void>((resolve) => {
       notifyPutStarted = resolve
     })
-    const putMayFinish = new Promise<void>((resolve) => {
+    const putRelease = new Promise<void>((resolve) => {
       releasePut = resolve
     })
-    const commandOrder: string[] = []
-    mocks.s3Send.mockImplementation(
-      async (command: InstanceType<typeof mocks.GetObjectCommand>) => {
-        if (command instanceof mocks.GetObjectCommand)
-          return { Body: Readable.from([BODY]) }
-        if (command instanceof mocks.PutObjectCommand) {
-          if (isTombstone(command)) {
-            commandOrder.push('seal')
-            return {}
-          }
-          commandOrder.push('put-started')
-          notifyPutStarted()
-          for await (const _chunk of command.input
-            .Body as AsyncIterable<Uint8Array>) {
-            // Consume the upload before allowing its response to settle.
-          }
-          await putMayFinish
-          commandOrder.push('put-finished')
-          return {}
-        }
-        return {}
-      },
-    )
-
-    const ingestion = ingestRuntimeMediaArtifacts({
-      ...IDS,
-      completedAt: new Date('2026-08-10T12:00:00.000Z'),
-      artifacts: [
-        {
-          kind: 'recording',
-          sourceKey: SOURCE_KEY,
-          contentType: 'video/webm',
-          sizeBytes: BODY.byteLength,
-          sha256: SHA256,
-        },
-      ],
+    const storage = mocks.s3Send.getMockImplementation()!
+    mocks.s3Send.mockImplementation(async (...args: unknown[]) => {
+      const command = args[1]
+      if (
+        command instanceof mocks.PutObjectCommand &&
+        command.input.IfNoneMatch === '*'
+      ) {
+        notifyPutStarted()
+        await putRelease
+      }
+      return storage(
+        ...(args as [string, unknown, { abortSignal?: AbortSignal }?]),
+      )
     })
 
+    const ingestion = ingestRuntimeMediaArtifacts(INPUT)
     await putStarted
-    expect(commandOrder).toEqual(['put-started'])
-    expect(mocks.mediaCreate).toHaveBeenCalledWith(
-      [
-        expect.objectContaining({
-          state: 'staging',
-          ingestionLeaseId: INGESTION_LEASE_ID,
-          ingestionLeaseExpiresAt: expect.any(Date),
-        }),
-      ],
-      { session: dbSession },
-    )
-    expect(
-      mocks.candidateFence.mock.invocationCallOrder[0],
-    ).toBeLessThan(mocks.mediaCreate.mock.invocationCallOrder[0])
+
+    expect(checkpoint).toMatchObject({
+      state: 'staging',
+      ingestionLeaseId: expect.any(String),
+      ingestionLeaseExpiresAt: expect.any(Date),
+    })
 
     releasePut()
-    await expect(ingestion).rejects.toBeInstanceOf(
+    const assets = await ingestion
+    mocks.mediaUpdateOne.mockClear()
+    mocks.candidateFence.mockRejectedValueOnce(
+      new mocks.CandidatePiiTombstoneError('verified deletion won'),
+    )
+
+    await expect(
+      activateRuntimeMediaArtifacts({
+        assets,
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        jobId: IDS.jobId,
+        candidateId: IDS.candidateId,
+        roundId: IDS.roundId,
+        attemptId: IDS.attemptId,
+        session: dbSession as unknown as mongoose.ClientSession,
+      }),
+    ).rejects.toBeInstanceOf(mocks.CandidatePiiTombstoneError)
+    expect(mocks.mediaUpdateOne).not.toHaveBeenCalled()
+    expect(checkpoint?.state).toBe('staging')
+  })
+
+  it('activates only through the exact unexpired lease after the final fences', async () => {
+    const assets = await ingestRuntimeMediaArtifacts(INPUT)
+    const leaseId = assets[0]?.ingestionLeaseId
+    mocks.mediaUpdateOne.mockClear()
+
+    await activateRuntimeMediaArtifacts({
+      assets,
+      workspaceId: IDS.workspaceId,
+      applicationId: IDS.applicationId,
+      jobId: IDS.jobId,
+      candidateId: IDS.candidateId,
+      roundId: IDS.roundId,
+      attemptId: IDS.attemptId,
+      session: dbSession as unknown as mongoose.ClientSession,
+    })
+
+    expect(mocks.mediaUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: assets[0]?._id,
+        state: 'staging',
+        ingestionLeaseId: leaseId,
+        ingestionLeaseExpiresAt: { $gt: expect.any(Date) },
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ state: 'ready', active: true }),
+      }),
+      { session: dbSession },
+    )
+    expect(checkpoint).toMatchObject({ state: 'ready', active: true })
+  })
+
+  it('does not stage or touch storage when the privacy fence has already won', async () => {
+    mocks.candidateFence.mockRejectedValueOnce(
+      new mocks.CandidatePiiTombstoneError('verified deletion won'),
+    )
+
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).rejects.toBeInstanceOf(
       mocks.CandidatePiiTombstoneError,
     )
 
-    expect(commandOrder).toEqual(['put-started', 'put-finished', 'seal'])
-    expect(mocks.candidateFence).toHaveBeenNthCalledWith(1, {
-      workspaceId: IDS.workspaceId,
-      candidateId: IDS.candidateId,
-      session: dbSession,
-    })
-    expect(mocks.candidateFence).toHaveBeenNthCalledWith(2, {
-      workspaceId: IDS.workspaceId,
-      candidateId: IDS.candidateId,
-      session: dbSession,
-    })
-    expect(mocks.mediaFindOneAndUpdate).toHaveBeenCalledOnce()
-    expect(mocks.mediaFindOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: IDS.workspaceId,
-        applicationId: IDS.applicationId,
-        jobId: IDS.jobId,
-        candidateId: IDS.candidateId,
-        roundId: IDS.roundId,
-        attemptId: IDS.attemptId,
-        state: 'staging',
-        ingestionLeaseId: INGESTION_LEASE_ID,
-      }),
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          state: 'purge_claimed',
-          purgeClaimId: expect.any(String),
-          purgeClaimedAt: expect.any(Date),
-          purgeReason: 'privacy_request',
-        }),
-        $unset: expect.objectContaining({
-          ingestionLeaseId: 1,
-          ingestionLeaseExpiresAt: 1,
-        }),
-      }),
-      { new: true },
-    )
-    const purgeClaimId = (
-      mocks.mediaFindOneAndUpdate.mock.calls[0][1] as {
-        $set: { purgeClaimId: string }
+    expect(mocks.mediaCreate).not.toHaveBeenCalled()
+    expect(mocks.s3Send).not.toHaveBeenCalled()
+  })
+
+  it('adopts the exact staged object after an unknown successful Put response', async () => {
+    let loseFirstPutResponse = true
+    const storage = mocks.s3Send.getMockImplementation()!
+    mocks.s3Send.mockImplementation(async (...args: unknown[]) => {
+      const result = await storage(...(args as [string, unknown]))
+      if (
+        args[1] instanceof mocks.PutObjectCommand &&
+        (args[1] as InstanceType<typeof mocks.PutObjectCommand>).input
+          .IfNoneMatch === '*' &&
+        loseFirstPutResponse
+      ) {
+        loseFirstPutResponse = false
+        throw new Error('connection reset after remote commit')
       }
-    ).$set.purgeClaimId
-    expect(mocks.mediaUpdateOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: IDS.workspaceId,
-        applicationId: IDS.applicationId,
-        jobId: IDS.jobId,
-        candidateId: IDS.candidateId,
-        roundId: IDS.roundId,
-        attemptId: IDS.attemptId,
-        state: 'purge_claimed',
-        purgeClaimId,
-      }),
-      {
-        $set: { state: 'purged', purgedAt: expect.any(Date) },
-        $unset: {
-          active: 1,
-          ingestionLeaseId: 1,
-          ingestionLeaseExpiresAt: 1,
-          purgeClaimId: 1,
-          purgeClaimedAt: 1,
-          purgeFailureCode: 1,
-        },
-      },
-    )
-    const sealCall = mocks.s3Send.mock.calls.findIndex(
-      ([command]) =>
-        command instanceof mocks.PutObjectCommand && isTombstone(command),
-    )
-    expect(
-      mocks.mediaFindOneAndUpdate.mock.invocationCallOrder[0],
-    ).toBeLessThan(mocks.s3Send.mock.invocationCallOrder[sealCall])
-    expect(dbSession.endSession).toHaveBeenCalledTimes(2)
-  })
-
-  it('releases the exact lease to purge_failed when the tombstone ACK fails', async () => {
-    mocks.s3Send.mockImplementation(
-      async (command: InstanceType<typeof mocks.GetObjectCommand>) => {
-        if (command instanceof mocks.GetObjectCommand)
-          return { Body: Readable.from([BODY]) }
-        if (command instanceof mocks.PutObjectCommand) {
-          if (isTombstone(command)) {
-            throw new Error('simulated R2 tombstone acknowledgement loss')
-          }
-          for await (const _chunk of command.input
-            .Body as AsyncIterable<Uint8Array>) {
-            // Consume the upload so checksum verification completes.
-          }
-          return {}
-        }
-        return {}
-      },
-    )
-
-    await expect(
-      ingestRuntimeMediaArtifacts({
-        ...IDS,
-        completedAt: new Date('2026-08-10T12:00:00.000Z'),
-        artifacts: [
-          {
-            kind: 'recording',
-            sourceKey: SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-        ],
-      }),
-    ).rejects.toBeInstanceOf(mocks.CandidatePiiTombstoneError)
-
-    const purgeClaimId = (
-      mocks.mediaFindOneAndUpdate.mock.calls[0][1] as {
-        $set: { purgeClaimId: string }
-      }
-    ).$set.purgeClaimId
-    expect(mocks.mediaUpdateOne).toHaveBeenCalledOnce()
-    expect(mocks.mediaUpdateOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: IDS.workspaceId,
-        applicationId: IDS.applicationId,
-        jobId: IDS.jobId,
-        candidateId: IDS.candidateId,
-        roundId: IDS.roundId,
-        attemptId: IDS.attemptId,
-        state: 'purge_claimed',
-        purgeClaimId,
-      }),
-      {
-        $set: {
-          state: 'purge_failed',
-          purgeEligibleAt: expect.any(Date),
-          purgeReason: 'privacy_request',
-          purgeFailureCode: 'RUNTIME_MEDIA_TOMBSTONE_FAILED',
-        },
-        $unset: {
-          active: 1,
-          purgeClaimId: 1,
-          purgeClaimedAt: 1,
-          purgedAt: 1,
-        },
-      },
-    )
-  })
-
-  it('preserves ready media when attachment committed with an unknown result', async () => {
-    const unknownCommit = new Error('unknown transaction commit result')
-    const ready = {
-      _id: new mongoose.Types.ObjectId(),
-      kind: 'camera_recording',
-      state: 'ready',
-      active: true,
-    }
-    mocks.candidateFence.mockReset()
-    mocks.candidateFence.mockResolvedValue(undefined)
-    mocks.mediaFindOne
-      .mockReset()
-      .mockResolvedValueOnce(null)
-    mocks.mediaFindOneAndUpdate
-      .mockReset()
-      .mockResolvedValueOnce(ready)
-      .mockResolvedValueOnce(null)
-    dbSession.withTransaction
-      .mockImplementationOnce(async (work: () => Promise<void>) => work())
-      .mockImplementationOnce(async (work: () => Promise<void>) => {
-        await work()
-        throw unknownCommit
-      })
-
-    await expect(
-      ingestRuntimeMediaArtifacts({
-        ...IDS,
-        completedAt: new Date('2026-08-10T12:00:00.000Z'),
-        artifacts: [
-          {
-            kind: 'recording',
-            sourceKey: SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-        ],
-      }),
-    ).rejects.toBe(unknownCommit)
-
-    expect(mocks.mediaFindOneAndUpdate).toHaveBeenCalledTimes(2)
-    expect(mocks.mediaFindOneAndUpdate).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        state: 'staging',
-        ingestionLeaseId: INGESTION_LEASE_ID,
-      }),
-      expect.objectContaining({
-        $set: expect.objectContaining({ state: 'purge_claimed' }),
-      }),
-      { new: true },
-    )
-    expect(mocks.mediaFindOne).toHaveBeenCalledOnce()
-    expect(
-      mocks.s3Send.mock.calls.some(
-        ([command]) =>
-          command instanceof mocks.PutObjectCommand && isTombstone(command),
-      ),
-    ).toBe(false)
-    expect(mocks.mediaUpdateOne).not.toHaveBeenCalled()
-  })
-
-  it('seals an ambiguous timed-out Put before terminaling the database row', async () => {
-    vi.useFakeTimers()
-    const writeStartedAt = new Date('2026-08-21T10:00:00.000Z')
-    vi.setSystemTime(writeStartedAt)
-    let notifyPutStarted!: () => void
-    const putStarted = new Promise<void>((resolve) => {
-      notifyPutStarted = resolve
-    })
-    let writeSignal: AbortSignal | undefined
-    mocks.candidateFence.mockReset()
-    mocks.candidateFence.mockResolvedValue(undefined)
-    mocks.s3Send.mockImplementation(
-      async (
-        command: InstanceType<typeof mocks.GetObjectCommand>,
-        options?: { abortSignal?: AbortSignal },
-      ) => {
-        if (command instanceof mocks.GetObjectCommand)
-          return { Body: Readable.from([BODY]) }
-        if (command instanceof mocks.PutObjectCommand) {
-          if (isTombstone(command)) return {}
-          writeSignal = options?.abortSignal
-          notifyPutStarted()
-          return new Promise((_resolve, reject) => {
-            writeSignal?.addEventListener(
-              'abort',
-              () => reject(writeSignal?.reason),
-              { once: true },
-            )
-          })
-        }
-        return {}
-      },
-    )
-
-    try {
-      const ingestion = ingestRuntimeMediaArtifacts({
-        ...IDS,
-        completedAt: new Date('2026-08-10T12:00:00.000Z'),
-        artifacts: [
-          {
-            kind: 'recording',
-            sourceKey: SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-        ],
-      })
-      await putStarted
-      expect(writeSignal?.aborted).toBe(false)
-
-      const rejected = expect(ingestion).rejects.toThrow(
-        'Hire runtime media copy timed out',
-      )
-      await vi.advanceTimersByTimeAsync(HIRE_MEDIA_WRITE_TIMEOUT_MS)
-      await rejected
-
-      expect(writeSignal?.aborted).toBe(true)
-      expect(mocks.mediaFindOneAndUpdate).toHaveBeenCalledOnce()
-      expect(
-        mocks.s3Send.mock.calls.some(
-          ([command]) =>
-            command instanceof mocks.PutObjectCommand && isTombstone(command),
-        ),
-      ).toBe(true)
-      expect(mocks.mediaUpdateOne).toHaveBeenCalledOnce()
-      expect(mocks.mediaUpdateOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          state: 'purge_claimed',
-          purgeClaimId: expect.any(String),
-        }),
-        expect.objectContaining({
-          $set: { state: 'purged', purgedAt: expect.any(Date) },
-        }),
-      )
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('activates media only through the exact unexpired ingestion lease CAS', async () => {
-    mocks.candidateFence.mockReset()
-    mocks.candidateFence.mockResolvedValue(undefined)
-    mocks.mediaFindOneAndUpdate.mockResolvedValue({
-      _id: new mongoose.Types.ObjectId(),
-      kind: 'camera_recording',
-      state: 'ready',
-      active: true,
+      return result
     })
 
-    await expect(
-      ingestRuntimeMediaArtifacts({
-        ...IDS,
-        completedAt: new Date('2026-08-10T12:00:00.000Z'),
-        artifacts: [
-          {
-            kind: 'recording',
-            sourceKey: SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-        ],
-      }),
-    ).resolves.toHaveLength(1)
-
-    expect(mocks.mediaFindOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceId: IDS.workspaceId,
-        applicationId: IDS.applicationId,
-        jobId: IDS.jobId,
-        candidateId: IDS.candidateId,
-        roundId: IDS.roundId,
-        attemptId: IDS.attemptId,
-        state: 'staging',
-        ingestionLeaseId: INGESTION_LEASE_ID,
-        ingestionLeaseExpiresAt: { $gt: expect.any(Date) },
-      }),
-      {
-        $set: { state: 'ready', active: true },
-        $unset: {
-          ingestionLeaseId: 1,
-          ingestionLeaseExpiresAt: 1,
-          purgeFailureCode: 1,
-          purgeEligibleAt: 1,
-          purgeReason: 1,
-        },
-      },
-      { new: true, session: dbSession },
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).rejects.toThrow(
+      'connection reset after remote commit',
     )
-    expect(
-      mocks.s3Send.mock.calls.some(
-        ([command]) => command instanceof mocks.DeleteObjectCommand,
-      ),
-    ).toBe(false)
-    expect(mocks.jobFindOneAndUpdate).toHaveBeenCalledTimes(2)
-    expect(mocks.jobFindOneAndUpdate).toHaveBeenNthCalledWith(
-      1,
-      { _id: IDS.jobId, workspaceId: IDS.workspaceId },
-      { $inc: { intakeWriteVersion: 1 } },
-      {
-        new: true,
-        session: dbSession,
-        projection: { status: 1, closedAt: 1 },
-      },
-    )
-    expect(mocks.jobFindOneAndUpdate).toHaveBeenNthCalledWith(
-      2,
-      { _id: IDS.jobId, workspaceId: IDS.workspaceId },
-      { $inc: { intakeWriteVersion: 1 } },
-      {
-        new: true,
-        session: dbSession,
-        projection: { status: 1, closedAt: 1 },
-      },
-    )
-    const staged = mocks.mediaCreate.mock.calls[0][0][0] as Record<
-      string,
-      unknown
-    >
-    expect(staged).not.toHaveProperty('purgeEligibleAt')
-    expect(staged).not.toHaveProperty('purgeReason')
-  })
+    expect(checkpoint?.state).toBe('staging')
+    const stagedId = checkpoint?._id.toString()
+    const stagedKey = checkpoint?.objectKey
 
-  it('clears a staged close deadline when the job reopens before activation', async () => {
-    const closedAt = new Date('2026-01-31T12:00:00.000Z')
-    const expectedPurgeAt = new Date('2026-07-31T12:00:00.000Z')
-    mocks.candidateFence.mockReset()
-    mocks.candidateFence.mockResolvedValue(undefined)
-    mocks.jobFindOneAndUpdate
-      .mockResolvedValueOnce({ status: 'closed', closedAt })
-      .mockResolvedValueOnce({ status: 'open' })
-    mocks.mediaFindOneAndUpdate.mockResolvedValue({
-      _id: new mongoose.Types.ObjectId(),
-      kind: 'camera_recording',
-      state: 'ready',
-      active: true,
-    })
-
-    await expect(
-      ingestRuntimeMediaArtifacts({
-        ...IDS,
-        completedAt: new Date('2026-02-01T12:00:00.000Z'),
-        artifacts: [
-          {
-            kind: 'recording',
-            sourceKey: SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-        ],
-      }),
-    ).resolves.toHaveLength(1)
-
-    expect(mocks.mediaCreate).toHaveBeenCalledWith(
-      [
-        expect.objectContaining({
-          purgeEligibleAt: expectedPurgeAt,
-          purgeReason: 'job_closed',
-        }),
-      ],
-      { session: dbSession },
-    )
-    expect(mocks.mediaFindOneAndUpdate).toHaveBeenCalledWith(
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).resolves.toEqual([
       expect.objectContaining({ state: 'staging' }),
-      expect.objectContaining({
-        $set: expect.not.objectContaining({
-          purgeEligibleAt: expect.anything(),
-          purgeReason: expect.anything(),
-        }),
-        $unset: expect.objectContaining({
-          purgeEligibleAt: 1,
-          purgeReason: 1,
-        }),
-      }),
-      { new: true, session: dbSession },
+    ])
+
+    expect(checkpoint?._id.toString()).toBe(stagedId)
+    expect(checkpoint?.objectKey).toBe(stagedKey)
+    expect(stagedKey).toMatch(/^hire-media\/v2\/[a-f0-9]{64}$/)
+    const conditionalPuts = mocks.s3Send.mock.calls.filter(
+      ([, command]) =>
+        command instanceof mocks.PutObjectCommand &&
+        command.input.IfNoneMatch === '*',
     )
+    expect(conditionalPuts).toHaveLength(1)
   })
 
-  it('stages a shared-display object as screen media under the same privacy fence', async () => {
-    await expect(
-      ingestRuntimeMediaArtifacts({
-        ...IDS,
-        completedAt: new Date('2026-08-10T12:00:00.000Z'),
-        artifacts: [
-          {
-            kind: 'screen',
-            sourceKey: SCREEN_SOURCE_KEY,
-            contentType: 'video/webm',
-            sizeBytes: BODY.byteLength,
-            sha256: SHA256,
-          },
-        ],
-      }),
-    ).rejects.toBeInstanceOf(mocks.CandidatePiiTombstoneError)
+  it('adopts an already verified staging checkpoint without another Put', async () => {
+    const checkpointKey = __runtimeMediaIngestion.runtimeMediaCheckpointKey({
+      ...INPUT,
+      artifactIndex: 0,
+    })
+    const assetId = new mongoose.Types.ObjectId()
+    const objectKeyNonce = 'a'.repeat(64)
+    const objectKey = hireMediaKey(
+      {
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        roundId: IDS.roundId,
+        attemptId: IDS.attemptId,
+        assetId: assetId.toString(),
+      },
+      'camera-recording',
+      objectKeyNonce,
+    )
+    checkpoint = {
+      _id: assetId,
+      workspaceId: objectId(IDS.workspaceId),
+      applicationId: objectId(IDS.applicationId),
+      jobId: objectId(IDS.jobId),
+      candidateId: objectId(IDS.candidateId),
+      roundId: objectId(IDS.roundId),
+      attemptId: objectId(IDS.attemptId),
+      kind: 'camera_recording',
+      state: 'staging',
+      ingestionCheckpointKey: checkpointKey,
+      ingestionCheckpointGeneration: 0,
+      objectKey,
+      objectKeyNonce,
+      contentType: ARTIFACT.contentType,
+      bytes: ARTIFACT.sizeBytes,
+      sha256: ARTIFACT.sha256,
+    }
+    destinationBody = BODY
+    destinationContentType = ARTIFACT.contentType
 
-    expect(mocks.mediaCreate).toHaveBeenCalledWith(
-      [
-        expect.objectContaining({
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).resolves.toEqual([
+      expect.objectContaining({ _id: assetId, state: 'staging' }),
+    ])
+    expect(
+      mocks.s3Send.mock.calls.some(
+        ([, command]) =>
+          command instanceof mocks.PutObjectCommand &&
+          command.input.IfNoneMatch === '*',
+      ),
+    ).toBe(false)
+  })
+
+  it('rejects a staged object whose opaque key is bound to another asset', async () => {
+    const checkpointKey = __runtimeMediaIngestion.runtimeMediaCheckpointKey({
+      ...INPUT,
+      artifactIndex: 0,
+    })
+    const assetId = new mongoose.Types.ObjectId()
+    const objectKeyNonce = 'c'.repeat(64)
+    checkpoint = {
+      _id: assetId,
+      workspaceId: objectId(IDS.workspaceId),
+      applicationId: objectId(IDS.applicationId),
+      jobId: objectId(IDS.jobId),
+      candidateId: objectId(IDS.candidateId),
+      roundId: objectId(IDS.roundId),
+      attemptId: objectId(IDS.attemptId),
+      kind: 'camera_recording',
+      state: 'staging',
+      ingestionCheckpointKey: checkpointKey,
+      ingestionCheckpointGeneration: 0,
+      objectKey: hireMediaKey(
+        {
           workspaceId: IDS.workspaceId,
           applicationId: IDS.applicationId,
           roundId: IDS.roundId,
           attemptId: IDS.attemptId,
-          kind: 'screen_recording',
-          state: 'staging',
-          contentType: 'video/webm',
-          ingestionLeaseId: INGESTION_LEASE_ID,
+          assetId: new mongoose.Types.ObjectId().toString(),
+        },
+        'camera-recording',
+        objectKeyNonce,
+      ),
+      objectKeyNonce,
+      contentType: ARTIFACT.contentType,
+      bytes: ARTIFACT.sizeBytes,
+      sha256: ARTIFACT.sha256,
+    }
+    destinationBody = BODY
+    destinationContentType = ARTIFACT.contentType
+
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).rejects.toThrow(
+      'Hire media key is outside the authorized scope',
+    )
+    expect(mocks.mediaUpdateOne).not.toHaveBeenCalled()
+    expect(mocks.s3Send).not.toHaveBeenCalled()
+  })
+
+  it.each(['purged', 'purge_failed'] as const)(
+    'allocates a fresh nonce after a %s checkpoint generation',
+    async (terminalState) => {
+    const checkpointKey = __runtimeMediaIngestion.runtimeMediaCheckpointKey({
+      ...INPUT,
+      artifactIndex: 0,
+    })
+    const oldAssetId = new mongoose.Types.ObjectId()
+    const oldNonce = 'b'.repeat(64)
+    const oldKey = hireMediaKey(
+      {
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        roundId: IDS.roundId,
+        attemptId: IDS.attemptId,
+        assetId: oldAssetId.toString(),
+      },
+      'camera-recording',
+      oldNonce,
+    )
+    checkpoint = {
+      _id: oldAssetId,
+      state: terminalState,
+      ingestionCheckpointKey: checkpointKey,
+      ingestionCheckpointGeneration: 0,
+      objectKey: oldKey,
+      objectKeyNonce: oldNonce,
+    }
+
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).resolves.toHaveLength(1)
+
+    expect(checkpoint?.ingestionCheckpointGeneration).toBe(1)
+    expect(checkpoint?._id.toString()).not.toBe(oldAssetId.toString())
+    expect(checkpoint?.objectKey).not.toBe(oldKey)
+    expect(checkpoint?.objectKeyNonce).not.toBe(oldNonce)
+    },
+  )
+
+  it('seals a copied staging checkpoint when retention expires before retry', async () => {
+    const checkpointKey = __runtimeMediaIngestion.runtimeMediaCheckpointKey({
+      ...INPUT,
+      artifactIndex: 0,
+    })
+    const assetId = new mongoose.Types.ObjectId()
+    const objectKeyNonce = 'c'.repeat(64)
+    const objectKey = hireMediaKey(
+      {
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        roundId: IDS.roundId,
+        attemptId: IDS.attemptId,
+        assetId: assetId.toString(),
+      },
+      'camera-recording',
+      objectKeyNonce,
+    )
+    checkpoint = {
+      _id: assetId,
+      workspaceId: objectId(IDS.workspaceId),
+      applicationId: objectId(IDS.applicationId),
+      jobId: objectId(IDS.jobId),
+      candidateId: objectId(IDS.candidateId),
+      roundId: objectId(IDS.roundId),
+      attemptId: objectId(IDS.attemptId),
+      kind: 'camera_recording',
+      state: 'staging',
+      ingestionLeaseId: 'crashed-owner',
+      ingestionCheckpointKey: checkpointKey,
+      ingestionCheckpointGeneration: 0,
+      objectKey,
+      objectKeyNonce,
+      contentType: ARTIFACT.contentType,
+      bytes: ARTIFACT.sizeBytes,
+      sha256: ARTIFACT.sha256,
+    }
+    destinationBody = BODY
+    destinationContentType = ARTIFACT.contentType
+    mocks.jobFindOneAndUpdate.mockResolvedValue({
+      status: 'closed',
+      closedAt: new Date('2025-01-01T00:00:00.000Z'),
+    })
+
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).rejects.toBeInstanceOf(
+      HireRuntimeMediaStaleError,
+    )
+
+    expect(mocks.mediaFindOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: assetId,
+        state: 'staging',
+        ingestionLeaseId: 'crashed-owner',
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          state: 'purge_claimed',
+          purgeReason: 'stale_staging',
         }),
-      ],
-      { session: dbSession },
+      }),
+      { new: true },
     )
     expect(
-      (mocks.mediaCreate.mock.calls[0][0][0] as { objectKey: string }).objectKey,
-    ).toMatch(/^hire-media\/v2\/[a-f0-9]{64}$/)
+      mocks.s3Send.mock.calls.some(
+        ([, command]) =>
+          command instanceof mocks.PutObjectCommand &&
+          command.input.Key === objectKey &&
+          command.input.ContentLength === 0,
+      ),
+    ).toBe(true)
+  })
+
+  it('retains the exact cleanup claim when the tombstone ACK fails', async () => {
+    const checkpointKey = __runtimeMediaIngestion.runtimeMediaCheckpointKey({
+      ...INPUT,
+      artifactIndex: 0,
+    })
+    const assetId = new mongoose.Types.ObjectId()
+    const objectKeyNonce = 'd'.repeat(64)
+    const objectKey = hireMediaKey(
+      {
+        workspaceId: IDS.workspaceId,
+        applicationId: IDS.applicationId,
+        roundId: IDS.roundId,
+        attemptId: IDS.attemptId,
+        assetId: assetId.toString(),
+      },
+      'camera-recording',
+      objectKeyNonce,
+    )
+    checkpoint = {
+      _id: assetId,
+      workspaceId: objectId(IDS.workspaceId),
+      applicationId: objectId(IDS.applicationId),
+      jobId: objectId(IDS.jobId),
+      candidateId: objectId(IDS.candidateId),
+      roundId: objectId(IDS.roundId),
+      attemptId: objectId(IDS.attemptId),
+      kind: 'camera_recording',
+      state: 'staging',
+      ingestionLeaseId: 'crashed-owner',
+      ingestionCheckpointKey: checkpointKey,
+      ingestionCheckpointGeneration: 0,
+      objectKey,
+      objectKeyNonce,
+      contentType: ARTIFACT.contentType,
+      bytes: ARTIFACT.sizeBytes,
+      sha256: ARTIFACT.sha256,
+    }
+    destinationBody = BODY
+    destinationContentType = ARTIFACT.contentType
+    mocks.jobFindOneAndUpdate.mockResolvedValue({
+      status: 'closed',
+      closedAt: new Date('2025-01-01T00:00:00.000Z'),
+    })
+    const storage = mocks.s3Send.getMockImplementation()!
+    mocks.s3Send.mockImplementation(async (...args: unknown[]) => {
+      const command = args[1]
+      if (command instanceof mocks.PutObjectCommand && isTombstone(command)) {
+        throw new Error('tombstone acknowledgement lost')
+      }
+      return storage(
+        ...(args as [string, unknown, { abortSignal?: AbortSignal }?]),
+      )
+    })
+
+    await expect(ingestRuntimeMediaArtifacts(INPUT)).rejects.toBeInstanceOf(
+      HireRuntimeMediaStaleError,
+    )
+
+    expect(mocks.mediaUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: assetId,
+        state: 'purge_claimed',
+        purgeClaimId: expect.any(String),
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          state: 'purge_failed',
+          purgeFailureCode: 'RUNTIME_MEDIA_TOMBSTONE_FAILED',
+        }),
+      }),
+    )
+    expect(checkpoint?.state).toBe('purge_failed')
+  })
+
+  it('never activates a partial multi-artifact batch when a later artifact turns stale', async () => {
+    const audioArtifact = {
+      ...ARTIFACT,
+      kind: 'audio' as const,
+      sourceKey: `recordings/${__runtimeMediaIngestion.runtimePrincipalId(IDS.roundId)}/${IDS.runtimeSessionId}-audio-1723248000001.webm`,
+    }
+    mocks.jobFindOneAndUpdate
+      .mockResolvedValueOnce({ status: 'open' })
+      .mockResolvedValueOnce({ status: 'open' })
+      .mockResolvedValueOnce({ status: 'open' })
+      .mockResolvedValueOnce({
+        status: 'closed',
+        closedAt: new Date('2025-01-01T00:00:00.000Z'),
+      })
+
+    await expect(
+      ingestRuntimeMediaArtifacts({
+        ...INPUT,
+        artifacts: [ARTIFACT, audioArtifact],
+      }),
+    ).rejects.toBeInstanceOf(HireRuntimeMediaStaleError)
+
+    const checkpointKeys = [0, 1].map((artifactIndex) =>
+      __runtimeMediaIngestion.runtimeMediaCheckpointKey({
+        ...INPUT,
+        artifacts: [ARTIFACT, audioArtifact],
+        artifactIndex,
+      }),
+    )
+    expect(mocks.mediaUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ingestionCheckpointKey: { $in: checkpointKeys },
+        state: 'staging',
+      }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          state: 'purge_failed',
+          purgeReason: 'stale_staging',
+        }),
+        $unset: expect.objectContaining({ active: 1 }),
+      }),
+      { session: dbSession },
+    )
+    expect(mocks.mediaUpdateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'ready' }),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(active).toBeNull()
     expect(
-      (mocks.mediaCreate.mock.calls[0][0][0] as {
-        objectKeyNonce: string
-      }).objectKeyNonce,
-    ).toMatch(/^[a-f0-9]{64}$/)
+      mocks.mediaUpdateOne.mock.calls.some(
+        ([, update]) => update.$set?.state === 'ready' || update.$set?.active === true,
+      ),
+    ).toBe(false)
+  })
+
+  it('keeps an accepted reusable asset active when a later artifact is stale', async () => {
+    const acceptedAssetId = new mongoose.Types.ObjectId()
+    active = {
+      _id: acceptedAssetId,
+      workspaceId: objectId(IDS.workspaceId),
+      applicationId: objectId(IDS.applicationId),
+      jobId: objectId(IDS.jobId),
+      candidateId: objectId(IDS.candidateId),
+      roundId: objectId(IDS.roundId),
+      attemptId: objectId(IDS.attemptId),
+      kind: 'camera_recording',
+      state: 'ready',
+      active: true,
+      contentType: ARTIFACT.contentType,
+      bytes: ARTIFACT.sizeBytes,
+      sha256: ARTIFACT.sha256,
+    }
+    const audioArtifact = {
+      ...ARTIFACT,
+      kind: 'audio' as const,
+      sourceKey: `recordings/${__runtimeMediaIngestion.runtimePrincipalId(IDS.roundId)}/${IDS.runtimeSessionId}-audio-1723248000001.webm`,
+    }
+    mocks.jobFindOneAndUpdate
+      .mockResolvedValueOnce({ status: 'open' })
+      .mockResolvedValueOnce({ status: 'open' })
+      .mockResolvedValueOnce({
+        status: 'closed',
+        closedAt: new Date('2025-01-01T00:00:00.000Z'),
+      })
+
+    await expect(
+      ingestRuntimeMediaArtifacts({
+        ...INPUT,
+        artifacts: [ARTIFACT, audioArtifact],
+      }),
+    ).rejects.toBeInstanceOf(HireRuntimeMediaStaleError)
+
+    expect(active).toMatchObject({
+      _id: acceptedAssetId,
+      state: 'ready',
+      active: true,
+    })
+    expect(mocks.mediaUpdateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'ready' }),
+      expect.anything(),
+      expect.anything(),
+    )
   })
 })

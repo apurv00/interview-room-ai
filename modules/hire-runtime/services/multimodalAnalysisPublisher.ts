@@ -25,6 +25,8 @@ import { enumerateRuntimeWorkspaceIds } from './runtimeTenantScope'
 const PUBLISH_LEASE_MS = 90_000
 const RETRY_BASE_MS = 5_000
 const RETRY_MAX_MS = 5 * 60 * 1_000
+// Reserve BSON headroom below MongoDB's 16 MiB document limit.
+const ANALYSIS_PAYLOAD_SNAPSHOT_MAX_BYTES = 12 * 1024 * 1024
 
 type PublishOutcome = 'published' | 'stale' | 'deferred' | 'skipped'
 
@@ -59,6 +61,68 @@ function retryAt(attempt: number, now: Date): Date {
     RETRY_BASE_MS * 2 ** Math.min(Math.max(attempt - 1, 0), 10),
   )
   return new Date(now.getTime() + delay)
+}
+
+function parseAnalysisPayloadSnapshot(
+  outbox: IHireRuntimeMultimodalAnalysisOutbox,
+  serialized: string,
+): HireMultimodalAnalysisIngestion {
+  const payload = HireMultimodalAnalysisIngestionSchema.parse(
+    JSON.parse(serialized),
+  )
+  if (
+    payload.eventId !== outbox.eventId ||
+    payload.workspaceId !== outbox.workspaceId.toString() ||
+    payload.applicationId !== outbox.applicationId.toString() ||
+    payload.roundId !== outbox.roundId.toString() ||
+    payload.runtimeSessionId !== outbox.runtimeSessionId.toString() ||
+    payload.attempt !== outbox.attempt ||
+    payload.revision !== outbox.revision ||
+    payload.landmarks.sourceKey !== outbox.landmarkArtifact?.sourceKey ||
+    payload.landmarks.sha256 !== outbox.artifactDigest
+  ) {
+    throw new Error('Runtime analysis payload snapshot does not match its outbox')
+  }
+  return payload
+}
+
+async function reserveAnalysisPayloadSnapshot(input: {
+  outbox: IHireRuntimeMultimodalAnalysisOutbox
+  payload: HireMultimodalAnalysisIngestion
+}): Promise<HireMultimodalAnalysisIngestion> {
+  const normalized = HireMultimodalAnalysisIngestionSchema.parse(input.payload)
+  const serialized = JSON.stringify(normalized)
+  if (Buffer.byteLength(serialized, 'utf8') > ANALYSIS_PAYLOAD_SNAPSHOT_MAX_BYTES) {
+    throw new Error('Runtime analysis payload exceeds the durable snapshot limit')
+  }
+  const staged = await HireRuntimeMultimodalAnalysisOutbox.updateOne(
+    {
+      _id: input.outbox._id,
+      status: 'pending',
+      publishLeaseToken: input.outbox.publishLeaseToken,
+      payloadSnapshotJson: { $exists: false },
+    },
+    { $set: { payloadSnapshotJson: serialized } },
+  )
+  if (staged.matchedCount === 1) {
+    return parseAnalysisPayloadSnapshot(input.outbox, serialized)
+  }
+
+  const winner = await HireRuntimeMultimodalAnalysisOutbox.findOne({
+    _id: input.outbox._id,
+    status: 'pending',
+    publishLeaseToken: input.outbox.publishLeaseToken,
+    payloadSnapshotJson: { $exists: true },
+  })
+    .select('payloadSnapshotJson')
+    .lean() as Pick<
+      IHireRuntimeMultimodalAnalysisOutbox,
+      'payloadSnapshotJson'
+    > | null
+  if (!winner?.payloadSnapshotJson) {
+    throw new Error('Runtime analysis outbox changed before payload reservation')
+  }
+  return parseAnalysisPayloadSnapshot(input.outbox, winner.payloadSnapshotJson)
 }
 
 function timelineFromSession(session: RuntimeSessionAnalysisSnapshot): {
@@ -270,6 +334,7 @@ async function clearAcknowledgedSource(input: {
       // metadata and any retry lease from the isolated runtime database.
       $unset: {
         landmarkArtifact: 1,
+        payloadSnapshotJson: 1,
         publishLeaseToken: 1,
         publishLeaseExpiresAt: 1,
         publishRetryAt: 1,
@@ -347,24 +412,33 @@ async function publishOne(
       await deferOutbox(outbox, now)
       return 'deferred'
     }
-    const session = await InterviewSession.findOne({
-      _id: outbox.runtimeSessionId,
-      userId: outbox.principalId,
-      organizationId: outbox.workspaceId,
-      status: 'completed',
-    })
-      .select(
-        '_id status startedAt completedAt updatedAt durationActualSeconds transcript liveTranscriptWords',
-      )
-      .lean() as RuntimeSessionAnalysisSnapshot | null
-    if (!session) {
-      await deferOutbox(outbox, now)
-      return 'deferred'
-    }
-    const payload = bridgePayload(outbox, session)
+    let payload = outbox.payloadSnapshotJson
+      ? parseAnalysisPayloadSnapshot(outbox, outbox.payloadSnapshotJson)
+      : null
     if (!payload) {
-      await clearAcknowledgedSource({ outbox, outcome: 'stale', now })
-      return 'stale'
+      const session = await InterviewSession.findOne({
+        _id: outbox.runtimeSessionId,
+        userId: outbox.principalId,
+        organizationId: outbox.workspaceId,
+        status: 'completed',
+      })
+        .select(
+          '_id status startedAt completedAt updatedAt durationActualSeconds transcript liveTranscriptWords',
+        )
+        .lean() as RuntimeSessionAnalysisSnapshot | null
+      if (!session) {
+        await deferOutbox(outbox, now)
+        return 'deferred'
+      }
+      const candidatePayload = bridgePayload(outbox, session)
+      if (!candidatePayload) {
+        await clearAcknowledgedSource({ outbox, outcome: 'stale', now })
+        return 'stale'
+      }
+      payload = await reserveAnalysisPayloadSnapshot({
+        outbox,
+        payload: candidatePayload,
+      })
     }
     // Reserve immediately before crossing the plane, then repeat the durable
     // retention check. Both prevent a privacy/retention winner from leaving a
@@ -434,4 +508,7 @@ export async function publishPendingHireMultimodalAnalyses(
 
 export const __hireRuntimeMultimodalAnalysisPublisher = {
   timelineFromSession,
+  parseAnalysisPayloadSnapshot,
+  reserveAnalysisPayloadSnapshot,
+  publishOne,
 }

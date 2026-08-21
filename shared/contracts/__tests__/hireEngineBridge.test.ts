@@ -128,6 +128,27 @@ describe('Hire engine bridge contract', () => {
     const parsed = HireEngineResultIngestionSchema.parse(payload)
     expect(parsed.roundId).toBe(ID_C)
     expect(parsed.media[0].kind).toBe('screen')
+    expect(parsed.mediaCompletion).toBeUndefined()
+    expect(HireEngineResultIngestionSchema.parse({
+      ...payload,
+      mediaCompletion: {
+        contractVersion: 1,
+        camera: { status: 'unavailable', reason: 'retry_exhausted' },
+        screen: { status: 'published' },
+      },
+    }).mediaCompletion).toEqual({
+      contractVersion: 1,
+      camera: { status: 'unavailable', reason: 'retry_exhausted' },
+      screen: { status: 'published' },
+    })
+    expect(() => HireEngineResultIngestionSchema.parse({
+      ...payload,
+      mediaCompletion: {
+        contractVersion: 1,
+        camera: { status: 'unavailable' },
+        screen: { status: 'published' },
+      },
+    })).toThrow()
     const { workspaceId: _workspaceId, ...withoutWorkspace } = payload
     expect(() => HireEngineResultIngestionSchema.parse(withoutWorkspace)).toThrow()
   })

@@ -14,6 +14,10 @@ import {
   type HireMultimodalAnalysisIngestion,
 } from '@shared/contracts/hireMultimodalAnalysisBridge'
 import { createInternalServiceHeaders } from '@shared/services/internalServiceAuth'
+import {
+  HIRE_INGESTION_REVISION_PROTOCOL_HEADER,
+  HIRE_INGESTION_REVISION_PROTOCOL_VERSION,
+} from '@shared/contracts/hireIngestionRevisionProtocol'
 import { assertHireRuntimeSurface } from './runtimeBoundary'
 
 export class HireControlBridgeError extends Error {
@@ -57,6 +61,7 @@ async function postControl(
   path: string,
   value: unknown,
   timeoutMs = HANDOFF_TIMEOUT_MS,
+  revisionProtocol = false,
 ): Promise<unknown> {
   const body = JSON.stringify(value)
   const response = await fetch(new URL(path, controlBaseUrl()), {
@@ -64,6 +69,12 @@ async function postControl(
     headers: {
       'Content-Type': 'application/json',
       ...createInternalServiceHeaders({ method: 'POST', path, body }),
+      ...(revisionProtocol
+        ? {
+            [HIRE_INGESTION_REVISION_PROTOCOL_HEADER]:
+              HIRE_INGESTION_REVISION_PROTOCOL_VERSION,
+          }
+        : {}),
     },
     body,
     cache: 'no-store',
@@ -104,6 +115,7 @@ export async function publishResultToControl(
     '/api/internal/hire/engine/results',
     payload,
     RESULT_INGESTION_TIMEOUT_MS,
+    true,
   )) as { ok?: unknown; outcome?: unknown }
   if (
     response.ok !== true ||
@@ -145,6 +157,7 @@ export async function publishMultimodalAnalysisToControl(
     '/api/internal/hire/engine/multimodal-analysis',
     payload,
     RESULT_INGESTION_TIMEOUT_MS,
+    true,
   )) as { ok?: unknown; outcome?: unknown }
   if (
     response.ok !== true ||

@@ -89,9 +89,11 @@ export async function captureHireRuntimeMultimodalAnalysis(input: {
     return 'disabled'
   }
 
+  const attempt = Math.max(1, binding.attemptCount)
   const existing = await HireRuntimeMultimodalAnalysisOutbox.exists({
     ...coordinates,
     runtimeSessionId: binding.runtimeSessionId,
+    attempt,
     revision: 1,
     status: { $in: ['pending', 'published', 'stale'] },
   })
@@ -143,7 +145,7 @@ export async function captureHireRuntimeMultimodalAnalysis(input: {
   const artifactDigest = sha256(body)
   const capturedAt = now.toISOString()
   const eventId = sha256(
-    `${binding.roundId.toString()}:${runtimeSessionId}:1:${artifactDigest}`,
+    `${binding.roundId.toString()}:${runtimeSessionId}:${attempt}:1:${artifactDigest}`,
   )
   let uploaded = false
   try {
@@ -155,7 +157,7 @@ export async function captureHireRuntimeMultimodalAnalysis(input: {
         ...coordinates,
         principalId: binding.principalId,
         runtimeSessionId: binding.runtimeSessionId,
-        attempt: Math.max(1, binding.attemptCount),
+        attempt,
         revision: 1,
         consentVersion: binding.consentVersion,
         policyVersion: HIRE_MULTIMODAL_ANALYSIS_POLICY_VERSION,

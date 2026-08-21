@@ -342,10 +342,14 @@ describe('Hire-native multimodal index preparation', () => {
   })
 
   it('refuses a same-key incompatible index without writing', async () => {
+    const observationDefinition =
+      HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS.find(
+        (definition) => definition.target === 'control-observations',
+      )!
     mocks.controlObservationIndexes.mockResolvedValue([
       {
         name: 'wrong',
-        key: HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS[0].key,
+        key: observationDefinition.key,
         unique: false,
       },
     ])

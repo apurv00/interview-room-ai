@@ -466,7 +466,63 @@ describe('runtime result publication lifecycle', () => {
       binding({ pendingMediaManifest: manifest }) as never,
     )
     expect(mocks.buildMedia).not.toHaveBeenCalled()
-    expect(mocks.events).toEqual(['ack', 'delete', 'complete'])
+    expect(mocks.events).toEqual(['stage', 'ack', 'delete', 'complete'])
+  })
+
+  it('replays the exact reserved result payload after an ambiguous ack and session mutation', async () => {
+    mocks.publish
+      .mockRejectedValueOnce(new Error('connection closed after control commit'))
+      .mockResolvedValueOnce('duplicate')
+
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(binding() as never),
+    ).rejects.toThrow('connection closed after control commit')
+    const firstPayload = mocks.publish.mock.calls[0][0]
+    const reservation = mocks.bindingUpdate.mock.calls.find(
+      ([, update]) => update.$set?.pendingResultPayloadJson,
+    )?.[1].$set
+    expect(reservation?.pendingResultPayloadJson).toEqual(
+      JSON.stringify(firstPayload),
+    )
+
+    // The engine session is mutable even after completion. An ambiguous
+    // response must never let this newer content poison the same revision.
+    mocks.sessionFindOne.mockReturnValue(
+      sessionQuery(completedSession({
+        feedback: {
+          overall_score: 12,
+          dimensions: {
+            answer_quality: { score: 12 },
+            communication: { score: 12 },
+          },
+        },
+        transcript: [{
+          speaker: 'candidate',
+          text: 'mutated after acknowledgement',
+          timestamp: 2_000,
+        }],
+      })),
+    )
+    await expect(
+      __resultPublisher.publishRuntimeBindingResult(
+        binding({
+          pendingMediaManifest: reservation?.pendingMediaManifest,
+          pendingResultPayloadJson: reservation?.pendingResultPayloadJson,
+        }) as never,
+      ),
+    ).resolves.toBe('published')
+
+    expect(mocks.sessionFindOne).toHaveBeenCalledOnce()
+    expect(mocks.publish.mock.calls[1][0]).toEqual(firstPayload)
+    expect(JSON.stringify(mocks.publish.mock.calls[1][0])).toBe(
+      JSON.stringify(firstPayload),
+    )
+    expect(mocks.bindingUpdate.mock.calls.at(-1)?.[1]).toMatchObject({
+      $unset: {
+        pendingMediaManifest: 1,
+        pendingResultPayloadJson: 1,
+      },
+    })
   })
 
   it('does not read or publish a stale scan row after privacy revocation wins', async () => {

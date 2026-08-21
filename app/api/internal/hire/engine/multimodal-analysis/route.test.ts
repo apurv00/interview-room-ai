@@ -42,7 +42,11 @@ const RUNTIME_SESSION_ID = "4".repeat(24);
 function request(body: string): NextRequest {
   return new NextRequest(
     "https://hire.example/api/internal/hire/engine/multimodal-analysis",
-    { method: "POST", body },
+    {
+      method: "POST",
+      body,
+      headers: { "x-hire-ingestion-revision-protocol": "2" },
+    },
   );
 }
 
@@ -131,6 +135,19 @@ describe("Hire full multimodal-analysis bridge route", () => {
     });
     expect(JSON.stringify(payload)).not.toContain(privateSourceKey);
     expect(JSON.stringify(payload)).not.toContain(privateTranscriptText);
+  });
+
+  it("rejects an old worker before ingestion and asks it to retry", async () => {
+    const response = await POST(
+      new NextRequest(
+        "https://hire.example/api/internal/hire/engine/multimodal-analysis",
+        { method: "POST", body: JSON.stringify(bridgePayload) },
+      ),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(mocks.ingest).not.toHaveBeenCalled();
   });
 
   it("rejects signed malformed input without passing it to ingestion", async () => {

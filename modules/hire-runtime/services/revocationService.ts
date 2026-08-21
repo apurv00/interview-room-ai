@@ -34,6 +34,7 @@ async function finalizeRuntimePrivacyTombstones(input: {
         principalLeaseToken: 1,
         principalLeaseExpiresAt: 1,
         pendingMediaManifest: 1,
+        pendingResultPayloadJson: 1,
         publishedRevision: 1,
         publishedDigest: 1,
         publishedAt: 1,

@@ -50,6 +50,12 @@ export interface IHireRuntimeBinding extends Document {
   purgePersonalData?: boolean
   personalDataPurgedAt?: Date
   pendingMediaManifest?: HireEngineResultIngestion['media']
+  /**
+   * Exact serialized result bridge payload reserved before the first send.
+   * It survives an ambiguous acknowledgement so every retry replays the same
+   * immutable event instead of rebuilding it from a mutable engine session.
+   */
+  pendingResultPayloadJson?: string
   publishedRevision?: number
   publishedDigest?: string
   publishedAt?: Date
@@ -196,6 +202,7 @@ const HireRuntimeBindingSchema = new Schema<IHireRuntimeBinding>(
       ],
       default: undefined,
     },
+    pendingResultPayloadJson: { type: String, maxlength: 12 * 1024 * 1024 },
     publishedRevision: { type: Number, min: 1, max: 10 },
     publishedDigest: { type: String, match: /^[a-f0-9]{64}$/ },
     publishedAt: { type: Date },

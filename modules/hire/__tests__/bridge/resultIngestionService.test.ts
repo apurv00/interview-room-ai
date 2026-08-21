@@ -9,8 +9,10 @@ import {
 
 const mocks = vi.hoisted(() => {
   class CandidatePiiTombstoneError extends Error {}
+  class RuntimeMediaStaleError extends Error {}
   return {
     CandidatePiiTombstoneError,
+    RuntimeMediaStaleError,
     connect: vi.fn(),
     ingestionFindOne: vi.fn(),
     ingestionCreate: vi.fn(),
@@ -24,6 +26,9 @@ const mocks = vi.hoisted(() => {
     privacyExists: vi.fn(),
     candidateFence: vi.fn(),
     ingestMedia: vi.fn(),
+    activateMedia: vi.fn(),
+    quarantineMedia: vi.fn(),
+    assertResultCompatible: vi.fn(),
     persistResult: vi.fn(),
   }
 })
@@ -60,13 +65,17 @@ vi.mock('../../models/HirePrivacyRequest', () => ({
   HirePrivacyRequest: { exists: mocks.privacyExists },
 }))
 vi.mock('../../services/runtimeMediaIngestionService', () => ({
+  HireRuntimeMediaStaleError: mocks.RuntimeMediaStaleError,
   ingestRuntimeMediaArtifacts: mocks.ingestMedia,
+  activateRuntimeMediaArtifacts: mocks.activateMedia,
+  quarantineRuntimeMediaAssets: mocks.quarantineMedia,
 }))
 vi.mock('../../services/hireCandidatePrivacyWriteFence', () => ({
   claimHireCandidatePiiWriteFence: mocks.candidateFence,
   HireCandidatePiiTombstoneError: mocks.CandidatePiiTombstoneError,
 }))
 vi.mock('../../services/evidenceService', () => ({
+  assertHireInterviewResultCompatible: mocks.assertResultCompatible,
   persistHireInterviewResult: mocks.persistResult,
 }))
 
@@ -115,10 +124,12 @@ function objectId(value: string) {
 
 function query(value: unknown) {
   const chain = {
+    select: vi.fn(),
     session: vi.fn(),
     lean: vi.fn().mockResolvedValue(value),
     sort: vi.fn(),
   }
+  chain.select.mockReturnValue(chain)
   chain.session.mockReturnValue(chain)
   chain.sort.mockReturnValue(chain)
   return chain
@@ -225,9 +236,12 @@ beforeEach(() => {
   mocks.attemptUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.privacyExists.mockResolvedValue(null)
   mocks.candidateFence.mockResolvedValue(undefined)
+  mocks.assertResultCompatible.mockResolvedValue(undefined)
   mocks.ingestMedia.mockResolvedValue([
     { kind: 'camera_recording', _id: objectId(IDS.mediaAssetId) },
   ])
+  mocks.activateMedia.mockResolvedValue(undefined)
+  mocks.quarantineMedia.mockResolvedValue(undefined)
   mocks.persistResult.mockResolvedValue({ _id: objectId(IDS.resultId) })
   mocks.ingestionCreate.mockResolvedValue([{}])
   mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 1 })
@@ -252,8 +266,12 @@ describe('isolated engine result ingestion', () => {
       media: [],
       status: 'received',
     })
-    expect(mocks.roundUpdateOne.mock.calls[0][1]).toEqual({
-      $set: { runtimeSessionId: expect.any(mongoose.Types.ObjectId) },
+    expect(mocks.roundUpdateOne).toHaveBeenCalledTimes(2)
+    expect(mocks.roundUpdateOne.mock.calls[1][1]).toMatchObject({
+      $set: {
+        'ingestionReservations.engineResult.status': 'processed',
+        runtimeSessionId: expect.any(mongoose.Types.ObjectId),
+      },
       $unset: { live: 1 },
     })
     expect(mocks.attemptUpdateOne).toHaveBeenCalledWith(
@@ -271,7 +289,7 @@ describe('isolated engine result ingestion', () => {
   it('discards copied media/result content when verified deletion wins the final fence', async () => {
     const input = payload()
     mocks.ingestionFindOne.mockReset().mockReturnValue(query(null))
-    mocks.candidateFence.mockRejectedValueOnce(
+    mocks.activateMedia.mockRejectedValueOnce(
       new mocks.CandidatePiiTombstoneError('privacy won'),
     )
 
@@ -281,11 +299,11 @@ describe('isolated engine result ingestion', () => {
 
     expect(mocks.ingestMedia).toHaveBeenCalledOnce()
     expect(mocks.persistResult).toHaveBeenCalledOnce()
-    expect(mocks.candidateFence).toHaveBeenCalledWith({
+    expect(mocks.activateMedia).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: IDS.workspaceId,
-      candidateId: expect.objectContaining({ toString: expect.any(Function) }),
+      candidateId: IDS.candidateId,
       session: expect.anything(),
-    })
+    }))
     expect(mocks.ingestionCreate).toHaveBeenCalledOnce()
     expect(mocks.ingestionCreate.mock.calls[0][0][0]).toMatchObject({
       eventId: input.eventId,
@@ -293,9 +311,12 @@ describe('isolated engine result ingestion', () => {
       media: [],
       status: 'received',
     })
-    expect(mocks.roundUpdateOne).toHaveBeenCalledOnce()
-    expect(mocks.roundUpdateOne.mock.calls[0][1]).toEqual({
-      $set: { runtimeSessionId: expect.any(mongoose.Types.ObjectId) },
+    expect(mocks.roundUpdateOne).toHaveBeenCalledTimes(2)
+    expect(mocks.roundUpdateOne.mock.calls[1][1]).toMatchObject({
+      $set: {
+        'ingestionReservations.engineResult.status': 'processed',
+        runtimeSessionId: expect.any(mongoose.Types.ObjectId),
+      },
       $unset: { live: 1 },
     })
     expect(mocks.applicationUpdateOne).not.toHaveBeenCalled()
@@ -334,6 +355,11 @@ describe('isolated engine result ingestion', () => {
       roundId: IDS.roundId,
       attemptId: IDS.attemptId,
       runtimeSessionId: IDS.runtimeSessionId,
+      ingestionStream: 'engine_result',
+      ingestionAttempt: input.attempt,
+      ingestionRevision: input.revision,
+      ingestionEventId: input.eventId,
+      ingestionDigest: input.resultDigest,
       completedAt: new Date(input.completedAt),
       artifacts: [MEDIA_ARTIFACT],
     })
@@ -389,13 +415,13 @@ describe('isolated engine result ingestion', () => {
       ]),
     )
 
-    const roundUpdateFilter = mocks.roundUpdateOne.mock.calls[0][0]
+    const roundUpdateFilter = mocks.roundUpdateOne.mock.calls[1][0]
     expect(roundUpdateFilter).toMatchObject({
       _id: IDS.roundId,
       workspaceId: IDS.workspaceId,
       applicationId: IDS.applicationId,
     })
-    expect(mocks.roundUpdateOne.mock.calls[0][1].$set).toMatchObject({
+    expect(mocks.roundUpdateOne.mock.calls[1][1].$set).toMatchObject({
       resultId: expect.objectContaining({ toString: expect.any(Function) }),
       attemptCount: 1,
       status: 'completed',
@@ -406,6 +432,45 @@ describe('isolated engine result ingestion', () => {
       type: 'ai_result_linked',
       actorName: 'System',
     })
+  })
+
+  it('preserves a job-close revocation that wins before final terminalization', async () => {
+    mocks.roundFindOne
+      .mockReset()
+      .mockReturnValueOnce(query({
+        candidateId: objectId(IDS.candidateId),
+        jobId: objectId(IDS.jobId),
+        runtimeSessionId: undefined,
+      }))
+      .mockReturnValueOnce(query({
+        candidateId: objectId(IDS.candidateId),
+        jobId: objectId(IDS.jobId),
+        runtimeSessionId: undefined,
+        status: 'revoked',
+        revokedAt: new Date('2026-08-10T00:00:01.000Z'),
+      }))
+
+    await expect(ingestHireEngineResult(payload())).resolves.toEqual({
+      outcome: 'processed',
+    })
+
+    expect(mocks.activateMedia).toHaveBeenCalledOnce()
+    expect(mocks.attemptUpdateOne).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        resultId: expect.anything(),
+        status: { $in: ['completed', 'revoked'] },
+      }),
+      expect.objectContaining({
+        $set: expect.not.objectContaining({ status: 'completed' }),
+      }),
+      expect.objectContaining({ session: expect.anything() }),
+    )
+    const terminalRoundUpdate = mocks.roundUpdateOne.mock.calls.at(-1)?.[1]
+    expect(terminalRoundUpdate.$set).toMatchObject({
+      'ingestionReservations.engineResult.status': 'processed',
+      results: expect.objectContaining({ completedAfterRevoke: true }),
+    })
+    expect(terminalRoundUpdate.$set).not.toHaveProperty('status')
   })
 
   it('rejects display media for a V5 consent receipt before copying any artifact', async () => {
@@ -454,9 +519,13 @@ describe('isolated engine result ingestion', () => {
     mocks.ingestionFindOne.mockReset().mockReturnValue(
       query({
         eventId: input.eventId,
+        workspaceId: objectId(IDS.workspaceId),
+        applicationId: objectId(IDS.applicationId),
         resultDigest: input.resultDigest,
         roundId: objectId(IDS.roundId),
         runtimeSessionId: objectId(IDS.runtimeSessionId),
+        revision: input.revision,
+        attempt: input.attempt,
         status: 'processed',
       }),
     )
@@ -465,8 +534,226 @@ describe('isolated engine result ingestion', () => {
       outcome: 'duplicate',
     })
     expect(mocks.ingestionCreate).not.toHaveBeenCalled()
-    expect(mocks.roundUpdateOne).not.toHaveBeenCalled()
+    // The attempted atomic head advance and legacy-event lookup share one
+    // transaction; the duplicate decision rolls that write back.
+    expect(mocks.roundUpdateOne).toHaveBeenCalledOnce()
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+    expect(mocks.persistResult).not.toHaveBeenCalled()
     expect(mocks.applicationUpdateOne).not.toHaveBeenCalled()
+  })
+
+  it('returns terminal stale again after the first acknowledgement was lost', async () => {
+    const input = payload()
+    mocks.ingestionFindOne.mockReset().mockReturnValue(
+      query({
+        eventId: input.eventId,
+        workspaceId: objectId(IDS.workspaceId),
+        applicationId: objectId(IDS.applicationId),
+        resultDigest: input.resultDigest,
+        roundId: objectId(IDS.roundId),
+        runtimeSessionId: objectId(IDS.runtimeSessionId),
+        revision: input.revision,
+        attempt: input.attempt,
+        status: 'processed',
+        terminalOutcome: 'stale',
+      }),
+    )
+
+    await expect(ingestHireEngineResult(input)).resolves.toEqual({
+      outcome: 'stale',
+    })
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+    expect(mocks.persistResult).not.toHaveBeenCalled()
+  })
+
+  it('terminally records lifecycle-stale media activation', async () => {
+    mocks.activateMedia.mockRejectedValueOnce(
+      new mocks.RuntimeMediaStaleError('retention expired'),
+    )
+
+    await expect(ingestHireEngineResult(payload())).resolves.toEqual({
+      outcome: 'stale',
+    })
+    expect(mocks.ingestionUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'received' }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          status: 'processed',
+          terminalOutcome: 'stale',
+        }),
+      }),
+      expect.objectContaining({ session: expect.anything() }),
+    )
+    expect(mocks.persistResult).toHaveBeenCalledOnce()
+    expect(mocks.quarantineMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'stale_staging',
+        assets: [expect.objectContaining({ kind: 'camera_recording' })],
+      }),
+    )
+  })
+
+  it('rejects a delayed older revision before any media or result mutation', async () => {
+    mocks.roundFindOne
+      .mockReset()
+      .mockReturnValueOnce(
+        query({
+          candidateId: objectId(IDS.candidateId),
+          jobId: objectId(IDS.jobId),
+          runtimeSessionId: objectId(IDS.runtimeSessionId),
+        }),
+      )
+      .mockReturnValue(
+        query({
+          runtimeSessionId: objectId(IDS.runtimeSessionId),
+          ingestionReservations: {
+            engineResult: {
+              runtimeSessionId: objectId(IDS.runtimeSessionId),
+              attempt: 1,
+              revision: 3,
+              eventId: '1'.repeat(64),
+              digest: '2'.repeat(64),
+              status: 'processed',
+            },
+          },
+        }),
+      )
+    mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 0 })
+
+    await expect(ingestHireEngineResult(payload())).resolves.toEqual({
+      outcome: 'stale',
+    })
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+    expect(mocks.persistResult).not.toHaveBeenCalled()
+    expect(mocks.ingestionCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a same-revision digest conflict before any media or result mutation', async () => {
+    mocks.roundFindOne
+      .mockReset()
+      .mockReturnValueOnce(
+        query({
+          candidateId: objectId(IDS.candidateId),
+          jobId: objectId(IDS.jobId),
+          runtimeSessionId: objectId(IDS.runtimeSessionId),
+        }),
+      )
+      .mockReturnValue(
+        query({
+          runtimeSessionId: objectId(IDS.runtimeSessionId),
+          ingestionReservations: {
+            engineResult: {
+              runtimeSessionId: objectId(IDS.runtimeSessionId),
+              attempt: 1,
+              revision: 2,
+              eventId: '1'.repeat(64),
+              digest: '2'.repeat(64),
+              status: 'processed',
+            },
+          },
+        }),
+      )
+    mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 0 })
+
+    await expect(ingestHireEngineResult(payload())).rejects.toMatchObject({
+      code: 'conflict',
+      status: 409,
+    })
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+    expect(mocks.persistResult).not.toHaveBeenCalled()
+    expect(mocks.ingestionCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a higher-revision immutable result conflict before copying media', async () => {
+    const input = payload({
+      revision: 3,
+      eventId: '9'.repeat(64),
+      results: {
+        ...payload().results,
+        overallScore: 13,
+      },
+    })
+    mocks.assertResultCompatible.mockRejectedValueOnce(
+      new Error('Interview result conflicts with the immutable prior result'),
+    )
+
+    await expect(ingestHireEngineResult(input)).rejects.toThrow(
+      /conflicts with the immutable prior result/,
+    )
+    expect(mocks.assertResultCompatible).toHaveBeenCalledOnce()
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+    expect(mocks.persistResult).not.toHaveBeenCalled()
+  })
+
+  it('serializes concurrent same-revision conflicts before the loser touches storage', async () => {
+    const baseRound = {
+      candidateId: objectId(IDS.candidateId),
+      jobId: objectId(IDS.jobId),
+      runtimeSessionId: undefined,
+    }
+    let head: Record<string, unknown> | undefined
+    mocks.roundFindOne.mockImplementation((filter: Record<string, unknown>) =>
+      'candidateId' in filter
+        ? query(baseRound)
+        : query({
+            runtimeSessionId: objectId(IDS.runtimeSessionId),
+            ingestionReservations: { engineResult: head },
+          }),
+    )
+    mocks.roundUpdateOne.mockImplementation(
+      async (
+        _filter: unknown,
+        update: { $set?: Record<string, unknown> },
+      ) => {
+        const reservation = update.$set?.[
+          'ingestionReservations.engineResult'
+        ] as Record<string, unknown> | undefined
+        if (reservation) {
+          if (head) return { matchedCount: 0 }
+          head = reservation
+          return { matchedCount: 1 }
+        }
+        if (
+          update.$set?.['ingestionReservations.engineResult.status'] ===
+          'processed'
+        ) {
+          head = { ...head, status: 'processed' }
+        }
+        return { matchedCount: 1 }
+      },
+    )
+    let signalMediaStarted!: () => void
+    const mediaStarted = new Promise<void>((resolve) => {
+      signalMediaStarted = resolve
+    })
+    let releaseMedia!: () => void
+    const mediaGate = new Promise<void>((resolve) => {
+      releaseMedia = resolve
+    })
+    mocks.ingestMedia.mockImplementationOnce(async () => {
+      signalMediaStarted()
+      await mediaGate
+      return [{ kind: 'camera_recording', _id: objectId(IDS.mediaAssetId) }]
+    })
+    const firstInput = payload()
+    const conflictingInput = payload({
+      eventId: 'f'.repeat(64),
+      results: { ...firstInput.results, overallScore: 81 },
+    })
+
+    const first = ingestHireEngineResult(firstInput)
+    await mediaStarted
+    expect(mocks.ingestMedia).toHaveBeenCalledOnce()
+    await expect(
+      ingestHireEngineResult(conflictingInput),
+    ).rejects.toMatchObject({ code: 'conflict', status: 409 })
+    // Only the accepted owner reached the media adapter. The conflicting
+    // request performed no R2 copy, asset stage, or immutable result write.
+    expect(mocks.ingestMedia).toHaveBeenCalledOnce()
+    expect(mocks.persistResult).not.toHaveBeenCalled()
+    releaseMedia()
+    await expect(first).resolves.toEqual({ outcome: 'processed' })
+    expect(mocks.persistResult).toHaveBeenCalledOnce()
   })
 
   it('accepts a camera-only higher revision from the same runtime session after the scorecard', async () => {
@@ -496,6 +783,10 @@ describe('isolated engine result ingestion', () => {
     expect(mocks.ingestMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         runtimeSessionId: IDS.runtimeSessionId,
+        ingestionStream: 'engine_result',
+        ingestionRevision: input.revision,
+        ingestionEventId: input.eventId,
+        ingestionDigest: input.resultDigest,
         artifacts: [MEDIA_ARTIFACT],
       }),
     )
@@ -506,7 +797,7 @@ describe('isolated engine result ingestion', () => {
     expect(mocks.ingestionCreate.mock.calls[0][0][0]).toMatchObject({
       eventId: input.eventId,
       revision: 2,
-      media: [MEDIA_ARTIFACT],
+      media: [],
       status: 'received',
     })
   })
@@ -1033,6 +1324,28 @@ describe('isolated engine result ingestion', () => {
     await expect(
       ingestHireEngineResult(input),
     ).rejects.toMatchObject<HireEngineIngestionError>({
+      code: 'digest_mismatch',
+      status: 400,
+    })
+    expect(mocks.connect).not.toHaveBeenCalled()
+    expect(mocks.ingestMedia).not.toHaveBeenCalled()
+  })
+
+  it('binds durable media completion state into the immutable result digest', async () => {
+    const input = payload({
+      mediaCompletion: {
+        contractVersion: 1,
+        camera: { status: 'pending' },
+        screen: { status: 'not_required' },
+      },
+    })
+    input.mediaCompletion = {
+      contractVersion: 1,
+      camera: { status: 'unavailable', reason: 'retry_exhausted' },
+      screen: { status: 'not_required' },
+    }
+
+    await expect(ingestHireEngineResult(input)).rejects.toMatchObject({
       code: 'digest_mismatch',
       status: 400,
     })

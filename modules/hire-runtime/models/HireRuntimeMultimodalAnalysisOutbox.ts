@@ -25,6 +25,8 @@ export interface IHireRuntimeMultimodalAnalysisOutbox extends Document {
     sizeBytes: number
     sha256: string
   }
+  /** Exact serialized bridge payload, reserved once before the first send. */
+  payloadSnapshotJson?: string
   status: 'pending' | 'published' | 'stale'
   publishLeaseToken?: string
   publishLeaseExpiresAt?: Date
@@ -77,6 +79,7 @@ const HireRuntimeMultimodalAnalysisOutboxSchema =
       },
       capturedAt: { type: Date, required: true, immutable: true },
       landmarkArtifact: { type: HireRuntimeMultimodalAnalysisArtifactSchema },
+      payloadSnapshotJson: { type: String, maxlength: 12 * 1024 * 1024 },
       status: { type: String, enum: ['pending', 'published', 'stale'], required: true },
       publishLeaseToken: { type: String, maxlength: 64 },
       publishLeaseExpiresAt: { type: Date },
@@ -89,7 +92,13 @@ const HireRuntimeMultimodalAnalysisOutboxSchema =
   )
 
 HireRuntimeMultimodalAnalysisOutboxSchema.index(
-  { workspaceId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+  {
+    workspaceId: 1,
+    roundId: 1,
+    runtimeSessionId: 1,
+    attempt: 1,
+    revision: 1,
+  },
   { unique: true },
 )
 HireRuntimeMultimodalAnalysisOutboxSchema.index(

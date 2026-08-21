@@ -14,14 +14,28 @@ import { HireApplication } from '../models/HireApplication'
 import { HireRound } from '../models/HireRound'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
 import { HireEngineIngestionEvent } from '../models/HireEngineIngestionEvent'
+import type { IHireMediaAsset } from '../models/HireMediaAsset'
 import { HirePrivacyRequest } from '../models/HirePrivacyRequest'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
-  claimHireCandidatePiiWriteFence,
   HireCandidatePiiTombstoneError,
 } from './hireCandidatePrivacyWriteFence'
-import { persistHireInterviewResult } from './evidenceService'
-import { ingestRuntimeMediaArtifacts } from './runtimeMediaIngestionService'
+import {
+  assertHireInterviewResultCompatible,
+  persistHireInterviewResult,
+} from './evidenceService'
+import {
+  completeHireRoundIngestion,
+  releaseHireRoundIngestion,
+  reserveHireRoundIngestion,
+  type HireIngestionPriorOutcome,
+} from './ingestionRevisionReservationService'
+import {
+  activateRuntimeMediaArtifacts,
+  HireRuntimeMediaStaleError,
+  ingestRuntimeMediaArtifacts,
+  quarantineRuntimeMediaAssets,
+} from './runtimeMediaIngestionService'
 
 export class HireEngineIngestionError extends Error {
   constructor(
@@ -37,6 +51,13 @@ export class HireEngineIngestionError extends Error {
 
 export type HireEngineIngestionOutcome = 'processed' | 'duplicate' | 'stale'
 
+interface PreparedResultMedia {
+  assets: IHireMediaAsset[]
+  jobId: string
+  candidateId: string
+  attemptId: string
+}
+
 function resultDigest(
   payload: Pick<
     HireEngineResultIngestion,
@@ -46,6 +67,7 @@ function resultDigest(
     | 'durationMs'
     | 'transcript'
     | 'media'
+    | 'mediaCompletion'
   >,
 ): string {
   return createHash('sha256')
@@ -57,6 +79,7 @@ function resultDigest(
         durationMs: payload.durationMs,
         transcript: payload.transcript,
         media: payload.media,
+        mediaCompletion: payload.mediaCompletion,
       }),
     )
     .digest('hex')
@@ -424,21 +447,21 @@ function buildEvidenceProjection(
 async function existingOutcome(
   payload: HireEngineResultIngestion,
   dbSession: ClientSession,
-): Promise<HireEngineIngestionOutcome | null> {
-  const eventScope = {
+): Promise<HireIngestionPriorOutcome | 'resume' | null> {
+  const exact = await HireEngineIngestionEvent.findOne({
     eventId: payload.eventId,
-    workspaceId: payload.workspaceId,
-    applicationId: payload.applicationId,
-    roundId: payload.roundId,
-  }
-  const exact = await HireEngineIngestionEvent.findOne(eventScope)
+  })
     .session(dbSession)
     .lean()
   if (exact) {
     if (
       exact.resultDigest !== payload.resultDigest ||
+      exact.workspaceId.toString() !== payload.workspaceId ||
+      exact.applicationId.toString() !== payload.applicationId ||
       exact.roundId.toString() !== payload.roundId ||
-      exact.runtimeSessionId.toString() !== payload.runtimeSessionId
+      exact.runtimeSessionId.toString() !== payload.runtimeSessionId ||
+      exact.revision !== payload.revision ||
+      exact.attempt !== payload.attempt
     ) {
       throw new HireEngineIngestionError(
         'An ingestion event id was reused with different content',
@@ -446,16 +469,20 @@ async function existingOutcome(
         409,
       )
     }
-    return exact.status === 'processed' ? 'duplicate' : null
+    return exact.status === 'processed'
+      ? exact.terminalOutcome === 'stale'
+        ? 'stale'
+        : 'duplicate'
+      : 'resume'
   }
 
   const latest = await HireEngineIngestionEvent.findOne({
     workspaceId: payload.workspaceId,
     applicationId: payload.applicationId,
     roundId: payload.roundId,
-    status: 'processed',
+    status: { $in: ['received', 'processed'] },
   })
-    .sort({ revision: -1 })
+    .sort({ attempt: -1, revision: -1, createdAt: -1 })
     .session(dbSession)
     .lean()
   if (!latest) return null
@@ -466,70 +493,86 @@ async function existingOutcome(
       409,
     )
   }
+  if (latest.attempt > payload.attempt) return 'stale'
+  if (latest.attempt < payload.attempt) {
+    return latest.status === 'received' ? 'in_progress' : null
+  }
   if (latest.revision > payload.revision) return 'stale'
   if (latest.revision === payload.revision) {
-    if (latest.resultDigest === payload.resultDigest) return 'duplicate'
+    if (latest.resultDigest === payload.resultDigest) {
+      return latest.status === 'processed'
+        ? latest.terminalOutcome === 'stale'
+          ? 'stale'
+          : 'duplicate'
+        : 'in_progress'
+    }
     throw new HireEngineIngestionError(
       'The same result revision has different content',
       'conflict',
       409,
     )
   }
+  if (latest.status === 'received') return 'in_progress'
+  return null
+}
+
+async function persistResultReservation(
+  payload: HireEngineResultIngestion,
+  dbSession: ClientSession,
+): Promise<HireIngestionPriorOutcome | null> {
+  const prior = await existingOutcome(payload, dbSession)
+  if (prior && prior !== 'resume') return prior
+  if (prior === 'resume') return null
+  await HireEngineIngestionEvent.create(
+    [
+      {
+        eventId: payload.eventId,
+        workspaceId: payload.workspaceId,
+        applicationId: payload.applicationId,
+        roundId: payload.roundId,
+        runtimeSessionId: payload.runtimeSessionId,
+        revision: payload.revision,
+        attempt: payload.attempt,
+        resultDigest: payload.resultDigest,
+        // The digest is the idempotency authority. Runtime source keys are
+        // unnecessary PII-bearing delivery metadata and are never retained.
+        media: [],
+        ...(payload.mediaCompletion
+          ? { mediaCompletion: payload.mediaCompletion }
+          : {}),
+        status: 'received',
+      },
+    ],
+    { session: dbSession },
+  )
   return null
 }
 
 async function discardResultBehindPrivacyTombstone(
   payload: HireEngineResultIngestion,
   attemptId: string,
+  reservationToken: string,
+  preparedMedia?: PreparedResultMedia,
 ): Promise<{ outcome: HireEngineIngestionOutcome }> {
   const dbSession = await mongoose.startSession()
   try {
-    let outcome: HireEngineIngestionOutcome = 'processed'
     await dbSession.withTransaction(async () => {
-      const prior = await existingOutcome(payload, dbSession)
-      if (prior) {
-        outcome = prior
-        return
+      if (preparedMedia) {
+        await quarantineRuntimeMediaAssets({
+          assets: preparedMedia.assets,
+          workspaceId: payload.workspaceId,
+          applicationId: payload.applicationId,
+          jobId: preparedMedia.jobId,
+          candidateId: preparedMedia.candidateId,
+          roundId: payload.roundId,
+          attemptId: preparedMedia.attemptId,
+          reason: 'privacy_request',
+          session: dbSession,
+        })
       }
-      await HireEngineIngestionEvent.create(
-        [
-          {
-            eventId: payload.eventId,
-            workspaceId: payload.workspaceId,
-            applicationId: payload.applicationId,
-            roundId: payload.roundId,
-            runtimeSessionId: payload.runtimeSessionId,
-            revision: payload.revision,
-            attempt: payload.attempt,
-            resultDigest: payload.resultDigest,
-            // Content and source media are deliberately not retained after a
-            // verified deletion request. The digest alone proves idempotency.
-            media: [],
-            status: 'received',
-          },
-        ],
-        { session: dbSession },
-      )
       const runtimeSessionId = new mongoose.Types.ObjectId(
         payload.runtimeSessionId,
       )
-      const linked = await HireRound.updateOne(
-        {
-          _id: payload.roundId,
-          workspaceId: payload.workspaceId,
-          applicationId: payload.applicationId,
-          $or: [{ runtimeSessionId: { $exists: false } }, { runtimeSessionId }],
-        },
-        { $set: { runtimeSessionId }, $unset: { live: 1 } },
-        { session: dbSession },
-      )
-      if (linked.matchedCount !== 1) {
-        throw new HireEngineIngestionError(
-          'Round changed while a deleted result was acknowledged',
-          'conflict',
-          409,
-        )
-      }
       await HireInterviewAttempt.updateOne(
         {
           _id: attemptId,
@@ -540,7 +583,7 @@ async function discardResultBehindPrivacyTombstone(
         { $set: { status: 'revoked' }, $unset: { live: 1 } },
         { session: dbSession },
       )
-      await HireEngineIngestionEvent.updateOne(
+      const processed = await HireEngineIngestionEvent.updateOne(
         {
           eventId: payload.eventId,
           workspaceId: payload.workspaceId,
@@ -548,11 +591,104 @@ async function discardResultBehindPrivacyTombstone(
           roundId: payload.roundId,
           status: 'received',
         },
-        { $set: { status: 'processed', processedAt: new Date() } },
+        {
+          $set: {
+            status: 'processed',
+            terminalOutcome: 'processed',
+            processedAt: new Date(),
+            media: [],
+          },
+        },
         { session: dbSession },
       )
+      if (processed.matchedCount !== 1) {
+        throw new Error('Result ingestion event changed before completion')
+      }
+      await completeHireRoundIngestion({
+        stream: 'engineResult',
+        workspaceId: payload.workspaceId,
+        applicationId: payload.applicationId,
+        roundId: payload.roundId,
+        runtimeSessionId: payload.runtimeSessionId,
+        attempt: payload.attempt,
+        revision: payload.revision,
+        eventId: payload.eventId,
+        digest: payload.resultDigest,
+        reservationToken,
+        terminalOutcome: 'processed',
+        session: dbSession,
+        set: { runtimeSessionId },
+        unset: { live: 1 },
+      })
     })
-    return { outcome }
+    return { outcome: 'processed' }
+  } finally {
+    await dbSession.endSession()
+  }
+}
+
+async function completeResultAsStale(
+  payload: HireEngineResultIngestion,
+  reservationToken: string,
+  preparedMedia?: PreparedResultMedia,
+): Promise<{ outcome: HireEngineIngestionOutcome }> {
+  const dbSession = await mongoose.startSession()
+  try {
+    await dbSession.withTransaction(async () => {
+      if (preparedMedia) {
+        await quarantineRuntimeMediaAssets({
+          assets: preparedMedia.assets,
+          workspaceId: payload.workspaceId,
+          applicationId: payload.applicationId,
+          jobId: preparedMedia.jobId,
+          candidateId: preparedMedia.candidateId,
+          roundId: payload.roundId,
+          attemptId: preparedMedia.attemptId,
+          reason: 'stale_staging',
+          session: dbSession,
+        })
+      }
+      const processed = await HireEngineIngestionEvent.updateOne(
+        {
+          eventId: payload.eventId,
+          workspaceId: payload.workspaceId,
+          applicationId: payload.applicationId,
+          roundId: payload.roundId,
+          runtimeSessionId: payload.runtimeSessionId,
+          attempt: payload.attempt,
+          revision: payload.revision,
+          resultDigest: payload.resultDigest,
+          status: 'received',
+        },
+        {
+          $set: {
+            status: 'processed',
+            terminalOutcome: 'stale',
+            processedAt: new Date(),
+            media: [],
+          },
+        },
+        { session: dbSession },
+      )
+      if (processed.matchedCount !== 1) {
+        throw new Error('Result ingestion event changed before stale completion')
+      }
+      await completeHireRoundIngestion({
+        stream: 'engineResult',
+        workspaceId: payload.workspaceId,
+        applicationId: payload.applicationId,
+        roundId: payload.roundId,
+        runtimeSessionId: payload.runtimeSessionId,
+        attempt: payload.attempt,
+        revision: payload.revision,
+        eventId: payload.eventId,
+        digest: payload.resultDigest,
+        reservationToken,
+        terminalOutcome: 'stale',
+        session: dbSession,
+      })
+    })
+    return { outcome: 'stale' }
   } finally {
     await dbSession.endSession()
   }
@@ -621,9 +757,6 @@ export async function ingestHireEngineResult(
     candidateId: application.candidateId,
     status: { $in: ['processing', 'completed'] },
   })
-  if (privacyTombstone) {
-    return discardResultBehindPrivacyTombstone(payload, attempt._id.toString())
-  }
   if (
     payload.media.some((artifact) => artifact.kind === 'screen') &&
     !supportsHireDisplayCapture(round.consentVersion)
@@ -634,8 +767,74 @@ export async function ingestHireEngineResult(
       409,
     )
   }
-  let persistedResult: Awaited<ReturnType<typeof persistHireInterviewResult>>
+  const evidenceWithoutMedia = privacyTombstone
+    ? undefined
+    : buildEvidenceProjection(payload, attempt._id.toString())
+  const rawEngineOutput = {
+    results: payload.results,
+    startedAt: payload.startedAt,
+    completedAt: payload.completedAt,
+    durationMs: payload.durationMs,
+    transcript: payload.transcript,
+  }
+  const reservationScope = {
+    stream: 'engineResult' as const,
+    workspaceId: payload.workspaceId,
+    applicationId: payload.applicationId,
+    roundId: payload.roundId,
+    runtimeSessionId: payload.runtimeSessionId,
+    attempt: payload.attempt,
+    revision: payload.revision,
+    eventId: payload.eventId,
+    digest: payload.resultDigest,
+  }
+  const reservation = await reserveHireRoundIngestion({
+    ...reservationScope,
+    allowUnboundRuntimeSession: true,
+    persistReservation: (session) =>
+      persistResultReservation(payload, session),
+  })
+  if (reservation.outcome === 'stale' || reservation.outcome === 'duplicate') {
+    return { outcome: reservation.outcome }
+  }
+  if (reservation.outcome === 'in_progress') {
+    throw new HireEngineIngestionError(
+      'This result stream already has an active ingestion reservation',
+      'conflict',
+      409,
+    )
+  }
+  if (reservation.outcome === 'conflict') {
+    throw new HireEngineIngestionError(
+      reservation.reason,
+      'conflict',
+      409,
+    )
+  }
+  if (reservation.outcome !== 'acquired') {
+    throw new Error('Unexpected result ingestion reservation outcome')
+  }
+  const reservationToken = reservation.reservationToken
+  let preparedMedia: PreparedResultMedia | undefined
+
   try {
+    if (privacyTombstone) {
+      return await discardResultBehindPrivacyTombstone(
+        payload,
+        attempt._id.toString(),
+        reservationToken,
+      )
+    }
+    // Immutable result identity is independent of copied media. Reject a
+    // higher-revision score/transcript conflict before creating any staging
+    // checkpoint or touching R2.
+    await assertHireInterviewResultCompatible({
+      workspaceId: payload.workspaceId,
+      applicationId: payload.applicationId,
+      roundId: payload.roundId,
+      attemptId: attempt._id.toString(),
+      rawEngineOutput,
+    })
     const mediaAssets = await ingestRuntimeMediaArtifacts({
       workspaceId: payload.workspaceId,
       applicationId: payload.applicationId,
@@ -644,18 +843,34 @@ export async function ingestHireEngineResult(
       roundId: payload.roundId,
       attemptId: attempt._id.toString(),
       runtimeSessionId: payload.runtimeSessionId,
+      ingestionStream: 'engine_result',
+      ingestionAttempt: payload.attempt,
+      ingestionRevision: payload.revision,
+      ingestionEventId: payload.eventId,
+      ingestionDigest: payload.resultDigest,
       completedAt: new Date(payload.completedAt),
       artifacts: payload.media,
     })
+    preparedMedia = {
+      assets: mediaAssets,
+      jobId: application.jobId.toString(),
+      candidateId: application.candidateId.toString(),
+      attemptId: attempt._id.toString(),
+    }
     const cameraAsset = mediaAssets.find(
       (asset) => asset.kind === 'camera_recording',
     )
-    const evidence = buildEvidenceProjection(
-      payload,
-      attempt._id.toString(),
-      cameraAsset?._id.toString(),
-    )
-    persistedResult = await persistHireInterviewResult({
+    const evidence = cameraAsset
+      ? buildEvidenceProjection(
+          payload,
+          attempt._id.toString(),
+          cameraAsset._id.toString(),
+        )
+      : evidenceWithoutMedia
+    if (!evidence) {
+      throw new Error('Result evidence was not prepared before ingestion')
+    }
+    const persistedResult = await persistHireInterviewResult({
       workspaceId: payload.workspaceId,
       applicationId: payload.applicationId,
       jobId: application.jobId.toString(),
@@ -664,84 +879,134 @@ export async function ingestHireEngineResult(
       attemptId: attempt._id.toString(),
       adapterVersion: 'hire-runtime-bridge-v1',
       engineContractVersion: `interview-engine:${payload.schemaVersion}`,
-      rawEngineOutput: {
-        results: payload.results,
-        startedAt: payload.startedAt,
-        completedAt: payload.completedAt,
-        durationMs: payload.durationMs,
-        transcript: payload.transcript,
-      },
+      rawEngineOutput,
       projection: evidence.projection,
       evidenceIndex: evidence.evidenceIndex,
       completedAt: new Date(payload.completedAt),
       durationMs: payload.durationMs,
     })
-  } catch (error) {
-    if (error instanceof HireCandidatePiiTombstoneError) {
-      return discardResultBehindPrivacyTombstone(
-        payload,
-        attempt._id.toString(),
-      )
-    }
-    throw error
-  }
 
-  const dbSession = await mongoose.startSession()
-  let privacyWon = false
-  let outcome: HireEngineIngestionOutcome = 'processed'
-  try {
+    const dbSession = await mongoose.startSession()
+    let privacyWon = false
     try {
-      await dbSession.withTransaction(async () => {
-        const prior = await existingOutcome(payload, dbSession)
-        if (prior) {
-          outcome = prior
-          return
-        }
-        await claimHireCandidatePiiWriteFence({
-          workspaceId: payload.workspaceId,
-          candidateId: application.candidateId,
-          session: dbSession,
-        })
-        const firstLink = !round.runtimeSessionId
-        await HireEngineIngestionEvent.create(
-          [
+      try {
+        await dbSession.withTransaction(async () => {
+          if (!preparedMedia) {
+            throw new Error('Result media was not prepared before terminalization')
+          }
+          // This claims workspace, candidate, and job in the same transaction
+          // that activates the complete batch and terminalizes the event.
+          // Job close therefore wins wholly before us or observes the final
+          // completed state after us; it cannot split media from lifecycle.
+          await activateRuntimeMediaArtifacts({
+            ...preparedMedia,
+            workspaceId: payload.workspaceId,
+            applicationId: payload.applicationId,
+            roundId: payload.roundId,
+            session: dbSession,
+          })
+          const runtimeSessionId = new mongoose.Types.ObjectId(
+            payload.runtimeSessionId,
+          )
+          const currentRound = await HireRound.findOne({
+            _id: payload.roundId,
+            workspaceId: payload.workspaceId,
+            applicationId: payload.applicationId,
+            jobId: application.jobId,
+            candidateId: application.candidateId,
+            $or: [
+              { runtimeSessionId: { $exists: false } },
+              { runtimeSessionId },
+            ],
+          })
+            .select('runtimeSessionId status revokedAt')
+            .session(dbSession)
+            .lean()
+          if (!currentRound) {
+            throw new HireRuntimeMediaStaleError(
+              'Round changed before result terminalization',
+            )
+          }
+          const firstLink = !currentRound.runtimeSessionId
+          const completedAfterRevoke = Boolean(
+            currentRound.revokedAt || currentRound.status === 'revoked',
+          )
+          const claimedAttempt = await HireInterviewAttempt.updateOne(
+            {
+              _id: attempt._id,
+              workspaceId: payload.workspaceId,
+              applicationId: payload.applicationId,
+              jobId: application.jobId,
+              candidateId: application.candidateId,
+              roundId: payload.roundId,
+              resultId: persistedResult._id,
+              status: completedAfterRevoke
+                ? { $in: ['completed', 'revoked'] }
+                : 'completed',
+            },
+            {
+              $set: {
+                resultId: persistedResult._id,
+                completedAt: new Date(payload.completedAt),
+              },
+              $unset: { live: 1 },
+            },
+            { session: dbSession },
+          )
+          if (claimedAttempt.matchedCount !== 1) {
+            throw new HireRuntimeMediaStaleError(
+              'Interview attempt changed before result terminalization',
+            )
+          }
+          const snapshot = {
+            ...payload.results,
+            sessionCompletedAt: new Date(payload.completedAt),
+            ...(completedAfterRevoke ? { completedAfterRevoke: true } : {}),
+          }
+          if (firstLink) {
+            await HireApplication.updateOne(
+              { _id: payload.applicationId, workspaceId: payload.workspaceId },
+              {
+                $push: {
+                  events: {
+                    type: 'ai_result_linked',
+                    actorName: 'System',
+                    note: completedAfterRevoke
+                      ? 'AI interview completed after revocation — results attached and flagged'
+                      : 'AI interview completed — results ingested from isolated runtime',
+                    at: new Date(),
+                  },
+                },
+              },
+              { session: dbSession },
+            )
+          }
+          const processed = await HireEngineIngestionEvent.updateOne(
             {
               eventId: payload.eventId,
               workspaceId: payload.workspaceId,
               applicationId: payload.applicationId,
               roundId: payload.roundId,
-              runtimeSessionId: payload.runtimeSessionId,
-              revision: payload.revision,
-              attempt: payload.attempt,
-              resultDigest: payload.resultDigest,
-              media: payload.media,
               status: 'received',
             },
-          ],
-          { session: dbSession },
-        )
-
-        const completedAfterRevoke = Boolean(round.revokedAt)
-        const snapshot = {
-          ...payload.results,
-          sessionCompletedAt: new Date(payload.completedAt),
-          ...(completedAfterRevoke ? { completedAfterRevoke: true } : {}),
-        }
-        const runtimeSessionId = new mongoose.Types.ObjectId(
-          payload.runtimeSessionId,
-        )
-        const updated = await HireRound.updateOne(
-          {
-            _id: payload.roundId,
-            workspaceId: payload.workspaceId,
-            applicationId: payload.applicationId,
-            $or: [
-              { runtimeSessionId: { $exists: false } },
-              { runtimeSessionId },
-            ],
-          },
-          {
-            $set: {
+            {
+              $set: {
+                status: 'processed',
+                terminalOutcome: 'processed',
+                processedAt: new Date(),
+              },
+            },
+            { session: dbSession },
+          )
+          if (processed.matchedCount !== 1) {
+            throw new Error('Result ingestion event changed before completion')
+          }
+          await completeHireRoundIngestion({
+            ...reservationScope,
+            reservationToken,
+            terminalOutcome: 'processed',
+            session: dbSession,
+            set: {
               runtimeSessionId,
               resultId: persistedResult._id,
               ...(firstLink ? { linkedAt: new Date() } : {}),
@@ -749,59 +1014,63 @@ export async function ingestHireEngineResult(
               attemptCount: payload.attempt,
               ...(completedAfterRevoke ? {} : { status: 'completed' }),
             },
-            $unset: { live: 1 },
-          },
-          { session: dbSession },
-        )
-        if (updated.matchedCount !== 1) {
-          throw new HireEngineIngestionError(
-            'Round changed while results were being ingested',
-            'conflict',
-            409,
-          )
-        }
-
-        if (firstLink) {
-          await HireApplication.updateOne(
-            { _id: payload.applicationId, workspaceId: payload.workspaceId },
-            {
-              $push: {
-                events: {
-                  type: 'ai_result_linked',
-                  actorName: 'System',
-                  note: completedAfterRevoke
-                    ? 'AI interview completed after revocation — results attached and flagged'
-                    : 'AI interview completed — results ingested from isolated runtime',
-                  at: new Date(),
-                },
-              },
-            },
-            { session: dbSession },
-          )
-        }
-        await HireEngineIngestionEvent.updateOne(
-          {
-            eventId: payload.eventId,
-            workspaceId: payload.workspaceId,
-            applicationId: payload.applicationId,
-            roundId: payload.roundId,
-            status: 'received',
-          },
-          { $set: { status: 'processed', processedAt: new Date() } },
-          { session: dbSession },
-        )
-      })
-    } catch (error) {
-      if (!(error instanceof HireCandidatePiiTombstoneError)) throw error
-      privacyWon = true
+            unset: { live: 1 },
+          })
+        })
+      } catch (error) {
+        if (!(error instanceof HireCandidatePiiTombstoneError)) throw error
+        privacyWon = true
+      }
+    } finally {
+      await dbSession.endSession()
     }
-  } finally {
-    await dbSession.endSession()
+    if (privacyWon) {
+      return await discardResultBehindPrivacyTombstone(
+        payload,
+        attempt._id.toString(),
+        reservationToken,
+        preparedMedia,
+      )
+    }
+    return { outcome: 'processed' }
+  } catch (error) {
+    if (error instanceof HireRuntimeMediaStaleError) {
+      try {
+        return await completeResultAsStale(
+          payload,
+          reservationToken,
+          preparedMedia,
+        )
+      } catch (completionError) {
+        await releaseHireRoundIngestion({
+          ...reservationScope,
+          reservationToken,
+        })
+        throw completionError
+      }
+    }
+    if (error instanceof HireCandidatePiiTombstoneError) {
+      try {
+        return await discardResultBehindPrivacyTombstone(
+          payload,
+          attempt._id.toString(),
+          reservationToken,
+          preparedMedia,
+        )
+      } catch (discardError) {
+        await releaseHireRoundIngestion({
+          ...reservationScope,
+          reservationToken,
+        })
+        throw discardError
+      }
+    }
+    await releaseHireRoundIngestion({
+      ...reservationScope,
+      reservationToken,
+    })
+    throw error
   }
-  if (privacyWon) {
-    return discardResultBehindPrivacyTombstone(payload, attempt._id.toString())
-  }
-  return { outcome }
 }
 
 export const __resultIngestion = { resultDigest, buildEvidenceProjection }

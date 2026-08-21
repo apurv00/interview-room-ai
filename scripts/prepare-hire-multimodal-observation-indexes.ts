@@ -75,8 +75,8 @@ interface IndexCollection {
 export const HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS: readonly HireMultimodalObservationIndexDefinition[] = [
   {
     target: 'control-analyses',
-    name: 'workspaceId_1_applicationId_1_roundId_1_runtimeSessionId_1_revision_1',
-    key: { workspaceId: 1, applicationId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+    name: 'workspaceId_1_applicationId_1_roundId_1_attemptId_1_runtimeSessionId_1_revision_1',
+    key: { workspaceId: 1, applicationId: 1, roundId: 1, attemptId: 1, runtimeSessionId: 1, revision: 1 },
     unique: true,
     purpose: 'one immutable full-analysis revision per isolated runtime session',
   },
@@ -117,8 +117,8 @@ export const HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS: readonly HireMultimo
   },
   {
     target: 'control-analysis-ingestion-events',
-    name: 'workspaceId_1_roundId_1_runtimeSessionId_1_revision_1',
-    key: { workspaceId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+    name: 'workspaceId_1_roundId_1_runtimeSessionId_1_attempt_1_revision_1',
+    key: { workspaceId: 1, roundId: 1, runtimeSessionId: 1, attempt: 1, revision: 1 },
     unique: true,
     purpose: 'one accepted full-analysis revision for each runtime coordinate',
   },
@@ -208,8 +208,8 @@ export const HIRE_MULTIMODAL_OBSERVATION_INDEX_DEFINITIONS: readonly HireMultimo
   },
   {
     target: 'runtime-analysis-outbox',
-    name: 'workspaceId_1_roundId_1_runtimeSessionId_1_revision_1',
-    key: { workspaceId: 1, roundId: 1, runtimeSessionId: 1, revision: 1 },
+    name: 'workspaceId_1_roundId_1_runtimeSessionId_1_attempt_1_revision_1',
+    key: { workspaceId: 1, roundId: 1, runtimeSessionId: 1, attempt: 1, revision: 1 },
     unique: true,
     purpose: 'one durable runtime publish outbox row per full-analysis revision',
   },

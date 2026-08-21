@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import {
   canonicalBridgeJson,
   HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
+  HIRE_ENGINE_RESULT_MAX_BODY_BYTES,
   HireEngineResultSchema,
   HireEngineResultIngestionSchema,
   type HireEngineResult,
@@ -284,6 +285,83 @@ function publicationStateFilter(binding: IHireRuntimeBinding): Record<string, un
   }
 }
 
+function parseResultPayloadSnapshot(
+  binding: IHireRuntimeBinding,
+  revision: number,
+  serialized: string,
+): HireEngineResultIngestion {
+  const payload = HireEngineResultIngestionSchema.parse(JSON.parse(serialized))
+  if (
+    payload.workspaceId !== binding.workspaceId.toString() ||
+    payload.applicationId !== binding.applicationId.toString() ||
+    payload.roundId !== binding.roundId.toString() ||
+    payload.runtimeSessionId !== binding.runtimeSessionId?.toString() ||
+    payload.attempt !== Math.max(1, binding.attemptCount) ||
+    payload.revision !== revision
+  ) {
+    throw new Error('Runtime result payload snapshot does not match its binding')
+  }
+  return payload
+}
+
+async function reserveResultPayloadSnapshot(input: {
+  binding: IHireRuntimeBinding
+  revision: number
+  expectedPublicationState: Record<string, unknown>
+  payload: HireEngineResultIngestion
+}): Promise<HireEngineResultIngestion> {
+  const normalized = HireEngineResultIngestionSchema.parse(input.payload)
+  const serialized = JSON.stringify(normalized)
+  if (Buffer.byteLength(serialized, 'utf8') > HIRE_ENGINE_RESULT_MAX_BODY_BYTES) {
+    throw new Error('Runtime result payload exceeds the durable snapshot limit')
+  }
+  const staged = await HireRuntimeBinding.updateOne(
+    {
+      _id: input.binding._id,
+      workspaceId: input.binding.workspaceId,
+      runtimeSessionId: input.binding.runtimeSessionId,
+      ...input.expectedPublicationState,
+      purgePersonalData: { $ne: true },
+      pendingResultPayloadJson: { $exists: false },
+    },
+    {
+      // The exact media inventory and the exact outgoing payload become
+      // authoritative in one CAS. Concurrent workers may build candidates,
+      // but only this winner can define the revision that is sent.
+      $set: {
+        pendingMediaManifest: normalized.media,
+        pendingResultPayloadJson: serialized,
+      },
+    },
+  )
+  if (staged.matchedCount === 1) {
+    return parseResultPayloadSnapshot(
+      input.binding,
+      input.revision,
+      serialized,
+    )
+  }
+
+  const winner = await HireRuntimeBinding.findOne({
+    _id: input.binding._id,
+    workspaceId: input.binding.workspaceId,
+    runtimeSessionId: input.binding.runtimeSessionId,
+    ...input.expectedPublicationState,
+    purgePersonalData: { $ne: true },
+    pendingResultPayloadJson: { $exists: true },
+  })
+    .select('pendingResultPayloadJson')
+    .lean() as Pick<IHireRuntimeBinding, 'pendingResultPayloadJson'> | null
+  if (!winner?.pendingResultPayloadJson) {
+    throw new Error('Runtime result binding changed before payload reservation')
+  }
+  return parseResultPayloadSnapshot(
+    input.binding,
+    input.revision,
+    winner.pendingResultPayloadJson,
+  )
+}
+
 async function scheduleCameraMediaCheck(
   binding: IHireRuntimeBinding,
   now = new Date(),
@@ -371,128 +449,128 @@ async function publishRuntimeBindingResult(
   // this horizon, so it cannot acknowledge while a stale cron row is active.
   await reserveRuntimePublishDrain(binding)
 
-  const session = (await InterviewSession.findOne({
-    _id: binding.runtimeSessionId,
-    userId: binding.principalId,
-    organizationId: binding.workspaceId,
-    status: 'completed',
-  })
-    .select(
-      '_id status feedback evaluations answeredCount plannedQuestionCount endReason startedAt completedAt durationActualSeconds transcript recordingR2Key recordingSizeBytes screenRecordingR2Key screenRecordingSizeBytes audioRecordingR2Key audioRecordingSizeBytes updatedAt',
-    )
-    .lean()) as RuntimeSessionSnapshot | null
-  if (!session) {
-    await markPublishChecked(binding)
-    return 'skipped'
-  }
-
-  const results = buildRuntimeResult(session)
-  const timeline = buildRuntimeTimeline(session)
-  // The control result is immutable and evidence-linked. Do not publish a
-  // provisional scorecard while engine feedback is still being generated;
-  // the scheduled publisher retries until the authoritative result exists.
-  if (results.pending) {
-    await markPublishChecked(binding)
-    return 'skipped'
-  }
-
-  let media = persistedMedia(binding)
-  if (media) assertMediaConsent(binding, media)
-  if (
-    lateReplay &&
-    media &&
-    !media.every(
-      (artifact) =>
-        (artifact.kind === 'recording' &&
-          binding.cameraMediaStatus === 'pending') ||
-        (artifact.kind === 'screen' && binding.screenMediaStatus === 'pending'),
-    )
-  ) {
-    throw new Error('Late replay publication contains an unexpected artifact')
-  }
-  if (!media) {
-    media = await buildRuntimeMediaManifest({
-      principalId: binding.principalId.toString(),
-      runtimeSessionId: session._id.toString(),
-      ...(!lateReplay || binding.cameraMediaStatus === 'pending'
-        ? {
-            recordingR2Key: session.recordingR2Key,
-            recordingSizeBytes: session.recordingSizeBytes,
-          }
-        : {}),
-      ...(expectsScreenRecording(binding) &&
-      (!lateReplay || binding.screenMediaStatus === 'pending')
-        ? {
-            screenRecordingR2Key: session.screenRecordingR2Key,
-            screenRecordingSizeBytes: session.screenRecordingSizeBytes,
-          }
-        : {}),
-      // Audio may have been copied and its isolated source object deleted by
-      // revision 1. Later revisions are strictly for replay objects that were
-      // not present when an earlier revision was built.
-      ...(lateReplay
-        ? {}
-        : {
-            audioRecordingR2Key: session.audioRecordingR2Key,
-            audioRecordingSizeBytes: session.audioRecordingSizeBytes,
-          }),
+  let payload = binding.pendingResultPayloadJson
+    ? parseResultPayloadSnapshot(
+        binding,
+        revision,
+        binding.pendingResultPayloadJson,
+      )
+    : null
+  if (!payload) {
+    const session = (await InterviewSession.findOne({
+      _id: binding.runtimeSessionId,
+      userId: binding.principalId,
+      organizationId: binding.workspaceId,
+      status: 'completed',
     })
-    assertMediaConsent(binding, media)
-    if (lateReplay && media.length === 0) {
-      await scheduleCameraMediaCheck(binding)
+      .select(
+        '_id status feedback evaluations answeredCount plannedQuestionCount endReason startedAt completedAt durationActualSeconds transcript recordingR2Key recordingSizeBytes screenRecordingR2Key screenRecordingSizeBytes audioRecordingR2Key audioRecordingSizeBytes updatedAt',
+      )
+      .lean()) as RuntimeSessionSnapshot | null
+    if (!session) {
+      await markPublishChecked(binding)
       return 'skipped'
     }
-    // Persist even an empty revision-1 manifest before publishing. If the
-    // binding update or source deletion later fails, a replay upload that
-    // finishes in that gap must not mutate/reuse the already-acknowledged
-    // revision-1 digest on retry.
-    const staged = await HireRuntimeBinding.updateOne(
-        {
-          _id: binding._id,
-          workspaceId: binding.workspaceId,
-          runtimeSessionId: binding.runtimeSessionId,
-        ...expectedPublicationState,
-        purgePersonalData: { $ne: true },
-      },
-      { $set: { pendingMediaManifest: media } },
-    )
-    if (staged.matchedCount !== 1) {
-      throw new Error('Runtime result binding changed before media staging')
+
+    const results = buildRuntimeResult(session)
+    const timeline = buildRuntimeTimeline(session)
+    // The control result is immutable and evidence-linked. Do not publish a
+    // provisional scorecard while engine feedback is still being generated;
+    // the scheduled publisher retries until the authoritative result exists.
+    if (results.pending) {
+      await markPublishChecked(binding)
+      return 'skipped'
     }
+
+    let media = persistedMedia(binding)
+    if (media) assertMediaConsent(binding, media)
+    if (
+      lateReplay &&
+      media &&
+      !media.every(
+        (artifact) =>
+          (artifact.kind === 'recording' &&
+            binding.cameraMediaStatus === 'pending') ||
+          (artifact.kind === 'screen' && binding.screenMediaStatus === 'pending'),
+      )
+    ) {
+      throw new Error('Late replay publication contains an unexpected artifact')
+    }
+    if (!media) {
+      media = await buildRuntimeMediaManifest({
+        principalId: binding.principalId.toString(),
+        runtimeSessionId: session._id.toString(),
+        ...(!lateReplay || binding.cameraMediaStatus === 'pending'
+          ? {
+              recordingR2Key: session.recordingR2Key,
+              recordingSizeBytes: session.recordingSizeBytes,
+            }
+          : {}),
+        ...(expectsScreenRecording(binding) &&
+        (!lateReplay || binding.screenMediaStatus === 'pending')
+          ? {
+              screenRecordingR2Key: session.screenRecordingR2Key,
+              screenRecordingSizeBytes: session.screenRecordingSizeBytes,
+            }
+          : {}),
+        // Audio may have been copied and its isolated source object deleted by
+        // revision 1. Later revisions are strictly for replay objects that were
+        // not present when an earlier revision was built.
+        ...(lateReplay
+          ? {}
+          : {
+              audioRecordingR2Key: session.audioRecordingR2Key,
+              audioRecordingSizeBytes: session.audioRecordingSizeBytes,
+            }),
+      })
+      assertMediaConsent(binding, media)
+      if (lateReplay && media.length === 0) {
+        await scheduleCameraMediaCheck(binding)
+        return 'skipped'
+      }
+    }
+
+    const completedAt = session.completedAt ?? session.updatedAt ?? new Date()
+    const digest = sha256(canonicalBridgeJson({
+      results,
+      startedAt: timeline.startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      durationMs: timeline.durationMs,
+      transcript: timeline.transcript,
+      media,
+    }))
+    const eventId = sha256(
+      `${binding.roundId.toString()}:${session._id.toString()}:${Math.max(1, binding.attemptCount)}:${revision}:${digest}`,
+    )
+    payload = await reserveResultPayloadSnapshot({
+      binding,
+      revision,
+      expectedPublicationState,
+      payload: {
+        schemaVersion: HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
+        eventId,
+        workspaceId: binding.workspaceId.toString(),
+        applicationId: binding.applicationId.toString(),
+        roundId: binding.roundId.toString(),
+        runtimeSessionId: session._id.toString(),
+        attempt: Math.max(1, binding.attemptCount),
+        revision,
+        status: 'completed',
+        startedAt: timeline.startedAt.toISOString(),
+        completedAt: completedAt.toISOString(),
+        durationMs: timeline.durationMs,
+        resultDigest: digest,
+        results,
+        transcript: timeline.transcript,
+        // Media transfer is a separate checksum-verified bridge operation.
+        // Never send raw object URLs or candidate identity through this contract.
+        media,
+      },
+    })
   }
 
-  const completedAt = session.completedAt ?? session.updatedAt ?? new Date()
-  const digest = sha256(canonicalBridgeJson({
-    results,
-    startedAt: timeline.startedAt.toISOString(),
-    completedAt: completedAt.toISOString(),
-    durationMs: timeline.durationMs,
-    transcript: timeline.transcript,
-    media,
-  }))
-  const eventId = sha256(
-    `${binding.roundId.toString()}:${session._id.toString()}:${revision}:${digest}`,
-  )
-  const payload: HireEngineResultIngestion = {
-    schemaVersion: HIRE_ENGINE_BRIDGE_SCHEMA_VERSION,
-    eventId,
-    workspaceId: binding.workspaceId.toString(),
-    applicationId: binding.applicationId.toString(),
-    roundId: binding.roundId.toString(),
-    runtimeSessionId: session._id.toString(),
-    attempt: Math.max(1, binding.attemptCount),
-    revision,
-    status: 'completed',
-    startedAt: timeline.startedAt.toISOString(),
-    completedAt: completedAt.toISOString(),
-    durationMs: timeline.durationMs,
-    resultDigest: digest,
-    results,
-    transcript: timeline.transcript,
-    // Media transfer is a separate checksum-verified bridge operation.
-    // Never send raw object URLs or candidate identity through this result contract.
-    media,
-  }
+  const media = payload.media
+  const digest = payload.resultDigest
 
   // Control acknowledges only after checksum-verified copying and durable
   // result ingestion. Runtime source deletion is therefore safe on all valid
@@ -505,7 +583,7 @@ async function publishRuntimeBindingResult(
   await publishResultToControl(payload)
   await deleteRuntimeMediaManifest({
     principalId: binding.principalId.toString(),
-    runtimeSessionId: session._id.toString(),
+    runtimeSessionId: payload.runtimeSessionId,
     media,
   })
   const now = new Date()
@@ -524,6 +602,7 @@ async function publishRuntimeBindingResult(
       runtimeSessionId: binding.runtimeSessionId,
       ...expectedPublicationState,
       purgePersonalData: { $ne: true },
+      pendingResultPayloadJson: JSON.stringify(payload),
     },
     {
       $set: {
@@ -561,6 +640,7 @@ async function publishRuntimeBindingResult(
       },
       $unset: {
         pendingMediaManifest: 1,
+        pendingResultPayloadJson: 1,
         publishFailureCode: 1,
         ...(!replayStillPending ? { publishRetryAt: 1 } : {}),
       },

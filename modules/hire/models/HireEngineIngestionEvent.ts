@@ -1,4 +1,5 @@
 import mongoose, { Document, Model, Schema } from 'mongoose'
+import type { HireEngineResultIngestion } from '@shared/contracts/hireEngineBridge'
 
 export type HireEngineIngestionEventStatus = 'received' | 'processed' | 'conflict'
 
@@ -12,7 +13,9 @@ export interface IHireEngineIngestionEvent extends Document {
   attempt: number
   resultDigest: string
   media: Array<Record<string, unknown>>
+  mediaCompletion?: HireEngineResultIngestion['mediaCompletion']
   status: HireEngineIngestionEventStatus
+  terminalOutcome?: 'processed' | 'stale'
   conflictReason?: string
   processedAt?: Date
   createdAt: Date
@@ -41,12 +44,14 @@ const HireEngineIngestionEventSchema = new Schema<IHireEngineIngestionEvent>(
       match: /^[a-f0-9]{64}$/,
     },
     media: { type: Schema.Types.Mixed, required: true, default: [] },
+    mediaCompletion: { type: Schema.Types.Mixed },
     status: {
       type: String,
       enum: ['received', 'processed', 'conflict'],
       required: true,
       default: 'received',
     },
+    terminalOutcome: { type: String, enum: ['processed', 'stale'] },
     conflictReason: { type: String, maxlength: 1_000 },
     processedAt: { type: Date },
   },
@@ -57,7 +62,7 @@ HireEngineIngestionEventSchema.index(
   { workspaceId: 1, applicationId: 1, roundId: 1, revision: -1 },
 )
 HireEngineIngestionEventSchema.index(
-  { roundId: 1, runtimeSessionId: 1, revision: 1 },
+  { roundId: 1, runtimeSessionId: 1, attempt: 1, revision: 1 },
   { unique: true },
 )
 
