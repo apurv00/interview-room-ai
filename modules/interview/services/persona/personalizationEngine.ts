@@ -1,5 +1,5 @@
 import { connectDB } from '@shared/db/connection'
-import { User, InterviewDomain, InterviewDepth, InterviewerPersona } from '@shared/db/models'
+import { User, InterviewerPersona } from '@shared/db/models'
 import { isFeatureEnabled } from '@shared/featureFlags'
 import {
   getUserCompetencySummary,

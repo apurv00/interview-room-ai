@@ -242,11 +242,6 @@ describe('checkApplyLink classifier', () => {
     expect(r.shouldClose).toBe(false)
   })
 
-  it('Codex #543 r4: dead-link closes of unpinned rows enter the 7-day purge lifecycle', async () => {
-    // covered in the handler suite below via the purgeAt assertion
-    expect(true).toBe(true)
-  })
-
   it('a stalled DNS lookup is bounded and never reaches the connector', async () => {
     const pinnedRequest = vi.fn()
     const hangingResolve = () => new Promise<never>(() => {}) // never settles

@@ -5,7 +5,7 @@ import { authOptions } from '@shared/auth/authOptions'
 import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { canViewSession } from '@shared/auth/permissions'
-import { AppError, NotFoundError, ForbiddenError } from '@shared/errors'
+import { AppError } from '@shared/errors'
 import { logger } from '@shared/logger'
 import {
   activeJobsAccountIds,

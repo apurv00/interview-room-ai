@@ -141,7 +141,6 @@ export async function generateMonthlyPlan(
 
     for (let day = 1; day <= PLAN_DURATION_DAYS; day++) {
       const dayDate = new Date(startDate.getTime() + (day - 1) * 24 * 60 * 60 * 1000)
-      const phaseDef = PHASE_DEFINITIONS[currentPhase]
       const tasks: PracticeTask[] = []
 
       // Force Review phase for last 3 days

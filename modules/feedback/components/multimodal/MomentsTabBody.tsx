@@ -224,7 +224,7 @@ export default function MomentsTabBody({
           {moments.length} {moments.length === 1 ? 'moment' : 'moments'}: {signalBreakdown}
         </p>
       )}
-      {enriched.map(({ moment, questionIdx, questionLabel, stats, excerpt, fillers }, i) => {
+      {enriched.map(({ moment, questionLabel, stats, excerpt, fillers }, i) => {
         const kind = timelineTypeToKind(moment.type)
         const c = KIND_STYLES[kind]
         const isSelected = i === selectedIdx

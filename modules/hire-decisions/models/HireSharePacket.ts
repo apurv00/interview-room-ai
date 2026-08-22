@@ -1,7 +1,6 @@
 import mongoose, { Document, Model, Schema } from 'mongoose'
 import {
   HIRE_DECISION_DIMENSIONS,
-  HIRE_EXTERNAL_VERDICT_RECOMMENDATIONS,
   HIRE_SHARE_PACKET_SECTIONS,
   type HireSharePacketSection,
   type HireSharePacketSnapshot,

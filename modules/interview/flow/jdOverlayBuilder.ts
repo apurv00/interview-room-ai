@@ -1,4 +1,4 @@
-import type { JDOverlay, JDSlotAnnotation, JDSlotInsertion, TopicSlot, ResolvedSlot } from './types'
+import type { JDOverlay, JDSlotAnnotation, JDSlotInsertion } from './types'
 import type { IParsedJobDescription } from '@shared/types'
 import { logger } from '@shared/logger'
 

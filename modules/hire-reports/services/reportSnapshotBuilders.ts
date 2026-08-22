@@ -14,7 +14,6 @@ import {
   type HirePipelineStatusReportSnapshot,
   type HirePipelineStatusReportSnapshotInput,
   type HireReportDepartmentSnapshot,
-  type HireReportAgingBucket,
   type HireReportAgingCount,
   type HireReportBlockerCount,
   type HireReportBlockerKind,

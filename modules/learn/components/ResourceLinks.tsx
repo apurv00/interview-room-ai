@@ -5,17 +5,11 @@ import Link from 'next/link'
 import {
   RESOURCES,
   getResourcesByCategory,
-  getPersonalizedResources,
   calculateRelevance,
   type UserProfile,
   type Resource,
 } from '@learn/lib/resources'
 import { useOnboardingProfile } from '@shared/hooks/useOnboardingProfile'
-
-const COLUMNS = [
-  { key: 'questions' as const, label: 'Interview Questions' },
-  { key: 'tips' as const, label: 'Tips & Frameworks' },
-] as const
 
 export default function ResourceLinks() {
   // UAT-014: setup page mounts InterviewSetupForm + ResourceLinks; both

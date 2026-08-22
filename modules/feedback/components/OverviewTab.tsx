@@ -52,7 +52,7 @@ interface OverviewTabProps {
 
 export default function OverviewTab({ data, feedback, sessionId, peerData, peerLoading, currentScore, currentScores, domain, parentSessionId, onQuestionClick, maxQuestionIndex, onAccountUnavailable, confidenceProgression, perQuestionConfidence }: OverviewTabProps) {
   const { dimensions, red_flags, top_3_improvements } = feedback
-  const { answer_quality, communication } = dimensions
+  const { communication } = dimensions
   const engagementSignals = dimensions.engagement_signals || null
 
   // Compute evaluation data for charts. Excludes status='failed' rows so the

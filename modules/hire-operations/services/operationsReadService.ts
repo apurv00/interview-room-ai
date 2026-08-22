@@ -31,7 +31,6 @@ import type {
   HireOperationsJobPerformance,
   HireOperationsJobsHealth,
   HireOperationsSmallSampleCandidate,
-  HireOperationsScoreBucket,
   HireOperationsScorecardCompletion,
   HireOperationsScoreDistribution,
   HireOperationsStageCounts,

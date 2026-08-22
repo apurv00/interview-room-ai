@@ -7,7 +7,6 @@ import { SessionSummary } from '@shared/db/models/SessionSummary'
 import { XpEvent } from '@shared/db/models/XpEvent'
 import { UserBadge } from '@shared/db/models/UserBadge'
 import type { SavedResumeLegacyPayload } from '@shared/db/models/SavedResume'
-import { logger } from '@shared/logger'
 import {
   isAnswerScoringReceipt,
   isModelExecutionProvenance,

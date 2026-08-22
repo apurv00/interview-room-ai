@@ -1,5 +1,5 @@
 import type { ExperienceLevel, Duration } from '@shared/types'
-import type { FlowTemplate, ResolvedFlow, ResolvedSlot, JDOverlay } from './types'
+import type { ResolvedFlow, ResolvedSlot, JDOverlay } from './types'
 import { makeTemplateKey } from './types'
 import { getQuestionCount } from '@interview/config/interviewConfig'
 import { TEMPLATE_REGISTRY } from './templates'

@@ -2564,7 +2564,6 @@ export function useInterview({
         checkAbort()
 
         // Present the problem
-        const requirementsList = problem.requirements.map((r: string) => `• ${r}`).join('\n')
         const problemText = `Here's your challenge: "${problem.title}". Take a look at the full description and requirements on the left panel. Use the component palette to build your architecture — drag components onto the canvas and use Connect mode to draw relationships between them. Click Submit when you're ready for my review.`
         transitionTo('ASK_QUESTION')
         questionIndexRef.current = 1
