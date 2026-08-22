@@ -435,7 +435,6 @@ export const POST = composeApiRoute<GenerateQuestionBody>({
           domain: config.role,
           interviewType,
           experience: config.experience,
-          jobDescription: config.jobDescription,
           resumeText: config.resumeText,
         })
         personalizationBlock = `\n\n${briefToPromptContext(brief)}`

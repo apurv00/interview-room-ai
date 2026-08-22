@@ -359,13 +359,6 @@ function nonEmpty(value: unknown, max: number): value is string {
   )
 }
 
-function exactOptional<T>(
-  left: T | undefined,
-  right: T | undefined,
-): boolean {
-  return left === right
-}
-
 function validPeriodTuple(
   subscription: Readonly<ProjectionSubscriptionEvidence>,
 ): boolean {

@@ -176,6 +176,29 @@ function containsUnsanitizedIdentifier(text: string): boolean {
   return RAW_EMAIL.test(text) || RAW_URL.test(text) || RAW_PHONE.test(text) || RAW_DATABASE_ID.test(text)
 }
 
+const SYNTHETIC_VALID_EVIDENCE_FIXTURE = {
+  schemaVersion: EVIDENCE_FIXTURE_SCHEMA_VERSION,
+  id: 'synthetic-valid-case',
+  segment: 'fresher',
+  domain: 'backend',
+  challenge: 'ordinary',
+  contextProfile: 'ordinary',
+  provenance: {
+    origin: 'founder-session-consented',
+    sourceCaseId: '00000000-0000-4000-8000-000000000001',
+    manuallyRedacted: true,
+    consentRecordHeldOffRepo: true,
+    labeledBy: 'founder',
+  },
+  answers: [{
+    index: 0,
+    question: 'How did you make a production change safer?',
+    answer: 'I added a transaction boundary, exercised the race, and monitored the rollout.',
+  }],
+  mustHaves: [{ id: 'safe-delivery', requirement: 'Demonstrates safe production delivery' }],
+  labels: [{ answerIndex: 0, requirementId: 'safe-delivery', strength: 'strong' }],
+} as const
+
 describe('golden set shape (CI guard for the env-gated live eval)', () => {
   const fixtures = goldenSet as Array<z.infer<typeof FixtureSchema>>
 
@@ -210,6 +233,46 @@ describe('golden set shape (CI guard for the env-gated live eval)', () => {
 describe('evidence golden set shape (CI guard for the PR-R2 calibration gate)', () => {
   const fixtures = evidenceGoldenSet as unknown[]
 
+  it('accepts a complete synthetic fixture while the release corpus is closed', () => {
+    expect(EvidenceFixtureSchema.safeParse(SYNTHETIC_VALID_EVIDENCE_FIXTURE).success).toBe(true)
+  })
+
+  it('rejects synthetic fixtures with incomplete or unsafe label contracts', () => {
+    const unknownAnswer = {
+      ...SYNTHETIC_VALID_EVIDENCE_FIXTURE,
+      labels: [{ answerIndex: 1, requirementId: 'safe-delivery', strength: 'strong' as const }],
+    }
+    const challengeWithoutNone = {
+      ...SYNTHETIC_VALID_EVIDENCE_FIXTURE,
+      challenge: 'prompt-injection' as const,
+    }
+    const unexpectedField = {
+      ...SYNTHETIC_VALID_EVIDENCE_FIXTURE,
+      rawCandidateEmail: 'must-not-be-accepted',
+    }
+
+    for (const fixture of [unknownAnswer, challengeWithoutNone, unexpectedField]) {
+      expect(EvidenceFixtureSchema.safeParse(fixture).success).toBe(false)
+    }
+  })
+
+  it.each([
+    'candidate@example.com',
+    'https://example.com/private/session',
+    '+1 (415) 555-2671',
+    '507f1f77bcf86cd799439011',
+  ])('detects an unsanitized identifier in synthetic candidate text: %s', (rawIdentifier) => {
+    expect(containsUnsanitizedIdentifier(`Candidate detail: ${rawIdentifier}`)).toBe(true)
+  })
+
+  it('accepts explicitly redacted synthetic candidate text', () => {
+    expect(
+      containsUnsanitizedIdentifier(
+        'Candidate contact, profile link, phone, and database identifier were manually redacted.',
+      ),
+    ).toBe(false)
+  })
+
   it('keeps v1 labels to one non-none evidence depth per answer', () => {
     expect(hasMixedEvidenceDepth([{ answerIndex: 0, strength: 'strong' }, { answerIndex: 0, strength: 'partial' }])).toBe(true)
     expect(hasMixedEvidenceDepth([{ answerIndex: 0, strength: 'strong' }, { answerIndex: 0, strength: 'none' }])).toBe(false)
@@ -217,7 +280,12 @@ describe('evidence golden set shape (CI guard for the PR-R2 calibration gate)', 
 
   it('is exactly empty while the gate is closed, or is a complete release-gate corpus', () => {
     if (fixtures.length === 0) {
-      expect(fixtures).toEqual([])
+      const gateState = {
+        state: 'closed',
+        cases: fixtures.length,
+        labeledPairs: 0,
+      }
+      expect(gateState).toEqual({ state: 'closed', cases: 0, labeledPairs: 0 })
       return
     }
 

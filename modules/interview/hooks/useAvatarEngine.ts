@@ -54,8 +54,7 @@ export interface UseAvatarEngineReturn {
 }
 
 export function useAvatarEngine(
-  emotion: AvatarEmotion,
-  isTalking: boolean
+  emotion: AvatarEmotion
 ): UseAvatarEngineReturn {
   const [state, setState] = useState<AvatarEngineState>(DEFAULT_STATE)
 

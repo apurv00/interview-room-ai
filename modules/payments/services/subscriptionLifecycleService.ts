@@ -1,4 +1,4 @@
-import mongoose, { type ClientSession } from 'mongoose'
+import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models/User'
 import { CURRENT_PLAN_VOCABULARY_VERSION } from '@shared/services/planConfig'

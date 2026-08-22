@@ -9,7 +9,15 @@ import {
 
 const uri = process.env.HIRE_INGESTION_REPLICA_SET_TEST_URI
 const database = process.env.HIRE_INGESTION_REPLICA_SET_TEST_DATABASE
-const replicaSuite = describe.skipIf(!uri || !database)
+const enabled = process.env.HIRE_INGESTION_REPLICA_SET_TEST === '1'
+
+if (enabled && (!uri || !database)) {
+  throw new Error(
+    'HIRE_INGESTION_REPLICA_SET_TEST_URI and HIRE_INGESTION_REPLICA_SET_TEST_DATABASE are required when the replica-set gate is enabled',
+  )
+}
+
+const replicaSuite = describe.skipIf(!enabled)
 
 replicaSuite('Hire ingestion reservation on a real replica set', () => {
   const ids = {

@@ -86,15 +86,6 @@ export interface SessionData {
    * seconds-since-session-start. See computeSessionT0 for the fallback chain.
    */
   sessionT0: number
-  /**
-   * Camera webm key — present for normal sessions when replay upload
-   * finishes. Analysis does not require it; live words / transcript are
-   * preferred so large replay uploads cannot block feedback.
-   */
-  recordingR2Key?: string
-  /** Optional audio-only key. Kept for legacy/transcription fallback, but
-   * analysis can also run from live Deepgram words or the stored transcript. */
-  audioRecordingR2Key?: string
   facialLandmarksR2Key?: string
   /** Deepgram-captured words from the live interview with audio-timeline
    * relative timestamps. When present, the pipeline skips Whisper entirely
@@ -207,8 +198,6 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
   return {
     sessionId,
     sessionT0,
-    recordingR2Key: session.recordingR2Key,
-    audioRecordingR2Key: session.audioRecordingR2Key,
     facialLandmarksR2Key: session.facialLandmarksR2Key,
     liveTranscriptWords,
     transcript,
@@ -229,9 +218,7 @@ export async function stepFetchSession(sessionId: string): Promise<SessionData> 
  *      Whisper call when running on a constrained function timeout.
  */
 export async function stepTranscribeAndDownload(
-  recordingR2Key: string | undefined,
   facialLandmarksR2Key?: string,
-  audioRecordingR2Key?: string,
   liveTranscriptWords?: LiveTranscriptWord[],
   sessionTranscript?: Array<{ speaker: string; text: string; timestamp: number }>,
   sessionT0: number = 0,
@@ -574,9 +561,7 @@ export async function runMultimodalPipeline(
   try {
     const session = await stepFetchSession(sessionId)
     const { whisper, facialFrames } = await stepTranscribeAndDownload(
-      session.recordingR2Key,
       session.facialLandmarksR2Key,
-      session.audioRecordingR2Key,
       session.liveTranscriptWords,
       session.transcript,
       session.sessionT0,

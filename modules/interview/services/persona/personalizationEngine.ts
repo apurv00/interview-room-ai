@@ -49,7 +49,6 @@ interface SessionBriefInput {
   domain: string
   interviewType: string
   experience: string
-  jobDescription?: string
   resumeText?: string
   persona?: string
   parsedJobDescription?: IParsedJobDescription
@@ -93,7 +92,7 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
     const recommendedDifficulty = determineDifficulty(experience, competencySummary, recentSummaries)
 
     // Focus competencies: weakest ones that need work
-    const focusCompetencies = determineFocusCompetencies(competencySummary, weaknesses, domain)
+    const focusCompetencies = determineFocusCompetencies(competencySummary, weaknesses)
 
     // Topics to avoid repeating
     const avoidRepeatingTopics = recentSummaries
@@ -114,7 +113,7 @@ export async function generateSessionBrief(input: SessionBriefInput): Promise<Se
     const interviewerBehavior = determineInterviewerBehavior(weaknesses, competencySummary, profileRecord)
 
     // Build context blocks
-    const profileContext = buildProfileContext(profileRecord, input)
+    const profileContext = buildProfileContext(profileRecord)
     const competencyContext = buildCompetencyContext(competencySummary)
 
     // Persona context
@@ -309,8 +308,7 @@ function determineDifficulty(
 
 function determineFocusCompetencies(
   competencySummary: Awaited<ReturnType<typeof getUserCompetencySummary>>,
-  weaknesses: Awaited<ReturnType<typeof getUserWeaknesses>>,
-  domain: string
+  weaknesses: Awaited<ReturnType<typeof getUserWeaknesses>>
 ): string[] {
   const focus: string[] = []
 
@@ -363,10 +361,7 @@ function determineInterviewerBehavior(
   return behaviors.join(', ') || 'balanced'
 }
 
-function buildProfileContext(
-  profile: Record<string, unknown> | null,
-  input: SessionBriefInput
-): string {
+function buildProfileContext(profile: Record<string, unknown> | null): string {
   if (!profile) return ''
 
   const parts: string[] = []

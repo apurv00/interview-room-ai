@@ -7,8 +7,8 @@ import type { ResumeData } from '../../validators/resume'
  * Complements paginationLineSnap (line bisection) with box-level header gap checks.
  */
 const ENABLED = process.env.RESUME_PDF_E2E === '1'
+const SUBPIXEL_TOLERANCE_PX = 0.5
 
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports */
 let browser: any = null
 
 async function launchBrowser() {
@@ -149,7 +149,9 @@ const educationContinuationData = {
 interface ContinuationGapRow {
   page: number
   headerGapPx: number | null
+  straddlers: Array<{ text: string; topPx: number; bottomPx: number }>
   h2Display: string | null
+  h2Visibility: string | null
   suppress: string | null
 }
 
@@ -171,7 +173,7 @@ async function continuationHeaderStyle(
   try {
     await page.setViewport({ width: 794, height: 1123 })
     await page.setContent(renderResumeHTML({ ...resumeData, template: templateId }, templateId), {
-      waitUntil: 'networkidle0',
+      waitUntil: 'domcontentloaded',
     })
     await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
     return await page.evaluate((sid: string) => {
@@ -205,10 +207,10 @@ async function experienceContinuationStyle(templateId: string) {
   try {
     await page.setViewport({ width: 794, height: 1123 })
     await page.setContent(renderResumeHTML({ ...data, template: templateId }, templateId), {
-      waitUntil: 'networkidle0',
+      waitUntil: 'domcontentloaded',
     })
     await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
-    return await page.evaluate(() => {
+    return await page.evaluate((tolerance: number) => {
       const pages = Array.from(document.querySelectorAll('.resume-page'))
       for (const pg of pages) {
         const content = pg.querySelector('.resume-page-content') as HTMLElement | null
@@ -217,40 +219,61 @@ async function experienceContinuationStyle(templateId: string) {
           '.resume-continuation-header [data-resume-section-header]',
         ) as HTMLElement | null
         const band = pg.querySelector('.resume-page-content-band') as HTMLElement | null
-        const unit = content.querySelector(
-          '[data-resume-section="experience"] [data-resume-section-unit]',
-        ) as HTMLElement | null
-        if (!hdr || !band || !unit) return null
+        if (!hdr || !band) return null
         const hRect = hdr.getBoundingClientRect()
         const contBottom = hRect.bottom
         const viewportRect = pg.querySelector('.resume-page-viewport')!.getBoundingClientRect()
         const section = content.querySelector('[data-resume-section="experience"]') as HTMLElement | null
-        let firstTop: number | null = null
-        section?.querySelectorAll('[data-resume-section-unit], [data-resume-section-unit] *').forEach(node => {
-          const el = node as HTMLElement
-          const r = el.getBoundingClientRect()
-          if (r.height < 1) return
-          if (r.top >= contBottom && r.top < viewportRect.bottom - 1) {
-            const gap = Math.round(r.top - contBottom)
-            if (gap < 0) return
-            if (firstTop === null || r.top < firstTop) firstTop = r.top
+        if (!section) return null
+        const lineRects: Array<{ text: string; top: number; bottom: number }> = []
+        const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT)
+        let textNode = walker.nextNode()
+        while (textNode) {
+          const parent = textNode.parentElement
+          const text = textNode.textContent?.trim() ?? ''
+          if (
+            parent &&
+            text &&
+            !parent.closest('[data-resume-section-header], [data-resume-skills-header]') &&
+            getComputedStyle(parent).visibility !== 'hidden' &&
+            getComputedStyle(parent).display !== 'none'
+          ) {
+            const range = document.createRange()
+            range.selectNodeContents(textNode)
+            for (const rect of Array.from(range.getClientRects())) {
+              if (rect.width > 0 && rect.height > 0) {
+                lineRects.push({ text, top: rect.top, bottom: rect.bottom })
+              }
+            }
           }
-        })
-        if (firstTop === null) return null
-        const uRect = { top: firstTop, bottom: firstTop } as DOMRect
+          textNode = walker.nextNode()
+        }
+        const relevantLines = lineRects.filter(
+          rect => rect.bottom > contBottom + tolerance && rect.top < viewportRect.bottom - tolerance,
+        )
+        if (relevantLines.length === 0) return null
+        const firstTop = Math.min(...relevantLines.map(rect => rect.top))
+        const straddlers = relevantLines
+          .filter(rect => rect.top < contBottom - tolerance && rect.bottom > contBottom + tolerance)
+          .map(rect => ({
+            text: rect.text.slice(0, 80),
+            topPx: Math.round((rect.top - contBottom) * 1000) / 1000,
+            bottomPx: Math.round((rect.bottom - contBottom) * 1000) / 1000,
+          }))
         const hCs = getComputedStyle(hdr)
         const bandCs = getComputedStyle(band)
         const overlay = pg.querySelector('.resume-continuation-header') as HTMLElement | null
         return {
           headerFontPx: parseFloat(hCs.fontSize),
           bodyFontPx: parseFloat(bandCs.fontSize),
-          gapPx: Math.round(uRect.top - hRect.bottom),
+          gapPx: Math.round((firstTop - hRect.bottom) * 1000) / 1000,
+          straddlers,
           headerHeightPx: Math.round(hRect.height),
           overlayMinHeight: overlay?.style.minHeight,
         }
       }
       return null
-    })
+    }, SUBPIXEL_TOLERANCE_PX)
   } finally {
     await page.close()
   }
@@ -261,10 +284,10 @@ async function continuationGaps(templateId: string): Promise<ContinuationGapRow[
   try {
     await page.setViewport({ width: 794, height: 1123 })
     await page.setContent(renderResumeHTML({ ...data, template: templateId }, templateId), {
-      waitUntil: 'networkidle0',
+      waitUntil: 'domcontentloaded',
     })
     await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
-    return await page.evaluate(() => {
+    return await page.evaluate((tolerance: number) => {
       const rows: ContinuationGapRow[] = []
       const pages = Array.from(document.querySelectorAll('.resume-page'))
       pages.forEach((pg, i) => {
@@ -280,31 +303,60 @@ async function continuationGaps(templateId: string): Promise<ContinuationGapRow[
           : null
         const h2 = section?.querySelector('[data-resume-section-header]') as HTMLElement | null
         let headerGapPx: number | null = null
+        const straddlers: Array<{ text: string; topPx: number; bottomPx: number }> = []
         if (section) {
-          const nodes = section.querySelectorAll(
-            '[data-resume-section-unit], [data-resume-section-unit] *',
-          )
-          nodes.forEach(node => {
-            const el = node as HTMLElement
-            const r = el.getBoundingClientRect()
-            if (r.height < 1) return
-            // Strictly below the overlay — do not admit 1px overlaps that round to gap < 0.
-            if (r.top >= contBottom && r.top < viewportRect.bottom - 1) {
-              const gap = Math.round(r.top - contBottom)
-              if (gap < 0) return
-              if (headerGapPx === null || gap < headerGapPx) headerGapPx = gap
+          const lineRects: Array<{ text: string; top: number; bottom: number }> = []
+          const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT)
+          let textNode = walker.nextNode()
+          while (textNode) {
+            const parent = textNode.parentElement
+            const text = textNode.textContent?.trim() ?? ''
+            if (
+              parent &&
+              text &&
+              !parent.closest('[data-resume-section-header], [data-resume-skills-header]') &&
+              getComputedStyle(parent).visibility !== 'hidden' &&
+              getComputedStyle(parent).display !== 'none'
+            ) {
+              const range = document.createRange()
+              range.selectNodeContents(textNode)
+              for (const rect of Array.from(range.getClientRects())) {
+                if (rect.width > 0 && rect.height > 0) {
+                  lineRects.push({ text, top: rect.top, bottom: rect.bottom })
+                }
+              }
             }
-          })
+            textNode = walker.nextNode()
+          }
+          const relevantLines = lineRects.filter(
+            rect => rect.bottom > contBottom + tolerance && rect.top < viewportRect.bottom - tolerance,
+          )
+          if (relevantLines.length > 0) {
+            headerGapPx = Math.round(
+              (Math.min(...relevantLines.map(rect => rect.top)) - contBottom) * 1000,
+            ) / 1000
+          }
+          straddlers.push(
+            ...relevantLines
+              .filter(rect => rect.top < contBottom - tolerance && rect.bottom > contBottom + tolerance)
+              .map(rect => ({
+                text: rect.text.slice(0, 80),
+                topPx: Math.round((rect.top - contBottom) * 1000) / 1000,
+                bottomPx: Math.round((rect.bottom - contBottom) * 1000) / 1000,
+              })),
+          )
         }
         rows.push({
           page: i,
           headerGapPx,
+          straddlers,
           h2Display: h2 ? getComputedStyle(h2).display : null,
+          h2Visibility: h2 ? getComputedStyle(h2).visibility : null,
           suppress,
         })
       })
       return rows
-    })
+    }, SUBPIXEL_TOLERANCE_PX)
   } finally {
     await page.close()
   }
@@ -312,40 +364,34 @@ async function continuationGaps(templateId: string): Promise<ContinuationGapRow[
 
 describe.runIf(ENABLED)('continuation header gap — overlay clears first job line', () => {
   beforeAll(async () => {
-    try {
-      browser = await launchBrowser()
-    } catch {
-      browser = null
-    }
+    browser = await launchBrowser()
   }, 60000)
   afterAll(async () => {
     if (browser) await browser.close()
   })
 
   it('executive: continuation pages hide in-flow header and leave >=6px under overlay', async () => {
-    if (!browser) {
-      expect(true).toBe(true)
-      return
-    }
     const rows = await continuationGaps('executive')
     const expRows = rows.filter(row => row.suppress === 'experience')
     expect(expRows.length).toBeGreaterThan(0)
     for (const row of expRows) {
-      expect(row.h2Display).toBe('none')
+      // The header stays in flow to reserve its exact height while the
+      // continuation overlay replaces it visually. `display:none` would shift
+      // the first content row upward and reintroduce the overlap regression.
+      expect(row.h2Display).not.toBe('none')
+      expect(row.h2Visibility).toBe('hidden')
+      expect(row.straddlers, `page ${row.page} has a text line bisected by the overlay`).toEqual([])
       expect(row.headerGapPx).not.toBeNull()
-      expect(row.headerGapPx!).toBeGreaterThanOrEqual(0)
+      expect(row.headerGapPx!).toBeGreaterThanOrEqual(-SUBPIXEL_TOLERANCE_PX)
     }
     const exp = await experienceContinuationStyle('executive')
     expect(exp).not.toBeNull()
+    expect(exp!.straddlers).toEqual([])
     expect(exp!.headerFontPx).toBeLessThanOrEqual(exp!.bodyFontPx + 1)
-    expect(exp!.gapPx).toBeGreaterThanOrEqual(0)
+    expect(exp!.gapPx).toBeGreaterThanOrEqual(-SUBPIXEL_TOLERANCE_PX)
   }, 60000)
 
   it('executive: education continuation header keeps template title classes', async () => {
-    if (!browser) {
-      expect(true).toBe(true)
-      return
-    }
     const styled = await continuationHeaderStyle('executive', 'education', educationContinuationData)
     expect(styled).not.toBeNull()
     expect(styled?.text?.toLowerCase()).toContain('education')

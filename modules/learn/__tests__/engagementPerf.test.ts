@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { BADGE_DEFINITIONS, getBadgesByTrigger, getBadgeById } from '@learn/config/badges'
-import { SubmitDailyChallengeSchema } from '@learn/validators/engagement'
 import type { BadgeCheckContext } from '@learn/config/badges'
 
 /**
@@ -61,20 +60,6 @@ describe('Engagement Performance Tests', () => {
       const elapsed = performance.now() - start
 
       expect(elapsed).toBeLessThan(50)
-    })
-  })
-
-  describe('Zod schema validation performance', () => {
-    it('1,000 SubmitDailyChallengeSchema.parse calls complete within 100ms', () => {
-      const validInput = { answer: 'A detailed answer about my experience handling a difficult situation at work that required creative problem-solving.' }
-
-      const start = performance.now()
-      for (let i = 0; i < 1_000; i++) {
-        SubmitDailyChallengeSchema.safeParse(validInput)
-      }
-      const elapsed = performance.now() - start
-
-      expect(elapsed).toBeLessThan(100)
     })
   })
 

@@ -298,7 +298,7 @@ describe('CMS coupon binding verification', () => {
 
 describe('launch coupon validation', () => {
   it('accepts a one-cycle acquisition coupon without an Offer warning', () => {
-    const result = validateCouponTerms(couponTerms(), couponCatalog, 'test')
+    const result = validateCouponTerms(couponTerms(), couponCatalog)
 
     expect(result.valid).toBe(true)
     expect(result.errors).toEqual([])
@@ -312,7 +312,7 @@ describe('launch coupon validation', () => {
         ...couponTerms().eligibility,
         upgradesEligible: true,
       },
-    }), couponCatalog, 'live')
+    }), couponCatalog)
 
     expect(result.valid).toBe(false)
     expect(result.errors).toEqual(expect.arrayContaining([

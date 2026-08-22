@@ -24,7 +24,9 @@ attempt-unaware indexes are being replaced.
 6. Run `npm run check:hire-ingestion-revision-protocol` on both surfaces.
    Before release, run the opt-in real transaction gate against a disposable
    replica-set database whose name ends in `_test`:
-   `HIRE_INGESTION_REPLICA_SET_TEST_URI=... HIRE_INGESTION_REPLICA_SET_TEST_DATABASE=hire_ingestion_test npm exec vitest -- run modules/hire/__tests__/ingestionRevisionReservation.replica.integration.test.ts`.
+   `HIRE_INGESTION_REPLICA_SET_TEST_URI=... HIRE_INGESTION_REPLICA_SET_TEST_DATABASE=hire_ingestion_test npm run test:hire-ingestion-replica`.
+   The manually dispatched **Hire Ingestion Replica-Set Test** workflow runs
+   the same fail-closed gate against a disposable single-node replica set.
 7. Change control to `HIRE_INGESTION_REVISION_PROTOCOL_MODE=required`, retaining
    the original drain timestamp. Re-run the check. Only senders presenting
    protocol version 2 can now enter ingestion. Authenticated control health

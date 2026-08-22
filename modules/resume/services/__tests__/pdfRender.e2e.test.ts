@@ -15,19 +15,16 @@ import type { ResumeData } from '../../validators/resume'
  * produces the expected page count without dropping content.
  *
  * Opt-in (RESUME_PDF_E2E=1) so the default unit suite / `ci` job stays
- * browser-free and fast. Run with: `npm run test:pdf`. If the browser cannot
- * launch in this environment, the suite skips rather than false-failing.
+ * browser-free and fast. Run with: `npm run test:pdf`. Once explicitly
+ * enabled, browser launch is part of the gate and must fail closed.
  */
 
 const ENABLED = process.env.RESUME_PDF_E2E === '1'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let browser: any = null
 
 async function launchBrowser() {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const puppeteer = require('puppeteer-core')
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const chromiumMod = require('@sparticuz/chromium')
   const chromium = chromiumMod.default ?? chromiumMod
   const executablePath =
@@ -58,7 +55,7 @@ async function renderAndMeasure(
   const page = await browser.newPage()
   try {
     await page.setViewport({ width: 794, height: 1123 })
-    await page.setContent(html, { waitUntil: 'networkidle0' })
+    await page.setContent(html, { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(
       () => (window as { __resumePagesReady?: boolean }).__resumePagesReady === true,
       { timeout: 15000 },
@@ -125,20 +122,14 @@ function longResume(): ResumeData {
 
 describe.skipIf(!ENABLED)('PDF render (headless Chromium)', () => {
   beforeAll(async () => {
-    try {
-      browser = await launchBrowser()
-    } catch (err) {
-      console.warn('[pdfRender.e2e] browser launch failed — skipping:', (err as Error).message)
-      browser = null
-    }
+    browser = await launchBrowser()
   }, 60000)
 
   afterAll(async () => {
     if (browser) await browser.close()
   })
 
-  it('applies template styling in the exported PDF (guards the missing-CSS regression)', async (ctx) => {
-    if (!browser) return ctx.skip()
+  it('applies template styling in the exported PDF (guards the missing-CSS regression)', async () => {
     const m = await renderAndMeasure(SAMPLE_RESUME_DATA as unknown as ResumeData, 'professional')
     // Professional section titles are font-bold + uppercase. If the PDF CSS were
     // missing these classes (the #411 P1), computed styles would be the defaults.
@@ -147,16 +138,14 @@ describe.skipIf(!ENABLED)('PDF render (headless Chromium)', () => {
     expect(m.sectionHeaderTextTransform).toBe('uppercase')
   }, 30000)
 
-  it('renders the Modern accent band with its themed background color', async (ctx) => {
-    if (!browser) return ctx.skip()
+  it('renders the Modern accent band with its themed background color', async () => {
     const m = await renderAndMeasure(SAMPLE_RESUME_DATA as unknown as ResumeData, 'modern-indigo')
     // bg-indigo-600 = #4f46e5 = rgb(79, 70, 229). A transparent band would mean
     // the family/theme classes never reached the precompiled PDF CSS.
     expect(m.bandBackgroundColor).toBe('rgb(79, 70, 229)')
   }, 30000)
 
-  it('paginates a long resume across multiple pages without dropping content', async (ctx) => {
-    if (!browser) return ctx.skip()
+  it('paginates a long resume across multiple pages without dropping content', async () => {
     // The last experience entry must be VISIBLE on a page (within a viewport's
     // clip band), not merely present in the duplicated/clipped DOM.
     const m = await renderAndMeasure(longResume(), 'professional', 'Senior Engineer 9')

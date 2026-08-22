@@ -1,0 +1,73 @@
+name: Hire Ingestion Replica-Set Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hire-ingestion-replica-test
+  cancel-in-progress: false
+
+jobs:
+  replica-set-integration:
+    name: Ingestion reservation transaction gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start disposable MongoDB replica set
+        shell: bash
+        run: |
+          docker run --detach \
+            --name hire-ingestion-replica \
+            --publish 27017:27017 \
+            mongo:8.0 \
+            mongod --replSet rs0 --bind_ip_all
+
+          for attempt in {1..30}; do
+            if docker exec hire-ingestion-replica mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs hire-ingestion-replica
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker exec hire-ingestion-replica mongosh --quiet --eval \
+            'rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] })'
+
+          for attempt in {1..30}; do
+            if docker exec hire-ingestion-replica mongosh --quiet --eval \
+              'quit(db.hello().isWritablePrimary ? 0 : 1)' >/dev/null 2>&1; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs hire-ingestion-replica
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Run fail-closed replica-set integration test
+        run: npm run test:hire-ingestion-replica
+        env:
+          HIRE_INGESTION_REPLICA_SET_TEST_URI: mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true
+          HIRE_INGESTION_REPLICA_SET_TEST_DATABASE: hire_ingestion_ci_test
+
+      - name: Stop disposable MongoDB replica set
+        if: always()
+        run: docker rm --force hire-ingestion-replica || true
