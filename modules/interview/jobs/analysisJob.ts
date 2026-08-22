@@ -56,9 +56,7 @@ export async function runAnalysisJobHandler(
   // Step 2: transcribe + download facial frames in parallel
   const { whisper, facialFrames } = await step.run('transcribe-and-download', () =>
     stepTranscribeAndDownload(
-      session.recordingR2Key,
       session.facialLandmarksR2Key,
-      session.audioRecordingR2Key,
       session.liveTranscriptWords,
       session.transcript,
       session.sessionT0,

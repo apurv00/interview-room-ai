@@ -51,8 +51,6 @@ import { runAnalysisJobHandler, analysisJob } from '@interview/jobs/analysisJob'
 const fakeSession = {
   sessionId: 'sess-1',
   sessionT0: 0,
-  recordingR2Key: 'rec.webm',
-  audioRecordingR2Key: 'audio.webm',
   facialLandmarksR2Key: 'facial.json',
   liveTranscriptWords: undefined,
   transcript: [{ speaker: 'candidate', text: 'hello', timestamp: 0 }],
@@ -147,16 +145,14 @@ describe('analysisJob', () => {
       expect(mockFetchSession).toHaveBeenCalledWith('sess-xyz')
     })
 
-    it('forwards all r2 keys and live transcript to transcribe step', async () => {
+    it('forwards facial data and transcript fallbacks to the transcribe step', async () => {
       const { step } = buildMockStep()
       await runAnalysisJobHandler(
         { data: { sessionId: 'sess-1', userId: 'user-1', startTime: 1_000 } },
         step
       )
       expect(mockTranscribe).toHaveBeenCalledWith(
-        'rec.webm',
         'facial.json',
-        'audio.webm',
         undefined,
         [{ speaker: 'candidate', text: 'hello', timestamp: 0 }],
         0, // sessionT0 — passed through from stepFetchSession output

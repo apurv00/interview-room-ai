@@ -13,12 +13,11 @@ import type { ResumeData } from '../../validators/resume'
  *
  * This asserts, for every family, that on a forced 2-page render NO content row
  * straddles a continuation viewport's top edge (top < 0 && bottom > 0) — i.e.
- * breaks land on line boundaries. Opt-in (RESUME_PDF_E2E=1); skips if the
- * browser can't launch so the browser-free `ci` job stays green.
+ * breaks land on line boundaries. Opt-in (RESUME_PDF_E2E=1); once enabled,
+ * browser launch is a required part of the gate.
  */
 const ENABLED = process.env.RESUME_PDF_E2E === '1'
 
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports */
 let browser: any = null
 
 async function launchBrowser() {
@@ -78,7 +77,7 @@ async function straddlingRows(templateId: string): Promise<Array<{ page: number;
   const page = await browser.newPage()
   try {
     await page.setViewport({ width: 794, height: 1123 })
-    await page.setContent(renderResumeHTML({ ...data, template: templateId }, templateId), { waitUntil: 'networkidle0' })
+    await page.setContent(renderResumeHTML({ ...data, template: templateId }, templateId), { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
     return await page.evaluate(() => {
       const root = document.getElementById('resume-pages-root')!
@@ -139,13 +138,12 @@ async function straddlingRows(templateId: string): Promise<Array<{ page: number;
 
 describe.runIf(ENABLED)('pagination line-snap — no row straddles a page top (all families)', () => {
   beforeAll(async () => {
-    try { browser = await launchBrowser() } catch { browser = null }
+    browser = await launchBrowser()
   }, 60000)
   afterAll(async () => { if (browser) await browser.close() })
 
   for (const templateId of SINGLE_COLUMN_FAMILIES) {
     it(`${templateId}: no half-clipped line at any continuation page top`, async () => {
-      if (!browser) { expect(true).toBe(true); return } // env can't launch → skip soft
       const bad = await straddlingRows(templateId)
       if (bad.length) {
         // eslint-disable-next-line no-console
@@ -157,7 +155,6 @@ describe.runIf(ENABLED)('pagination line-snap — no row straddles a page top (a
 
   for (const templateId of COLUMNAR_FAMILIES) {
     it(`${templateId} (columnar): no VISIBLE half-clipped line (masked by header band)`, async () => {
-      if (!browser) { expect(true).toBe(true); return }
       const bad = await straddlingRows(templateId)
       if (bad.length) {
         // eslint-disable-next-line no-console

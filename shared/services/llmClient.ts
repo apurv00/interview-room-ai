@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { z, type ZodSchema } from 'zod'
+import type { ZodSchema } from 'zod'
 
 let _client: Anthropic | null = null
 

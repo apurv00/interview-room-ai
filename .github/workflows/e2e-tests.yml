@@ -16,7 +16,7 @@ jobs:
   vitest-pipeline:
     name: Pipeline Tests (Vitest)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
   playwright-e2e:
     name: E2E Tests (Playwright)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -52,12 +52,13 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      # Render-verify the exported résumé PDF in a real browser (styling applied
-      # + correct page count). Uses @sparticuz/chromium with the system libs the
-      # Playwright install above provides. Runs here (browser-capable job) rather
-      # than the main unit `ci` so that stays browser-free.
-      - name: Run PDF render harness
+      # Render-verify the exported résumé PDF in a real browser. Uses
+      # @sparticuz/chromium with the system libs the Playwright install above
+      # provides. Runs here rather than the browser-free main `ci`.
+      - name: Run PDF browser regression harnesses
         run: npm run test:pdf
+        env:
+          PREVIEW_BASE_URL: ${{ inputs.url || 'https://staging.interviewprep.guru' }}
 
       - name: Run E2E tests
         run: npm run test:e2e

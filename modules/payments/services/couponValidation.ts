@@ -63,7 +63,6 @@ function approvalMatches(
 export function validateCouponTerms(
   input: unknown,
   catalog: CatalogContent,
-  providerMode: ProviderMode = 'test',
 ): CouponValidationResult {
   const parsed = CouponRevisionTermsSchema.safeParse(input)
   if (!parsed.success) {
@@ -145,7 +144,7 @@ export function validateCouponCampaignPolicy(
   catalog: CatalogContent,
   context: CouponPolicyValidationContext,
 ): CouponPolicyValidationResult {
-  const base = validateCouponTerms(input, catalog, context.providerMode)
+  const base = validateCouponTerms(input, catalog)
   if (!base.terms || !base.contentHash) {
     return { ...base, requiredPolicyApprovals: [] }
   }

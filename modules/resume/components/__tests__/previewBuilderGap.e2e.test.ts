@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 
 const ENABLED = process.env.RESUME_PDF_E2E === '1'
-const BASE = process.env.PREVIEW_BASE_URL || 'http://localhost:3000'
+const BASE = (process.env.PREVIEW_BASE_URL || 'http://localhost:3000').replace(/\/+$/, '')
 
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports */
 let browser: any = null
 
 async function launchBrowser() {
@@ -49,30 +48,24 @@ interface GapRow {
   pageIdx: number
   sectionId: string | null
   useCont: boolean
-  gapToBorderPx: number
-  gapToMarginPx: number
-  overlapBorder: boolean
-  overlapMargin: boolean
+  gapToMarginPx: number | null
+  straddlers: Array<{ text: string; topPx: number; bottomPx: number }>
+  flowHeaderDisplay: string | null
+  flowHeaderVisibility: string | null
   contMinHeight: string | null
 }
 
+const SUBPIXEL_TOLERANCE_PX = 0.5
+
 describe.runIf(ENABLED)('builder ResumePreview — section header gaps', () => {
   beforeAll(async () => {
-    try {
-      browser = await launchBrowser()
-    } catch {
-      browser = null
-    }
+    browser = await launchBrowser()
   }, 60000)
   afterAll(async () => {
     if (browser) await browser.close()
   })
 
   it('measures live preview gaps (runtime evidence)', async () => {
-    if (!browser) {
-      expect(true).toBe(true)
-      return
-    }
     const page = await browser.newPage()
     try {
       await page.setViewport({ width: 1440, height: 1200 })
@@ -81,7 +74,7 @@ describe.runIf(ENABLED)('builder ResumePreview — section header gaps', () => {
         localStorage.setItem('resume:draft:anon', JSON.stringify(d))
       }, draft)
       await page.goto(`${BASE}/resume/builder?template=academic`, {
-        waitUntil: 'networkidle0',
+        waitUntil: 'domcontentloaded',
         timeout: 60000,
       })
       await page.waitForSelector('#resume-preview-container [data-resume-page-viewport]', {
@@ -90,9 +83,17 @@ describe.runIf(ENABLED)('builder ResumePreview — section header gaps', () => {
       await page.waitForFunction(() => document.fonts?.status === 'loaded', { timeout: 15000 }).catch(
         () => undefined,
       )
-      await new Promise(r => setTimeout(r, 800))
+      await page.waitForFunction(
+        () => Array.from(
+          document.querySelectorAll('#resume-preview-container [data-resume-page-viewport]'),
+        ).some(viewport => (
+          viewport.querySelector('[data-resume-continuation-header]')
+          && viewport.querySelector('[data-resume-page-content][data-suppress-section]')
+        )),
+        { timeout: 30000 },
+      )
 
-      const rows = (await page.evaluate(() => {
+      const rows = (await page.evaluate((tolerance: number) => {
         const out: GapRow[] = []
         document
           .querySelectorAll('#resume-preview-container [data-resume-page-viewport]')
@@ -102,6 +103,10 @@ describe.runIf(ENABLED)('builder ResumePreview — section header gaps', () => {
               '[data-resume-continuation-header]',
             ) as HTMLElement | null
             const contBottom = contHdr?.getBoundingClientRect().bottom ?? null
+            const content = viewport.querySelector(
+              '[data-resume-page-content]',
+            ) as HTMLElement | null
+            const suppressSectionId = content?.getAttribute('data-suppress-section') ?? null
 
             viewport.querySelectorAll('[data-resume-section]').forEach(section => {
               const sectionId = section.getAttribute('data-resume-section')
@@ -115,91 +120,115 @@ describe.runIf(ENABLED)('builder ResumePreview — section header gaps', () => {
 
               const h2Rect = h2.getBoundingClientRect()
               const mb = parseFloat(getComputedStyle(h2).marginBottom) || 0
-              const borderBottom = h2Rect.bottom
-              const useCont = Boolean(contHdr && getComputedStyle(flowHeader).display === 'none')
+              const useCont = Boolean(
+                contHdr && contBottom != null && sectionId === suppressSectionId,
+              )
 
-              // On continuation pages, compare overlay to the first unit visible in this viewport.
+              if (useCont) {
+                const lineRects: Array<{ text: string; top: number; bottom: number }> = []
+                const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT)
+                let textNode = walker.nextNode()
+                while (textNode) {
+                  const parent = textNode.parentElement
+                  const text = textNode.textContent?.trim() ?? ''
+                  if (
+                    parent
+                    && text
+                    && !parent.closest(
+                      '[data-resume-section-header], [data-resume-skills-header]',
+                    )
+                    && getComputedStyle(parent).visibility !== 'hidden'
+                    && getComputedStyle(parent).display !== 'none'
+                  ) {
+                    const range = document.createRange()
+                    range.selectNodeContents(textNode)
+                    for (const rect of Array.from(range.getClientRects())) {
+                      if (rect.width > 0 && rect.height > 0) {
+                        lineRects.push({ text, top: rect.top, bottom: rect.bottom })
+                      }
+                    }
+                  }
+                  textNode = walker.nextNode()
+                }
+
+                const relevantLines = lineRects.filter(
+                  rect => (
+                    rect.bottom > contBottom! + tolerance
+                    && rect.top < viewportRect.bottom - tolerance
+                  ),
+                )
+                const firstLineTop = relevantLines.length > 0
+                  ? Math.min(...relevantLines.map(rect => rect.top))
+                  : null
+                const straddlers = relevantLines
+                  .filter(rect => (
+                    rect.top < contBottom! - tolerance
+                    && rect.bottom > contBottom! + tolerance
+                  ))
+                  .map(rect => ({
+                    text: rect.text.slice(0, 80),
+                    topPx: Math.round((rect.top - contBottom!) * 1000) / 1000,
+                    bottomPx: Math.round((rect.bottom - contBottom!) * 1000) / 1000,
+                  }))
+
+                out.push({
+                  pageIdx,
+                  sectionId,
+                  useCont: true,
+                  gapToMarginPx: firstLineTop == null
+                    ? null
+                    : Math.round((firstLineTop - contBottom!) * 1000) / 1000,
+                  straddlers,
+                  flowHeaderDisplay: getComputedStyle(flowHeader).display,
+                  flowHeaderVisibility: getComputedStyle(flowHeader).visibility,
+                  contMinHeight: contHdr?.style.minHeight ?? null,
+                })
+                return
+              }
+
               const units = Array.from(
                 section.querySelectorAll('[data-resume-section-unit], [data-resume-skills-category]'),
               ) as HTMLElement[]
               const visibleUnit = units.find(u => {
                 const r = u.getBoundingClientRect()
-                if (useCont && contBottom != null) {
-                  return r.top >= contBottom - 1 && r.top < viewportRect.bottom - 1
-                }
                 return r.bottom > viewportRect.top + 1 && r.top < viewportRect.bottom - 1
               })
               if (!visibleUnit) return
 
-              const headerBottom = useCont && contBottom != null
-                ? contBottom
-                : h2Rect.bottom + mb
+              const headerBottom = h2Rect.bottom + mb
               const unitTop = visibleUnit.getBoundingClientRect().top
 
               out.push({
                 pageIdx,
                 sectionId,
-                useCont,
-                gapToBorderPx: Math.round((unitTop - borderBottom) * 10) / 10,
+                useCont: false,
                 gapToMarginPx: Math.round((unitTop - headerBottom) * 10) / 10,
-                overlapBorder: unitTop - borderBottom < 0,
-                overlapMargin: unitTop - headerBottom < 0,
+                straddlers: [],
+                flowHeaderDisplay: getComputedStyle(flowHeader).display,
+                flowHeaderVisibility: getComputedStyle(flowHeader).visibility,
                 contMinHeight: contHdr?.style.minHeight ?? null,
               })
             })
           })
         return out
-      })) as GapRow[]
+      }, SUBPIXEL_TOLERANCE_PX)) as GapRow[]
 
       // eslint-disable-next-line no-console
       console.log('PREVIEW_GAP_EVIDENCE', JSON.stringify(rows, null, 2))
 
-      const contDebug = await page.evaluate(() => {
-        const viewport = document.querySelectorAll('#resume-preview-container [data-resume-page-viewport]')[1]
-        if (!viewport) return null
-        const cont = viewport.querySelector('[data-resume-continuation-header]') as HTMLElement | null
-        const content = viewport.querySelector('[data-resume-page-content]') as HTMLElement | null
-        const suppress = content?.getAttribute('data-suppress-section')
-        const exp = suppress
-          ? viewport.querySelector(`[data-resume-section="${suppress}"]`)
-          : null
-        const contBottom = cont?.getBoundingClientRect().bottom ?? 0
-        const units = exp
-          ? Array.from(exp.querySelectorAll('[data-resume-section-unit]')).map(u => ({
-              top: Math.round(u.getBoundingClientRect().top),
-              bottom: Math.round(u.getBoundingClientRect().bottom),
-            }))
-          : []
-        const firstBelowHeader = units.find(u => u.top >= contBottom - 1)
-        return {
-          contMinHeight: cont?.style.minHeight,
-          contRect: cont
-            ? {
-                top: Math.round(cont.getBoundingClientRect().top),
-                bottom: Math.round(cont.getBoundingClientRect().bottom),
-                height: Math.round(cont.getBoundingClientRect().height),
-              }
-            : null,
-          marginTop: content?.style.marginTop,
-          suppress,
-          firstBelowHeader,
-          gapBelowHeader: firstBelowHeader ? firstBelowHeader.top - contBottom : null,
-        }
-      })
-      // eslint-disable-next-line no-console
-      console.log('CONT_DEBUG_PAGE1', JSON.stringify(contDebug, null, 2))
-      if (contDebug?.gapBelowHeader != null) {
-        expect(contDebug.gapBelowHeader).toBeGreaterThanOrEqual(0)
-      }
-
       expect(rows.length).toBeGreaterThan(0)
       const contRows = rows.filter(r => r.useCont)
       const inflowRows = rows.filter(r => !r.useCont)
+      expect(contRows.length).toBeGreaterThan(0)
       for (const row of inflowRows) {
-        expect(row.gapToMarginPx).toBeGreaterThanOrEqual(0)
+        expect(row.gapToMarginPx).not.toBeNull()
+        expect(row.gapToMarginPx!).toBeGreaterThanOrEqual(0)
       }
       for (const row of contRows) {
-        expect(row.gapToMarginPx).toBeGreaterThanOrEqual(0)
+        expect(row.flowHeaderDisplay).not.toBe('none')
+        expect(row.flowHeaderVisibility).toBe('hidden')
+        expect(row.gapToMarginPx).not.toBeNull()
+        expect(row.straddlers, `page ${row.pageIdx} has text bisected by the header`).toEqual([])
       }
     } finally {
       await page.close()

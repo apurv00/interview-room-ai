@@ -89,7 +89,7 @@ export async function generatePathwayPlan(input: GeneratePathwayInput): Promise<
 
     // Identify blocking weaknesses
     const topBlockingWeaknesses = identifyBlockingWeaknesses(
-      competencySummary, weaknesses, feedback, sessionEvaluation
+      competencySummary, weaknesses, sessionEvaluation
     )
 
     // Strengths to preserve
@@ -274,7 +274,6 @@ function scoreToReadinessLevel(score: number): IPathwayPlan['readinessLevel'] {
 function identifyBlockingWeaknesses(
   competencySummary: Awaited<ReturnType<typeof getUserCompetencySummary>>,
   weaknesses: Awaited<ReturnType<typeof getUserWeaknesses>>,
-  feedback: FeedbackData,
   sessionEvaluation?: SessionEvaluationSummary
 ): IPathwayPlan['topBlockingWeaknesses'] {
   const blockers: IPathwayPlan['topBlockingWeaknesses'] = []

@@ -1,6 +1,5 @@
 import { registerProvider, type CompletionParams, type CompletionResponse } from './index'
 
-let _model: unknown = null
 let _genAI: unknown = null
 
 async function getGenAI() {

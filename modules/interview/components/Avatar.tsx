@@ -24,7 +24,7 @@ const GLOW_COLORS: Record<AvatarEmotion, string> = {
 }
 
 export default function Avatar({ emotion, isTalking, ttsText, isListening, isProcessing, transcriptWordCount }: AvatarProps) {
-  const { state, prepareLipSync, startLipSync, stopLipSync, setListening, onTranscriptUpdate } = useAvatarEngine(emotion, isTalking)
+  const { state, prepareLipSync, startLipSync, stopLipSync, setListening, onTranscriptUpdate } = useAvatarEngine(emotion)
 
   const prevTalkingRef = useRef(false)
   const prevTtsTextRef = useRef('')

@@ -57,13 +57,6 @@ describe('P0 Regression — Duration Configuration', () => {
 // ─── P0: LLM Client Centralization ──────────────────────────────────────────
 
 describe('P0 Regression — LLM Client', () => {
-  it('llmClient module exports getAnthropicClient and parseClaudeJSON', async () => {
-    // Can't instantiate Anthropic in JSDOM (browser-like) env, but verify exports exist
-    const mod = await import('@shared/services/llmClient')
-    expect(typeof mod.getAnthropicClient).toBe('function')
-    expect(typeof mod.parseClaudeJSON).toBe('function')
-  })
-
   it('parseClaudeJSON extracts JSON from various formats', async () => {
     const { parseClaudeJSON } = await import('@shared/services/llmClient')
     const { z } = await import('zod')
@@ -118,23 +111,19 @@ describe('Phase 4 Regression — Code Run (LLM simulation)', () => {
   })
 })
 
-// ─── Phase 4: Data Export Service ───────────────────────────────────────────
-
-describe('Phase 4 Regression — Data Export', () => {
-  it('generateDataExport function exists', async () => {
-    const { generateDataExport } = await import('@shared/services/dataExportService')
-    expect(typeof generateDataExport).toBe('function')
-  })
-})
-
 // ─── Schema Regression: PathwayPlan ─────────────────────────────────────────
 
 describe('Schema Regression — PathwayPlan', () => {
   it('PathwayPlan supports monthly planType', async () => {
     const { PathwayPlan } = await import('@shared/db/models')
-    const schema = PathwayPlan.schema
-    const planTypePath = schema.path('planType')
-    expect(planTypePath).toBeDefined()
+    const userId = '507f1f77bcf86cd799439011'
+    const validPlan = new PathwayPlan({ userId, planType: 'monthly' })
+    const invalidPlan = new PathwayPlan({ userId, planType: 'weekly' })
+
+    await expect(validPlan.validate()).resolves.toBeUndefined()
+    await expect(invalidPlan.validate()).rejects.toMatchObject({
+      errors: { planType: { kind: 'enum' } },
+    })
   })
 
   it('PathwayPlan has phase tracking fields', async () => {
@@ -167,9 +156,19 @@ describe('Schema Regression — InterviewSession', () => {
 
   it('InterviewSession duration accepts 5-60 range', async () => {
     const { InterviewSession } = await import('@shared/db/models')
-    const schema = InterviewSession.schema
-    const durationPath = schema.path('config.duration')
-    expect(durationPath).toBeDefined()
+    const sessionWithDuration = (duration: number) => new InterviewSession({
+      userId: '507f1f77bcf86cd799439011',
+      config: { role: 'Software Engineer', experience: '3-6', duration },
+    })
+
+    await expect(sessionWithDuration(5).validate()).resolves.toBeUndefined()
+    await expect(sessionWithDuration(60).validate()).resolves.toBeUndefined()
+    await expect(sessionWithDuration(4).validate()).rejects.toMatchObject({
+      errors: { 'config.duration': { kind: 'min' } },
+    })
+    await expect(sessionWithDuration(61).validate()).rejects.toMatchObject({
+      errors: { 'config.duration': { kind: 'max' } },
+    })
   })
 })
 

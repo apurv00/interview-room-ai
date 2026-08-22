@@ -6,6 +6,7 @@ import { awardXp } from '@learn/services/xpService'
 import { recordActivity, updateStreak } from '@learn/services/streakService'
 import { checkAndAwardBadges } from '@learn/services/badgeService'
 import { XP_AMOUNTS } from '@learn/config/xpTable'
+import { SubmitDailyChallengeSchema } from '@learn/validators/engagement'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,12 +39,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const body = await req.json()
-    const { answer } = body
-
-    if (!answer || typeof answer !== 'string' || answer.length < 10) {
-      return NextResponse.json({ error: 'Answer must be at least 10 characters' }, { status: 400 })
+    const parsed = SubmitDailyChallengeSchema.safeParse(await req.json())
+    if (!parsed.success) {
+      const overLimit = parsed.error.issues.some((issue) => issue.code === 'too_big')
+      return NextResponse.json(
+        {
+          error: overLimit
+            ? 'Answer must be at most 5000 characters'
+            : 'Answer must be at least 10 characters',
+        },
+        { status: 400 },
+      )
     }
+    const { answer } = parsed.data
 
     const today = new Date().toISOString().split('T')[0]
     const result = await submitChallengeAnswer(session.user.id, today, answer)

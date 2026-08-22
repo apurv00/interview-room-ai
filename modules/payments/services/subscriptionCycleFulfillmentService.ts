@@ -1,6 +1,6 @@
 import mongoose, { type ClientSession } from 'mongoose'
 import { connectDB } from '@shared/db/connection'
-import { User, type IUser } from '@shared/db/models/User'
+import { User } from '@shared/db/models/User'
 import { CURRENT_PLAN_VOCABULARY_VERSION } from '@shared/services/planConfig'
 import { canonicalJson } from '../lib/canonicalJson'
 import { isInrPaise } from '../lib/money'

@@ -36,7 +36,7 @@ import { JOBS_VERDICT_DEFAULTS } from '@shared/db/models/JobsVerdictConfig'
  * JOBS_VERDICT_EVAL=1; needs OPENAI_API_KEY and MONGODB_URI so the same
  * authoritative route contract as production is evaluated.
  *
- * Run:  node scripts/jobs-verdict-eval.mjs
+ * Run:  npm run eval:jobs-verdict
  *
  * Gates (shadow-exit criteria + this harness = the enforceEnabled pre-flip
  * gate; also the epoch-cutover replay comparator, ruling #8):

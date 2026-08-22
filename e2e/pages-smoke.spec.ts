@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Request } from '@playwright/test'
 import { expectCleanPageLoad, gotoAndTrack } from './helpers/page-checks'
 
 /**
@@ -106,14 +106,70 @@ test.describe('Content regression checks', () => {
     await expect(page.getByRole('button', { name: /Continue with GitHub/i })).toBeVisible()
   })
 
-  // TODO(ops): un-fixme once the hanging RSC prefetch at /learn/guides is
-  // fixed. The Apr 11 production audit flagged this as a known issue; the
-  // test is doing its job (it caught the bug), but we can't keep CI red over
-  // a production issue we aren't fixing in this PR. The weaker assertion in
-  // the pages-smoke suite above still exercises /learn/guides via
-  // `expectCleanPageLoad` — it just doesn't wait for networkidle.
-  test.fixme('/learn/guides settles within 15s (RSC prefetch regression)', async ({ page }) => {
-    await page.goto('/learn/guides')
-    await page.waitForLoadState('networkidle', { timeout: 15_000 })
+  test('/learn/guides settles its RSC requests within 15s', async ({ page }) => {
+    const activeRscRequests = new Set<Request>()
+    const failedRscRequests: string[] = []
+    const errorRscResponses: string[] = []
+    let lastRscActivityAt = Date.now()
+    const isRscRequest = (request: Request) => {
+      const url = new URL(request.url())
+      return url.searchParams.has('_rsc') || request.headers().rsc === '1'
+    }
+    const markStarted = (request: Request) => {
+      if (!isRscRequest(request)) return
+      activeRscRequests.add(request)
+      lastRscActivityAt = Date.now()
+    }
+    const markSettled = (request: Request) => {
+      if (!activeRscRequests.delete(request)) return
+      lastRscActivityAt = Date.now()
+    }
+    const markFailed = (request: Request) => {
+      if (isRscRequest(request)) {
+        const errorText = request.failure()?.errorText ?? 'unknown error'
+        // Next cancels speculative link prefetches when their priority changes.
+        // Chromium reports that normal cancellation as ERR_ABORTED; every
+        // other RSC transport failure remains fatal.
+        if (errorText !== 'net::ERR_ABORTED') {
+          failedRscRequests.push(`${request.url()} — ${errorText}`)
+        }
+      }
+      markSettled(request)
+    }
+    page.on('request', markStarted)
+    page.on('requestfinished', markSettled)
+    page.on('requestfailed', markFailed)
+    page.on('response', response => {
+      if (isRscRequest(response.request()) && response.status() >= 400) {
+        errorRscResponses.push(`${response.status()} ${response.url()}`)
+      }
+    })
+
+    const { response, consoleTracker, networkTracker } = await gotoAndTrack(page, '/learn/guides')
+    expect(response?.status()).toBe(200)
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Interview Preparation Resources' }),
+    ).toBeVisible()
+
+    // `networkidle` is the wrong contract for a Next.js page because unrelated
+    // analytics and prefetch traffic can remain active. The regression was an
+    // RSC request that never completed, so require the exact request class to
+    // reach zero and remain quiet for a full second.
+    const deadline = Date.now() + 15_000
+    while (
+      Date.now() < deadline &&
+      (activeRscRequests.size > 0 || Date.now() - lastRscActivityAt < 1_000)
+    ) {
+      await page.waitForTimeout(100)
+    }
+    expect(
+      Array.from(activeRscRequests, request => request.url()),
+      'RSC requests still active after the 15s settlement budget',
+    ).toEqual([])
+    expect(failedRscRequests, 'RSC requests failed before settlement').toEqual([])
+    expect(errorRscResponses, 'RSC requests returned an error response').toEqual([])
+    expect(Date.now() - lastRscActivityAt).toBeGreaterThanOrEqual(1_000)
+    networkTracker.assertNoServerErrors()
+    consoleTracker.assertNoErrors()
   })
 })

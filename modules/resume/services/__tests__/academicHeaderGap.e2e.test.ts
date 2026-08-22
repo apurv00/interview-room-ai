@@ -4,7 +4,6 @@ import type { ResumeData } from '../../validators/resume'
 
 const ENABLED = process.env.RESUME_PDF_E2E === '1'
 
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports */
 let browser: any = null
 
 async function launchBrowser() {
@@ -62,7 +61,7 @@ async function measureAllSectionGaps(templateId: string): Promise<GapRow[]> {
   const page = await browser.newPage()
   try {
     await page.setViewport({ width: 794, height: 1123 })
-    await page.setContent(renderResumeHTML(academicData, templateId), { waitUntil: 'networkidle0' })
+    await page.setContent(renderResumeHTML(academicData, templateId), { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => (window as any).__resumePagesReady === true, { timeout: 15000 })
     return await page.evaluate(() => {
       const out: GapRow[] = []
@@ -114,21 +113,13 @@ async function measureAllSectionGaps(templateId: string): Promise<GapRow[]> {
 
 describe.runIf(ENABLED)('academic template — section header gaps', () => {
   beforeAll(async () => {
-    try {
-      browser = await launchBrowser()
-    } catch {
-      browser = null
-    }
+    browser = await launchBrowser()
   }, 60000)
   afterAll(async () => {
     if (browser) await browser.close()
   })
 
   it('logs gap measurements for all sections (runtime evidence)', async () => {
-    if (!browser) {
-      expect(true).toBe(true)
-      return
-    }
     const rows = await measureAllSectionGaps('academic')
     // eslint-disable-next-line no-console
     console.log('ACADEMIC_GAP_EVIDENCE', JSON.stringify(rows, null, 2))

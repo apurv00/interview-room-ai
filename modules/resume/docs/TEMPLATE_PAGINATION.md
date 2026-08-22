@@ -98,13 +98,15 @@ Two complementary mechanisms keep a continuation page from showing a half-line:
 2. **Markers** — a render test asserts the marker contract above for the family
    (see `lib/__tests__/*LayoutMarkers.test.tsx`).
 3. **Full suite** — `npm run test:run -- modules/resume`.
-4. **PDF render** — `npm run test:pdf` (opt-in, real Chromium) renders the exported
-   PDF HTML and asserts template styling is applied + page count + that content is
-   visible within a page viewport (not clipped). Runs in the `e2e-tests` workflow
-   (browser-capable job), not the browser-free main `ci`. For a brand-new family,
-   also eyeball a long resume on the Vercel preview (long skills after education; a
-   long single experience entry; a long summary) and, for a sidebar variant, that
-   the columns advance together.
+4. **Browser render** — `npm run test:pdf` (opt-in, real Chromium) runs five
+   browser suites: four deterministic exported-HTML checks (styling/pagination,
+   academic and continuation header gaps, and line snapping) plus the live
+   builder-preview gap check against `PREVIEW_BASE_URL`. An explicitly enabled
+   run fails if Chromium is unavailable. The command runs in the `e2e-tests`
+   workflow (browser-capable job), not the browser-free main `ci`. For a brand-new
+   family, also eyeball a long resume on the Vercel preview (long skills after
+   education; a long single experience entry; a long summary) and, for a sidebar
+   variant, that the columns advance together.
 
 ## How the legacy parity baseline was made
 `legacyTemplateParity.test.tsx` renders each legacy ID via `renderToStaticMarkup`

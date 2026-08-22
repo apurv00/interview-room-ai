@@ -1,4 +1,4 @@
-import type { ExperienceLevel, Duration } from '@shared/types'
+import type { ExperienceLevel } from '@shared/types'
 
 // ─── Phase Types ────────────────────────────────────────────────────────────
 

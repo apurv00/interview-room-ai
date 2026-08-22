@@ -5,7 +5,7 @@
  * vitest harness, which exercises the REAL prompt + schema + evaluator
  * against modules/jobs/eval/goldenSet.json with live model calls.
  *
- *   OPENAI_API_KEY=... node scripts/jobs-verdict-eval.mjs
+ *   OPENAI_API_KEY=... npm run eval:jobs-verdict
  *
  * Gates: fraud-FP on labeled-genuine <2%, evaluator errors <5%.
  * Artifact: modules/jobs/eval/results/<epoch>-<ts>.json — keep the passing
