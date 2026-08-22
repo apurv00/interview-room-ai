@@ -23,7 +23,7 @@ interface ResumeListData {
 }
 
 export default function ResumeDashboardPage() {
-  const { data: session, status } = useSession()
+  const { status } = useSession()
   const [data, setData] = useState<ResumeListData | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)

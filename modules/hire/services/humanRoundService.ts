@@ -728,7 +728,7 @@ export async function submitHumanInterviewKitScorecard(
   if (!authorityMemberId) return null
 
   try {
-    const completed = await withActiveHireWorkspaceWriteTransaction(
+    await withActiveHireWorkspaceWriteTransaction(
       new mongoose.Types.ObjectId(capability.workspaceId),
       authorityMemberId,
       async (session) => {

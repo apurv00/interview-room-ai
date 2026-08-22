@@ -115,7 +115,6 @@ export function compactTranscript(input: CompactTranscriptInput): CompactTranscr
     .sort((a, b) => a.perQAvg - b.perQAvg || a.questionIndex - b.questionIndex)
     .slice(0, FULL_DETAIL_WEAKEST_COUNT)
   const fullDetailIndices = weakestCandidates.map((p) => p.questionIndex).sort((a, b) => a - b)
-  const fullDetailSet = new Set(fullDetailIndices)
 
   // Per-question summary block.
   const summaryLines: string[] = []

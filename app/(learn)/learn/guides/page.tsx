@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import type { Metadata } from 'next'
 import StartCta from '@shared/ui/StartCta'
-import { RESOURCES, getResourcesByCategory } from '@learn/lib/resources'
+import { getResourcesByCategory } from '@learn/lib/resources'
 import { PILLARS } from '@learn/lib/pillars'
 import { siteConfig } from '@shared/siteConfig'
 import JsonLd from '@shared/seo/JsonLd'

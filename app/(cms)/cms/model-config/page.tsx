@@ -43,7 +43,6 @@ export default function ModelConfigPage() {
   const [success, setSuccess] = useState('')
   const [routingEnabled, setRoutingEnabled] = useState(false)
   const [slots, setSlots] = useState<SlotConfig[]>([])
-  const [taskSlots, setTaskSlots] = useState<string[]>([])
   const [defaults, setDefaults] = useState<Defaults>({})
   const [providers, setProviders] = useState<ProviderInfo[]>([])
 
@@ -51,7 +50,6 @@ export default function ModelConfigPage() {
     fetch('/api/cms/model-config')
       .then(r => r.ok ? r.json() : Promise.reject('Failed to load'))
       .then(data => {
-        setTaskSlots(data.taskSlots)
         setDefaults(data.defaults)
         setProviders(data.providers || [])
         setRoutingEnabled(data.config.routingEnabled || data.config.openRouterEnabled || false)

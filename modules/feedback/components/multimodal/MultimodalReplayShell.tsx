@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Play, Pause, Maximize2, Minimize2 } from 'lucide-react'
 import type { WhisperSegment } from '@shared/types/multimodal'
 import VideoCaptionOverlay from './VideoCaptionOverlay'
@@ -43,13 +43,6 @@ interface MultimodalReplayShellProps {
 
 const MAX_URL_REFRESH_ATTEMPTS = 2
 
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
 const TIME_UPDATE_THROTTLE_MS = 150
 
 /**
@@ -69,7 +62,6 @@ export default function MultimodalReplayShell({
   whisperSegments,
   askedQuestion,
   activeQuestionLabel,
-  totalDurationSec,
   playing,
   setPlaying,
   replayFullscreen,
@@ -80,8 +72,6 @@ export default function MultimodalReplayShell({
 }: MultimodalReplayShellProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const lastEmitRef = useRef(0)
-  const [internalDuration, setInternalDuration] = useState(0)
-
   // Prop mirrors + recovery state for the listener effect below.
   const knownDurationRef = useRef(knownDurationSeconds)
   knownDurationRef.current = knownDurationSeconds
@@ -227,7 +217,6 @@ export default function MultimodalReplayShell({
 
     const onLoadedMetadata = () => {
       if (Number.isFinite(v.duration) && v.duration > 0) {
-        setInternalDuration(v.duration)
         onDurationKnown?.(v.duration)
         restoreAfterRefresh()
         const pending = pendingSeekRef.current
@@ -242,7 +231,6 @@ export default function MultimodalReplayShell({
         // Probe skipped — recorder-truth duration drives the timeline. The
         // durationchange path below still lets the browser's own finite
         // value win when the file fully buffers.
-        setInternalDuration(known)
         onDurationKnown?.(known)
         restoreAfterRefresh()
         // A seek parked before metadata loaded (seek guard defers the probe
@@ -256,7 +244,6 @@ export default function MultimodalReplayShell({
 
     const onDurationChange = () => {
       if (Number.isFinite(v.duration) && v.duration > 0) {
-        setInternalDuration(v.duration)
         onDurationKnown?.(v.duration)
         if (durationProbeInProgress) {
           durationProbeInProgress = false
@@ -332,8 +319,6 @@ export default function MultimodalReplayShell({
       v.removeEventListener('error', onError)
     }
   }, [onTimeUpdate, onDurationKnown, setPlaying])
-
-  const duration = totalDurationSec ?? internalDuration
 
   return (
     <div

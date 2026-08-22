@@ -4,17 +4,14 @@ import {
   MongooseFinancialDocumentStore,
 } from './financialDocumentPersistenceService'
 import {
-  CreditNote,
   type ICreditNote,
 } from '../models/CreditNote'
 import {
-  Invoice,
   INVOICE_CHARGE_KINDS,
   type IInvoice,
   type InvoiceChargeKind,
 } from '../models/Invoice'
 import {
-  RefundRecord,
   type IRefundRecord,
 } from '../models/RefundRecord'
 import type {

@@ -262,10 +262,10 @@ Anonymous users can browse the full setup form. The system prompts auth only at 
   - JD upload or generate-from-company.
 - Sticky CTA bar summarizes selection.
 - **"Enter Interview Room →"** CTA:
-  - `getStartRedirect(status)`:
-    - `status === 'loading'` → disabled
-    - `status === 'unauthenticated'` → `/signin?callbackUrl=/lobby`  **[Auth Gate]**
-    - `status === 'authenticated'` → `/lobby`
+  - While authentication is loading, the start action is blocked.
+  - Anonymous users open the shared auth gate and remain on setup so the saved
+    interview configuration survives the OAuth round trip.
+  - Authenticated users continue to `/lobby`.
 
 So anonymous users can *configure* an interview but cannot actually start one without signing in.
 

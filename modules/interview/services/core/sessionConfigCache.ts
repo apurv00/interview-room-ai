@@ -11,26 +11,6 @@ const TTL_SECONDS = 1800 // 30 min — matches the default session duration cap.
 
 const cfgKey = (sessionId: string) => `session:cfg:${sessionId}`
 
-/**
- * Which layer served the most recent `getOrLoadSessionConfig` call.
- * Surfaced in the `event:session_config_load` telemetry log so ops can
- * answer "are long interviews hitting redis continuously, or thrashing
- * through the Mongo fallback because the TTL expired mid-flow?"
- *
- * PR B (follow-up to PR #303 ModelConfig parity): session cache was
- * already Redis-first but had NO observability and NO TTL refresh,
- * so interviews running longer than 30 minutes silently fell through
- * to Mongo on every Q-turn after the cache expired. Both problems
- * fixed in this module.
- */
-type ConfigLoadSource =
-  | 'redis-hit'    // cache hit on Redis; TTL refreshed in fire-and-forget. The happy path.
-  | 'mongo-hit'    // Redis miss, Mongo read succeeded, wrote to Redis. Expected on Q1 of a session.
-  | 'mongo-error'  // Mongo read failed — empty config returned. Alert-worthy.
-  | 'feature-off'  // session_config_cache flag disabled — never touched Redis or Mongo.
-  | 'empty'        // Redis miss + all 4 parallel Mongo fetches returned null. Bad sessionId?
-  | 'redis-error'  // Redis outage on the read. Degraded gracefully; not cached.
-
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /**

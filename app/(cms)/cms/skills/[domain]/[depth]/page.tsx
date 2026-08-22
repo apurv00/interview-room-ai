@@ -31,7 +31,6 @@ export default function SkillEditorPage() {
   const depth = params.depth
 
   const [content, setContent] = useState('')
-  const [defaultContent, setDefaultContent] = useState('')
   const [isActive, setIsActive] = useState(true)
   const [hasCustomContent, setHasCustomContent] = useState(false)
   const [version, setVersion] = useState(0)
@@ -49,7 +48,6 @@ export default function SkillEditorPage() {
       .then(r => r.json())
       .then(d => {
         setContent(d.content || '')
-        setDefaultContent(d.defaultContent || '')
         setIsActive(d.isActive ?? true)
         setHasCustomContent(d.hasCustomContent)
         setVersion(d.version || 0)

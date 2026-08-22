@@ -79,7 +79,7 @@ export function contentScoreFromEvaluation(e: AnswerEvaluation | undefined): num
 }
 
 /**
- * Audio confidence band → 0–100 component. Mirrors composureScore.ts.
+ * Audio confidence band → 0–100 component used by the delivery matrix.
  *  high → 100, medium → 50, low → 0. Returns null on missing.
  */
 function audioComponent(marker: ProsodySegment['confidenceMarker'] | undefined): number | null {

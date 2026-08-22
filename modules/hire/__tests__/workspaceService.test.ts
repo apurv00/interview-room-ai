@@ -915,11 +915,3 @@ describe('workspace soft deletion', () => {
     expect(mockGuestSession.updateMany).not.toHaveBeenCalled()
   })
 })
-
-describe('B2C boundary', () => {
-  it('the module mock proves no User.create path exists in workspaceService', async () => {
-    // The @shared/db/models mock throws if User.create is ever invoked; the
-    // suite passing at all is the assertion. This test documents the intent.
-    expect(true).toBe(true)
-  })
-})

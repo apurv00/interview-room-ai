@@ -20,7 +20,6 @@
  * document.
  */
 
-import mongoose from 'mongoose'
 import { connectDB } from '@shared/db/connection'
 import { User } from '@shared/db/models'
 import { logger } from '@shared/logger'

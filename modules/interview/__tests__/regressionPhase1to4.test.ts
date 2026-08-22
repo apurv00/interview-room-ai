@@ -94,16 +94,6 @@ describe('P1 Regression — Feature Flags', () => {
   })
 })
 
-// ─── Phase 3: STAR Stories ──────────────────────────────────────────────────
-
-describe('Phase 3 Regression — STAR Stories', () => {
-  it('resumeAIService module exports generateSTARStories', async () => {
-    // Can't import resumeAIService directly (instantiates Anthropic at module level in JSDOM)
-    // Instead verify the API route file exists and is importable as a module path
-    expect(true).toBe(true) // Service validated via typecheck + build
-  })
-})
-
 // ─── Phase 4: Embedding Service ─────────────────────────────────────────────
 
 describe('Phase 4 Regression — Embedding Service', () => {

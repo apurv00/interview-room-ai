@@ -23,7 +23,7 @@ interface Props {
 export default function WizardShell({ initialSessionId }: Props) {
   const {
     state, dispatch,
-    createSession, submitStage, generateFollowUps, enhanceBullets, submitReview, exportResume, goBack, resetWizard,
+    createSession, submitStage, generateFollowUps, enhanceBullets, submitReview, exportResume, goBack,
   } = useWizard(initialSessionId)
 
   const [mobileTab, setMobileTab] = useState<'wizard' | 'preview'>('wizard')

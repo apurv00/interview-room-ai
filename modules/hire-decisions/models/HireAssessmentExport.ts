@@ -1,7 +1,6 @@
 import mongoose, { Document, Model, Schema } from 'mongoose'
 import {
   HIRE_DECISION_DIMENSIONS,
-  HIRE_EXTERNAL_VERDICT_RECOMMENDATIONS,
   type HireDecisionView,
 } from '../types'
 

@@ -7,7 +7,6 @@ import { connectDB } from '@shared/db/connection'
 import { InterviewSession } from '@shared/db/models'
 import { logger } from '@shared/logger'
 import type { AnswerEvaluation, FeedbackData } from '@shared/types'
-import { getDomainLabel } from '@interview/config/interviewConfig'
 import { inngest } from '@shared/services/inngest'
 
 /**

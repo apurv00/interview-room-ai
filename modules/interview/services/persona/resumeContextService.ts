@@ -107,10 +107,6 @@ function scoreExperience(exp: ResumeExperience, keywords: string[]): number {
   return isCurrent ? base * 1.5 : base
 }
 
-function scoreSkillGroup(group: ResumeSkillGroup, keywords: string[]): number {
-  return countKeywordHits(group.items.join(' '), keywords) + countKeywordHits(group.category, keywords)
-}
-
 function scoreProject(project: ResumeProject, keywords: string[]): number {
   return (
     countKeywordHits(project.description, keywords) +
