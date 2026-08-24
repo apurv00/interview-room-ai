@@ -70,7 +70,12 @@ describe("OverviewWorkspace", () => {
     expect(
       screen.getByText("Interview validation timelines available"),
     ).toBeTruthy();
-    expect(screen.getByText("11 open")).toBeTruthy();
+    expect(screen.getByText("8 open")).toBeTruthy();
+    const validationRow = screen
+      .getByText("Interview validation timelines available")
+      .closest("a");
+    expect(validationRow).not.toBeNull();
+    expect(within(validationRow as HTMLAnchorElement).getByText("3")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Jobs health" })).toHaveAttribute(
       "href",
       "/workspace/jobs/health",

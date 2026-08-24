@@ -66,7 +66,10 @@ export default function OverviewWorkspace() {
   }
 
   const totalActions = overview.actionInbox.items.reduce(
-    (total, item) => total + item.count,
+    (total, item) =>
+      item.kind === "interview_validation_attention"
+        ? total
+        : total + item.count,
     0,
   );
   const actionItems = overview.actionInbox.items.filter(
