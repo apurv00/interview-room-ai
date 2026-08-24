@@ -98,15 +98,6 @@ export interface IInterviewSession extends Document {
     createdAt: Date
   }>
 
-  templateId?: mongoose.Types.ObjectId
-  candidateEmail?: string
-  candidateName?: string
-  recruiterNotes?: string
-
-  // Invite verification (B2B)
-  inviteTokenHash?: string
-  inviteTokenExpiry?: Date
-
   // Sharing
   shareToken?: string
   isPublic?: boolean
@@ -256,7 +247,7 @@ const AnswerScoringReceiptSchema = new Schema(
 const InterviewSessionSchema = new Schema<IInterviewSession>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', index: true },
+    organizationId: { type: Schema.Types.ObjectId, index: true },
 
     config: {
       role: { type: String, required: true },
@@ -319,15 +310,6 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
     designProblemId: { type: String },
     codeSubmissions: { type: Schema.Types.Mixed },
     codingClarifications: { type: Schema.Types.Mixed, default: [] },
-
-    templateId: { type: Schema.Types.ObjectId, ref: 'InterviewTemplate' },
-    candidateEmail: { type: String, lowercase: true },
-    candidateName: { type: String },
-    recruiterNotes: { type: String },
-
-    // Invite verification (B2B)
-    inviteTokenHash: { type: String },
-    inviteTokenExpiry: { type: Date },
 
     // Consent
     consentedToRecording: { type: Boolean },
@@ -420,7 +402,6 @@ InterviewSessionSchema.add(PaymentSessionProjectionDefinition)
 
 InterviewSessionSchema.index({ userId: 1, createdAt: -1 })
 InterviewSessionSchema.index({ organizationId: 1, createdAt: -1 })
-InterviewSessionSchema.index({ organizationId: 1, candidateEmail: 1 })
 InterviewSessionSchema.index({ status: 1, createdAt: -1 })
 InterviewSessionSchema.index({ status: 1, 'config.role': 1, 'config.experience': 1 })
 InterviewSessionSchema.index({ userId: 1, status: 1 })

@@ -13,7 +13,7 @@ import {
   CreateInterviewTypeSchema,
   UpdateInterviewTypeSchema,
 } from '@cms/validators/cms'
-import { canViewSession, hasRole, canAccessOrg } from '@shared/auth/permissions'
+import { canEditSession, canViewSession } from '@shared/auth/permissions'
 
 // ─── Authorization Boundary Tests ───────────────────────────────────────────
 
@@ -32,18 +32,18 @@ describe('canViewSession — authorization boundaries', () => {
     )).toBe(false)
   })
 
-  it('blocks recruiter from different org', () => {
-    expect(canViewSession(
-      { userId: 'user-1', organizationId: 'org-A' },
-      { id: 'user-2', role: 'recruiter', organizationId: 'org-B' }
-    )).toBe(false)
-  })
-
-  it('allows recruiter from same org', () => {
+  it('does not grant a retired recruiter role cross-user access', () => {
     expect(canViewSession(
       { userId: 'user-1', organizationId: 'org-A' },
       { id: 'user-2', role: 'recruiter', organizationId: 'org-A' }
-    )).toBe(true)
+    )).toBe(false)
+  })
+
+  it('does not grant a retired org-admin role cross-user access', () => {
+    expect(canViewSession(
+      { userId: 'user-1', organizationId: 'org-A' },
+      { id: 'user-2', role: 'org_admin', organizationId: 'org-A' }
+    )).toBe(false)
   })
 
   it('allows platform_admin to view any session', () => {
@@ -53,51 +53,28 @@ describe('canViewSession — authorization boundaries', () => {
     )).toBe(true)
   })
 
-  it('blocks candidate from accessing session without org even with matching org', () => {
-    expect(canViewSession(
-      { userId: 'user-1', organizationId: undefined },
-      { id: 'user-2', role: 'recruiter', organizationId: 'org-A' }
+})
+
+describe('canEditSession — authorization boundaries', () => {
+  it('allows the session owner to edit', () => {
+    expect(canEditSession(
+      { userId: 'user-1', organizationId: 'org-A' },
+      { id: 'user-1', role: 'candidate', organizationId: undefined }
+    )).toBe(true)
+  })
+
+  it('does not grant a retired org-admin role cross-user edit access', () => {
+    expect(canEditSession(
+      { userId: 'user-1', organizationId: 'org-A' },
+      { id: 'user-2', role: 'org_admin', organizationId: 'org-A' }
     )).toBe(false)
   })
-})
 
-describe('hasRole — role hierarchy', () => {
-  it('candidate cannot access recruiter features', () => {
-    expect(hasRole('candidate', 'recruiter')).toBe(false)
-  })
-
-  it('recruiter can access candidate features', () => {
-    expect(hasRole('recruiter', 'candidate')).toBe(true)
-  })
-
-  it('platform_admin can access everything', () => {
-    expect(hasRole('platform_admin', 'candidate')).toBe(true)
-    expect(hasRole('platform_admin', 'recruiter')).toBe(true)
-    expect(hasRole('platform_admin', 'org_admin')).toBe(true)
-    expect(hasRole('platform_admin', 'platform_admin')).toBe(true)
-  })
-
-  it('unknown role defaults to lowest level', () => {
-    expect(hasRole('unknown_role', 'candidate')).toBe(true) // level 0 >= level 0
-    expect(hasRole('unknown_role', 'recruiter')).toBe(false)
-  })
-})
-
-describe('canAccessOrg — tenant isolation', () => {
-  it('platform_admin can access any org', () => {
-    expect(canAccessOrg(undefined, 'org-A', 'platform_admin')).toBe(true)
-  })
-
-  it('user can access own org', () => {
-    expect(canAccessOrg('org-A', 'org-A', 'recruiter')).toBe(true)
-  })
-
-  it('user cannot access different org', () => {
-    expect(canAccessOrg('org-A', 'org-B', 'recruiter')).toBe(false)
-  })
-
-  it('user without org cannot access any org', () => {
-    expect(canAccessOrg(undefined, 'org-A', 'recruiter')).toBe(false)
+  it('allows a platform administrator to edit any session', () => {
+    expect(canEditSession(
+      { userId: 'user-1', organizationId: 'org-A' },
+      { id: 'admin-1', role: 'platform_admin', organizationId: undefined }
+    )).toBe(true)
   })
 })
 

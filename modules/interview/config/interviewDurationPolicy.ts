@@ -24,11 +24,7 @@ export function isBasicPersonalInterviewUser(
 ): boolean {
   if (!user) return true
 
-  const isPrivilegedRole = [
-    'recruiter',
-    'org_admin',
-    'platform_admin',
-  ].includes(user.role ?? 'candidate')
+  const isPrivilegedRole = user.role === 'platform_admin'
   const hasPaidPlan = ['plus', 'pro', 'enterprise'].includes(
     user.plan ?? 'free',
   )

@@ -15,8 +15,16 @@ export {
 export { HireHumanKitDelivery } from "./models/HireHumanKitDelivery";
 export { HireHumanRound } from "./models/HireHumanRound";
 export { HireInterviewResult } from "./models/HireInterviewResult";
+export { HireInvitationBatch } from "./models/HireInvitationBatch";
+export { HireInvitationBatchItem } from "./models/HireInvitationBatchItem";
+export type {
+  HireInvitationBatchItemDeliveryStatus,
+  HireInvitationBatchItemSelectionReason,
+  HireInvitationBatchItemStatus,
+} from "./models/HireInvitationBatchItem";
 export { HireJob } from "./models/HireJob";
 export type { HireJobStatus } from "./models/HireJob";
+export type { HireScreeningScoreState } from "./models/HireScreeningGate";
 
 export { connectHireControlDB } from "./services/hireControlBoundary";
 export { requireMembership } from "./services/workspaceService";

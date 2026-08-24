@@ -11,7 +11,6 @@ import {
   readOperationsResponse,
 } from "../_operations/operationsView";
 import DigestPreferenceControl from "./DigestPreferenceControl";
-import CompanyIdentityCard from "./CompanyIdentityCard";
 
 function pluralize(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -67,10 +66,7 @@ export default function OverviewWorkspace() {
   }
 
   const totalActions = overview.actionInbox.items.reduce(
-    (total, item) =>
-      item.kind === "interview_validation_attention"
-        ? total
-        : total + item.count,
+    (total, item) => total + item.count,
     0,
   );
   const actionItems = overview.actionInbox.items.filter(
@@ -108,8 +104,6 @@ export default function OverviewWorkspace() {
           </a>
         </div>
       </header>
-
-      <CompanyIdentityCard />
 
       <section
         aria-label="Hiring key performance indicators"
@@ -171,25 +165,32 @@ export default function OverviewWorkspace() {
             aria-label="Current grouped actions"
           >
             {actionItems.map((item) => (
-              <li
-                key={item.kind}
-                className="flex items-center justify-between gap-4 py-3"
-              >
-                <span className="text-sm font-medium text-[#0f1419]">
-                  {operationsLabels[item.kind]}
-                </span>
-                <Badge
-                  variant={
-                    item.kind === "interview_validation_attention"
-                      ? "default"
-                      : item.kind === "terminal_human_kit_delivery_failures"
-                      || item.kind === "failed_multimodal_analyses"
-                      ? "danger"
-                      : "caution"
-                  }
+              <li key={item.kind}>
+                <Link
+                  href="/workspace/jobs/health"
+                  className="group flex flex-col items-start gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
                 >
-                  {item.count}
-                </Badge>
+                  <span className="text-sm font-medium text-[#0f1419] group-hover:text-indigo-700">
+                    {operationsLabels[item.kind]}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <Badge
+                      variant={
+                        item.kind === "interview_validation_attention"
+                          ? "default"
+                          : item.kind === "terminal_human_kit_delivery_failures"
+                          || item.kind === "failed_multimodal_analyses"
+                          ? "danger"
+                          : "caution"
+                      }
+                    >
+                      {item.count}
+                    </Badge>
+                    <span className="text-xs font-medium text-indigo-700">
+                      Review
+                    </span>
+                  </span>
+                </Link>
               </li>
             ))}
           </ul>

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { issueOtp } from '@b2b/services/otpService'
+import { issueOtp } from '@shared/auth/mailboxOtp'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { sendEmail } from '@shared/services/emailService'
 import { buildHirePrivacyDeletionOtpEmail } from '@hire/emails/privacyDeletionOtpEmail'

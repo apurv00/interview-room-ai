@@ -49,7 +49,6 @@ function sessionDocument(ownerId = USER_ID) {
     feedback: { overall_score: 91, private: 'retained feedback' },
     resumeText: 'PRIVATE RESUME',
     jobDescription: 'PRIVATE JOB DESCRIPTION',
-    candidateEmail: 'candidate@example.com',
     userAgent: 'private-agent',
     parsedResume: { name: 'Candidate' },
     parsedJobDescription: { title: 'Backend Engineer' },
@@ -63,8 +62,12 @@ function sessionDocument(ownerId = USER_ID) {
     facialLandmarksR2Key: 'landmarks/private.json',
     resumeR2Key: 'documents/private-resume.pdf',
     jdR2Key: 'documents/private-job.pdf',
-    inviteTokenHash: 'invite-secret',
-    inviteTokenExpiry: new Date('2099-01-01T00:00:00.000Z'),
+    templateId: '507f1f77bcf86cd799439099',
+    candidateEmail: 'legacy-candidate@example.com',
+    candidateName: 'Legacy Candidate',
+    recruiterNotes: 'legacy recruiter-only note',
+    inviteTokenHash: 'legacy-invite-token-hash',
+    inviteTokenExpiry: new Date('2026-01-01T00:00:00.000Z'),
     transcript: [],
   }
   return { ...data, toObject: () => ({ ...data }) }
@@ -74,8 +77,8 @@ function callRoute(viewerId = USER_ID) {
   mocks.getServerSession.mockResolvedValue({
     user: {
       id: viewerId,
-      role: viewerId === USER_ID ? 'candidate' : 'recruiter',
-      organizationId: viewerId === USER_ID ? undefined : ORG_ID,
+      role: viewerId === USER_ID ? 'candidate' : 'platform_admin',
+      organizationId: undefined,
     },
   })
   return GET(
@@ -121,7 +124,7 @@ describe('GET /api/interviews/[id] account deletion fence', () => {
     expect(mocks.activeJobsAccountIds).toHaveBeenCalledWith([USER_ID])
   })
 
-  it('hides a retained session from an active organization viewer when its owner is deleting', async () => {
+  it('hides a retained session from a platform administrator when its owner is deleting', async () => {
     mocks.getSession.mockResolvedValue(sessionDocument(USER_ID))
     mocks.isJobsAccountActive
       .mockResolvedValueOnce(true)
@@ -134,13 +137,13 @@ describe('GET /api/interviews/[id] account deletion fence', () => {
     expect(mocks.getSession).toHaveBeenCalledWith(
       SESSION_ID,
       VIEWER_ID,
-      'recruiter',
-      ORG_ID,
+      'platform_admin',
+      undefined,
       { excludeTranscript: true },
     )
   })
 
-  it('withholds data when the owner starts deleting after an organization viewer captured it', async () => {
+  it('withholds data when the owner starts deleting after a platform administrator captured it', async () => {
     mocks.getSession.mockResolvedValue(sessionDocument(USER_ID))
     mocks.activeJobsAccountIds.mockResolvedValueOnce(new Set([VIEWER_ID]))
 
@@ -161,7 +164,6 @@ describe('GET /api/interviews/[id] account deletion fence', () => {
       feedback: { overall_score: 91, private: 'retained feedback' },
       resumeText: 'PRIVATE RESUME',
       jobDescription: 'PRIVATE JOB DESCRIPTION',
-      candidateEmail: 'candidate@example.com',
       userAgent: 'private-agent',
       hasRecording: true,
       hasScreenRecording: true,
@@ -174,6 +176,10 @@ describe('GET /api/interviews/[id] account deletion fence', () => {
       'facialLandmarksR2Key',
       'resumeR2Key',
       'jdR2Key',
+      'templateId',
+      'candidateEmail',
+      'candidateName',
+      'recruiterNotes',
       'inviteTokenHash',
       'inviteTokenExpiry',
     ]) {
@@ -183,7 +189,7 @@ describe('GET /api/interviews/[id] account deletion fence', () => {
     expect(mocks.activeJobsAccountIds).toHaveBeenCalledWith([USER_ID])
   })
 
-  it('strips candidate private context from an active organization viewer response', async () => {
+  it('strips candidate private context from an active platform-administrator response', async () => {
     const response = await callRoute(VIEWER_ID)
     const body = await response.json()
 
@@ -197,7 +203,6 @@ describe('GET /api/interviews/[id] account deletion fence', () => {
     for (const privateField of [
       'resumeText',
       'jobDescription',
-      'candidateEmail',
       'userAgent',
       'parsedResume',
       'parsedJobDescription',
@@ -211,6 +216,10 @@ describe('GET /api/interviews/[id] account deletion fence', () => {
       'facialLandmarksR2Key',
       'resumeR2Key',
       'jdR2Key',
+      'templateId',
+      'candidateEmail',
+      'candidateName',
+      'recruiterNotes',
       'inviteTokenHash',
       'inviteTokenExpiry',
     ]) {

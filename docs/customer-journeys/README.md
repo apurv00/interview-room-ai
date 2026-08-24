@@ -1,6 +1,8 @@
 # Interview Prep Guru — Customer Journey Map
 
-This directory documents every user journey across every CTA and page in the Interview Prep Guru consumer product (B2B `/hire/*` routes are **excluded**).
+This directory documents every user journey across every CTA and page in the
+Interview Prep Guru consumer product. The separate IPG Hire workspace, control,
+and candidate-interview surfaces are **excluded**.
 
 The goal is exhaustive coverage: if a user can click it, tap it, or land on it, it should be documented here.
 
@@ -24,7 +26,9 @@ The goal is exhaustive coverage: if a user can click it, tap it, or land on it, 
 
 ## Out of scope (intentionally omitted)
 
-- `/hire/*` pages and `/api/hire/*` routes (B2B recruiter product)
+- IPG Hire surfaces: `/workspace/*`, `/api/workspace/*`, `/hire-signin`,
+  `/api/hire-auth/*`, `/candidate/*`, `/apply/*`, `/handoff/*`,
+  `/interview-kit/*`, `/share-packet/*`, and `/candidate-status/*`
 - `/cms/*` platform-admin screens (not consumer-facing)
 - Inngest background jobs (not user-visible)
 - Internal debug/seed endpoints

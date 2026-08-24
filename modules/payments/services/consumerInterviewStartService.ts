@@ -370,9 +370,7 @@ function exactConsumerAuthority(
     session.id !== input.sessionId ||
     session.userId !== input.userId ||
     session.deletionPendingAt !== undefined ||
-    session.organizationId !== undefined ||
-    session.inviteTokenHash !== undefined ||
-    session.inviteProvenance !== undefined
+    session.organizationId !== undefined
   ) {
     throw failure(
       'not_found_or_ineligible',
@@ -385,12 +383,6 @@ function exactConsumerAuthority(
     runtime.sessionId !== input.sessionId ||
     runtime.userId !== input.userId ||
     runtime.authorityKind !== 'consumer_usage' ||
-    runtime.organizationId !== undefined ||
-    runtime.inviteAuthorityId !== undefined ||
-    runtime.recruiterUserId !== undefined ||
-    runtime.recruiterReferenceErasedAt !== undefined ||
-    runtime.inviteVerifiedAt !== undefined ||
-    runtime.inviteProvenanceDigest !== undefined ||
     !runtime.usageId ||
     !OBJECT_ID_PATTERN.test(runtime.usageId) ||
     !runtime.entitlementSource ||

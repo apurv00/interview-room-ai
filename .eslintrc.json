@@ -9,7 +9,6 @@
             "group": [
               "@interview/*",
               "@learn/*",
-              "@b2b/*",
               "@resume/*",
               "@cms/*",
               "@feedback/*",
@@ -35,7 +34,6 @@
               {
                 "group": [
                   "@learn/*",
-                  "@b2b/*",
                   "@resume/*",
                   "@cms/*",
                   "@feedback/*",
@@ -61,7 +59,6 @@
               {
                 "group": [
                   "@interview/*",
-                  "@b2b/*",
                   "@resume/*",
                   "@cms/*",
                   "@feedback/*",
@@ -69,32 +66,6 @@
                   "@hire/*"
                 ],
                 "message": "Cross-module imports must use the module barrel (e.g. '@interview')."
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "files": [
-        "modules/b2b/**/*"
-      ],
-      "rules": {
-        "no-restricted-imports": [
-          "error",
-          {
-            "patterns": [
-              {
-                "group": [
-                  "@interview/*",
-                  "@learn/*",
-                  "@resume/*",
-                  "@cms/*",
-                  "@feedback/*",
-                  "@jobs/*",
-                  "@hire/*"
-                ],
-                "message": "Cross-module imports must use the module barrel."
               }
             ]
           }
@@ -114,7 +85,6 @@
                 "group": [
                   "@interview/*",
                   "@learn/*",
-                  "@b2b/*",
                   "@cms/*",
                   "@feedback/*",
                   "@jobs/*",
@@ -140,7 +110,6 @@
                 "group": [
                   "@interview/*",
                   "@learn/*",
-                  "@b2b/*",
                   "@resume/*",
                   "@feedback/*",
                   "@jobs/*",
@@ -165,7 +134,6 @@
               {
                 "group": [
                   "@learn/*",
-                  "@b2b/*",
                   "@resume/*",
                   "@cms/*",
                   "@jobs/*",
@@ -199,7 +167,6 @@
                 "group": [
                   "@interview/*",
                   "@learn/*",
-                  "@b2b/*",
                   "@resume/*",
                   "@cms/*",
                   "@feedback/*",
@@ -228,8 +195,7 @@
                   "@resume/*",
                   "@cms/*",
                   "@feedback/*",
-                  "@jobs/*",
-                  "@b2b/*"
+                  "@jobs/*"
                 ],
                 "message": "Cross-module imports must use the module barrel."
               }
@@ -253,8 +219,6 @@
                   "@interview/*",
                   "@learn",
                   "@learn/*",
-                  "@b2b",
-                  "@b2b/*",
                   "@resume",
                   "@resume/*",
                   "@cms",

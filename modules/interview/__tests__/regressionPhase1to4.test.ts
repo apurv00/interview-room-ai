@@ -147,11 +147,25 @@ describe('Schema Regression — InterviewSession', () => {
     expect(schema.path('consentedToAnalysis')).toBeDefined()
   })
 
-  it('InterviewSession has invite token fields', async () => {
+  it('InterviewSession has no retired org-invite fields or index', async () => {
     const { InterviewSession } = await import('@shared/db/models')
     const schema = InterviewSession.schema
-    expect(schema.path('inviteTokenHash')).toBeDefined()
-    expect(schema.path('inviteTokenExpiry')).toBeDefined()
+    expect(schema.path('candidateEmail')).toBeUndefined()
+    expect(schema.path('inviteTokenHash')).toBeUndefined()
+    expect(schema.path('inviteTokenExpiry')).toBeUndefined()
+    expect(schema.path('templateId')).toBeUndefined()
+    expect(schema.path('candidateName')).toBeUndefined()
+    expect(schema.path('recruiterNotes')).toBeUndefined()
+    expect(schema.indexes().some(([fields]) => 'candidateEmail' in fields)).toBe(false)
+  })
+
+  it('retains organizationId as unpopulated tenant metadata', async () => {
+    const { InterviewSession, User, UsageRecord } = await import('@shared/db/models')
+    for (const model of [InterviewSession, User, UsageRecord]) {
+      const path = model.schema.path('organizationId')
+      expect(path).toBeDefined()
+      expect(path.options.ref).toBeUndefined()
+    }
   })
 
   it('InterviewSession duration accepts 5-60 range', async () => {

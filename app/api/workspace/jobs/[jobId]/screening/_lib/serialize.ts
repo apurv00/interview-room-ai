@@ -1,6 +1,40 @@
-import type { IHireInvitationBatch, IHireScreeningGate } from '@hire'
+import type {
+  IHireInvitationBatch,
+  IHireScreeningGate,
+  ScreeningGatePreviewResult,
+} from '@hire'
+import type {
+  JobScreeningMemberReadProjection,
+  ScreeningMemberCandidateView,
+} from '@hire-operations'
 
-export function serializeInvitationBatch(batch: IHireInvitationBatch) {
+type ScreeningPreview = ScreeningGatePreviewResult['preview']
+
+function candidateViewsByApplicationId(
+  projection?: JobScreeningMemberReadProjection,
+): Map<string, ScreeningMemberCandidateView> {
+  return new Map(
+    (projection?.candidates ?? []).map((candidate) => [candidate.applicationId, candidate]),
+  )
+}
+
+export function serializeScreeningPreview(
+  preview: ScreeningPreview,
+  projection?: JobScreeningMemberReadProjection,
+) {
+  const candidates = candidateViewsByApplicationId(projection)
+  return {
+    ...preview,
+    rankedApplications: preview.rankedApplications.map((entry) => ({
+      ...entry,
+      candidate: candidates.get(entry.applicationId) ?? null,
+    })),
+  }
+}
+
+export function serializeInvitationBatch(
+  batch: IHireInvitationBatch,
+) {
   return {
     id: batch._id.toString(),
     screeningGateId: batch.screeningGateId.toString(),
@@ -10,18 +44,29 @@ export function serializeInvitationBatch(batch: IHireInvitationBatch) {
     plannedCount: batch.plannedCount,
     sentCount: batch.sentCount,
     failedCount: batch.failedCount,
-    lastError: batch.lastError ?? null,
+    // Worker/provider detail may contain operational internals. The recipient
+    // ledger carries a stable, controlled issue instead.
+    lastError: batch.lastError
+      ? 'One or more invitation deliveries need attention.'
+      : null,
     completedAt: batch.completedAt ?? null,
     cancelledAt: batch.cancelledAt ?? null,
     createdByName: batch.createdByName,
     createdAt: batch.createdAt,
+    // Recipient delivery is intentionally fetched from the bounded,
+    // batch-scoped cursor endpoint only when a recruiter expands the ledger.
+    recipients: [],
   }
 }
 
-/** Explicit member-facing shape: no User references, recipient PII, or hidden worker claims. */
+/**
+ * Explicit member-facing shape. PII is a current, authenticated read-time
+ * join; it never comes from or writes back to the immutable gate snapshot.
+ */
 export function serializeScreeningGate(
   gate: IHireScreeningGate,
   batches: IHireInvitationBatch[] = [],
+  projection?: JobScreeningMemberReadProjection,
 ) {
   // Privacy cleanup removes whole snapshot entries rather than retaining
   // dangling identity coordinates. Filter defensively as well so a legacy or
@@ -31,6 +76,8 @@ export function serializeScreeningGate(
     (entry) => Boolean(entry.applicationId && entry.candidateId),
   )
   const exceptions = gate.exceptions.filter((exception) => Boolean(exception.applicationId))
+  const candidates = candidateViewsByApplicationId(projection)
+  const cutLineApplicationId = gate.cutLine.applicationId?.toString() ?? null
 
   return {
     id: gate._id.toString(),
@@ -54,9 +101,12 @@ export function serializeScreeningGate(
       mode: gate.cutLine.mode,
       requestedTopN: gate.cutLine.requestedTopN ?? null,
       scoreThreshold: gate.cutLine.scoreThreshold ?? null,
-      applicationId: gate.cutLine.applicationId?.toString() ?? null,
+      applicationId: cutLineApplicationId,
       rank: gate.cutLine.rank ?? null,
       score: gate.cutLine.score ?? null,
+      candidate: cutLineApplicationId
+        ? candidates.get(cutLineApplicationId) ?? null
+        : null,
     },
     counts: {
       evaluated: gate.evaluatedCount,
@@ -75,6 +125,7 @@ export function serializeScreeningGate(
       automaticallySelected: entry.automaticallySelected,
       selected: entry.selected,
       selectionReason: entry.selectionReason,
+      candidate: candidates.get(entry.applicationId.toString()) ?? null,
     })),
     exceptions: exceptions.map((exception) => ({
       applicationId: exception.applicationId.toString(),
@@ -82,12 +133,13 @@ export function serializeScreeningGate(
       actorName: exception.actorName,
       note: exception.note,
       at: exception.at,
+      candidate: candidates.get(exception.applicationId.toString()) ?? null,
     })),
     confirmedByName: gate.confirmedByName,
     confirmedAt: gate.confirmedAt,
     cancelledAt: gate.cancelledAt ?? null,
     cancelNote: gate.cancelNote ?? null,
     createdAt: gate.createdAt,
-    batches: batches.map(serializeInvitationBatch),
+    batches: batches.map((batch) => serializeInvitationBatch(batch)),
   }
 }

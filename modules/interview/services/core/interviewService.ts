@@ -45,9 +45,6 @@ interface CreateSessionInput {
   userId: string
   organizationId?: string
   config: InterviewConfig
-  templateId?: string
-  candidateEmail?: string
-  candidateName?: string
   userAgent?: string
   jobDescription?: string
   resumeText?: string
@@ -153,8 +150,6 @@ interface UpdateSessionInput {
 
 interface ListSessionsInput {
   userId: string
-  organizationId?: string
-  role: string
   page?: number
   limit?: number
   status?: string
@@ -237,14 +232,14 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
   )
 
   // Repair personal Basic rows created before pricing enforcement. Organization,
-  // staff, Enterprise, admin-grant, and grandfathered paid rows remain outside
-  // this migration fence.
+  // platform-admin, Enterprise, admin-grant, and grandfathered paid rows remain
+  // outside this migration fence. Retired/unknown raw roles carry no privilege.
   await User.updateOne(
     {
       _id: userId,
       accountState: { $ne: 'deleting' },
       organizationId: null,
-      role: { $nin: ['recruiter', 'org_admin', 'platform_admin'] },
+      role: { $nin: ['platform_admin'] },
       plan: { $nin: ['plus', 'pro', 'enterprise'] },
       entitlementSource: { $nin: ['subscription', 'admin_grant'] },
       $or: [
@@ -298,7 +293,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
 
   const personalBasicAuthority = {
     organizationId: null,
-    role: { $nin: ['recruiter', 'org_admin', 'platform_admin'] },
+    role: { $nin: ['platform_admin'] },
     plan: { $nin: ['plus', 'pro', 'enterprise'] },
     entitlementSource: { $nin: ['subscription', 'admin_grant'] },
     monthlyInterviewLimit: 1,
@@ -343,7 +338,7 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
               monthlyInterviewLimit: 15,
             },
             { organizationId: { $ne: null } },
-            { role: { $in: ['recruiter', 'org_admin', 'platform_admin'] } },
+            { role: { $in: ['platform_admin'] } },
             { plan: 'enterprise' },
             { entitlementSource: 'admin_grant' },
             {
@@ -519,11 +514,6 @@ export async function createSession(input: CreateSessionInput): Promise<IIntervi
     config: input.config,
     status: 'created',
     scoringDimensions,
-    templateId: input.templateId
-      ? new mongoose.Types.ObjectId(input.templateId)
-      : undefined,
-    candidateEmail: input.candidateEmail,
-    candidateName: input.candidateName,
     userAgent: input.userAgent,
     jobDescription: input.jobDescription,
     parsedJobDescription: gatedParsedJobDescription as unknown as Record<string, unknown> | undefined,
@@ -792,27 +782,8 @@ export async function listSessions(input: ListSessionsInput) {
   const limit = Math.min(input.limit || 20, 50)
   const skip = (page - 1) * limit
 
-  const filter: Record<string, unknown> = {}
-  const organizationScoped = Boolean(
-    input.organizationId &&
-    ['recruiter', 'org_admin', 'platform_admin'].includes(input.role),
-  )
-
-  // If recruiter/admin, show org sessions; otherwise show own sessions
-  if (organizationScoped) {
-    const organizationId = new mongoose.Types.ObjectId(input.organizationId)
-    const { _id: _requesterId, ...activeAccountState } = activeJobsAccountFilter(input.userId)
-    // Resolve active organization members before applying skip/limit/count.
-    // Missing Users and explicit `deleting` Users therefore cannot occupy a
-    // page slot or inflate pagination for recruiter/admin history.
-    const activeOwnerIds = await User.distinct('_id', {
-      organizationId,
-      ...activeAccountState,
-    })
-    filter.organizationId = organizationId
-    filter.userId = { $in: activeOwnerIds }
-  } else {
-    filter.userId = new mongoose.Types.ObjectId(input.userId)
+  const filter: Record<string, unknown> = {
+    userId: new mongoose.Types.ObjectId(input.userId),
   }
 
   if (input.status) {

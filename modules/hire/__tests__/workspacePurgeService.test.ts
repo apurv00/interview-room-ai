@@ -20,6 +20,7 @@ const {
   mockDeleteAssessmentExports,
   mockCancelReportExports,
   mockBrandingDelete,
+  mockDeleteCommercial,
 } = vi.hoisted(() => {
   const child = () => ({ deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }) })
   const modelMap = {
@@ -107,6 +108,7 @@ const {
     mockDeleteAssessmentExports: vi.fn(),
     mockCancelReportExports: vi.fn(),
     mockBrandingDelete: vi.fn(),
+    mockDeleteCommercial: vi.fn(),
   }
 })
 
@@ -133,6 +135,10 @@ vi.mock('@hire-branding/services/workspaceBrandingStorage', () => ({
     delete: (...args: unknown[]) => mockBrandingDelete(...args),
   },
   hireWorkspaceLogoKey: (workspaceId: string) => `hire-workspace-branding/${workspaceId}/logo`,
+}))
+vi.mock('@hire-commercial/purge-boundary', () => ({
+  deleteHireCommercialWorkspaceData: (...args: unknown[]) =>
+    mockDeleteCommercial(...args),
 }))
 
 import {
@@ -202,6 +208,7 @@ beforeEach(() => {
   mockDeleteAssessmentExports.mockResolvedValue(undefined)
   mockCancelReportExports.mockResolvedValue(0)
   mockBrandingDelete.mockResolvedValue(undefined)
+  mockDeleteCommercial.mockResolvedValue(undefined)
   reportModels.HireReportExport.deleteMany.mockResolvedValue({ deletedCount: 1 })
   statusModels.HireCandidateStatusLink.deleteMany.mockResolvedValue({ deletedCount: 1 })
   onboardingModels.HireOnboardingTestDrive.deleteMany.mockResolvedValue({ deletedCount: 1 })
@@ -227,6 +234,7 @@ describe('workspace hard purge', () => {
       'HireMultimodalObservationPurgeObligation',
       'HireMultimodalAnalysisIngestionEvent',
       'HireMultimodalAnalysis',
+      'HireCommercialAccount',
       'HireInterviewResult',
       'HireInterviewAttempt',
       'HireMediaAsset',
@@ -385,6 +393,13 @@ describe('workspace hard purge', () => {
       cancelledAt: NOW,
       session,
     })
+    expect(mockDeleteCommercial).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      session,
+    })
+    expect(mockDeleteCommercial.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireWorkspace.deleteOne.mock.invocationCallOrder[0],
+    )
     expect(mockDeleteAssessmentExports).toHaveBeenCalledWith([assessmentExportTarget])
     expect(mockCancelAssessmentExports.mock.invocationCallOrder[0]).toBeLessThan(
       decisionModels.HireAssessmentExport.deleteMany.mock.invocationCallOrder[0],

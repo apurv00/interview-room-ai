@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({
   itemIndexes: vi.fn(),
   itemAggregate: vi.fn(),
   itemDuplicateRows: vi.fn(),
+  resultCreateIndex: vi.fn(),
+  resultIndexes: vi.fn(),
+  accountCreateIndex: vi.fn(),
+  accountIndexes: vi.fn(),
+  accountAggregate: vi.fn(),
+  accountDuplicateRows: vi.fn(),
 }))
 
 vi.mock('../../shared/db/connection', () => ({ connectDB: mocks.connectDB }))
@@ -30,6 +36,21 @@ vi.mock('../../modules/hire/models', () => ({
       createIndex: mocks.itemCreateIndex,
       indexes: mocks.itemIndexes,
       aggregate: mocks.itemAggregate,
+    },
+  },
+  HireInterviewResult: {
+    collection: {
+      createIndex: mocks.resultCreateIndex,
+      indexes: mocks.resultIndexes,
+    },
+  },
+}))
+vi.mock('../../modules/hire-commercial/models', () => ({
+  HireCommercialAccount: {
+    collection: {
+      createIndex: mocks.accountCreateIndex,
+      indexes: mocks.accountIndexes,
+      aggregate: mocks.accountAggregate,
     },
   },
 }))
@@ -57,6 +78,14 @@ const targetMocks = {
   'invitation-batch-items': {
     createIndex: mocks.itemCreateIndex,
     indexes: mocks.itemIndexes,
+  },
+  'interview-results': {
+    createIndex: mocks.resultCreateIndex,
+    indexes: mocks.resultIndexes,
+  },
+  'commercial-accounts': {
+    createIndex: mocks.accountCreateIndex,
+    indexes: mocks.accountIndexes,
   },
 } as const
 
@@ -107,6 +136,8 @@ describe('Hire Phase 2 control index preparation', () => {
     mocks.connectDB.mockResolvedValue({ connection: { name: 'hire-control' } })
     mocks.itemAggregate.mockReturnValue({ toArray: mocks.itemDuplicateRows })
     mocks.itemDuplicateRows.mockResolvedValue([])
+    mocks.accountAggregate.mockReturnValue({ toArray: mocks.accountDuplicateRows })
+    mocks.accountDuplicateRows.mockResolvedValue([])
     resetCreateIndexResults()
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
   })
@@ -136,7 +167,7 @@ describe('Hire Phase 2 control index preparation', () => {
     }
   })
 
-  it('keeps --check read-only and verifies all 11 exact indexes', async () => {
+  it('keeps --check read-only and verifies all 14 exact indexes', async () => {
     setAllExactIndexes()
 
     await prepareHirePhase2Indexes(['--check'])
@@ -147,6 +178,7 @@ describe('Hire Phase 2 control index preparation', () => {
       expect(targetMocks[target].createIndex).not.toHaveBeenCalled()
     }
     expect(mocks.itemAggregate).not.toHaveBeenCalled()
+    expect(mocks.accountAggregate).not.toHaveBeenCalled()
     expect(console.log).toHaveBeenCalledWith(
       `\nCHECK PASSED — all ${HIRE_PHASE2_INDEX_DEFINITIONS.length} exact Phase 2 Hire-control indexes exist.`,
     )
@@ -170,10 +202,23 @@ describe('Hire Phase 2 control index preparation', () => {
       { $match: { count: { $gt: 1 } } },
       { $limit: 1 },
     ])
+    expect(mocks.accountAggregate).toHaveBeenCalledTimes(1)
+    expect(mocks.accountAggregate).toHaveBeenCalledWith([
+      {
+        $group: {
+          _id: '$workspaceId',
+          count: { $sum: 1 },
+        },
+      },
+      { $match: { count: { $gt: 1 } } },
+      { $limit: 1 },
+    ])
     expect(mocks.intakeCreateIndex).toHaveBeenCalledTimes(2)
     expect(mocks.gateCreateIndex).toHaveBeenCalledTimes(2)
     expect(mocks.batchCreateIndex).toHaveBeenCalledTimes(3)
-    expect(mocks.itemCreateIndex).toHaveBeenCalledTimes(4)
+    expect(mocks.itemCreateIndex).toHaveBeenCalledTimes(5)
+    expect(mocks.resultCreateIndex).toHaveBeenCalledTimes(1)
+    expect(mocks.accountCreateIndex).toHaveBeenCalledTimes(1)
     expect(mocks.itemCreateIndex).toHaveBeenCalledWith(
       { workspaceId: 1, applicationId: 1 },
       {
@@ -183,8 +228,25 @@ describe('Hire Phase 2 control index preparation', () => {
       },
     )
     expect(mocks.itemCreateIndex).toHaveBeenCalledWith(
+      { workspaceId: 1, jobId: 1, invitationBatchId: 1, _id: 1 },
+      {
+        name: 'workspaceId_1_jobId_1_invitationBatchId_1__id_1',
+      },
+    )
+    expect(mocks.itemCreateIndex).toHaveBeenCalledWith(
       { workspaceId: 1, roundId: 1 },
       { name: 'workspaceId_1_roundId_1', sparse: true },
+    )
+    expect(mocks.resultCreateIndex).toHaveBeenCalledWith(
+      { workspaceId: 1, completedAt: -1 },
+      { name: 'workspaceId_1_completedAt_-1' },
+    )
+    expect(mocks.accountCreateIndex).toHaveBeenCalledWith(
+      { workspaceId: 1 },
+      {
+        name: 'uniq_hire_commercial_account_workspace',
+        unique: true,
+      },
     )
     expect(console.log).toHaveBeenCalledWith(
       `\nAPPLY PASSED — all ${HIRE_PHASE2_INDEX_DEFINITIONS.length} exact indexes exist; no index was removed.`,
@@ -224,6 +286,7 @@ describe('Hire Phase 2 control index preparation', () => {
       expect(targetMocks[target].createIndex).not.toHaveBeenCalled()
     }
     expect(mocks.itemAggregate).not.toHaveBeenCalled()
+    expect(mocks.accountAggregate).not.toHaveBeenCalled()
   })
 
   it('fails closed on any other same-key incompatible index before any write', async () => {
@@ -240,13 +303,35 @@ describe('Hire Phase 2 control index preparation', () => {
     ])
 
     await expect(prepareHirePhase2Indexes(['--apply'])).rejects.toThrow(
-      'incompatible same-key Phase 2 index',
+      'incompatible Phase 2 index key/name collision',
     )
 
     for (const target of Object.keys(targetMocks) as Target[]) {
       expect(targetMocks[target].createIndex).not.toHaveBeenCalled()
     }
     expect(mocks.itemAggregate).not.toHaveBeenCalled()
+    expect(mocks.accountAggregate).not.toHaveBeenCalled()
+  })
+
+  it('fails closed on a same-name different-key collision before any write', async () => {
+    setAllExactIndexes()
+    mocks.accountIndexes.mockResolvedValue([
+      {
+        name: 'uniq_hire_commercial_account_workspace',
+        key: { workspaceId: 1, catalogVersion: 1 },
+        unique: true,
+      },
+    ])
+
+    await expect(prepareHirePhase2Indexes(['--apply'])).rejects.toThrow(
+      'incompatible Phase 2 index key/name collision',
+    )
+
+    for (const target of Object.keys(targetMocks) as Target[]) {
+      expect(targetMocks[target].createIndex).not.toHaveBeenCalled()
+    }
+    expect(mocks.itemAggregate).not.toHaveBeenCalled()
+    expect(mocks.accountAggregate).not.toHaveBeenCalled()
   })
 
   it('rejects data that cannot satisfy the live application uniqueness invariant', async () => {
@@ -257,6 +342,22 @@ describe('Hire Phase 2 control index preparation', () => {
       'duplicate live HireInvitationBatchItem workspace/application rows',
     )
 
+    for (const target of Object.keys(targetMocks) as Target[]) {
+      expect(targetMocks[target].createIndex).not.toHaveBeenCalled()
+    }
+    expect(mocks.accountAggregate).not.toHaveBeenCalled()
+  })
+
+  it('rejects duplicate commercial accounts before creating any index', async () => {
+    setAllMissingThenExact()
+    mocks.accountDuplicateRows.mockResolvedValue([{ _id: 'workspace-1', count: 2 }])
+
+    await expect(prepareHirePhase2Indexes(['--apply'])).rejects.toThrow(
+      'duplicate HireCommercialAccount workspace rows',
+    )
+
+    expect(mocks.itemAggregate).toHaveBeenCalledTimes(1)
+    expect(mocks.accountAggregate).toHaveBeenCalledTimes(1)
     for (const target of Object.keys(targetMocks) as Target[]) {
       expect(targetMocks[target].createIndex).not.toHaveBeenCalled()
     }

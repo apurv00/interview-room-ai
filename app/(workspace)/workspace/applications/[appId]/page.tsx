@@ -2,11 +2,12 @@
 
 /**
  * Candidate card — decision-first (build plan §Dashboard & screens #4).
- * Header leads with the AI recommendation evidence; dimension bars and a
- * per-question breakdown link every number to the answer that produced it.
- * All round/stage actions live here: send AI interview, revoke link,
- * advance / reject. Loading this page triggers server-side reconciliation,
- * so fresh AI results appear the moment the member looks.
+ * The header leads with human-review readiness and keeps AI output explicitly
+ * labelled as supporting evidence. Dimension bars and a per-question
+ * breakdown link every number to the answer that produced it. All round/stage
+ * actions live here: send AI interview, revoke link, advance / reject. Loading
+ * this page triggers server-side reconciliation, so fresh AI results appear
+ * the moment the member looks.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -483,6 +484,30 @@ export default function ApplicationCardPage({
   const results = latest?.results ?? null;
   const inProgress = activity.some((a) => a.inProgress);
   const terminal = TERMINAL.includes(application.stage);
+  const submittedHumanScorecards = humanRounds.filter(
+    (round) => round.status === "completed",
+  ).length;
+  const pendingHumanScorecards = humanRounds.filter(
+    (round) => round.status === "pending_scorecard",
+  ).length;
+  const revokedHumanReviews = humanRounds.filter(
+    (round) => round.status === "revoked",
+  ).length;
+  const humanReviewSummary =
+    submittedHumanScorecards > 0
+      ? `${submittedHumanScorecards} human scorecard${submittedHumanScorecards === 1 ? "" : "s"} submitted${pendingHumanScorecards > 0 ? ` · ${pendingHumanScorecards} pending` : ""}`
+      : pendingHumanScorecards > 0
+        ? `Waiting for ${pendingHumanScorecards} human scorecard${pendingHumanScorecards === 1 ? "" : "s"}`
+        : revokedHumanReviews > 0
+          ? `${revokedHumanReviews} requested human review${revokedHumanReviews === 1 ? " was" : "s were"} revoked`
+          : "No human scorecards requested";
+  const aiEvidenceSummary = results?.pending
+    ? "Assessment report pending"
+    : results?.unscored
+      ? "Assessment completed without a score"
+      : results?.overallScore != null
+        ? `Assessment score: ${results.overallScore} / 100${results.confidenceLevel ? ` · Confidence: ${results.confidenceLevel}` : ""}`
+        : "No completed AI assessment";
   const liveRound =
     latest && !latest.revokedAt && latest.status !== "completed"
       ? latest
@@ -498,8 +523,8 @@ export default function ApplicationCardPage({
         >
           ← {job.title}
         </Link>
-        <div className="flex items-start justify-between gap-4 mt-1 flex-wrap">
-          <div>
+        <div className="mt-1 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0 w-full xl:flex-1">
             <h1 className="text-xl font-bold text-[#0f1419]">
               {candidate.name}
             </h1>
@@ -509,26 +534,50 @@ export default function ApplicationCardPage({
             </p>
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <Badge variant="primary">{application.stage}</Badge>
-              {results?.overallScore != null && (
-                <Badge variant={scoreBadgeVariant(results.overallScore)} dot>
-                  AI {results.overallScore}
-                </Badge>
-              )}
-              {results?.passProbability && (
-                <span className="text-xs text-[#536471]">
-                  Pass probability: {results.passProbability}
-                  {results.confidenceLevel
-                    ? ` · Confidence: ${results.confidenceLevel}`
-                    : ""}
-                </span>
-              )}
               {inProgress && (
                 <Badge variant="primary">Interview in progress</Badge>
               )}
             </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <section
+                aria-labelledby="human-review-readiness-heading"
+                className="rounded-xl border border-[#e1e8ed] bg-[#f8fafc] px-3 py-2"
+              >
+                <h2
+                  id="human-review-readiness-heading"
+                  className="text-xs font-semibold text-[#536471]"
+                >
+                  Human review readiness
+                </h2>
+                <p className="mt-1 text-sm font-medium text-[#0f1419]">
+                  {humanReviewSummary}
+                </p>
+              </section>
+              <section
+                aria-labelledby="ai-evidence-summary-heading"
+                className="rounded-xl border border-[#e1e8ed] bg-[#f8fafc] px-3 py-2"
+              >
+                <h2
+                  id="ai-evidence-summary-heading"
+                  className="text-xs font-semibold text-[#536471]"
+                >
+                  AI evidence
+                </h2>
+                <p className="mt-1 text-sm font-medium text-[#0f1419]">
+                  {aiEvidenceSummary}
+                </p>
+                <p className="mt-1 text-xs text-[#71767b]">
+                  Supporting evidence only; a human makes the hiring decision.
+                </p>
+              </section>
+            </div>
           </div>
           {!terminal && job.status === "open" && (
-            <div className="flex gap-2 shrink-0">
+            <div
+              role="group"
+              aria-label="Candidate actions"
+              className="flex w-full flex-wrap gap-2 xl:w-auto xl:shrink-0 xl:justify-end"
+            >
               {/* Visible whenever no round is live — a follow-up AI round
                   after a completed one is a supported flow. */}
               {!liveRound && (
@@ -711,7 +760,8 @@ export default function ApplicationCardPage({
           an anonymous caller hide the original simply by appending one of
           their own (Codex P1 on #615). Divergence is called out, because
           two different documents for one person is itself the signal. */}
-      {(candidate.resumeText || application.applicantSubmissions?.length) && (
+      {(Boolean(candidate.resumeText) ||
+        (application.applicantSubmissions?.length ?? 0) > 0) && (
         <div className="bg-white border border-[#e1e8ed] rounded-2xl p-5 space-y-3">
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-semibold text-[#0f1419]">

@@ -10,8 +10,8 @@ import {
 } from '../config/staticData'
 
 /**
- * Two-screen Category → Domain picker — the app's only domain selector (setup,
- * authenticated home, and /hire/invite). Screen 1 is a category grid; screen 2 is
+ * Two-screen Category → Domain picker — the shared domain selector for
+ * interview setup surfaces. Screen 1 is a category grid; screen 2 is
  * the roles within the chosen category. A "can't find your role" escape routes to
  * General. Props are just `selectedDomain` + `onSelect`, and the downstream
  * `config.role` slug is untouched.

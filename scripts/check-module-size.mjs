@@ -79,11 +79,10 @@ const BUDGETS = {
   // service). LOC ~12.1k/20k. +2 headroom keeps the tripwire tight.
   // See docs/adr/0014-resume-module-budget-bump-cross-cutting-helpers.md.
   'modules/resume':    { maxLOC: 20_000, maxFiles: 104 },
-  'modules/b2b':       { maxLOC: 5_000,  maxFiles: 20 },
   'modules/cms':       { maxLOC: 5_000,  maxFiles: 20 },
   // Added 2026-08-08 with the IPG Hire v2 Phase 1 spine (workspace-based ATS,
-  // docs/ipg-hire-build-plan.md). New top-level module so v1 modules/b2b stays
-  // untouched and its 5k budget isn't consumed by v2. Phase 1's production
+  // docs/ipg-hire-build-plan.md). Its dedicated top-level boundary keeps the
+  // workspace ATS bounded independently. Phase 1's production
   // control/runtime, tenant, privacy, media, evidence, and delivery seams take
   // 62 files / ~12.9k LOC; 14k/66 leaves bounded near-term headroom without
   // folding those auditable boundaries into large files. See ADR 0029.
@@ -131,6 +130,10 @@ const BUDGETS = {
   // records, and their tests without authorizing unrelated reporting/UI work.
   // See ADR 0032.
   'modules/hire-decisions': { maxLOC: 5_000, maxFiles: 20 },
+  // Commercial packaging begins in shadow mode: a versioned catalog, an
+  // optional account, and aggregate-only read/purge seams. It cannot gate
+  // current capabilities, write ingestion state, or own checkout. See ADR 0046.
+  'modules/hire-commercial': { maxLOC: 2_000, maxFiles: 12 },
   // Phase 5 report artifacts have a distinct security/lifecycle boundary from
   // the operational read model: immutable aggregate snapshots, private object
   // storage, bounded export workers, and deletion-only cleanup tombstones.

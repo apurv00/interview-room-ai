@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { shouldOfferPaidInterviewCheckout } from '../interviewUnlockEligibility'
+import {
+  shouldCheckPaidInterviewCheckout,
+  shouldOfferPaidInterviewCheckout,
+} from '../interviewUnlockEligibility'
 
 describe('additional interview checkout eligibility', () => {
   it('opens for an exhausted Basic allowance', () => {
@@ -63,6 +66,40 @@ describe('additional interview checkout eligibility', () => {
       {
         plan: 'free',
         entitlementSource: 'legacy',
+        monthlyInterviewsUsed: 0,
+        monthlyInterviewLimit: 1,
+      },
+    )).toBe(true)
+  })
+
+  it('skips the usage request and personal checkout for a signed Hire runtime config', () => {
+    const hireConfig = {
+      role: 'backend',
+      interviewType: 'behavioral',
+      experience: '3-6',
+      duration: 30,
+      _hireRoundId: '507f1f77bcf86cd799439011',
+    } as const
+
+    expect(shouldCheckPaidInterviewCheckout(hireConfig)).toBe(false)
+    expect(shouldOfferPaidInterviewCheckout(
+      hireConfig,
+      {
+        plan: 'free',
+        monthlyInterviewsUsed: 3,
+        monthlyInterviewLimit: 3,
+      },
+    )).toBe(false)
+  })
+
+  it('checks usage and may offer checkout for a self-serve config', () => {
+    const selfServeConfig = { duration: 30 }
+
+    expect(shouldCheckPaidInterviewCheckout(selfServeConfig)).toBe(true)
+    expect(shouldOfferPaidInterviewCheckout(
+      selfServeConfig,
+      {
+        plan: 'free',
         monthlyInterviewsUsed: 0,
         monthlyInterviewLimit: 1,
       },

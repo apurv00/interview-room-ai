@@ -11,7 +11,7 @@ export interface SubscriptionAcquisitionUserAuthority {
   entitlementVersion?: number
   buyerState?: string
   accountState?: 'active' | 'deleting'
-  role?: 'candidate' | 'recruiter' | 'org_admin' | 'platform_admin'
+  role?: string
   organizationId?: unknown
 }
 

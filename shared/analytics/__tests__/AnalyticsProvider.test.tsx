@@ -101,6 +101,28 @@ describe('AnalyticsProvider', () => {
     expect(traits).not.toHaveProperty('image')
   })
 
+  it.each(['recruiter', 'org_admin', 'unknown_role'])(
+    'does not identify retired or unknown %s roles as persistent traits',
+    (role) => {
+      mockStatus = 'authenticated'
+      mockSessionData = {
+        user: {
+          id: `user_${role}`,
+          plan: 'free',
+          role,
+        },
+      }
+
+      render(<AnalyticsProvider><div /></AnalyticsProvider>)
+
+      expect(identifyMock).toHaveBeenCalledTimes(1)
+      expect(identifyMock.mock.calls[0][1]).toEqual({
+        plan: 'free',
+        organizationId: undefined,
+      })
+    },
+  )
+
   it('does NOT fire signin_succeeded on a page reload of an already-authed session', () => {
     // Provider mounts with status === 'authenticated' on first render —
     // there's no unauth → auth transition, so only identify() fires.

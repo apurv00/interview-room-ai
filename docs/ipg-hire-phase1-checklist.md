@@ -3,6 +3,15 @@
 Plan of record: [ipg-hire-build-plan.md](./ipg-hire-build-plan.md) · Phase 1 §"The Spine".
 Status legend: `[x]` implemented + covered by automated verification · `[ ]` open · `[P]` blocked on a prod action (auth is prod-only — see "Prod demo script").
 
+> **Historical record / errata (2026-08-24):** This checklist records the
+> original Phase 1 implementation snapshot. Statements below that say Hire v1
+> still serves the subdomain, or that v2 still uses the v1 invite-ticket/B2C
+> guest seam, are intentionally preserved as history and are no longer current.
+> Hire v1 was removed on 2026-08-09; the Hire subdomain now serves
+> `/workspace`, candidates use Hire-owned guest sessions, and the isolated
+> runtime uses its own one-time handoff ticket. Use the later phase checklists
+> and current runbooks for release operations.
+
 ## Ships (build plan §Phase 1)
 
 - [x] **Workspace + direct member add** — `modules/hire` (HireWorkspace / HireWorkspaceMember), `/workspace` UI, admin-only add/remove, flat permissions (one admin, identical members). Members are added by name + email with **lazy account linking** on first sign-in (no invite flow, no pre-minted User rows — see "Deviations").

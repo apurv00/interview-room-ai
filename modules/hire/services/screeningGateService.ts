@@ -9,9 +9,11 @@ import {
   HireInvitationBatchItem,
   HireJob,
   HireJobRequirementVersion,
+  HirePrivacyRequest,
   HireRound,
   HireScreeningGate,
   TERMINAL_STAGES,
+  activeHirePrivacyRequestFilter,
   type IHireApplication,
   type IHireCandidate,
   type IHireInvitationBatch,
@@ -32,14 +34,7 @@ import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFen
 import { claimHireCandidatePiiWriteFence } from './hireCandidatePrivacyWriteFence'
 import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
 
-/**
- * Durable screening gate orchestration.
- *
- * Ranking itself remains pure in `screeningService`. This layer owns only
- * tenant-scoped reads, a preview fingerprint, and the one transactional
- * confirmation that freezes a gate plus its first, unsent invitation batch.
- * It never changes a human pipeline stage and never sends an email.
- */
+/** Durable, tenant-scoped screening preview and confirmation orchestration. */
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i
 const FINGERPRINT = /^[a-f0-9]{64}$/i
@@ -385,7 +380,27 @@ async function loadScreeningSource(input: {
     (application) => !liveApplicationIds.has(application._id.toString()),
   )
 
-  const candidateIds = dispatchableApplications.map((application) => application.candidateId)
+  const dispatchableCandidateIds = dispatchableApplications.map(
+    (application) => application.candidateId,
+  )
+  let privacyRequestsQuery = HirePrivacyRequest.find({
+    workspaceId: input.workspaceId,
+    candidateId: { $in: dispatchableCandidateIds },
+    ...activeHirePrivacyRequestFilter(now),
+  }).select('candidateId')
+  if (input.session) privacyRequestsQuery = privacyRequestsQuery.session(input.session)
+  const privacyRequests = dispatchableApplications.length > 0
+    ? await privacyRequestsQuery
+    : []
+  const privacyProtectedCandidateIds = new Set(
+    privacyRequests.map((request) => request.candidateId.toString()),
+  )
+  const reviewableApplications = dispatchableApplications.filter(
+    (application) =>
+      !privacyProtectedCandidateIds.has(application.candidateId.toString()),
+  )
+
+  const candidateIds = reviewableApplications.map((application) => application.candidateId)
   let candidatesQuery = HireCandidate.find({
     workspaceId: input.workspaceId,
     _id: { $in: candidateIds },
@@ -394,7 +409,7 @@ async function loadScreeningSource(input: {
   const candidates = await candidatesQuery
   const candidatesById = new Map(candidates.map((candidate) => [candidate._id.toString(), candidate]))
 
-  for (const application of dispatchableApplications) {
+  for (const application of reviewableApplications) {
     if (
       !idsEqual(application.workspaceId, input.workspaceId) ||
       !idsEqual(application.jobId, input.jobId)
@@ -406,14 +421,18 @@ async function loadScreeningSource(input: {
       )
     }
     const candidate = candidatesById.get(application.candidateId.toString())
-    if (!candidate || !idsEqual(candidate.workspaceId, input.workspaceId) || candidate.piiAnonymizedAt) {
+    if (candidate && !idsEqual(candidate.workspaceId, input.workspaceId)) {
       throw new AppError(
-        'A candidate record changed while preparing this screening gate',
+        'A candidate record was outside the requested workspace',
         409,
-        'SCREENING_CANDIDATE_UNAVAILABLE',
+        'SCREENING_SCOPE_MISMATCH',
       )
     }
   }
+  const availableApplications = reviewableApplications.filter((application) => {
+    const candidate = candidatesById.get(application.candidateId.toString())
+    return Boolean(candidate && !candidate.piiAnonymizedAt)
+  })
 
   return {
     job: {
@@ -437,7 +456,7 @@ async function loadScreeningSource(input: {
           }
         : {}),
     },
-    applications: dispatchableApplications,
+    applications: availableApplications,
     candidatesById,
   }
 }
@@ -682,6 +701,13 @@ export async function confirmJobScreeningGate(
       },
     )
   } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === 'SCREENING_UNKNOWN_APPLICATION') {
+      throw new AppError(
+        'The ranked queue changed — refresh the screening preview before confirming',
+        409,
+        'SCREENING_PREVIEW_STALE',
+      )
+    }
     // The unique workspace/application index is the final concurrency guard:
     // two HR members cannot queue a duplicate interview invitation.
     if (isDuplicateKey(error)) {

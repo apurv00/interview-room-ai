@@ -12,7 +12,7 @@ import {
   assertCompleteHireConsent,
   HireConsentError,
 } from '@hire/policies/aiInterviewConsent'
-import { verifyOtp } from '@b2b/services/otpService'
+import { verifyOtp } from '@shared/auth/mailboxOtp'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import { authLogger } from '@shared/logger'
 import { setHireGuestCookie } from '../../_lib/hireGuestHttp'

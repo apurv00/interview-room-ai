@@ -16,6 +16,7 @@ import Input from '@shared/ui/Input'
 import StateView from '@shared/ui/StateView'
 import { scoreBand } from '@shared/ui/ScoreBar'
 import BulkUploadPanel from './BulkUploadPanel'
+import JobSubnav from './JobSubnav'
 import PoolSuggestionPanel from './PoolSuggestionPanel'
 import ScreeningPanel from './ScreeningPanel'
 
@@ -927,25 +928,21 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
 
   return (
     <div id="job-pipeline-top" className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <JobSubnav jobId={job.id} active="pipeline" />
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <Link href="/workspace/jobs" className="text-xs text-[#71767b] hover:text-indigo-600">
             ← All jobs
           </Link>
           <h1 className="text-xl font-bold text-[#0f1419] truncate">{job.title}</h1>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="mt-1 flex flex-wrap items-center gap-2">
             <Badge variant={job.status === 'open' ? 'success' : job.status === 'on_hold' ? 'caution' : 'default'}>
               {job.status.replace('_', ' ')}
             </Badge>
             <span className="text-xs text-[#536471]">
               Department: <span className="font-medium text-[#0f1419]">{departmentName}</span>
             </span>
-            <Link
-              href={`/workspace/jobs/${job.id}/decision`}
-              className="text-xs font-medium text-indigo-600 hover:underline"
-            >
-              Decision workspace
-            </Link>
             {job.closeNote && (
               <span className="text-xs text-[#71767b]">
                 Decision{job.closedByName ? ` by ${job.closedByName}` : ''}: {job.closeNote}
@@ -953,7 +950,11 @@ export default function JobPipelinePage({ params }: { params: { jobId: string } 
             )}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2 shrink-0">
+        <div
+          role="group"
+          aria-label="Job actions"
+          className="flex w-full flex-wrap gap-2 sm:w-auto sm:min-w-0 sm:flex-1 sm:justify-end"
+        >
           <Button
             variant="secondary"
             disabled={busy || duplicateBusy || Boolean(duplicatedJob)}

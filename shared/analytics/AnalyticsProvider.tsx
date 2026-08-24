@@ -80,15 +80,15 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
       const priorDistinctId = readPriorDistinctId()
       const had_prior_session =
         priorDistinctId !== null && !priorDistinctId.startsWith('anon_')
+      const persistentRole =
+        session.user.role === 'candidate' ||
+        session.user.role === 'platform_admin'
+          ? session.user.role
+          : undefined
 
       identify(userId, {
         plan: session.user.plan as 'free' | 'pro' | 'enterprise' | undefined,
-        role: session.user.role as
-          | 'candidate'
-          | 'recruiter'
-          | 'org_admin'
-          | 'platform_admin'
-          | undefined,
+        ...(persistentRole === undefined ? {} : { role: persistentRole }),
         organizationId: session.user.organizationId,
       })
       lastIdentifiedUserIdRef.current = userId

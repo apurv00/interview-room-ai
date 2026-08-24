@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   connectDB: vi.fn(),
   aggregate: vi.fn(),
   countDocuments: vi.fn(),
-  distinctActiveUsers: vi.fn(),
 }))
 
 vi.mock('@shared/db/connection', () => ({ connectDB: mocks.connectDB }))
@@ -14,9 +13,7 @@ vi.mock('@shared/db/models', () => ({
     aggregate: (...args: unknown[]) => mocks.aggregate(...args),
     countDocuments: (...args: unknown[]) => mocks.countDocuments(...args),
   },
-  User: {
-    distinct: (...args: unknown[]) => mocks.distinctActiveUsers(...args),
-  },
+  User: {},
 }))
 vi.mock('@shared/db/models/InterviewDepth', () => ({ InterviewDepth: {} }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
@@ -54,90 +51,46 @@ vi.mock('@interview/services/core/sessionConfigCache', () => ({
 import { listSessions } from '@interview/services/core/interviewService'
 
 const REQUESTER_ID = new mongoose.Types.ObjectId().toString()
-const ACTIVE_OWNER_ID = new mongoose.Types.ObjectId()
-const LEGACY_ACTIVE_OWNER_ID = new mongoose.Types.ObjectId()
-const ORGANIZATION_ID = new mongoose.Types.ObjectId().toString()
 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.connectDB.mockResolvedValue(undefined)
-  mocks.distinctActiveUsers.mockResolvedValue([ACTIVE_OWNER_ID, LEGACY_ACTIVE_OWNER_ID])
-  mocks.aggregate.mockResolvedValue([
-    { _id: 'active-session', userId: ACTIVE_OWNER_ID },
-    { _id: 'legacy-active-session', userId: LEGACY_ACTIVE_OWNER_ID },
-  ])
+  mocks.aggregate.mockResolvedValue([{ _id: 'owner-session', userId: REQUESTER_ID }])
   mocks.countDocuments.mockResolvedValue(2)
 })
 
-describe('listSessions organization account lifecycle', () => {
-  it('filters deleting/missing owners before skip, limit, and count while keeping legacy-active owners', async () => {
+describe('listSessions owner-only history contract', () => {
+  it('queries only the requester and retains pagination/status behavior', async () => {
     const result = await listSessions({
       userId: REQUESTER_ID,
-      organizationId: ORGANIZATION_ID,
-      role: 'recruiter',
       page: 2,
       limit: 10,
       status: 'completed',
     })
 
-    expect(mocks.distinctActiveUsers).toHaveBeenNthCalledWith(1, '_id', {
-      organizationId: expect.any(mongoose.Types.ObjectId),
-      $or: [{ accountState: 'active' }, { accountState: { $exists: false } }],
-    })
+    const ownerFilter = {
+      userId: new mongoose.Types.ObjectId(REQUESTER_ID),
+      status: 'completed',
+    }
     const pipeline = mocks.aggregate.mock.calls[0][0]
     expect(pipeline.slice(0, 4)).toEqual([
-      {
-        $match: {
-          organizationId: expect.any(mongoose.Types.ObjectId),
-          userId: { $in: [ACTIVE_OWNER_ID, LEGACY_ACTIVE_OWNER_ID] },
-          status: 'completed',
-        },
-      },
+      { $match: ownerFilter },
       { $sort: { createdAt: -1 } },
       { $skip: 10 },
       { $limit: 10 },
     ])
-    expect(mocks.countDocuments).toHaveBeenCalledWith({
-      organizationId: expect.any(mongoose.Types.ObjectId),
-      userId: { $in: [ACTIVE_OWNER_ID, LEGACY_ACTIVE_OWNER_ID] },
-      status: 'completed',
-    })
+    expect(mocks.countDocuments).toHaveBeenCalledWith(ownerFilter)
     expect(result.pagination).toEqual({ page: 2, limit: 10, total: 2, totalPages: 1 })
   })
 
-  it('returns an empty, correctly paginated page when no organization owner is active', async () => {
-    mocks.distinctActiveUsers.mockResolvedValue([])
-    mocks.aggregate.mockResolvedValue([])
-    mocks.countDocuments.mockResolvedValue(0)
-
-    const result = await listSessions({
-      userId: REQUESTER_ID,
-      organizationId: ORGANIZATION_ID,
-      role: 'org_admin',
-      page: 1,
-      limit: 20,
-    })
+  it('has no role or organization input that can widen history to foreign sessions', async () => {
+    await listSessions({ userId: REQUESTER_ID, page: 1, limit: 20 })
 
     const match = mocks.aggregate.mock.calls[0][0][0].$match
-    expect(match.userId).toEqual({ $in: [] })
-    expect(result).toEqual({
-      sessions: [],
-      pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
-    })
-  })
-
-  it('keeps candidate history owner-scoped without an organization-wide User query', async () => {
-    await listSessions({
-      userId: REQUESTER_ID,
-      organizationId: ORGANIZATION_ID,
-      role: 'candidate',
-      page: 1,
-      limit: 20,
-    })
-
-    expect(mocks.distinctActiveUsers).not.toHaveBeenCalled()
-    expect(mocks.countDocuments).toHaveBeenCalledWith({
+    expect(match).toEqual({
       userId: new mongoose.Types.ObjectId(REQUESTER_ID),
     })
+    expect(match).not.toHaveProperty('organizationId')
+    expect(match.userId).not.toHaveProperty('$in')
   })
 })

@@ -124,7 +124,7 @@ export async function GET(
     const ownerUserId = interviewSession.userId.toString()
     const requesterIsOwner = ownerUserId === session.user.id
 
-    // A recruiter/admin must not read a retained session after its owner has
+    // A platform administrator must not read a retained session after its owner has
     // crossed the deletion fence. Use 404 so this path does not disclose the
     // lifecycle state of another account.
     if (!requesterIsOwner && !(await isJobsAccountActive(ownerUserId))) {
@@ -170,6 +170,14 @@ export async function GET(
     delete responseData.facialLandmarksR2Key
     delete responseData.resumeR2Key
     delete responseData.jdR2Key
+    // Mongoose preserves unknown fields hydrated from older documents even
+    // after they leave the current schema. Keep retired invite metadata and
+    // candidate context behind the response boundary until those rows are
+    // physically migrated.
+    delete responseData.templateId
+    delete responseData.candidateEmail
+    delete responseData.candidateName
+    delete responseData.recruiterNotes
     delete responseData.inviteTokenHash
     delete responseData.inviteTokenExpiry
     delete responseData.liveTranscriptWords
@@ -182,12 +190,11 @@ export async function GET(
     // Evaluations alone do NOT drive analysis (Codex P2 #1 on PR #332).
     responseData.hasAnalysisSource = hasLiveTranscriptWords || hasStoredTranscript
 
-    // Strip PII and non-essential fields for non-owner viewers (recruiters viewing org sessions)
+    // Strip PII and non-essential fields from platform-administrator reads.
     const isOwner = responseData.userId?.toString() === session.user.id
     if (!isOwner) {
       delete responseData.resumeText
       delete responseData.userAgent
-      delete responseData.candidateEmail
       delete responseData.jobDescription
       delete responseData.parsedResume
       delete responseData.parsedJobDescription

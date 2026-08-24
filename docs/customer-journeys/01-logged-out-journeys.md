@@ -31,7 +31,8 @@ Routes that **immediately redirect anonymous users** to `/signin`:
 - `/settings` → displays nothing; nav menu hides this link
 
 Routes middleware protects at the edge (redirect to `/signin?callbackUrl=...`):
-- (None of the consumer routes — only `/hire/*` and `/cms/*` are hard-blocked, both excluded from this doc.)
+- None of the consumer routes. `/cms/*` and the separate IPG Hire
+  workspace/control surface are excluded from this document.
 
 ---
 

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import JobSubnav from "../JobSubnav";
 import DecisionWorkspace from "./DecisionWorkspace";
 
 export const dynamic = "force-dynamic";
@@ -17,5 +18,10 @@ export default async function DecisionWorkspacePage({
   params: Promise<{ jobId: string }>;
 }) {
   const { jobId } = await params;
-  return <DecisionWorkspace jobId={jobId} />;
+  return (
+    <div className="space-y-6">
+      <JobSubnav jobId={jobId} active="decisions" />
+      <DecisionWorkspace jobId={jobId} />
+    </div>
+  );
 }

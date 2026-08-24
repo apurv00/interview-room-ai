@@ -220,7 +220,6 @@ export const GenerateQuestionSchema = z.object({
   // TRUE completed-thread count, decoupled from the capped summaries above so the server's flow-slot
   // cursor/coverage reflect the real progress on long sessions (durations run to 60 min → >30 threads).
   completedThreadCount: z.number().int().min(0).max(200).optional(),
-  templateId: z.string().optional(),
   sessionId: z.string().optional(),
 })
 
@@ -278,9 +277,6 @@ export const CreateSessionSchema = z.object({
   // Transport-only proof for Jobs-attributed sessions. It is validated and
   // consumed by POST /api/interviews, never persisted in InterviewConfig.
   jobsHandoffToken: z.string().min(1).max(2048).optional(),
-  templateId: z.string().optional(),
-  candidateEmail: z.string().email().optional(),
-  candidateName: z.string().max(200).optional(),
   // Retake linkage — when present, the new session is a retake of the given
   // parent session. The service resolves the root of the chain.
   parentSessionId: z.string().optional(),

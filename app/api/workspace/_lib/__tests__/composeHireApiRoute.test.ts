@@ -49,7 +49,7 @@ import { composeHireApiRoute } from '../composeHireApiRoute'
 const USER = {
   id: '69b04a6c8ba3596e447148e9',
   email: 'workspace-admin@example.com',
-  role: 'org_admin',
+  role: 'candidate',
   plan: 'free',
 }
 

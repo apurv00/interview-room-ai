@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import JobSubnav from "../JobSubnav";
 import JobPerformancePanel from "./JobPerformancePanel";
 
 export const dynamic = "force-dynamic";
@@ -13,5 +14,10 @@ export default async function JobPerformancePage({
   params: Promise<{ jobId: string }>;
 }) {
   const { jobId } = await params;
-  return <JobPerformancePanel jobId={jobId} />;
+  return (
+    <div className="space-y-6">
+      <JobSubnav jobId={jobId} active="performance" />
+      <JobPerformancePanel jobId={jobId} />
+    </div>
+  );
 }

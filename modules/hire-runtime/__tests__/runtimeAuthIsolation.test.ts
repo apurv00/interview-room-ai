@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   connectDB: vi.fn(),
   userFindOne: vi.fn(),
   userFindById: vi.fn(),
-  redeemAuthTicket: vi.fn(),
+  redeemRuntimeAuthTicket: vi.fn(),
 }))
 
 vi.mock('next-auth/providers/google', () => ({ default: mocks.googleProvider }))
@@ -32,11 +32,8 @@ vi.mock('@shared/db/models', () => ({
 vi.mock('@shared/logger', () => ({
   authLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
-vi.mock('@b2b/services/inviteTicketService', () => ({
-  redeemAuthTicket: mocks.redeemAuthTicket,
-}))
 vi.mock('@modules/hire-runtime/services/handoffAuthTicketService', () => ({
-  redeemRuntimeAuthTicket: mocks.redeemAuthTicket,
+  redeemRuntimeAuthTicket: mocks.redeemRuntimeAuthTicket,
 }))
 
 const RUNTIME_SECRET = 'runtime-secret-isolated-from-b2c'
@@ -106,7 +103,7 @@ describe('Hire runtime NextAuth isolation', () => {
       image: null,
     }
     const select = vi.fn().mockResolvedValue(dbUser)
-    mocks.redeemAuthTicket.mockResolvedValue({
+    mocks.redeemRuntimeAuthTicket.mockResolvedValue({
       userId: USER_ID,
       sessionId: ROUND_ID,
       organizationId: WORKSPACE_ID,
@@ -131,7 +128,7 @@ describe('Hire runtime NextAuth isolation', () => {
   })
 
   it('rejects a runtime ticket that has no workspace boundary before querying User', async () => {
-    mocks.redeemAuthTicket.mockResolvedValue({
+    mocks.redeemRuntimeAuthTicket.mockResolvedValue({
       userId: USER_ID,
       sessionId: ROUND_ID,
     })

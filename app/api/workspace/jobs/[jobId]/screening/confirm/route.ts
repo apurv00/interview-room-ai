@@ -5,7 +5,11 @@ import {
   type ConfirmScreeningGateRequest,
 } from '@hire'
 import { composeHireApiRoute } from '../../../../_lib/composeHireApiRoute'
-import { serializeInvitationBatch, serializeScreeningGate } from '../_lib/serialize'
+import {
+  serializeInvitationBatch,
+  serializeScreeningGate,
+  serializeScreeningPreview,
+} from '../_lib/serialize'
 import {
   screeningConfirmRequestSchema,
   type ScreeningConfirmRouteBody,
@@ -24,12 +28,15 @@ export const POST = composeHireApiRoute<ScreeningConfirmRouteBody>({
       params.jobId,
       body as ConfirmScreeningGateRequest,
     )
+    // The committed command above is authoritative. History identity and
+    // delivery details are loaded separately, so no fallible post-commit read
+    // can turn this successful mutation into a misleading failed response.
     return NextResponse.json(
       {
         gate: serializeScreeningGate(result.gate, [result.batch]),
         batch: serializeInvitationBatch(result.batch),
         itemCount: result.itemCount,
-        preview: result.preview,
+        preview: serializeScreeningPreview(result.preview),
         requirementVersion: result.requirementVersion,
         previewFingerprint: result.previewFingerprint,
       },

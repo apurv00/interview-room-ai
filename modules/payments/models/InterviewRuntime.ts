@@ -9,7 +9,6 @@ import {
 
 export const INTERVIEW_RUNTIME_AUTHORITY_KINDS = [
   'consumer_usage',
-  'organization_invite',
 ] as const
 export type InterviewRuntimeAuthorityKind =
   (typeof INTERVIEW_RUNTIME_AUTHORITY_KINDS)[number]
@@ -88,13 +87,6 @@ export interface IInterviewRuntime extends Document {
   entitlementSourceId?: mongoose.Types.ObjectId
   periodKey?: string
   entitlementSnapshotDigest?: string
-
-  organizationId?: mongoose.Types.ObjectId
-  inviteAuthorityId?: string
-  recruiterUserId?: mongoose.Types.ObjectId
-  recruiterReferenceErasedAt?: Date
-  inviteVerifiedAt?: Date
-  inviteProvenanceDigest?: string
 
   sessionConfigDigest: string
   normalizedDurationMinutes: NormalizedInterviewDurationMinutes
@@ -387,27 +379,6 @@ const InterviewRuntimeSchema = new Schema<IInterviewRuntime>(
       match: SHA256_PATTERN,
       immutable: true,
     },
-    organizationId: {
-      type: Schema.Types.ObjectId,
-      ref: 'Organization',
-      immutable: true,
-    },
-    inviteAuthorityId: {
-      type: String,
-      match: UUID_V4_PATTERN,
-      immutable: true,
-    },
-    recruiterUserId: {
-      type: Schema.Types.ObjectId,
-      ref: 'User',
-    },
-    recruiterReferenceErasedAt: { type: Date },
-    inviteVerifiedAt: { type: Date, immutable: true },
-    inviteProvenanceDigest: {
-      type: String,
-      match: SHA256_PATTERN,
-      immutable: true,
-    },
     sessionConfigDigest: {
       type: String,
       required: true,
@@ -464,77 +435,27 @@ const InterviewRuntimeSchema = new Schema<IInterviewRuntime>(
 )
 
 InterviewRuntimeSchema.pre('validate', function validateAuthorityLinkage() {
-  const consumer = this.authorityKind === 'consumer_usage'
   const periodOwned =
     this.entitlementSource === 'free_period' ||
     this.entitlementSource === 'subscription_cycle' ||
     this.entitlementSource === 'subscription_grace'
 
-  if (consumer) {
-    if (
-      !this.usageId ||
-      !this.entitlementSource ||
-      !this.entitlementSourceId ||
-      !this.entitlementSnapshotDigest
-    ) {
-      this.invalidate(
-        'authorityKind',
-        'Consumer runtime authority requires exact usage linkage',
-      )
-    }
-    if (periodOwned && !this.periodKey) {
-      this.invalidate(
-        'periodKey',
-        'Period-backed runtime authority requires periodKey',
-      )
-    }
-    if (
-      this.organizationId ||
-      this.inviteAuthorityId ||
-      this.recruiterUserId ||
-      this.recruiterReferenceErasedAt ||
-      this.inviteVerifiedAt ||
-      this.inviteProvenanceDigest
-    ) {
-      this.invalidate(
-        'authorityKind',
-        'Consumer runtime authority cannot carry invite provenance',
-      )
-    }
-  } else {
-    if (
-      !this.organizationId ||
-      !this.inviteAuthorityId ||
-      !this.inviteVerifiedAt ||
-      !this.inviteProvenanceDigest
-    ) {
-      this.invalidate(
-        'authorityKind',
-        'Organization runtime authority requires verified invite provenance',
-      )
-    }
-    const hasRecruiter = Boolean(this.recruiterUserId)
-    const hasErasureMarker =
-      this.recruiterReferenceErasedAt instanceof Date &&
-      Number.isFinite(this.recruiterReferenceErasedAt.getTime())
-    if (hasRecruiter === hasErasureMarker) {
-      this.invalidate(
-        'recruiterUserId',
-        'Organization runtime authority requires recruiter attribution or its erasure marker',
-      )
-    }
-    if (
-      this.usageId ||
-      this.entitlementSource ||
-      this.entitlementSourceId ||
-      this.periodKey ||
-      this.entitlementSnapshotDigest
-    ) {
-      this.invalidate(
-        'authorityKind',
-        'Organization runtime authority cannot carry consumer usage linkage',
-      )
-    }
+  if (
+    !this.usageId ||
+    !this.entitlementSource ||
+    !this.entitlementSourceId ||
+    !this.entitlementSnapshotDigest
+  ) {
+    this.invalidate(
+      'authorityKind',
+      'Consumer runtime authority requires exact usage linkage',
+    )
+  }
+  if (periodOwned && !this.periodKey) {
+    this.invalidate(
+      'periodKey',
+      'Period-backed runtime authority requires periodKey',
+    )
   }
 
   const hasStarted = this.startedAt instanceof Date
@@ -601,7 +522,7 @@ InterviewRuntimeSchema.pre('validate', function validateAuthorityLinkage() {
     this.restorationRecoveryReviewedAt,
     this.restorationRecoveryReviewCode,
   ].filter(Boolean).length
-  if (reviewLinkCount !== 0 && (reviewLinkCount !== 2 || !consumer)) {
+  if (reviewLinkCount !== 0 && reviewLinkCount !== 2) {
     this.invalidate(
       'restorationRecoveryReviewedAt',
       'Restoration recovery review requires complete consumer linkage',
@@ -629,23 +550,6 @@ InterviewRuntimeSchema.index(
   { state: 1, deadlineAt: 1 },
   { name: 'interview_runtime_deadline_v1' },
 )
-InterviewRuntimeSchema.index(
-  { organizationId: 1, state: 1, updatedAt: -1 },
-  {
-    partialFilterExpression: { organizationId: { $type: 'objectId' } },
-    name: 'interview_runtime_org_state_v1',
-  },
-)
-InterviewRuntimeSchema.index(
-  { recruiterUserId: 1, updatedAt: -1 },
-  {
-    partialFilterExpression: {
-      recruiterUserId: { $type: 'objectId' },
-    },
-    name: 'interview_runtime_recruiter_reference_v1',
-  },
-)
-
 const InterviewTurnSchema = new Schema<IInterviewTurn>(
   {
     runtimeId: {

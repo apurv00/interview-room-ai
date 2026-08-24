@@ -1743,7 +1743,7 @@ interface LeanUserEntitlementProjection {
   entitlementVersion?: number
   buyerState?: string
   accountState?: 'active' | 'deleting'
-  role?: 'candidate' | 'recruiter' | 'org_admin' | 'platform_admin'
+  role?: string
   organizationId?: mongoose.Types.ObjectId | null
 }
 
