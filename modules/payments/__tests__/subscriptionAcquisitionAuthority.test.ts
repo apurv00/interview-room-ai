@@ -50,14 +50,6 @@ describe('initial subscription acquisition authority', () => {
     })).toBe(false)
     expect(canAcceptInitialSubscriptionAcquisition({
       plan: 'free',
-      planVocabularyVersion: 2,
-      entitlementSource: 'free',
-      usagePeriodKey: 'basic:2026-08',
-      entitlementVersion: 1,
-      role: 'recruiter',
-    })).toBe(false)
-    expect(canAcceptInitialSubscriptionAcquisition({
-      plan: 'free',
       buyerState: 'deletion_pending',
     })).toBe(false)
     expect(canAcceptInitialSubscriptionAcquisition({
@@ -65,4 +57,18 @@ describe('initial subscription acquisition authority', () => {
       accountState: 'deleting',
     })).toBe(false)
   })
+
+  it.each(['recruiter', 'org_admin', 'unknown_role'])(
+    'rejects canonical Free authority for retired or unknown role %s',
+    (role) => {
+      expect(canAcceptInitialSubscriptionAcquisition({
+        plan: 'free',
+        planVocabularyVersion: 2,
+        entitlementSource: 'free',
+        usagePeriodKey: 'basic:2026-08',
+        entitlementVersion: 1,
+        role,
+      })).toBe(false)
+    },
+  )
 })

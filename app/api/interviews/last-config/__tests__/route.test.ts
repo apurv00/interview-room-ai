@@ -51,12 +51,11 @@ describe('GET /api/interviews/last-config', () => {
     expect(mocks.listSessions).not.toHaveBeenCalled()
   })
 
-  it('forces recruiter/admin callers onto the owner-only history contract', async () => {
+  it('uses the owner-only history contract for every caller role', async () => {
     await GET(new NextRequest('http://localhost/api/interviews/last-config'))
 
     expect(mocks.listSessions).toHaveBeenCalledWith({
       userId: USER_ID,
-      role: 'candidate',
       page: 1,
       limit: 1,
     })

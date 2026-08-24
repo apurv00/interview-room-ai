@@ -22,7 +22,7 @@ implemented). This doc is the single source of truth for the taxonomy work.
 >   domain selector. There is no `NEXT_PUBLIC_FEATURE_TAXONOMY_V2`; it's a
 >   non-breaking drop-in (same props, `config.role` unchanged), so the flag added
 >   only complexity. The legacy flat `DomainSelector` (and its `CATEGORY_TABS`) was
->   **deleted** — the authenticated home and `/hire/invite` now use the picker too.
+>   **deleted** — the authenticated home uses the picker too.
 >   The legacy `category` field stays only as a `resolveCategorySlug` fallback for
 >   pre-`categorySlug` rows. **Deploy = merge; no env flag.** Optional: `POST
 >   /api/db/seed` (platform_admin) so `/api/domains` lists the new roles — until then
@@ -239,8 +239,8 @@ wizard step. Hides irrelevant roles; adds search + escape hatch.
 
 **Changes** — shipped as PR #439. **No feature flag**: `CategoryDomainPicker` is the
 default setup selector. (As shipped this added a *new* `CategoryDomainPicker` rather
-than refactoring `DomainSelector`; the home + /hire/invite surfaces were later moved
-onto the picker too and `DomainSelector` + `CATEGORY_TABS` were deleted.) Original plan:
+than refactoring `DomainSelector`; the home surface was later moved onto the
+picker too and `DomainSelector` + `CATEGORY_TABS` were deleted.) Original plan:
 - New `CategoryGrid.tsx` (icon cards 3×2 + one-line descriptor, role counts) and
   refactor `DomainSelector.tsx` into the **role-list screen** (filtered to the
   chosen category; no category tabs; no "All").

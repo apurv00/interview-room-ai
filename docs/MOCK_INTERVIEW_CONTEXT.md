@@ -498,7 +498,7 @@ Error types: `AppError`, `NotFoundError`, `ForbiddenError`, `UsageLimitError`
 {
   _id: ObjectId,
   userId: ObjectId,                    // Owner
-  organizationId?: ObjectId,           // B2B org (if recruiter-created)
+  organizationId?: ObjectId,           // Current Hire workspace tenant binding
 
   config: {
     role: string,                      // Domain slug: "PM", "SWE", etc.
@@ -527,12 +527,6 @@ Error types: `AppError`, `NotFoundError`, `ForbiddenError`, `UsageLimitError`
   // Recording
   recordingR2Key?: string,             // R2 storage key
   recordingSizeBytes?: number,
-
-  // B2B fields
-  templateId?: ObjectId,
-  candidateEmail?: string,
-  candidateName?: string,
-  recruiterNotes?: string,
 
   createdAt: Date,
   updatedAt: Date,

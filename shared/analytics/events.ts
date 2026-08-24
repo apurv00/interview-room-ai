@@ -147,7 +147,6 @@ export interface EventPropsMap {
 type _AssertEventMapCovers = {
   [K in EventName]: EventPropsMap[K]
 }
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _Assertion = _AssertEventMapCovers
 
 export type EventProps<E extends EventName> = EventPropsMap[E]
@@ -162,6 +161,6 @@ export type EventProps<E extends EventName> = EventPropsMap[E]
  */
 export interface UserTraits {
   plan?: 'free' | 'pro' | 'enterprise'
-  role?: 'candidate' | 'recruiter' | 'org_admin' | 'platform_admin'
+  role?: 'candidate' | 'platform_admin'
   organizationId?: string
 }

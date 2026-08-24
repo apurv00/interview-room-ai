@@ -309,7 +309,7 @@ In the replay page:
 |----------------|--------|---------|
 | `/signin` while authenticated | none | `router.replace('/')` |
 | `/signup` while authenticated | none | `router.replace('/')` |
-| `/hire/*` as candidate | none | 403 or redirect (out of scope) |
+| `/workspace/*` without a Hire member session | none | Hire member auth gate or 403 (separate product; out of scope) |
 | `/cms/*` as candidate | none | 403 (out of scope) |
 | `/feedback/[id]` for other user's session | none | 403 + redirect to `/history` |
 | `/replay/[sessionId]` | any | 301 → `/feedback/[sessionId]` |

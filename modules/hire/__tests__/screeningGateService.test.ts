@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     requirement: { findOne: vi.fn() },
     application: { find: vi.fn(), updateOne: vi.fn() },
     candidate: { find: vi.fn() },
+    privacy: { find: vi.fn() },
     round: { find: vi.fn() },
     gate: { find: vi.fn(), create: vi.fn() },
     batch: { find: vi.fn(), create: vi.fn() },
@@ -58,11 +59,19 @@ vi.mock('../models', () => ({
   HireJobRequirementVersion: mocks.requirement,
   HireApplication: mocks.application,
   HireCandidate: mocks.candidate,
+  HirePrivacyRequest: mocks.privacy,
   HireRound: mocks.round,
   HireScreeningGate: mocks.gate,
   HireInvitationBatch: mocks.batch,
   HireInvitationBatchItem: mocks.item,
   TERMINAL_STAGES: ['hired', 'rejected', 'withdrawn'],
+  activeHirePrivacyRequestFilter: (now: Date) => ({
+    live: true,
+    $or: [
+      { status: 'processing' },
+      { status: 'pending_verification', verificationExpiresAt: { $gt: now } },
+    ],
+  }),
 }))
 
 import {
@@ -150,9 +159,25 @@ function candidate(input: {
   }
 }
 
+function currentCandidates() {
+  return [
+    candidate({
+      id: FRESH_CANDIDATE_ID,
+      resumeText: 'Fresh current resume',
+      location: 'Bengaluru, India',
+      experienceYears: 6,
+    }),
+    candidate({
+      id: STALE_CANDIDATE_ID,
+      resumeText: 'Changed current resume',
+      location: 'Mumbai, India',
+      experienceYears: 8,
+    }),
+  ]
+}
+
 function setCurrentRows() {
   const freshResume = 'Fresh current resume'
-  const staleCurrentResume = 'Changed current resume'
   const applications = [
     application({
       id: FRESH_APPLICATION_ID,
@@ -169,26 +194,13 @@ function setCurrentRows() {
       resumeHash: hash('Old replaced resume'),
     }),
   ]
-  const candidates = [
-    candidate({
-      id: FRESH_CANDIDATE_ID,
-      resumeText: freshResume,
-      location: 'Bengaluru, India',
-      experienceYears: 6,
-    }),
-    candidate({
-      id: STALE_CANDIDATE_ID,
-      resumeText: staleCurrentResume,
-      location: 'Mumbai, India',
-      experienceYears: 8,
-    }),
-  ]
   mocks.job.findOne.mockImplementation(() => mocks.chain(job))
   mocks.requirement.findOne.mockImplementation(() =>
     mocks.chain({ _id: REQUIREMENT_ID, version: 2, contentHash: 'c'.repeat(64) }),
   )
   mocks.application.find.mockImplementation(() => mocks.chain(applications))
-  mocks.candidate.find.mockImplementation(() => mocks.chain(candidates))
+  mocks.candidate.find.mockImplementation(() => mocks.chain(currentCandidates()))
+  mocks.privacy.find.mockImplementation(() => mocks.chain([]))
   mocks.round.find.mockImplementation(() => mocks.chain([]))
 }
 
@@ -306,6 +318,61 @@ describe('screeningGateService', () => {
       version: 2,
       contentHash: 'c'.repeat(64),
     })
+  })
+
+  it('excludes active and completed-deletion candidates from the recipient set', async () => {
+    mocks.privacy.find.mockImplementation(() =>
+      mocks.chain([{ candidateId: STALE_CANDIDATE_ID }]),
+    )
+    mocks.candidate.find.mockImplementation(() => mocks.chain([
+      {
+        ...currentCandidates()[0],
+        piiAnonymizedAt: new Date('2026-08-12T08:30:00.000Z'),
+      },
+    ]))
+
+    const result = await previewJobScreeningGate(CTX, JOB_ID.toString(), request)
+
+    expect(result.preview.rankedApplications).toEqual([])
+    expect(result.preview.selectedCount).toBe(0)
+    expect(mocks.privacy.find).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      candidateId: { $in: [FRESH_CANDIDATE_ID, STALE_CANDIDATE_ID] },
+      live: true,
+      $or: [
+        { status: 'processing' },
+        {
+          status: 'pending_verification',
+          verificationExpiresAt: { $gt: expect.any(Date) },
+        },
+      ],
+    })
+  })
+
+  it('rejects confirmation when a reviewed recipient is anonymized', async () => {
+    const requestWithException = {
+      ...request,
+      exceptions: [{ applicationId: FRESH_APPLICATION_ID.toString(), action: 'include' as const, note: 'Reviewed exception' }],
+    }
+    const preview = await previewJobScreeningGate(CTX, JOB_ID.toString(), requestWithException)
+    mocks.candidate.find.mockImplementation(() => mocks.chain(
+      currentCandidates().map((row) =>
+        row._id.equals(FRESH_CANDIDATE_ID)
+          ? { ...row, piiAnonymizedAt: new Date('2026-08-12T09:30:00.000Z') }
+          : row,
+      ),
+    ))
+
+    await expect(
+      confirmJobScreeningGate(CTX, JOB_ID.toString(), {
+        ...requestWithException,
+        previewFingerprint: preview.previewFingerprint,
+      }),
+    ).rejects.toMatchObject({ code: 'SCREENING_PREVIEW_STALE', statusCode: 409 })
+
+    expect(mocks.gate.create).not.toHaveBeenCalled()
+    expect(mocks.batch.create).not.toHaveBeenCalled()
+    expect(mocks.item.create).not.toHaveBeenCalled()
   })
 
   it('rejects a synthetic practice job before creating a gate or invitation batch', async () => {

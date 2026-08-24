@@ -47,13 +47,10 @@ export async function GET(_req: NextRequest) {
       return accountUnavailableResponse()
     }
 
-    // This endpoint restores the requester's personal setup. Passing the
-    // requester's recruiter/admin role to listSessions would widen the query
-    // to every session in their organization and could return another
-    // candidate's JD or resume. Force the owner-only list contract here.
+    // This endpoint restores the requester's personal setup through the
+    // owner-only history contract.
     const result = await listSessions({
       userId: session.user.id,
-      role: 'candidate',
       page: 1,
       limit: 1,
     })

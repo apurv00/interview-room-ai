@@ -1,4 +1,5 @@
 import type { InterviewConfig } from '@shared/types'
+import { isHireRuntimeInterview } from '@interview/config/hireRuntimeMode'
 
 export interface InterviewUsageSummary {
   plan?: unknown
@@ -7,10 +8,21 @@ export interface InterviewUsageSummary {
   monthlyInterviewLimit?: unknown
 }
 
+type InterviewUnlockConfig = Pick<InterviewConfig, 'duration'> & {
+  _hireRoundId?: unknown
+}
+
+export function shouldCheckPaidInterviewCheckout(
+  config: InterviewUnlockConfig,
+): boolean {
+  return !isHireRuntimeInterview(config as InterviewConfig)
+}
+
 export function shouldOfferPaidInterviewCheckout(
-  config: Pick<InterviewConfig, 'duration'>,
+  config: InterviewUnlockConfig,
   usage: InterviewUsageSummary,
 ): boolean {
+  if (!shouldCheckPaidInterviewCheckout(config)) return false
   if (usage.plan !== 'free') return false
   // Mirrors the server admission authority (interviewService admin_grant
   // branch): an admin-granted account — comped users, and IPG Hire's

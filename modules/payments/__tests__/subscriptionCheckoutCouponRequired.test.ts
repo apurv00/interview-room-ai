@@ -246,6 +246,14 @@ describe('subscription launch coupon fallback', () => {
       entitlementVersion: 1,
       role: 'recruiter' as const,
     }],
+    ['unknown-role account', {
+      plan: 'free' as const,
+      planVocabularyVersion: 2 as const,
+      entitlementSource: 'free' as const,
+      usagePeriodKey: 'basic:2026-08',
+      entitlementVersion: 1,
+      role: 'unknown_role' as const,
+    }],
     ['partial entitlement projection', {
       plan: 'free' as const,
       entitlementSource: 'free' as const,

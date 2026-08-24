@@ -60,75 +60,66 @@ export const authOptions: NextAuthOptions = {
           }),
         ]
       : []),
-    // Candidate invite OTP. The `ticket` credential is minted by
-    // /api/invite/[sessionId]/verify-otp after a successful OTP check; this
-    // provider's only job is to redeem the ticket and hand NextAuth a user
-    // record so the session cookie gets issued. No passwords, no form fields.
-    CredentialsProvider({
-      id: 'invite-otp',
-      name: 'Interview invite',
-      credentials: {
-        ticket: { label: 'Ticket', type: 'text' },
-      },
-      async authorize(credentials) {
-        const ticket = credentials?.ticket
-        if (!ticket || typeof ticket !== 'string') return null
+    // The isolated Hire runtime exchanges its one-time handoff ticket for a
+    // workspace-bound NextAuth session. The B2C surface has no credentials
+    // provider: its retired invite-ticket fallback must not be reachable.
+    ...(isHireRuntime
+      ? [
+          CredentialsProvider({
+            id: 'invite-otp',
+            name: 'Interview invite',
+            credentials: {
+              ticket: { label: 'Ticket', type: 'text' },
+            },
+            async authorize(credentials) {
+              const ticket = credentials?.ticket
+              if (!ticket || typeof ticket !== 'string') return null
 
-        const payload = isHireRuntime
-          ? await import(
-              '@modules/hire-runtime/services/handoffAuthTicketService'
-            ).then(({ redeemRuntimeAuthTicket }) =>
-              redeemRuntimeAuthTicket(ticket),
-            )
-          : await import('@b2b/services/inviteTicketService').then(
-              ({ redeemAuthTicket }) => redeemAuthTicket(ticket),
-            )
-        if (!payload) {
-          authLogger.warn('invite-otp: ticket redemption failed')
-          return null
-        }
-        if (isHireRuntime && !payload.organizationId) {
-          authLogger.warn(
-            { userId: payload.userId },
-            'invite-otp: runtime ticket is missing its workspace boundary',
-          )
-          return null
-        }
+              const payload = await import(
+                '@modules/hire-runtime/services/handoffAuthTicketService'
+              ).then(({ redeemRuntimeAuthTicket }) =>
+                redeemRuntimeAuthTicket(ticket),
+              )
+              if (!payload) {
+                authLogger.warn('invite-otp: ticket redemption failed')
+                return null
+              }
+              if (!payload.organizationId) {
+                authLogger.warn(
+                  { userId: payload.userId },
+                  'invite-otp: runtime ticket is missing its workspace boundary',
+                )
+                return null
+              }
 
-        try {
-          await connectDB()
-          const userQuery = isHireRuntime
-            ? User.findOne({
-                _id: payload.userId,
-                organizationId: payload.organizationId,
-              })
-            : User.findById(payload.userId)
-          const dbUser = await userQuery.select(
-            '_id email name image',
-          )
-          if (!dbUser) {
-            authLogger.error(
-              { userId: payload.userId },
-              'invite-otp: user vanished between ticket issue and redemption',
-            )
-            return null
-          }
-          const authorizedUser = {
-            id: dbUser._id.toString(),
-            email: dbUser.email,
-            name: dbUser.name ?? dbUser.email,
-            image: dbUser.image ?? undefined,
-            ...(isHireRuntime
-              ? { organizationId: payload.organizationId }
-              : {}),
-          }
-          return authorizedUser
-        } catch (err) {
-          authLogger.error({ err }, 'invite-otp: user lookup failed')
-          return null
-        }
-      },
-    }),
+              try {
+                await connectDB()
+                const dbUser = await User.findOne({
+                  _id: payload.userId,
+                  organizationId: payload.organizationId,
+                }).select('_id email name image')
+                if (!dbUser) {
+                  authLogger.error(
+                    { userId: payload.userId },
+                    'invite-otp: user vanished between ticket issue and redemption',
+                  )
+                  return null
+                }
+                return {
+                  id: dbUser._id.toString(),
+                  email: dbUser.email,
+                  name: dbUser.name ?? dbUser.email,
+                  image: dbUser.image ?? undefined,
+                  organizationId: payload.organizationId,
+                }
+              } catch (err) {
+                authLogger.error({ err }, 'invite-otp: user lookup failed')
+                return null
+              }
+            },
+          }),
+        ]
+      : []),
   ],
 
   callbacks: {

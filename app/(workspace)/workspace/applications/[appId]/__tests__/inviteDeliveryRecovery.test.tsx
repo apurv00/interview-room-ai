@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import ApplicationCardPage from '../page'
 
@@ -75,6 +75,154 @@ afterEach(() => {
 })
 
 describe('AI invitation delivery recovery UI', () => {
+  it('renders no falsey numeric text when no resume is on file', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(card('sent'))))
+
+    const { container } = render(
+      <ApplicationCardPage params={{ appId: 'app-1' }} />,
+    )
+
+    await screen.findByRole('region', { name: 'Human review readiness' })
+    expect(screen.queryByText('Résumés on file')).not.toBeInTheDocument()
+
+    const textWalker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+    const bareTextNodes: string[] = []
+    while (textWalker.nextNode()) {
+      const text = textWalker.currentNode.textContent?.trim()
+      if (text) bareTextNodes.push(text)
+    }
+    expect(bareTextNodes).not.toContain('0')
+  })
+
+  it('leads the decision header with human readiness and neutral AI evidence', async () => {
+    const base = card('sent')
+    const reviewCard = {
+      ...base,
+      rounds: [
+        {
+          ...base.rounds[0],
+          status: 'completed',
+          linkedAt: '2026-08-10T13:00:00.000Z',
+          results: {
+            overallScore: 82,
+            passProbability: 'likely to pass',
+            confidenceLevel: 'high',
+          },
+          assessment: {
+            overallScore: 82,
+            overallEvidenceIds: [],
+            recommendation: 'advance',
+            confidence: 'high',
+            dimensions: [],
+            findings: [],
+            questions: [],
+          },
+          inviteDelivery: null,
+        },
+      ],
+      humanRounds: [
+        {
+          id: 'human-round-1',
+          mode: 'member_room',
+          status: 'completed',
+          openedAt: '2026-08-10T14:00:00.000Z',
+          scorecardSubmittedAt: '2026-08-10T15:00:00.000Z',
+          revokedAt: null,
+          createdAt: '2026-08-10T14:00:00.000Z',
+          scorecard: null,
+          delivery: null,
+        },
+        {
+          id: 'human-round-2',
+          mode: 'guest_kit',
+          status: 'pending_scorecard',
+          openedAt: null,
+          scorecardSubmittedAt: null,
+          revokedAt: null,
+          createdAt: '2026-08-10T16:00:00.000Z',
+          scorecard: null,
+          delivery: null,
+        },
+      ],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(reviewCard)))
+
+    render(<ApplicationCardPage params={{ appId: 'app-1' }} />)
+
+    const humanReview = await screen.findByRole('region', {
+      name: 'Human review readiness',
+    })
+    expect(
+      within(humanReview).getByText('1 human scorecard submitted · 1 pending'),
+    ).toBeInTheDocument()
+
+    const aiEvidence = screen.getByRole('region', { name: 'AI evidence' })
+    expect(
+      within(aiEvidence).getByText('Assessment score: 82 / 100 · Confidence: high'),
+    ).toBeInTheDocument()
+    expect(
+      within(aiEvidence).getByText(
+        'Supporting evidence only; a human makes the hiring decision.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/pass probability/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('likely to pass')).not.toBeInTheDocument()
+    expect(
+      screen.getByText('AI recommendation (supporting evidence only): advance'),
+    ).toBeInTheDocument()
+    const actions = screen.getByRole('group', { name: 'Candidate actions' })
+    expect(actions).toHaveClass(
+      'w-full',
+      'flex-wrap',
+      'xl:w-auto',
+      'xl:shrink-0',
+    )
+    expect(actions.parentElement).toHaveClass('flex-col', 'xl:flex-row')
+    expect(humanReview.parentElement?.parentElement).toHaveClass(
+      'w-full',
+      'xl:flex-1',
+    )
+    expect(within(actions).getByRole('button', { name: 'Advance' })).toBeInTheDocument()
+    expect(within(actions).getByRole('button', { name: 'Reject' })).toBeInTheDocument()
+  })
+
+  it('states when every requested human review was revoked', async () => {
+    const base = card('sent')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        json({
+          ...base,
+          humanRounds: [
+            {
+              id: 'human-round-revoked',
+              mode: 'member_room',
+              status: 'revoked',
+              openedAt: null,
+              scorecardSubmittedAt: null,
+              revokedAt: '2026-08-10T15:00:00.000Z',
+              createdAt: '2026-08-10T14:00:00.000Z',
+              scorecard: null,
+              delivery: null,
+            },
+          ],
+        }),
+      ),
+    )
+
+    render(<ApplicationCardPage params={{ appId: 'app-1' }} />)
+
+    const humanReview = await screen.findByRole('region', {
+      name: 'Human review readiness',
+    })
+    expect(
+      within(humanReview).getByText('1 requested human review was revoked'),
+    ).toBeInTheDocument()
+    expect(
+      within(humanReview).queryByText('No human scorecards requested'),
+    ).not.toBeInTheDocument()
+  })
+
   it('programmatically labels the experience selector and required offer note', async () => {
     const newApplication = card('sent')
     newApplication.rounds = []

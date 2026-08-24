@@ -9,7 +9,6 @@ const {
   mockFencePracticeSessionWrite,
   mockConnectDB,
   mockIsJobsAccountActive,
-  mockActiveJobsAccountIds,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockCreateSession: vi.fn(),
@@ -18,7 +17,6 @@ const {
   mockFencePracticeSessionWrite: vi.fn(),
   mockConnectDB: vi.fn(),
   mockIsJobsAccountActive: vi.fn(),
-  mockActiveJobsAccountIds: vi.fn(),
 }))
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }))
@@ -30,7 +28,6 @@ vi.mock('@interview/services/core/interviewService', () => ({
 vi.mock('@shared/db/connection', () => ({ connectDB: mockConnectDB }))
 vi.mock('@shared/services/jobsAccountFence', () => ({
   isJobsAccountActive: (...args: unknown[]) => mockIsJobsAccountActive(...args),
-  activeJobsAccountIds: (...args: unknown[]) => mockActiveJobsAccountIds(...args),
 }))
 vi.mock('@jobs/services/practiceHandoff', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@jobs/services/practiceHandoff')>()),
@@ -88,9 +85,6 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue({ sessions: [], total: 0, page: 1, limit: 20 })
   mockConnectDB.mockResolvedValue(undefined)
   mockIsJobsAccountActive.mockResolvedValue(true)
-  mockActiveJobsAccountIds.mockImplementation(
-    (userIds: string[]) => Promise.resolve(new Set(userIds)),
-  )
   mockResolvePracticeHandoff.mockResolvedValue({
     jobId: JOB_ID,
     jobDescription: SERVER_JD,
@@ -131,21 +125,6 @@ describe('GET /api/interviews account lifecycle', () => {
 
     expect(response.status).toBe(401)
     await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
-    expect(mockActiveJobsAccountIds).not.toHaveBeenCalled()
-  })
-
-  it('withholds a sanitized list when requester deletion wins at the final disclosure check', async () => {
-    mockListSessions.mockResolvedValue({
-      sessions: [{ _id: 'captured-private-row', userId: USER_ID, feedback: { overall_score: 80 } }],
-      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-    })
-    mockActiveJobsAccountIds.mockResolvedValueOnce(new Set())
-
-    const response = await GET(new NextRequest('http://localhost/api/interviews'))
-
-    expect(response.status).toBe(401)
-    await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
-    expect(mockActiveJobsAccountIds).toHaveBeenCalledWith([USER_ID])
   })
 
   it('prefers account-unavailable when the list query fails during deletion', async () => {
@@ -158,69 +137,38 @@ describe('GET /api/interviews account lifecycle', () => {
     await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_UNAVAILABLE' })
   })
 
-  it('preserves owner setup fields while stripping foreign-owner private context', async () => {
-    const foreignOwnerId = '507f1f77bcf86cd799439099'
-    mockGetServerSession.mockResolvedValue({
-      user: {
-        id: USER_ID,
-        role: 'recruiter',
-        organizationId: '507f1f77bcf86cd799439020',
-      },
-    })
+  it('preserves owner setup fields while stripping internal storage keys', async () => {
     mockListSessions.mockResolvedValue({
-      sessions: [
-        {
-          _id: 'owner-session',
-          userId: USER_ID,
-          resumeText: 'OWNER RESUME',
-          jobDescription: 'OWNER JD',
-          candidateEmail: 'owner@example.com',
-          userAgent: 'owner-agent',
-          recordingR2Key: 'recordings/owner.webm',
-          screenRecordingR2Key: 'recordings/owner-screen.webm',
-          audioRecordingR2Key: 'recordings/owner-audio.webm',
-          facialLandmarksR2Key: 'landmarks/owner.json',
-          resumeR2Key: 'documents/owner-resume.pdf',
-          jdR2Key: 'documents/owner-jd.pdf',
-          inviteTokenHash: 'owner-invite-secret',
-          inviteTokenExpiry: '2099-01-01T00:00:00.000Z',
-        },
-        {
-          _id: 'foreign-session',
-          userId: foreignOwnerId,
-          resumeText: 'FOREIGN RESUME',
-          jobDescription: 'FOREIGN JD',
-          candidateEmail: 'foreign@example.com',
-          userAgent: 'foreign-agent',
-          parsedResume: { name: 'Foreign Candidate' },
-          parsedJobDescription: { title: 'Foreign Role' },
-          resumeFileName: 'foreign-resume.pdf',
-          jdFileName: 'foreign-jd.pdf',
-          recordingUrl: 'https://private.example/recording',
-          shareToken: 'foreign-share-secret',
-          recordingR2Key: 'recordings/foreign.webm',
-          screenRecordingR2Key: 'recordings/foreign-screen.webm',
-          audioRecordingR2Key: 'recordings/foreign-audio.webm',
-          facialLandmarksR2Key: 'landmarks/foreign.json',
-          resumeR2Key: 'documents/foreign-resume.pdf',
-          jdR2Key: 'documents/foreign-jd.pdf',
-          inviteTokenHash: 'foreign-invite-secret',
-          inviteTokenExpiry: '2099-01-01T00:00:00.000Z',
-          feedback: { overall_score: 80 },
-        },
-      ],
-      pagination: { page: 1, limit: 20, total: 2, totalPages: 1 },
+      sessions: [{
+        _id: 'owner-session',
+        userId: USER_ID,
+        resumeText: 'OWNER RESUME',
+        jobDescription: 'OWNER JD',
+        userAgent: 'owner-agent',
+        recordingR2Key: 'recordings/owner.webm',
+        screenRecordingR2Key: 'recordings/owner-screen.webm',
+        audioRecordingR2Key: 'recordings/owner-audio.webm',
+        facialLandmarksR2Key: 'landmarks/owner.json',
+        resumeR2Key: 'documents/owner-resume.pdf',
+        jdR2Key: 'documents/owner-jd.pdf',
+        templateId: '507f1f77bcf86cd799439099',
+        candidateEmail: 'legacy-candidate@example.com',
+        candidateName: 'Legacy Candidate',
+        recruiterNotes: 'legacy recruiter-only note',
+        inviteTokenHash: 'legacy-invite-token-hash',
+        inviteTokenExpiry: new Date('2026-01-01T00:00:00.000Z'),
+      }],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
     })
 
     const response = await GET(new NextRequest('http://localhost/api/interviews'))
     const body = await response.json()
 
     expect(response.status).toBe(200)
-    expect(body.pagination.total).toBe(2)
+    expect(body.pagination.total).toBe(1)
     expect(body.sessions[0]).toMatchObject({
       resumeText: 'OWNER RESUME',
       jobDescription: 'OWNER JD',
-      candidateEmail: 'owner@example.com',
       userAgent: 'owner-agent',
       hasRecording: true,
       hasScreenRecording: true,
@@ -232,56 +180,39 @@ describe('GET /api/interviews account lifecycle', () => {
       'facialLandmarksR2Key',
       'resumeR2Key',
       'jdR2Key',
+      'templateId',
+      'candidateEmail',
+      'candidateName',
+      'recruiterNotes',
       'inviteTokenHash',
       'inviteTokenExpiry',
     ]) {
       expect(body.sessions[0]).not.toHaveProperty(privateField)
-      expect(body.sessions[1]).not.toHaveProperty(privateField)
     }
-    expect(body.sessions[1]).toMatchObject({
-      _id: 'foreign-session',
-      feedback: { overall_score: 80 },
-    })
-    for (const privateField of [
-      'resumeText',
-      'jobDescription',
-      'candidateEmail',
-      'userAgent',
-      'parsedResume',
-      'parsedJobDescription',
-      'resumeFileName',
-      'jdFileName',
-      'recordingUrl',
-      'shareToken',
-    ]) {
-      expect(body.sessions[1]).not.toHaveProperty(privateField)
-    }
-    expect(mockActiveJobsAccountIds).toHaveBeenCalledWith([USER_ID, foreignOwnerId])
   })
 
-  it('prunes a foreign row instead of failing the page when its owner starts deleting in flight', async () => {
-    const foreignOwnerId = '507f1f77bcf86cd799439099'
-    mockGetServerSession.mockResolvedValue({
-      user: {
-        id: USER_ID,
-        role: 'recruiter',
-        organizationId: '507f1f77bcf86cd799439020',
-      },
-    })
-    mockListSessions.mockResolvedValue({
-      sessions: [{ _id: 'captured-private-row', userId: foreignOwnerId, feedback: { overall_score: 80 } }],
-      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-    })
-    mockActiveJobsAccountIds.mockResolvedValueOnce(new Set([USER_ID]))
+  it.each(['recruiter', 'org_admin', 'platform_admin'])(
+    'keeps %s history owner-only',
+    async (role) => {
+      mockGetServerSession.mockResolvedValue({
+        user: {
+          id: USER_ID,
+          role,
+          organizationId: '507f1f77bcf86cd799439020',
+        },
+      })
 
-    const response = await GET(new NextRequest('http://localhost/api/interviews'))
-    const body = await response.json()
+      const response = await GET(new NextRequest('http://localhost/api/interviews'))
 
-    expect(response.status).toBe(200)
-    expect(body.sessions).toEqual([])
-    expect(body.pagination).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1 })
-    expect(mockActiveJobsAccountIds).toHaveBeenCalledWith([USER_ID, foreignOwnerId])
-  })
+      expect(response.status).toBe(200)
+      expect(mockListSessions).toHaveBeenCalledWith({
+        userId: USER_ID,
+        page: 1,
+        limit: 20,
+        status: undefined,
+      })
+    },
+  )
 })
 
 describe('POST /api/interviews Jobs handoff', () => {

@@ -78,7 +78,6 @@ vi.mock('../../services/evidenceService', () => ({
   assertHireInterviewResultCompatible: mocks.assertResultCompatible,
   persistHireInterviewResult: mocks.persistResult,
 }))
-
 import {
   __resultIngestion,
   HireEngineIngestionError,

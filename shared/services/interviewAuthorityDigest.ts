@@ -13,8 +13,6 @@ export const INTERVIEW_AUTHORITY_DIGEST_DOMAINS = Object.freeze({
     'self-serve-creation-request',
   authoritativeConfig:
     'authoritative-config',
-  verifiedInviteProvenance:
-    'verified-invite-provenance',
   authoritativeOperationRequest:
     'authoritative-operation-request',
   authoritativeParentBinding:

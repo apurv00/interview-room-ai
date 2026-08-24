@@ -28,7 +28,7 @@ Status legend: [x] implemented with named automated evidence; [P] required deplo
 
 ## Hard boundaries
 
-- [x] **Interview engine and B2C persistence remain untouched.** The current diff from origin/main is empty for modules/interview/, app/api/interviews/, shared/db/models/, and shared/services/ttsCache.ts.
+- [x] **The original Phase 2 implementation left the interview engine and B2C persistence untouched.** At the Phase 2 candidate baseline, its scoped diff from `origin/main` was empty for `modules/interview/`, `app/api/interviews/`, `shared/db/models/`, and `shared/services/ttsCache.ts`. Later combined cleanup work is outside this historical Phase 2 boundary.
 
 - [x] **Candidate identity stays Hire-owned.** Candidate email is not resolved against B2C User. Public intake and worker authority use Hire workspace/member records and hashed capabilities. Evidence: applyPageService.test.ts, intakeQueueService.test.ts, and tenantIsolation.test.ts.
 
@@ -72,7 +72,8 @@ Focused Phase 2 behavior:
 
 Index-rollout guard:
 
-    npx vitest run scripts/__tests__/prepare-hire-phase2-indexes.test.ts
+    npx vitest run scripts/__tests__/prepare-hire-phase2-indexes.test.ts \
+      scripts/__tests__/hirePhase2IndexOwnership.test.ts
 
 Regression and release checks:
 
@@ -81,15 +82,15 @@ Regression and release checks:
     npm run lint
     npm run build
     git diff --check
-    git diff --quiet origin/main -- modules/interview app/api/interviews shared/db/models shared/services/ttsCache.ts
+    git diff --stat origin/main -- modules/interview app/api/interviews shared/db/models shared/services/ttsCache.ts
     npx vitest run shared/surfaces/__tests__/hireDeploymentReadiness.test.ts
 
 ## Release and deployment gates
 
-- [x] **Module-size architecture gate.** ADR 0030 accepts a bounded Phase 2
-  envelope of **80 files / 22,000 LOC** for `modules/hire`, preserving the
+- [x] **Module-size architecture gate.** The current bounded Phase 2
+  envelope is **92 files / 28,100 LOC** for `modules/hire`, preserving the
   distinct queue, screening, invitation, and privacy lifecycle
-  seams. Measured implementation is **74 files / 19,795 LOC**; `node
+  seams. Measured implementation is **92 files / 28,097 LOC**; `node
   scripts/check-module-size.mjs` passes. Future growth must remain within
   that tripwire or receive a new architectural decision.
 
@@ -99,7 +100,7 @@ Regression and release checks:
 
 - [P] **Inngest registration and recovery.** Deploy the control surface and sync GET /api/inngest with the control app. Verify hire-resume-intake, hire-resume-intake-recovery, hire-screening-invitation-dispatch, and hire-screening-invitation-recovery are registered/enabled, minute recovery runs, and events contain only durable IDs.
 
-- [P] **Control indexes and conditional legacy invitation migration.** `npm run prepare:hire-phase2-indexes` is a locally verified plan-only command: it prints 11 exact target definitions and opens no database connection or index write. In the target control deployment, run `npm run check:hire-phase2-indexes`; review the result, then run `npm run prepare:hire-phase2-indexes -- --apply` only with release approval and check again. The apply path creates only exact missing indexes and never drops or synchronizes indexes. If it detects the legacy full unique HireInvitationBatchItem workspaceId/applicationId index, it fails before writes: pause screening creation/dispatch, back up and inspect that index and data, confirm redacted rows have no applicationId, replace the exact legacy full index with the partial index, verify it, then resume. A fresh Phase 2 deployment with no prior collection needs no migration.
+- [P] **Control indexes and conditional legacy invitation migration.** `npm run prepare:hire-phase2-indexes` is a locally verified plan-only command: it prints 14 exact target definitions and opens no database connection or index write. The set includes the bounded screening-recipient read index, the authoritative-result aggregate index, and the optional commercial-account uniqueness index. The three new indexes are deliberately absent from runtime schema initialization. Before the new control image handles traffic, run `npm run check:hire-phase2-indexes` against the target control database; review the missing-index report, run `npm run prepare:hire-phase2-indexes -- --apply` only with release approval, then require a passing `--check`. The apply path preflights every key and name collision before the first write, creates only exact missing indexes, and never drops or synchronizes indexes. If it detects the legacy full unique HireInvitationBatchItem workspaceId/applicationId index or duplicate workspace commercial accounts, it fails the complete preflight before writes. For the legacy invitation index, pause screening creation/dispatch, back up and inspect that index and data, confirm redacted rows have no applicationId, replace the exact legacy full index with the partial index, verify it, then resume. A fresh deployment with no prior collection needs no data migration, but still requires the explicit apply/check gate.
 
 - [P] **Provider/privacy and lifecycle smoke test.** In deployed control, prove verified candidate deletion prevents pending intake/invitation work from re-emitting PII, and workspace deletion that wins the egress claim prevents close-rejection provider sends or retries.
 

@@ -4,7 +4,11 @@ import {
   INTERVIEW_ROLE_SLUG_MAX_CHARS,
   INTERVIEW_TARGET_COMPANY_MAX_CHARS,
 } from '@shared/interviewContract'
-import { InterviewConfigSchema } from '../validators/interview'
+import {
+  CreateSessionSchema,
+  GenerateQuestionSchema,
+  InterviewConfigSchema,
+} from '../validators/interview'
 import { CreateJobSchema } from '@hire'
 
 const BASE_CONFIG = {
@@ -27,6 +31,26 @@ describe('InterviewConfigSchema shared producer limits', () => {
       ...BASE_CONFIG,
       duration: 60,
     }).success).toBe(false)
+  })
+
+  it('strips retired org-hiring template and candidate-name inputs', () => {
+    const create = CreateSessionSchema.parse({
+      config: BASE_CONFIG,
+      templateId: '507f1f77bcf86cd799439011',
+      candidateName: 'Retired invite candidate',
+      candidateEmail: 'retired-invite@example.com',
+    })
+    expect(create).not.toHaveProperty('templateId')
+    expect(create).not.toHaveProperty('candidateName')
+    expect(create).not.toHaveProperty('candidateEmail')
+
+    const question = GenerateQuestionSchema.parse({
+      config: BASE_CONFIG,
+      questionIndex: 0,
+      previousQA: [],
+      templateId: '507f1f77bcf86cd799439011',
+    })
+    expect(question).not.toHaveProperty('templateId')
   })
 
   it('accepts the exact JD/company boundaries', () => {
@@ -61,9 +85,10 @@ describe('InterviewConfigSchema shared producer limits', () => {
     }).success).toBe(false)
 
     // Downstream consumer of the exact role persisted on an InterviewSession:
-    // IPG Hire job titles become AI-round roles (v1's InviteSchema was
-    // deleted 2026-08-09; CreateJobSchema is its successor pin). A title the
-    // hire UI accepts must never fail the engine contract mid-flow.
+    // IPG Hire job titles become AI-round roles (the retired org-hiring
+    // InviteSchema was deleted 2026-08-09; CreateJobSchema is its successor
+    // pin). A title the hire UI accepts must never fail the engine contract
+    // mid-flow.
     const jdText = 'x'.repeat(60)
     expect(CreateJobSchema.safeParse({ title: atLimit, jdText }).success).toBe(true)
     expect(CreateJobSchema.safeParse({ title: overLimit, jdText }).success).toBe(false)

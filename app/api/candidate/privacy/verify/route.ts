@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { verifyOtp } from '@b2b/services/otpService'
+import { verifyOtp } from '@shared/auth/mailboxOtp'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'
 import {
   HirePrivacyError,

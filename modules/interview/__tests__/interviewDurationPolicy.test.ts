@@ -36,4 +36,18 @@ describe('interview duration policy', () => {
     expect(isBasicPersonalInterviewUser(user)).toBe(false)
     expect(interviewDurationOptionsForUser(user)).toEqual([10, 20, 30])
   })
+
+  it('privileges only the platform administrator role', () => {
+    expect(isBasicPersonalInterviewUser({
+      plan: 'free',
+      role: 'platform_admin',
+    })).toBe(false)
+  })
+
+  it.each(['recruiter', 'org_admin', 'unknown_role'])(
+    'treats the retired or unknown %s role as Basic',
+    (role) => {
+      expect(isBasicPersonalInterviewUser({ plan: 'free', role })).toBe(true)
+    },
+  )
 })

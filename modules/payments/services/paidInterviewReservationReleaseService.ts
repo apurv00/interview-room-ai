@@ -427,12 +427,6 @@ interface ReleaseEvidenceRuntimeRow {
   entitlementSourceId: mongoose.Types.ObjectId
   entitlementSnapshotDigest: string
   periodKey?: string
-  organizationId?: mongoose.Types.ObjectId
-  inviteAuthorityId?: string
-  recruiterUserId?: mongoose.Types.ObjectId
-  recruiterReferenceErasedAt?: Date
-  inviteVerifiedAt?: Date
-  inviteProvenanceDigest?: string
   state: 'reserved'
   startedAt?: Date
   deadlineAt?: Date
@@ -1034,12 +1028,6 @@ function exactEvidenceRows(
     runtime.entitlementSnapshotDigest ===
       input.entitlementSnapshotDigest &&
     runtime.periodKey === undefined &&
-    runtime.organizationId === undefined &&
-    runtime.inviteAuthorityId === undefined &&
-    runtime.recruiterUserId === undefined &&
-    runtime.recruiterReferenceErasedAt === undefined &&
-    runtime.inviteVerifiedAt === undefined &&
-    runtime.inviteProvenanceDigest === undefined &&
     runtime.state === 'reserved' &&
     runtime.startedAt === undefined &&
     runtime.deadlineAt === undefined &&
@@ -1088,12 +1076,6 @@ PaidInterviewReservationReleaseEvidenceProvider = {
       entitlementSnapshotDigest:
         input.entitlementSnapshotDigest,
       periodKey: { $exists: false },
-      organizationId: { $exists: false },
-      inviteAuthorityId: { $exists: false },
-      recruiterUserId: { $exists: false },
-      recruiterReferenceErasedAt: { $exists: false },
-      inviteVerifiedAt: { $exists: false },
-      inviteProvenanceDigest: { $exists: false },
       state: 'reserved',
       startedAt: { $exists: false },
       deadlineAt: { $exists: false },
@@ -1113,10 +1095,7 @@ PaidInterviewReservationReleaseEvidenceProvider = {
       .select(
         '_id sessionId userId authorityKind usageId ' +
           'entitlementSource entitlementSourceId ' +
-          'entitlementSnapshotDigest periodKey organizationId ' +
-          'inviteAuthorityId recruiterUserId ' +
-          'recruiterReferenceErasedAt inviteVerifiedAt ' +
-          'inviteProvenanceDigest ' +
+          'entitlementSnapshotDigest periodKey ' +
           'state startedAt deadlineAt restoreUntil terminalAt ' +
           'runtimeVersion nextTurnOrdinal nextMainQuestionOrdinal ' +
           'mainQuestionReservationOperationId firstTurnRecordedAt ' +

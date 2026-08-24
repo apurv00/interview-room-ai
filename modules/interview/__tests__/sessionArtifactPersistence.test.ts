@@ -285,6 +285,50 @@ describe('createSession — Jobs JD provider authority', () => {
     }
   })
 
+  it('grants role privilege only to platform_admin while preserving Hire tenant authority', async () => {
+    mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mockUserFindOneAndUpdate.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439010',
+    })
+    mockDepthFindOne.mockReturnValue({ lean: () => Promise.resolve(null) })
+    mockSessionCreate.mockResolvedValue({
+      _id: { toString: () => 'session-role-authority' },
+    })
+
+    await createSession({
+      userId: '507f1f77bcf86cd799439010',
+      config: {
+        role: 'backend',
+        interviewType: 'behavioral',
+        experience: '3-6',
+        duration: 10,
+      },
+    })
+
+    const basicRepair = mockUserUpdateOne.mock.calls[1][0]
+    const admissionBranches = mockUserFindOneAndUpdate.mock.calls[0][0].$and[1].$or
+    const personalBasic = admissionBranches.find(
+      (branch: Record<string, unknown>) => branch.monthlyInterviewLimit === 1,
+    )
+    const privilegedRole = admissionBranches.find(
+      (branch: { role?: { $in?: string[] } }) => branch.role?.$in,
+    )
+
+    expect(basicRepair.role).toEqual({ $nin: ['platform_admin'] })
+    expect(personalBasic).toEqual(expect.objectContaining({
+      organizationId: null,
+      role: { $nin: ['platform_admin'] },
+      monthlyInterviewLimit: 1,
+    }))
+    expect(privilegedRole).toEqual({ role: { $in: ['platform_admin'] } })
+    for (const retiredOrUnknownRole of ['recruiter', 'org_admin', 'unknown_role']) {
+      expect(basicRepair.role.$nin).not.toContain(retiredOrUnknownRole)
+      expect(personalBasic.role.$nin).not.toContain(retiredOrUnknownRole)
+      expect(privilegedRole.role.$in).not.toContain(retiredOrUnknownRole)
+    }
+    expect(admissionBranches).toContainEqual({ organizationId: { $ne: null } })
+  })
+
   it('uses one exact paid unlock for a Basic request above 10 minutes', async () => {
     mockUserUpdateOne.mockResolvedValue({ matchedCount: 1 })
     mockUserFindOneAndUpdate.mockResolvedValue(null)

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import OverviewWorkspace from "../OverviewWorkspace";
 
 vi.mock("next/link", () => ({
@@ -71,6 +71,11 @@ describe("OverviewWorkspace", () => {
       screen.getByText("Interview validation timelines available"),
     ).toBeTruthy();
     expect(screen.getByText("8 open")).toBeTruthy();
+    const validationRow = screen
+      .getByText("Interview validation timelines available")
+      .closest("a");
+    expect(validationRow).not.toBeNull();
+    expect(within(validationRow as HTMLAnchorElement).getByText("3")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Jobs health" })).toHaveAttribute(
       "href",
       "/workspace/jobs/health",
@@ -82,6 +87,14 @@ describe("OverviewWorkspace", () => {
     expect(screen.getByRole("link", { name: "Download CSV" })).toHaveAttribute(
       "download",
     );
+    const actionList = screen.getByRole("list", {
+      name: "Current grouped actions",
+    });
+    const actionLinks = within(actionList).getAllByRole("link");
+    expect(actionLinks).toHaveLength(5);
+    actionLinks.forEach((link) => {
+      expect(link).toHaveAttribute("href", "/workspace/jobs/health");
+    });
     expect(fetchMock).toHaveBeenCalledWith("/api/workspace/overview?contractVersion=2", {
       cache: "no-store",
     });

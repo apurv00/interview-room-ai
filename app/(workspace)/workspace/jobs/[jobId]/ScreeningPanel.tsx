@@ -10,7 +10,15 @@
  * exposes a resume, or handles a public capability.
  */
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from 'react'
+import Link from 'next/link'
 import Badge from '@shared/ui/Badge'
 import Button from '@shared/ui/Button'
 
@@ -34,6 +42,17 @@ interface ScreeningExceptionRequest {
   note: string
 }
 
+type CandidateIdentityState = 'available' | 'privacy_protected' | 'unavailable'
+
+interface CandidateIdentityView {
+  applicationId: string
+  candidateId: string
+  identityState: CandidateIdentityState
+  displayName: string | null
+  email: string | null
+  applicationUrl: string | null
+}
+
 interface PreviewEntry {
   applicationId: string
   candidateId: string
@@ -53,6 +72,7 @@ interface PreviewEntry {
     | 'knockout'
     | 'manual_include'
     | 'manual_exclude'
+  candidate?: CandidateIdentityView | null
 }
 
 interface ScreeningPreview {
@@ -109,6 +129,39 @@ interface InvitationBatch {
   cancelledAt: string | null
   createdByName: string
   createdAt: string
+  recipients: RecipientDelivery[]
+}
+
+interface RecipientDelivery {
+  id: string
+  batchId: string
+  applicationId: string | null
+  candidate: CandidateIdentityView | null
+  identityState: CandidateIdentityState | 'privacy_redacted'
+  rank: number | null
+  score: number | null
+  scoreState: ScoreState
+  selectionReason: 'top_n' | 'above_threshold' | 'manual_include' | 'waterfall'
+  sendAfter: string
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'cancelled' | 'skipped'
+  deliveryStatus: 'pending' | 'sending' | 'sent' | 'failed' | null
+  attempts: number
+  sentAt: string | null
+  issue: {
+    code:
+      | 'privacy_redacted'
+      | 'delivery_failed'
+      | 'retry_scheduled'
+      | 'delivery_cancelled'
+      | 'delivery_skipped'
+    message: string
+  } | null
+}
+
+interface RecipientDeliveryPage {
+  recipients: RecipientDelivery[]
+  hasMore: boolean
+  nextCursor: string | null
 }
 
 interface ScreeningGate {
@@ -128,6 +181,7 @@ interface ScreeningGate {
     applicationId: string | null
     rank: number | null
     score: number | null
+    candidate?: CandidateIdentityView | null
   }
   counts: {
     evaluated: number
@@ -136,7 +190,13 @@ interface ScreeningGate {
     selected: number
   }
   rankedApplications: PreviewEntry[]
-  exceptions: Array<ScreeningExceptionRequest & { actorName: string; at: string }>
+  exceptions: Array<
+    ScreeningExceptionRequest & {
+      actorName: string
+      at: string
+      candidate?: CandidateIdentityView | null
+    }
+  >
   confirmedByName: string
   confirmedAt: string
   cancelledAt: string | null
@@ -167,6 +227,9 @@ const INITIAL_RULE: ScreeningRuleDraft = {
   experienceFloorYears: '',
 }
 
+const PREVIEW_ROW_PAGE_SIZE = 50
+const EXCEPTION_RESULT_LIMIT = 50
+
 function endpoint(jobId: string, suffix = ''): string {
   return `/api/workspace/jobs/${encodeURIComponent(jobId)}/screening${suffix}`
 }
@@ -192,8 +255,235 @@ function shortId(value: string): string {
   return value.length > 8 ? `…${value.slice(-8)}` : value
 }
 
-function entryLabel(entry: Pick<PreviewEntry, 'applicationId' | 'candidateId'>): string {
-  return `Application ${shortId(entry.applicationId)} · candidate ${shortId(entry.candidateId)}`
+function entryLabel(
+  entry: Pick<PreviewEntry, 'applicationId' | 'candidateId' | 'candidate'>,
+): string {
+  if (entry.candidate?.identityState === 'available') {
+    return `${entry.candidate.displayName} · ${entry.candidate.email}`
+  }
+  if (entry.candidate?.identityState === 'privacy_protected') {
+    return 'Candidate details unavailable while a privacy request is active'
+  }
+  return `Candidate details unavailable · application ${shortId(entry.applicationId)}`
+}
+
+function filterPreviewEntries(
+  entries: PreviewEntry[],
+  query: string,
+): PreviewEntry[] {
+  const normalizedQuery = query.trim().toLowerCase()
+  if (!normalizedQuery) return entries
+  return entries.filter((entry) =>
+    [
+      entry.applicationId,
+      entry.candidateId,
+      entry.candidate?.displayName,
+      entry.candidate?.email,
+    ].some(
+      (value) =>
+        typeof value === 'string' &&
+        value.toLowerCase().includes(normalizedQuery),
+    ),
+  )
+}
+
+function CandidateIdentityLine({
+  candidate,
+  identityState,
+}: {
+  candidate?: CandidateIdentityView | null
+  identityState?: CandidateIdentityState | 'privacy_redacted'
+}) {
+  if (
+    candidate?.identityState === 'available' &&
+    candidate.displayName &&
+    candidate.email &&
+    candidate.applicationUrl
+  ) {
+    return (
+      <div className="min-w-0">
+        <Link
+          href={candidate.applicationUrl}
+          className="block truncate font-medium text-indigo-700 hover:underline"
+        >
+          {candidate.displayName}
+        </Link>
+        <p className="truncate text-xs text-[#536471]">{candidate.email}</p>
+      </div>
+    )
+  }
+  const privacyProtected =
+    identityState === 'privacy_redacted' ||
+    identityState === 'privacy_protected' ||
+    candidate?.identityState === 'privacy_protected'
+  return (
+    <div className="min-w-0">
+      <p className="font-medium text-[#536471]">Candidate details unavailable</p>
+      <p className="text-xs text-[#71767b]">
+        {privacyProtected
+          ? 'Identity is hidden because privacy processing is active or complete.'
+          : 'The current candidate record could not be loaded. Refresh before acting.'}
+      </p>
+    </div>
+  )
+}
+
+function recipientVariant(
+  recipient: RecipientDelivery,
+): 'default' | 'primary' | 'success' | 'caution' | 'danger' {
+  if (recipient.status === 'sent') return 'success'
+  if (
+    recipient.status === 'failed' ||
+    recipient.status === 'cancelled' ||
+    recipient.status === 'skipped'
+  ) {
+    return 'danger'
+  }
+  if (recipient.status === 'sending') return 'caution'
+  return 'primary'
+}
+
+function recipientStatusLabel(recipient: RecipientDelivery): string {
+  if (recipient.status === 'pending' && recipient.issue?.code === 'retry_scheduled') {
+    return 'retry scheduled'
+  }
+  return recipient.status
+}
+
+function browserTimeZoneName(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'browser local time'
+  } catch {
+    return 'browser local time'
+  }
+}
+
+function RecipientDeliveryLedger({
+  jobId,
+  batchId,
+}: {
+  jobId: string
+  batchId: string
+}) {
+  const [recipients, setRecipients] = useState<RecipientDelivery[]>([])
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadRecipients = useCallback(async (cursor?: string) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const search = new URLSearchParams({ limit: '25' })
+      if (cursor) search.set('cursor', cursor)
+      const response = await fetch(
+        endpoint(
+          jobId,
+          `/batches/${encodeURIComponent(batchId)}/recipients?${search.toString()}`,
+        ),
+        { cache: 'no-store' },
+      )
+      const data = await response.json().catch(() => null)
+      if (
+        !response.ok ||
+        !data ||
+        !Array.isArray((data as Partial<RecipientDeliveryPage>).recipients) ||
+        typeof (data as Partial<RecipientDeliveryPage>).hasMore !== 'boolean'
+      ) {
+        throw new Error(responseError(data, 'Could not load recipient delivery status.'))
+      }
+      const page = data as RecipientDeliveryPage
+      setRecipients((previous) => cursor ? [...previous, ...page.recipients] : page.recipients)
+      setNextCursor(page.hasMore ? page.nextCursor : null)
+      setLoaded(true)
+    } catch (loadError) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : 'Could not load recipient delivery status.',
+      )
+    } finally {
+      setLoading(false)
+    }
+  }, [batchId, jobId])
+
+  return (
+    <details
+      className="mt-3 rounded-lg border border-[#e1e8ed] bg-white p-3"
+      onToggle={(event) => {
+        if (event.currentTarget.open && !loaded && !loading) {
+          void loadRecipients()
+        }
+      }}
+    >
+      <summary className="cursor-pointer text-sm font-medium text-[#0f1419]">
+        Recipient delivery details
+      </summary>
+      {loading && !loaded ? (
+        <p className="mt-3 text-xs text-[#71767b]" aria-busy="true">
+          Loading recipient delivery status…
+        </p>
+      ) : null}
+      {error ? (
+        <div role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-800">
+          <p>{error}</p>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="mt-2"
+            disabled={loading}
+            onClick={() => void loadRecipients(loaded ? nextCursor ?? undefined : undefined)}
+          >
+            Try loading recipients again
+          </Button>
+        </div>
+      ) : null}
+      {loaded && recipients.length === 0 ? (
+        <p className="mt-3 text-xs text-[#71767b]">
+          No recipient rows are available for this batch.
+        </p>
+      ) : null}
+      {recipients.length ? (
+        <ul className="mt-3 divide-y divide-[#e1e8ed]" aria-label="Recipient delivery status">
+          {recipients.map((recipient) => (
+            <li key={recipient.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
+              <div className="flex items-start justify-between gap-3">
+                <CandidateIdentityLine
+                  candidate={recipient.candidate}
+                  identityState={recipient.identityState}
+                />
+                <Badge variant={recipientVariant(recipient)}>
+                  {recipientStatusLabel(recipient)}
+                </Badge>
+              </div>
+              <p className="text-xs text-[#71767b]">
+                Planned {displayDate(recipient.sendAfter)} · {recipient.attempts}{' '}
+                {recipient.attempts === 1 ? 'attempt' : 'attempts'}
+                {recipient.sentAt ? ` · sent ${displayDate(recipient.sentAt)}` : ''}
+              </p>
+              {recipient.issue ? (
+                <p className="text-xs text-[#a16207]">{recipient.issue.message}</p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {loaded && nextCursor ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="mt-3"
+          disabled={loading}
+          onClick={() => void loadRecipients(nextCursor)}
+        >
+          {loading ? 'Loading more recipients…' : 'Load more recipients'}
+        </Button>
+      ) : null}
+    </details>
+  )
 }
 
 function ruleFromDraft(draft: ScreeningRuleDraft):
@@ -312,6 +602,7 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
   const [ruleDraft, setRuleDraft] = useState<ScreeningRuleDraft>(INITIAL_RULE)
   const [exceptions, setExceptions] = useState<ScreeningExceptionRequest[]>([])
   const [exceptionTargetId, setExceptionTargetId] = useState('')
+  const [exceptionSearch, setExceptionSearch] = useState('')
   const [exceptionAction, setExceptionAction] = useState<ExceptionAction>('include')
   const [exceptionNote, setExceptionNote] = useState('')
   const [previewState, setPreviewState] = useState<PreviewResponse | null>(null)
@@ -337,6 +628,20 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
   const [retryBusyBatchId, setRetryBusyBatchId] = useState<string | null>(null)
   const [retryError, setRetryError] = useState<string | null>(null)
   const [retryNotice, setRetryNotice] = useState<string | null>(null)
+  const [browserTimeZone, setBrowserTimeZone] = useState('browser local time')
+  const [selectedSearch, setSelectedSearch] = useState('')
+  const [selectedVisibleCount, setSelectedVisibleCount] = useState(
+    PREVIEW_ROW_PAGE_SIZE,
+  )
+  const [evaluatedOpen, setEvaluatedOpen] = useState(false)
+  const [evaluatedSearch, setEvaluatedSearch] = useState('')
+  const [evaluatedVisibleCount, setEvaluatedVisibleCount] = useState(
+    PREVIEW_ROW_PAGE_SIZE,
+  )
+
+  const deferredExceptionSearch = useDeferredValue(exceptionSearch)
+  const deferredSelectedSearch = useDeferredValue(selectedSearch)
+  const deferredEvaluatedSearch = useDeferredValue(evaluatedSearch)
 
   const jobOpen = jobStatus === undefined || jobStatus === 'open'
   const ruleResult = useMemo(() => ruleFromDraft(ruleDraft), [ruleDraft])
@@ -367,6 +672,10 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
       setGatesLoading(false)
     }
   }, [jobId])
+
+  useEffect(() => {
+    setBrowserTimeZone(browserTimeZoneName())
+  }, [])
 
   useEffect(() => {
     void loadGates()
@@ -402,7 +711,19 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
       setPreviewState(nextPreview)
       setReviewedRequest(currentRequest)
       setConfirmAcknowledged(false)
-      setExceptionTargetId((previous) => previous || nextPreview.preview.rankedApplications[0]?.applicationId || '')
+      setExceptionTargetId((previous) =>
+        nextPreview.preview.rankedApplications.some(
+          (entry) => entry.applicationId === previous,
+        )
+          ? previous
+          : nextPreview.preview.rankedApplications[0]?.applicationId || '',
+      )
+      setExceptionSearch('')
+      setSelectedSearch('')
+      setSelectedVisibleCount(PREVIEW_ROW_PAGE_SIZE)
+      setEvaluatedOpen(false)
+      setEvaluatedSearch('')
+      setEvaluatedVisibleCount(PREVIEW_ROW_PAGE_SIZE)
     } catch {
       setPreviewError('Something went wrong. Check your connection and try again.')
     } finally {
@@ -568,11 +889,67 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
   }
 
   const preview = previewState?.preview ?? null
-  const selectedEntries = preview?.rankedApplications.filter((entry) => entry.selected) ?? []
-  const allPreviewEntries = preview?.rankedApplications ?? []
-  const staleCount = scoreStateCount(allPreviewEntries, 'stale')
-  const unknownCount = scoreStateCount(allPreviewEntries, 'unscored')
-  const knownKnockoutCount = knockoutCount(allPreviewEntries)
+  const allPreviewEntries = useMemo(
+    () => preview?.rankedApplications ?? [],
+    [preview],
+  )
+  const selectedEntries = useMemo(
+    () => allPreviewEntries.filter((entry) => entry.selected),
+    [allPreviewEntries],
+  )
+  const entriesByApplicationId = useMemo(
+    () =>
+      new Map(
+        allPreviewEntries.map((entry) => [entry.applicationId, entry] as const),
+      ),
+    [allPreviewEntries],
+  )
+  const cutLineEntry = preview?.cutLine.applicationId
+    ? entriesByApplicationId.get(preview.cutLine.applicationId)
+    : null
+  const staleCount = useMemo(
+    () => scoreStateCount(allPreviewEntries, 'stale'),
+    [allPreviewEntries],
+  )
+  const unknownCount = useMemo(
+    () => scoreStateCount(allPreviewEntries, 'unscored'),
+    [allPreviewEntries],
+  )
+  const knownKnockoutCount = useMemo(
+    () => knockoutCount(allPreviewEntries),
+    [allPreviewEntries],
+  )
+  const matchingExceptionEntries = useMemo(
+    () => filterPreviewEntries(allPreviewEntries, deferredExceptionSearch),
+    [allPreviewEntries, deferredExceptionSearch],
+  )
+  const exceptionOptions = useMemo(() => {
+    const options = matchingExceptionEntries.slice(0, EXCEPTION_RESULT_LIMIT)
+    const selectedEntry = entriesByApplicationId.get(exceptionTargetId)
+    if (
+      selectedEntry &&
+      !options.some((entry) => entry.applicationId === selectedEntry.applicationId)
+    ) {
+      return [selectedEntry, ...options.slice(0, EXCEPTION_RESULT_LIMIT - 1)]
+    }
+    return options
+  }, [entriesByApplicationId, exceptionTargetId, matchingExceptionEntries])
+  const matchingSelectedEntries = useMemo(
+    () => filterPreviewEntries(selectedEntries, deferredSelectedSearch),
+    [deferredSelectedSearch, selectedEntries],
+  )
+  const visibleSelectedEntries = matchingSelectedEntries.slice(
+    0,
+    selectedVisibleCount,
+  )
+  const matchingEvaluatedEntries = useMemo(
+    () => filterPreviewEntries(allPreviewEntries, deferredEvaluatedSearch),
+    [allPreviewEntries, deferredEvaluatedSearch],
+  )
+  const visibleEvaluatedEntries = matchingEvaluatedEntries.slice(
+    0,
+    evaluatedVisibleCount,
+  )
 
   return (
     <section aria-labelledby="screening-title" className="rounded-2xl border border-[#e1e8ed] bg-white p-5 space-y-5">
@@ -705,7 +1082,7 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
       {confirmNotice ? <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{confirmNotice}</p> : null}
 
       {preview ? (
-        <div className="space-y-5 border-t border-[#e1e8ed] pt-5" aria-live="polite">
+        <div className="space-y-5 border-t border-[#e1e8ed] pt-5">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <h3 className="text-sm font-semibold text-[#0f1419]">Read-only preview</h3>
@@ -748,6 +1125,14 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
 
           <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
             <p className="text-sm font-medium text-indigo-950">{cutLineDescription(preview)}</p>
+            {cutLineEntry ? (
+              <div className="mt-2">
+                <CandidateIdentityLine
+                  candidate={cutLineEntry.candidate}
+                  identityState={cutLineEntry.candidate?.identityState}
+                />
+              </div>
+            ) : null}
             <p className="mt-1 text-xs text-indigo-900">
               Fresh scores rank first, then original application time, then application ID. Stale and
               unknown scores never silently become a passing score.
@@ -765,22 +1150,45 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
               </p>
             </div>
             <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_10rem_minmax(0,1fr)_auto] md:items-end">
-              <label className="text-sm text-[#0f1419]">
-                Application
-                <select
-                  aria-label="Exception application"
-                  value={exceptionTargetId}
-                  onChange={(event) => setExceptionTargetId(event.target.value)}
-                  className="mt-1 block h-9 w-full rounded-lg border border-[#e1e8ed] bg-white px-3 text-sm"
-                >
-                  <option value="">Choose an application</option>
-                  {allPreviewEntries.map((entry) => (
-                    <option key={entry.applicationId} value={entry.applicationId}>
-                      {entryLabel(entry)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="space-y-2">
+                <label className="block text-sm text-[#0f1419]">
+                  Find application
+                  <input
+                    aria-label="Search exception applications"
+                    aria-describedby="exception-search-status"
+                    aria-busy={exceptionSearch !== deferredExceptionSearch}
+                    type="search"
+                    value={exceptionSearch}
+                    onChange={(event) => {
+                      setExceptionSearch(event.target.value)
+                      setExceptionTargetId('')
+                    }}
+                    placeholder="Name, email, application or candidate ID"
+                    className="mt-1 block h-9 w-full rounded-lg border border-[#e1e8ed] px-3 text-sm"
+                  />
+                </label>
+                <label className="block text-sm text-[#0f1419]">
+                  Application
+                  <select
+                    aria-label="Exception application"
+                    value={exceptionTargetId}
+                    onChange={(event) => setExceptionTargetId(event.target.value)}
+                    className="mt-1 block h-9 w-full rounded-lg border border-[#e1e8ed] bg-white px-3 text-sm"
+                  >
+                    <option value="">Choose an application</option>
+                    {exceptionOptions.map((entry) => (
+                      <option key={entry.applicationId} value={entry.applicationId}>
+                        {entryLabel(entry)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p id="exception-search-status" className="text-xs text-[#71767b]" aria-live="polite">
+                  {matchingExceptionEntries.length
+                    ? `Showing up to ${Math.min(EXCEPTION_RESULT_LIMIT, matchingExceptionEntries.length)} of ${matchingExceptionEntries.length} matching applications.`
+                    : 'No applications match this search.'}
+                </p>
+              </div>
               <label className="text-sm text-[#0f1419]">
                 Action
                 <select
@@ -811,18 +1219,23 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
             </div>
             {exceptions.length ? (
               <ul aria-label="Screening exceptions" className="space-y-2">
-                {exceptions.map((exception) => (
-                  <li key={exception.applicationId} className="flex items-center gap-2 rounded-lg border border-[#e1e8ed] p-2 text-sm flex-wrap">
-                    <Badge variant={exception.action === 'include' ? 'success' : 'danger'}>
-                      {exception.action}
-                    </Badge>
-                    <span className="font-mono text-xs text-[#536471]">{shortId(exception.applicationId)}</span>
-                    <span className="min-w-0 flex-1 text-[#0f1419]">{exception.note}</span>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => removeException(exception.applicationId)} disabled={confirmBusy}>
-                      Remove
-                    </Button>
-                  </li>
-                ))}
+                {exceptions.map((exception) => {
+                  const entry = entriesByApplicationId.get(exception.applicationId)
+                  return (
+                    <li key={exception.applicationId} className="flex items-center gap-2 rounded-lg border border-[#e1e8ed] p-2 text-sm flex-wrap">
+                      <Badge variant={exception.action === 'include' ? 'success' : 'danger'}>
+                        {exception.action}
+                      </Badge>
+                      <span className="min-w-0 text-xs font-medium text-[#536471]">
+                        {entry ? entryLabel(entry) : 'Candidate details unavailable'}
+                      </span>
+                      <span className="min-w-0 flex-1 text-[#0f1419]">{exception.note}</span>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => removeException(exception.applicationId)} disabled={confirmBusy}>
+                        Remove
+                      </Button>
+                    </li>
+                  )
+                })}
               </ul>
             ) : (
               <p className="text-xs text-[#71767b]">No exceptions added.</p>
@@ -842,45 +1255,167 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
               {staleCount ? <Badge variant="caution">{staleCount} stale score{staleCount === 1 ? '' : 's'}</Badge> : null}
             </div>
             {selectedEntries.length ? (
-              <ul className="divide-y divide-[#e1e8ed] rounded-xl border border-[#e1e8ed]">
-                {selectedEntries.map((entry) => (
-                  <li key={entry.applicationId} className="flex items-center gap-3 p-3 text-sm flex-wrap">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-xs text-[#0f1419]">{entryLabel(entry)}</p>
-                      <p className="mt-1 text-xs text-[#71767b]">
-                        {entry.rank ? `Rank ${entry.rank}` : 'Not ranked'} · {scoreStateLabel(entry.scoreState)}
-                        {entry.score === null ? '' : ` ${entry.score}/100`} · {selectionReasonLabel(entry.selectionReason)}
-                      </p>
-                    </div>
-                    <Badge variant="success">selected</Badge>
-                  </li>
-                ))}
-              </ul>
+              <div className="space-y-3">
+                {selectedEntries.length > PREVIEW_ROW_PAGE_SIZE || selectedSearch ? (
+                  <label className="block max-w-md text-sm text-[#0f1419]">
+                    Search planned selection
+                    <input
+                      aria-label="Search planned selection"
+                      aria-busy={selectedSearch !== deferredSelectedSearch}
+                      type="search"
+                      value={selectedSearch}
+                      onChange={(event) => {
+                        setSelectedSearch(event.target.value)
+                        setSelectedVisibleCount(PREVIEW_ROW_PAGE_SIZE)
+                      }}
+                      placeholder="Name, email, application or candidate ID"
+                      className="mt-1 block h-9 w-full rounded-lg border border-[#e1e8ed] px-3 text-sm"
+                    />
+                  </label>
+                ) : null}
+                {visibleSelectedEntries.length ? (
+                  <ul
+                    aria-label="Planned selected applications"
+                    className="divide-y divide-[#e1e8ed] rounded-xl border border-[#e1e8ed]"
+                  >
+                    {visibleSelectedEntries.map((entry) => (
+                      <li key={entry.applicationId} className="flex items-center gap-3 p-3 text-sm flex-wrap">
+                        <div className="min-w-0 flex-1">
+                          <CandidateIdentityLine
+                            candidate={entry.candidate}
+                            identityState={entry.candidate?.identityState}
+                          />
+                          <p className="mt-1 text-xs text-[#71767b]">
+                            {entry.rank ? `Rank ${entry.rank}` : 'Not ranked'} · {scoreStateLabel(entry.scoreState)}
+                            {entry.score === null ? '' : ` ${entry.score}/100`} · {selectionReasonLabel(entry.selectionReason)}
+                          </p>
+                        </div>
+                        <Badge variant="success">selected</Badge>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-[#e1e8ed] p-4 text-sm text-[#71767b]">
+                    No selected applications match this search.
+                  </p>
+                )}
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <p className="text-xs text-[#71767b]" aria-live="polite">
+                    Showing {visibleSelectedEntries.length} of {matchingSelectedEntries.length}
+                    {selectedSearch ? ` matches (${selectedEntries.length} selected total).` : ' selected applications.'}
+                  </p>
+                  {visibleSelectedEntries.length < matchingSelectedEntries.length ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() =>
+                        setSelectedVisibleCount((current) =>
+                          Math.min(
+                            current + PREVIEW_ROW_PAGE_SIZE,
+                            matchingSelectedEntries.length,
+                          ),
+                        )
+                      }
+                    >
+                      Show next{' '}
+                      {Math.min(
+                        PREVIEW_ROW_PAGE_SIZE,
+                        matchingSelectedEntries.length - visibleSelectedEntries.length,
+                      )}{' '}
+                      selected applications
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
             ) : (
               <p className="rounded-xl border border-dashed border-[#e1e8ed] p-4 text-sm text-[#71767b]">
                 No candidates are selected by this rule. Adjust the rule or add a documented include exception.
               </p>
             )}
 
-            <details className="rounded-xl border border-[#e1e8ed] p-3">
+            <details
+              open={evaluatedOpen}
+              className="rounded-xl border border-[#e1e8ed] p-3"
+              onToggle={(event) => setEvaluatedOpen(event.currentTarget.open)}
+            >
               <summary className="cursor-pointer text-sm font-medium text-[#0f1419]">
                 View all {allPreviewEntries.length} evaluated applications
               </summary>
-              <ul className="mt-3 divide-y divide-[#e1e8ed]">
-                {allPreviewEntries.map((entry) => (
-                  <li key={entry.applicationId} className="flex items-center gap-3 py-2 text-sm flex-wrap">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-xs text-[#0f1419]">{entryLabel(entry)}</p>
-                      <p className="mt-1 text-xs text-[#71767b]">
-                        {entry.rank ? `Rank ${entry.rank}` : 'Not ranked'} · {scoreStateLabel(entry.scoreState)}
-                        {entry.score === null ? '' : ` ${entry.score}/100`} · {selectionReasonLabel(entry.selectionReason)}
-                        {entry.knockoutReasons.length ? ` · knockout: ${entry.knockoutReasons.join(', ')}` : ''}
-                      </p>
-                    </div>
-                    <Badge variant={selectionVariant(entry)}>{entry.selected ? 'selected' : 'not selected'}</Badge>
-                  </li>
-                ))}
-              </ul>
+              {evaluatedOpen ? (
+                <div className="mt-3 space-y-3">
+                  <label className="block max-w-md text-sm text-[#0f1419]">
+                    Search evaluated applications
+                    <input
+                      aria-label="Search evaluated applications"
+                      aria-busy={evaluatedSearch !== deferredEvaluatedSearch}
+                      type="search"
+                      value={evaluatedSearch}
+                      onChange={(event) => {
+                        setEvaluatedSearch(event.target.value)
+                        setEvaluatedVisibleCount(PREVIEW_ROW_PAGE_SIZE)
+                      }}
+                      placeholder="Name, email, application or candidate ID"
+                      className="mt-1 block h-9 w-full rounded-lg border border-[#e1e8ed] px-3 text-sm"
+                    />
+                  </label>
+                  {visibleEvaluatedEntries.length ? (
+                    <ul
+                      aria-label="Evaluated applications"
+                      className="divide-y divide-[#e1e8ed]"
+                    >
+                      {visibleEvaluatedEntries.map((entry) => (
+                        <li key={entry.applicationId} className="flex items-center gap-3 py-2 text-sm flex-wrap">
+                          <div className="min-w-0 flex-1">
+                            <CandidateIdentityLine
+                              candidate={entry.candidate}
+                              identityState={entry.candidate?.identityState}
+                            />
+                            <p className="mt-1 text-xs text-[#71767b]">
+                              {entry.rank ? `Rank ${entry.rank}` : 'Not ranked'} · {scoreStateLabel(entry.scoreState)}
+                              {entry.score === null ? '' : ` ${entry.score}/100`} · {selectionReasonLabel(entry.selectionReason)}
+                              {entry.knockoutReasons.length ? ` · knockout: ${entry.knockoutReasons.join(', ')}` : ''}
+                            </p>
+                          </div>
+                          <Badge variant={selectionVariant(entry)}>{entry.selected ? 'selected' : 'not selected'}</Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-[#e1e8ed] p-3 text-sm text-[#71767b]">
+                      No evaluated applications match this search.
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <p className="text-xs text-[#71767b]" aria-live="polite">
+                      Showing {visibleEvaluatedEntries.length} of {matchingEvaluatedEntries.length}
+                      {evaluatedSearch ? ` matches (${allPreviewEntries.length} evaluated total).` : ' evaluated applications.'}
+                    </p>
+                    {visibleEvaluatedEntries.length < matchingEvaluatedEntries.length ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          setEvaluatedVisibleCount((current) =>
+                            Math.min(
+                              current + PREVIEW_ROW_PAGE_SIZE,
+                              matchingEvaluatedEntries.length,
+                            ),
+                          )
+                        }
+                      >
+                        Show next{' '}
+                        {Math.min(
+                          PREVIEW_ROW_PAGE_SIZE,
+                          matchingEvaluatedEntries.length - visibleEvaluatedEntries.length,
+                        )}{' '}
+                        evaluated applications
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </details>
           </section>
 
@@ -904,7 +1439,10 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
                 disabled={!jobOpen || confirmBusy || !previewIsCurrent}
                 className="mt-1 block h-9 w-full rounded-lg border border-indigo-200 bg-white px-3 text-sm"
               />
-              <span className="mt-1 block text-xs text-indigo-900">Leave blank to create a batch planned for now.</span>
+              <span className="mt-1 block text-xs text-indigo-900">
+                Leave blank to create a batch planned for now. Times use your browser timezone:{' '}
+                <strong>{browserTimeZone}</strong>.
+              </span>
             </label>
             <label className="flex items-start gap-2 text-sm text-indigo-950">
               <input
@@ -1018,6 +1556,7 @@ export default function ScreeningPanel({ jobId, jobStatus }: ScreeningPanelProps
                     </div>
                     <p className="mt-1 text-xs text-[#71767b]">Planned for {displayDate(batch.sendAfter)}</p>
                     {batch.lastError ? <p className="mt-1 text-xs text-[#f4212e]">Latest delivery issue: {batch.lastError}</p> : null}
+                    <RecipientDeliveryLedger jobId={jobId} batchId={batch.id} />
                     {batch.status === 'failed' && batch.failedCount > 0 ? (
                       <Button
                         type="button"

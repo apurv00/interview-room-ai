@@ -6,15 +6,14 @@
 // barrel is grouped by owner so developers know which module's service
 // layer is the authoritative consumer of each model.
 //
-//   core       — cross-cutting: User, Organization, UsageRecord, WaitlistEntry
-//   interview  — InterviewSession, Template, Domain, Depth, Rubric, Persona,
+//   core       — cross-cutting: User, UsageRecord, WaitlistEntry
+//   interview  — InterviewSession, Domain, Depth, Rubric, Persona,
 //                QuestionBank, CompanyPattern, Skill, MultimodalAnalysis
 //   learn      — Competency, Weakness, Summary, Pathway, Drill, XP, Badge,
 //                Streak, DailyChallenge, Benchmark
 //   jobs       — JobPosting, JobSourceConfig, JobIngestCursor, JobIngestCycle,
 //                JobApplication, ProductEvent
 //   resume     — WizardConfig, WizardSession
-//   b2b        — (uses Organization + InterviewSession + InterviewTemplate)
 //   cms        — BenchmarkCase, InterviewDomain, InterviewDepth (shared with interview)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -22,9 +21,6 @@
 
 export { User } from './User'
 export type { IUser } from './User'
-
-export { Organization } from './Organization'
-export type { IOrganization } from './Organization'
 
 export { UsageRecord } from './UsageRecord'
 export type { IUsageRecord } from './UsageRecord'
@@ -39,9 +35,6 @@ export type { IWaitlistEntry } from './WaitlistEntry'
 
 export { InterviewSession } from './InterviewSession'
 export type { IInterviewSession, SessionStatus } from './InterviewSession'
-
-export { InterviewTemplate } from './InterviewTemplate'
-export type { IInterviewTemplate } from './InterviewTemplate'
 
 export { Category } from './Category'
 export type { ICategory } from './Category'

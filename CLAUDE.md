@@ -50,9 +50,11 @@ modules/
     services/               # competencyService, pathwayPlanner, sessionSummaryService
     lib/                    # peerComparison, resources
     components/             # ResourceLinks
-  b2b/                      # B2B hiring platform (@b2b/*)
-    services/               # hireService (org, candidates, invites, templates, dashboard)
-    validators/             # Zod schemas for hire API routes
+  hire/                     # IPG Hire control domain (@hire/*)
+  hire-runtime/             # Isolated candidate interview runtime
+  hire-decisions/           # Decision, assessment, and export boundary
+  hire-operations/          # Operations read-model boundary
+  hire-reports/             # Workspace reporting/export boundary
   resume/                   # Resume builder tools (@resume/*)
     services/               # resumeService (CRUD), resumeAIService (enhance, ATS, tailor)
     validators/             # Zod schemas for resume API routes
@@ -61,7 +63,7 @@ modules/
     validators/             # CMS domain/type schemas
 shared/                     # Cross-cutting concerns (@shared/*)
   auth/                     # NextAuth config, permissions, role hierarchy
-  db/models/                # User, InterviewSession, Organization, InterviewTemplate, UsageRecord
+  db/models/                # User, InterviewSession, UsageRecord, taxonomy and product-owned models
   services/                 # documentParser, usageTracking, stripe
   middleware/               # composeApiRoute (auth → rate limit → validate → handler)
   layout/                   # AppShell, AuthMenu, Footer
@@ -69,11 +71,13 @@ shared/                     # Cross-cutting concerns (@shared/*)
   providers/                # SessionProvider, ThemeProvider
   types.ts                  # Core TypeScript types
 app/                        # Next.js App Router (pages & API routes)
-  api/hire/                 # B2B recruiter API endpoints
+  api/workspace/            # IPG Hire control-plane API endpoints
+  api/hire-auth/            # IPG Hire member authentication
+  api/hire-engine/          # Isolated Hire runtime endpoints
   api/resume/               # Resume builder API endpoints
   api/learn/                # Learning feature API endpoints
   api/cms/                  # CMS admin API endpoints
-  (hire)/                   # B2B recruiter pages
+  (workspace)/              # IPG Hire member workspace pages
   (resume)/                 # Resume tool pages
   (learn)/                  # Learning & practice pages
   (cms)/                    # CMS admin pages
@@ -218,10 +222,13 @@ Full list: `.env.local.example`
 
 ## Auth & Roles
 
-- Roles: `candidate` (default), `recruiter`, `org_admin`, `platform_admin`
+- B2C roles are `candidate` (default) and `platform_admin`; the retired
+  org-hiring `recruiter` and `org_admin` roles are no longer authority values.
 - Free plan: 3 interviews/month (usage tracked per user)
 - Protected routes defined in `middleware.ts`
-- B2B routes (`/hire/*`) require recruiter+
+- IPG Hire uses its own member session and flat `admin`/`member` workspace
+  roles. The former org-hiring route tree no longer exists; the Hire subdomain
+  serves `/workspace/*`.
 
 ---
 
@@ -256,7 +263,10 @@ _Update this section each session to carry context forward._
 - **CLAUDE.md**: Added this file for cross-session context
 - **Voice & responsiveness**: Faster TTS rate (0.95→1.08), warmer pitch, parallel eval+question generation, reduced inter-phase delays, switched real-time APIs to claude-sonnet-4-6 for speed
 - **CMS + Interview Domains/Depth**: Expanded from 4 hardcoded roles to 12+ dynamic interview domains (PM, SWE, DS, Design, Marketing, Finance, Consulting, DevOps, HR, Legal, etc.) managed via CMS. Added 6 interview depth levels (HR Screening, Behavioral, Technical, Case Study, Domain Knowledge, Culture Fit). CMS admin at cms.interviewprep.guru subdomain with middleware-based routing. Homepage redesigned with domain catalog, search, category tabs, and depth selector. AI prompts dynamically adapt to domain/depth. All 166 tests passing.
-- **Modular monolith refactor**: Reorganized codebase from flat `lib/`, `components/`, `hooks/` into 5 domain modules (`interview`, `learn`, `b2b`, `resume`, `cms`) + `shared/` kernel. All modules have barrel exports and path aliases (`@interview/*`, `@learn/*`, `@b2b/*`, `@resume/*`, `@cms/*`, `@shared/*`). Business logic extracted from API routes into module services. Removed legacy empty directories and dead middleware routes. 252 tests passing, production build clean.
+- **Historical modular monolith refactor**: Reorganized the original flat
+  codebase into domain modules plus the `shared/` kernel. The later org-based
+  `b2b` hiring product was retired; current hiring functionality lives in the
+  bounded `hire*` modules and `/workspace` surface.
 
 ## Resume Module — Functional Context
 

@@ -892,9 +892,18 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
                 key={decision.coordinates.applicationId}
                 className="space-y-2"
               >
-                <p className="text-xs font-semibold text-[#71767b]">
-                  Selection {index + 1}
-                </p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-[#71767b]">
+                    Selection {index + 1}
+                  </p>
+                  <Link
+                    href={`/workspace/applications/${encodeURIComponent(decision.coordinates.applicationId)}`}
+                    aria-label={`Open decision detail for ${decision.candidateBrief.candidateName}`}
+                    className="text-xs font-semibold text-indigo-600 hover:underline"
+                  >
+                    Open decision detail
+                  </Link>
+                </div>
                 <AssessmentPresentation decision={decision} />
               </div>
             ))}

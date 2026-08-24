@@ -6,10 +6,10 @@
  *   npm run check:hire-phase2-indexes                # connected, read-only verification
  *   npm run prepare:hire-phase2-indexes -- --apply   # create only missing exact indexes
  *
- * This command is intentionally scoped to the Phase 2 Hire-control
- * collections introduced for intake, screening, and invitation batches. It
- * suppresses Mongoose schema initialization
- * and never calls syncIndexes or dropIndex.
+ * This command is intentionally scoped to the exact Hire-control indexes used
+ * by Phase 2 intake/screening plus the additive commercial shadow read/account
+ * paths. It suppresses Mongoose schema initialization and never calls
+ * syncIndexes or dropIndex.
  *
  * A prior rollout may have created a full unique
  * { workspaceId: 1, applicationId: 1 } index on invitation-batch items. The
@@ -22,10 +22,12 @@ import { pathToFileURL } from 'node:url'
 import { connectDB } from '../shared/db/connection'
 import {
   HireIntakeTask,
+  HireInterviewResult,
   HireInvitationBatch,
   HireInvitationBatchItem,
   HireScreeningGate,
 } from '../modules/hire/models'
+import { HireCommercialAccount } from '../modules/hire-commercial/models'
 
 export type HirePhase2IndexPreparationMode = 'plan' | 'check' | 'apply' | 'help'
 
@@ -36,6 +38,8 @@ type IndexTarget =
   | 'screening-gates'
   | 'invitation-batches'
   | 'invitation-batch-items'
+  | 'interview-results'
+  | 'commercial-accounts'
 
 export interface HirePhase2IndexDescription {
   name?: string
@@ -72,6 +76,10 @@ interface IndexCollection {
 }
 
 interface InvitationBatchItemCollection extends IndexCollection {
+  aggregate<T>(pipeline: unknown[]): { toArray(): Promise<T[]> }
+}
+
+interface CommercialAccountCollection extends IndexCollection {
   aggregate<T>(pipeline: unknown[]): { toArray(): Promise<T[]> }
 }
 
@@ -180,11 +188,32 @@ export const HIRE_PHASE2_INDEX_DEFINITIONS: readonly HirePhase2IndexDefinition[]
   },
   {
     target: 'invitation-batch-items',
+    name: 'workspaceId_1_jobId_1_invitationBatchId_1__id_1',
+    key: { workspaceId: 1, jobId: 1, invitationBatchId: 1, _id: 1 },
+    unique: false,
+    purpose: 'bounded job-scoped recipient delivery ledger pagination',
+  },
+  {
+    target: 'invitation-batch-items',
     name: 'workspaceId_1_roundId_1',
     key: { workspaceId: 1, roundId: 1 },
     unique: false,
     sparse: true,
     purpose: 'round-to-delivery recovery lookup without indexing redacted rows',
+  },
+  {
+    target: 'interview-results',
+    name: 'workspaceId_1_completedAt_-1',
+    key: { workspaceId: 1, completedAt: -1 },
+    unique: false,
+    purpose: 'bounded commercial shadow aggregate from authoritative results',
+  },
+  {
+    target: 'commercial-accounts',
+    name: 'uniq_hire_commercial_account_workspace',
+    key: { workspaceId: 1 },
+    unique: true,
+    purpose: 'one optional shadow commercial account per workspace',
   },
 ]
 
@@ -257,6 +286,7 @@ interface IndexInspection {
   definition: HirePhase2IndexDefinition
   exact: boolean
   sameKeyIndexes: HirePhase2IndexDescription[]
+  sameNameIndexes: HirePhase2IndexDescription[]
 }
 
 type IndexesByTarget = Record<IndexTarget, HirePhase2IndexDescription[]>
@@ -266,9 +296,13 @@ function inspectIndexes(indexesByTarget: IndexesByTarget): IndexInspection[] {
     const sameKeyIndexes = indexesByTarget[definition.target].filter((index) =>
       sameKey(index.key, definition.key),
     )
+    const sameNameIndexes = indexesByTarget[definition.target].filter(
+      (index) => index.name === definition.name,
+    )
     return {
       definition,
       sameKeyIndexes,
+      sameNameIndexes,
       exact: sameKeyIndexes.length === 1 && isExactHirePhase2Index(sameKeyIndexes[0], definition),
     }
   })
@@ -286,8 +320,10 @@ function legacyInvitationApplicationIndexes(
 }
 
 function incompatibleIndexes(inspection: IndexInspection[]): IndexInspection[] {
-  return inspection.filter(({ exact, sameKeyIndexes, definition }) => {
-    if (exact || sameKeyIndexes.length === 0) return false
+  return inspection.filter(({ exact, sameKeyIndexes, sameNameIndexes, definition }) => {
+    if (exact) return false
+    if (sameNameIndexes.length > 0) return true
+    if (sameKeyIndexes.length === 0) return false
     return !(
       definition.name === 'workspaceId_1_applicationId_1' &&
       sameKeyIndexes.every(isLegacyFullInvitationApplicationUniqueIndex)
@@ -296,7 +332,10 @@ function incompatibleIndexes(inspection: IndexInspection[]): IndexInspection[] {
 }
 
 function missingIndexes(inspection: IndexInspection[]): IndexInspection[] {
-  return inspection.filter(({ exact, sameKeyIndexes }) => !exact && sameKeyIndexes.length === 0)
+  return inspection.filter(
+    ({ exact, sameKeyIndexes, sameNameIndexes }) =>
+      !exact && sameKeyIndexes.length === 0 && sameNameIndexes.length === 0,
+  )
 }
 
 function describeIndex(index: HirePhase2IndexDescription): string {
@@ -337,6 +376,8 @@ Safety:
   workspaceId + applicationId index exists, no writes are attempted. Pause
   invitation-item writers, have an operator replace that exact index manually,
   then run --apply followed by --check.
+  Duplicate commercial-account workspace rows also fail the complete preflight
+  before any index write.
 `)
 }
 
@@ -357,6 +398,8 @@ function collectionsByTarget(): Record<IndexTarget, IndexCollection> {
     'screening-gates': HireScreeningGate.collection as unknown as IndexCollection,
     'invitation-batches': HireInvitationBatch.collection as unknown as IndexCollection,
     'invitation-batch-items': HireInvitationBatchItem.collection as unknown as IndexCollection,
+    'interview-results': HireInterviewResult.collection as unknown as IndexCollection,
+    'commercial-accounts': HireCommercialAccount.collection as unknown as IndexCollection,
   }
 }
 
@@ -368,6 +411,8 @@ async function readIndexes(
     'screening-gates',
     'invitation-batches',
     'invitation-batch-items',
+    'interview-results',
+    'commercial-accounts',
   ]
   const result = {} as IndexesByTarget
   await Promise.all(targets.map(async (target) => {
@@ -390,11 +435,19 @@ function reportInspection(inspection: IndexInspection[]): void {
   for (const entry of inspection) {
     if (entry.exact) {
       console.log(`✓ ${entry.definition.target}.${entry.definition.name}`)
-    } else if (entry.sameKeyIndexes.length === 0) {
+    } else if (
+      entry.sameKeyIndexes.length === 0 &&
+      entry.sameNameIndexes.length === 0
+    ) {
       console.log(`○ ${entry.definition.target}.${entry.definition.name} is missing`)
     } else {
       console.log(
-        `! ${entry.definition.target}.${entry.definition.name} has incompatible same-key index(es): ${entry.sameKeyIndexes.map(describeIndex).join('; ')}`,
+        `! ${entry.definition.target}.${entry.definition.name} has incompatible index(es): ${[
+          ...entry.sameKeyIndexes,
+          ...entry.sameNameIndexes.filter(
+            (candidate) => !entry.sameKeyIndexes.includes(candidate),
+          ),
+        ].map(describeIndex).join('; ')}`,
       )
     }
   }
@@ -417,8 +470,13 @@ function assertNoIncompatibleIndexes(inspection: IndexInspection[]): void {
   const incompatible = incompatibleIndexes(inspection)
   if (incompatible.length) {
     throw new Error(
-      `incompatible same-key Phase 2 index(es): ${incompatible.map(({ definition, sameKeyIndexes }) => (
-        `${definition.target}.${definition.name} <- ${sameKeyIndexes.map(describeIndex).join(', ')}`
+      `incompatible Phase 2 index key/name collision(s): ${incompatible.map(({ definition, sameKeyIndexes, sameNameIndexes }) => (
+        `${definition.target}.${definition.name} <- ${[
+          ...sameKeyIndexes,
+          ...sameNameIndexes.filter(
+            (candidate) => !sameKeyIndexes.includes(candidate),
+          ),
+        ].map(describeIndex).join(', ')}`
       )).join('; ')}. No index was changed; explicit operator repair is required.`,
     )
   }
@@ -453,6 +511,26 @@ async function assertNoLiveInvitationApplicationDuplicates(
   if (duplicates.length) {
     throw new Error(
       'duplicate live HireInvitationBatchItem workspace/application rows block the partial unique index; no index was changed',
+    )
+  }
+}
+
+async function assertNoCommercialAccountDuplicates(
+  collection: CommercialAccountCollection,
+): Promise<void> {
+  const duplicates = await collection.aggregate<{ _id: unknown; count: number }>([
+    {
+      $group: {
+        _id: '$workspaceId',
+        count: { $sum: 1 },
+      },
+    },
+    { $match: { count: { $gt: 1 } } },
+    { $limit: 1 },
+  ]).toArray()
+  if (duplicates.length) {
+    throw new Error(
+      'duplicate HireCommercialAccount workspace rows block the unique account index; no index was changed',
     )
   }
 }
@@ -505,6 +583,9 @@ export async function prepareHirePhase2Indexes(argv: string[]): Promise<void> {
   assertNoIncompatibleIndexes(before)
   await assertNoLiveInvitationApplicationDuplicates(
     HireInvitationBatchItem.collection as unknown as InvitationBatchItemCollection,
+  )
+  await assertNoCommercialAccountDuplicates(
+    HireCommercialAccount.collection as unknown as CommercialAccountCollection,
   )
   for (const { definition } of missingIndexes(before)) {
     const indexName = await collections[definition.target].createIndex(

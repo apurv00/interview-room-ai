@@ -1,8 +1,12 @@
 # Phase 2 — Candidate Growth & Retention
 
-> **Status**: Planning
+> **Status**: Historical planning snapshot — implementation state is not maintained here
 > **Target**: Q2 2026
 > **Depends on**: Phase 1 (Modular Monolith, CMS, Interview Domains/Depth) — complete
+
+> **Current-context note (2026-08-24):** This March 2026 B2C plan is retained
+> for product-history context, not as a source of truth. The org-based Hire v1
+> routes and services it originally referenced were retired on 2026-08-09.
 
 ---
 
@@ -22,7 +26,8 @@ Phase 2 transforms Interview Prep Guru from a "practice and leave" tool into a *
 - `UserCompetencyState` model tracks per-competency EMA scores, trend (`improving`/`stable`/`declining`), confidence intervals, and 20-point score history (`competencyService.ts:84-99`)
 - `SessionSummary` model stores per-session domain, overall score, pass probability, strengths/weaknesses, communication markers
 - `UsageRecord` model tracks token/cost per API call with session linkage
-- B2B recruiter dashboard at `api/hire/dashboard/route.ts` (aggregates candidate stats — reusable pattern)
+- IPG Hire v2 workspace overview/operations read models provide the current
+  scoped-aggregate reference; their workspace tenancy must not leak into B2C analytics
 
 **What to build**:
 
@@ -135,8 +140,9 @@ Phase 2 transforms Interview Prep Guru from a "practice and leave" tool into a *
 **What exists today**:
 - `InterviewSession` stores full evaluation data, domain, depth, experience, scores
 - `SessionSummary` stores aggregated scores, strengths, weaknesses, pass probability
-- B2B invite/template system provides a sharing pattern (`hireService.createInvite`)
-- No public/anonymous access routes exist yet
+- The current public-sharing reference is `/api/public/scorecard/[token]` plus
+  `/scorecard/[token]`; the retired org-hiring invite service no longer exists
+- Public/anonymous scorecard routes now exist; the proposal below is historical
 
 **What to build**:
 

@@ -24,7 +24,7 @@ export interface IUsageRecord extends Document {
 const UsageRecordSchema = new Schema<IUsageRecord>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', index: true },
+    organizationId: { type: Schema.Types.ObjectId, index: true },
 
     type: {
       type: String,

@@ -27,7 +27,7 @@ type Role = 'PM' | 'SWE' | 'Sales' | 'MBA'
 ### Interview Depth (None — HR Screening only)
 - All interviews run the same "behavioral screening" format
 - No concept of interview type/depth (technical, case study, domain knowledge, etc.)
-- The InterviewTemplate model has question categories (`behavioral | situational | motivation | technical | custom`) but these are B2B-only and not exposed to candidates
+- The retired B2B-only `InterviewTemplate` model has been removed; candidates use the shared domain and interview-depth taxonomy
 
 ### CMS
 - `CMS_PLAN.md` exists as a detailed plan document

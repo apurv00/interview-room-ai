@@ -3,6 +3,11 @@
 Date: 2026-08-08
 Status: accepted
 
+Implementation note (2026-08-24): the planned retirement described below was
+completed on 2026-08-09 when the org-based Hire v1 pages, routes, and services
+were deleted. References below to `modules/b2b` describe the historical state
+at the time of this decision and are retained as ADR history.
+
 ## Context
 
 IPG Hire v2 (docs/ipg-hire-build-plan.md) is a workspace-based hiring tool:

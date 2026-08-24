@@ -10,7 +10,7 @@ import {
   assertCompleteHireConsent,
   HireConsentError,
 } from '@hire/policies/aiInterviewConsent'
-import { issueOtp } from '@b2b/services/otpService'
+import { issueOtp } from '@shared/auth/mailboxOtp'
 import { sendEmail } from '@shared/services/emailService'
 import { buildInviteOtpEmail } from '@shared/services/emailTemplates/inviteOtp'
 import { checkRateLimit } from '@shared/middleware/checkRateLimit'

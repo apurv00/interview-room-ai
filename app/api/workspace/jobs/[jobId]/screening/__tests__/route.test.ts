@@ -7,8 +7,11 @@ const mocks = vi.hoisted(() => ({
   listJobScreeningGates: vi.fn(),
   createHireScreeningInvitationWaterfall: vi.fn(),
   retryFailedHireScreeningInvitationBatch: vi.fn(),
+  getJobScreeningMemberReadProjection: vi.fn(),
+  readJobScreeningBatchRecipients: vi.fn(),
   serializeScreeningGate: vi.fn(),
   serializeInvitationBatch: vi.fn(),
+  serializeScreeningPreview: vi.fn(),
 }))
 
 vi.mock('../../../../_lib/composeHireApiRoute', () => ({
@@ -34,15 +37,22 @@ vi.mock('@hire', () => ({
   retryFailedHireScreeningInvitationBatch: mocks.retryFailedHireScreeningInvitationBatch,
 }))
 
+vi.mock('@hire-operations', () => ({
+  getJobScreeningMemberReadProjection: mocks.getJobScreeningMemberReadProjection,
+  readJobScreeningBatchRecipients: mocks.readJobScreeningBatchRecipients,
+}))
+
 vi.mock('../_lib/serialize', () => ({
   serializeScreeningGate: mocks.serializeScreeningGate,
   serializeInvitationBatch: mocks.serializeInvitationBatch,
+  serializeScreeningPreview: mocks.serializeScreeningPreview,
 }))
 
 import { POST as confirmPOST } from '../confirm/route'
 import { POST as previewPOST } from '../preview/route'
 import { POST as waterfallPOST } from '../gates/[gateId]/waterfall/route'
 import { POST as retryPOST } from '../batches/[batchId]/retry/route'
+import { GET as recipientsGET } from '../batches/[batchId]/recipients/route'
 import { GET } from '../route'
 
 const JOB_ID = '222222222222222222222222'
@@ -50,6 +60,7 @@ const ctx = {
   workspace: { _id: '111111111111111111111111', name: 'Acme' },
   membership: { _id: '333333333333333333333333', role: 'admin' },
 }
+const projection = { candidates: [] }
 
 const preview = {
   preview: {
@@ -76,7 +87,16 @@ beforeEach(() => {
     itemCount: 1,
     ...preview,
   })
-  mocks.listJobScreeningGates.mockResolvedValue([{ gate: { _id: 'gate-1' }, batches: [{ _id: 'batch-1' }] }])
+  mocks.listJobScreeningGates.mockResolvedValue([{
+    gate: { _id: 'gate-1', rankedApplications: [] },
+    batches: [{ _id: 'batch-1' }],
+  }])
+  mocks.getJobScreeningMemberReadProjection.mockResolvedValue(projection)
+  mocks.readJobScreeningBatchRecipients.mockResolvedValue({
+    recipients: [],
+    hasMore: false,
+    nextCursor: null,
+  })
   mocks.createHireScreeningInvitationWaterfall.mockResolvedValue({
     batchId: 'batch-2',
     itemIds: ['item-1'],
@@ -88,6 +108,10 @@ beforeEach(() => {
   })
   mocks.serializeScreeningGate.mockReturnValue({ id: 'gate-1', batches: [{ id: 'batch-1' }] })
   mocks.serializeInvitationBatch.mockReturnValue({ id: 'batch-1', status: 'planned' })
+  mocks.serializeScreeningPreview.mockImplementation((value, readProjection) => ({
+    ...value,
+    identityEnriched: Boolean(readProjection),
+  }))
 })
 
 describe('workspace job screening routes', () => {
@@ -101,7 +125,10 @@ describe('workspace job screening routes', () => {
     )
 
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-    await expect(response.json()).resolves.toEqual(preview)
+    await expect(response.json()).resolves.toEqual({
+      ...preview,
+      preview: { ...preview.preview, identityEnriched: true },
+    })
     expect(mocks.requireMembership).toHaveBeenCalledWith({
       userId: 'hire-member:workspace.member',
       email: 'admin@acme.example',
@@ -111,6 +138,12 @@ describe('workspace job screening routes', () => {
       JOB_ID,
       { rule: { mode: 'top_n', topN: 1 } },
     )
+    expect(mocks.getJobScreeningMemberReadProjection).toHaveBeenCalledWith(
+      ctx,
+      JOB_ID,
+      { candidateCoordinates: [] },
+    )
+    expect(mocks.serializeScreeningPreview).toHaveBeenCalledWith(preview.preview, projection)
   })
 
   it('requires an explicit preview proof before confirming a planned batch', async () => {
@@ -133,9 +166,51 @@ describe('workspace job screening routes', () => {
       gate: { id: 'gate-1', batches: [{ id: 'batch-1' }] },
       batch: { id: 'batch-1', status: 'planned' },
       itemCount: 1,
-      preview: preview.preview,
+      preview: { ...preview.preview, identityEnriched: false },
       requirementVersion: preview.requirementVersion,
       previewFingerprint: preview.previewFingerprint,
+    })
+    expect(mocks.getJobScreeningMemberReadProjection).not.toHaveBeenCalled()
+    expect(mocks.serializeScreeningGate).toHaveBeenCalledWith(
+      { _id: 'gate-1' },
+      [{ _id: 'batch-1' }],
+    )
+    expect(mocks.serializeInvitationBatch).toHaveBeenCalledWith(
+      { _id: 'batch-1' },
+    )
+  })
+
+  it('never lets a post-commit read dependency turn confirmation into a failed mutation', async () => {
+    mocks.getJobScreeningMemberReadProjection.mockRejectedValueOnce(
+      new Error('read replica unavailable'),
+    )
+    const body = {
+      rule: { mode: 'top_n', topN: 1 },
+      previewFingerprint: 'b'.repeat(64),
+    }
+
+    const response = await confirmPOST(
+      new Request(`https://hire.example/api/workspace/jobs/${JOB_ID}/screening/confirm`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }) as never,
+      { params: { jobId: JOB_ID } },
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(mocks.confirmJobScreeningGate).toHaveBeenCalledTimes(1)
+    expect(mocks.confirmJobScreeningGate).toHaveBeenCalledWith(ctx, JOB_ID, body)
+    expect(mocks.getJobScreeningMemberReadProjection).not.toHaveBeenCalled()
+    expect(mocks.serializeScreeningGate).toHaveBeenCalledWith(
+      { _id: 'gate-1' },
+      [{ _id: 'batch-1' }],
+    )
+    expect(mocks.serializeInvitationBatch).toHaveBeenCalledWith(
+      { _id: 'batch-1' },
+    )
+    await expect(response.json()).resolves.toMatchObject({
+      itemCount: 1,
     })
   })
 
@@ -151,9 +226,36 @@ describe('workspace job screening routes', () => {
     })
     expect(mocks.listJobScreeningGates).toHaveBeenCalledWith(ctx, JOB_ID)
     expect(mocks.serializeScreeningGate).toHaveBeenCalledWith(
-      { _id: 'gate-1' },
+      { _id: 'gate-1', rankedApplications: [] },
       [{ _id: 'batch-1' }],
     )
+    expect(mocks.getJobScreeningMemberReadProjection).not.toHaveBeenCalled()
+  })
+
+  it('loads one authenticated, batch-scoped recipient page without accepting tenant scope', async () => {
+    const response = await recipientsGET(
+      new Request(
+        `https://hire.example/api/workspace/jobs/${JOB_ID}/screening/batches/bbbbbbbbbbbbbbbbbbbbbbbb/recipients?cursor=opaque&limit=25&workspaceId=other`,
+      ) as never,
+      { params: { jobId: JOB_ID, batchId: 'bbbbbbbbbbbbbbbbbbbbbbbb' } },
+    )
+
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(mocks.requireMembership).toHaveBeenCalledWith({
+      userId: 'hire-member:workspace.member',
+      email: 'admin@acme.example',
+    })
+    expect(mocks.readJobScreeningBatchRecipients).toHaveBeenCalledWith(
+      ctx,
+      JOB_ID,
+      'bbbbbbbbbbbbbbbbbbbbbbbb',
+      { cursor: 'opaque', limit: 25 },
+    )
+    await expect(response.json()).resolves.toEqual({
+      recipients: [],
+      hasMore: false,
+      nextCursor: null,
+    })
   })
 
   it('requires a bounded explicit HR waterfall command and never accepts candidate ids', async () => {

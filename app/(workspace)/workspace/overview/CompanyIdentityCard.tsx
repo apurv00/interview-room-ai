@@ -14,6 +14,11 @@ type WorkspaceIdentity = {
   companyLogo: { updatedAt: string } | null;
 };
 
+interface CompanyIdentityCardProps {
+  initialWorkspace?: WorkspaceIdentity;
+  membershipRole?: "admin" | "member";
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -29,9 +34,14 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-export default function CompanyIdentityCard() {
-  const [workspace, setWorkspace] = useState<WorkspaceIdentity | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+export default function CompanyIdentityCard({
+  initialWorkspace,
+  membershipRole,
+}: CompanyIdentityCardProps = {}) {
+  const [workspace, setWorkspace] = useState<WorkspaceIdentity | null>(
+    initialWorkspace ?? null,
+  );
+  const [isAdmin, setIsAdmin] = useState(membershipRole === "admin");
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -51,8 +61,13 @@ export default function CompanyIdentityCard() {
   }, []);
 
   useEffect(() => {
+    if (initialWorkspace) {
+      setWorkspace(initialWorkspace);
+      setIsAdmin(membershipRole === "admin");
+      return;
+    }
     void load();
-  }, [load]);
+  }, [initialWorkspace, load, membershipRole]);
 
   async function uploadLogo() {
     if (!logoFile) return;

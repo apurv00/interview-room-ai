@@ -23,7 +23,7 @@ vi.mock('@hire/services/identityConsentService', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hire/services/identityConsentService')>()),
   acceptHireConsentAndIssueGuestSession: mocks.acceptConsent,
 }))
-vi.mock('@b2b/services/otpService', () => ({
+vi.mock('@shared/auth/mailboxOtp', () => ({
   issueOtp: mocks.issueOtp,
   verifyOtp: mocks.verifyOtp,
 }))

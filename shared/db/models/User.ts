@@ -32,7 +32,7 @@ export interface IUser extends Document {
   emailVerified?: Date
   hashedPassword?: string
 
-  role: 'candidate' | 'recruiter' | 'org_admin' | 'platform_admin'
+  role: 'candidate' | 'platform_admin'
   organizationId?: mongoose.Types.ObjectId
 
   targetRole?: string
@@ -243,10 +243,10 @@ const UserSchema = new Schema<IUser>(
 
     role: {
       type: String,
-      enum: ['candidate', 'recruiter', 'org_admin', 'platform_admin'],
+      enum: ['candidate', 'platform_admin'],
       default: 'candidate',
     },
-    organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', index: true },
+    organizationId: { type: Schema.Types.ObjectId, index: true },
 
     targetRole: { type: String },
     experienceLevel: { type: String, enum: ['0-2', '3-6', '7+'] },

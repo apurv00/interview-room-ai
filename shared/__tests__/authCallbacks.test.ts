@@ -57,6 +57,12 @@ describe('authOptions callbacks', () => {
     vi.clearAllMocks()
   })
 
+  it('does not expose the retired invite credentials provider on B2C', () => {
+    expect(authOptions.providers.map((provider) => provider.id)).not.toContain(
+      'invite-otp',
+    )
+  })
+
   describe('signIn callback', () => {
     const signIn = authOptions.callbacks!.signIn!
 
@@ -231,7 +237,7 @@ describe('authOptions callbacks', () => {
     it('populates plan/role from DB on initial sign-in (user present)', async () => {
       mockUserFindOne.mockResolvedValue({
         _id: { toString: () => 'user-1' },
-        role: 'recruiter',
+        role: 'candidate',
         organizationId: { toString: () => 'org-A' },
         plan: 'pro',
       })
@@ -243,7 +249,7 @@ describe('authOptions callbacks', () => {
       } as Parameters<typeof jwt>[0])
 
       expect(result.userId).toBe('user-1')
-      expect(result.role).toBe('recruiter')
+      expect(result.role).toBe('candidate')
       expect(result.plan).toBe('pro')
       expect(result.organizationId).toBe('org-A')
     })
@@ -270,7 +276,7 @@ describe('authOptions callbacks', () => {
 
     it('refreshes plan/role from DB when trigger === "update" is explicit', async () => {
       mockUserFindById.mockResolvedValue({
-        role: 'org_admin',
+        role: 'platform_admin',
         plan: 'enterprise',
         organizationId: { toString: () => 'org-B' },
       })
@@ -282,7 +288,7 @@ describe('authOptions callbacks', () => {
       } as unknown as Parameters<typeof jwt>[0])
 
       expect(mockUserFindById).toHaveBeenCalledWith('user-1')
-      expect(result.role).toBe('org_admin')
+      expect(result.role).toBe('platform_admin')
       expect(result.plan).toBe('enterprise')
       expect(result.organizationId).toBe('org-B')
     })
@@ -291,12 +297,12 @@ describe('authOptions callbacks', () => {
       mockUserFindById.mockRejectedValue(new Error('Mongo down'))
 
       const result = await jwt({
-        token: { userId: 'user-1', role: 'recruiter', plan: 'pro' },
+        token: { userId: 'user-1', role: 'candidate', plan: 'pro' },
         user: undefined,
         trigger: 'update',
       } as unknown as Parameters<typeof jwt>[0])
 
-      expect(result.role).toBe('recruiter')
+      expect(result.role).toBe('candidate')
       expect(result.plan).toBe('pro')
       expect(mockAuthLoggerError).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'user-1' }),

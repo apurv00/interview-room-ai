@@ -4,11 +4,13 @@ import {
   requireMembership,
   type ScreeningGatePreviewRequest,
 } from '@hire'
+import { getJobScreeningMemberReadProjection } from '@hire-operations'
 import { composeHireApiRoute } from '../../../../_lib/composeHireApiRoute'
 import {
   screeningPreviewRequestSchema,
   type ScreeningPreviewRouteBody,
 } from '../_lib/schemas'
+import { serializeScreeningPreview } from '../_lib/serialize'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,7 +25,16 @@ export const POST = composeHireApiRoute<ScreeningPreviewRouteBody>({
       params.jobId,
       body as ScreeningGatePreviewRequest,
     )
-    return NextResponse.json(result, {
+    const projection = await getJobScreeningMemberReadProjection(ctx, params.jobId, {
+      candidateCoordinates: result.preview.rankedApplications.map((entry) => ({
+        applicationId: entry.applicationId,
+        candidateId: entry.candidateId,
+      })),
+    })
+    return NextResponse.json({
+      ...result,
+      preview: serializeScreeningPreview(result.preview, projection),
+    }, {
       headers: { 'Cache-Control': 'private, no-store' },
     })
   },

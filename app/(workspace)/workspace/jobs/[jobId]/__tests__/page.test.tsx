@@ -486,6 +486,55 @@ describe('job candidate add/merge UI', () => {
   })
 })
 
+describe('job header reflow', () => {
+  it('keeps the action group shrinkable and wrapping beside the job identity', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/jobs/job-1') {
+        return json({
+          job: {
+            id: 'job-1',
+            departmentId: 'department-1',
+            title: 'Backend Engineer',
+            status: 'open',
+            closeNote: null,
+            closedByName: null,
+            jdText: 'Build reliable systems.',
+            applyPageEnabled: false,
+          },
+          entries: [],
+        })
+      }
+      if (url === '/api/workspace/departments') {
+        return json({
+          departments: [
+            {
+              id: 'department-1',
+              name: 'Engineering',
+              status: 'active',
+              kind: 'standard',
+            },
+          ],
+        })
+      }
+      if (url === '/api/workspace') {
+        return json({ membership: { role: 'admin' } })
+      }
+      if (url === '/api/workspace/candidates') return json({ candidates: [] })
+      if (url.endsWith('/screening')) return json({ gates: [] })
+      if (url.endsWith('/pool-suggestions')) return json({ suggestions: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<JobPipelinePage params={{ jobId: 'job-1' }} />)
+
+    const actions = await screen.findByRole('group', { name: 'Job actions' })
+    expect(actions).toHaveClass('flex-wrap', 'sm:min-w-0', 'sm:flex-1')
+    expect(actions).not.toHaveClass('sm:shrink-0')
+  })
+})
+
 describe('ranked pipeline visibility', () => {
   it('keeps fresh rank and other in-workspace job history visible on the candidate card', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

@@ -227,7 +227,7 @@ export default function HireEvidenceAssessment({
           <div className="flex flex-wrap gap-2 text-xs">
             {assessment.recommendation && (
               <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-800">
-                Recommendation: {assessment.recommendation}
+                AI recommendation (supporting evidence only): {assessment.recommendation}
               </span>
             )}
             {assessment.confidence && (

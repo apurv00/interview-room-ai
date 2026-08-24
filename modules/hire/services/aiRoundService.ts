@@ -43,9 +43,10 @@ import {
  * engine is consumed through (1) session provisioning — the guest enters the
  * engine's own public flow with a config this service hands out at prepare
  * time; (2) the completion event — roundLinkService reconciles the engine's
- * completed session read-only; (3) guest-session auth — the app-layer
- * verify-otp route reuses the existing OTP + ticket + `invite-otp` provider.
- * No engine file is modified and no B2C row is written from this module.
+ * completed session read-only; (3) guest-session auth — candidate verification
+ * issues a Hire-scoped guest cookie, and the isolated runtime later exchanges
+ * its own one-time handoff ticket through the runtime-only `invite-otp`
+ * provider. No B2C row is written from this module.
  */
 
 /** Fixed depth for Phase 1 AI screening rounds (build plan: fixed over

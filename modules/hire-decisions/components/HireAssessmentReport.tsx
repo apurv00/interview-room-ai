@@ -79,11 +79,14 @@ function DimensionTable({ dimensions }: { dimensions: HireDecisionDimensionAggre
  */
 export function HireAssessmentReport({ decision, compact = false }: HireAssessmentReportProps) {
   const { candidateBrief, aiAssessments, humanScorecards, externalVerdicts } = decision
+  const reportId = React.useId().replace(/:/g, '')
+  const CandidateHeading = compact ? 'h3' : 'h1'
+  const SectionHeading = compact ? 'h4' : 'h2'
   return (
     <article className={compact ? 'hire-assessment-report hire-assessment-report-compact' : 'hire-assessment-report'}>
       <header>
         <p className="hire-assessment-eyebrow">Candidate assessment</p>
-        <h1>{candidateBrief.candidateName}</h1>
+        <CandidateHeading>{candidateBrief.candidateName}</CandidateHeading>
         <p className="hire-assessment-role">{candidateBrief.jobTitle}</p>
         {(candidateBrief.location || candidateBrief.experienceYears !== undefined) && (
           <p className="hire-assessment-meta">
@@ -96,8 +99,8 @@ export function HireAssessmentReport({ decision, compact = false }: HireAssessme
         )}
       </header>
 
-      <section aria-labelledby="human-evidence-heading">
-        <h2 id="human-evidence-heading">Human scorecards</h2>
+      <section aria-labelledby={`${reportId}-human-evidence-heading`}>
+        <SectionHeading id={`${reportId}-human-evidence-heading`}>Human scorecards</SectionHeading>
         <p className="hire-assessment-supporting">
           {humanScorecards.total.count} submitted · {humanScorecards.member.count} member · {humanScorecards.kit.count} guest-kit
         </p>
@@ -105,16 +108,16 @@ export function HireAssessmentReport({ decision, compact = false }: HireAssessme
         <DimensionTable dimensions={humanScorecards.total.dimensions} />
       </section>
 
-      <section aria-labelledby="external-evidence-heading">
-        <h2 id="external-evidence-heading">External verdicts</h2>
+      <section aria-labelledby={`${reportId}-external-evidence-heading`}>
+        <SectionHeading id={`${reportId}-external-evidence-heading`}>External verdicts</SectionHeading>
         <p className="hire-assessment-supporting">
           {externalVerdicts.count} submitted. External verdicts are intentionally not blended into scorecard averages.
         </p>
         <RecommendationTally tally={externalVerdicts.recommendations} />
       </section>
 
-      <section aria-labelledby="ai-evidence-heading">
-        <h2 id="ai-evidence-heading">AI assessments</h2>
+      <section aria-labelledby={`${reportId}-ai-evidence-heading`}>
+        <SectionHeading id={`${reportId}-ai-evidence-heading`}>AI assessments</SectionHeading>
         {aiAssessments.length === 0 ? (
           <p className="hire-assessment-supporting">No completed AI assessment is available.</p>
         ) : (
@@ -127,7 +130,9 @@ export function HireAssessmentReport({ decision, compact = false }: HireAssessme
                 </div>
                 <p>
                   Overall score: {assessment.overallScore ?? '—'}
-                  {assessment.recommendation ? ` · ${assessment.recommendation}` : ''}
+                  {assessment.recommendation
+                    ? ` · AI recommendation (supporting evidence only): ${assessment.recommendation}`
+                    : ''}
                   {assessment.confidence ? ` · ${assessment.confidence} confidence` : ''}
                 </p>
                 {assessment.dimensions.length > 0 && (
@@ -147,7 +152,7 @@ export function HireAssessmentReport({ decision, compact = false }: HireAssessme
 
       <footer>
         <p>
-          This assessment presents evidence for a human decision. It does not make or recommend a pipeline-stage change.
+          AI recommendations shown above are supporting evidence only. A human owns every pipeline-stage decision and change.
         </p>
       </footer>
     </article>

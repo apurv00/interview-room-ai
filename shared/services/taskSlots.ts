@@ -34,8 +34,6 @@ export const TASK_SLOTS = [
   'learn.daily-challenge-gen',
   'learn.daily-challenge-score',
   'learn.drill-evaluate',
-  // B2B
-  'b2b.scorecard',
   // Onboarding
   'onboarding.extract-profile',
   // Evaluation Engine V2
@@ -133,7 +131,6 @@ export const TASK_SLOT_DEFAULTS: Record<
   // drill-evaluate streams to the UI — reasoning would delay the first
   // visible token (silent head on the stream), so it stays at none.
   'learn.drill-evaluate':           { model: 'gpt-5.6-luna', maxTokens: 1500, provider: 'openai', fallbackModel: 'claude-sonnet-4-6', fallbackProvider: 'anthropic', reasoningEffort: 'none' },
-  'b2b.scorecard':                  { model: 'claude-haiku-4-5', maxTokens: 1000, provider: 'anthropic' },
   'onboarding.extract-profile':     { model: 'claude-sonnet-4-6', maxTokens: 2000, provider: 'anthropic' },
   'interview.evaluation-engine-v2': { model: 'gpt-5.6-luna', maxTokens: 2600, provider: 'openai', reasoningEffort: 'high' },
   'interview.answer-candidate-question': { model: 'gpt-5.6-luna', maxTokens: 200, provider: 'openai', reasoningEffort: 'none' },

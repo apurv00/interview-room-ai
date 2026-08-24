@@ -121,7 +121,6 @@ export type AuthoritativeInterviewRuntimeErrorCode =
   | 'runtime_not_found'
   | 'runtime_linkage_invalid'
   | 'usage_linkage_invalid'
-  | 'invite_linkage_invalid'
   | 'persisted_config_invalid'
   | 'runtime_state_invalid'
   | 'runtime_expired'
@@ -168,19 +167,6 @@ export interface RuntimeSessionRecord {
   completedAt?: Date
   config: unknown
   plannedQuestionCount?: number
-  candidateEmail?: string
-  inviteTokenHash?: string
-  inviteProvenance?: {
-    kind?: unknown
-    inviteAuthorityId?: unknown
-    recruiterUserId?: unknown
-    recruiterReferenceErasedAt?: unknown
-    organizationId?: unknown
-    verifiedCandidateUserId?: unknown
-    verifiedCandidateEmail?: unknown
-    verificationMethod?: unknown
-    verifiedAt?: unknown
-  }
 }
 
 export interface RuntimeAuthorityRecord {
@@ -193,12 +179,6 @@ export interface RuntimeAuthorityRecord {
   entitlementSourceId?: string
   periodKey?: string
   entitlementSnapshotDigest?: string
-  organizationId?: string
-  inviteAuthorityId?: string
-  recruiterUserId?: string
-  recruiterReferenceErasedAt?: Date
-  inviteVerifiedAt?: Date
-  inviteProvenanceDigest?: string
   sessionConfigDigest: string
   normalizedDurationMinutes: NormalizedInterviewDurationMinutes
   plannedMainQuestionCount: number
@@ -342,12 +322,6 @@ interface NewRuntimeAuthority {
   entitlementSourceId?: string
   periodKey?: string
   entitlementSnapshotDigest?: string
-  organizationId?: string
-  inviteAuthorityId?: string
-  recruiterUserId?: string
-  recruiterReferenceErasedAt?: Date
-  inviteVerifiedAt?: Date
-  inviteProvenanceDigest?: string
   sessionConfigDigest: string
   normalizedDurationMinutes: NormalizedInterviewDurationMinutes
   plannedMainQuestionCount: number
@@ -430,7 +404,6 @@ export interface CreateAuthoritativeInterviewRuntimeResult {
   entitlementSource?: InterviewUsageSource
   entitlementSourceId?: string
   periodKey?: string
-  organizationId?: string
 }
 
 export interface ClaimAuthoritativeInterviewOperationInput {
@@ -610,7 +583,7 @@ function exactOperationKind(value: unknown): InterviewRuntimeOperationKind {
 }
 
 function exactAuthorityKind(value: unknown): InterviewRuntimeAuthorityKind {
-  if (value !== 'consumer_usage' && value !== 'organization_invite') {
+  if (value !== 'consumer_usage') {
     throw failure(
       'authority_conflict',
       'Interview runtime authority kind is invalid',
@@ -881,127 +854,6 @@ function authoritativeMainQuestionCount(
     : Math.max(1, persistedPlannedQuestionCount - 1)
 }
 
-export function digestVerifiedInviteProvenance(input: {
-  sessionId: string
-  inviteAuthorityId: string
-  organizationId: string
-  verificationMethod: 'email_otp'
-  verifiedAt: Date
-}): string {
-  const verifiedAt = input.verifiedAt
-  if (
-    !OBJECT_ID_PATTERN.test(input.sessionId) ||
-    !UUID_V4_PATTERN.test(input.inviteAuthorityId) ||
-    !OBJECT_ID_PATTERN.test(input.organizationId) ||
-    !(verifiedAt instanceof Date) ||
-    !Number.isFinite(verifiedAt.getTime())
-  ) {
-    throw new Error('Verified invite provenance is invalid')
-  }
-  return digestInterviewAuthority(
-    INTERVIEW_AUTHORITY_DIGEST_DOMAINS
-      .verifiedInviteProvenance,
-    {
-      schemaVersion: 2,
-      sessionId: input.sessionId,
-      inviteAuthorityId: input.inviteAuthorityId,
-      organizationId: input.organizationId,
-      verificationMethod: input.verificationMethod,
-      verifiedAt: verifiedAt.toISOString(),
-    },
-  )
-}
-
-function verifiedInviteAuthority(
-  session: RuntimeSessionRecord,
-  userId: string,
-  sessionId: string,
-): {
-  organizationId: string
-  inviteAuthorityId: string
-  recruiterUserId?: string
-  recruiterReferenceErasedAt?: Date
-  inviteVerifiedAt: Date
-  inviteProvenanceDigest: string
-} {
-  const provenance = session.inviteProvenance
-  const organizationId = String(provenance?.organizationId ?? '')
-  const inviteAuthorityId =
-    typeof provenance?.inviteAuthorityId === 'string'
-      ? provenance.inviteAuthorityId
-      : ''
-  const recruiterUserId = provenance?.recruiterUserId === undefined
-    ? undefined
-    : String(provenance.recruiterUserId)
-  const recruiterReferenceErasedAt =
-    provenance?.recruiterReferenceErasedAt
-  const hasRecruiterUserId =
-    provenance?.recruiterUserId !== undefined &&
-    provenance?.recruiterUserId !== null
-  const validRecruiterUserId = Boolean(
-    recruiterUserId &&
-    OBJECT_ID_PATTERN.test(recruiterUserId),
-  )
-  const hasRecruiterErasureMarker =
-    recruiterReferenceErasedAt !== undefined &&
-    recruiterReferenceErasedAt !== null
-  const validRecruiterErasureMarker =
-    recruiterReferenceErasedAt instanceof Date &&
-    Number.isFinite(recruiterReferenceErasedAt.getTime())
-  const verifiedCandidateUserId = String(
-    provenance?.verifiedCandidateUserId ?? '',
-  )
-  const verifiedCandidateEmail =
-    typeof provenance?.verifiedCandidateEmail === 'string'
-      ? provenance.verifiedCandidateEmail
-      : ''
-  const verifiedAt = provenance?.verifiedAt
-  let inviteProvenanceDigest = ''
-  try {
-    inviteProvenanceDigest = digestVerifiedInviteProvenance({
-      sessionId,
-      inviteAuthorityId,
-      organizationId,
-      verificationMethod: 'email_otp',
-      verifiedAt: verifiedAt as Date,
-    })
-  } catch {
-    // The exact predicate below intentionally collapses malformed provenance.
-  }
-  if (
-    provenance?.kind !== 'recruiter_invite' ||
-    provenance?.verificationMethod !== 'email_otp' ||
-    session.organizationId !== organizationId ||
-    verifiedCandidateUserId !== userId ||
-    session.candidateEmail?.trim().toLowerCase() !==
-      verifiedCandidateEmail.trim().toLowerCase() ||
-    session.inviteTokenHash !== undefined ||
-    hasRecruiterUserId !== validRecruiterUserId ||
-    hasRecruiterErasureMarker !== validRecruiterErasureMarker ||
-    validRecruiterUserId === validRecruiterErasureMarker ||
-    !(verifiedAt instanceof Date) ||
-    !Number.isFinite(verifiedAt.getTime()) ||
-    !inviteProvenanceDigest
-  ) {
-    throw failure(
-      'invite_linkage_invalid',
-      'Verified organization invite linkage is invalid',
-    )
-  }
-  return {
-    organizationId,
-    inviteAuthorityId,
-    ...(recruiterUserId
-      ? { recruiterUserId }
-      : {
-          recruiterReferenceErasedAt:
-            new Date(recruiterReferenceErasedAt as Date),
-        }),
-    inviteVerifiedAt: new Date(verifiedAt),
-    inviteProvenanceDigest,
-  }
-}
-
 function consumerUsageAuthority(
   usage: RuntimeUsageRecord | null,
   input: {
@@ -1083,8 +935,6 @@ function exactRuntimeAuthority(
   existing: RuntimeAuthorityRecord,
   expected: NewRuntimeAuthority,
 ): RuntimeAuthorityRecord {
-  const exactDate = (left?: Date, right?: Date) =>
-    left?.getTime() === right?.getTime()
   if (
     existing.sessionId !== expected.sessionId ||
     existing.userId !== expected.userId ||
@@ -1095,15 +945,6 @@ function exactRuntimeAuthority(
     existing.periodKey !== expected.periodKey ||
     existing.entitlementSnapshotDigest !==
       expected.entitlementSnapshotDigest ||
-    existing.organizationId !== expected.organizationId ||
-    existing.inviteAuthorityId !== expected.inviteAuthorityId ||
-    existing.recruiterUserId !== expected.recruiterUserId ||
-    !exactDate(
-      existing.recruiterReferenceErasedAt,
-      expected.recruiterReferenceErasedAt,
-    ) ||
-    !exactDate(existing.inviteVerifiedAt, expected.inviteVerifiedAt) ||
-    existing.inviteProvenanceDigest !== expected.inviteProvenanceDigest ||
     existing.sessionConfigDigest !== expected.sessionConfigDigest ||
     existing.normalizedDurationMinutes !==
       expected.normalizedDurationMinutes ||
@@ -1145,7 +986,6 @@ function runtimeCreationResult(
     entitlementSource: runtime.entitlementSource,
     entitlementSourceId: runtime.entitlementSourceId,
     periodKey: runtime.periodKey,
-    organizationId: runtime.organizationId,
   }
 }
 
@@ -1195,35 +1035,22 @@ export async function createAuthoritativeInterviewRuntimeInSession(
     )
   }
 
-  let authority:
-    | ReturnType<typeof consumerUsageAuthority>
-    | ReturnType<typeof verifiedInviteAuthority>
-  if (authorityKind === 'consumer_usage') {
-    const usageId = exactObjectId(
-      input.usageId,
-      'invalid_usage_id',
-      'usageId',
-    )
-    const usage = await store.loadUsage({
-      ...identifiers,
-      usageId: new mongoose.Types.ObjectId(usageId),
-    })
-    authority = consumerUsageAuthority(usage, {
-      userId,
-      sessionId,
-      usageId,
-      duration: authoritativeConfig.duration,
-      allowReservedPaidUsage: true,
-    })
-  } else {
-    if (input.usageId !== undefined) {
-      throw failure(
-        'authority_conflict',
-        'Organization runtime authority cannot carry usage linkage',
-      )
-    }
-    authority = verifiedInviteAuthority(session, userId, sessionId)
-  }
+  const usageId = exactObjectId(
+    input.usageId,
+    'invalid_usage_id',
+    'usageId',
+  )
+  const usage = await store.loadUsage({
+    ...identifiers,
+    usageId: new mongoose.Types.ObjectId(usageId),
+  })
+  const authority = consumerUsageAuthority(usage, {
+    userId,
+    sessionId,
+    usageId,
+    duration: authoritativeConfig.duration,
+    allowReservedPaidUsage: true,
+  })
 
   const expected: NewRuntimeAuthority = {
     sessionId,
@@ -1413,55 +1240,39 @@ async function validatedAuthority(
     )
   }
 
-  if (runtime.authorityKind === 'consumer_usage') {
-    if (
-      !runtime.usageId ||
-      !runtime.entitlementSource ||
-      !runtime.entitlementSourceId ||
-      !runtime.entitlementSnapshotDigest
-    ) {
-      throw failure('usage_linkage_invalid', 'Runtime usage linkage is incomplete')
-    }
-    const usage = await transaction.loadUsage(runtime.usageId)
-    const exactUsage = consumerUsageAuthority(usage, {
-      userId,
-      sessionId,
-      usageId: runtime.usageId,
-      duration: runtime.normalizedDurationMinutes,
-      allowReservedPaidUsage: false,
-    })
-    if (
-      exactUsage.entitlementSource !== runtime.entitlementSource ||
-      exactUsage.entitlementSourceId !== runtime.entitlementSourceId ||
-      exactUsage.periodKey !== runtime.periodKey ||
-      exactUsage.entitlementSnapshotDigest !==
-        runtime.entitlementSnapshotDigest
-    ) {
-      throw failure(
-        'usage_linkage_invalid',
-        'Interview usage does not match runtime authority',
-      )
-    }
-    return { session, runtime, config, usage: usage! }
-  }
-
-  const invite = verifiedInviteAuthority(session, userId, sessionId)
   if (
-    runtime.organizationId !== invite.organizationId ||
-    runtime.inviteAuthorityId !== invite.inviteAuthorityId ||
-    runtime.recruiterUserId !== invite.recruiterUserId ||
-    runtime.recruiterReferenceErasedAt?.getTime() !==
-      invite.recruiterReferenceErasedAt?.getTime() ||
-    runtime.inviteVerifiedAt?.getTime() !==
-      invite.inviteVerifiedAt.getTime() ||
-    runtime.inviteProvenanceDigest !== invite.inviteProvenanceDigest
+    runtime.authorityKind !== 'consumer_usage' ||
+    !runtime.usageId ||
+    !runtime.entitlementSource ||
+    !runtime.entitlementSourceId ||
+    !runtime.entitlementSnapshotDigest
   ) {
     throw failure(
-      'invite_linkage_invalid',
-      'Verified organization invite linkage is invalid',
+      'usage_linkage_invalid',
+      'Runtime usage linkage is incomplete',
     )
   }
-  return { session, runtime, config }
+  const usage = await transaction.loadUsage(runtime.usageId)
+  const exactUsage = consumerUsageAuthority(usage, {
+    userId,
+    sessionId,
+    usageId: runtime.usageId,
+    duration: runtime.normalizedDurationMinutes,
+    allowReservedPaidUsage: false,
+  })
+  if (
+    exactUsage.entitlementSource !== runtime.entitlementSource ||
+    exactUsage.entitlementSourceId !== runtime.entitlementSourceId ||
+    exactUsage.periodKey !== runtime.periodKey ||
+    exactUsage.entitlementSnapshotDigest !==
+      runtime.entitlementSnapshotDigest
+  ) {
+    throw failure(
+      'usage_linkage_invalid',
+      'Interview usage does not match runtime authority',
+    )
+  }
+  return { session, runtime, config, usage: usage! }
 }
 
 function assertNewOperationAllowed(
@@ -2677,9 +2488,6 @@ function asDate(value: unknown): Date | undefined {
 }
 
 function sessionRecord(value: Record<string, unknown>): RuntimeSessionRecord {
-  const provenance = value.inviteProvenance as
-    | RuntimeSessionRecord['inviteProvenance']
-    | undefined
   return {
     id: String(value._id),
     userId: String(value.userId),
@@ -2695,20 +2503,6 @@ function sessionRecord(value: Record<string, unknown>): RuntimeSessionRecord {
       typeof value.plannedQuestionCount === 'number'
         ? value.plannedQuestionCount
         : undefined,
-    candidateEmail:
-      typeof value.candidateEmail === 'string'
-        ? value.candidateEmail
-        : undefined,
-    inviteTokenHash:
-      typeof value.inviteTokenHash === 'string'
-        ? value.inviteTokenHash
-        : undefined,
-    inviteProvenance: provenance && {
-      ...provenance,
-      verifiedAt: asDate(provenance.verifiedAt),
-      recruiterReferenceErasedAt:
-        asDate(provenance.recruiterReferenceErasedAt),
-    },
   }
 }
 
@@ -2730,23 +2524,6 @@ function runtimeRecord(value: Record<string, unknown>): RuntimeAuthorityRecord {
     entitlementSnapshotDigest:
       typeof value.entitlementSnapshotDigest === 'string'
         ? value.entitlementSnapshotDigest
-        : undefined,
-    organizationId: value.organizationId
-      ? String(value.organizationId)
-      : undefined,
-    inviteAuthorityId:
-      typeof value.inviteAuthorityId === 'string'
-        ? value.inviteAuthorityId
-        : undefined,
-    recruiterUserId: value.recruiterUserId
-      ? String(value.recruiterUserId)
-      : undefined,
-    recruiterReferenceErasedAt:
-      asDate(value.recruiterReferenceErasedAt),
-    inviteVerifiedAt: asDate(value.inviteVerifiedAt),
-    inviteProvenanceDigest:
-      typeof value.inviteProvenanceDigest === 'string'
-        ? value.inviteProvenanceDigest
         : undefined,
     sessionConfigDigest: String(value.sessionConfigDigest ?? ''),
     normalizedDurationMinutes:
@@ -2841,7 +2618,7 @@ export const mongoAuthoritativeInterviewRuntimeCreationStore:
       })
         .select(
           'userId organizationId status deletionPendingAt startedAt completedAt config ' +
-            'plannedQuestionCount candidateEmail inviteTokenHash inviteProvenance',
+            'plannedQuestionCount',
         )
         .session(input.session)
         .lean()
@@ -2879,12 +2656,6 @@ export const mongoAuthoritativeInterviewRuntimeCreationStore:
         entitlementSourceId: input.entitlementSourceId
           ? new mongoose.Types.ObjectId(input.entitlementSourceId)
           : undefined,
-        organizationId: input.organizationId
-          ? new mongoose.Types.ObjectId(input.organizationId)
-          : undefined,
-        recruiterUserId: input.recruiterUserId
-          ? new mongoose.Types.ObjectId(input.recruiterUserId)
-          : undefined,
       }], { session })
       return runtimeRecord(
         created.toObject() as unknown as Record<string, unknown>,
@@ -2906,7 +2677,7 @@ function mongoTransaction(
       })
         .select(
           'userId organizationId status deletionPendingAt startedAt completedAt config ' +
-            'plannedQuestionCount candidateEmail inviteTokenHash inviteProvenance',
+            'plannedQuestionCount',
         )
         .session(session)
         .lean()

@@ -67,6 +67,7 @@ import {
   HireMultimodalObservationIngestionEvent,
   HireMultimodalObservationPurgeObligation,
 } from '../../hire-multimodal/models'
+import { deleteHireCommercialWorkspaceData } from '@hire-commercial/purge-boundary'
 
 const MEDIA_DELETE_BATCH_SIZE = 100
 const RUNTIME_PURGE_DELIVERY_BATCH_SIZE = 25
@@ -92,6 +93,7 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireMultimodalObservationPurgeObligation',
   'HireMultimodalAnalysisIngestionEvent',
   'HireMultimodalAnalysis',
+  'HireCommercialAccount',
   'HireInterviewResult',
   'HireInterviewAttempt',
   'HireMediaAsset',
@@ -473,6 +475,7 @@ async function deleteWorkspaceGraphChildren(
     { session },
   )
   await HireMultimodalAnalysis.deleteMany({ workspaceId }, { session })
+  await deleteHireCommercialWorkspaceData({ workspaceId, session })
   await HireInterviewResult.deleteMany({ workspaceId }, { session })
   await HireInterviewAttempt.deleteMany({ workspaceId }, { session })
   await HireMediaAsset.deleteMany(

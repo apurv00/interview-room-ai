@@ -206,7 +206,41 @@ describe("DecisionWorkspace", () => {
         "Presented in your selected order. No composite rank is calculated.",
       ),
     ).toBeTruthy();
-    expect(screen.getAllByText("AI assessments").length).toBe(2);
+    const aiAssessmentHeadings = screen.getAllByRole("heading", {
+      name: "AI assessments",
+      level: 4,
+    });
+    expect(aiAssessmentHeadings).toHaveLength(2);
+    expect(new Set(aiAssessmentHeadings.map((heading) => heading.id)).size).toBe(2);
+    expect(
+      screen.getByRole("heading", { name: "Katherine Johnson", level: 3 }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Ada Lovelace", level: 3 }),
+    ).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        /AI recommendation \(supporting evidence only\): advance/,
+      ),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByText(
+        "AI recommendations shown above are supporting evidence only. A human owns every pipeline-stage decision and change.",
+      ),
+    ).toHaveLength(2);
+    expect(
+      screen.getByRole("link", {
+        name: "Open decision detail for Katherine Johnson",
+      }),
+    ).toHaveAttribute(
+      "href",
+      `/workspace/applications/${APP_KATHERINE}`,
+    );
+    expect(
+      screen.getByRole("link", {
+        name: "Open decision detail for Ada Lovelace",
+      }),
+    ).toHaveAttribute("href", `/workspace/applications/${APP_ADA}`);
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         `/api/workspace/jobs/${JOB_ID}/decision/compare`,

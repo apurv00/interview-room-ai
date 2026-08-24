@@ -33,7 +33,7 @@ vi.mock('@hire/services/privacyService', () => ({
   getHirePrivacyVerificationTarget: mocks.getTarget,
   applyVerifiedHirePrivacyRequest: mocks.applyRequest,
 }))
-vi.mock('@b2b/services/otpService', () => ({
+vi.mock('@shared/auth/mailboxOtp', () => ({
   issueOtp: mocks.issueOtp,
   verifyOtp: mocks.verifyOtp,
 }))

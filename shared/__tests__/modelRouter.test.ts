@@ -154,12 +154,6 @@ describe('resolveModel', () => {
     expect(result.model).toBe('claude-sonnet-4-6')
   })
 
-  it('returns provider: "anthropic" for b2b.scorecard', async () => {
-    const result = await resolveModel('b2b.scorecard')
-    expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-haiku-4-5')
-  })
-
   // ── Verify all interview slots use their configured provider ─────────────
 
   const interviewSlots = Object.entries(TASK_SLOT_DEFAULTS)

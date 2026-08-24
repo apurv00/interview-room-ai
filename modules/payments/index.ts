@@ -287,7 +287,6 @@ export {
   authorizeAuthoritativeInterviewProviderAccess,
   createAuthoritativeInterviewRuntimeInSession,
   digestOpaqueInterviewRuntimeSnapshot,
-  digestVerifiedInviteProvenance,
   establishAuthoritativeInterviewRuntimeInSession,
   normalizeAuthoritativeInterviewConfig,
   settleAuthoritativeInterviewRuntime,
