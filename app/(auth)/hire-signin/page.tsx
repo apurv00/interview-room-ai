@@ -3,13 +3,25 @@
 import Link from 'next/link'
 import { useEffect, useState, type FormEvent } from 'react'
 
-const WORKSPACE_STORAGE_KEY = 'ipg-hire-workspace-id'
+const WORKSPACE_STORAGE_KEY = 'ipg-hire-workspace-handle'
+const LEGACY_WORKSPACE_STORAGE_KEY = 'ipg-hire-workspace-id'
 const WORKSPACE_ID_PATTERN = /^[a-f0-9]{24}$/i
+const WORKSPACE_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/i
 const SETUP_CREDENTIAL_PATTERN = /^([a-f0-9]{24})\.[a-f0-9]{64}$/i
+
+function normalizedWorkspaceHandle(value: string): string {
+  const normalized = value.trim().toLowerCase()
+  return WORKSPACE_ID_PATTERN.test(normalized) ||
+    (normalized.length >= 2 &&
+      normalized.length <= 48 &&
+      WORKSPACE_SLUG_PATTERN.test(normalized))
+    ? normalized
+    : ''
+}
 
 function HireSignInForm() {
   const [ready, setReady] = useState(false)
-  const [workspaceId, setWorkspaceId] = useState('')
+  const [workspaceHandle, setWorkspaceHandle] = useState('')
   const [setupCredential, setSetupCredential] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -23,21 +35,24 @@ function HireSignInForm() {
     const match = SETUP_CREDENTIAL_PATTERN.exec(candidate)
     const workspaceFromQuery = new URLSearchParams(window.location.search).get('workspace') ?? ''
     const remembered = window.localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? ''
+    const legacyRemembered =
+      window.localStorage.getItem(LEGACY_WORKSPACE_STORAGE_KEY) ?? ''
 
     if (match) {
-      const credentialWorkspaceId = match[1].toLowerCase()
       setSetupCredential(candidate.toLowerCase())
-      setWorkspaceId(credentialWorkspaceId)
-      window.localStorage.setItem(WORKSPACE_STORAGE_KEY, credentialWorkspaceId)
-    } else if (WORKSPACE_ID_PATTERN.test(workspaceFromQuery)) {
-      setWorkspaceId(workspaceFromQuery.toLowerCase())
-    } else if (WORKSPACE_ID_PATTERN.test(remembered)) {
-      setWorkspaceId(remembered.toLowerCase())
+    } else {
+      const initialHandle =
+        normalizedWorkspaceHandle(workspaceFromQuery) ||
+        normalizedWorkspaceHandle(remembered) ||
+        normalizedWorkspaceHandle(legacyRemembered)
+      if (initialHandle) setWorkspaceHandle(initialHandle)
     }
     if (candidate && !match) setError('This setup link is invalid or incomplete.')
 
     // Setup secrets must not remain in browser history, screenshots, copied
-    // address bars, or later navigations. The workspace id is non-secret.
+    // address bars, or later navigations. Its internal routing coordinate is
+    // never rendered; it is retained in browser storage only as a temporary
+    // compatibility fallback when a pre-backfill setup response has no slug.
     if (window.location.hash) {
       window.history.replaceState(
         window.history.state,
@@ -62,19 +77,28 @@ function HireSignInForm() {
           body: JSON.stringify(
             setup
               ? { credential: setupCredential, password, confirmPassword }
-              : { workspaceId: workspaceId.trim(), email: email.trim(), password }
+              : { workspace: workspaceHandle.trim(), email: email.trim(), password }
           ),
         }
       )
       const data = (await response.json().catch(() => ({}))) as {
         error?: string
         details?: Array<{ message?: string }>
+        workspace?: { slug?: string | null }
       }
       if (!response.ok) {
         setError(data.details?.[0]?.message || data.error || 'Could not sign in.')
         return
       }
-      window.localStorage.setItem(WORKSPACE_STORAGE_KEY, workspaceId.toLowerCase())
+      const rememberedHandle =
+        normalizedWorkspaceHandle(data.workspace?.slug ?? '') ||
+        normalizedWorkspaceHandle(
+          setup ? setupCredential.split('.', 1)[0] ?? '' : workspaceHandle,
+        )
+      if (rememberedHandle) {
+        window.localStorage.setItem(WORKSPACE_STORAGE_KEY, rememberedHandle)
+        window.localStorage.removeItem(LEGACY_WORKSPACE_STORAGE_KEY)
+      }
       window.location.assign('/workspace')
     } catch {
       setError('Could not reach the service. Check your connection and try again.')
@@ -105,33 +129,38 @@ function HireSignInForm() {
           onSubmit={submit}
           className="space-y-4 rounded-2xl border border-[#e1e8ed] bg-white p-6 shadow-sm"
         >
-          {setup ? (
-            <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-[#536471]">
-              Workspace sign-in ID
-              <span className="mt-0.5 block break-all font-mono text-xs text-[#0f1419]">
-                {workspaceId}
-              </span>
-            </div>
-          ) : (
+          {!setup ? (
             <label className="block space-y-1.5 text-sm font-medium text-[#0f1419]">
-              Workspace sign-in ID
+              Company workspace
               <input
                 type="text"
+                aria-label="Company workspace"
+                aria-describedby="company-workspace-help"
                 inputMode="text"
                 autoComplete="organization"
-                minLength={24}
-                maxLength={24}
-                pattern="[A-Fa-f0-9]{24}"
+                autoCapitalize="none"
+                spellCheck={false}
+                minLength={2}
+                maxLength={48}
+                pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"
+                placeholder="acme"
                 required
-                value={workspaceId}
-                onChange={(event) => setWorkspaceId(event.target.value.trim())}
-                className="w-full rounded-xl border border-[#cfd9de] px-3 py-2.5 font-mono text-sm font-normal outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                value={workspaceHandle}
+                onChange={(event) => setWorkspaceHandle(event.target.value)}
+                onBlur={() => {
+                  const normalized = normalizedWorkspaceHandle(workspaceHandle)
+                  setWorkspaceHandle(normalized || workspaceHandle.trim())
+                }}
+                className="w-full rounded-xl border border-[#cfd9de] px-3 py-2.5 text-sm font-normal outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
               />
-              <span className="block text-xs font-normal text-[#71767b]">
-                Included in your first-password email.
+              <span
+                id="company-workspace-help"
+                className="block text-xs font-normal text-[#71767b]"
+              >
+                Use the short company name from your welcome email, such as acme.
               </span>
             </label>
-          )}
+          ) : null}
           {!setup && (
             <label className="block space-y-1.5 text-sm font-medium text-[#0f1419]">
               Work email

@@ -87,6 +87,8 @@
     "check:jobs-verdict-governance-indexes": "tsx -r dotenv/config scripts/prepare-jobs-verdict-governance-indexes.ts --check",
     "prepare:hire-member-email-uniqueness": "tsx -r dotenv/config scripts/prepare-hire-member-email-uniqueness.ts",
     "check:hire-member-email-uniqueness": "tsx -r dotenv/config scripts/prepare-hire-member-email-uniqueness.ts --check",
+    "prepare:hire-workspace-signin-slugs": "tsx -r dotenv/config scripts/prepare-hire-workspace-signin-slugs.ts",
+    "check:hire-workspace-signin-slugs": "tsx -r dotenv/config scripts/prepare-hire-workspace-signin-slugs.ts --check",
     "prepare:hire-phase2-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase2-indexes.ts",
     "check:hire-phase2-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase2-indexes.ts --check",
     "prepare:hire-phase3-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase3-indexes.ts",

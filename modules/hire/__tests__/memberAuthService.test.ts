@@ -31,6 +31,8 @@ vi.mock('@shared/logger', () => ({ logger: { warn: vi.fn() } }))
 
 vi.mock('../models', () => ({
   normalizeHireMemberEmail: (value: string) => value.trim().toLowerCase(),
+  parseHireWorkspaceSignInSlug: (value: string) =>
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) ? value : null,
   HireWorkspaceMember: {
     findOne: (...args: unknown[]) => mocks.findMember(...args),
     findOneAndUpdate: (...args: unknown[]) => mocks.findMemberAndUpdate(...args),
@@ -110,14 +112,47 @@ describe('workspace-scoped Hire member authentication', () => {
     expect(parseHireMemberCredential(auth.sessionCredential)?.workspaceId).toBe(WORKSPACE_A)
   })
 
+  it('resolves a readable slug before applying the same workspace-scoped member fence', async () => {
+    const workspace = {
+      _id: WORKSPACE_A,
+      name: 'Acme Hiring',
+      signInSlug: 'acme-hiring',
+    }
+    mocks.findWorkspace.mockResolvedValue(workspace)
+    const select = vi.fn().mockResolvedValue({
+      _id: MEMBER_A,
+      workspaceId: WORKSPACE_A,
+      passwordHash: 'bcrypt-hash-a',
+      sessionVersion: 4,
+    })
+    mocks.findMember.mockReturnValue({ select })
+
+    await expect(
+      authenticateHireMember('Acme-Hiring', 'person@example.com', 'correct horse'),
+    ).resolves.toMatchObject({ workspace })
+
+    expect(mocks.findWorkspace).toHaveBeenCalledWith({ signInSlug: 'acme-hiring' })
+    expect(mocks.findMember).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_A,
+      normalizedEmail: 'person@example.com',
+      authState: 'active',
+    })
+  })
+
   it('does not reveal whether workspace, email, or password was wrong', async () => {
     const select = vi.fn().mockResolvedValue(null)
     mocks.findMember.mockReturnValue({ select })
+    mocks.findWorkspace.mockResolvedValue(null)
 
     await expect(
       authenticateHireMember(WORKSPACE_B, 'missing@example.com', 'wrong'),
     ).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS', statusCode: 401 })
-    expect(mocks.findWorkspace).not.toHaveBeenCalled()
+    expect(mocks.findWorkspace).toHaveBeenCalledWith({ _id: WORKSPACE_B })
+    expect(mocks.findMember).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: new mongoose.Types.ObjectId('000000000000000000000000'),
+    }))
+    expect(mocks.compare).toHaveBeenCalledOnce()
+    expect(mocks.compare.mock.calls[0][1]).toMatch(/^\$2b\$12\$/)
   })
 
   it('routes identical session secrets by the credential workspace for reads and lastSeen writes', async () => {

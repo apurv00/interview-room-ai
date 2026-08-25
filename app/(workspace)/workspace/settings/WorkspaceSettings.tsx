@@ -9,6 +9,7 @@ import CompanyIdentityCard from "../overview/CompanyIdentityCard";
 
 interface WorkspaceSettingsView {
   name: string;
+  signInSlug: string | null;
   companyDescription: string | null;
   companyLogo: { updatedAt: string } | null;
   guestAuthMode: "magic_link" | "otp";
@@ -340,6 +341,38 @@ export default function WorkspaceSettings() {
           membershipRole={membership.role}
         />
       </div>
+
+      {workspace.signInSlug ? (
+        <section
+          aria-labelledby="company-workspace-title"
+          className="space-y-3 rounded-2xl border border-[#e1e8ed] bg-white p-6"
+        >
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-indigo-700">
+              Team sign-in
+            </p>
+            <h2
+              id="company-workspace-title"
+              className="mt-1 text-lg font-semibold text-[#0f1419]"
+            >
+              Company workspace
+            </h2>
+            <p className="mt-2 text-sm text-[#536471]">
+              Share this short name with teammates who use a work email and
+              password. It stays the same if the company display name changes.
+            </p>
+          </div>
+          <label className="block max-w-md space-y-1.5 text-sm font-medium text-[#0f1419]">
+            Sign-in name
+            <Input
+              value={workspace.signInSlug}
+              readOnly
+              onFocus={(event) => event.currentTarget.select()}
+              autoComplete="off"
+            />
+          </label>
+        </section>
+      ) : null}
 
       {membership.role === "admin" ? (
         <section

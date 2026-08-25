@@ -19,6 +19,10 @@ const mockWorkspace = {
   updateOne: vi.fn(),
   deleteOne: vi.fn(),
 }
+const mockWorkspaceSignInSlug = {
+  create: vi.fn(),
+}
+const mockSlugCandidates = vi.fn((_company?: unknown, _workspace?: unknown) => ['acme'])
 const mockMember = {
   create: vi.fn(),
   findOne: vi.fn(),
@@ -70,6 +74,12 @@ vi.mock('../models', () => ({
     updateOne: (...a: unknown[]) => mockMember.updateOne(...a),
     deleteOne: (...a: unknown[]) => mockMember.deleteOne(...a),
   },
+  HireWorkspaceSignInSlug: {
+    create: (...a: unknown[]) => mockWorkspaceSignInSlug.create(...a),
+  },
+  hireWorkspaceSignInSlugCandidates: (...args: unknown[]) =>
+    mockSlugCandidates(...args),
+  hireWorkspaceSignInSlugHash: (slug: string) => `hash:${slug}`,
   HireMemberSession: {
     updateMany: (...a: unknown[]) => mockMemberSession.updateMany(...a),
   },
@@ -171,13 +181,13 @@ const OPERATION_ID = '123e4567-e89b-42d3-a456-426614174000'
 const TARGET_MEMBER_ID = '222222222222222222222222'
 
 const transactionSession = {
-  withTransaction: vi.fn(async (callback: () => Promise<void>) => callback()),
+  withTransaction: vi.fn(async (callback: () => Promise<unknown>) => callback()),
   endSession: vi.fn().mockResolvedValue(undefined),
 }
 
 function ctxWith(role: 'admin' | 'member'): MembershipContext {
   return {
-    workspace: { _id: 'ws1', name: 'Acme' },
+    workspace: { _id: 'ws1', name: 'Acme', signInSlug: 'acme' },
     membership: { _id: 'm1', role, userId: 'u1', email: 'admin@acme.com' },
   } as unknown as MembershipContext
 }
@@ -186,7 +196,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.spyOn(mongoose, 'startSession').mockResolvedValue(transactionSession as never)
   transactionSession.withTransaction.mockImplementation(
-    async (callback: () => Promise<void>) => callback(),
+    async (callback: () => Promise<unknown>) => callback(),
   )
   transactionSession.endSession.mockResolvedValue(undefined)
   mockIssueMemberSetup.mockResolvedValue({
@@ -202,6 +212,9 @@ beforeEach(() => {
   mockMember.exists.mockReturnValue({ session: () => Promise.resolve({ _id: 'm1' }) })
   mockMember.updateOne.mockResolvedValue({ modifiedCount: 1 })
   mockWorkspace.updateOne.mockResolvedValue({ matchedCount: 1 })
+  mockWorkspace.deleteOne.mockResolvedValue({ deletedCount: 1 })
+  mockWorkspaceSignInSlug.create.mockResolvedValue({ _id: 'hash:acme' })
+  mockSlugCandidates.mockReturnValue(['acme'])
   mockOutbox.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockMemberSession.updateMany.mockResolvedValue({ modifiedCount: 0 })
   mockMemberSetup.updateMany.mockResolvedValue({ modifiedCount: 0 })
@@ -311,37 +324,124 @@ describe('createWorkspace', () => {
   it('creates the workspace with its canonical onboarding company description and admin membership', async () => {
     mockMember.findOne.mockResolvedValue(null)
     mockMember.findOneAndUpdate.mockResolvedValue(null)
-    mockWorkspace.create.mockResolvedValue({ _id: 'ws-new', name: 'Acme' })
-    mockMember.create.mockResolvedValue({ _id: 'm-new', role: 'admin' })
+    mockWorkspace.create.mockImplementation(async ([input]) => [{ ...input }])
+    mockMember.create.mockResolvedValue([{ _id: 'm-new', role: 'admin' }])
 
     await createWorkspace(ACTOR, {
       name: 'Acme',
       companyDescription: 'Acme builds reliable workflow software for operations teams.',
     })
-    expect(mockWorkspace.create).toHaveBeenCalledWith({
-      name: 'Acme',
-      companyDescription: 'Acme builds reliable workflow software for operations teams.',
-      guestAuthMode: 'magic_link',
-      createdBy: ACTOR.userId,
-    })
-    const memberDoc = mockMember.create.mock.calls[0][0]
+    expect(mockWorkspace.create).toHaveBeenCalledWith(
+      [{
+        _id: expect.any(mongoose.Types.ObjectId),
+        name: 'Acme',
+        signInSlug: 'acme',
+        companyDescription: 'Acme builds reliable workflow software for operations teams.',
+        guestAuthMode: 'magic_link',
+        createdBy: ACTOR.userId,
+      }],
+      { session: transactionSession },
+    )
+    const memberDoc = mockMember.create.mock.calls[0][0][0]
     expect(memberDoc.role).toBe('admin')
     expect(memberDoc.email).toBe('admin@acme.com')
     expect(memberDoc.userId).toBe(ACTOR.userId)
+    expect(mockWorkspaceSignInSlug.create).toHaveBeenCalledWith(
+      [{
+        _id: 'hash:acme',
+        slug: 'acme',
+        workspaceId: expect.any(mongoose.Types.ObjectId),
+        state: 'active',
+      }],
+      { session: transactionSession },
+    )
+    expect(transactionSession.withTransaction).toHaveBeenCalledOnce()
+    expect(transactionSession.endSession).toHaveBeenCalledOnce()
   })
 
   it('honors an explicit otp guest verification choice', async () => {
     mockMember.findOne.mockResolvedValue(null)
     mockMember.findOneAndUpdate.mockResolvedValue(null)
-    mockWorkspace.create.mockResolvedValue({ _id: 'ws-new' })
-    mockMember.create.mockResolvedValue({ _id: 'm-new' })
+    mockWorkspace.create.mockImplementation(async ([input]) => [{ ...input }])
+    mockMember.create.mockResolvedValue([{ _id: 'm-new' }])
 
     await createWorkspace(ACTOR, {
       name: 'Acme',
       companyDescription: 'Acme builds reliable workflow software for operations teams.',
       guestAuthMode: 'otp',
     })
-    expect(mockWorkspace.create.mock.calls[0][0].guestAuthMode).toBe('otp')
+    expect(mockWorkspace.create.mock.calls[0][0][0].guestAuthMode).toBe('otp')
+  })
+
+  it('rolls reservation, workspace, and admin membership through one transaction', async () => {
+    mockWorkspace.create.mockImplementation(async ([input]) => [{ ...input }])
+    mockMember.create.mockRejectedValueOnce(new Error('member write failed'))
+
+    await expect(createWorkspace(ACTOR, {
+      name: 'Acme',
+      companyDescription: 'Acme builds reliable workflow software for operations teams.',
+    })).rejects.toThrow('member write failed')
+
+    expect(mockWorkspaceSignInSlug.create.mock.calls[0][1]).toEqual({
+      session: transactionSession,
+    })
+    expect(mockWorkspace.create.mock.calls[0][1]).toEqual({
+      session: transactionSession,
+    })
+    expect(mockMember.create.mock.calls[0][1]).toEqual({
+      session: transactionSession,
+    })
+    expect(mockWorkspace.deleteOne).not.toHaveBeenCalled()
+    expect(transactionSession.endSession).toHaveBeenCalledOnce()
+  })
+
+  it('retries a colliding readable slug in a fresh transaction', async () => {
+    mockSlugCandidates.mockReturnValue(['acme', 'acme-22222222'])
+    mockWorkspaceSignInSlug.create
+      .mockRejectedValueOnce({ code: 11000 })
+      .mockResolvedValueOnce({ _id: 'hash:acme-22222222' })
+    mockWorkspace.create.mockImplementation(async ([input]) => [{ ...input }])
+    mockMember.create.mockResolvedValue([{ _id: 'm-new', role: 'admin' }])
+
+    const result = await createWorkspace(ACTOR, {
+      name: 'Acme',
+      companyDescription: 'Acme builds reliable workflow software for operations teams.',
+    })
+
+    expect(transactionSession.withTransaction).toHaveBeenCalledTimes(2)
+    expect(mockWorkspaceSignInSlug.create.mock.calls[0][0][0].slug).toBe('acme')
+    expect(mockWorkspaceSignInSlug.create.mock.calls[1][0][0].slug).toBe(
+      'acme-22222222',
+    )
+    expect(result.workspace.signInSlug).toBe('acme-22222222')
+  })
+
+  it('returns a stable conflict when a concurrent creator wins membership ownership', async () => {
+    const winnerWorkspaceId = new mongoose.Types.ObjectId(
+      '111111111111111111111111',
+    )
+    mockWorkspace.find
+      .mockReturnValueOnce({
+        sort: () => ({ lean: () => Promise.resolve([]) }),
+      })
+      .mockReturnValueOnce({
+        sort: () => ({ lean: () => Promise.resolve([{ _id: winnerWorkspaceId }]) }),
+      })
+    mockWorkspace.create.mockImplementation(async ([input]) => [{ ...input }])
+    mockMember.create.mockRejectedValueOnce({ code: 11000 })
+    mockMember.findOne.mockResolvedValueOnce({ workspaceId: winnerWorkspaceId })
+    mockWorkspace.findOne.mockResolvedValueOnce({ _id: winnerWorkspaceId })
+
+    await expect(createWorkspace(ACTOR, {
+      name: 'Acme',
+      companyDescription: 'Acme builds reliable workflow software for operations teams.',
+    })).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'WORKSPACE_EXISTS',
+    })
+
+    expect(transactionSession.withTransaction).toHaveBeenCalledOnce()
+    expect(transactionSession.endSession).toHaveBeenCalledOnce()
   })
 
   it('rejects a second workspace for the same user (409)', async () => {
@@ -513,7 +613,7 @@ describe('regenerateMemberSetup', () => {
       role: 'member',
       authState: 'pending',
     })
-    expect(mockIssueMemberSetup).toHaveBeenCalledWith(pending, 'Acme')
+    expect(mockIssueMemberSetup).toHaveBeenCalledWith(pending, 'Acme', 'acme')
   })
 
   it('does not regenerate a foreign or already-active membership', async () => {

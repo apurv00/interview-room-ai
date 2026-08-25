@@ -23,6 +23,7 @@ function json(value: unknown, status = 200): Response {
 
 const activeWorkspace = {
   name: "Acme Hiring",
+  signInSlug: "acme-hiring",
   companyDescription: "Acme builds reliable hiring software.",
   companyLogo: null,
   guestAuthMode: "magic_link" as const,
@@ -71,6 +72,11 @@ describe("WorkspaceSettings", () => {
       await screen.findByRole("heading", { name: "Settings" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("Company profile")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Company workspace" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Sign-in name")).toHaveValue("acme-hiring");
+    expect(screen.getByLabelText("Sign-in name")).toHaveAttribute("readonly");
     expect(
       fetchMock.mock.calls.filter(
         ([input, init]) =>

@@ -16,7 +16,10 @@ import {
   HireMemberSetup,
   HireRound,
   HireWorkspace,
+  HireWorkspaceSignInSlug,
   HireWorkspaceMember,
+  hireWorkspaceSignInSlugCandidates,
+  hireWorkspaceSignInSlugHash,
   normalizeHireMemberEmail,
   type GuestAuthMode,
   type IHireWorkspace,
@@ -70,6 +73,10 @@ export interface WorkspaceActor {
 export interface MembershipContext {
   workspace: IHireWorkspace
   membership: IHireWorkspaceMember
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return !!error && typeof error === 'object' && (error as { code?: number }).code === 11000
 }
 
 /**
@@ -159,47 +166,74 @@ export async function createWorkspace(
     throw new AppError('You already belong to a workspace', 409, 'WORKSPACE_EXISTS')
   }
 
-  const workspace = await HireWorkspace.create({
-    name: input.name,
-    companyDescription: input.companyDescription,
-    guestAuthMode: input.guestAuthMode ?? 'magic_link',
-    createdBy: actor.userId,
-  })
+  const workspaceId = new mongoose.Types.ObjectId()
+  const normalizedEmail = normalizeHireMemberEmail(actor.email)
+  const session = await mongoose.startSession()
   try {
-    const normalizedEmail = normalizeHireMemberEmail(actor.email)
-    const membership = await HireWorkspaceMember.create({
-      workspaceId: workspace._id,
-      email: normalizedEmail,
-      normalizedEmail,
-      name: actor.name?.trim() || actor.email.split('@')[0] || 'Workspace admin',
-      userId: actor.userId,
-      role: 'admin',
-      authState: 'active',
-      sessionVersion: 1,
-      addedBy: actor.userId,
-      addedByName: actor.name?.trim() || actor.email,
-    })
-    return { workspace, membership }
-  } catch (err: unknown) {
-    // The database decides concurrent ownership. Remove the orphaned
-    // workspace, then surface a stable conflict instead of leaking an index
-    // name or allowing an ambiguous email login.
-    if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
-      await HireWorkspace.deleteOne({ _id: workspace._id })
-      const owner = await HireWorkspaceMember.findOne({
-        workspaceId: workspace._id,
-        normalizedEmail: normalizeHireMemberEmail(actor.email),
-        authState: { $in: ['pending', 'active'] },
-      }).select('_id')
-      throw new AppError(
-        owner
-          ? 'This email already belongs to a hiring workspace'
-          : 'You already belong to a workspace',
-        409,
-        'WORKSPACE_EXISTS',
-      )
+    for (const signInSlug of hireWorkspaceSignInSlugCandidates(input.name, workspaceId)) {
+      try {
+        const created = await session.withTransaction(async () => {
+          await HireWorkspaceSignInSlug.create(
+            [{
+              _id: hireWorkspaceSignInSlugHash(signInSlug),
+              slug: signInSlug,
+              workspaceId,
+              state: 'active',
+            }],
+            { session },
+          )
+          const [workspace] = await HireWorkspace.create(
+            [{
+              _id: workspaceId,
+              name: input.name,
+              signInSlug,
+              companyDescription: input.companyDescription,
+              guestAuthMode: input.guestAuthMode ?? 'magic_link',
+              createdBy: actor.userId,
+            }],
+            { session },
+          )
+          const [membership] = await HireWorkspaceMember.create(
+            [{
+              workspaceId,
+              email: normalizedEmail,
+              normalizedEmail,
+              name: actor.name?.trim() || actor.email.split('@')[0] || 'Workspace admin',
+              userId: actor.userId,
+              role: 'admin',
+              authState: 'active',
+              sessionVersion: 1,
+              addedBy: actor.userId,
+              addedByName: actor.name?.trim() || actor.email,
+            }],
+            { session },
+          )
+          if (!workspace || !membership) {
+            throw new Error('Workspace creation transaction returned no result')
+          }
+          return { workspace, membership }
+        })
+        if (!created) throw new Error('Workspace creation transaction did not commit')
+        return created
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error
+        const concurrentWorkspace = await getWorkspaceForUser(actor)
+        if (concurrentWorkspace) {
+          throw new AppError(
+            'You already belong to a workspace',
+            409,
+            'WORKSPACE_EXISTS',
+          )
+        }
+      }
     }
-    throw err
+    throw new AppError(
+      'Could not assign a company workspace name',
+      409,
+      'WORKSPACE_SLUG_UNAVAILABLE',
+    )
+  } finally {
+    await session.endSession()
   }
 }
 
@@ -258,7 +292,7 @@ export interface AddMemberResult extends MemberSetupResult {
 /**
  * Admin adds an HR-team member by name + email — no invite flow (build plan
  * §Permission model). We do not query or create a B2C User here. The member
- * receives Hire-owned credentials whose login coordinate is the workspace id.
+ * receives Hire-owned credentials using the preferred workspace slug coordinate.
  */
 export async function addMember(
   ctx: MembershipContext,
@@ -343,7 +377,11 @@ export async function addMember(
   }
   if (!member) throw new Error('Member creation transaction completed without a result')
   try {
-    const setup = await issueMemberSetup(member, ctx.workspace.name)
+    const setup = await issueMemberSetup(
+      member,
+      ctx.workspace.name,
+      ctx.workspace.signInSlug,
+    )
     return { member, ...setup }
   } catch (err) {
     // The membership has no history yet and cannot authenticate while
@@ -386,7 +424,7 @@ export async function regenerateMemberSetup(
     )
   }
 
-  return issueMemberSetup(member, ctx.workspace.name)
+  return issueMemberSetup(member, ctx.workspace.name, ctx.workspace.signInSlug)
 }
 
 export async function listMembers(ctx: MembershipContext): Promise<IHireWorkspaceMember[]> {

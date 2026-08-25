@@ -47,6 +47,12 @@ which is removed from browser history before the first form render; it is never
 sent in an HTTP request URL or referrer. Existing pre-rollout raw-token links
 and cookies do not parse under the new format and therefore fail closed.
 
+The ObjectId coordinate in those internal credentials is no longer the normal
+member-facing login name. Password sign-in resolves the immutable company slug
+to this same `workspaceId` first; see
+`docs/runbooks/hire-workspace-signin-slugs.md`. This does not weaken or replace
+any compound member/setup/session index described above.
+
 ## B2C deletion bridge
 
 The B2C deployment needs `HIRE_CONTROL_INTERNAL_URL`,
