@@ -1,4 +1,10 @@
 import mongoose, { Schema, Document, Model } from 'mongoose'
+import {
+  HIRE_WORKSPACE_SIGN_IN_SLUG_MAX_LENGTH,
+  HIRE_WORKSPACE_SIGN_IN_SLUG_MIN_LENGTH,
+  HIRE_WORKSPACE_SIGN_IN_SLUG_PATTERN,
+  parseHireWorkspaceSignInSlug,
+} from './HireWorkspaceSignInSlug'
 
 /**
  * How candidates verify themselves on an AI-interview invite link — the
@@ -64,6 +70,8 @@ export interface IHireWorkspaceLogo {
 export interface IHireWorkspace extends Document {
   _id: mongoose.Types.ObjectId
   name: string
+  /** Immutable public routing name for member password sign-in. */
+  signInSlug?: string
   /** Canonical workspace-level company context for new job/JD creation. */
   companyDescription?: string
   /**
@@ -158,6 +166,20 @@ const HireWorkspaceLogoSchema = new Schema<IHireWorkspaceLogo>(
 const HireWorkspaceSchema = new Schema<IHireWorkspace>(
   {
     name: { type: String, required: true, trim: true, maxlength: 120 },
+    signInSlug: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      immutable: true,
+      minlength: HIRE_WORKSPACE_SIGN_IN_SLUG_MIN_LENGTH,
+      maxlength: HIRE_WORKSPACE_SIGN_IN_SLUG_MAX_LENGTH,
+      match: HIRE_WORKSPACE_SIGN_IN_SLUG_PATTERN,
+      validate: {
+        validator: (value: string) =>
+          parseHireWorkspaceSignInSlug(value) === value,
+        message: 'Invalid workspace sign-in slug',
+      },
+    },
     companyDescription: { type: String, trim: true, maxlength: 2000 },
     companyBlurb: { type: String, trim: true, maxlength: 2000 },
     companyLogo: { type: HireWorkspaceLogoSchema },
@@ -197,7 +219,6 @@ const HireWorkspaceSchema = new Schema<IHireWorkspace>(
 HireWorkspaceSchema.index({ lifecycleState: 1, purgeAfter: 1, purgeState: 1 })
 HireWorkspaceSchema.index({ 'lifecycleEvents.operationId': 1 })
 HireWorkspaceSchema.index({ 'adminTransferEvents.operationId': 1 })
-
 export const HireWorkspace: Model<IHireWorkspace> =
   mongoose.models.HireWorkspace ||
   mongoose.model<IHireWorkspace>('HireWorkspace', HireWorkspaceSchema)

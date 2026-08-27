@@ -21,6 +21,24 @@ export {
   type IHireWorkspace,
 } from './HireWorkspace'
 export {
+  HireWorkspaceSignInSlug,
+  HIRE_WORKSPACE_SIGN_IN_SLUG_MIN_LENGTH,
+  HIRE_WORKSPACE_SIGN_IN_SLUG_MAX_LENGTH,
+  HIRE_WORKSPACE_SIGN_IN_SLUG_PATTERN,
+  HIRE_WORKSPACE_SIGN_IN_SLUG_INDEX_NAME,
+  HIRE_WORKSPACE_SIGN_IN_SLUG_INDEX_KEY,
+  HIRE_WORKSPACE_SIGN_IN_SLUG_INDEX_PARTIAL,
+  HIRE_WORKSPACE_SIGN_IN_RESERVATION_INDEX_NAME,
+  HIRE_WORKSPACE_SIGN_IN_RESERVATION_INDEX_KEY,
+  HIRE_WORKSPACE_SIGN_IN_RESERVATION_INDEX_PARTIAL,
+  parseHireWorkspaceSignInSlug,
+  hireWorkspaceSignInSlugBase,
+  hireWorkspaceSignInSlugCandidates,
+  hireWorkspaceSignInSlugHash,
+  type HireWorkspaceSignInSlugReservationState,
+  type IHireWorkspaceSignInSlug,
+} from './HireWorkspaceSignInSlug'
+export {
   HireWorkspaceMember,
   HIRE_MEMBER_ROLES,
   HIRE_MEMBER_AUTH_STATES,

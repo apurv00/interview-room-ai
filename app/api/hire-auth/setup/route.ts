@@ -42,7 +42,11 @@ export async function POST(req: NextRequest) {
     await revokeLegacyRequestHireMemberSession(req)
     const response = NextResponse.json({
       ok: true,
-      workspace: { id: auth.workspace._id.toString(), name: auth.workspace.name },
+      workspace: {
+        id: auth.workspace._id.toString(),
+        slug: auth.workspace.signInSlug ?? null,
+        name: auth.workspace.name,
+      },
       member: {
         id: auth.membership._id.toString(),
         name: auth.membership.name,

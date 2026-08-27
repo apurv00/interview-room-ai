@@ -10,6 +10,7 @@ import {
   HireWorkspace,
   HireWorkspaceMember,
   normalizeHireMemberEmail,
+  parseHireWorkspaceSignInSlug,
   type IHireWorkspace,
   type IHireWorkspaceMember,
 } from '../models'
@@ -24,6 +25,9 @@ export const HIRE_MEMBER_SETUP_HOURS = 24
 const WORKSPACE_ID_PATTERN = /^[a-f0-9]{24}$/i
 const RAW_CREDENTIAL_PATTERN = /^[a-f0-9]{64}$/i
 const WORKSPACE_CREDENTIAL_PATTERN = /^([a-f0-9]{24})\.([a-f0-9]{64})$/i
+const INVALID_PASSWORD_HASH =
+  '$2b$12$TLFksasKvzjfwk.zqGaNmegQr1/HChhfbjLDUMHnFHerqfwZk9rZK'
+const MISSING_WORKSPACE_ID = new mongoose.Types.ObjectId('000000000000000000000000')
 
 function tokenHash(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex')
@@ -76,7 +80,8 @@ export interface MemberSetupResult {
 
 export async function issueMemberSetup(
   member: IHireWorkspaceMember,
-  workspaceName: string
+  workspaceName: string,
+  workspaceSignInSlug?: string,
 ): Promise<MemberSetupResult> {
   await connectHireControlDB()
   const raw = randomCredential()
@@ -104,7 +109,7 @@ export async function issueMemberSetup(
   const email = buildMemberSetupEmail({
     memberName: member.name,
     workspaceName,
-    workspaceId,
+    workspaceSignInSlug: workspaceSignInSlug ?? workspaceId,
     setupUrl,
     expiryHours: HIRE_MEMBER_SETUP_HOURS,
   })
@@ -234,24 +239,35 @@ export async function completeMemberSetup(
 }
 
 export async function authenticateHireMember(
-  workspaceId: string,
+  workspaceCoordinate: string,
   email: string,
   password: string
 ): Promise<AuthenticatedHireMember> {
-  if (!WORKSPACE_ID_PATTERN.test(workspaceId)) {
-    throw new AppError('Workspace, email, or password is incorrect', 401, 'INVALID_CREDENTIALS')
-  }
   await connectHireControlDB()
+  const normalizedCoordinate = workspaceCoordinate.trim().toLowerCase()
+  const legacyWorkspaceId = WORKSPACE_ID_PATTERN.test(normalizedCoordinate)
+    ? normalizedCoordinate
+    : null
+  const signInSlug = legacyWorkspaceId
+    ? null
+    : parseHireWorkspaceSignInSlug(normalizedCoordinate)
+  const workspace = legacyWorkspaceId
+    ? await HireWorkspace.findOne({ _id: legacyWorkspaceId })
+    : signInSlug
+      ? await HireWorkspace.findOne({ signInSlug })
+      : null
   const member = await HireWorkspaceMember.findOne({
-    workspaceId,
+    workspaceId: workspace?._id ?? MISSING_WORKSPACE_ID,
     normalizedEmail: normalizeHireMemberEmail(email),
     authState: 'active',
   }).select('+passwordHash')
-  if (!member?.passwordHash || !(await bcrypt.compare(password, member.passwordHash))) {
+  const passwordMatches = await bcrypt.compare(
+    password,
+    member?.passwordHash ?? INVALID_PASSWORD_HASH,
+  )
+  if (!workspace || !member?.passwordHash || !passwordMatches) {
     throw new AppError('Workspace, email, or password is incorrect', 401, 'INVALID_CREDENTIALS')
   }
-  const workspace = await HireWorkspace.findOne({ _id: workspaceId })
-  if (!workspace) throw new AppError('Workspace unavailable', 410, 'WORKSPACE_UNAVAILABLE')
   const issued = await createSessionForMember(member)
   return { workspace, membership: member, ...issued }
 }

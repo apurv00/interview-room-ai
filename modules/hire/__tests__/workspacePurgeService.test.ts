@@ -65,11 +65,15 @@ const {
     },
     HireWorkspace: {
       find: vi.fn(),
+      findOne: vi.fn(),
       findOneAndUpdate: vi.fn(),
       updateOne: vi.fn(),
-      exists: vi.fn(),
       deleteOne: vi.fn(),
     },
+    HireWorkspaceSignInSlug: {
+      updateOne: vi.fn(),
+    },
+    hireWorkspaceSignInSlugHash: (slug: string) => `hash:${slug}`,
   }
   return {
     models: modelMap,
@@ -196,6 +200,14 @@ function sessionResult(value: unknown) {
   return { session: vi.fn().mockResolvedValue(value) }
 }
 
+function selectedSessionResult(value: unknown) {
+  return {
+    select: vi.fn().mockReturnValue({
+      session: vi.fn().mockResolvedValue(value),
+    }),
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(mongoose, 'startSession').mockResolvedValue(
@@ -204,10 +216,17 @@ beforeEach(() => {
   session.withTransaction.mockImplementation(async (work: () => Promise<void>) => work())
   session.endSession.mockResolvedValue(undefined)
   models.HireWorkspace.find.mockReturnValue(queryResult([{ _id: WORKSPACE_ID }]))
-  models.HireWorkspace.findOneAndUpdate.mockResolvedValue({ _id: WORKSPACE_ID })
+  models.HireWorkspace.findOneAndUpdate.mockResolvedValue({
+    _id: WORKSPACE_ID,
+    signInSlug: 'acme',
+  })
+  models.HireWorkspace.findOne.mockReturnValue(selectedSessionResult({
+    _id: WORKSPACE_ID,
+    signInSlug: 'acme',
+  }))
   models.HireWorkspace.updateOne.mockResolvedValue({ matchedCount: 1 })
-  models.HireWorkspace.exists.mockReturnValue(sessionResult({ _id: WORKSPACE_ID }))
   models.HireWorkspace.deleteOne.mockResolvedValue({ deletedCount: 1 })
+  models.HireWorkspaceSignInSlug.updateOne.mockResolvedValue({ modifiedCount: 1 })
   models.HireMediaAsset.find.mockReturnValue(mediaQuery([]))
   models.HireMediaAsset.findOneAndUpdate.mockResolvedValue(null)
   models.HireMediaAsset.updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 })
@@ -479,8 +498,110 @@ describe('workspace hard purge', () => {
       }),
       { session },
     )
+    expect(models.HireWorkspaceSignInSlug.updateOne).toHaveBeenCalledWith(
+      {
+        _id: 'hash:acme',
+        workspaceId: WORKSPACE_ID,
+        slug: 'acme',
+        state: 'active',
+      },
+      {
+        $set: { state: 'retired', retiredAt: NOW },
+        $unset: { workspaceId: 1, slug: 1 },
+      },
+      { session },
+    )
+    expect(
+      models.HireWorkspace.findOne.mock.invocationCallOrder[0],
+    ).toBeLessThan(models.HireWorkspaceSignInSlug.updateOne.mock.invocationCallOrder[0])
+    expect(
+      models.HireWorkspaceSignInSlug.updateOne.mock.invocationCallOrder[0],
+    ).toBeLessThan(models.HireWorkspace.deleteOne.mock.invocationCallOrder[0])
     expect(mockBrandingDelete.mock.invocationCallOrder[0]).toBeLessThan(
       models.HireWorkspace.deleteOne.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('re-reads a slug committed after the outer purge claim before deleting the graph', async () => {
+    // The long-running purge claimed this workspace before migration added its
+    // slug. Only the in-transaction read sees the committed reservation.
+    models.HireWorkspace.findOneAndUpdate.mockResolvedValueOnce({
+      _id: WORKSPACE_ID,
+    })
+    models.HireWorkspace.findOne.mockReturnValueOnce(selectedSessionResult({
+      _id: WORKSPACE_ID,
+      signInSlug: 'acme',
+    }))
+
+    const report = await purgeDueHireWorkspaces({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+      storage: { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() },
+      clock: () => NOW,
+    })
+
+    expect(report).toMatchObject({ claimed: 1, purged: 1, failed: 0 })
+    expect(models.HireWorkspace.findOne).toHaveBeenCalledWith({
+      _id: WORKSPACE_ID,
+      lifecycleState: 'deletion_pending',
+      purgeAfter: { $lte: NOW },
+      purgeState: 'claimed',
+      purgeClaimToken: expect.any(String),
+    })
+    expect(models.HireWorkspaceSignInSlug.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: 'hash:acme',
+        workspaceId: WORKSPACE_ID,
+        slug: 'acme',
+        state: 'active',
+      }),
+      expect.any(Object),
+      { session },
+    )
+    expect(models.HireWorkspace.deleteOne).toHaveBeenCalledOnce()
+  })
+
+  it('purges a legacy workspace without inventing a slug reservation', async () => {
+    models.HireWorkspace.findOneAndUpdate.mockResolvedValueOnce({
+      _id: WORKSPACE_ID,
+    })
+    models.HireWorkspace.findOne.mockReturnValueOnce(selectedSessionResult({
+      _id: WORKSPACE_ID,
+    }))
+
+    const report = await purgeDueHireWorkspaces({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+      storage: { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() },
+      clock: () => NOW,
+    })
+
+    expect(report).toMatchObject({ claimed: 1, purged: 1, failed: 0 })
+    expect(models.HireWorkspaceSignInSlug.updateOne).not.toHaveBeenCalled()
+    expect(models.HireWorkspace.deleteOne).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed before graph deletion when the active slug reservation is missing', async () => {
+    models.HireWorkspaceSignInSlug.updateOne.mockResolvedValueOnce({
+      modifiedCount: 0,
+    })
+
+    const report = await purgeDueHireWorkspaces({
+      workspaceId: WORKSPACE_ID.toString(),
+      now: NOW,
+      storage: { upload: vi.fn(), signRead: vi.fn(), delete: vi.fn() },
+      clock: () => NOW,
+    })
+
+    expect(report).toMatchObject({ claimed: 1, purged: 0, failed: 1 })
+    expect(models.HireWorkspace.deleteOne).not.toHaveBeenCalled()
+    expect(models.HireWorkspaceMember.deleteMany).not.toHaveBeenCalled()
+    expect(models.HireWorkspace.updateOne).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _id: WORKSPACE_ID, purgeState: 'claimed' }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ purgeState: 'failed' }),
+      }),
+      { timestamps: false },
     )
   })
 

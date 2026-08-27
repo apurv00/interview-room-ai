@@ -108,9 +108,14 @@ const BUDGETS = {
   // index declarations. The integrated core measures 28,265 LOC / 92 files;
   // 28.3k leaves 35 LOC, not a new feature envelope. The final company-scale
   // Screening pass adds conservative retained-hash validation plus bounded
-  // gate-history adapters; 28.4k leaves only tripwire headroom and no files.
-  // See ADRs 0041, 0043, 0047, and 0048.
-  'modules/hire':      { maxLOC: 28_400, maxFiles: 92 },
+  // gate-history adapters. See ADRs 0041, 0043, 0047, and 0048.
+  // The company-facing sign-in slug adds one dedicated model for the active
+  // namespace plus irreversible hashed retirement reservations. Keeping that
+  // authority separate from the workspace root avoids leaking Mongo IDs and
+  // prevents a purged tenant's saved login from routing to a future company.
+  // The integrated core measures 28,618 LOC / 93 files; 28.65k/94 leaves one
+  // bounded file and 32 LOC of tripwire-only headroom. See ADR 0049.
+  'modules/hire':      { maxLOC: 28_650, maxFiles: 94 },
   // A bounded control-plane authority for Hire-native supplemental interview
   // observations. It cannot write assessments, decisions, exports, or raw
   // camera data; see ADR 0039.

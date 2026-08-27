@@ -34,7 +34,9 @@ import {
   HireRound,
   HireScreeningGate,
   HireWorkspace,
+  HireWorkspaceSignInSlug,
   HireWorkspaceMember,
+  hireWorkspaceSignInSlugHash,
   type IHireMediaAsset,
   type IHireWorkspace,
 } from '../models'
@@ -130,6 +132,10 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireWorkspaceMember',
   'HireWorkspace',
 ] as const
+
+// HireWorkspaceSignInSlug is intentionally absent. Hard purge removes its
+// workspace/slug fields but retains the one-way hash as a non-reusable name
+// reservation, so an old saved sign-in can never route to a future tenant.
 
 export interface HireWorkspacePurgeReport {
   scanned: number
@@ -564,13 +570,21 @@ async function deleteClaimedWorkspaceGraph(
   let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   try {
     await session.withTransaction(async () => {
-      const claimed = await HireWorkspace.exists({
+      // Re-read the claimed row inside the final deletion transaction. The
+      // earlier claim snapshot predates runtime/media/object cleanup and can
+      // miss a slug committed by the rollout backfill during that interval.
+      // Reading the slug here makes the later workspace delete conflict with a
+      // concurrent backfill update, so the reservation is either retired in
+      // this transaction or the competing transaction safely retries/aborts.
+      const claimed = await HireWorkspace.findOne({
         _id: workspaceId,
         lifecycleState: 'deletion_pending',
         purgeAfter: { $lte: now },
         purgeState: 'claimed',
         purgeClaimToken: claimToken,
-      }).session(session)
+      })
+        .select('signInSlug')
+        .session(session)
       if (!claimed) throw new Error('Workspace purge claim is no longer authoritative')
 
       const unacknowledgedMedia = await HireMediaAsset.exists({
@@ -595,6 +609,26 @@ async function deleteClaimedWorkspaceGraph(
       }).session(session)
       if (runtimeWorkPending) {
         throw new Error('Isolated runtime personal-data purge is still pending')
+      }
+
+      const signInSlug = claimed.signInSlug
+      if (signInSlug) {
+        const retiredSlug = await HireWorkspaceSignInSlug.updateOne(
+          {
+            _id: hireWorkspaceSignInSlugHash(signInSlug),
+            workspaceId,
+            slug: signInSlug,
+            state: 'active',
+          },
+          {
+            $set: { state: 'retired', retiredAt: now },
+            $unset: { workspaceId: 1, slug: 1 },
+          },
+          { session },
+        )
+        if (retiredSlug.modifiedCount !== 1) {
+          throw new Error('Workspace sign-in name reservation is missing')
+        }
       }
 
       assessmentExportCleanupTargets = await deleteWorkspaceGraphChildren(workspaceId, session, now)
@@ -669,7 +703,11 @@ export async function purgeDueHireWorkspaces(input: {
       )
       await deleteWorkspaceLogo(claim.workspace._id, brandingStorage)
       await renewWorkspacePurgeLease(claim.workspace._id, claim.claimToken, clock())
-      await deleteClaimedWorkspaceGraph(claim.workspace._id, claim.claimToken, now)
+      await deleteClaimedWorkspaceGraph(
+        claim.workspace._id,
+        claim.claimToken,
+        now,
+      )
       purged += 1
     } catch (error) {
       failed += 1
