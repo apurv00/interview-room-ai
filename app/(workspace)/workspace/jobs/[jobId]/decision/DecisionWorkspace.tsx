@@ -565,6 +565,12 @@ export default function DecisionWorkspace({
 }) {
   const [items, setItems] = useState<DecisionInboxItem[] | null>(null);
   const [inboxNextCursor, setInboxNextCursor] = useState<string | null>(null);
+  const [inboxCurrentCursor, setInboxCurrentCursor] = useState<string | null>(
+    null,
+  );
+  const [inboxCursorHistory, setInboxCursorHistory] = useState<
+    Array<string | null>
+  >([]);
   const [inboxLimit, setInboxLimit] = useState(20);
   const [candidateQuery, setCandidateQuery] = useState("");
   const [comparisonCandidates, setComparisonCandidates] = useState<
@@ -578,7 +584,7 @@ export default function DecisionWorkspace({
   >([]);
   const [comparison, setComparison] = useState<HireDecisionView[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const [loadingMoreInbox, setLoadingMoreInbox] = useState(false);
+  const [loadingInboxPage, setLoadingInboxPage] = useState(false);
   const [candidateLoading, setCandidateLoading] = useState(false);
   const [loadingMoreCandidates, setLoadingMoreCandidates] = useState(false);
   const [comparing, setComparing] = useState(false);
@@ -588,9 +594,13 @@ export default function DecisionWorkspace({
   const [initialInboxSettled, setInitialInboxSettled] = useState(false);
   const activeCandidateQuery = useRef("");
   const initialHandoffStarted = useRef(false);
+  const inboxPageStatusRef = useRef<HTMLParagraphElement>(null);
+  const inboxRequestGeneration = useRef(0);
 
   const loadDecisionData = useCallback(async () => {
+    const generation = ++inboxRequestGeneration.current;
     setLoading(true);
+    setLoadingInboxPage(false);
     setInboxError(null);
     setComparisonError(null);
     try {
@@ -599,23 +609,29 @@ export default function DecisionWorkspace({
         { cache: "no-store" },
       );
       const inbox = response.ok ? inboxFrom(await response.json()) : null;
+      if (generation !== inboxRequestGeneration.current) return;
       if (inbox === null) {
         setItems(null);
         setInboxError("Could not load decision actions. Please try again.");
       } else {
-        setItems(inbox.items);
+        setItems(inbox.items.slice(0, inbox.limit));
         setInboxLimit(inbox.limit);
         setInboxNextCursor(inbox.nextCursor);
+        setInboxCurrentCursor(null);
+        setInboxCursorHistory([]);
         // A refresh may contain newer scorecards or an external verdict. Never
         // keep a previously assembled comparison beside fresher source data.
         setComparison(null);
       }
     } catch {
+      if (generation !== inboxRequestGeneration.current) return;
       setItems(null);
       setInboxError("Could not load decision actions. Please try again.");
     } finally {
-      setLoading(false);
-      setInitialInboxSettled(true);
+      if (generation === inboxRequestGeneration.current) {
+        setLoading(false);
+        setInitialInboxSettled(true);
+      }
     }
   }, [jobId]);
 
@@ -623,33 +639,70 @@ export default function DecisionWorkspace({
     void loadDecisionData();
   }, [loadDecisionData]);
 
-  const loadMoreInbox = useCallback(async () => {
-    if (!inboxNextCursor || loadingMoreInbox) return;
-    setLoadingMoreInbox(true);
-    setInboxError(null);
-    try {
-      const search = new URLSearchParams({
-        limit: String(inboxLimit),
-        cursor: inboxNextCursor,
-      });
-      const response = await fetch(
-        `/api/workspace/jobs/${encodeURIComponent(jobId)}/decision?${search.toString()}`,
-        { cache: "no-store" },
-      );
-      const page = response.ok ? inboxFrom(await response.json()) : null;
-      if (!page) {
-        setInboxError("Could not load more decision actions. Please try again.");
-        return;
+  const loadInboxPage = useCallback(
+    async (cursor: string | null, history: Array<string | null>) => {
+      if (loading || loadingInboxPage) return;
+      const generation = ++inboxRequestGeneration.current;
+      setLoadingInboxPage(true);
+      setInboxError(null);
+      try {
+        const search = new URLSearchParams({ limit: String(inboxLimit) });
+        if (cursor) search.set("cursor", cursor);
+        const response = await fetch(
+          `/api/workspace/jobs/${encodeURIComponent(jobId)}/decision?${search.toString()}`,
+          { cache: "no-store" },
+        );
+        const page = response.ok ? inboxFrom(await response.json()) : null;
+        if (generation !== inboxRequestGeneration.current) return;
+        if (!page) {
+          setInboxError(
+            "Could not load that decision action page. Please try again.",
+          );
+          return;
+        }
+        // Replace the mounted page instead of accumulating the job's action
+        // history. The server limit and this defensive slice keep the DOM
+        // bounded even if an upstream response accidentally over-delivers.
+        setItems(page.items.slice(0, page.limit));
+        setInboxLimit(page.limit);
+        setInboxNextCursor(page.nextCursor);
+        setInboxCurrentCursor(cursor);
+        setInboxCursorHistory(history);
+        window.requestAnimationFrame(() => inboxPageStatusRef.current?.focus());
+      } catch {
+        if (generation !== inboxRequestGeneration.current) return;
+        setInboxError(
+          "Could not load that decision action page. Please try again.",
+        );
+      } finally {
+        if (generation === inboxRequestGeneration.current) {
+          setLoadingInboxPage(false);
+        }
       }
-      setItems((current) => [...(current ?? []), ...page.items]);
-      setInboxLimit(page.limit);
-      setInboxNextCursor(page.nextCursor);
-    } catch {
-      setInboxError("Could not load more decision actions. Please try again.");
-    } finally {
-      setLoadingMoreInbox(false);
-    }
-  }, [inboxLimit, inboxNextCursor, jobId, loadingMoreInbox]);
+    },
+    [inboxLimit, jobId, loading, loadingInboxPage],
+  );
+
+  const loadNextInboxPage = useCallback(() => {
+    if (!inboxNextCursor) return;
+    void loadInboxPage(inboxNextCursor, [
+      ...inboxCursorHistory,
+      inboxCurrentCursor,
+    ]);
+  }, [
+    inboxCurrentCursor,
+    inboxCursorHistory,
+    inboxNextCursor,
+    loadInboxPage,
+  ]);
+
+  const loadPreviousInboxPage = useCallback(() => {
+    if (inboxCursorHistory.length === 0) return;
+    void loadInboxPage(
+      inboxCursorHistory[inboxCursorHistory.length - 1] ?? null,
+      inboxCursorHistory.slice(0, -1),
+    );
+  }, [inboxCursorHistory, loadInboxPage]);
 
   const loadCandidateResults = useCallback(
     async (
@@ -868,7 +921,7 @@ export default function DecisionWorkspace({
           type="button"
           size="sm"
           variant="secondary"
-          disabled={loading}
+          disabled={loading || loadingInboxPage}
           onClick={() => void loadDecisionData()}
         >
           {loading ? "Refreshing…" : "Refresh evidence"}
@@ -910,9 +963,15 @@ export default function DecisionWorkspace({
             </p>
           </div>
           {items !== null ? (
-            <p className="text-sm text-[#536471]" aria-live="polite">
-              Showing {items.length} action{items.length === 1 ? "" : "s"} · up
-              to {inboxLimit} per page
+            <p
+              ref={inboxPageStatusRef}
+              className="text-sm text-[#536471]"
+              role="status"
+              tabIndex={-1}
+            >
+              Page {inboxCursorHistory.length + 1} · Showing {items.length}{" "}
+              action{items.length === 1 ? "" : "s"} · up to {inboxLimit} per
+              page
             </p>
           ) : null}
         </div>
@@ -948,19 +1007,43 @@ export default function DecisionWorkspace({
           </div>
         )}
 
-        {items !== null && inboxNextCursor ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={loadingMoreInbox}
-            onClick={() => void loadMoreInbox()}
+        {items !== null &&
+        (inboxCursorHistory.length > 0 || inboxNextCursor) ? (
+          <nav
+            className="flex flex-wrap items-center gap-2"
+            aria-label="Action inbox pages"
+            aria-busy={loadingInboxPage}
           >
-            {loadingMoreInbox ? "Loading more actions…" : "Load more actions"}
-          </Button>
-        ) : items !== null && items.length > 0 ? (
+            {inboxCursorHistory.length > 0 ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={loading || loadingInboxPage}
+                aria-label="Previous action page"
+                onClick={loadPreviousInboxPage}
+              >
+                {loadingInboxPage ? "Loading page…" : "Previous page"}
+              </Button>
+            ) : null}
+            {inboxNextCursor ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={loading || loadingInboxPage}
+                aria-label="Next action page"
+                onClick={loadNextInboxPage}
+              >
+                {loadingInboxPage ? "Loading page…" : "Next page"}
+              </Button>
+            ) : null}
+          </nav>
+        ) : null}
+
+        {items !== null && items.length > 0 && !inboxNextCursor ? (
           <p className="text-xs text-[#71767b]">
-            All currently matching decision actions are loaded.
+            This is the last page of currently matching decision actions.
           </p>
         ) : null}
       </section>

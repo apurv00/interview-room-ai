@@ -96,6 +96,7 @@
     "check:hire-phase5-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase5-indexes.ts --check",
     "prepare:hire-candidate-workspace-indexes": "tsx -r dotenv/config scripts/prepare-hire-candidate-workspace-indexes.ts",
     "check:hire-candidate-workspace-indexes": "tsx -r dotenv/config scripts/prepare-hire-candidate-workspace-indexes.ts --check",
+    "inventory:hire-candidate-bulk-operations": "node --import tsx scripts/inventory-hire-candidate-bulk-operations.ts",
     "prepare:hire-phase6-department-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase6-department-indexes.ts",
     "check:hire-phase6-department-indexes": "tsx -r dotenv/config scripts/prepare-hire-phase6-department-indexes.ts --check",
     "prepare:hire-multimodal-observation-indexes": "tsx -r dotenv/config scripts/prepare-hire-multimodal-observation-indexes.ts",

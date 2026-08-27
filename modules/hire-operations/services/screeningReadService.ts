@@ -77,8 +77,10 @@ export interface JobScreeningMemberReadProjection {
 export interface ScreeningRecipientPage {
   recipients: ScreeningRecipientDeliveryView[]
   hasMore: boolean
-  nextCursor: string | null
+  nextCursor: ScreeningRecipientCursor | null
 }
+
+export interface ScreeningRecipientCursor { itemId: string }
 
 export interface ScreeningBatchCursor { wave: number; id: string }
 export interface ScreeningBatchPage {
@@ -114,14 +116,6 @@ interface InvitationItemRow {
   attempts: number
   sentAt?: Date
   lastError?: string
-}
-
-interface RecipientCursorPayload {
-  v: 1
-  workspaceId: string
-  jobId: string
-  batchId: string
-  itemId: string
 }
 
 function unavailableCandidate(
@@ -187,41 +181,6 @@ function recipientPageSize(value: number | undefined): number {
     throw new AppError('Invalid recipient page limit', 400, 'INVALID_LIMIT')
   }
   return limit
-}
-
-function invalidRecipientCursor(): AppError {
-  return new AppError('Invalid recipient cursor', 400, 'INVALID_CURSOR')
-}
-
-function parseRecipientCursor(
-  value: string | undefined,
-  scope: Omit<RecipientCursorPayload, 'v' | 'itemId'>,
-): mongoose.Types.ObjectId | null {
-  if (value === undefined) return null
-  try {
-    if (!value || value.length > 512) throw invalidRecipientCursor()
-    const parsed = JSON.parse(
-      Buffer.from(value, 'base64url').toString('utf8'),
-    ) as Partial<RecipientCursorPayload>
-    if (
-      parsed.v !== 1 ||
-      parsed.workspaceId !== scope.workspaceId ||
-      parsed.jobId !== scope.jobId ||
-      parsed.batchId !== scope.batchId ||
-      typeof parsed.itemId !== 'string' ||
-      !validObjectId(parsed.itemId)
-    ) {
-      throw invalidRecipientCursor()
-    }
-    return new mongoose.Types.ObjectId(parsed.itemId)
-  } catch (error) {
-    if (error instanceof AppError) throw error
-    throw invalidRecipientCursor()
-  }
-}
-
-function encodeRecipientCursor(payload: RecipientCursorPayload): string {
-  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
 }
 
 async function loadCandidateViews(
@@ -371,14 +330,15 @@ export async function readJobScreeningGateBatches(
 }
 
 /**
- * Read a bounded, stable page of one batch's delivery ledger. The cursor
- * embeds its complete tenant/job/batch scope and cannot be replayed elsewhere.
+ * Read a bounded, stable page of one batch's delivery ledger. The API layer
+ * authenticates and scope-binds the opaque cursor before this internal seek
+ * coordinate reaches the service.
  */
 export async function readJobScreeningBatchRecipients(
   ctx: MembershipContext,
   jobId: string,
   batchId: string,
-  input: { cursor?: string; limit?: number; now?: Date } = {},
+  input: { cursor?: ScreeningRecipientCursor; limit?: number; now?: Date } = {},
 ): Promise<ScreeningRecipientPage> {
   if (!validObjectId(jobId) || !validObjectId(batchId)) {
     throw new AppError('Invalid screening recipient scope', 400, 'INVALID_ID')
@@ -404,12 +364,12 @@ export async function readJobScreeningBatchRecipients(
     .lean()
   if (!batch) throw new NotFoundError('Invitation batch')
 
-  const cursorScope = {
-    workspaceId: ctx.workspace._id.toString(),
-    jobId: normalizedJobId.toString(),
-    batchId: normalizedBatchId.toString(),
+  if (input.cursor && !validObjectId(input.cursor.itemId)) {
+    throw new AppError('Invalid recipient cursor', 400, 'INVALID_CURSOR')
   }
-  const cursorId = parseRecipientCursor(input.cursor, cursorScope)
+  const cursorId = input.cursor
+    ? new mongoose.Types.ObjectId(input.cursor.itemId)
+    : null
   const items = (await HireInvitationBatchItem.find({
     workspaceId: ctx.workspace._id,
     jobId: normalizedJobId,
@@ -486,11 +446,7 @@ export async function readJobScreeningBatchRecipients(
     recipients,
     hasMore,
     nextCursor: hasMore && last
-      ? encodeRecipientCursor({
-          v: 1,
-          ...cursorScope,
-          itemId: last._id.toString(),
-        })
+      ? { itemId: last._id.toString() }
       : null,
   }
 }

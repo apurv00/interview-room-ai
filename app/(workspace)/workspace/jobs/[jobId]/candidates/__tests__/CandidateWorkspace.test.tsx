@@ -192,6 +192,23 @@ describe('CandidateWorkspace', () => {
     expect(navigation.replace).toHaveBeenCalledWith(expect.stringContaining(`selectionId=${SELECTION_ID}`), { scroll: false })
   })
 
+  it('supports keyboard-only candidate selection with the native Space activation sequence', async () => {
+    render(<CandidateWorkspace jobId={JOB_ID} />)
+    const table = await screen.findByRole('table', { name: 'Candidates for this job' })
+    const checkbox = within(table).getByRole('checkbox', { name: 'Select Ada Lovelace' })
+    checkbox.focus()
+
+    fireEvent.keyDown(checkbox, { key: ' ', code: 'Space' })
+    fireEvent.keyUp(checkbox, { key: ' ', code: 'Space' })
+    // Browsers dispatch a zero-detail click for native keyboard activation;
+    // jsdom does not synthesize that default action from Space by itself.
+    fireEvent(checkbox, new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }))
+
+    expect(checkbox).toHaveFocus()
+    expect(checkbox).toBeChecked()
+    expect(screen.getByText('1 candidate selected')).toBeTruthy()
+  })
+
   it('retains selection across cursors but clears it when browser history changes the normalized filter', async () => {
     const view = render(<CandidateWorkspace jobId={JOB_ID} />)
     const table = await screen.findByRole('table', { name: 'Candidates for this job' })
@@ -580,12 +597,12 @@ describe('CandidateWorkspace', () => {
     expect(screen.getByText(/How this person entered the workspace over time/)).toBeTruthy()
   })
 
-  it('defensively mounts no more than 50 candidate rows or cards', async () => {
+  it('defensively mounts no more than 50 rows or cards from a 1,000-candidate response', async () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/candidates/freshness')) return Promise.resolve(json({ hasNewerResults: false, checkedAt: '2026-08-25T08:01:00.000Z' }))
       if (url.includes('/candidates/summary')) return Promise.resolve(json(candidateSummary()))
-      if (url.includes('/candidates?')) return Promise.resolve(json(candidatePage({ rows: generatedRows(75) })))
+      if (url.includes('/candidates?')) return Promise.resolve(json(candidatePage({ rows: generatedRows(1_000) })))
       return Promise.resolve(json({ error: 'Unexpected request' }, 500))
     })
     render(<CandidateWorkspace jobId={JOB_ID} />)

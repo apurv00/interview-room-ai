@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   connectHireControlDB: vi.fn(),
   testDriveExclusionStages: vi.fn(),
   jobAggregate: vi.fn(),
+  workspaceFindOne: vi.fn(),
   candidateAggregate: vi.fn(),
   applicationAggregate: vi.fn(),
   humanRoundAggregate: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock("@hire-operations-boundary", () => ({
     "withdrawn",
   ],
   HireJob: { aggregate: mocks.jobAggregate },
+  HireWorkspace: { findOne: mocks.workspaceFindOne },
   HireCandidate: { aggregate: mocks.candidateAggregate },
   HireApplication: { aggregate: mocks.applicationAggregate },
   HireHumanRound: { aggregate: mocks.humanRoundAggregate },
@@ -138,6 +140,9 @@ describe("Phase-5 operations read model", () => {
     vi.clearAllMocks();
     mocks.connectHireControlDB.mockResolvedValue(undefined);
     mocks.privacyRequestFind.mockReturnValue(query([]));
+    mocks.workspaceFindOne.mockReturnValue(
+      query({ privacyAggregateFenceVersion: 1 }),
+    );
     mocks.departmentFind.mockReturnValue(
       query([{ _id: "department-a", name: "Engineering" }]),
     );
@@ -592,8 +597,8 @@ describe("Phase-5 operations read model", () => {
 
     mocks.jobAggregate.mockResolvedValue([job({ _id: JOB_ID })]);
     mocks.candidateAggregate.mockImplementation(async (pipeline) => {
-      const project = pipeline.at(-1)?.$project as
-        { name?: unknown } | undefined;
+      const project = pipeline.find((stage) => stage.$project?.name === 1)
+        ?.$project as { name?: unknown } | undefined;
       if (project?.name === 1) {
         const ids =
           (pipeline[0]?.$match as { _id?: { $in?: string[] } } | undefined)?._id
@@ -622,13 +627,25 @@ describe("Phase-5 operations read model", () => {
     mocks.privacyRequestFind.mockImplementation((filter: Record<string, any>) =>
       query(
         requests
-          .filter((request) => privacyRequestMatchesFilter(filter, request))
+          .filter((request) => {
+            const scopedCandidateIds = filter.candidateId?.$in as
+              | string[]
+              | undefined;
+            return (
+              (!scopedCandidateIds ||
+                scopedCandidateIds.includes(request.candidateId)) &&
+              privacyRequestMatchesFilter(filter, request)
+            );
+          })
           .map(({ candidateId }) => ({ candidateId })),
       ),
     );
-    mocks.applicationAggregate.mockImplementation(async (pipeline) =>
-      scopedRows(pipeline, safeApplication, privacyApplication),
-    );
+    mocks.applicationAggregate.mockImplementation(async (pipeline) => {
+      const match = pipeline[0]?.$match as Record<string, unknown> | undefined;
+      return match?.jobId && !match.candidateId
+        ? [safeApplication, privacyApplication]
+        : scopedRows(pipeline, safeApplication, privacyApplication);
+    });
     mocks.humanRoundAggregate.mockResolvedValue([]);
     mocks.deliveryAggregate.mockImplementation(async (pipeline) =>
       scopedRows(
@@ -701,7 +718,7 @@ describe("Phase-5 operations read model", () => {
     expect(dtoJson).not.toContain(PRIVACY_CANDIDATE_ID);
     expect(dtoJson).not.toContain(PRIVACY_APPLICATION_ID);
     for (const [filter] of mocks.privacyRequestFind.mock.calls) {
-      expect(filter).toEqual({
+      expect(filter).toMatchObject({
         workspaceId: expect.anything(),
         live: true,
         $or: [
@@ -711,12 +728,33 @@ describe("Phase-5 operations read model", () => {
       });
       expect(filter.workspaceId.toString()).toBe(WORKSPACE_ID);
     }
+    const performancePrivacyFilter = mocks.privacyRequestFind.mock.calls
+      .map(([filter]) => filter)
+      .find((filter) => filter.candidateId);
+    expect(performancePrivacyFilter.candidateId).toEqual({
+      $in: [SAFE_CANDIDATE_ID, PRIVACY_CANDIDATE_ID],
+    });
     expect(mocks.privacyFilter).toHaveBeenCalledWith(NOW);
     const performanceApplicationPipeline =
       mocks.applicationAggregate.mock.calls.at(-1)?.[0];
-    expect(performanceApplicationPipeline[0].$match.candidateId).toEqual({
+    expect(performanceApplicationPipeline[0].$match).toMatchObject({
+      workspaceId: expect.anything(),
+      jobId: expect.anything(),
+    });
+    expect(performanceApplicationPipeline[0].$match).not.toHaveProperty(
+      "candidateId",
+    );
+    expect(
+      mocks.humanRoundAggregate.mock.calls.at(-1)?.[0]?.[0]?.$match.candidateId,
+    ).toEqual({
       $in: [SAFE_CANDIDATE_ID],
     });
+    expect(
+      mocks.resultAggregate.mock.calls.at(-1)?.[0]?.[0]?.$match.candidateId,
+    ).toEqual({ $in: [SAFE_CANDIDATE_ID] });
+    expect(
+      mocks.candidateAggregate.mock.calls.at(-1)?.[0]?.[0]?.$match._id,
+    ).toEqual({ $in: [SAFE_CANDIDATE_ID] });
   });
 
   it("excludes test-drive jobs and candidates before operations rows or a small-sample fallback", async () => {
@@ -876,7 +914,7 @@ describe("Phase-5 operations read model", () => {
     });
   });
 
-  it("uses fixed job-scoped batches and selects display names only for that job's applications", async () => {
+  it("starts from the job application set and selects names only for its small sample", async () => {
     const JOB_ID = "222222222222222222222222";
     const activeCandidates = [{ _id: "candidate-a" }, { _id: "candidate-b" }];
     const displayNames = [
@@ -896,7 +934,16 @@ describe("Phase-5 operations read model", () => {
       }),
     ]);
     mocks.humanRoundAggregate.mockResolvedValue([]);
-    mocks.resultAggregate.mockResolvedValue([]);
+    mocks.resultAggregate.mockResolvedValue([
+      result({ jobId: JOB_ID }),
+      result({
+        _id: "result-b",
+        applicationId: "app-b",
+        jobId: JOB_ID,
+        candidateId: "candidate-b",
+        numericSummary: { overallScore: 75 },
+      }),
+    ]);
 
     await readHireJobPerformance({
       workspaceId: WORKSPACE_ID,
@@ -919,7 +966,15 @@ describe("Phase-5 operations read model", () => {
       $match: {
         workspaceId: expect.anything(),
         jobId: expect.anything(),
-        candidateId: { $in: ["candidate-a", "candidate-b"] },
+      },
+    });
+    expect(applicationPipeline[0].$match).not.toHaveProperty("candidateId");
+    const [activeCandidatesPipeline] = mocks.candidateAggregate.mock.calls[0];
+    expect(activeCandidatesPipeline[0]).toMatchObject({
+      $match: {
+        workspaceId: expect.anything(),
+        _id: { $in: ["candidate-a", "candidate-b"] },
+        piiAnonymizedAt: { $exists: false },
       },
     });
     const [displayNamesPipeline] = mocks.candidateAggregate.mock.calls[1];
@@ -929,6 +984,185 @@ describe("Phase-5 operations read model", () => {
         _id: { $in: ["candidate-a", "candidate-b"] },
         piiAnonymizedAt: { $exists: false },
       },
+    });
+  });
+
+  it("keeps a 1,001-candidate performance read job-scoped and skips identity for chart data", async () => {
+    const JOB_ID = "2".repeat(24);
+    const applications = Array.from({ length: 1_001 }, (_, index) => {
+      const sequence = index + 1;
+      return application({
+        _id: sequence.toString(16).padStart(24, "0"),
+        jobId: JOB_ID,
+        candidateId: (sequence + 2_000).toString(16).padStart(24, "0"),
+      });
+    });
+    const results = applications.map((row, index) =>
+      result({
+        _id: (index + 4_000).toString(16).padStart(24, "0"),
+        applicationId: row._id,
+        jobId: JOB_ID,
+        candidateId: row.candidateId,
+        numericSummary: { overallScore: 50 + (index % 50) },
+      }),
+    );
+    mocks.jobAggregate.mockResolvedValue([job({ _id: JOB_ID })]);
+    mocks.applicationAggregate.mockResolvedValue(applications);
+    mocks.candidateAggregate.mockImplementation(async (pipeline) => {
+      const ids = pipeline[0]?.$match?._id?.$in ?? [];
+      return ids.map((_id: string) => ({ _id }));
+    });
+    mocks.humanRoundAggregate.mockResolvedValue([]);
+    mocks.resultAggregate.mockResolvedValue(results);
+
+    const performance = await readHireJobPerformance({
+      workspaceId: WORKSPACE_ID,
+      jobId: JOB_ID,
+      now: NOW,
+    });
+
+    const activeCandidateMatch =
+      mocks.candidateAggregate.mock.calls[0]?.[0]?.[0]?.$match;
+    expect(activeCandidateMatch._id.$in).toHaveLength(1_001);
+    expect(activeCandidateMatch).toMatchObject({
+      workspaceId: expect.anything(),
+      piiAnonymizedAt: { $exists: false },
+    });
+    expect(mocks.candidateAggregate).toHaveBeenCalledTimes(1);
+    expect(performance.scoreDistribution).toMatchObject({
+      sampleSize: 1_001,
+      chartEligible: true,
+    });
+    expect(performance.scoreDistribution).not.toHaveProperty(
+      "fallbackCandidates",
+    );
+    const applicationCall = mocks.applicationAggregate.mock.calls[0];
+    expect(applicationCall[0][1].$project).toEqual(
+      expect.not.objectContaining({ resumeMatch: expect.anything() }),
+    );
+    expect(applicationCall[1]).toEqual({
+      maxTimeMS: 5_000,
+      allowDiskUse: false,
+    });
+    const resultCall = mocks.resultAggregate.mock.calls[0];
+    expect(resultCall[0][1].$project).not.toHaveProperty("rawEngineOutput");
+    expect(resultCall[0]).toEqual(
+      expect.arrayContaining([
+        { $group: { _id: "$applicationId", latest: { $first: "$$ROOT" } } },
+      ]),
+    );
+    expect(resultCall[1]).toEqual({ maxTimeMS: 5_000, allowDiskUse: false });
+  });
+
+  it("drops foreign candidate coordinates even when corrupt evidence rows reach the builder", async () => {
+    const JOB_ID = "2".repeat(24);
+    const SAFE_CANDIDATE_ID = "3".repeat(24);
+    const FOREIGN_CANDIDATE_ID = "4".repeat(24);
+    const SAFE_APPLICATION_ID = "5".repeat(24);
+    const FOREIGN_APPLICATION_ID = "6".repeat(24);
+    const safeApplication = application({
+      _id: SAFE_APPLICATION_ID,
+      jobId: JOB_ID,
+      candidateId: SAFE_CANDIDATE_ID,
+    });
+    const foreignApplication = application({
+      _id: FOREIGN_APPLICATION_ID,
+      jobId: JOB_ID,
+      candidateId: FOREIGN_CANDIDATE_ID,
+      stage: "offer",
+    });
+    mocks.jobAggregate.mockResolvedValue([job({ _id: JOB_ID })]);
+    mocks.applicationAggregate.mockResolvedValue([
+      safeApplication,
+      foreignApplication,
+    ]);
+    mocks.candidateAggregate.mockImplementation(async (pipeline) => {
+      const projectsName = pipeline.some((stage) => stage.$project?.name === 1);
+      return projectsName
+        ? [{ _id: SAFE_CANDIDATE_ID, name: "Ada Lovelace" }]
+        : [{ _id: SAFE_CANDIDATE_ID }];
+    });
+    mocks.humanRoundAggregate.mockResolvedValue([
+      {
+        applicationId: SAFE_APPLICATION_ID,
+        candidateId: SAFE_CANDIDATE_ID,
+        jobId: JOB_ID,
+        status: "completed",
+      },
+      {
+        applicationId: FOREIGN_APPLICATION_ID,
+        candidateId: FOREIGN_CANDIDATE_ID,
+        jobId: JOB_ID,
+        status: "completed",
+      },
+    ]);
+    mocks.resultAggregate.mockResolvedValue([
+      result({
+        applicationId: SAFE_APPLICATION_ID,
+        candidateId: SAFE_CANDIDATE_ID,
+        jobId: JOB_ID,
+      }),
+      result({
+        _id: "foreign-result",
+        applicationId: FOREIGN_APPLICATION_ID,
+        candidateId: FOREIGN_CANDIDATE_ID,
+        jobId: JOB_ID,
+        numericSummary: { overallScore: 99 },
+      }),
+    ]);
+
+    const performance = await readHireJobPerformance({
+      workspaceId: WORKSPACE_ID,
+      jobId: JOB_ID,
+      now: NOW,
+    });
+
+    expect(performance.funnel.current.new).toBe(1);
+    expect(performance.funnel.current.offer).toBe(0);
+    expect(performance.humanScorecards.total).toBe(1);
+    expect(performance.scoreDistribution).toMatchObject({
+      sampleSize: 1,
+      fallbackCandidates: [
+        {
+          applicationId: SAFE_APPLICATION_ID,
+          candidateName: "Ada Lovelace",
+        },
+      ],
+    });
+    expect(JSON.stringify(performance)).not.toContain(FOREIGN_APPLICATION_ID);
+    expect(JSON.stringify(performance)).not.toContain(FOREIGN_CANDIDATE_ID);
+    expect(
+      mocks.humanRoundAggregate.mock.calls[0]?.[0]?.[0]?.$match.applicationId,
+    ).toEqual({ $in: [SAFE_APPLICATION_ID] });
+    expect(
+      mocks.resultAggregate.mock.calls[0]?.[0]?.[0]?.$match.applicationId,
+    ).toEqual({ $in: [SAFE_APPLICATION_ID] });
+  });
+
+  it("fails closed when privacy authority changes during a performance read", async () => {
+    const JOB_ID = "2".repeat(24);
+    mocks.workspaceFindOne
+      .mockReturnValueOnce(query({ privacyAggregateFenceVersion: 1 }))
+      .mockReturnValueOnce(query({ privacyAggregateFenceVersion: 2 }));
+    mocks.jobAggregate.mockResolvedValue([job({ _id: JOB_ID })]);
+    mocks.applicationAggregate.mockResolvedValue([
+      application({ jobId: JOB_ID }),
+    ]);
+    mocks.candidateAggregate
+      .mockResolvedValueOnce([{ _id: "candidate-a" }])
+      .mockResolvedValueOnce([{ _id: "candidate-a", name: "Ada Lovelace" }]);
+    mocks.humanRoundAggregate.mockResolvedValue([]);
+    mocks.resultAggregate.mockResolvedValue([result({ jobId: JOB_ID })]);
+
+    await expect(
+      readHireJobPerformance({
+        workspaceId: WORKSPACE_ID,
+        jobId: JOB_ID,
+        now: NOW,
+      }),
+    ).rejects.toMatchObject({
+      code: "OPERATIONS_PRIVACY_STATE_CHANGED",
+      statusCode: 409,
     });
   });
 });

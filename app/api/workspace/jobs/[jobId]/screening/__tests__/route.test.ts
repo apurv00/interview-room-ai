@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   encodeScreeningHistoryCursor: vi.fn(),
   decodeScreeningBatchCursor: vi.fn(),
   encodeScreeningBatchCursor: vi.fn(),
+  decodeScreeningRecipientCursor: vi.fn(),
+  encodeScreeningRecipientCursor: vi.fn(),
 }))
 
 vi.mock('../../../../_lib/composeHireApiRoute', () => ({
@@ -69,6 +71,8 @@ vi.mock('../_lib/paging', () => ({
   encodeScreeningHistoryCursor: mocks.encodeScreeningHistoryCursor,
   decodeScreeningBatchCursor: mocks.decodeScreeningBatchCursor,
   encodeScreeningBatchCursor: mocks.encodeScreeningBatchCursor,
+  decodeScreeningRecipientCursor: mocks.decodeScreeningRecipientCursor,
+  encodeScreeningRecipientCursor: mocks.encodeScreeningRecipientCursor,
 }))
 
 import { POST as confirmPOST } from '../confirm/route'
@@ -127,6 +131,8 @@ beforeEach(() => {
     hasMore: false,
     nextCursor: null,
   })
+  mocks.decodeScreeningRecipientCursor.mockReturnValue({ itemId: 'aaaaaaaaaaaaaaaaaaaaaaaa' })
+  mocks.encodeScreeningRecipientCursor.mockReturnValue('opaque-recipient-next')
   mocks.readJobScreeningGateBatches.mockResolvedValue({
     batches: [],
     hasMore: false,
@@ -582,10 +588,15 @@ describe('workspace job screening routes', () => {
     expect(mocks.listJobScreeningGates).not.toHaveBeenCalled()
   })
 
-  it('loads one authenticated, batch-scoped recipient page without accepting tenant scope', async () => {
+  it('loads one authenticated, member-bound recipient page', async () => {
+    mocks.readJobScreeningBatchRecipients.mockResolvedValueOnce({
+      recipients: [],
+      hasMore: true,
+      nextCursor: { itemId: 'cccccccccccccccccccccccc' },
+    })
     const response = await recipientsGET(
       new Request(
-        `https://hire.example/api/workspace/jobs/${JOB_ID}/screening/batches/bbbbbbbbbbbbbbbbbbbbbbbb/recipients?cursor=opaque&limit=25&workspaceId=other`,
+        `https://hire.example/api/workspace/jobs/${JOB_ID}/screening/batches/bbbbbbbbbbbbbbbbbbbbbbbb/recipients?cursor=opaque&limit=25`,
       ) as never,
       { params: { jobId: JOB_ID, batchId: 'bbbbbbbbbbbbbbbbbbbbbbbb' } },
     )
@@ -599,13 +610,54 @@ describe('workspace job screening routes', () => {
       ctx,
       JOB_ID,
       'bbbbbbbbbbbbbbbbbbbbbbbb',
-      { cursor: 'opaque', limit: 25 },
+      { cursor: { itemId: 'aaaaaaaaaaaaaaaaaaaaaaaa' }, limit: 25 },
+    )
+    expect(mocks.decodeScreeningRecipientCursor).toHaveBeenCalledWith(
+      'opaque',
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: JOB_ID,
+        memberId: ctx.membership._id,
+        batchId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+      },
+      25,
+    )
+    expect(mocks.encodeScreeningRecipientCursor).toHaveBeenCalledWith(
+      { itemId: 'cccccccccccccccccccccccc' },
+      {
+        workspaceId: ctx.workspace._id,
+        jobId: JOB_ID,
+        memberId: ctx.membership._id,
+        batchId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+      },
+      25,
     )
     await expect(response.json()).resolves.toEqual({
       recipients: [],
-      hasMore: false,
-      nextCursor: null,
+      hasMore: true,
+      nextCursor: 'opaque-recipient-next',
     })
+  })
+
+  it('rejects unknown or repeated recipient query parameters before membership', async () => {
+    await expect(
+      recipientsGET(
+        new Request(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/screening/batches/bbbbbbbbbbbbbbbbbbbbbbbb/recipients?limit=25&workspaceId=other`,
+        ) as never,
+        { params: { jobId: JOB_ID, batchId: 'bbbbbbbbbbbbbbbbbbbbbbbb' } },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_QUERY', statusCode: 400 })
+    await expect(
+      recipientsGET(
+        new Request(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/screening/batches/bbbbbbbbbbbbbbbbbbbbbbbb/recipients?limit=25&limit=50`,
+        ) as never,
+        { params: { jobId: JOB_ID, batchId: 'bbbbbbbbbbbbbbbbbbbbbbbb' } },
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_QUERY', statusCode: 400 })
+    expect(mocks.requireMembership).not.toHaveBeenCalled()
+    expect(mocks.readJobScreeningBatchRecipients).not.toHaveBeenCalled()
   })
 
   it('requires a bounded explicit HR waterfall command and never accepts candidate ids', async () => {

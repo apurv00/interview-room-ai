@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      target_commit:
+        description: Exact 40-character commit on main to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   ci:
@@ -21,7 +30,33 @@ jobs:
           --health-retries 12
 
     steps:
+      - name: Validate manual CI request
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+        run: |
+          if ! printf '%s' "$TARGET_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo 'target_commit must be an exact lowercase 40-character SHA' >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != 'main' ]; then
+            echo 'Manual CI must be dispatched from main' >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_commit || github.sha }}
+
+      - name: Verify checked-out manual target is on main
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$TARGET_COMMIT" origin/main
 
       - uses: actions/setup-node@v4
         with:
@@ -56,6 +91,8 @@ jobs:
           IPG_SURFACE: hire-control
           MONGODB_URI: mongodb://localhost:27017/ipg_candidate_indexes_ci_test
           HIRE_CONTROL_DATABASE_NAME: ipg_candidate_indexes_ci_test
+          HIRE_RUNTIME_DATABASE_NAME: ipg_candidate_runtime_ci_test
+          B2C_DATABASE_NAME: ipg_candidate_b2c_ci_test
 
       - name: Build B2C surface
         run: npm run build

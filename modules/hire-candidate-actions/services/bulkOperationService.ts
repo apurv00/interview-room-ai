@@ -34,6 +34,10 @@ import type {
   CreateHireCandidateBulkOperationInput,
   HireCandidateBulkOperationIssueQuery,
 } from '../validators'
+import {
+  decodeBulkOperationIssueCursor,
+  encodeBulkOperationIssueCursor,
+} from './bulkOperationIssueCursor'
 
 export const HIRE_CANDIDATE_BULK_MAX_SELECTION = 5000
 export const HIRE_CANDIDATE_BULK_WORKER_BATCH_SIZE = 10
@@ -974,13 +978,25 @@ export async function getHireCandidateBulkOperation(
   })
   if (!operation) throw new NotFoundError('Bulk operation')
 
+  const cursorScope = {
+    workspaceId: ctx.workspace._id.toString(),
+    jobId: operation.jobId.toString(),
+    operationId: operation._id.toString(),
+    memberId: ctx.membership._id.toString(),
+    limit: input.issues.limit,
+  }
+  const cursorId = decodeBulkOperationIssueCursor(
+    input.issues.cursor,
+    cursorScope,
+  )
+
   const issueFilter: Record<string, unknown> = {
     workspaceId: ctx.workspace._id,
     bulkOperationId: operation._id,
     status: { $in: ['conflict', 'failed'] },
     privacyRedactedAt: { $exists: false },
   }
-  if (input.issues.cursor) issueFilter._id = { $gt: input.issues.cursor }
+  if (cursorId) issueFilter._id = { $gt: new mongoose.Types.ObjectId(cursorId) }
   const rows = await HireCandidateBulkOperationItem.find(issueFilter)
     .select('_id applicationId expectedStage status outcomeCode processedAt')
     .sort({ _id: 1 })
@@ -997,7 +1013,12 @@ export async function getHireCandidateBulkOperation(
         code: row.outcomeCode || 'ACTION_FAILED',
         ...(row.processedAt ? { processedAt: row.processedAt } : {}),
       }] : []),
-      nextCursor: hasMore ? visible.at(-1)?._id.toString() ?? null : null,
+      nextCursor: hasMore && visible.at(-1)
+        ? encodeBulkOperationIssueCursor(
+            visible.at(-1)!._id.toString(),
+            cursorScope,
+          )
+        : null,
     },
   }
 }

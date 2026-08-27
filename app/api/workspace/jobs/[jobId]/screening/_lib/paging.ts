@@ -59,6 +59,17 @@ type BatchCursorPayload = CursorScope & {
   id: string
 }
 
+export type ScreeningRecipientCursor = { itemId: string }
+
+type RecipientCursorPayload = CursorScope & {
+  v: 1
+  kind: 'recipients'
+  issuedAt: number
+  batchId: string
+  limit: number
+  itemId: string
+}
+
 function cursorSecret(): string {
   const configured = process.env.NEXTAUTH_SECRET?.trim()
   if (
@@ -100,7 +111,11 @@ function decodePart(value: string): Buffer {
 }
 
 function encodeCursor(
-  payload: PreviewCursorPayload | HistoryCursorPayload | BatchCursorPayload,
+  payload:
+    | PreviewCursorPayload
+    | HistoryCursorPayload
+    | BatchCursorPayload
+    | RecipientCursorPayload,
 ): string {
   const iv = randomBytes(CURSOR_IV_BYTES)
   const cipher = createCipheriv('aes-256-gcm', cursorKey(), iv)
@@ -289,5 +304,44 @@ export function encodeScreeningBatchCursor(
     limit,
     wave: cursor.wave,
     id: cursor.id,
+  })
+}
+
+export function decodeScreeningRecipientCursor(
+  value: string | null,
+  scope: CursorScope & { batchId: string },
+  limit: number,
+): ScreeningRecipientCursor | undefined {
+  if (value === null) return undefined
+  const payload = decodeCursor(value)
+  if (
+    Object.keys(payload).sort().join(',') !==
+      'batchId,issuedAt,itemId,jobId,kind,limit,memberId,v,workspaceId' ||
+    payload.v !== CURSOR_VERSION ||
+    payload.kind !== 'recipients' ||
+    !validIssuedAt(payload.issuedAt) ||
+    payload.workspaceId !== scope.workspaceId ||
+    payload.jobId !== scope.jobId ||
+    payload.memberId !== scope.memberId ||
+    payload.batchId !== scope.batchId ||
+    payload.limit !== limit ||
+    typeof payload.itemId !== 'string' ||
+    !OBJECT_ID.test(payload.itemId)
+  ) throw invalidCursor()
+  return { itemId: payload.itemId }
+}
+
+export function encodeScreeningRecipientCursor(
+  cursor: ScreeningRecipientCursor,
+  scope: CursorScope & { batchId: string },
+  limit: number,
+): string {
+  return encodeCursor({
+    v: CURSOR_VERSION,
+    kind: 'recipients',
+    issuedAt: Date.now(),
+    ...scope,
+    limit,
+    itemId: cursor.itemId,
   })
 }

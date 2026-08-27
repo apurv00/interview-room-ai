@@ -26,7 +26,7 @@ import { GET } from '../route'
 
 const JOB_ID = '111111111111111111111111'
 const OPERATION_ID = '222222222222222222222222'
-const CURSOR = '333333333333333333333333'
+const CURSOR = 'opaque.encrypted.cursor'
 const ctx = {
   workspace: { _id: '444444444444444444444444' },
   membership: { _id: '555555555555555555555555' },
@@ -66,6 +66,26 @@ describe('GET candidate bulk operation', () => {
         { params: { jobId: JOB_ID, operationId: OPERATION_ID } },
       ),
     ).rejects.toThrow()
+    expect(mocks.getOperation).not.toHaveBeenCalled()
+  })
+
+  it('rejects unknown, repeated, and non-decimal queries before membership', async () => {
+    for (const query of [
+      'limit=25&workspaceId=other',
+      'limit=25&limit=50',
+      'limit=1e2',
+      'limit=1.5',
+    ]) {
+      await expect(
+        GET(
+          new NextRequest(
+            `https://hire.example/api/workspace/jobs/${JOB_ID}/candidate-bulk-operations/${OPERATION_ID}?${query}`,
+          ) as never,
+          { params: { jobId: JOB_ID, operationId: OPERATION_ID } },
+        ),
+      ).rejects.toThrow()
+    }
+    expect(mocks.requireMembership).not.toHaveBeenCalled()
     expect(mocks.getOperation).not.toHaveBeenCalled()
   })
 })

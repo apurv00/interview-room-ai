@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   decodeScreeningBatchCursor,
   decodeScreeningHistoryCursor,
+  decodeScreeningRecipientCursor,
   encodeScreeningBatchCursor,
   encodeScreeningHistoryCursor,
   encodeScreeningPreviewPageCursor,
+  encodeScreeningRecipientCursor,
   screeningPreviewPageOffset,
 } from '../_lib/paging'
 
@@ -80,5 +82,67 @@ describe('screening page cursors', () => {
     expect(() => decodeScreeningBatchCursor(cursor, batchScope, 25)).toThrow(
       expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }),
     )
+  })
+
+  it('encrypts recipient cursors and binds member, batch, job, and page size', () => {
+    const coordinate = { itemId: '555555555555555555555555' }
+    const recipientScope = {
+      ...scope,
+      batchId: '777777777777777777777777',
+    }
+    const cursor = encodeScreeningRecipientCursor(
+      coordinate,
+      recipientScope,
+      25,
+    )
+
+    expect(cursor).not.toContain(coordinate.itemId)
+    expect(
+      decodeScreeningRecipientCursor(cursor, recipientScope, 25),
+    ).toEqual(coordinate)
+    expect(() =>
+      decodeScreeningRecipientCursor(
+        cursor,
+        { ...recipientScope, memberId: '888888888888888888888888' },
+        25,
+      ),
+    ).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    expect(() =>
+      decodeScreeningRecipientCursor(
+        cursor,
+        { ...recipientScope, batchId: '999999999999999999999999' },
+        25,
+      ),
+    ).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    expect(() =>
+      decodeScreeningRecipientCursor(cursor, recipientScope, 50),
+    ).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    const tampered = `${cursor.slice(0, -1)}${cursor.endsWith('a') ? 'b' : 'a'}`
+    expect(() =>
+      decodeScreeningRecipientCursor(tampered, recipientScope, 25),
+    ).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+  })
+
+  it('rejects a recipient cursor after the seven-day lifetime', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-20T08:00:00.000Z'))
+      const recipientScope = {
+        ...scope,
+        batchId: '777777777777777777777777',
+      }
+      const cursor = encodeScreeningRecipientCursor(
+        { itemId: '555555555555555555555555' },
+        recipientScope,
+        25,
+      )
+      vi.setSystemTime(new Date('2026-08-27T08:00:00.001Z'))
+
+      expect(() =>
+        decodeScreeningRecipientCursor(cursor, recipientScope, 25),
+      ).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -10,6 +10,7 @@ import {
   HireInterviewResult,
   HireJob,
   HirePrivacyRequest,
+  HireWorkspace,
   activeHirePrivacyRequestFilter,
   type HireJobStatus,
   type HireStage,
@@ -42,6 +43,11 @@ export const HIRE_OPERATIONS_STUCK_STAGE_DAYS = 6;
 export const HIRE_OPERATIONS_SCORE_CHART_MIN_SAMPLE = 10;
 export const HIRE_OPERATIONS_SMALL_SAMPLE_MAX_CANDIDATES =
   HIRE_OPERATIONS_SCORE_CHART_MIN_SAMPLE - 1;
+const HIRE_OPERATIONS_PERFORMANCE_MAX_TIME_MS = 5_000;
+const PERFORMANCE_AGGREGATE_OPTIONS = {
+  maxTimeMS: HIRE_OPERATIONS_PERFORMANCE_MAX_TIME_MS,
+  allowDiskUse: false,
+};
 
 const PROGRESSIVE_FUNNEL_STAGES: readonly Exclude<
   HireStage,
@@ -167,8 +173,11 @@ function excludeHireOnboardingTestDrives(input: {
 export class HireOperationsError extends AppError {
   constructor(
     message: string,
-    readonly code: "OPERATIONS_INVALID_SCOPE" | "OPERATIONS_SCOPE_NOT_FOUND",
-    readonly status: 400 | 404,
+    readonly code:
+      | "OPERATIONS_INVALID_SCOPE"
+      | "OPERATIONS_SCOPE_NOT_FOUND"
+      | "OPERATIONS_PRIVACY_STATE_CHANGED",
+    readonly status: 400 | 404 | 409,
   ) {
     super(message, status, code);
     this.name = "HireOperationsError";
@@ -1055,30 +1064,21 @@ export async function readHireJobPerformance(input: {
   const jobId = objectId(input.jobId, "job id");
   const now = normalizedNow(input.now);
   await connectHireOperationsDB();
-  const [jobs, activeCandidates, livePrivacyRequests] = await Promise.all([
-    HireJob.aggregate([
-      { $match: { _id: jobId, workspaceId } },
-      ...excludeHireOnboardingTestDrives({ coordinate: "jobId" }),
-      {
-        $project: {
-          _id: 1,
-          departmentId: 1,
-          title: 1,
-          status: 1,
-          createdAt: 1,
-          closedAt: 1,
-        },
+  const jobs = await HireJob.aggregate([
+    { $match: { _id: jobId, workspaceId } },
+    {
+      $project: {
+        _id: 1,
+        workspaceId: 1,
+        departmentId: 1,
+        title: 1,
+        status: 1,
+        createdAt: 1,
+        closedAt: 1,
       },
-    ]),
-    HireCandidate.aggregate([
-      { $match: { workspaceId, piiAnonymizedAt: { $exists: false } } },
-      ...excludeHireOnboardingTestDrives({ coordinate: "candidateId" }),
-      { $project: { _id: 1 } },
-    ]),
-    HirePrivacyRequest.find({ workspaceId, ...activeHirePrivacyRequestFilter(now) })
-      .select("candidateId")
-      .lean(),
-  ]);
+    },
+    ...excludeHireOnboardingTestDrives({ coordinate: "jobId" }),
+  ], PERFORMANCE_AGGREGATE_OPTIONS);
   const job = jobs[0] as OperationsJobRecord | undefined;
   if (!job) {
     throw new HireOperationsError(
@@ -1087,12 +1087,75 @@ export async function readHireJobPerformance(input: {
       404,
     );
   }
-  const departments = await HireDepartment.find({
-    workspaceId,
-    _id: job.departmentId,
-  })
-    .select("_id name")
-    .lean();
+  const privacyFenceBefore = await HireWorkspace.findOne({ _id: workspaceId })
+    .select("privacyAggregateFenceVersion")
+    .lean<{ privacyAggregateFenceVersion?: number }>();
+  if (!privacyFenceBefore) {
+    throw new HireOperationsError(
+      "Workspace not found",
+      "OPERATIONS_SCOPE_NOT_FOUND",
+      404,
+    );
+  }
+  const [departments, jobApplications] = await Promise.all([
+    HireDepartment.find({ workspaceId, _id: job.departmentId })
+      .select("_id name")
+      .lean(),
+    HireApplication.aggregate([
+      { $match: { workspaceId, jobId } },
+      {
+        $project: {
+          _id: 1,
+          workspaceId: 1,
+          jobId: 1,
+          candidateId: 1,
+          stage: 1,
+          createdAt: 1,
+          "events.to": 1,
+        },
+      },
+      ...excludeHireOnboardingTestDrives({ coordinate: "applicationId" }),
+    ], PERFORMANCE_AGGREGATE_OPTIONS),
+  ]);
+  const candidateIdsForJob = Array.from(
+    new Map(
+      jobApplications.map((application) => [
+        recordId(application.candidateId),
+        application.candidateId,
+      ]),
+    ).values(),
+  );
+  if (candidateIdsForJob.length === 0) {
+    return buildJobPerformance({
+      job: job as unknown as OperationsJobRecord,
+      departments: departments as unknown as OperationsDepartmentRecord[],
+      applications: [],
+      candidates: [],
+      humanRounds: [],
+      results: [],
+      now,
+    });
+  }
+  const [activeCandidates, livePrivacyRequests] = await Promise.all([
+    HireCandidate.aggregate([
+      {
+        $match: {
+          workspaceId,
+          _id: { $in: candidateIdsForJob },
+          piiAnonymizedAt: { $exists: false },
+        },
+      },
+      { $project: { _id: 1, workspaceId: 1 } },
+      ...excludeHireOnboardingTestDrives({ coordinate: "candidateId" }),
+    ], PERFORMANCE_AGGREGATE_OPTIONS),
+    HirePrivacyRequest.find({
+      workspaceId,
+      candidateId: { $in: candidateIdsForJob },
+      ...activeHirePrivacyRequestFilter(now),
+    })
+      .select("candidateId")
+      .lean(),
+  ]);
   const candidateIds = candidateIdsWithoutLivePrivacyRequests(
     activeCandidates,
     livePrivacyRequests,
@@ -1108,23 +1171,18 @@ export async function readHireJobPerformance(input: {
       now,
     });
   }
-  const baseScope = { workspaceId, jobId, candidateId: { $in: candidateIds } };
-  const [applications, humanRounds, results] = await Promise.all([
-    HireApplication.aggregate([
-      { $match: baseScope },
-      ...excludeHireOnboardingTestDrives({ coordinate: "applicationId" }),
-      {
-        $project: {
-          _id: 1,
-          jobId: 1,
-          candidateId: 1,
-          stage: 1,
-          createdAt: 1,
-          "events.to": 1,
-          "events.at": 1,
-        },
-      },
-    ]),
+  const authorizedCandidateIds = new Set(candidateIds.map(recordId));
+  const applications = jobApplications.filter((application) =>
+    authorizedCandidateIds.has(recordId(application.candidateId)),
+  );
+  const applicationIds = applications.map((application) => application._id);
+  const baseScope = {
+    workspaceId,
+    jobId,
+    applicationId: { $in: applicationIds },
+    candidateId: { $in: candidateIds },
+  };
+  const [humanRounds, results] = await Promise.all([
     HireHumanRound.aggregate([
       {
         $match: {
@@ -1132,21 +1190,22 @@ export async function readHireJobPerformance(input: {
           privacyRedactedAt: { $exists: false },
         },
       },
-      ...excludeHireOnboardingTestDrives({
-        coordinate: "applicationId",
-        sourceIdField: "applicationId",
-      }),
-      ...excludeHireOnboardingTestDrives({ coordinate: "roundId" }),
       {
         $project: {
-          _id: 0,
+          _id: 1,
+          workspaceId: 1,
           jobId: 1,
           applicationId: 1,
           candidateId: 1,
           status: 1,
         },
       },
-    ]),
+      ...excludeHireOnboardingTestDrives({
+        coordinate: "applicationId",
+        sourceIdField: "applicationId",
+      }),
+      ...excludeHireOnboardingTestDrives({ coordinate: "roundId" }),
+    ], PERFORMANCE_AGGREGATE_OPTIONS),
     HireInterviewResult.aggregate([
       {
         $match: {
@@ -1154,13 +1213,10 @@ export async function readHireJobPerformance(input: {
           piiPurgedAt: { $exists: false },
         },
       },
-      ...excludeHireOnboardingTestDrives({
-        coordinate: "applicationId",
-        sourceIdField: "applicationId",
-      }),
       {
         $project: {
           _id: 1,
+          workspaceId: 1,
           applicationId: 1,
           jobId: 1,
           candidateId: 1,
@@ -1168,31 +1224,64 @@ export async function readHireJobPerformance(input: {
           "numericSummary.overallScore": 1,
         },
       },
-      { $sort: { completedAt: -1, _id: -1 } },
-    ]),
+      ...excludeHireOnboardingTestDrives({
+        coordinate: "applicationId",
+        sourceIdField: "applicationId",
+      }),
+      { $sort: { applicationId: 1, completedAt: -1, _id: -1 } },
+      { $group: { _id: "$applicationId", latest: { $first: "$$ROOT" } } },
+      { $replaceWith: "$latest" },
+    ], PERFORMANCE_AGGREGATE_OPTIONS),
   ]);
-  const authorizedCandidateIds = new Set(candidateIds.map(recordId));
-  const applicationCandidateIds = Array.from(
-    new Set(
-      applications
-        .map((application) => recordId(application.candidateId))
-        .filter((candidateId) => authorizedCandidateIds.has(candidateId)),
-    ),
+  const applicationsById = new Map(
+    applications.map((application) => [recordId(application._id), application]),
   );
-  const candidates =
-    applicationCandidateIds.length === 0
+  const scoredWithoutNames = scoredApplicationsForJob({
+    jobId: recordId(job._id),
+    applicationsById,
+    candidates: [],
+    results: results as unknown as OperationsResultRecord[],
+  });
+  const fallbackCandidateIds =
+    scoredWithoutNames.length >= HIRE_OPERATIONS_SCORE_CHART_MIN_SAMPLE
       ? []
-      : await HireCandidate.aggregate([
+      : Array.from(
+          new Map(
+            scoredWithoutNames.flatMap((scored) => {
+              const application = applicationsById.get(scored.applicationId);
+              return application
+                ? [[recordId(application.candidateId), application.candidateId] as const]
+                : [];
+            }),
+          ).values(),
+        );
+  const candidates = fallbackCandidateIds.length
+    ? await HireCandidate.aggregate([
           {
             $match: {
               workspaceId,
-              _id: { $in: applicationCandidateIds },
+              _id: { $in: fallbackCandidateIds },
               piiAnonymizedAt: { $exists: false },
             },
           },
+          { $project: { _id: 1, workspaceId: 1, name: 1 } },
           ...excludeHireOnboardingTestDrives({ coordinate: "candidateId" }),
-          { $project: { _id: 1, name: 1 } },
-        ]);
+        ], PERFORMANCE_AGGREGATE_OPTIONS)
+    : [];
+  const privacyFenceAfter = await HireWorkspace.findOne({ _id: workspaceId })
+    .select("privacyAggregateFenceVersion")
+    .lean<{ privacyAggregateFenceVersion?: number }>();
+  if (
+    !privacyFenceAfter ||
+    (privacyFenceAfter.privacyAggregateFenceVersion ?? 0) !==
+      (privacyFenceBefore.privacyAggregateFenceVersion ?? 0)
+  ) {
+    throw new HireOperationsError(
+      "Candidate privacy state changed during the performance read",
+      "OPERATIONS_PRIVACY_STATE_CHANGED",
+      409,
+    );
+  }
   return buildJobPerformance({
     job: job as unknown as OperationsJobRecord,
     departments: departments as unknown as OperationsDepartmentRecord[],

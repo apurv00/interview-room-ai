@@ -99,6 +99,7 @@ vi.mock('../models', () => ({
 
 import {
   createHireCandidateBulkOperation,
+  getHireCandidateBulkOperation,
   listDueHireCandidateBulkOperationIds,
   processHireCandidateBulkOperation,
 } from '../services/bulkOperationService'
@@ -136,6 +137,14 @@ function queryResult<T>(value: T) {
 
 function countResult(value: number) {
   return { session: vi.fn().mockResolvedValue(value) }
+}
+
+function issuePage<T>(value: T) {
+  const lean = vi.fn().mockResolvedValue(value)
+  const limit = vi.fn().mockReturnValue({ lean })
+  const sort = vi.fn().mockReturnValue({ limit })
+  const select = vi.fn().mockReturnValue({ sort })
+  return { query: { select }, select, sort, limit, lean }
 }
 
 function operation(overrides: Record<string, unknown> = {}) {
@@ -265,6 +274,88 @@ describe('candidate bulk operation service', () => {
       nextRecoveryAt: expect.any(Date),
     })
     expect(result).toMatchObject({ status: 'queued', totalCount: 2 })
+  })
+
+  it('returns opaque member-bound issue pages and seeks with the decoded coordinate', async () => {
+    const ISSUE_ID = new mongoose.Types.ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa')
+    const OVERFLOW_ID = new mongoose.Types.ObjectId('bbbbbbbbbbbbbbbbbbbbbbbb')
+    mocks.operationFindOne.mockResolvedValue(
+      operation({
+        status: 'partial',
+        queuedCount: 0,
+        conflictCount: 2,
+      }),
+    )
+    const firstPage = issuePage([
+      {
+        _id: ISSUE_ID,
+        applicationId: APP_A,
+        expectedStage: 'new',
+        status: 'conflict',
+        outcomeCode: 'STAGE_CHANGED',
+        processedAt: NOW,
+      },
+      {
+        _id: OVERFLOW_ID,
+        applicationId: APP_B,
+        expectedStage: 'new',
+        status: 'failed',
+        outcomeCode: 'ACTION_FAILED',
+        processedAt: NOW,
+      },
+    ])
+    const secondPage = issuePage([])
+    mocks.itemFind
+      .mockReturnValueOnce(firstPage.query)
+      .mockReturnValueOnce(secondPage.query)
+
+    const first = await getHireCandidateBulkOperation(ctx, {
+      jobId: JOB_ID.toString(),
+      operationId: OPERATION_ID.toString(),
+      issues: { limit: 1 },
+    })
+
+    expect(firstPage.limit).toHaveBeenCalledWith(2)
+    expect(first.issues.items).toHaveLength(1)
+    expect(first.issues.nextCursor).toEqual(expect.any(String))
+    expect(first.issues.nextCursor).not.toContain(ISSUE_ID.toString())
+    expect(mocks.itemFind).toHaveBeenNthCalledWith(1, {
+      workspaceId: WORKSPACE_ID,
+      bulkOperationId: OPERATION_ID,
+      status: { $in: ['conflict', 'failed'] },
+      privacyRedactedAt: { $exists: false },
+    })
+
+    await getHireCandidateBulkOperation(ctx, {
+      jobId: JOB_ID.toString(),
+      operationId: OPERATION_ID.toString(),
+      issues: { limit: 1, cursor: first.issues.nextCursor! },
+    })
+    expect(mocks.itemFind).toHaveBeenNthCalledWith(2, {
+      workspaceId: WORKSPACE_ID,
+      bulkOperationId: OPERATION_ID,
+      status: { $in: ['conflict', 'failed'] },
+      privacyRedactedAt: { $exists: false },
+      _id: { $gt: ISSUE_ID },
+    })
+
+    await expect(
+      getHireCandidateBulkOperation(
+        {
+          ...ctx,
+          membership: {
+            ...ctx.membership,
+            _id: new mongoose.Types.ObjectId('cccccccccccccccccccccccc'),
+          },
+        } as never,
+        {
+          jobId: JOB_ID.toString(),
+          operationId: OPERATION_ID.toString(),
+          issues: { limit: 1, cursor: first.issues.nextCursor! },
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'BULK_OPERATION_INVALID_CURSOR' })
+    expect(mocks.itemFind).toHaveBeenCalledTimes(2)
   })
 
   it('fails before persistence when privacy wins the candidate-row fence', async () => {

@@ -53,8 +53,13 @@ export type CreateHireCandidateBulkOperationInput = z.infer<
 
 export const HireCandidateBulkOperationIssueQuerySchema = z
   .object({
-    cursor: ObjectIdSchema.optional(),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
+    cursor: z.string().min(1).max(2_048).optional(),
+    limit: z
+      .string()
+      .regex(/^\d+$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(100))
+      .default(50),
   })
   .strict()
 

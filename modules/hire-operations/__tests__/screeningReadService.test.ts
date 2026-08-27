@@ -306,7 +306,7 @@ describe('screening recipient delivery pages', () => {
     expect(firstQuery.limit).toHaveBeenCalledWith(2)
     expect(first).toMatchObject({
       hasMore: true,
-      nextCursor: expect.any(String),
+      nextCursor: { itemId: ITEM_ID.toString() },
       recipients: [{
         id: ITEM_ID.toString(),
         status: 'failed',
@@ -321,16 +321,7 @@ describe('screening recipient delivery pages', () => {
     })
     expect(JSON.stringify(first)).not.toContain('do-not-expose')
 
-    const decoded = JSON.parse(
-      Buffer.from(first.nextCursor!, 'base64url').toString('utf8'),
-    )
-    expect(decoded).toEqual({
-      v: 1,
-      workspaceId: WORKSPACE_ID.toString(),
-      jobId: JOB_ID.toString(),
-      batchId: BATCH_ID.toString(),
-      itemId: ITEM_ID.toString(),
-    })
+    expect(first.nextCursor).toEqual({ itemId: ITEM_ID.toString() })
 
     const nextQuery = pagedLeanMany([])
     mocks.item.find.mockReturnValueOnce(nextQuery.query)
@@ -338,7 +329,7 @@ describe('screening recipient delivery pages', () => {
       ctx,
       JOB_ID.toString(),
       BATCH_ID.toString(),
-      { cursor: first.nextCursor!, limit: 1, now: NOW },
+      { cursor: { itemId: ITEM_ID.toString() }, limit: 1, now: NOW },
     )
     expect(mocks.item.find).toHaveBeenLastCalledWith({
       workspaceId: WORKSPACE_ID,
@@ -348,17 +339,13 @@ describe('screening recipient delivery pages', () => {
     })
     expect(second).toEqual({ recipients: [], hasMore: false, nextCursor: null })
 
-    const wrongScopeCursor = Buffer.from(JSON.stringify({
-      ...decoded,
-      batchId: OTHER_BATCH_ID.toString(),
-    })).toString('base64url')
     mocks.item.find.mockClear()
     await expect(
       readJobScreeningBatchRecipients(
         ctx,
         JOB_ID.toString(),
         BATCH_ID.toString(),
-        { cursor: wrongScopeCursor, limit: 1, now: NOW },
+        { cursor: { itemId: 'not-an-object-id' }, limit: 1, now: NOW },
       ),
     ).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_CURSOR' })
     expect(mocks.item.find).not.toHaveBeenCalled()

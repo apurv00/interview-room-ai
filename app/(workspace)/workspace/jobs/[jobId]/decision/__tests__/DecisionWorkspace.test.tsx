@@ -19,6 +19,7 @@ const APP_ADA = "2".repeat(24);
 const APP_GRACE = "3".repeat(24);
 const WORKSPACE_ID = "4".repeat(24);
 const APP_KATHERINE = "5".repeat(24);
+const NEXT_JOB_ID = "6".repeat(24);
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -356,7 +357,7 @@ describe("DecisionWorkspace", () => {
     }
   });
 
-  it("makes inbox bounds visible and loads the next opaque page", async () => {
+  it("keeps one inbox page mounted and navigates opaque cursors in both directions", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
@@ -364,16 +365,28 @@ describe("DecisionWorkspace", () => {
           json({
             items: [inboxItem(APP_ADA, "Ada Lovelace")],
             limit: 20,
-            nextCursor: "opaque-next-page",
+            nextCursor: "opaque-page-two",
+          }),
+        );
+      }
+      if (
+        url ===
+        `/api/workspace/jobs/${JOB_ID}/decision?limit=20&cursor=opaque-page-two`
+      ) {
+        return Promise.resolve(
+          json({
+            items: [inboxItem(APP_GRACE, "Grace Hopper")],
+            limit: 20,
+            nextCursor: "opaque-page-three",
           }),
         );
       }
       expect(url).toBe(
-        `/api/workspace/jobs/${JOB_ID}/decision?limit=20&cursor=opaque-next-page`,
+        `/api/workspace/jobs/${JOB_ID}/decision?limit=20&cursor=opaque-page-three`,
       );
       return Promise.resolve(
         json({
-          items: [inboxItem(APP_GRACE, "Grace Hopper")],
+          items: [inboxItem(APP_KATHERINE, "Katherine Johnson")],
           limit: 20,
           nextCursor: null,
         }),
@@ -383,16 +396,171 @@ describe("DecisionWorkspace", () => {
 
     render(<DecisionWorkspace jobId={JOB_ID} />);
 
-    expect(await screen.findByText(/Showing 1 action · up to 20 per page/i)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Load more actions" }));
+    expect(
+      await screen.findByText(/Page 1 · Showing 1 action · up to 20 per page/i),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Next action page" }));
 
     expect(
       await screen.findByRole("heading", { name: "Grace Hopper" }),
     ).toBeTruthy();
-    expect(screen.getByText(/Showing 2 actions · up to 20 per page/i)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Load more actions" })).toBeNull();
     expect(
-      screen.getByText("All currently matching decision actions are loaded."),
+      screen.queryByRole("heading", { name: "Ada Lovelace" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(/Page 2 · Showing 1 action · up to 20 per page/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Previous action page" }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Page 2 · Showing 1 action · up to 20 per page/i),
+      ).toHaveFocus(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Next action page" }));
+    expect(
+      await screen.findByRole("heading", { name: "Katherine Johnson" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Grace Hopper" })).toBeNull();
+    expect(
+      screen.getByText(/Page 3 · Showing 1 action · up to 20 per page/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This is the last page of currently matching decision actions.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Previous action page" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Grace Hopper" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Katherine Johnson" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(/Page 2 · Showing 1 action · up to 20 per page/i),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Page 2 · Showing 1 action · up to 20 per page/i),
+      ).toHaveFocus(),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Previous action page" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Ada Lovelace" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Grace Hopper" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(/Page 1 · Showing 1 action · up to 20 per page/i),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Previous action page" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Next action page" }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Page 1 · Showing 1 action · up to 20 per page/i),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("does not let an older page response overwrite a new job", async () => {
+    let resolveOldPage: ((response: Response) => void) | undefined;
+    const oldPage = new Promise<Response>((resolve) => {
+      resolveOldPage = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
+        return Promise.resolve(
+          json({
+            items: [inboxItem(APP_ADA, "Ada Lovelace")],
+            limit: 20,
+            nextCursor: "opaque-page-two",
+          }),
+        );
+      }
+      if (url.includes(`jobs/${JOB_ID}/decision?limit=20&cursor=`)) {
+        return oldPage;
+      }
+      expect(url).toBe(
+        `/api/workspace/jobs/${NEXT_JOB_ID}/decision?limit=20`,
+      );
+      return Promise.resolve(
+        json({
+          items: [inboxItem(APP_KATHERINE, "Katherine Johnson")],
+          limit: 20,
+          nextCursor: null,
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(<DecisionWorkspace jobId={JOB_ID} />);
+    await screen.findByRole("heading", { name: "Ada Lovelace" });
+    fireEvent.click(screen.getByRole("button", { name: "Next action page" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    view.rerender(<DecisionWorkspace jobId={NEXT_JOB_ID} />);
+    expect(
+      await screen.findByRole("heading", { name: "Katherine Johnson" }),
+    ).toBeTruthy();
+    resolveOldPage?.(
+      json({
+        items: [inboxItem(APP_GRACE, "Grace Hopper")],
+        limit: 20,
+        nextCursor: null,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("heading", { name: "Grace Hopper" }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Katherine Johnson" }),
+    ).toBeTruthy();
+  });
+
+  it("defensively bounds an oversized inbox response to the declared page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          json({
+            items: Array.from({ length: 1_000 }, (_, index) =>
+              inboxItem(
+                (index + 1).toString(16).padStart(24, "0"),
+                `Candidate ${index + 1}`,
+              ),
+            ),
+            limit: 20,
+            nextCursor: null,
+          }),
+        ),
+      ),
+    );
+
+    render(<DecisionWorkspace jobId={JOB_ID} />);
+
+    expect(await screen.findAllByRole("article")).toHaveLength(20);
+    expect(screen.getByRole("heading", { name: "Candidate 20" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Candidate 21" })).toBeNull();
+    expect(
+      screen.getByText(/Page 1 · Showing 20 actions · up to 20 per page/i),
     ).toBeTruthy();
   });
 

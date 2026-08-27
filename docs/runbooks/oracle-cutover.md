@@ -103,6 +103,14 @@ the final successful check as one release record. The CI MongoDB gate proves
 the scripts against an empty ephemeral database; it does not replace this
 target-control-database evidence.
 
+Before candidate bulk operations are enabled for the first time, freeze their
+creation route as described in section 6 and capture the retained-operation
+zero baseline with the immutable production sentinel and inventory command
+there. Keep ordinary recruiter access fenced after the baseline; section 4
+defines the narrow smoke-only exception. That baseline is part of the rollback
+record; a later zero result cannot independently prove that no older operation
+existed because terminal ledgers expire after 365 days.
+
 ### 3. Manually deploy the Hire engine first, then control
 
 The browser-bound handoff request is a strict wire change: an old handoff page
@@ -215,6 +223,17 @@ before treating the release as live. Before allowing real recruiter bulk
 actions, use a dedicated non-production job and candidates to prove both new
 control jobs without retaining candidate PII:
 
+For first activation, keep the creation route closed to all ordinary recruiter
+traffic after the section 6 zero baseline. Add a narrowly scoped ingress
+exception for only the approved smoke principal and source; verify that another
+authenticated recruiter remains blocked. The first smoke request accepted by
+the application creates the first durable operation and crosses the
+irreversible fix-forward boundary: from that response onward, rollback to a
+build without candidate bulk-operation support is forbidden. Remove the
+exception and keep the general fence if smoke fails; fix forward. Open the
+route generally only after both smoke operations below are terminal and both
+functions are unpaused.
+
 1. Create an 11-candidate, same-stage selection and an `advance` operation
    with communication explicitly disabled. Retain only the opaque operation
    ID, timestamps, counts, and controlled outcome codes.
@@ -269,13 +288,103 @@ The candidate-workspace indexes are additive and its operation ledgers are
 durable. There is no database rollback switch, and dropping indexes or deleting
 operation rows during an incident is forbidden.
 
-- If no candidate bulk operation has ever been created, the Hire control image
-  may be rolled back to the prior approved commit and re-synced in Inngest.
+- Before inventory, deny
+  `POST /api/workspace/jobs/*/candidate-bulk-operations` across every Hire
+  control replica. Keep
+  `GET /api/workspace/jobs/*/candidate-bulk-operations/*` available for
+  reconciliation. Pause both candidate bulk-operation Inngest functions and
+  wait until no attempts are running. While any operation is unresolved, also
+  freeze `POST /api/workspace/applications/*/stage`; do not block candidate
+  privacy routes.
+- Prove the creation-route ingress rule with an authenticated POST containing
+  deliberately invalid `{}`. Retain its distinctive ingress maintenance
+  response or rule log. An application `401`, `403`, or `422` is not proof of
+  an ingress freeze. If method-aware ingress is unavailable, place the whole
+  Hire control service in maintenance. Keep the fence active through inventory
+  and rollback or fix-forward completion.
+- Before the first zero baseline, provision this immutable marker through a
+  separate, change-controlled bootstrap principal in the exact production Hire
+  control database. The inventory command has no marker mutation path:
+
+  - collection: `__deployment_environment_identity`;
+  - `_id`: `hire-candidate-bulk-operations-production-inventory-v1`;
+  - `environment`: `production`, `surface`: `hire-control`, and
+    `databaseName`: the exact control database;
+  - `schemaVersion`: `1` and `immutable`: `true`;
+  - `replicaSetName` and the 24-character lowercase `replicaSetId` from a
+    committed primary `replSetGetConfig` response;
+  - `bulkOperationCollectionUuid`: the 32-character lowercase hex UUID from
+    the exact `hirecandidatebulkoperations` collection after its required
+    indexes are installed;
+  - `tokenSha256`: SHA-256 of a separately stored UTF-8 sentinel secret of at
+    least 32 bytes; and
+  - `bindingHmacSha256`: the token-keyed, length-framed HMAC described below.
+
+  Build the HMAC by feeding each field name and value as UTF-8, each preceded
+  by its own unsigned four-byte big-endian length, in this order:
+  `domain` =
+  `hire-candidate-bulk-operations-production-inventory-binding-v1`,
+  `environment`, `surface`, `databaseName`, `replicaSetName`, `replicaSetId`,
+  `bulkOperationCollectionUuid`, `mongoScheme`, `mongoAuthority`, `mongoSrvServiceName`,
+  `mongoReplicaSetOption`, `mongoTls`, `mongoDirectConnection`, and
+  `mongoLoadBalanced`. Derive the Mongo fields from the actual driver
+  connection exactly as in the Hire media production-sentinel procedure:
+  lowercased SRV seed or sorted/deduplicated direct hosts, normalized SRV
+  service, exact replica-set option, and lowercase boolean strings.
+
+  Insert the marker once with majority plus journal acknowledgement,
+  independently verify it, then revoke all marker-write authority. Never copy
+  it into a clone or restore. A physical clone that preserves both the local
+  replica identity and marker must be treated as the same deployment until the
+  replica set is reinitialized.
+- From the exact approved source commit, use a dedicated least-privilege
+  read-only Mongo principal. It needs only `find` on the fixed sentinel and
+  `hirecandidatebulkoperations`, collection/index listing, snapshot reads, and
+  the exact cluster privilege for `replSetGetConfig`; it must have no create,
+  insert, update, replace, delete, index mutation, collection mutation, or drop
+  authority. Inject the isolated Hire control boundary plus
+  `NODE_ENV=production`,
+  `HIRE_CANDIDATE_BULK_INVENTORY_EXPECTED_ENVIRONMENT=production`,
+  `HIRE_CANDIDATE_BULK_INVENTORY_EXPECTED_DATABASE_NAME`, and the independently
+  stored `HIRE_CANDIDATE_BULK_INVENTORY_SENTINEL_TOKEN`, then run:
+
+  ```sh
+  IPG_SURFACE=hire-control npm run inventory:hire-candidate-bulk-operations
+  ```
+
+  The command requires a committed replica set, recomputes and timing-safely
+  verifies the sentinel token/HMAC against the live replica and actual driver
+  authority before and after inventory. It also captures the collection UUID
+  and full index signature on both sides of the read and requires them to be
+  identical. It fails on a standalone, missing privilege, copied marker,
+  replacement cluster/collection, index change, or malformed identity. It does
+  not load `.env`, has no apply mode, and reads the entire retained top-level
+  operation collection in a read-only snapshot transaction committed with
+  majority write concern, which makes the snapshot majority-committed without
+  mutating a collection. Its report contains only opaque operation IDs,
+  statuses, and counters—never database identity, collection UUID, sentinel
+  values, workspace, member, selection, reason, description, or candidate
+  data.
+- Require `completenessInvariant.exact=true` and matching expected/enumerated
+  counts. Any malformed row is a hard no-go. Any retained operation produces
+  `FIX_FORWARD_REQUIRED`; unresolved operations additionally require pause and
+  reconciliation. A zero retained result is only conditionally useful: pair it
+  with the retained pre-enable zero baseline and evidence that ledger deletion
+  did not occur inside a rollback window shorter than the 365-day terminal
+  retention period. Do not call a zero result proof that no operation has ever
+  existed.
+- The no-deletion evidence must cover every instant from the retained zero
+  baseline through the rollback inventory. Retain both the Hire-control audit
+  stream for workspace hard-purge attempts/outcomes and either MongoDB audit
+  records or an independently retained change stream with continuous resume
+  tokens for delete, drop, and rename activity on
+  `hirecandidatebulkoperations`. Workspace hard purge legitimately deletes
+  these ledgers. If either evidence source has a gap, any such purge occurred,
+  or database audit/change-stream retention is shorter than the rollback
+  window, zero is not rollback evidence and fix-forward is mandatory.
+- Only when that conditional zero evidence is complete may the Hire control
+  image be rolled back to the prior approved commit and re-synced in Inngest.
   Leave the additive indexes in place; they are inert for the older image.
-- If any operation is queued, processing, or partially settled, pause both new
-  Inngest functions and prevent recruiter access to the candidate-workspace
-  mutation routes. If a route-scoped ingress rule is unavailable, put the Hire
-  control service into maintenance rather than allowing new operations.
 - Retain each affected opaque operation ID and terminal counters. Never replay
   individual stage writes manually or change ledger rows. Reconcile partial
   results through the operation status API, then fix forward with the same

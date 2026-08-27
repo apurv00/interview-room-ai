@@ -88,11 +88,16 @@ view, filters, sort, and page position.
 - Uses asynchronous, paginated candidate search rather than loading every job
   application.
 - Does not return or imply JD rank in the comparison picker.
-- Paginates the action inbox and makes result bounds visible.
+- Paginates the action inbox with previous/next replacement pages, never
+  append-only accumulation, and makes the current page and result bounds
+  visible.
 
 ### Performance
 
 - Remains a separate aggregate view and never becomes a candidate-list API.
+- Starts every read from the exact workspace/job application boundary rather
+  than preloading the workspace candidate directory. Candidate identity is
+  loaded only for the capped, fewer-than-ten-score fallback.
 
 ## Read/API contract
 
@@ -115,6 +120,10 @@ view, filters, sort, and page position.
   revocation timestamps, never generic technical-write timestamps.
 - Search/filter/sort validation is fail closed and responses are private,
   `no-store`.
+- Secondary member pages (Screening history/waves/recipients, Decisions, and
+  bulk-operation issues) use authenticated opaque cursors bound to member,
+  workspace, job, resource, limit, and age. Their routes reject unknown or
+  repeated query parameters.
 - Database indexes are derived from the supported query matrix, explicitly
   prepared and checked, and never delegated to runtime `autoIndex`.
 - A new arrival never silently reorders the page under review; the UI polls the
@@ -125,6 +134,9 @@ view, filters, sort, and page position.
 - Selection distinguishes explicit candidates accumulated across visited pages
   from `all matching` and always displays the exact count and normalized filter
   description.
+- Explicit browser-held selection is capped at 100 candidates; larger cohorts
+  use the server-owned `all matching` snapshot instead of submitting a mutable
+  client ID list.
 - `All matching` creates a short-lived, workspace/job/member-scoped server
   snapshot with an immutable application set. The browser does not submit
   thousands of authoritative IDs.
