@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
     ingestionUpdateOne: vi.fn(),
     applicationFindOne: vi.fn(),
     applicationUpdateOne: vi.fn(),
+    jobUpdateOne: vi.fn(),
     roundFindOne: vi.fn(),
     roundUpdateOne: vi.fn(),
     attemptFindOne: vi.fn(),
@@ -48,6 +49,9 @@ vi.mock('../../models/HireApplication', () => ({
     findOne: mocks.applicationFindOne,
     updateOne: mocks.applicationUpdateOne,
   },
+}))
+vi.mock('../../models/HireJob', () => ({
+  HireJob: { updateOne: mocks.jobUpdateOne },
 }))
 vi.mock('../../models/HireRound', () => ({
   HireRound: {
@@ -245,6 +249,7 @@ beforeEach(() => {
   mocks.ingestionCreate.mockResolvedValue([{}])
   mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.applicationUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.ingestionUpdateOne.mockResolvedValue({ matchedCount: 1 })
 })
 
@@ -264,6 +269,7 @@ describe('isolated engine result ingestion', () => {
 
     expect(mocks.ingestMedia).not.toHaveBeenCalled()
     expect(mocks.persistResult).not.toHaveBeenCalled()
+    expect(mocks.jobUpdateOne).not.toHaveBeenCalled()
     expect(mocks.ingestionCreate.mock.calls[0][0][0]).toMatchObject({
       eventId: input.eventId,
       resultDigest: input.resultDigest,
@@ -325,6 +331,7 @@ describe('isolated engine result ingestion', () => {
       $unset: { live: 1 },
     })
     expect(mocks.applicationUpdateOne).not.toHaveBeenCalled()
+    expect(mocks.jobUpdateOne).not.toHaveBeenCalled()
   })
 
   it('validates every Hire coordinate and projects timestamped transcript/media evidence', async () => {
@@ -437,6 +444,11 @@ describe('isolated engine result ingestion', () => {
       type: 'ai_result_linked',
       actorName: 'System',
     })
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith(
+      { _id: expect.anything(), workspaceId: IDS.workspaceId },
+      { $inc: { candidateReadVersion: 1 } },
+      { session: expect.anything() },
+    )
   })
 
   it('preserves a job-close revocation that wins before final terminalization', async () => {

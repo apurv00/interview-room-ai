@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import mongoose from 'mongoose'
 import { HireExternalVerdict, HireSharePacket } from '@hire-decisions/models'
+import { redactHireCandidateActionSubjectData } from '../../hire-candidate-actions/subject-lifecycle-boundary'
 import { HireAiInviteDelivery } from '../models/HireAiInviteDelivery'
 import { HireApplication } from '../models/HireApplication'
 import { HireCandidate } from '../models/HireCandidate'
@@ -410,6 +411,12 @@ export async function applyVerifiedHirePrivacyRequest(input: {
         .session(dbSession)
         .lean()
       const applicationIds = applicationCoordinates.map((application) => application._id)
+      await redactHireCandidateActionSubjectData({
+        workspaceId: request.workspaceId,
+        applicationIds,
+        at: now,
+        session: dbSession,
+      })
       const roundCoordinates = await HireRound.find(scope)
         .select('_id applicationId')
         .session(dbSession)
@@ -669,6 +676,7 @@ export async function applyVerifiedHirePrivacyRequest(input: {
               },
               exceptions: { applicationId: { $in: applicationIds } },
             },
+            $unset: { selectionHandoff: 1 },
           },
           { session: dbSession, overwriteImmutable: true },
         ),
@@ -713,6 +721,8 @@ export async function applyVerifiedHirePrivacyRequest(input: {
           {
             $unset: {
               applicantSubmissions: 1,
+              decisionNote: 1,
+              'offerDecision.note': 1,
               'events.$[sensitiveEvent].note': 1,
             },
           },
@@ -728,6 +738,7 @@ export async function applyVerifiedHirePrivacyRequest(input: {
                   'human_kit_reminded',
                   'human_kit_revoked',
                   'human_scorecard_submitted',
+                  'stage_move',
                 ],
               },
             }],

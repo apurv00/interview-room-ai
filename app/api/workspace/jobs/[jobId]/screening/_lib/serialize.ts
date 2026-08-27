@@ -9,6 +9,23 @@ import type {
 } from '@hire-operations'
 
 type ScreeningPreview = ScreeningGatePreviewResult['preview']
+type ScreeningPreviewEntry = ScreeningPreview['rankedApplications'][number]
+
+export const SCREENING_PREVIEW_PAGE_SIZE = 50
+export type ScreeningPreviewPageScope =
+  | 'selected'
+  | 'evaluated'
+  | 'attention'
+  | 'knockouts'
+
+export interface ScreeningPreviewPageSlice {
+  scope: ScreeningPreviewPageScope
+  rows: ScreeningPreviewEntry[]
+  total: number
+  offset: number
+  hasPrevious: boolean
+  hasNext: boolean
+}
 
 function candidateViewsByApplicationId(
   projection?: JobScreeningMemberReadProjection,
@@ -18,17 +35,85 @@ function candidateViewsByApplicationId(
   )
 }
 
+export function sliceScreeningPreviewPage(
+  preview: ScreeningPreview,
+  scope: ScreeningPreviewPageScope,
+  offset: number,
+): ScreeningPreviewPageSlice {
+  const source = scope === 'selected'
+    ? preview.rankedApplications.filter((entry) => entry.selected)
+    : scope === 'attention'
+      ? preview.rankedApplications.filter((entry) => entry.scoreState !== 'scored')
+      : scope === 'knockouts'
+        ? preview.rankedApplications.filter((entry) => entry.knockoutReasons.length > 0)
+        : preview.rankedApplications
+  const normalizedOffset = Number.isSafeInteger(offset) && offset >= 0
+    ? Math.min(offset, Math.max(0, source.length - (source.length % SCREENING_PREVIEW_PAGE_SIZE || SCREENING_PREVIEW_PAGE_SIZE)))
+    : 0
+  const rows = source.slice(
+    normalizedOffset,
+    normalizedOffset + SCREENING_PREVIEW_PAGE_SIZE,
+  )
+  return {
+    scope,
+    rows,
+    total: source.length,
+    offset: normalizedOffset,
+    hasPrevious: normalizedOffset > 0,
+    hasNext: normalizedOffset + rows.length < source.length,
+  }
+}
+
 export function serializeScreeningPreview(
   preview: ScreeningPreview,
+  page: ScreeningPreviewPageSlice & {
+    previousCursor: string | null
+    nextCursor: string | null
+  },
   projection?: JobScreeningMemberReadProjection,
 ) {
   const candidates = candidateViewsByApplicationId(projection)
+  const scoreStateCounts = preview.rankedApplications.reduce(
+    (counts, entry) => {
+      counts[entry.scoreState] += 1
+      return counts
+    },
+    { scored: 0, stale: 0, unscored: 0 },
+  )
+  const cutLineApplicationId = preview.cutLine.applicationId
   return {
-    ...preview,
-    rankedApplications: preview.rankedApplications.map((entry) => ({
-      ...entry,
-      candidate: candidates.get(entry.applicationId) ?? null,
-    })),
+    workspaceId: preview.workspaceId,
+    jobId: preview.jobId,
+    rule: preview.rule,
+    generatedAt: preview.generatedAt,
+    evaluatedCount: preview.evaluatedCount,
+    eligibleCount: preview.eligibleCount,
+    automaticallySelectedCount: preview.automaticallySelectedCount,
+    selectedCount: preview.selectedCount,
+    scoreStateCounts,
+    knownKnockoutCount: preview.rankedApplications.filter(
+      (entry) => entry.knockoutReasons.length > 0,
+    ).length,
+    cutLine: {
+      ...preview.cutLine,
+      candidate: cutLineApplicationId
+        ? candidates.get(cutLineApplicationId) ?? null
+        : null,
+    },
+    exceptions: preview.exceptions,
+    page: {
+      scope: page.scope,
+      rows: page.rows.map((entry) => ({
+        ...entry,
+        candidate: candidates.get(entry.applicationId) ?? null,
+      })),
+      total: page.total,
+      offset: page.offset,
+      hasPrevious: page.hasPrevious,
+      previousCursor: page.previousCursor,
+      hasNext: page.hasNext,
+      nextCursor: page.nextCursor,
+    },
   }
 }
 
@@ -66,17 +151,9 @@ export function serializeInvitationBatch(
 export function serializeScreeningGate(
   gate: IHireScreeningGate,
   batches: IHireInvitationBatch[] = [],
-  projection?: JobScreeningMemberReadProjection,
+  hasMoreBatches = false,
 ) {
-  // Privacy cleanup removes whole snapshot entries rather than retaining
-  // dangling identity coordinates. Filter defensively as well so a legacy or
-  // partially-redacted record cannot stringify an absent ID into the member
-  // response while a transaction is retried.
-  const rankedApplications = gate.rankedApplications.filter(
-    (entry) => Boolean(entry.applicationId && entry.candidateId),
-  )
   const exceptions = gate.exceptions.filter((exception) => Boolean(exception.applicationId))
-  const candidates = candidateViewsByApplicationId(projection)
   const cutLineApplicationId = gate.cutLine.applicationId?.toString() ?? null
 
   return {
@@ -104,9 +181,6 @@ export function serializeScreeningGate(
       applicationId: cutLineApplicationId,
       rank: gate.cutLine.rank ?? null,
       score: gate.cutLine.score ?? null,
-      candidate: cutLineApplicationId
-        ? candidates.get(cutLineApplicationId) ?? null
-        : null,
     },
     counts: {
       evaluated: gate.evaluatedCount,
@@ -114,32 +188,20 @@ export function serializeScreeningGate(
       automaticallySelected: gate.automaticallySelectedCount,
       selected: gate.selectedCount,
     },
-    rankedApplications: rankedApplications.map((entry) => ({
-      applicationId: entry.applicationId.toString(),
-      candidateId: entry.candidateId.toString(),
-      applicationCreatedAt: entry.applicationCreatedAt,
-      rank: entry.rank ?? null,
-      score: entry.score,
-      scoreState: entry.scoreState,
-      knockoutReasons: entry.knockoutReasons,
-      automaticallySelected: entry.automaticallySelected,
-      selected: entry.selected,
-      selectionReason: entry.selectionReason,
-      candidate: candidates.get(entry.applicationId.toString()) ?? null,
-    })),
-    exceptions: exceptions.map((exception) => ({
-      applicationId: exception.applicationId.toString(),
-      action: exception.action,
-      actorName: exception.actorName,
-      note: exception.note,
-      at: exception.at,
-      candidate: candidates.get(exception.applicationId.toString()) ?? null,
-    })),
+    exceptionCount: exceptions.length,
+    selectionHandoff: gate.selectionHandoff
+      ? {
+          actorName: gate.selectionHandoff.actorName,
+          note: gate.selectionHandoff.note,
+          at: gate.selectionHandoff.at,
+        }
+      : null,
     confirmedByName: gate.confirmedByName,
     confirmedAt: gate.confirmedAt,
     cancelledAt: gate.cancelledAt ?? null,
     cancelNote: gate.cancelNote ?? null,
     createdAt: gate.createdAt,
     batches: batches.map((batch) => serializeInvitationBatch(batch)),
+    hasMoreBatches,
   }
 }

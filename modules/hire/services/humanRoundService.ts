@@ -59,6 +59,12 @@ function friendlyTombstone(error: unknown): never {
   throw error
 }
 
+function roundWriteVersions(existing: IHireHumanRound | null) {
+  return existing
+    ? { intakeWriteVersion: 1 }
+    : { intakeWriteVersion: 1, candidateReadVersion: 1 }
+}
+
 export interface CreateGuestHumanRoundInput {
   applicationId: string
   interviewerName: string
@@ -172,9 +178,13 @@ export async function createGuestHumanRound(
           candidateId: candidate._id,
           session,
         })
+        const existing = await HireHumanRound.findOne({
+          workspaceId: ctx.workspace._id,
+          creationOperationId: input.operationId,
+        }, null, { session })
         const jobClaim = await HireJob.updateOne(
           { _id: job._id, workspaceId: ctx.workspace._id, status: 'open' },
-          { $inc: { intakeWriteVersion: 1 } },
+          { $inc: roundWriteVersions(existing) },
           { session },
         )
         if (jobClaim.matchedCount !== 1) {
@@ -201,10 +211,6 @@ export async function createGuestHumanRound(
           candidateId: candidate._id,
           session,
         })
-        const existing = await HireHumanRound.findOne({
-          workspaceId: ctx.workspace._id,
-          creationOperationId: input.operationId,
-        }, null, { session })
         if (existing) {
           if (existing.applicationId.toString() !== application._id.toString() || existing.mode !== 'guest_kit') {
             throw new AppError('That operation id was used for another human round', 409, 'OPERATION_ID_REUSED')
@@ -322,9 +328,13 @@ export async function createMemberHumanRound(
       ctx.workspace._id,
       ctx.membership._id,
       async (session) => {
+        const existing = await HireHumanRound.findOne({
+          workspaceId: ctx.workspace._id,
+          creationOperationId: input.operationId,
+        }, null, { session })
         const jobClaim = await HireJob.updateOne(
           { _id: job._id, workspaceId: ctx.workspace._id, status: 'open' },
-          { $inc: { intakeWriteVersion: 1 } },
+          { $inc: roundWriteVersions(existing) },
           { session },
         )
         if (jobClaim.matchedCount !== 1) throw new AppError('Human rounds require an open job', 409, 'JOB_NOT_OPEN')
@@ -343,10 +353,6 @@ export async function createMemberHumanRound(
         }).session(session)
         if (privacy) throw new AppError('A candidate privacy request is in progress', 409, 'CANDIDATE_PRIVACY_PENDING')
         await claimHireCandidatePiiWriteFence({ workspaceId: ctx.workspace._id, candidateId: candidate._id, session })
-        const existing = await HireHumanRound.findOne({
-          workspaceId: ctx.workspace._id,
-          creationOperationId: input.operationId,
-        }, null, { session })
         if (existing) {
           if (existing.applicationId.toString() !== application._id.toString() || existing.mode !== 'member_room') {
             throw new AppError('That operation id was used for another human round', 409, 'OPERATION_ID_REUSED')
@@ -438,7 +444,7 @@ export async function submitMemberHumanRoundScorecard(
         // serialize; a closed job cannot gain new human evidence.
         const jobClaim = await HireJob.updateOne(
           { _id: round.jobId, workspaceId: ctx.workspace._id, status: 'open' },
-          { $inc: { intakeWriteVersion: 1 } },
+          { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } },
           { session },
         )
         if (jobClaim.matchedCount !== 1) {
@@ -739,6 +745,8 @@ export async function submitHumanInterviewKitScorecard(
           session,
         })
         if (!active) throw inactiveKitError()
+        const jobClaim = await HireJob.updateOne({ _id: active.kit.jobId, workspaceId: active.kit.workspaceId, status: 'open' }, { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } }, { session })
+        if (jobClaim.matchedCount !== 1) throw inactiveKitError()
         await claimHireCandidatePiiWriteFence({
           workspaceId: active.kit.workspaceId,
           candidateId: active.kit.candidateId,
@@ -883,6 +891,8 @@ export async function revokeHumanInterviewKit(
         status: { $nin: ['completed', 'revoked'] },
       }, null, { session })
       if (!current) throw new NotFoundError('Human round')
+      const job = await HireJob.updateOne({ _id: current.jobId, workspaceId: ctx.workspace._id }, { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } }, { session })
+      if (job.matchedCount !== 1) throw new NotFoundError('Job')
       await HireInterviewKit.updateMany(
         { workspaceId: ctx.workspace._id, humanRoundId: current._id, active: true },
         {

@@ -21,6 +21,8 @@ const {
   mockCancelReportExports,
   mockBrandingDelete,
   mockDeleteCommercial,
+  mockDeleteCandidateActions,
+  mockDeleteCandidateSelections,
 } = vi.hoisted(() => {
   const child = () => ({ deleteMany: vi.fn().mockResolvedValue({ deletedCount: 1 }) })
   const modelMap = {
@@ -109,6 +111,8 @@ const {
     mockCancelReportExports: vi.fn(),
     mockBrandingDelete: vi.fn(),
     mockDeleteCommercial: vi.fn(),
+    mockDeleteCandidateActions: vi.fn(),
+    mockDeleteCandidateSelections: vi.fn(),
   }
 })
 
@@ -139,6 +143,14 @@ vi.mock('@hire-branding/services/workspaceBrandingStorage', () => ({
 vi.mock('@hire-commercial/purge-boundary', () => ({
   deleteHireCommercialWorkspaceData: (...args: unknown[]) =>
     mockDeleteCommercial(...args),
+}))
+vi.mock('../../hire-candidate-actions/purge-boundary', () => ({
+  deleteHireCandidateActionWorkspaceData: (...args: unknown[]) =>
+    mockDeleteCandidateActions(...args),
+}))
+vi.mock('@hire-operations/purge-boundary', () => ({
+  deleteHireCandidateSelectionWorkspaceData: (...args: unknown[]) =>
+    mockDeleteCandidateSelections(...args),
 }))
 
 import {
@@ -209,6 +221,8 @@ beforeEach(() => {
   mockCancelReportExports.mockResolvedValue(0)
   mockBrandingDelete.mockResolvedValue(undefined)
   mockDeleteCommercial.mockResolvedValue(undefined)
+  mockDeleteCandidateActions.mockResolvedValue(undefined)
+  mockDeleteCandidateSelections.mockResolvedValue(undefined)
   reportModels.HireReportExport.deleteMany.mockResolvedValue({ deletedCount: 1 })
   statusModels.HireCandidateStatusLink.deleteMany.mockResolvedValue({ deletedCount: 1 })
   onboardingModels.HireOnboardingTestDrive.deleteMany.mockResolvedValue({ deletedCount: 1 })
@@ -252,6 +266,9 @@ describe('workspace hard purge', () => {
       'HireInvitationBatchItem',
       'HireInvitationBatch',
       'HireScreeningGate',
+      'HireCandidateBulkOperationItem',
+      'HireCandidateBulkOperation',
+      'HireCandidateSelectionSnapshot',
       'HireAssessmentExport',
       'HireReportExport',
       'HireExternalVerdict',
@@ -397,6 +414,20 @@ describe('workspace hard purge', () => {
       workspaceId: WORKSPACE_ID,
       session,
     })
+    expect(mockDeleteCandidateActions).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      session,
+    })
+    expect(mockDeleteCandidateSelections).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      session,
+    })
+    expect(mockDeleteCandidateActions.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteCandidateSelections.mock.invocationCallOrder[0],
+    )
+    expect(mockDeleteCandidateSelections.mock.invocationCallOrder[0]).toBeLessThan(
+      models.HireApplication.deleteMany.mock.invocationCallOrder[0],
+    )
     expect(mockDeleteCommercial.mock.invocationCallOrder[0]).toBeLessThan(
       models.HireWorkspace.deleteOne.mock.invocationCallOrder[0],
     )

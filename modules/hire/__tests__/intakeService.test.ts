@@ -32,6 +32,7 @@ vi.mock('@hire-onboarding-boundary', () => ({
 }))
 
 const mockJob = { findOne: vi.fn(), find: vi.fn(), updateOne: vi.fn() }
+const mockWorkspace = { updateOne: vi.fn() }
 const mockCandidate = { create: vi.fn(), findOne: vi.fn(), updateOne: vi.fn() }
 const mockApplication = {
   create: vi.fn(),
@@ -50,6 +51,7 @@ vi.mock('../models', async () => {
       find: (...a: unknown[]) => mockJob.find(...a),
       updateOne: (...a: unknown[]) => mockJob.updateOne(...a),
     },
+    HireWorkspace: { updateOne: (...a: unknown[]) => mockWorkspace.updateOne(...a) },
     HireCandidate: {
       create: (...a: unknown[]) => mockCandidate.create(...a),
       findOne: (...a: unknown[]) => mockCandidate.findOne(...a),
@@ -131,6 +133,7 @@ beforeEach(() => {
   mockJob.findOne.mockResolvedValue(OPEN_JOB)
   mockJob.find.mockReturnValue({ select: () => Promise.resolve([]) })
   mockJob.updateOne.mockResolvedValue({ matchedCount: 1 })
+  mockWorkspace.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockCandidate.updateOne.mockResolvedValue({ matchedCount: 1 })
   candidateFence.mockResolvedValue(undefined)
   onboardingTestDriveFence.mockResolvedValue(undefined)
@@ -315,6 +318,17 @@ describe('idempotency and merge', () => {
       },
       { session: SESSION, runValidators: true },
     )
+    expect(mockWorkspace.updateOne).toHaveBeenCalledWith(
+      { _id: 'ws-A' },
+      { $inc: { privacyAggregateFenceVersion: 1 } },
+      { session: SESSION },
+    )
+    expect(mockJob.updateOne).toHaveBeenNthCalledWith(
+      2,
+      { _id: 'job-1', workspaceId: 'ws-A' },
+      { $inc: { candidateReadVersion: 1 } },
+      { session: SESSION },
+    )
   })
 
   it('clears a stale screening profile when a newer resume could not be profiled', async () => {
@@ -343,6 +357,33 @@ describe('idempotency and merge', () => {
       }),
       { session: SESSION, runValidators: true },
     )
+  })
+
+  it('uses the workspace epoch for a profile-only identity update', async () => {
+    const existing = candidateDoc({
+      name: 'Jane Doe',
+      resumeText: 'resume body',
+      screeningProfile: {
+        location: 'Pune',
+        experienceYears: 4,
+        resumeHash: 'a'.repeat(64),
+        extractedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    })
+    mockCandidate.findOne.mockReturnValue(inTx(existing))
+    mockApplication.findOne.mockReturnValue(inTx(applicationDoc()))
+
+    await intakeCandidate(CTX, {
+      ...BASE_INPUT,
+      screeningProfile: SCREENING_PROFILE,
+    })
+
+    expect(mockWorkspace.updateOne).toHaveBeenCalledWith(
+      { _id: 'ws-A' },
+      { $inc: { privacyAggregateFenceVersion: 1 } },
+      { session: SESSION },
+    )
+    expect(mockJob.updateOne).toHaveBeenCalledTimes(1)
   })
 
   it('recovers from a lost E11000 race by retrying the WHOLE transaction once', async () => {
@@ -405,6 +446,7 @@ describe('in-transaction job claim', () => {
       { $inc: { intakeWriteVersion: 1 } },
       { session: SESSION },
     )
+    expect(mockJob.updateOne).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -508,6 +550,7 @@ describe('resume/score coherence', () => {
 
     expect((app.resumeMatch as { score: number }).score).toBe(88)
     expect(mockApplication.updateOne).not.toHaveBeenCalled()
+    expect(mockJob.updateOne).toHaveBeenCalledTimes(1)
   })
 
   it('an identical re-upload is NOT a replacement — no staleness sweep', async () => {
@@ -518,6 +561,7 @@ describe('resume/score coherence', () => {
     await intakeCandidate(CTX, { ...BASE_INPUT, resumeMatch: MATCH })
 
     expect(mockApplication.updateMany).not.toHaveBeenCalled()
+    expect(mockWorkspace.updateOne).not.toHaveBeenCalled()
   })
 
   it('fails closed when a concurrent application update wins the version race', async () => {
@@ -725,6 +769,12 @@ describe('quarantined résumé and its score move together (Codex P1 on #615)', 
       candidateId: 'cand-1',
       __v: 0,
     })
+    expect(mockJob.updateOne).toHaveBeenNthCalledWith(
+      2,
+      { _id: 'job-1', workspaceId: 'ws-A' },
+      { $inc: { candidateReadVersion: 1 } },
+      { session: SESSION },
+    )
   })
 })
 

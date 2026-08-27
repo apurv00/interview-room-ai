@@ -8,6 +8,7 @@ import {
   type HireEngineHandoffEnvelope,
 } from '@shared/contracts/hireEngineBridge'
 import { HireEngineHandoff } from '../models/HireEngineHandoff'
+import { HireJob } from '../models/HireJob'
 import { HireRound } from '../models/HireRound'
 import { HireWorkspace } from '../models/HireWorkspace'
 import { connectHireControlDB } from './hireControlBoundary'
@@ -83,10 +84,6 @@ export async function issueHireEngineHandoff(
     Math.min(input.inviteExpiresAt.getTime(), now.getTime() + HANDOFF_TTL_SECONDS * 1_000),
   )
 
-  // Serialize runtime-authority creation against workspace deletion and round
-  // revocation. This must be one transaction: a lifecycle read followed by a
-  // separate handoff insert would permit a just-deleted workspace to mint a
-  // fresh runtime capability from an in-flight request.
   const dbSession = await mongoose.startSession()
   try {
     await dbSession.withTransaction(async () => {
@@ -108,20 +105,36 @@ export async function issueHireEngineHandoff(
           410,
         )
       }
-      const liveRound = await HireRound.findOneAndUpdate(
+      const scope = {
+        _id: input.roundId,
+        workspaceId: input.workspaceId,
+        applicationId: input.applicationId,
+        inviteTokenExpiry: { $gt: now },
+        revokedAt: { $exists: false },
+        consentVersion: input.consentVersion,
+        consentAt: input.consentAt,
+      }
+      let preparedNow = true
+      let liveRound = await HireRound.findOneAndUpdate(
         {
-          _id: input.roundId,
-          workspaceId: input.workspaceId,
-          applicationId: input.applicationId,
-          inviteTokenExpiry: { $gt: now },
-          revokedAt: { $exists: false },
+          ...scope,
           status: { $nin: ['completed', 'revoked'] },
-          consentVersion: input.consentVersion,
-          consentAt: input.consentAt,
+          $or: [{ status: { $ne: 'prepared' } }, { preparedAt: { $exists: false } }],
         },
-        { $inc: { engineHandoffGeneration: 1 } },
+        {
+          $set: { status: 'prepared', preparedAt: now },
+          $inc: { engineHandoffGeneration: 1 },
+        },
         { new: true, session: dbSession },
       )
+      if (!liveRound) {
+        preparedNow = false
+        liveRound = await HireRound.findOneAndUpdate(
+          { ...scope, status: 'prepared', preparedAt: { $exists: true } },
+          { $inc: { engineHandoffGeneration: 1 } },
+          { new: true, session: dbSession, timestamps: false },
+        )
+      }
       if (!liveRound) {
         throw new HireEngineHandoffError(
           'This engine handoff is no longer valid',
@@ -129,10 +142,21 @@ export async function issueHireEngineHandoff(
           410,
         )
       }
+      if (preparedNow) {
+        const job = await HireJob.updateOne(
+          { _id: liveRound.jobId, workspaceId: input.workspaceId },
+          { $inc: { candidateReadVersion: 1 } },
+          { session: dbSession },
+        )
+        if (job.matchedCount !== 1) {
+          throw new HireEngineHandoffError(
+            'This engine handoff is no longer valid',
+            'expired',
+            410,
+          )
+        }
+      }
 
-      // A fresh handoff supersedes every older code for this exact round,
-      // including one that was previously request-bound. This closes the
-      // delayed-response path after a candidate requests a recovery link.
       await HireEngineHandoff.updateMany(
         {
           workspaceId: input.workspaceId,
@@ -205,8 +229,6 @@ export async function exchangeHireEngineHandoff(
     { new: true },
   )
   if (!handoff) {
-    // Uniform response: callers cannot distinguish nonexistent, expired,
-    // revoked, or already consumed by a different exchange request.
     throw new HireEngineHandoffError(
       'This engine handoff is no longer valid',
       'expired',
@@ -217,9 +239,6 @@ export async function exchangeHireEngineHandoff(
   const envelopeExpiresAt = new Date(
     Math.min(handoff.expiresAt.getTime(), now.getTime() + HANDOFF_TTL_SECONDS * 1_000),
   )
-  // `config` is a hydrated Mongoose subdocument here. Zod's strict object
-  // parser correctly rejects its enumerable document helpers, so cross the
-  // internal-API seam with a plain object rather than the persistence wrapper.
   const storedConfig =
     handoff.config && typeof (handoff.config as { toObject?: unknown }).toObject === 'function'
       ? (handoff.config as unknown as { toObject: () => unknown }).toObject()

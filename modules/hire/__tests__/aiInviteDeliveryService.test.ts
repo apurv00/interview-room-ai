@@ -244,7 +244,7 @@ describe('durable AI invite delivery', () => {
         candidateId: IDS.candidate,
         stage: { $nin: ['hired', 'rejected', 'withdrawn'] },
       })
-      expect(update).toEqual({ $set: { updatedAt: NOW } })
+      expect(update).toEqual({ $inc: { __v: 1 } })
       expect(options).toEqual({ session: { id: 'egress-auth-tx' }, timestamps: false })
       order.push('application-stage-fence')
       return { matchedCount: 1 }

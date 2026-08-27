@@ -29,8 +29,8 @@ export type HireScreeningSelectionReason =
 export const HIRE_SCREENING_EXCEPTION_ACTIONS = ['include', 'exclude'] as const
 export type HireScreeningExceptionAction = (typeof HIRE_SCREENING_EXCEPTION_ACTIONS)[number]
 
-/** Bound keeps the durable confirmation record well inside Mongo's document limit. */
 export const HIRE_SCREENING_GATE_SNAPSHOT_CAP = 5000
+export const HIRE_SCREENING_GATE_MAX_EXCEPTIONS = 100
 
 export interface IHireScreeningKnockoutSettings {
   location?: string
@@ -75,6 +75,11 @@ export interface IHireScreeningException {
   at: Date
 }
 
+export interface IHireScreeningSelectionHandoff {
+  selectionSnapshotId: mongoose.Types.ObjectId; actorMemberId: mongoose.Types.ObjectId
+  actorName: string; note: string; at: Date
+}
+
 /**
  * A durable, confirmed screening decision for one workspace/job.
  *
@@ -103,6 +108,7 @@ export interface IHireScreeningGate extends Document {
   selectedCount: number
   rankedApplications: IHireScreeningRankedApplication[]
   exceptions: IHireScreeningException[]
+  selectionHandoff?: IHireScreeningSelectionHandoff
   confirmedByMemberId: mongoose.Types.ObjectId
   confirmedByName: string
   confirmedAt: Date
@@ -201,6 +207,21 @@ const HireScreeningExceptionSchema = new Schema<IHireScreeningException>(
   { _id: false },
 )
 
+const HireScreeningSelectionHandoffSchema = new Schema<IHireScreeningSelectionHandoff>(
+  {
+    selectionSnapshotId: {
+      type: Schema.Types.ObjectId, ref: 'HireCandidateSelectionSnapshot', required: true, immutable: true,
+    },
+    actorMemberId: {
+      type: Schema.Types.ObjectId, ref: 'HireWorkspaceMember', required: true, immutable: true,
+    },
+    actorName: { type: String, required: true, trim: true, maxlength: 120, immutable: true },
+    note: { type: String, required: true, trim: true, minlength: 1, maxlength: 4000, immutable: true },
+    at: { type: Date, required: true, immutable: true },
+  },
+  { _id: false },
+)
+
 const HireScreeningGateSchema = new Schema<IHireScreeningGate>(
   {
     workspaceId: {
@@ -288,6 +309,16 @@ const HireScreeningGateSchema = new Schema<IHireScreeningGate>(
     exceptions: {
       type: [HireScreeningExceptionSchema],
       default: [],
+      immutable: true,
+      validate: {
+        validator: (entries: IHireScreeningException[]) => Array.isArray(entries) &&
+          entries.length <= HIRE_SCREENING_GATE_MAX_EXCEPTIONS,
+        message: `exceptions must contain at most ${HIRE_SCREENING_GATE_MAX_EXCEPTIONS} entries`,
+      },
+    },
+    selectionHandoff: {
+      type: HireScreeningSelectionHandoffSchema,
+      default: undefined,
       immutable: true,
     },
     confirmedByMemberId: {

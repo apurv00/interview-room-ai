@@ -53,6 +53,8 @@ export interface IHireJob extends Document {
   status: HireJobStatus
   /** Conflict-inducing counter for the in-transaction intake claim. */
   intakeWriteVersion?: number
+  /** Changes only when an already-visible candidate row can reorder. */
+  candidateReadVersion?: number
   /** sha256 of the public apply link's raw token. */
   applyTokenHash?: string
   applyTokenSecret?: string
@@ -143,11 +145,9 @@ const HireJobSchema = new Schema<IHireJob>(
     },
     activeRequirementVersion: { type: Number, min: 1 },
     status: { type: String, enum: HIRE_JOB_STATUSES, default: 'open' },
-    // Conflict-inducing counter for the in-transaction intake claim: intake
-    // $incs it with `status: {$ne:'closed'}` in the filter so a concurrent
-    // job-close serializes against intake writes instead of racing them
-    // (snapshot reads alone permit write skew). The value itself is unused.
+    // Conflict counter: intake $incs it so job-close serializes with writes.
     intakeWriteVersion: { type: Number, default: 0 },
+    candidateReadVersion: { type: Number, default: 0 },
     applyTokenHash: { type: String, maxlength: 64 },
     applyTokenSecret: { type: String, select: false, minlength: 64, maxlength: 64, match: /^[a-f0-9]{64}$/ },
     applyPageEnabled: { type: Boolean, default: false },

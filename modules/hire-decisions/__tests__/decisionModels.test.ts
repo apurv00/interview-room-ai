@@ -167,5 +167,19 @@ describe('Phase-4 decision record contracts', () => {
     expect(indexes(HireExternalVerdict as unknown as Model<never>).some(
       ([spec]) => spec.workspaceId === 1 && spec.candidateId === 1,
     )).toBe(true)
+    expect(indexes(HireExternalVerdict as unknown as Model<never>)).not.toEqual(
+      expect.arrayContaining([
+        [
+          {
+            workspaceId: 1,
+            jobId: 1,
+            submittedAt: -1,
+            applicationId: 1,
+            _id: 1,
+          },
+          expect.any(Object),
+        ],
+      ]),
+    )
   })
 })

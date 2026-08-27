@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@shared/ui/Badge";
 import Button from "@shared/ui/Button";
 import { HireAssessmentReport } from "@hire-decisions/components/HireAssessmentReport";
@@ -27,6 +27,12 @@ interface DecisionInboxItem {
   decision: HireDecisionActionContext;
 }
 
+interface DecisionInboxPage {
+  items: DecisionInboxItem[];
+  limit: number;
+  nextCursor: string | null;
+}
+
 interface CandidateInboxEntry {
   applicationId: string;
   decision: HireDecisionActionContext;
@@ -36,6 +42,7 @@ interface CandidateInboxEntry {
 interface ComparisonCandidate {
   applicationId: string;
   candidateName: string;
+  candidateEmail?: string;
 }
 
 const RECOMMENDATIONS = ["strong_yes", "yes", "no", "strong_no"] as const;
@@ -328,43 +335,74 @@ function inboxItemFrom(value: unknown): DecisionInboxItem | null {
   return null;
 }
 
-function inboxFrom(value: unknown): DecisionInboxItem[] | null {
+function inboxFrom(value: unknown): DecisionInboxPage | null {
   const source = record(value);
   if (!source || !Array.isArray(source.items)) return null;
   const items = source.items.map(inboxItemFrom);
-  return items.some((item) => item === null)
-    ? null
-    : (items as DecisionInboxItem[]);
+  const limit = numberValue(source.limit);
+  const nextCursor = source.nextCursor;
+  if (
+    items.some((item) => item === null) ||
+    limit === null ||
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > 50 ||
+    (nextCursor !== null &&
+      (typeof nextCursor !== "string" ||
+        nextCursor.length === 0 ||
+        nextCursor.length > 1_024))
+  ) {
+    return null;
+  }
+  return {
+    items: items as DecisionInboxItem[],
+    limit,
+    nextCursor,
+  };
 }
 
 /**
- * The member-only candidates endpoint admits only application coordinates and
- * display names. The browser never receives the broad pipeline response.
+ * Parse the decision-specific identity-only search envelope. The endpoint
+ * cannot return rank, stage, evidence, or scores by contract.
  */
 function comparisonCandidatesFrom(
   value: unknown,
-): ComparisonCandidate[] | null {
+): { candidates: ComparisonCandidate[]; nextCursor: string | null } | null {
   const source = record(value);
   if (!source || !Array.isArray(source.candidates)) return null;
   const unique = new Map<string, ComparisonCandidate>();
   for (const rawCandidate of source.candidates) {
     const candidate = record(rawCandidate);
-    const applicationId = candidate
-      ? stringValue(candidate.applicationId)
-      : null;
-    const candidateName = candidate
-      ? stringValue(candidate.candidateName)
-      : null;
-    if (!applicationId || !candidateName || unique.has(applicationId)) {
+    const applicationId = stringValue(candidate?.applicationId);
+    const candidateName = stringValue(candidate?.candidateName);
+    const candidateEmail = stringValue(candidate?.candidateEmail);
+    if (
+      !applicationId ||
+      !candidate ||
+      !candidateName ||
+      !candidateEmail ||
+      unique.has(applicationId)
+    ) {
       return null;
     }
-    unique.set(applicationId, { applicationId, candidateName });
+    unique.set(applicationId, {
+      applicationId,
+      candidateName,
+      candidateEmail,
+    });
   }
-  return Array.from(unique.values()).sort(
-    (left, right) =>
-      left.candidateName.localeCompare(right.candidateName) ||
-      left.applicationId.localeCompare(right.applicationId),
-  );
+  const page = record(source.pageInfo);
+  if (!page) return null;
+  const nextCursor = page.nextCursor;
+  if (
+    nextCursor !== null &&
+    (typeof nextCursor !== "string" ||
+      nextCursor.length === 0 ||
+      nextCursor.length > 2_048)
+  ) {
+    return null;
+  }
+  return { candidates: Array.from(unique.values()), nextCursor };
 }
 
 function comparisonFrom(value: unknown): HireDecisionView[] | null {
@@ -492,8 +530,15 @@ function ComparisonCandidatePicker({
         }
         onClick={onToggle}
       >
-        <span className="font-medium text-[#0f1419]">
-          {candidate.candidateName}
+        <span className="min-w-0">
+          <span className="block truncate font-medium text-[#0f1419]">
+            {candidate.candidateName}
+          </span>
+          {candidate.candidateEmail ? (
+            <span className="block truncate text-xs text-[#71767b]">
+              {candidate.candidateEmail}
+            </span>
+          ) : null}
         </span>
         <span className="text-xs font-semibold text-indigo-600">
           {selected ? `Selected #${selectedIndex + 1}` : "Add to comparison"}
@@ -505,78 +550,180 @@ function ComparisonCandidatePicker({
 
 /**
  * A member-only evidence workspace. It renders explicit safe DTO picks only,
- * plus an application-id/name projection from the current-job pipeline; it
- * never displays a rank, contact details, resume contents, private notes,
- * media, or packet secrets.
+ * plus a bounded, asynchronous identity projection from the current-job
+ * candidate read model. It never displays a rank, resume contents, private
+ * notes, media, or packet secrets.
  */
-export default function DecisionWorkspace({ jobId }: { jobId: string }) {
+export default function DecisionWorkspace({
+  jobId,
+  initialApplicationIds = [],
+  initialSelectionError,
+}: {
+  jobId: string;
+  initialApplicationIds?: string[];
+  initialSelectionError?: string;
+}) {
   const [items, setItems] = useState<DecisionInboxItem[] | null>(null);
+  const [inboxNextCursor, setInboxNextCursor] = useState<string | null>(null);
+  const [inboxLimit, setInboxLimit] = useState(20);
+  const [candidateQuery, setCandidateQuery] = useState("");
   const [comparisonCandidates, setComparisonCandidates] = useState<
-    ComparisonCandidate[] | null
-  >(null);
-  const [selectedApplicationIds, setSelectedApplicationIds] = useState<
-    string[]
+    ComparisonCandidate[]
+  >([]);
+  const [candidateNextCursor, setCandidateNextCursor] = useState<string | null>(
+    null,
+  );
+  const [selectedCandidates, setSelectedCandidates] = useState<
+    ComparisonCandidate[]
   >([]);
   const [comparison, setComparison] = useState<HireDecisionView[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMoreInbox, setLoadingMoreInbox] = useState(false);
+  const [candidateLoading, setCandidateLoading] = useState(false);
+  const [loadingMoreCandidates, setLoadingMoreCandidates] = useState(false);
   const [comparing, setComparing] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [initialInboxSettled, setInitialInboxSettled] = useState(false);
+  const activeCandidateQuery = useRef("");
+  const initialHandoffStarted = useRef(false);
 
   const loadDecisionData = useCallback(async () => {
     setLoading(true);
     setInboxError(null);
-    setCandidateError(null);
     setComparisonError(null);
     try {
-      const inboxRequest = fetch(
-        `/api/workspace/jobs/${encodeURIComponent(jobId)}/decision`,
+      const response = await fetch(
+        `/api/workspace/jobs/${encodeURIComponent(jobId)}/decision?limit=20`,
         { cache: "no-store" },
-      )
-        .then(async (response) =>
-          response.ok ? inboxFrom(await response.json()) : null,
-        )
-        .catch(() => null);
-      const candidatesRequest = fetch(
-        `/api/workspace/jobs/${encodeURIComponent(jobId)}/decision/candidates`,
-        { cache: "no-store" },
-      )
-        .then(async (response) =>
-          response.ok ? comparisonCandidatesFrom(await response.json()) : null,
-        )
-        .catch(() => null);
-      const [inbox, candidates] = await Promise.all([
-        inboxRequest,
-        candidatesRequest,
-      ]);
+      );
+      const inbox = response.ok ? inboxFrom(await response.json()) : null;
       if (inbox === null) {
         setItems(null);
         setInboxError("Could not load decision actions. Please try again.");
       } else {
-        setItems(inbox);
-      }
-      if (candidates === null) {
-        setComparisonCandidates(null);
-        setCandidateError(
-          "Could not load current job candidates. Please try again.",
-        );
-      } else {
-        setComparisonCandidates(candidates);
-      }
-      if (inbox !== null && candidates !== null) {
+        setItems(inbox.items);
+        setInboxLimit(inbox.limit);
+        setInboxNextCursor(inbox.nextCursor);
         // A refresh may contain newer scorecards or an external verdict. Never
         // keep a previously assembled comparison beside fresher source data.
         setComparison(null);
       }
+    } catch {
+      setItems(null);
+      setInboxError("Could not load decision actions. Please try again.");
     } finally {
       setLoading(false);
+      setInitialInboxSettled(true);
     }
   }, [jobId]);
 
   useEffect(() => {
     void loadDecisionData();
   }, [loadDecisionData]);
+
+  const loadMoreInbox = useCallback(async () => {
+    if (!inboxNextCursor || loadingMoreInbox) return;
+    setLoadingMoreInbox(true);
+    setInboxError(null);
+    try {
+      const search = new URLSearchParams({
+        limit: String(inboxLimit),
+        cursor: inboxNextCursor,
+      });
+      const response = await fetch(
+        `/api/workspace/jobs/${encodeURIComponent(jobId)}/decision?${search.toString()}`,
+        { cache: "no-store" },
+      );
+      const page = response.ok ? inboxFrom(await response.json()) : null;
+      if (!page) {
+        setInboxError("Could not load more decision actions. Please try again.");
+        return;
+      }
+      setItems((current) => [...(current ?? []), ...page.items]);
+      setInboxLimit(page.limit);
+      setInboxNextCursor(page.nextCursor);
+    } catch {
+      setInboxError("Could not load more decision actions. Please try again.");
+    } finally {
+      setLoadingMoreInbox(false);
+    }
+  }, [inboxLimit, inboxNextCursor, jobId, loadingMoreInbox]);
+
+  const loadCandidateResults = useCallback(
+    async (
+      query: string,
+      options: {
+        cursor?: string;
+        nextPage?: boolean;
+        signal?: AbortSignal;
+      } = {},
+    ) => {
+      const normalizedQuery = query.trim();
+      if (normalizedQuery.length < 2) return;
+      options.nextPage
+        ? setLoadingMoreCandidates(true)
+        : setCandidateLoading(true);
+      setCandidateError(null);
+      try {
+        const search = new URLSearchParams({
+          q: normalizedQuery,
+          limit: "20",
+        });
+        if (options.cursor) search.set("cursor", options.cursor);
+        const response = await fetch(
+          `/api/workspace/jobs/${encodeURIComponent(jobId)}/decision/candidates?${search.toString()}`,
+          { cache: "no-store", signal: options.signal },
+        );
+        if (activeCandidateQuery.current !== normalizedQuery) return;
+        const page = response.ok
+          ? comparisonCandidatesFrom(await response.json())
+          : null;
+        if (!page) {
+          setCandidateError("Could not search job candidates. Please try again.");
+          return;
+        }
+        // Keep the mounted result set bounded to one server page. Deliberate
+        // selections live independently below, so moving forward never drops
+        // a selected chip or accumulates the whole applicant pool in the DOM.
+        setComparisonCandidates(page.candidates);
+        setCandidateNextCursor(page.nextCursor);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (activeCandidateQuery.current !== normalizedQuery) return;
+        setCandidateError("Could not search job candidates. Please try again.");
+      } finally {
+        if (!options.signal?.aborted) {
+          options.nextPage
+            ? setLoadingMoreCandidates(false)
+            : setCandidateLoading(false);
+        }
+      }
+    },
+    [jobId],
+  );
+
+  useEffect(() => {
+    const normalizedQuery = candidateQuery.trim();
+    activeCandidateQuery.current = normalizedQuery;
+    setComparisonCandidates([]);
+    setCandidateNextCursor(null);
+    setCandidateError(null);
+    if (normalizedQuery.length < 2) {
+      setCandidateLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void loadCandidateResults(normalizedQuery, { signal: controller.signal });
+    }, 250);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [candidateQuery, loadCandidateResults]);
 
   const inboxCandidates = useMemo(() => {
     const byApplication = new Map<string, CandidateInboxEntry>();
@@ -596,35 +743,36 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
     return Array.from(byApplication.values());
   }, [items]);
 
-  const selected = useMemo(() => {
-    const candidateIds = new Set(
-      (comparisonCandidates ?? []).map((candidate) => candidate.applicationId),
-    );
-    return selectedApplicationIds.filter((id) => candidateIds.has(id));
-  }, [comparisonCandidates, selectedApplicationIds]);
+  const selected = useMemo(
+    () => selectedCandidates.map((candidate) => candidate.applicationId),
+    [selectedCandidates],
+  );
 
   const toggleCandidate = useCallback(
-    (applicationId: string) => {
-      const candidateIds = new Set(
-        (comparisonCandidates ?? []).map(
-          (candidate) => candidate.applicationId,
-        ),
-      );
-      setSelectedApplicationIds((current) => {
-        const scoped = current.filter((id) => candidateIds.has(id));
-        if (scoped.includes(applicationId)) {
-          return scoped.filter((id) => id !== applicationId);
+    (candidate: ComparisonCandidate) => {
+      setSelectedCandidates((current) => {
+        if (
+          current.some(
+            (entry) => entry.applicationId === candidate.applicationId,
+          )
+        ) {
+          return current.filter(
+            (entry) => entry.applicationId !== candidate.applicationId,
+          );
         }
-        return scoped.length >= 3 ? scoped : [...scoped, applicationId];
+        return current.length >= 3 ? current : [...current, candidate];
       });
       setComparison(null);
       setComparisonError(null);
     },
-    [comparisonCandidates],
+    [],
   );
 
-  const compareSelected = useCallback(async () => {
-    if (selected.length < 2 || selected.length > 3) return;
+  const compareApplications = useCallback(async (
+    applicationIds: string[],
+    hydrateSelection = false,
+  ) => {
+    if (applicationIds.length < 2 || applicationIds.length > 3) return;
     setComparing(true);
     setComparisonError(null);
     setComparison(null);
@@ -634,7 +782,7 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ applicationIds: selected }),
+          body: JSON.stringify({ applicationIds }),
           cache: "no-store",
         },
       );
@@ -647,16 +795,24 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
       const applications = comparisonFrom(await response.json());
       if (
         !applications ||
-        applications.length !== selected.length ||
+        applications.length !== applicationIds.length ||
         applications.some(
           (application, index) =>
-            application.coordinates.applicationId !== selected[index],
+            application.coordinates.applicationId !== applicationIds[index],
         )
       ) {
         setComparisonError(
           "The comparison response could not be verified. Please try again.",
         );
         return;
+      }
+      if (hydrateSelection) {
+        setSelectedCandidates(
+          applications.map((application) => ({
+            applicationId: application.coordinates.applicationId,
+            candidateName: application.candidateBrief.candidateName,
+          })),
+        );
       }
       setComparison(applications);
     } catch {
@@ -666,7 +822,29 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
     } finally {
       setComparing(false);
     }
-  }, [jobId, selected]);
+  }, [jobId]);
+
+  const compareSelected = useCallback(async () => {
+    await compareApplications(selected);
+  }, [compareApplications, selected]);
+
+  const initialApplicationKey = initialApplicationIds.join(",");
+  useEffect(() => {
+    if (
+      !initialInboxSettled ||
+      initialHandoffStarted.current ||
+      initialApplicationIds.length === 0
+    ) {
+      return;
+    }
+    initialHandoffStarted.current = true;
+    void compareApplications(initialApplicationIds, true);
+  }, [
+    compareApplications,
+    initialApplicationIds,
+    initialApplicationKey,
+    initialInboxSettled,
+  ]);
 
   return (
     <div className="space-y-6">
@@ -676,7 +854,7 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
             href={`/workspace/jobs/${encodeURIComponent(jobId)}`}
             className="text-xs font-medium text-indigo-600 hover:underline"
           >
-            ← Job pipeline
+            ← Job overview
           </Link>
           <h1 className="mt-2 text-2xl font-bold text-[#0f1419]">
             Decision workspace
@@ -706,6 +884,15 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
         </p>
       ) : null}
 
+      {initialSelectionError ? (
+        <p
+          className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+          role="alert"
+        >
+          {initialSelectionError}
+        </p>
+      ) : null}
+
       <section
         className="space-y-4"
         aria-labelledby="decision-action-inbox-heading"
@@ -722,7 +909,22 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
               Activity is shown newest first. It is not a candidate ranking.
             </p>
           </div>
+          {items !== null ? (
+            <p className="text-sm text-[#536471]" aria-live="polite">
+              Showing {items.length} action{items.length === 1 ? "" : "s"} · up
+              to {inboxLimit} per page
+            </p>
+          ) : null}
         </div>
+
+        {inboxError ? (
+          <p
+            className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-[#b42318]"
+            role="alert"
+          >
+            {inboxError}
+          </p>
+        ) : null}
 
         {items === null && !inboxError ? (
           <p
@@ -730,13 +932,6 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
             role="status"
           >
             Loading decision evidence…
-          </p>
-        ) : inboxError ? (
-          <p
-            className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-[#b42318]"
-            role="alert"
-          >
-            {inboxError}
           </p>
         ) : items !== null && inboxCandidates.length === 0 ? (
           <p className="rounded-2xl border border-[#e1e8ed] bg-white p-5 text-sm text-[#536471]">
@@ -752,6 +947,22 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
             ))}
           </div>
         )}
+
+        {items !== null && inboxNextCursor ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={loadingMoreInbox}
+            onClick={() => void loadMoreInbox()}
+          >
+            {loadingMoreInbox ? "Loading more actions…" : "Load more actions"}
+          </Button>
+        ) : items !== null && items.length > 0 ? (
+          <p className="text-xs text-[#71767b]">
+            All currently matching decision actions are loaded.
+          </p>
+        ) : null}
       </section>
 
       <section
@@ -767,8 +978,8 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
               Candidate selection
             </h2>
             <p className="mt-1 text-sm text-[#536471]">
-              All current job applications are listed alphabetically. No score
-              or rank is shown.
+              Search this job by candidate name or email. Results are bounded,
+              paginated, and never ordered by a score or rank.
             </p>
           </div>
           <p className="text-sm text-[#536471]" aria-live="polite">
@@ -776,30 +987,55 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
           </p>
         </div>
 
-        {comparisonCandidates === null && !candidateError ? (
-          <p
-            className="rounded-2xl border border-[#e1e8ed] bg-white p-5 text-sm text-[#536471]"
-            role="status"
-          >
-            Loading current job candidates…
-          </p>
-        ) : candidateError ? (
+        <label className="block max-w-xl text-sm font-medium text-[#0f1419]">
+          Find a candidate
+          <input
+            type="search"
+            value={candidateQuery}
+            onChange={(event) => setCandidateQuery(event.target.value)}
+            placeholder="Search name or email"
+            autoComplete="off"
+            aria-describedby="decision-candidate-search-status"
+            className="mt-1 block h-10 w-full rounded-lg border border-[#e1e8ed] bg-white px-3 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+          />
+        </label>
+
+        <p
+          id="decision-candidate-search-status"
+          className="text-sm text-[#536471]"
+          aria-live="polite"
+        >
+          {candidateQuery.trim().length < 2
+            ? "Enter at least two characters to search."
+            : candidateLoading
+              ? "Searching current job candidates…"
+              : `Showing ${comparisonCandidates.length} candidate${comparisonCandidates.length === 1 ? "" : "s"} on this result page.`}
+        </p>
+
+        {candidateError ? (
           <p
             className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm text-[#b42318]"
             role="alert"
           >
             {candidateError}
           </p>
-        ) : comparisonCandidates?.length === 0 ? (
+        ) : null}
+
+        {candidateQuery.trim().length >= 2 &&
+        !candidateLoading &&
+        !candidateError &&
+        comparisonCandidates.length === 0 ? (
           <p className="rounded-2xl border border-[#e1e8ed] bg-white p-5 text-sm text-[#536471]">
-            No current job applications are available for comparison.
+            No current job candidates match this search.
           </p>
-        ) : (
+        ) : null}
+
+        {comparisonCandidates.length > 0 ? (
           <ul
             className="grid gap-2 sm:grid-cols-2"
-            aria-label="Current job candidates"
+            aria-label="Candidate search results"
           >
-            {comparisonCandidates?.map((candidate) => {
+            {comparisonCandidates.map((candidate) => {
               const selectedIndex = selected.indexOf(candidate.applicationId);
               return (
                 <ComparisonCandidatePicker
@@ -807,12 +1043,31 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
                   candidate={candidate}
                   selectedIndex={selectedIndex >= 0 ? selectedIndex : undefined}
                   canAdd={selected.length < 3}
-                  onToggle={() => toggleCandidate(candidate.applicationId)}
+                  onToggle={() => toggleCandidate(candidate)}
                 />
               );
             })}
           </ul>
-        )}
+        ) : null}
+
+        {candidateNextCursor ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={loadingMoreCandidates}
+            onClick={() =>
+              void loadCandidateResults(candidateQuery, {
+                cursor: candidateNextCursor,
+                nextPage: true,
+              })
+            }
+          >
+            {loadingMoreCandidates
+              ? "Loading the next candidate page…"
+              : "Show next candidate results"}
+          </Button>
+        ) : null}
       </section>
 
       <section
@@ -849,20 +1104,26 @@ export default function DecisionWorkspace({ jobId }: { jobId: string }) {
             className="mt-4 grid gap-2 text-sm sm:grid-cols-3"
             aria-label="Selected comparison order"
           >
-            {selected.map((applicationId, index) => {
-              const candidate = comparisonCandidates?.find(
-                (entry) => entry.applicationId === applicationId,
-              );
-              if (!candidate) return null;
+            {selectedCandidates.map((candidate, index) => {
               return (
                 <li
-                  key={applicationId}
-                  className="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-indigo-950"
+                  key={candidate.applicationId}
+                  className="flex items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-white px-3 py-2 text-indigo-950"
                 >
-                  <span className="mr-2 text-xs font-semibold text-indigo-600">
-                    {index + 1}.
+                  <span className="min-w-0 truncate">
+                    <span className="mr-2 text-xs font-semibold text-indigo-600">
+                      {index + 1}.
+                    </span>
+                    {candidate.candidateName}
                   </span>
-                  {candidate.candidateName}
+                  <button
+                    type="button"
+                    className="shrink-0 rounded px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                    aria-label={`Remove ${candidate.candidateName} from comparison`}
+                    onClick={() => toggleCandidate(candidate)}
+                  >
+                    Remove
+                  </button>
                 </li>
               );
             })}

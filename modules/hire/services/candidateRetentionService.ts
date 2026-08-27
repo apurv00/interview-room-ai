@@ -43,6 +43,7 @@ import {
   HireMultimodalObservationIngestionEvent,
   HireMultimodalObservationPurgeObligation,
 } from '../../hire-multimodal/models'
+import { redactHireCandidateActionSubjectData } from '../../hire-candidate-actions/subject-lifecycle-boundary'
 
 const DEFAULT_CANDIDATE_BATCH_SIZE = 100
 const ANONYMIZATION_LEASE_MS = 15 * 60 * 1000
@@ -675,11 +676,19 @@ async function anonymizeClaimedCandidate(input: {
         .session(session)
         .lean()
       const applicationIds = applicationCoordinates.map((application) => application._id)
+      await redactHireCandidateActionSubjectData({
+        workspaceId: candidate.workspaceId,
+        applicationIds,
+        at: input.now,
+        session,
+      })
       await HireApplication.updateMany(
         scope,
         {
           $unset: {
             applicantSubmissions: 1,
+            decisionNote: 1,
+            'offerDecision.note': 1,
             'events.$[sensitiveEvent].note': 1,
           },
         },
@@ -695,6 +704,7 @@ async function anonymizeClaimedCandidate(input: {
                 'human_kit_reminded',
                 'human_kit_revoked',
                 'human_scorecard_submitted',
+                'stage_move',
               ],
             },
           }],
@@ -881,6 +891,7 @@ async function anonymizeClaimedCandidate(input: {
             },
             exceptions: { applicationId: { $in: applicationIds } },
           },
+          $unset: { selectionHandoff: 1 },
         },
         { session, overwriteImmutable: true },
       )

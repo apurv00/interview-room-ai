@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   findOneAndUpdate: vi.fn(),
   workspaceUpdateOne: vi.fn(),
+  jobUpdateOne: vi.fn(),
   roundFindOneAndUpdate: vi.fn(),
   withTransaction: vi.fn(),
   endSession: vi.fn(),
@@ -25,6 +26,9 @@ vi.mock('../../models/HireEngineHandoff', () => ({
 vi.mock('../../models/HireWorkspace', () => ({
   HireWorkspace: { updateOne: mocks.workspaceUpdateOne },
 }))
+vi.mock('../../models/HireJob', () => ({
+  HireJob: { updateOne: mocks.jobUpdateOne },
+}))
 vi.mock('../../models/HireRound', () => ({
   HireRound: { findOneAndUpdate: mocks.roundFindOneAndUpdate },
 }))
@@ -42,6 +46,7 @@ const IDS = {
   workspaceId: 'a'.repeat(24),
   applicationId: 'b'.repeat(24),
   roundId: 'c'.repeat(24),
+  jobId: 'd'.repeat(24),
 }
 
 afterEach(() => {
@@ -60,7 +65,11 @@ beforeEach(() => {
   mocks.updateMany.mockResolvedValue({ matchedCount: 0 })
   mocks.create.mockResolvedValue({})
   mocks.workspaceUpdateOne.mockResolvedValue({ matchedCount: 1 })
-  mocks.roundFindOneAndUpdate.mockResolvedValue({ engineHandoffGeneration: 1 })
+  mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.roundFindOneAndUpdate.mockResolvedValue({
+    engineHandoffGeneration: 1,
+    jobId: IDS.jobId,
+  })
   mocks.withTransaction.mockImplementation(async (work: () => Promise<void>) => work())
   mocks.endSession.mockResolvedValue(undefined)
   startSessionSpy.mockResolvedValue({
@@ -105,12 +114,47 @@ describe('Hire control handoff service', () => {
         _id: IDS.roundId,
         workspaceId: IDS.workspaceId,
         applicationId: IDS.applicationId,
+        $or: expect.any(Array),
       }),
-      { $inc: { engineHandoffGeneration: 1 } },
+      {
+        $set: { status: 'prepared', preparedAt: NOW },
+        $inc: { engineHandoffGeneration: 1 },
+      },
       expect.objectContaining({ new: true, session: expect.anything() }),
+    )
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith(
+      { _id: IDS.jobId, workspaceId: IDS.workspaceId },
+      { $inc: { candidateReadVersion: 1 } },
+      expect.objectContaining({ session: expect.anything() }),
     )
     expect(persisted.handoffGeneration).toBe(1)
     expect(mocks.updateMany.mock.calls[0][0]).not.toHaveProperty('redeemedAt')
+  })
+
+  it('keeps renewed handoff bookkeeping out of candidate-list activity', async () => {
+    mocks.roundFindOneAndUpdate
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ engineHandoffGeneration: 2, jobId: IDS.jobId })
+
+    const result = await issueHireEngineHandoff({
+      ...IDS,
+      config: {
+        role: 'Backend engineer', interviewType: 'behavioral', experience: '3-6',
+        duration: 20, jobDescription: 'Canonical JD',
+      },
+      consentVersion: 'hire-ai-v1',
+      consentAt: new Date('2026-08-09T23:59:00.000Z'),
+      inviteExpiresAt: new Date('2026-08-17T00:00:00.000Z'),
+      now: NOW,
+    })
+
+    expect(result.code).toBeTruthy()
+    expect(mocks.roundFindOneAndUpdate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'prepared', preparedAt: { $exists: true } }),
+      { $inc: { engineHandoffGeneration: 1 } },
+      expect.objectContaining({ session: expect.anything(), timestamps: false }),
+    )
+    expect(mocks.jobUpdateOne).not.toHaveBeenCalled()
   })
 
   it('cannot mint a handoff after the workspace tombstone wins', async () => {
@@ -165,7 +209,11 @@ describe('Hire control handoff service', () => {
       { code: `${IDS.workspaceId}.${'f'.repeat(64)}`, requestId: '1'.repeat(64) },
       NOW,
     )
-    expect(envelope).toMatchObject(IDS)
+    expect(envelope).toMatchObject({
+      workspaceId: IDS.workspaceId,
+      applicationId: IDS.applicationId,
+      roundId: IDS.roundId,
+    })
     expect(envelope).toMatchObject({ handoffGeneration: 1, issuedAt: NOW.toISOString() })
     expect(envelope.config).toEqual(persistedConfig)
     expect(mocks.findOneAndUpdate.mock.calls[0][0]).toMatchObject({

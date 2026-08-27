@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   candidateFindOne: vi.fn(),
   privacyExists: vi.fn(),
   kitFindOne: vi.fn(),
+  kitCreate: vi.fn(),
   kitUpdateOne: vi.fn(),
   kitUpdateMany: vi.fn(),
   roundFindOne: vi.fn(),
@@ -29,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   deliveryFindOne: vi.fn(),
   deliveryUpdateMany: vi.fn(),
   deliveryCreate: vi.fn(),
-  deliver: vi.fn(),
+  kickDelivery: vi.fn(),
   append: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -52,7 +53,7 @@ vi.mock('@hire-onboarding-boundary', () => ({
 vi.mock('../services/pipelineService', () => ({ appendApplicationEvent: mocks.append }))
 vi.mock('../services/humanKitDeliveryService', () => ({
   createHumanInterviewKitDelivery: mocks.deliveryCreate,
-  deliverHumanInterviewKit: mocks.deliver,
+  kickHumanInterviewKitDelivery: mocks.kickDelivery,
 }))
 vi.mock('../models', () => ({
   HireApplication: {
@@ -74,6 +75,7 @@ vi.mock('../models', () => ({
   HireHumanScorecard: { create: mocks.scorecardCreate, updateOne: mocks.scorecardUpdateOne },
   HireInterviewKit: {
     findOne: mocks.kitFindOne,
+    create: mocks.kitCreate,
     updateOne: mocks.kitUpdateOne,
     updateMany: mocks.kitUpdateMany,
   },
@@ -86,7 +88,10 @@ vi.mock('../models', () => ({
 import {
   bootstrapHumanInterviewKit,
   createGuestHumanRound,
+  createMemberHumanRound,
+  revokeHumanInterviewKit,
   submitHumanInterviewKitScorecard,
+  submitMemberHumanRoundScorecard,
 } from '../services/humanRoundService'
 
 const IDS = {
@@ -155,6 +160,7 @@ beforeEach(() => {
   mocks.workspaceFindOne.mockReturnValue({ select: vi.fn().mockReturnThis(), lean: vi.fn().mockResolvedValue({ name: 'Acme' }) })
   mocks.jobExists.mockReturnValue(sessionValue({ _id: IDS.job }))
   mocks.jobFindOne.mockReturnValue({ select: vi.fn().mockReturnThis(), lean: vi.fn().mockResolvedValue({ title: 'Engineer' }) })
+  mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.applicationExists.mockReturnValue(sessionValue({ _id: IDS.application }))
   mocks.candidateFindOne.mockResolvedValue({ _id: IDS.candidate, name: 'Ada' })
   mocks.privacyExists.mockReturnValue(sessionValue(null))
@@ -163,8 +169,11 @@ beforeEach(() => {
   mocks.deliveryFindOne.mockReturnValue({ select: vi.fn().mockReturnThis(), lean: vi.fn().mockResolvedValue({ recipientName: 'Jordan' }) })
   mocks.kitUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.kitUpdateMany.mockResolvedValue({ modifiedCount: 1 })
   mocks.deliveryUpdateMany.mockResolvedValue({ modifiedCount: 0 })
   mocks.scorecardCreate.mockResolvedValue([{}])
+  mocks.scorecardUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.kickDelivery.mockResolvedValue(undefined)
 })
 
 describe('public human interview kit service', () => {
@@ -213,6 +222,7 @@ describe('public human interview kit service', () => {
     const consumeOrder = mocks.kitUpdateOne.mock.invocationCallOrder[0]
     const scorecardOrder = mocks.scorecardCreate.mock.invocationCallOrder[0]
     expect(consumeOrder).toBeLessThan(scorecardOrder)
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith(expect.objectContaining({ _id: IDS.job, status: 'open' }), { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } }, { session: { id: 'tx' } })
     expect(mocks.kitUpdateOne).toHaveBeenCalledWith(
       expect.objectContaining({ active: true, status: 'active', secretHash: expect.any(String) }),
       { $set: { status: 'submitted', submittedAt: NOW, active: false } },
@@ -282,6 +292,145 @@ describe('guest human-kit creation isolation', () => {
     expect(mocks.jobUpdateOne).not.toHaveBeenCalled()
     expect(mocks.roundCreate).not.toHaveBeenCalled()
     expect(mocks.deliveryCreate).not.toHaveBeenCalled()
-    expect(mocks.deliver).not.toHaveBeenCalled()
+    expect(mocks.kickDelivery).not.toHaveBeenCalled()
   })
+
+  it('revises candidate pages once for a new round but not for its replay', async () => {
+    const application = {
+      _id: IDS.application,
+      workspaceId: IDS.workspace,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+    }
+    const job = {
+      _id: IDS.job,
+      workspaceId: IDS.workspace,
+      title: 'Engineer',
+      status: 'open',
+    }
+    const candidate = {
+      _id: IDS.candidate,
+      workspaceId: IDS.workspace,
+      name: 'Ada',
+      email: 'ada@example.com',
+    }
+    const ctx = {
+      workspace: { _id: IDS.workspace, name: 'Acme' },
+      membership: { _id: IDS.member, name: 'Recruiter', email: 'hr@acme.example' },
+    } as never
+    const input = {
+      applicationId: IDS.application,
+      interviewerName: 'Jordan Interviewer',
+      interviewerEmail: 'jordan@example.com',
+      operationId: '123e4567-e89b-42d3-a456-426614174000',
+    }
+    mocks.applicationFindOne.mockResolvedValue(application)
+    mocks.jobFindOne.mockResolvedValue(job)
+    mocks.candidateFindOne.mockResolvedValue(candidate)
+    mocks.roundFindOne.mockResolvedValueOnce(null)
+    mocks.roundCreate.mockImplementationOnce(async (docs: unknown[]) => docs)
+    mocks.kitCreate.mockImplementationOnce(async (docs: unknown[]) => docs)
+    mocks.deliveryCreate.mockResolvedValueOnce({ _id: '888888888888888888888888' })
+
+    await createGuestHumanRound(ctx, input)
+
+    expect(mocks.jobUpdateOne).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _id: IDS.job, status: 'open' }),
+      { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } },
+      { session: { id: 'tx' } },
+    )
+
+    vi.clearAllMocks()
+    mocks.applicationFindOne.mockResolvedValue(application)
+    mocks.jobFindOne.mockResolvedValue(job)
+    mocks.candidateFindOne.mockResolvedValue(candidate)
+    mocks.onboardingFence.mockResolvedValue(undefined)
+    mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
+    mocks.privacyExists.mockReturnValue(sessionValue(null))
+    mocks.roundFindOne.mockResolvedValue(round())
+    mocks.kitFindOne.mockReturnValue({ select: vi.fn().mockResolvedValue(kit()) })
+    mocks.deliveryFindOne.mockResolvedValue({ _id: '888888888888888888888888' })
+    mocks.kickDelivery.mockResolvedValue(undefined)
+
+    await createGuestHumanRound(ctx, input)
+
+    expect(mocks.jobUpdateOne).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _id: IDS.job, status: 'open' }),
+      { $inc: { intakeWriteVersion: 1 } },
+      { session: { id: 'tx' } },
+    )
+  })
+})
+
+describe('member human-round candidate-page revisions', () => {
+  const ctx = {
+    workspace: { _id: IDS.workspace, name: 'Acme' },
+    membership: { _id: IDS.member, name: 'Recruiter', email: 'hr@acme.example' },
+  } as never
+
+  beforeEach(() => {
+    mocks.applicationFindOne.mockResolvedValue({
+      _id: IDS.application,
+      workspaceId: IDS.workspace,
+      jobId: IDS.job,
+      candidateId: IDS.candidate,
+    })
+    mocks.jobFindOne.mockResolvedValue({
+      _id: IDS.job,
+      workspaceId: IDS.workspace,
+      title: 'Engineer',
+      status: 'open',
+    })
+    mocks.candidateFindOne.mockResolvedValue({
+      _id: IDS.candidate,
+      workspaceId: IDS.workspace,
+      name: 'Ada',
+    })
+  })
+
+  it('revises the page when a member opens a human round', async () => {
+    mocks.roundFindOne.mockResolvedValueOnce(null)
+    mocks.roundCreate.mockImplementationOnce(async (docs: unknown[]) => docs)
+
+    await createMemberHumanRound(ctx, {
+      applicationId: IDS.application,
+      operationId: '123e4567-e89b-42d3-a456-426614174001',
+    })
+
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: IDS.job, status: 'open' }),
+      { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } },
+      { session: { id: 'tx' } },
+    )
+  })
+
+  it('revises the page when a member submits human evidence', async () => {
+    mocks.roundFindOne.mockResolvedValueOnce(round({ mode: 'member_room' }))
+    mocks.roundFindOneAndUpdate.mockResolvedValueOnce(
+      round({ mode: 'member_room', status: 'completed' }),
+    )
+
+    await submitMemberHumanRoundScorecard(ctx, {
+      humanRoundId: IDS.round,
+      dimensions: [...DIMENSIONS],
+      recommendation: 'yes',
+      overallComment: 'Strong practical interview evidence.',
+    })
+
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: IDS.job, status: 'open' }),
+      { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } },
+      { session: { id: 'tx' } },
+    )
+  })
+})
+
+it('revisions candidate pages when a human interview kit is revoked', async () => {
+  const current = round()
+  mocks.roundFindOne.mockResolvedValueOnce(current)
+  mocks.roundFindOneAndUpdate.mockResolvedValueOnce({ ...current, status: 'revoked' })
+  await revokeHumanInterviewKit({ workspace: { _id: IDS.workspace }, membership: { _id: IDS.member, name: 'HR' } } as never, IDS.round)
+  expect(mocks.jobUpdateOne).toHaveBeenCalledWith(
+    { _id: IDS.job, workspaceId: IDS.workspace }, { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } }, { session: { id: 'tx' } },
+  )
 })

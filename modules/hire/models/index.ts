@@ -103,6 +103,7 @@ export {
   HIRE_SCREENING_SELECTION_REASONS,
   HIRE_SCREENING_EXCEPTION_ACTIONS,
   HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+  HIRE_SCREENING_GATE_MAX_EXCEPTIONS,
   type HireScreeningSelectionMode,
   type HireScreeningGateStatus,
   type HireScreeningScoreState,
@@ -113,6 +114,7 @@ export {
   type IHireScreeningCutLine,
   type IHireScreeningRankedApplication,
   type IHireScreeningException,
+  type IHireScreeningSelectionHandoff,
   type IHireScreeningGate,
 } from './HireScreeningGate'
 export {

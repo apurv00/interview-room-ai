@@ -16,9 +16,12 @@ import {
   HireInvitationBatch,
   HireInvitationBatchItem,
   HireJob,
+  HirePrivacyRequest,
   HireRound,
+  HireWorkspace,
   HIRE_STAGES,
   TERMINAL_STAGES,
+  activeHirePrivacyRequestFilter,
   type HireStage,
   type HireCandidateProvenanceSource,
   type IHireApplication,
@@ -794,7 +797,7 @@ export async function updateJobStatus(
       {
         $set: set,
         ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
-        $inc: { intakeWriteVersion: 1 },
+        $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 },
         $push: {
           events: {
             type: 'status_change',
@@ -1314,6 +1317,7 @@ export async function createApplication(
         ],
         { session },
       )
+      await HireWorkspace.updateOne({ _id: ctx.workspace._id }, { $inc: { privacyAggregateFenceVersion: 1 } }, { session })
       return created[0]
     })
   } catch (err: unknown) {
@@ -1555,7 +1559,12 @@ async function addOrMergeJobCandidateOnce(
     // not bump write versions, and a close racing this add wins cleanly.
     const jobClaim = await HireJob.updateOne(
       { _id: job._id, workspaceId: ctx.workspace._id, status: 'open' },
-      { $inc: { intakeWriteVersion: 1 } },
+      {
+        $inc: {
+          intakeWriteVersion: 1,
+          ...(existingApplication ? { candidateReadVersion: 1 } : {}),
+        },
+      },
       { session },
     )
     if (jobClaim.matchedCount !== 1) {
@@ -1582,6 +1591,9 @@ async function addOrMergeJobCandidateOnce(
     const sourceMerged = createdCandidate
       ? false
       : await recordCandidateSourceProvenance(candidate, ctx.workspace._id, source, session)
+    if (!createdCandidate && (!existingApplication || sourceMerged)) {
+      await HireWorkspace.updateOne({ _id: ctx.workspace._id }, { $inc: { privacyAggregateFenceVersion: 1 } }, { session })
+    }
 
     if (!existingApplication) {
       const created = await HireApplication.create(
@@ -1692,6 +1704,7 @@ export interface StageMoveInput {
   expectedFrom: HireStage
   operationId: string
   note?: string
+  requirePrivacyAvailable?: boolean
 }
 
 function targetStageForMove(from: HireStage, action: StageMoveInput['action']): HireStage {
@@ -1757,16 +1770,17 @@ export async function moveStage(
     (event) => event.operationId === input.operationId,
   )
   if (repeated) {
-    if (repeated.type !== 'stage_move' || repeated.from !== from || repeated.to !== to) {
+    if (repeated.type !== 'stage_move' || repeated.from !== from || repeated.to !== to ||
+        (repeated.note?.trim() ?? '') !== (input.note?.trim() ?? '')) {
       throw new AppError(
         'That operation id was already used for another stage move',
         409,
         'OPERATION_ID_REUSED',
       )
     }
-    return application
+    if (!input.requirePrivacyAvailable) return application
   }
-  if (application.stage !== from) {
+  if (!repeated && application.stage !== from) {
     throw new AppError('The stage changed underneath you — refresh and retry', 409, 'STAGE_RACE')
   }
 
@@ -1785,9 +1799,52 @@ export async function moveStage(
 
   let assessmentExportCleanupTargets: HireAssessmentExportCleanupTarget[] = []
   const result = await withHireTransaction(ctx, async (session) => {
+    if (input.requirePrivacyAvailable) {
+      try {
+        await claimHireCandidatePiiWriteFence({
+          workspaceId: ctx.workspace._id,
+          candidateId: application.candidateId,
+          session,
+        })
+      } catch (error) {
+        if (error instanceof HireCandidatePiiTombstoneError) {
+          throw new AppError(
+            'This candidate is unavailable for privacy reasons',
+            409,
+            'CANDIDATE_PRIVACY_UNAVAILABLE',
+          )
+        }
+        throw error
+      }
+      const privacyRequest = await HirePrivacyRequest.exists({
+        workspaceId: ctx.workspace._id,
+        candidateId: application.candidateId,
+        ...activeHirePrivacyRequestFilter(new Date()),
+      }).session(session)
+      if (privacyRequest) {
+        throw new AppError(
+          'This candidate is unavailable while a privacy request is active',
+          409,
+          'CANDIDATE_PRIVACY_UNAVAILABLE',
+        )
+      }
+      if (repeated) {
+        const current = await HireApplication.findOne(
+          {
+            _id: application._id,
+            workspaceId: ctx.workspace._id,
+            events: { $elemMatch: { operationId: input.operationId } },
+          },
+          null,
+          { session },
+        )
+        if (current) return current
+        throw new AppError('The stage changed underneath you — refresh and retry', 409, 'STAGE_RACE')
+      }
+    }
     const jobClaim = await HireJob.updateOne(
       { _id: application.jobId, workspaceId: ctx.workspace._id, status: 'open' },
-      { $inc: { intakeWriteVersion: 1 } },
+      { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } },
       { session },
     )
     if (jobClaim.matchedCount !== 1) {
@@ -2079,6 +2136,7 @@ export async function appendApplicationEvent(
   await connectDB()
   await HireApplication.updateOne(
     { _id: applicationId, workspaceId },
-    { $push: { events: { ...event, at: new Date() } } }
+    { $push: { events: { ...event, at: new Date() } } },
+    { timestamps: false },
   )
 }

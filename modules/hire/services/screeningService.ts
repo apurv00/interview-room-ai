@@ -29,6 +29,7 @@ export type ScreeningSelectionReason = (typeof SCREENING_SELECTION_REASONS)[numb
 
 export const SCREENING_EXCEPTION_ACTIONS = ['include', 'exclude'] as const
 export type ScreeningExceptionAction = (typeof SCREENING_EXCEPTION_ACTIONS)[number]
+export const SCREENING_MAX_EXCEPTIONS = 100
 
 /** Strings, ObjectIds, and other values with stable `toString()` all work. */
 export type ScreeningId = string | { toString(): string }
@@ -368,6 +369,8 @@ function normalizeExceptions(
   knownApplicationIds: Set<string>,
   now: Date,
 ): ScreeningException[] {
+  if ((input?.length ?? 0) > SCREENING_MAX_EXCEPTIONS) throw new ScreeningPreviewError('SCREENING_TOO_MANY_EXCEPTIONS',
+    `A screening preview supports at most ${SCREENING_MAX_EXCEPTIONS} explicit exceptions`)
   const seen = new Set<string>()
   return (input ?? []).map((exception) => {
     const applicationId = stableId(exception.applicationId, 'exception applicationId')
@@ -461,6 +464,7 @@ export function previewScreeningGate(input: {
   jobId: ScreeningId
   rule: ScreeningGateRule
   applications: ScreeningApplicationInput[]
+  manualIncludeApplicationIds?: ScreeningId[]
   exceptions?: ScreeningExceptionInput[]
   now?: Date | string | number
 }): ScreeningGatePreview {
@@ -513,6 +517,21 @@ export function previewScreeningGate(input: {
     entry.automaticallySelected = automatic.selected
     entry.selected = automatic.selected
     entry.selectionReason = automatic.reason
+  }
+
+  const manualInput = (input.manualIncludeApplicationIds ?? [])
+    .map((value) => stableId(value, 'manual include applicationId'))
+  const manualIncludeApplicationIds = new Set(manualInput)
+  if (manualIncludeApplicationIds.size !== manualInput.length) throw new ScreeningPreviewError('SCREENING_DUPLICATE_APPLICATION',
+    'A manual inclusion can appear only once in a screening preview')
+  manualIncludeApplicationIds.forEach((applicationId) => {
+    if (!applicationIds.has(applicationId)) throw new ScreeningPreviewError('SCREENING_UNKNOWN_APPLICATION',
+      'A manual inclusion must target an application in this preview')
+  })
+  for (const entry of [...eligible, ...knownKnockouts]) {
+    if (!manualIncludeApplicationIds.has(entry.applicationId)) continue
+    entry.selected = true
+    entry.selectionReason = 'manual_include'
   }
 
   const exceptions = normalizeExceptions(input.exceptions, applicationIds, generatedAt)

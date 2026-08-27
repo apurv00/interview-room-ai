@@ -8,7 +8,6 @@ import { composeHireApiRoute } from '../../../../_lib/composeHireApiRoute'
 import {
   serializeInvitationBatch,
   serializeScreeningGate,
-  serializeScreeningPreview,
 } from '../_lib/serialize'
 import {
   screeningConfirmRequestSchema,
@@ -36,7 +35,6 @@ export const POST = composeHireApiRoute<ScreeningConfirmRouteBody>({
         gate: serializeScreeningGate(result.gate, [result.batch]),
         batch: serializeInvitationBatch(result.batch),
         itemCount: result.itemCount,
-        preview: serializeScreeningPreview(result.preview),
         requirementVersion: result.requirementVersion,
         previewFingerprint: result.previewFingerprint,
       },

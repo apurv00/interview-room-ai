@@ -7,7 +7,7 @@
  * storage: retry identity lives only in this rendered component state.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Badge from '@shared/ui/Badge'
 import Button from '@shared/ui/Button'
 
@@ -109,6 +109,10 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const confirmationRef = useRef<HTMLDivElement | null>(null)
+  const addTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const headingRef = useRef<HTMLHeadingElement | null>(null)
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoadError(null)
@@ -145,10 +149,47 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
     return () => controller.abort()
   }, [jobStatus, load])
 
+  useEffect(() => {
+    if (!confirmation) return
+    const dialog = confirmationRef.current
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>('button:not([disabled])') ?? [])
+    window.requestAnimationFrame(() => focusable()[0]?.focus())
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !sending) {
+        event.preventDefault()
+        closeConfirmation()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const targets = focusable()
+      if (targets.length === 0) return
+      const first = targets[0]
+      const last = targets[targets.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [confirmation, sending])
+
+  function closeConfirmation() {
+    const trigger = addTriggerRef.current
+    setConfirmation(null)
+    setActionError(null)
+    addTriggerRef.current = null
+    window.requestAnimationFrame(() => (trigger?.isConnected ? trigger : headingRef.current)?.focus())
+  }
+
   async function confirmAddToJob() {
     if (!confirmation || sending) return
     setSending(true)
     setNotice(null)
+    setActionError(null)
     try {
       const response = await fetch(
         candidateEndpoint(jobId),
@@ -168,13 +209,16 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
         )
         setConfirmation(null)
         setNotice(`Added ${confirmation.suggestion.candidate.name} to this job.`)
+        const trigger = addTriggerRef.current
+        addTriggerRef.current = null
+        window.requestAnimationFrame(() => (trigger?.isConnected ? trigger : headingRef.current)?.focus())
         return
       }
-      setNotice(responseError(data, statusMessage(data?.status)))
+      setActionError(responseError(data, statusMessage(data?.status)))
       // Keep confirmation + operationId available to make only a network
       // retry idempotent; explicit cancellation discards it.
     } catch {
-      setNotice('Network error — no confirmation was received. You can retry safely.')
+      setActionError('Network error — no confirmation was received. You can retry safely.')
     } finally {
       setSending(false)
     }
@@ -193,7 +237,7 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
     <section className="rounded-2xl border border-[#e6ecf0] bg-white p-5" aria-labelledby="pool-suggestions-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 id="pool-suggestions-heading" className="text-base font-semibold text-[#0f1419]">Past candidates who match this job</h2>
+          <h2 ref={headingRef} id="pool-suggestions-heading" tabIndex={-1} className="text-base font-semibold text-[#0f1419] focus:outline-none">Past candidates who match this job</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[#536471]">
             These are read-only, deterministic requirement-overlap suggestions from this workspace’s past candidates. Reviewing them does not add anyone or contact a candidate.
           </p>
@@ -204,6 +248,7 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
       </div>
 
       {notice ? <p className="mt-4 text-sm text-[#2563eb]" role="status">{notice}</p> : null}
+      {actionError ? <p className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">{actionError}</p> : null}
       {loadError ? (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700" role="alert">
           <p>{loadError}</p>
@@ -228,8 +273,10 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
                 <Button
                   type="button"
                   variant="secondary"
-                  onClick={() => {
+                  onClick={(event) => {
                     setNotice(null)
+                    setActionError(null)
+                    addTriggerRef.current = event.currentTarget
                     setConfirmation({ suggestion, operationId: operationId() })
                   }}
                 >
@@ -252,16 +299,16 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
       ) : null}
 
       {confirmation ? (
-        <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-4" role="alertdialog" aria-modal="false" aria-labelledby="pool-confirm-heading">
+        <div ref={confirmationRef} className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-4" role="alertdialog" aria-modal="false" aria-labelledby="pool-confirm-heading" aria-describedby="pool-confirm-description">
           <h3 id="pool-confirm-heading" className="font-semibold text-[#0f1419]">Confirm candidate addition</h3>
-          <p className="mt-2 text-sm leading-6 text-[#334155]">
+          <p id="pool-confirm-description" className="mt-2 text-sm leading-6 text-[#334155]">
             Add {confirmation.suggestion.candidate.name} to this job? This is an HR action; it does not happen until you confirm and does not contact the candidate.
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
             <Button type="button" onClick={() => void confirmAddToJob()} disabled={sending}>
               {sending ? 'Adding…' : 'Confirm add to job'}
             </Button>
-            <Button type="button" variant="secondary" onClick={() => setConfirmation(null)} disabled={sending}>
+            <Button type="button" variant="secondary" onClick={closeConfirmation} disabled={sending}>
               Cancel
             </Button>
           </div>

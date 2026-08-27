@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
   startHireInterviewAttempt: vi.fn(),
   issueHireEngineHandoff: vi.fn(),
   roundFindOne: vi.fn(),
-  roundUpdateOne: vi.fn(),
   workspaceFindOne: vi.fn(),
 }))
 
@@ -22,10 +21,7 @@ vi.mock('@hire/services/engineHandoffService', () => ({
   issueHireEngineHandoff: mocks.issueHireEngineHandoff,
 }))
 vi.mock('@hire/models/HireRound', () => ({
-  HireRound: {
-    findOne: mocks.roundFindOne,
-    updateOne: mocks.roundUpdateOne,
-  },
+  HireRound: { findOne: mocks.roundFindOne },
 }))
 vi.mock('@hire/models/HireWorkspace', () => ({
   HireWorkspace: { findOne: mocks.workspaceFindOne },
@@ -102,7 +98,6 @@ beforeEach(() => {
     handoffUrl: 'https://runtime.example/handoff#code=opaque',
     expiresAt: new Date('2026-08-10T00:02:00.000Z'),
   })
-  mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 1 })
 })
 
 afterEach(() => {

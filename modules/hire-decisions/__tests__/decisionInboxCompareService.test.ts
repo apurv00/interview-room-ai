@@ -41,6 +41,8 @@ const IDS = {
   candidateA: '666666666666666666666666',
   candidateB: '777777777777777777777777',
   candidateC: '888888888888888888888888',
+  sourceA: '999999999999999999999999',
+  sourceB: 'aaaaaaaaaaaaaaaaaaaaaaaa',
 }
 
 function query<T>(value: T) {
@@ -175,6 +177,7 @@ describe('Phase-4 decision action inbox', () => {
     expect(mocks.deliveryFind).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed',
       attempts: { $gte: 5 },
+      privacyRedactedAt: { $exists: false },
     }))
     expect(mocks.buildDecision).toHaveBeenCalledTimes(1)
 
@@ -193,6 +196,8 @@ describe('Phase-4 decision action inbox', () => {
       expect(encoded).not.toContain(forbidden)
     }
     expect(result.items[0].decision).not.toHaveProperty('aiAssessments')
+    expect(result.limit).toBe(10)
+    expect(result.nextCursor).toBeNull()
   })
 
   it('rejects an invalid limit before reading any source collection', async () => {
@@ -215,7 +220,273 @@ describe('Phase-4 decision action inbox', () => {
     const { HireDecisionError } = await import('../services/decisionAggregateService')
     mocks.buildDecision.mockRejectedValue(new HireDecisionError('gone', 'DECISION_SCOPE_NOT_FOUND', 404))
 
-    await expect(readHireDecisionActionInbox({ workspaceId: IDS.workspaceId })).resolves.toEqual({ items: [] })
+    await expect(readHireDecisionActionInbox({ workspaceId: IDS.workspaceId })).resolves.toEqual({
+      items: [],
+      limit: 50,
+      nextCursor: null,
+    })
+  })
+
+  it('returns a stable keyset cursor when another safe action exists', async () => {
+    const newest = new Date('2026-08-14T11:00:00.000Z')
+    const older = new Date('2026-08-14T10:00:00.000Z')
+    mocks.verdictFind.mockReturnValue(query([
+      {
+        _id: IDS.sourceA,
+        applicationId: IDS.applicationA,
+        jobId: IDS.jobId,
+        candidateId: IDS.candidateA,
+        recommendation: 'yes',
+        submittedAt: newest,
+      },
+      {
+        _id: IDS.sourceB,
+        applicationId: IDS.applicationB,
+        jobId: IDS.jobId,
+        candidateId: IDS.candidateA,
+        recommendation: 'no',
+        submittedAt: older,
+      },
+    ]))
+
+    const result = await readHireDecisionActionInbox({
+      workspaceId: IDS.workspaceId,
+      jobId: IDS.jobId,
+      limit: 1,
+    })
+
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0].decision.coordinates.applicationId).toBe(
+      IDS.applicationA,
+    )
+    expect(result.nextCursor).toEqual({
+      occurredAt: newest,
+      kind: 'external_verdict_submitted',
+      applicationId: IDS.applicationA,
+      sourceId: IDS.sourceA,
+    })
+  })
+
+  it('hydrates only the visible page plus look-ahead instead of every source row', async () => {
+    const rows = [
+      [IDS.applicationA, IDS.candidateA, '2026-08-14T12:00:00.000Z'],
+      [IDS.applicationB, IDS.candidateB, '2026-08-14T11:00:00.000Z'],
+      [IDS.applicationC, IDS.candidateC, '2026-08-14T10:00:00.000Z'],
+    ] as const
+    mocks.roundFind.mockReturnValue(query(rows.map(([applicationId, candidateId, occurredAt], index) => ({
+      _id: index === 0 ? IDS.sourceA : index === 1 ? IDS.sourceB : 'bbbbbbbbbbbbbbbbbbbbbbbb',
+      applicationId,
+      jobId: IDS.jobId,
+      candidateId,
+      mode: 'member_room',
+      createdAt: new Date(occurredAt),
+    }))))
+    mocks.buildDecision.mockImplementation(({ applicationId }: { applicationId: string }) => {
+      const candidateId = applicationId === IDS.applicationA
+        ? IDS.candidateA
+        : applicationId === IDS.applicationB
+          ? IDS.candidateB
+          : IDS.candidateC
+      return Promise.resolve(view(applicationId, candidateId))
+    })
+
+    const result = await readHireDecisionActionInbox({
+      workspaceId: IDS.workspaceId,
+      jobId: IDS.jobId,
+      limit: 2,
+    })
+
+    expect(result.items).toHaveLength(2)
+    expect(result.nextCursor).not.toBeNull()
+    expect(mocks.buildDecision).toHaveBeenCalledTimes(3)
+  })
+
+  it('backfills a context removed by privacy while keeping cursor progress truthful', async () => {
+    const occurredAt = [
+      new Date('2026-08-14T12:00:00.000Z'),
+      new Date('2026-08-14T11:00:00.000Z'),
+      new Date('2026-08-14T10:00:00.000Z'),
+    ]
+    mocks.roundFind.mockReturnValue(query([
+      {
+        _id: IDS.sourceA,
+        applicationId: IDS.applicationA,
+        jobId: IDS.jobId,
+        candidateId: IDS.candidateA,
+        mode: 'member_room',
+        createdAt: occurredAt[0],
+      },
+      {
+        _id: IDS.sourceB,
+        applicationId: IDS.applicationB,
+        jobId: IDS.jobId,
+        candidateId: IDS.candidateB,
+        mode: 'member_room',
+        createdAt: occurredAt[1],
+      },
+      {
+        _id: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+        applicationId: IDS.applicationC,
+        jobId: IDS.jobId,
+        candidateId: IDS.candidateC,
+        mode: 'member_room',
+        createdAt: occurredAt[2],
+      },
+    ]))
+    const { HireDecisionError } = await import('../services/decisionAggregateService')
+    mocks.buildDecision.mockImplementation(({ applicationId }: { applicationId: string }) => {
+      if (applicationId === IDS.applicationA) {
+        return Promise.reject(
+          new HireDecisionError('gone', 'DECISION_SCOPE_NOT_FOUND', 404),
+        )
+      }
+      return Promise.resolve(
+        view(
+          applicationId,
+          applicationId === IDS.applicationB ? IDS.candidateB : IDS.candidateC,
+        ),
+      )
+    })
+
+    const result = await readHireDecisionActionInbox({
+      workspaceId: IDS.workspaceId,
+      jobId: IDS.jobId,
+      limit: 1,
+    })
+
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0].decision.coordinates.applicationId).toBe(
+      IDS.applicationB,
+    )
+    expect(result.nextCursor).toEqual({
+      occurredAt: occurredAt[1],
+      kind: 'pending_human_scorecard',
+      applicationId: IDS.applicationB,
+      sourceId: IDS.sourceB,
+    })
+    expect(mocks.buildDecision).toHaveBeenCalledTimes(3)
+  })
+
+  it('defensively excludes privacy-redacted delivery rows from items and pagination', async () => {
+    mocks.deliveryFind.mockReturnValue(query([{
+      _id: IDS.sourceA,
+      applicationId: IDS.applicationA,
+      jobId: IDS.jobId,
+      candidateId: IDS.candidateA,
+      purpose: 'initial',
+      attempts: 5,
+      updatedAt: new Date('2026-08-14T12:00:00.000Z'),
+      privacyRedactedAt: new Date('2026-08-14T12:01:00.000Z'),
+    }]))
+    mocks.verdictFind.mockReturnValue(query([{
+      _id: IDS.sourceB,
+      applicationId: IDS.applicationB,
+      jobId: IDS.jobId,
+      candidateId: IDS.candidateB,
+      recommendation: 'yes',
+      submittedAt: new Date('2026-08-14T11:00:00.000Z'),
+    }]))
+    mocks.buildDecision.mockImplementation(({ applicationId }: { applicationId: string }) =>
+      Promise.resolve(view(applicationId, IDS.candidateB)),
+    )
+
+    const result = await readHireDecisionActionInbox({
+      workspaceId: IDS.workspaceId,
+      jobId: IDS.jobId,
+      limit: 1,
+    })
+
+    expect(result.items.map((item) => item.kind)).toEqual([
+      'external_verdict_submitted',
+    ])
+    expect(result.nextCursor).toBeNull()
+    expect(mocks.buildDecision).toHaveBeenCalledTimes(1)
+    expect(mocks.buildDecision).toHaveBeenCalledWith({
+      workspaceId: IDS.workspaceId,
+      applicationId: IDS.applicationB,
+    })
+  })
+
+  it('binds every source query to the same stable global keyset coordinate', async () => {
+    const occurredAt = new Date('2026-08-14T10:00:00.000Z')
+
+    await readHireDecisionActionInbox({
+      workspaceId: IDS.workspaceId,
+      jobId: IDS.jobId,
+      limit: 10,
+      cursor: {
+        occurredAt,
+        kind: 'pending_human_scorecard',
+        applicationId: IDS.applicationA,
+        sourceId: IDS.sourceA,
+      },
+    })
+
+    expect(mocks.roundFind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: [
+          { createdAt: { $lt: occurredAt } },
+          {
+            createdAt: occurredAt,
+            $or: [
+              {
+                applicationId: {
+                  $gt: expect.objectContaining({ toString: expect.any(Function) }),
+                },
+              },
+              {
+                applicationId: expect.objectContaining({
+                  toString: expect.any(Function),
+                }),
+                _id: {
+                  $gt: expect.objectContaining({ toString: expect.any(Function) }),
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    expect(mocks.deliveryFind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: [
+          { updatedAt: { $lt: occurredAt } },
+          { updatedAt: occurredAt },
+        ],
+      }),
+    )
+    expect(mocks.verdictFind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $or: [{ submittedAt: { $lt: occurredAt } }],
+      }),
+    )
+  })
+
+  it('keeps the external-verdict watermark and keyset bound on later pages', async () => {
+    const since = new Date('2026-08-14T08:00:00.000Z')
+    const occurredAt = new Date('2026-08-14T10:00:00.000Z')
+
+    await readHireDecisionActionInbox({
+      workspaceId: IDS.workspaceId,
+      jobId: IDS.jobId,
+      externalVerdictsSince: since,
+      limit: 10,
+      cursor: {
+        occurredAt,
+        kind: 'pending_human_scorecard',
+        applicationId: IDS.applicationA,
+        sourceId: IDS.sourceA,
+      },
+    })
+
+    expect(mocks.verdictFind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        $and: [
+          { submittedAt: { $gt: since } },
+          { $or: [{ submittedAt: { $lt: occurredAt } }] },
+        ],
+      }),
+    )
   })
 })
 

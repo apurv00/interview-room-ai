@@ -44,7 +44,19 @@ vi.mock('../../hire-digest/services/hireDigestService', () => ({
 vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
   cancelHireReportExportsForLifecycle: (...args: unknown[]) => mocks.cancelReportExports(...args),
 }))
-vi.mock('../models/HireApplication', () => ({ HireApplication: { updateMany: vi.fn() } }))
+vi.mock('../models/HireApplication', () => ({
+  HIRE_STAGES: [
+    'new',
+    'screened',
+    'interviewing',
+    'shortlist',
+    'offer',
+    'hired',
+    'rejected',
+    'withdrawn',
+  ],
+  HireApplication: { updateMany: vi.fn() },
+}))
 vi.mock('../models/HireEngineHandoff', () => ({ HireEngineHandoff: { updateMany: vi.fn() } }))
 vi.mock('../models/HireGuestSession', () => ({ HireGuestSession: { updateMany: vi.fn() } }))
 vi.mock('../models/HireInterviewAttempt', () => ({ HireInterviewAttempt: { updateMany: vi.fn() } }))

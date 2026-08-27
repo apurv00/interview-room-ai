@@ -36,39 +36,12 @@ import {
   deliverAiInvite,
 } from './aiInviteDeliveryService'
 
-/**
- * AI interview rounds — the hire side of the engine seams.
- *
- * Seam discipline (goal item 2): this service writes ONLY hire tables. The
- * engine is consumed through (1) session provisioning — the guest enters the
- * engine's own public flow with a config this service hands out at prepare
- * time; (2) the completion event — roundLinkService reconciles the engine's
- * completed session read-only; (3) guest-session auth — candidate verification
- * issues a Hire-scoped guest cookie, and the isolated runtime later exchanges
- * its own one-time handoff ticket through the runtime-only `invite-otp`
- * provider. No B2C row is written from this module.
- */
-
-/** Fixed depth for Phase 1 AI screening rounds (build plan: fixed over
- * configurable). 'behavioral' is unrestricted across experience bands. */
 export const AI_ROUND_INTERVIEW_TYPE = 'behavioral'
-
 export const INVITE_TOKEN_EXPIRY_DAYS = 7
-
 export function sha256(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex')
 }
 
-/**
- * Synthetic per-round guest identity. The engine requires a User row +
- * NextAuth session for every interview API call, but guests must not be
- * keyed by their real email: sharing a User across workspaces/rounds caused
- * the whole identity edge-case class (cross-workspace ambiguity, OAuth
- * account-linking hazards, real-email accounts left roaming the B2C
- * product). One synthetic user per round makes round↔session attribution
- * exact by userId alone, and keeps candidate PII in workspace-scoped hire
- * tables only. `.internal` is ICANN-reserved — never routable.
- */
 export function buildJdSnapshot(input: {
   proseJd: string
   version: number
@@ -103,8 +76,6 @@ export interface VerifiedRound {
   round: IHireRound
   state: RoundTokenState
 }
-
-// ─── Send ─────────────────────────────────────────────────────────────────────
 
 export interface SendAiRoundInput {
   applicationId: string
@@ -160,8 +131,6 @@ export async function sendAiRound(
     )
   }
 
-  // One live AI round per application. A pre-auth round whose link expired is
-  // superseded explicitly (revoked + re-sent), never silently reused.
   const existing = await HireRound.find({
     workspaceId: ctx.workspace._id,
     applicationId: application._id,
@@ -172,21 +141,35 @@ export async function sendAiRound(
   for (const r of existing) {
     const preAuth = (PRE_AUTH_STATUSES as readonly string[]).includes(r.status)
     if (preAuth && r.inviteTokenExpiry <= now) {
-      await HireRound.updateOne(
-        { _id: r._id, workspaceId: ctx.workspace._id },
-        {
-          $set: {
-            status: 'revoked',
-            revokedAt: now,
-            revocationState: 'confirmed',
-            revocationConfirmedAt: now,
-            revocationReason: 'Interview invitation expired and was superseded',
-            ...(ctx.membership.userId ? { revokedBy: ctx.membership.userId } : {}),
-            revokedByMemberId: ctx.membership._id,
-            revokedByName: ctx.membership.name || ctx.membership.email,
-          },
-          $unset: { live: 1 },
-        }
+      await withActiveHireWorkspaceWriteTransaction(
+        ctx.workspace._id,
+        ctx.membership._id,
+        async (session) => {
+          const revoked = await HireRound.updateOne(
+            { _id: r._id, workspaceId: ctx.workspace._id },
+            {
+              $set: {
+                status: 'revoked',
+                revokedAt: now,
+                revocationState: 'confirmed',
+                revocationConfirmedAt: now,
+                revocationReason: 'Interview invitation expired and was superseded',
+                ...(ctx.membership.userId ? { revokedBy: ctx.membership.userId } : {}),
+                revokedByMemberId: ctx.membership._id,
+                revokedByName: ctx.membership.name || ctx.membership.email,
+              },
+              $unset: { live: 1 },
+            },
+            { session },
+          )
+          if (revoked.matchedCount !== 1) throw new NotFoundError('Round')
+          const version = await HireJob.updateOne(
+            { _id: job._id, workspaceId: ctx.workspace._id },
+            { $inc: { candidateReadVersion: 1 } },
+            { session },
+          )
+          if (version.matchedCount !== 1) throw new NotFoundError('Job')
+        },
       )
       await revokeControlPlaneGuestAccess({
         workspaceId: r.workspaceId.toString(),
@@ -229,15 +212,12 @@ export async function sendAiRound(
       async (session) => {
         const jobClaim = await HireJob.updateOne(
           { _id: job._id, workspaceId: ctx.workspace._id, status: 'open' },
-          { $inc: { intakeWriteVersion: 1 } },
+          { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } },
           { session },
         )
         if (jobClaim.matchedCount !== 1) {
           throw new AppError('AI interviews can only be sent for open jobs', 409, 'JOB_NOT_OPEN')
         }
-        // This is the creation-side half of the stage/egress fence. The
-        // application was read before this transaction, so it must be
-        // conditionally claimed here rather than trusting that stale read.
         await claimNonTerminalHireApplicationDispatchFence({
           workspaceId: ctx.workspace._id,
           applicationId: application._id,
@@ -246,11 +226,6 @@ export async function sendAiRound(
           now,
           session,
         })
-        // The candidate row is the deletion/egress serialization point. A
-        // verified privacy deletion that commits first makes this transaction
-        // fail before it creates either a round or its encrypted delivery
-        // recovery record. A live request is also a hard stop: it avoids
-        // creating a fresh invitation while deletion is being verified.
         const privacyRequest = await HirePrivacyRequest.exists({
           workspaceId: ctx.workspace._id,
           candidateId: candidate._id,
@@ -279,17 +254,12 @@ export async function sendAiRound(
           candidateName: candidate.name,
           kind: 'ai',
           status: 'invited',
-          // Snapshot the workspace's verification mode — links already in
-          // inboxes must keep the semantics they were sent with.
           authMode,
           live: true,
           inviteTokenHash: sha256(token),
           inviteTokenExpiry,
           invitedAt: now,
           config: {
-            // The engine's role contract caps at 100 chars; job titles are the
-            // role in Phase 1, so clamp — a longer title must never produce a
-            // config the engine's CreateSessionSchema would reject mid-flow.
             role: job.title.slice(0, INTERVIEW_ROLE_SLUG_MAX_CHARS),
             interviewType: AI_ROUND_INTERVIEW_TYPE,
             experience: input.experience,
@@ -304,8 +274,6 @@ export async function sendAiRound(
           createdByMemberId: ctx.membership._id,
           createdByName: ctx.membership.name || ctx.membership.email,
         }], { session })
-        // This encrypted recovery record commits atomically with the
-        // hash-only round. A crash after commit can no longer strand it.
         await createAiInviteDeliveryRecord({
           workspaceId: ctx.workspace._id.toString(),
           applicationId: application._id.toString(),
@@ -332,8 +300,6 @@ export async function sendAiRound(
         'HIRE_CANDIDATE_PII_TOMBSTONED',
       )
     }
-    // Partial unique index {workspaceId, applicationId, live:true}: a
-    // concurrent send won the race — same outcome as the fast-path check.
     if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
       throw new AppError(
         'An AI interview is already in flight for this candidate. Revoke it before sending a new one.',
@@ -354,9 +320,6 @@ export async function sendAiRound(
     )
   }
 
-  // The audit log must never claim a delivery that didn't happen — after a
-  // reload, this event is the only record of whether the candidate was
-  // actually contacted.
   await appendApplicationEvent(ctx.workspace._id, application._id, {
     type: 'ai_round_sent',
     ...(ctx.membership.userId ? { actorUserId: ctx.membership.userId } : {}),
@@ -370,12 +333,6 @@ export async function sendAiRound(
   return { round, inviteUrl, emailSent: delivery.emailSent }
 }
 
-// ─── Guest-side: token verification, consent, auth binding, prepare ──────────
-
-/**
- * Verify a raw invite token against a round. Constant-shape: callers render a
- * generic invalid page for null; state distinguishes only presentable cases.
- */
 export async function verifyRoundToken(
   roundId: string,
   rawCapability: string
@@ -396,45 +353,51 @@ export async function verifyRoundToken(
   if (!workspaceActive) return null
   if (round.revokedAt) return { round, state: 'revoked' }
   if (round.status === 'completed') return { round, state: 'completed' }
-  // The RAW emailed credential dies at inviteTokenExpiry, full stop —
-  // regardless of round status. A copied or leaked link must not outlive
-  // its advertised deadline (Codex P1 on #604). Mid-flow candidates resume
-  // via their authenticated session on /prepare, which has its own
-  // POST_AUTH_GRACE_DAYS ceiling and never takes the raw token.
   if (round.inviteTokenExpiry <= new Date()) {
     return { round, state: 'expired' }
   }
   return { round, state: 'ok' }
 }
 
-// ─── Member-side: revoke ─────────────────────────────────────────────────────
-
 export async function revokeRound(
   ctx: MembershipContext,
   roundId: string
 ): Promise<IHireRound> {
   await connectHireControlDB()
-  const round = await HireRound.findOneAndUpdate(
-    {
-      _id: roundId,
-      workspaceId: ctx.workspace._id,
-      status: { $nin: ['completed', 'revoked'] },
+  const round = await withActiveHireWorkspaceWriteTransaction(
+    ctx.workspace._id,
+    ctx.membership._id,
+    async (session) => {
+      const claimed = await HireRound.findOneAndUpdate(
+        {
+          _id: roundId,
+          workspaceId: ctx.workspace._id,
+          status: { $nin: ['completed', 'revoked'] },
+        },
+        {
+          $set: {
+            status: 'revoked',
+            revokedAt: new Date(),
+            revocationState: 'pending',
+            revocationReason: 'Recruiter revoked the interview invitation',
+            ...(ctx.membership.userId ? { revokedBy: ctx.membership.userId } : {}),
+            revokedByMemberId: ctx.membership._id,
+            revokedByName: ctx.membership.name || ctx.membership.email,
+          },
+          $unset: { live: 1 },
+        },
+        { new: true, session },
+      )
+      if (!claimed) throw new NotFoundError('Round')
+      const job = await HireJob.updateOne(
+        { _id: claimed.jobId, workspaceId: ctx.workspace._id },
+        { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } },
+        { session },
+      )
+      if (job.matchedCount !== 1) throw new NotFoundError('Job')
+      return claimed
     },
-    {
-      $set: {
-        status: 'revoked',
-        revokedAt: new Date(),
-        revocationState: 'pending',
-        revocationReason: 'Recruiter revoked the interview invitation',
-        ...(ctx.membership.userId ? { revokedBy: ctx.membership.userId } : {}),
-        revokedByMemberId: ctx.membership._id,
-        revokedByName: ctx.membership.name || ctx.membership.email,
-      },
-      $unset: { live: 1 },
-    },
-    { new: true }
   )
-  if (!round) throw new NotFoundError('Round')
 
   await revokeControlPlaneGuestAccess({
     workspaceId: round.workspaceId.toString(),

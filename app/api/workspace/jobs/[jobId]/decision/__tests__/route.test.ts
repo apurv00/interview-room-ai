@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   requireMembership: vi.fn(),
   readInbox: vi.fn(),
   compare: vi.fn(),
-  getJobPipeline: vi.fn(),
+  searchCandidates: vi.fn(),
 }));
 
 vi.mock("../../../../_lib/composeHireApiRoute", () => ({
@@ -21,16 +21,18 @@ vi.mock("../../../../_lib/composeHireApiRoute", () => ({
 
 vi.mock("@hire", () => ({
   requireMembership: mocks.requireMembership,
-  getJobPipeline: mocks.getJobPipeline,
 }));
 vi.mock("@hire-decisions", () => ({
   readHireDecisionActionInbox: mocks.readInbox,
   compareHireDecisionApplications: mocks.compare,
 }));
+vi.mock("@hire-operations", () => ({
+  readHireJobCandidateIdentities: mocks.searchCandidates,
+}));
 
 import { GET } from "../route";
+import { GET as candidatesGET } from "../candidates/route";
 import { POST } from "../compare/route";
-import { GET as GET_CANDIDATES } from "../candidates/route";
 
 const JOB_ID = "111111111111111111111111";
 const APP_A = "222222222222222222222222";
@@ -42,9 +44,12 @@ describe("member decision routes", () => {
     mocks.requireMembership.mockResolvedValue({
       workspace: { _id: { toString: () => "workspace-1" } },
     });
-    mocks.readInbox.mockResolvedValue({ items: [] });
+    mocks.readInbox.mockResolvedValue({ items: [], limit: 20, nextCursor: null });
     mocks.compare.mockResolvedValue({ applications: [] });
-    mocks.getJobPipeline.mockResolvedValue({ entries: [] });
+    mocks.searchCandidates.mockResolvedValue({
+      candidates: [],
+      pageInfo: { limit: 20, nextCursor: null },
+    });
   });
 
   it("reads only the current member workspace and job action inbox", async () => {
@@ -59,8 +64,85 @@ describe("member decision routes", () => {
       workspaceId: "workspace-1",
       jobId: JOB_ID,
       externalVerdictsSince: new Date("2026-08-14T00:00:00.000Z"),
+      limit: 20,
+      cursor: undefined,
     });
-    await expect(response.json()).resolves.toEqual({ items: [] });
+    await expect(response.json()).resolves.toEqual({
+      items: [],
+      limit: 20,
+      nextCursor: null,
+    });
+  });
+
+  it("returns and accepts a scope-bound opaque inbox cursor", async () => {
+    const occurredAt = new Date("2026-08-14T08:00:00.000Z");
+    mocks.readInbox.mockResolvedValueOnce({
+      items: [],
+      limit: 2,
+      nextCursor: {
+        occurredAt,
+        kind: "external_verdict_submitted",
+        applicationId: APP_A,
+        sourceId: APP_A,
+      },
+    });
+
+    const first = await GET(
+      new NextRequest(
+        `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=2`,
+      ) as never,
+      { params: { jobId: JOB_ID } },
+    );
+    const page = await first.json();
+    expect(page).toEqual({
+      items: [],
+      limit: 2,
+      nextCursor: expect.any(String),
+    });
+
+    mocks.readInbox.mockResolvedValueOnce({
+      items: [],
+      limit: 2,
+      nextCursor: null,
+    });
+    await GET(
+      new NextRequest(
+        `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=2&cursor=${encodeURIComponent(page.nextCursor)}`,
+      ) as never,
+      { params: { jobId: JOB_ID } },
+    );
+    expect(mocks.readInbox).toHaveBeenLastCalledWith({
+      workspaceId: "workspace-1",
+      jobId: JOB_ID,
+      externalVerdictsSince: undefined,
+      limit: 2,
+      cursor: {
+        occurredAt,
+        kind: "external_verdict_submitted",
+        applicationId: APP_A,
+        sourceId: APP_A,
+      },
+    });
+
+    const cursorParts = String(page.nextCursor).split(".");
+    cursorParts[1] = `${cursorParts[1][0] === "A" ? "B" : "A"}${cursorParts[1].slice(1)}`;
+    await expect(
+      GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=2&cursor=${encodeURIComponent(cursorParts.join("."))}`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_DECISION_CURSOR" });
+
+    await expect(
+      GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${"9".repeat(24)}/decision?limit=2&cursor=${encodeURIComponent(page.nextCursor)}`,
+        ) as never,
+        { params: { jobId: "9".repeat(24) } },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_DECISION_CURSOR" });
   });
 
   it("rejects an invalid verdict cursor before reading any decision data", async () => {
@@ -72,6 +154,18 @@ describe("member decision routes", () => {
         { params: { jobId: JOB_ID } },
       ),
     ).rejects.toMatchObject({ code: "INVALID_VERDICT_CURSOR" });
+    expect(mocks.readInbox).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unbounded inbox page before reading decision data", async () => {
+    await expect(
+      GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=51`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_DECISION_LIMIT" });
     expect(mocks.readInbox).not.toHaveBeenCalled();
   });
 
@@ -94,6 +188,70 @@ describe("member decision routes", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
+  it("returns a paginated identity-only comparison search with no rank or evidence fields", async () => {
+    mocks.searchCandidates.mockResolvedValue({
+      candidates: [
+        {
+          applicationId: APP_A,
+          candidateName: "Ada Lovelace",
+          candidateEmail: "ada@example.com",
+          stage: "offer",
+          jdMatch: { score: 99, rank: 1 },
+          humanReview: { state: "complete" },
+          aiInterview: { overallScore: 98 },
+          resumeText: "PRIVATE_RESUME",
+        },
+      ],
+      pageInfo: {
+        limit: 20,
+        nextCursor: "opaque-candidate-page",
+        hasNextPage: true,
+        snapshotAt: "2026-08-25T00:00:00.000Z",
+      },
+      rankContext: { freshScoredTotal: 500 },
+    });
+
+    const response = await candidatesGET(
+      new NextRequest(
+        `https://hire.example/api/workspace/jobs/${JOB_ID}/decision/candidates?q=ada&limit=20`,
+      ) as never,
+      { params: { jobId: JOB_ID } },
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(mocks.searchCandidates).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      jobId: JOB_ID,
+      query: {
+        q: "ada",
+        limit: 20,
+      },
+    });
+    const payload = await response.json();
+    expect(payload).toEqual({
+      candidates: [
+        {
+          applicationId: APP_A,
+          candidateName: "Ada Lovelace",
+          candidateEmail: "ada@example.com",
+        },
+      ],
+      pageInfo: { limit: 20, nextCursor: "opaque-candidate-page" },
+    });
+    const encoded = JSON.stringify(payload).toLowerCase();
+    for (const forbidden of [
+      "rank",
+      "score",
+      "stage",
+      "review",
+      "interview",
+      "resume",
+      "evidence",
+    ]) {
+      expect(encoded).not.toContain(forbidden);
+    }
+  });
+
   it("rejects duplicate or over-limit comparison inputs at the route boundary", async () => {
     await expect(
       POST(
@@ -110,97 +268,4 @@ describe("member decision routes", () => {
     expect(mocks.compare).not.toHaveBeenCalled();
   });
 
-  it("projects only current-job application ids and candidate names for the comparison picker", async () => {
-    const appAda = "444444444444444444444444";
-    const appGrace = "555555555555555555555555";
-    mocks.getJobPipeline.mockResolvedValue({
-      entries: [
-        {
-          application: {
-            _id: { toString: () => appGrace },
-            stage: "PRIVATE_STAGE",
-            decisionNote: "PRIVATE_DECISION_NOTE",
-            events: [{ note: "PRIVATE_EVENT_NOTE" }],
-            resumeMatch: { strengths: ["PRIVATE_RESUME_EVIDENCE"] },
-            jdText: "PRIVATE_JD_TEXT",
-          },
-          candidate: {
-            name: "Grace Hopper",
-            email: "grace@example.com",
-            phone: "+91-PRIVATE_PHONE",
-            resumeText: "PRIVATE_RESUME_TEXT",
-            screeningProfile: { location: "PRIVATE_LOCATION" },
-          },
-          rank: 1,
-          latestRound: { results: { raw: "PRIVATE_RAW_AI" } },
-        },
-        {
-          application: { _id: { toString: () => appAda } },
-          candidate: { name: "Ada Lovelace", email: "ada@example.com" },
-          rank: 2,
-        },
-        {
-          application: { _id: { toString: () => "666666666666666666666666" } },
-          candidate: null,
-          rank: 3,
-        },
-      ],
-    });
-
-    const response = await GET_CANDIDATES(
-      new Request(
-        `https://hire.example/api/workspace/jobs/${JOB_ID}/decision/candidates`,
-      ) as never,
-      { params: { jobId: JOB_ID } },
-    );
-
-    expect(mocks.requireMembership).toHaveBeenCalledWith({
-      userId: "member-1",
-      email: "hr@example.com",
-    });
-    expect(mocks.getJobPipeline).toHaveBeenCalledWith(
-      expect.objectContaining({ workspace: expect.anything() }),
-      JOB_ID,
-    );
-    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    const body = await response.clone().text();
-    await expect(response.json()).resolves.toEqual({
-      candidates: [
-        { applicationId: appAda, candidateName: "Ada Lovelace" },
-        { applicationId: appGrace, candidateName: "Grace Hopper" },
-      ],
-    });
-
-    for (const forbidden of [
-      "PRIVATE_DECISION_NOTE",
-      "PRIVATE_EVENT_NOTE",
-      "PRIVATE_RESUME_EVIDENCE",
-      "grace@example.com",
-      "+91-PRIVATE_PHONE",
-      "PRIVATE_RESUME_TEXT",
-      "PRIVATE_LOCATION",
-      "PRIVATE_JD_TEXT",
-      "PRIVATE_RAW_AI",
-    ]) {
-      expect(body).not.toContain(forbidden);
-    }
-    for (const forbiddenField of [
-      "email",
-      "phone",
-      "rank",
-      "stage",
-      "decisionNote",
-      "events",
-      "resumeMatch",
-      "resumeText",
-      "screeningProfile",
-      "jdText",
-      "latestRound",
-      "results",
-      "raw",
-      "rawAi",
-    ]) {
-      expect(body).not.toContain(`"${forbiddenField}"`);
-    }
-  });
 });

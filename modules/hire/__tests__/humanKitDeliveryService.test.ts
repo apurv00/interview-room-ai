@@ -272,6 +272,7 @@ describe('human interview-kit delivery', () => {
           }),
         }),
       }),
+      { timestamps: false },
     )
     expect(JSON.stringify(mocks.appUpdateOne.mock.calls)).not.toContain('jordan@example.com')
     expect(JSON.stringify(mocks.appUpdateOne.mock.calls)).not.toContain(SECRET)
@@ -321,6 +322,7 @@ describe('human interview-kit delivery', () => {
           events: expect.objectContaining({ type: 'human_kit_delivery_failed' }),
         }),
       }),
+      { timestamps: false },
     )
   })
 

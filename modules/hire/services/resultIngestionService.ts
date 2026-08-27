@@ -15,6 +15,7 @@ import { HireRound } from '../models/HireRound'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
 import { HireEngineIngestionEvent } from '../models/HireEngineIngestionEvent'
 import type { IHireMediaAsset } from '../models/HireMediaAsset'
+import { HireJob } from '../models/HireJob'
 import { HirePrivacyRequest } from '../models/HirePrivacyRequest'
 import { connectHireControlDB } from './hireControlBoundary'
 import {
@@ -102,9 +103,6 @@ function evidenceForQuestions(payload: HireEngineResultIngestion): {
   const consumedCandidateIndexes = new Set<number>()
   const candidateIndexByResult = new Map<number, number>()
   const fallbackEligibleResults = new Set<number>()
-  // Reserve all exact answer matches before positional fallback. Otherwise an
-  // earlier result with an omitted/normalized answer can steal the transcript
-  // entry that a later result identifies exactly.
   resultQuestions.forEach((question, resultIndex) => {
     if (typeof question.answer !== 'string') {
       fallbackEligibleResults.add(resultIndex)
@@ -144,10 +142,6 @@ function evidenceForQuestions(payload: HireEngineResultIngestion): {
     const candidateIndexes = (
       candidateIndexesByQuestion.get(questionIndex) ?? []
     ).filter((index) => !consumedCandidateIndexes.has(index))
-    // Positional fallback is authoritative only for one remaining result and
-    // one remaining transcript response. Multiple unmatched results can be
-    // persisted in evaluation-completion order rather than transcript order,
-    // so equal counts alone are not enough to establish provenance.
     if (candidateIndexes.length !== 1 || resultIndexes.length !== 1) return
     consumedCandidateIndexes.add(candidateIndexes[0])
     candidateIndexByResult.set(resultIndexes[0], candidateIndexes[0])
@@ -232,7 +226,6 @@ function evidenceForQuestions(payload: HireEngineResultIngestion): {
   return { evidenceIndex, questions }
 }
 
-/** Feedback generation is instructed to use Q1 / Q3-Q5 provenance tokens. */
 function questionIndexesInFinding(text: string): number[] {
   const indexes = new Set<number>()
   for (const match of Array.from(
@@ -360,9 +353,6 @@ function buildEvidenceProjection(
   const evidenceForFinding = (text: string): string[] => {
     const referenced = questionIndexesInFinding(text)
     if (referenced.length === 0) {
-      // The unchanged engine prompt permits no Q-ref only for genuinely
-      // cross-cutting feedback, for which all contributing answers are the
-      // honest provenance rather than a fabricated single moment.
       return scoredEvidenceIds
     }
     return uniqueEvidenceIds(
@@ -534,8 +524,6 @@ async function persistResultReservation(
         revision: payload.revision,
         attempt: payload.attempt,
         resultDigest: payload.resultDigest,
-        // The digest is the idempotency authority. Runtime source keys are
-        // unnecessary PII-bearing delivery metadata and are never retained.
         media: [],
         ...(payload.mediaCompletion
           ? { mediaCompletion: payload.mediaCompletion }
@@ -829,9 +817,6 @@ export async function ingestHireEngineResult(
         reservationToken,
       )
     }
-    // Immutable result identity is independent of copied media. Reject a
-    // higher-revision score/transcript conflict before creating any staging
-    // checkpoint or touching R2.
     await assertHireInterviewResultCompatible({
       workspaceId: payload.workspaceId,
       applicationId: payload.applicationId,
@@ -898,10 +883,6 @@ export async function ingestHireEngineResult(
           if (!preparedMedia) {
             throw new Error('Result media was not prepared before terminalization')
           }
-          // This claims workspace, candidate, and job in the same transaction
-          // that activates the complete batch and terminalizes the event.
-          // Job close therefore wins wholly before us or observes the final
-          // completed state after us; it cannot split media from lifecycle.
           await activateRuntimeMediaArtifacts({
             ...preparedMedia,
             workspaceId: payload.workspaceId,
@@ -1024,6 +1005,16 @@ export async function ingestHireEngineResult(
             },
             unset: { live: 1 },
           })
+          const job = await HireJob.updateOne(
+            { _id: application.jobId, workspaceId: payload.workspaceId },
+            { $inc: { candidateReadVersion: 1 } },
+            { session: dbSession },
+          )
+          if (job.matchedCount !== 1) {
+            throw new HireRuntimeMediaStaleError(
+              'Job changed before result terminalization',
+            )
+          }
         })
       } catch (error) {
         if (!(error instanceof HireCandidatePiiTombstoneError)) throw error

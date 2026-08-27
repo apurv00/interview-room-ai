@@ -31,10 +31,8 @@ export async function claimNonTerminalHireApplicationDispatchFence(input: {
       candidateId: input.candidateId,
       stage: { $nin: TERMINAL_STAGES },
     },
-    // `updatedAt` is an existing, schema-owned field. Updating it gives this
-    // authorization a document-write conflict with `moveStage` without adding
-    // mutable decision state or touching the interview engine/B2C database.
-    { $set: { updatedAt: input.now } },
+    // Conflict with `moveStage` without claiming provider work is candidate activity.
+    { $inc: { __v: 1 } },
     { session: input.session, timestamps: false },
   )
   if (claim.matchedCount !== 1) {

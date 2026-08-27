@@ -76,7 +76,7 @@ afterEach(() => {
 
 describe('AI invitation delivery recovery UI', () => {
   it('renders no falsey numeric text when no resume is on file', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(card('sent'))))
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => json(card('sent'))))
 
     const { container } = render(
       <ApplicationCardPage params={{ appId: 'app-1' }} />,
@@ -92,6 +92,58 @@ describe('AI invitation delivery recovery UI', () => {
       if (text) bareTextNodes.push(text)
     }
     expect(bareTextNodes).not.toContain('0')
+  })
+
+  it('returns to the exact candidate-list state without accepting an external redirect', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => json(card('sent'))))
+    const returnTo = '/workspace/jobs/job-1/candidates?view=offers&sort=newest'
+    const first = render(
+      <ApplicationCardPage params={{ appId: 'app-1' }} searchParams={{ returnTo }} />,
+    )
+    expect(await screen.findByRole('link', { name: /Back to Platform Engineer candidates/i }))
+      .toHaveAttribute('href', returnTo)
+    first.unmount()
+
+    const second = render(
+      <ApplicationCardPage
+        params={{ appId: 'app-1' }}
+        searchParams={{ returnTo: 'https://attacker.example/phish' }}
+      />,
+    )
+    expect(await screen.findByRole('link', { name: /Back to Platform Engineer candidates/i }))
+      .toHaveAttribute('href', '/workspace/jobs/job-1/candidates')
+    second.unmount()
+
+    render(
+      <ApplicationCardPage
+        params={{ appId: 'app-1' }}
+        searchParams={{ returnTo: '/workspace/jobs/job-1/decision?cursor=opaque' }}
+      />,
+    )
+    expect(await screen.findByRole('link', { name: /Back to Platform Engineer workspace/i }))
+      .toHaveAttribute('href', '/workspace/jobs/job-1/decision?cursor=opaque')
+  })
+
+  it('requires an action-valid structured reason before a destructive decision', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') return json({ application: { id: 'app-1', stage: 'rejected' } })
+      return json(card('sent'))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ApplicationCardPage params={{ appId: 'app-1' }} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject' }))
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
+    const reason = screen.getByLabelText('Structured reason')
+    expect(reason).toHaveValue('requirements_mismatch')
+    fireEvent.change(reason, { target: { value: 'role_filled' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm decision' }))
+
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1))
+    const [, request] = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!
+    expect(JSON.parse(String(request?.body))).toMatchObject({
+      action: 'reject', reasonCode: 'role_filled', expectedFrom: 'new',
+    })
   })
 
   it('leads the decision header with human readiness and neutral AI evidence', async () => {

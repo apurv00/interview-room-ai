@@ -97,15 +97,6 @@ export async function POST(
       consentAt: started.consent.acceptedAt,
       inviteExpiresAt: round.inviteTokenExpiry,
     })
-    await HireRound.updateOne(
-      {
-        _id: scope.roundId,
-        workspaceId: scope.workspaceId,
-        applicationId: scope.applicationId,
-        status: { $nin: ['completed', 'revoked'] },
-      },
-      { $set: { status: 'prepared', preparedAt: new Date() } },
-    )
     return NextResponse.json(
       {
         attemptId: started.attemptId,

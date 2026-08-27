@@ -112,6 +112,7 @@ const {
       deleteAssessmentExportObjects: vi.fn(),
       cancelReportExports: vi.fn(),
       invalidateDigestSnapshots: vi.fn(),
+      redactCandidateActions: vi.fn(),
     },
     statusLifecycle: {
       revokeStatusLinks: vi.fn(),
@@ -131,6 +132,10 @@ vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
 }))
 vi.mock('../../hire-digest/services/hireDigestService', () => ({
   invalidateHireDigestAggregateSnapshotsForPrivacy: (...args: unknown[]) => lifecycle.invalidateDigestSnapshots(...args),
+}))
+vi.mock('../../hire-candidate-actions/subject-lifecycle-boundary', () => ({
+  redactHireCandidateActionSubjectData: (...args: unknown[]) =>
+    lifecycle.redactCandidateActions(...args),
 }))
 vi.mock('../../hire-status/services/candidateStatusLinkService', () => ({
   revokeCandidateStatusLinksForScope: (...args: unknown[]) =>
@@ -350,6 +355,8 @@ describe('candidate PII retention', () => {
       {
         $unset: {
           applicantSubmissions: 1,
+          decisionNote: 1,
+          'offerDecision.note': 1,
           'events.$[sensitiveEvent].note': 1,
         },
       },
@@ -365,11 +372,18 @@ describe('candidate PII retention', () => {
               'human_kit_reminded',
               'human_kit_revoked',
               'human_scorecard_submitted',
+              'stage_move',
             ],
           },
         }],
       },
     )
+    expect(lifecycle.redactCandidateActions).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      applicationIds: [APPLICATION_ID],
+      at: NOW,
+      session,
+    })
     expect(models.HireInterviewResult.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID }),
       expect.objectContaining({
@@ -540,6 +554,7 @@ describe('candidate PII retention', () => {
           },
           exceptions: { applicationId: { $in: [APPLICATION_ID] } },
         },
+        $unset: { selectionHandoff: 1 },
       },
       { session, overwriteImmutable: true },
     )

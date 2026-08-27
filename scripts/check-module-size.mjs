@@ -103,9 +103,14 @@ const BUDGETS = {
   // conditional writes, permanent same-key seals, leases, and claim tokens.
   // Revision-safe ingestion then adds one shared reservation authority,
   // drained attempt migration, media checkpoints, transactional activation,
-  // and immutable retry snapshots. In the integrated remediation stack the
-  // measured core is 27,957 LOC / 92 files. See ADRs 0041 and 0043.
-  'modules/hire':      { maxLOC: 28_100, maxFiles: 92 },
+  // and immutable retry snapshots. The candidate workspace adds only the
+  // core-owned privacy/stage/screening transaction adapters and three keyset
+  // index declarations. The integrated core measures 28,265 LOC / 92 files;
+  // 28.3k leaves 35 LOC, not a new feature envelope. The final company-scale
+  // Screening pass adds conservative retained-hash validation plus bounded
+  // gate-history adapters; 28.4k leaves only tripwire headroom and no files.
+  // See ADRs 0041, 0043, 0047, and 0048.
+  'modules/hire':      { maxLOC: 28_400, maxFiles: 92 },
   // A bounded control-plane authority for Hire-native supplemental interview
   // observations. It cannot write assessments, decisions, exports, or raw
   // camera data; see ADR 0039.
@@ -141,11 +146,20 @@ const BUDGETS = {
   // modules/hire or modules/hire-operations into a general export surface.
   // See ADR 0034.
   'modules/hire-reports': { maxLOC: 10_000, maxFiles: 30 },
-  // Phase 5 begins a distinct, member-only operational read-model boundary.
-  // Its tight initial envelope permits fixed batch aggregates and typed route
-  // contracts without turning it into a reporting/export or pipeline-write
-  // module. See ADR 0033.
-  'modules/hire-operations': { maxLOC: 3_000, maxFiles: 12 },
+  // Phase 5 began as fixed member aggregates. The job-candidate workspace now
+  // adds its bounded, privacy-filtered keyset read model plus short-lived,
+  // immutable selection coordinates; mutation execution remains isolated in
+  // hire-candidate-actions. Measured at 5,597 LOC / 13 files; the spare file
+  // slot and 3 LOC were tripwire-only headroom. Bounded, tenant-scoped
+  // Screening batch traversal and non-terminal identity search consume that
+  // checkpoint; 5.7k remains a tight read-only envelope. See ADRs 0033/0048.
+  'modules/hire-operations': { maxLOC: 5_700, maxFiles: 14 },
+  // Candidate mutations at company scale are intentionally isolated from the
+  // interactive pipeline service: immutable selection coordinates, bounded
+  // per-row work, resumable leases, and opaque recovery events live here.
+  // This module cannot decide offer outcomes or send candidate communication.
+  // Measured at 1,674 production LOC / 9 files; see ADR 0047.
+  'modules/hire-candidate-actions': { maxLOC: 2_000, maxFiles: 12 },
   // Phase 5 daily operational mail is deliberately independent of the
   // candidate close-email outbox and the disabled B2C digest. This bounded
   // outbox/preference/egress-fence module owns only Hire-member summaries.

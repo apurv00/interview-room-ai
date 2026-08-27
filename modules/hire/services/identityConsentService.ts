@@ -7,6 +7,7 @@ import {
 } from '../models/HireConsentReceipt'
 import { HireGuestSession, type IHireGuestSession } from '../models/HireGuestSession'
 import { HireInterviewAttempt } from '../models/HireInterviewAttempt'
+import { HireJob } from '../models/HireJob'
 import { HireMediaAsset } from '../models/HireMediaAsset'
 import { HireRound } from '../models/HireRound'
 import { HireWorkspace } from '../models/HireWorkspace'
@@ -276,12 +277,6 @@ async function acceptOnce(
         candidateId: round.candidateId.toString(),
         roundId: round._id.toString(),
       }
-      // Serialize guest authority creation against workspace deletion. A
-      // plain read is insufficient under snapshot isolation: the tombstone
-      // and this transaction could otherwise both commit after reading the
-      // old active state. Claiming the workspace write fence means either
-      // this session commits first (and deletion revokes it in the same
-      // later transaction) or deletion wins and this request returns 410.
       const workspaceFence = await HireWorkspace.updateOne(
         {
           _id: coordinate.workspaceId,
@@ -324,6 +319,8 @@ async function acceptOnce(
       }
 
       if (!attempt) {
+        const job = await HireJob.updateOne({ _id: coordinate.jobId, workspaceId: coordinate.workspaceId, status: 'open' }, { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } }, { session: dbSession })
+        if (job.matchedCount !== 1) throw new HireGuestAccessError('This interview invitation is no longer valid', 'INVITE_EXPIRED', 410)
         const [priorAttempts, attemptId, receiptId] = await Promise.all([
           HireInterviewAttempt.countDocuments(coordinate).session(dbSession),
           Promise.resolve(new mongoose.Types.ObjectId()),
@@ -437,8 +434,6 @@ export async function acceptHireConsentAndIssueGuestSession(
     return await acceptOnce(acceptedInput)
   } catch (error) {
     if (error && typeof error === 'object' && (error as { code?: number }).code === 11000) {
-      // A concurrent begin created the live attempt/session. Retrying resolves
-      // through that exact scoped attempt and rotates its guest credential.
       return acceptOnce(acceptedInput)
     }
     throw error

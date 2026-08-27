@@ -325,15 +325,23 @@ export const AddOrMergeJobCandidateSchema = z
     }
   })
 
+export const HIRE_STAGE_REASON_CODES = ['requirements_mismatch', 'position_closed', 'duplicate_application', 'candidate_withdrew', 'role_filled'] as const
+
 export const MoveStageSchema = z
   .object({
     action: z.enum(['advance', 'reject', 'withdraw', 'offer_accepted', 'offer_declined']),
     expectedFrom: z.enum(HIRE_STAGES),
     operationId: z.string().uuid(),
+    reasonCode: z.enum(HIRE_STAGE_REASON_CODES).optional(),
     note: z.string().trim().min(1).max(4000).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
+    const destructive = value.action === 'reject' || value.action === 'withdraw' || value.action === 'offer_declined'
+    if (destructive && !value.reasonCode) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reasonCode'], message: 'Choose a structured decision reason' })
+    if (value.note && value.action !== 'offer_accepted') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['note'], message: 'Free-text notes are not accepted for this action' })
+    if (value.reasonCode && (value.action === 'advance' || value.action === 'offer_accepted')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reasonCode'], message: 'This action does not accept a reason code' })
+    if (value.reasonCode && ((value.action === 'withdraw' || value.action === 'offer_declined') !== (value.reasonCode === 'candidate_withdrew'))) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reasonCode'], message: 'Choose a reason that matches the requested action' })
     if (value.action === 'offer_accepted' && !value.note) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

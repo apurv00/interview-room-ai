@@ -171,6 +171,7 @@ beforeEach(() => {
   mocks.deliverRuntimeRevocation.mockResolvedValue(undefined)
   mocks.workspaceExists.mockResolvedValue({ _id: IDS.workspace })
   mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.applicationUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.privacyExists.mockReturnValue(sessionQuery(null))
   mocks.candidateFence.mockResolvedValue(undefined)
@@ -222,8 +223,13 @@ describe('sendAiRound', () => {
         candidateId: IDS.candidate,
         stage: { $nin: ['hired', 'rejected', 'withdrawn'] },
       },
-      { $set: { updatedAt: expect.any(Date) } },
+      { $inc: { __v: 1 } },
       { session: { id: 'hire-tx' }, timestamps: false },
+    )
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith(
+      { _id: IDS.job, workspaceId: IDS.workspace, status: 'open' },
+      { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } },
+      { session: { id: 'hire-tx' } },
     )
   })
 
@@ -417,6 +423,12 @@ describe('sendAiRound', () => {
         $set: expect.objectContaining({ status: 'revoked', revocationState: 'confirmed' }),
         $unset: { live: 1 },
       }),
+      { session: { id: 'hire-tx' } },
+    )
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith(
+      { _id: IDS.job, workspaceId: IDS.workspace },
+      { $inc: { candidateReadVersion: 1 } },
+      { session: { id: 'hire-tx' } },
     )
     expect(mocks.revokeGuestAccess).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -513,6 +525,7 @@ describe('revokeRound', () => {
       _id: IDS.round,
       workspaceId: IDS.workspace,
       applicationId: IDS.application,
+      jobId: IDS.job,
       revokedAt,
     }
     mocks.roundFindOneAndUpdate.mockResolvedValueOnce(round)
@@ -535,8 +548,9 @@ describe('revokeRound', () => {
         }),
         $unset: { live: 1 },
       }),
-      { new: true },
+      { new: true, session: { id: 'hire-tx' } },
     )
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith({ _id: IDS.job, workspaceId: IDS.workspace }, { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } }, { session: { id: 'hire-tx' } })
     expect(mocks.revokeGuestAccess).toHaveBeenCalledWith(
       expect.objectContaining({ roundId: IDS.round }),
     )

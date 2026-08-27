@@ -193,11 +193,16 @@ describe('human decision command validators', () => {
   })
 
   it('accepts every explicit Phase-1 pipeline outcome', () => {
-    for (const action of ['advance', 'reject', 'withdraw', 'offer_declined'] as const) {
+    const actions = [
+      { action: 'advance' as const, expectedFrom: 'screened' as const },
+      { action: 'reject' as const, expectedFrom: 'screened' as const, reasonCode: 'requirements_mismatch' as const },
+      { action: 'withdraw' as const, expectedFrom: 'screened' as const, reasonCode: 'candidate_withdrew' as const },
+      { action: 'offer_declined' as const, expectedFrom: 'offer' as const, reasonCode: 'candidate_withdrew' as const },
+    ]
+    for (const action of actions) {
       expect(() =>
         MoveStageSchema.parse({
-          action,
-          expectedFrom: action === 'offer_declined' ? 'offer' : 'screened',
+          ...action,
           operationId: '11111111-1111-4111-8111-111111111111',
         }),
       ).not.toThrow()
@@ -210,5 +215,31 @@ describe('human decision command validators', () => {
         note: 'Candidate accepted after human review.',
       }),
     ).not.toThrow()
+  })
+
+  it('accepts only fixed stage reason codes and rejects mixed free text', () => {
+    const command = {
+      action: 'reject' as const,
+      expectedFrom: 'screened' as const,
+      operationId: '11111111-1111-4111-8111-111111111111',
+    }
+    expect(MoveStageSchema.parse({ ...command, reasonCode: 'requirements_mismatch' }))
+      .toMatchObject({ reasonCode: 'requirements_mismatch' })
+    expect(() => MoveStageSchema.parse({ ...command, reasonCode: 'personal_medical_detail' }))
+      .toThrow()
+    expect(() =>
+      MoveStageSchema.parse({
+        ...command,
+        reasonCode: 'requirements_mismatch',
+        note: 'Unstructured explanation',
+      }),
+    ).toThrow(/free-text/i)
+    expect(() => MoveStageSchema.parse(command)).toThrow(/structured decision reason/i)
+    expect(() => MoveStageSchema.parse({ ...command, action: 'advance', reasonCode: 'role_filled' }))
+      .toThrow(/does not accept/i)
+    expect(() => MoveStageSchema.parse({ ...command, action: 'withdraw', reasonCode: 'role_filled' }))
+      .toThrow(/matches/i)
+    expect(() => MoveStageSchema.parse({ ...command, reasonCode: 'candidate_withdrew' }))
+      .toThrow(/matches/i)
   })
 })

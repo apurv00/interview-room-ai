@@ -6,6 +6,7 @@ import {
   HireApplication,
   HireCandidate,
   HireJob,
+  HireWorkspace,
   type HireCandidateSource,
   type IHireApplication,
   type IHireCandidate,
@@ -20,34 +21,10 @@ import { claimHireCandidatePiiWriteFence } from './hireCandidatePrivacyWriteFenc
 import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
 
 /**
- * Phase 2 intake: idempotent candidate + application creation with
- * workspace-scoped email dedupe and the "seen before" signal.
- *
- * Contrast with pipelineService.addCandidate (Phase 1, manual form): that
- * path REJECTS duplicates with 409 because a recruiter typing an email that
- * already exists is a mistake worth surfacing. Bulk upload and the apply
- * page are the opposite — the same person showing up again is EXPECTED and
- * must merge into the existing record, not fail the row.
- *
- * WRITE AUTHORITY: every write runs inside a Hire-owned workspace/member
- * transaction. The workspace claim and ALL intake writes commit together,
- * so workspace deletion/removal cannot interleave with them. Candidate
- * identity never reaches the B2C User collection.
- *
- * Merge policy (deliberate, keep boring):
- *   - name: existing wins (recruiter-entered names beat parsed ones); filled
- *     only when the existing record has none.
- *   - phone: filled only when missing.
- *   - resumeText/resumeFileName: NEWEST upload wins whenever the intake
- *     carries a resume — a re-uploaded CV is assumed fresher.
- *   - email: immutable here; it IS the identity key.
- *
- * Resume/score coherence (the resume is WORKSPACE-level, matches are
- * per-application): replacing the shared resume (a) refreshes or — when
- * analysis failed — CLEARS the current application's match (a new CV must
- * never wear the old CV's score), and (b) flags every sibling
- * application's match `stale` so pipeline readers see that its evidence
- * predates the current CV. Matches carry resumeHash for auditability.
+ * Transactional, workspace-deduplicated bulk/apply intake. Existing identity
+ * fields win; a member's newest resume wins while email stays immutable.
+ * Replacing that shared resume refreshes or clears this job's match and marks
+ * sibling matches stale so no score silently outlives its evidence.
  */
 
 export interface IntakeInput {
@@ -362,6 +339,7 @@ async function writeIntake(
   // ── Candidate: find-or-create; merge on revisit ──
   let createdCandidate = false
   let resumeReplaced = false
+  let candidateAggregateChanged = false
   const intakeProfile = profileForIntake(input)
   // Set when a public submission must not touch the shared pool résumé —
   // the file is APPENDED to the application instead of being discarded.
@@ -472,6 +450,11 @@ async function writeIntake(
       } else if (resumeReplaced) {
         candidate.screeningProfile = undefined
       }
+      candidateAggregateChanged =
+        resumeReplaced ||
+        candidate.name !== previous.name ||
+        candidate.phone !== previous.phone ||
+        candidate.screeningProfile !== previous.screeningProfile
       const $set: Record<string, unknown> = {}
       const $unset: Record<string, 1> = {}
       if (candidate.name !== previous.name) $set.name = candidate.name
@@ -647,6 +630,18 @@ async function writeIntake(
       { $set: { 'resumeMatch.stale': true } },
       { session },
     )
+  }
+
+  if (!createdApplication && (
+    applicantSubmission || input.resumeMatch || (input.resumeText && resumeReplaced)
+  )) {
+    await HireJob.updateOne(
+      { _id: input.jobId, workspaceId }, { $inc: { candidateReadVersion: 1 } }, { session },
+    )
+  }
+
+  if (!createdCandidate && (candidateAggregateChanged || createdApplication)) {
+    await HireWorkspace.updateOne({ _id: workspaceId }, { $inc: { privacyAggregateFenceVersion: 1 } }, { session })
   }
 
   return { candidate, application, createdCandidate, createdApplication }

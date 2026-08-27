@@ -31,8 +31,8 @@ import {
 } from './screeningService'
 import type { MembershipContext } from './workspaceService'
 import { withActiveHireWorkspaceWriteTransaction } from './hireWorkspaceWriteFence'
-import { claimHireCandidatePiiWriteFence } from './hireCandidatePrivacyWriteFence'
 import { assertHireOnboardingTestDriveWriteIsolation } from '@hire-onboarding-boundary'
+import { readCandidateSelectionSnapshot } from '@hire-operations'
 
 /** Durable, tenant-scoped screening preview and confirmation orchestration. */
 
@@ -55,6 +55,8 @@ export interface ScreeningGateExceptionRequest {
 export interface ScreeningGatePreviewRequest {
   rule: ScreeningGateRule
   exceptions?: ScreeningGateExceptionRequest[]
+  selectionSnapshotId?: string
+  selectionNote?: string
 }
 
 export interface ConfirmScreeningGateRequest extends ScreeningGatePreviewRequest {
@@ -85,6 +87,17 @@ export interface ConfirmedScreeningGateResult extends ScreeningGatePreviewResult
 export interface ScreeningGateListItem {
   gate: IHireScreeningGate
   batches: IHireInvitationBatch[]
+  hasMoreBatches: boolean
+}
+
+export interface ScreeningGateListCursor {
+  confirmedAt: Date
+  id: string
+}
+
+export interface ScreeningGateListPage {
+  items: ScreeningGateListItem[]
+  nextCursor: ScreeningGateListCursor | null
 }
 
 interface ScreeningSource {
@@ -100,6 +113,12 @@ interface ScreeningSource {
   }
   applications: IHireApplication[]
   candidatesById: Map<string, IHireCandidate>
+}
+
+interface ResolvedSelectionHandoff {
+  source: ScreeningSource
+  manualIncludeApplicationIds: string[]
+  audit?: Record<'selectionSnapshotId' | 'actorMemberId' | 'actorName' | 'note', string>
 }
 
 function requireObjectId(value: string, label: string): mongoose.Types.ObjectId {
@@ -120,23 +139,15 @@ function idsEqual(
   return left.toString() === right.toString()
 }
 
-function hashResume(resumeText: string | undefined): string | null {
-  return resumeText
-    ? createHash('sha256').update(resumeText).digest('hex')
-    : null
-}
-
 function currentProfile(candidate: IHireCandidate): {
   location?: string | null
   experienceYears?: number | null
 } {
   const profile = candidate.screeningProfile
-  const currentResumeHash = hashResume(candidate.resumeText)
-  if (!profile || !currentResumeHash || profile.resumeHash !== currentResumeHash) {
-    // A stale profile is intentionally UNKNOWN rather than a silent
-    // knockout. The candidate's latest resume must be re-analysed first.
-    return {}
-  }
+  // Every pool-resume writer replaces this profile with analysis bound to the
+  // new resume or clears it. Treat an absent profile as UNKNOWN; screening
+  // never needs to fetch the underlying resume body to prove that invariant.
+  if (!profile) return {}
   return {
     ...(profile.location !== undefined ? { location: profile.location } : {}),
     ...(profile.experienceYears !== undefined
@@ -152,21 +163,17 @@ function currentRanking(
 ): { score?: number | null; stale?: boolean } {
   const match = application.resumeMatch
   if (!match) return {}
-
-  // Scores may have been produced from either the workspace pool resume or
-  // one immutable public submission. A score is fresh only when the exact
-  // source document still exists; stored stale hints alone are insufficient.
-  const sourceHashes = [
-    hashResume(candidate.resumeText),
-    ...(application.applicantSubmissions ?? []).map((submission) =>
-      hashResume(submission.resumeText),
+  const retainedSourceHashes = [
+    candidate.screeningProfile?.resumeHash,
+    ...(application.applicantSubmissions ?? []).map(
+      (submission) => submission.match?.resumeHash,
     ),
-  ].filter((hash): hash is string => hash !== null)
+  ].filter((hash): hash is string => Boolean(hash))
 
   return {
     score: match.score,
     stale:
-      !sourceHashes.includes(match.resumeHash) ||
+      !retainedSourceHashes.includes(match.resumeHash) ||
       match.jdHash !== createHash('sha256').update(currentJdText).digest('hex'),
   }
 }
@@ -203,12 +210,44 @@ function exceptionInputs(
   }))
 }
 
-function buildPreview(
-  ctx: MembershipContext,
-  source: ScreeningSource,
-  request: ScreeningGatePreviewRequest,
-  now: Date,
-): ScreeningGatePreview {
+async function resolveSelectionHandoff(ctx: MembershipContext, source: ScreeningSource,
+  request: ScreeningGatePreviewRequest, now: Date, session?: ClientSession): Promise<ResolvedSelectionHandoff> {
+  const selectionSnapshotId = request.selectionSnapshotId?.trim()
+  const selectionNote = request.selectionNote?.trim()
+  if (Boolean(selectionSnapshotId) !== Boolean(selectionNote)) {
+    throw new AppError('A candidate selection and its documented inclusion rationale are required together', 422,
+      'SCREENING_SELECTION_INVALID')
+  }
+  if (!selectionSnapshotId || !selectionNote) {
+    return { source, manualIncludeApplicationIds: [] }
+  }
+
+  const snapshot = await readCandidateSelectionSnapshot(ctx, {
+    jobId: source.job._id.toString(),
+    selectionId: selectionSnapshotId,
+    now,
+    ...(session ? { session } : {}),
+  })
+  const currentApplications = new Map(source.applications.map((application) => [application._id.toString(), application]))
+  const scopedApplications: IHireApplication[] = []
+  for (const entry of snapshot.entries) {
+    const application = currentApplications.get(entry.applicationId)
+    if (!application || application.stage !== entry.expectedStage) {
+      throw new AppError('The candidate selection changed or is no longer available for screening; return to Candidates and select again', 409,
+        'SCREENING_SELECTION_STALE')
+    }
+    scopedApplications.push(application)
+  }
+
+  return {
+    source: { ...source, applications: scopedApplications },
+    manualIncludeApplicationIds: snapshot.entries.map((entry) => entry.applicationId),
+    audit: { selectionSnapshotId, actorMemberId: ctx.membership._id.toString(), actorName: actorName(ctx), note: selectionNote },
+  }
+}
+
+function buildPreview(ctx: MembershipContext, source: ScreeningSource, request: ScreeningGatePreviewRequest,
+  now: Date, manualIncludeApplicationIds: string[] = []): ScreeningGatePreview {
   return previewScreeningGate({
     workspaceId: source.job.workspaceId,
     jobId: source.job._id,
@@ -234,6 +273,7 @@ function buildPreview(
         ranking: currentRanking(application, candidate, source.job.jdText),
       }
     }),
+    manualIncludeApplicationIds,
     exceptions: exceptionInputs(ctx, request.exceptions),
     now,
   })
@@ -247,6 +287,7 @@ function buildPreview(
 function fingerprintForPreview(
   preview: ScreeningGatePreview,
   source: ScreeningSource,
+  selectionHandoff?: ResolvedSelectionHandoff['audit'],
 ): string {
   const canonical = {
     workspaceId: preview.workspaceId,
@@ -279,6 +320,7 @@ function fingerprintForPreview(
       action: exception.action,
       note: exception.note,
     })),
+    selectionHandoff: selectionHandoff ?? null,
   }
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
 }
@@ -347,7 +389,7 @@ async function loadScreeningSource(input: {
     .sort({ createdAt: 1, _id: 1 })
     .limit(HIRE_SCREENING_GATE_SNAPSHOT_CAP + 1)
     .select(
-      '_id workspaceId jobId candidateId stage createdAt updatedAt resumeMatch applicantSubmissions',
+      '_id workspaceId jobId candidateId stage createdAt resumeMatch.score resumeMatch.jdHash resumeMatch.resumeHash applicantSubmissions.match.resumeHash',
     )
   if (input.session) applicationsQuery = applicationsQuery.session(input.session)
   const applications = await applicationsQuery
@@ -404,7 +446,7 @@ async function loadScreeningSource(input: {
   let candidatesQuery = HireCandidate.find({
     workspaceId: input.workspaceId,
     _id: { $in: candidateIds },
-  }).select('_id workspaceId resumeText screeningProfile piiAnonymizedAt')
+  }).select('_id workspaceId screeningProfile piiAnonymizedAt')
   if (input.session) candidatesQuery = candidatesQuery.session(input.session)
   const candidates = await candidatesQuery
   const candidatesById = new Map(candidates.map((candidate) => [candidate._id.toString(), candidate]))
@@ -478,41 +520,43 @@ function isDuplicateKey(error: unknown): boolean {
   return !!error && typeof error === 'object' && (error as { code?: number }).code === 11000
 }
 
-/** Read-only preview. It deliberately performs no write/fence claim. */
-export async function previewJobScreeningGate(
-  ctx: MembershipContext,
-  jobId: string,
-  request: ScreeningGatePreviewRequest,
-): Promise<ScreeningGatePreviewResult> {
+export async function previewJobScreeningGate(ctx: MembershipContext, jobId: string,
+  request: ScreeningGatePreviewRequest): Promise<ScreeningGatePreviewResult> {
   await connectHireControlDB()
-  const source = await loadScreeningSource({
-    workspaceId: ctx.workspace._id,
-    jobId: requireObjectId(jobId, 'job id'),
-    now: new Date(),
-  })
-  assertJobOpen(source)
-  const preview = buildPreview(ctx, source, request, new Date())
-  return {
-    preview,
-    requirementVersion: {
-      id: source.job.requirementVersionId.toString(),
-      version: source.job.requirementVersion,
-      contentHash: source.job.requirementContentHash,
-    },
-    previewFingerprint: fingerprintForPreview(preview, source),
+  const previewedAt = new Date()
+  try {
+    const source = await loadScreeningSource({
+      workspaceId: ctx.workspace._id,
+      jobId: requireObjectId(jobId, 'job id'),
+      now: previewedAt,
+    })
+    assertJobOpen(source)
+    const resolved = await resolveSelectionHandoff(ctx, source, request, previewedAt)
+    const preview = buildPreview(ctx, resolved.source, request, previewedAt, resolved.manualIncludeApplicationIds)
+    return {
+      preview,
+      requirementVersion: {
+        id: resolved.source.job.requirementVersionId.toString(),
+        version: resolved.source.job.requirementVersion,
+        contentHash: resolved.source.job.requirementContentHash,
+      },
+      previewFingerprint: fingerprintForPreview(preview, resolved.source, resolved.audit),
+    }
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === 'SCREENING_UNKNOWN_APPLICATION') {
+      throw new AppError(
+        'The ranked queue changed — refresh the screening preview',
+        409,
+        'SCREENING_PREVIEW_STALE',
+      )
+    }
+    throw error
   }
 }
 
-/**
- * Confirm the current preview inside the workspace write transaction. The
- * job update is a deliberate conflict-inducing fence: a job close cannot
- * race this selection and leave a usable invitation batch behind.
- */
-export async function confirmJobScreeningGate(
-  ctx: MembershipContext,
-  jobId: string,
-  request: ConfirmScreeningGateRequest,
-): Promise<ConfirmedScreeningGateResult> {
+/** Confirm inside the job-fenced workspace write transaction. */
+export async function confirmJobScreeningGate(ctx: MembershipContext, jobId: string,
+  request: ConfirmScreeningGateRequest): Promise<ConfirmedScreeningGateResult> {
   await connectHireControlDB()
   const normalizedJobId = requireObjectId(jobId, 'job id')
   if (!FINGERPRINT.test(request.previewFingerprint)) {
@@ -560,8 +604,9 @@ export async function confirmJobScreeningGate(
           now: confirmedAt,
         })
         assertJobOpen(source)
-        const preview = buildPreview(ctx, source, request, confirmedAt)
-        const previewFingerprint = fingerprintForPreview(preview, source)
+        const resolved = await resolveSelectionHandoff(ctx, source, request, confirmedAt, session)
+        const preview = buildPreview(ctx, resolved.source, request, confirmedAt, resolved.manualIncludeApplicationIds)
+        const previewFingerprint = fingerprintForPreview(preview, resolved.source, resolved.audit)
         if (previewFingerprint !== request.previewFingerprint) {
           throw new AppError(
             'The ranked queue changed — refresh the screening preview before confirming',
@@ -577,16 +622,29 @@ export async function confirmJobScreeningGate(
         })
         const itemPlan = buildInvitationBatchItemPlan(preview)
 
-        // Claim the selected candidate records in the same transaction. A
-        // verified privacy deletion that wins first turns this into a 409;
-        // one that loses retries after the gate is durable and its future
-        // delivery worker will see the tombstone before sending.
-        for (const item of itemPlan) {
-          await claimHireCandidatePiiWriteFence({
-            workspaceId: ctx.workspace._id,
-            candidateId: objectIdFromPreview(item.candidateId),
-            session,
-          })
+        // Serialize candidate privacy deletion against gate confirmation in a
+        // single bounded database command rather than one round-trip per row.
+        const selectedCandidateIds = Array.from(
+          new Set(itemPlan.map((item) => item.candidateId)),
+          objectIdFromPreview,
+        )
+        if (selectedCandidateIds.length > 0) {
+          const privacyClaim = await HireCandidate.updateMany(
+            {
+              _id: { $in: selectedCandidateIds },
+              workspaceId: ctx.workspace._id,
+              piiAnonymizedAt: { $exists: false },
+            },
+            { $inc: { privacyWriteFenceVersion: 1 } },
+            { session, timestamps: false },
+          )
+          if (privacyClaim.matchedCount !== selectedCandidateIds.length) {
+            throw new AppError(
+              'One or more selected candidates became unavailable; refresh the screening preview',
+              409,
+              'SCREENING_PREVIEW_STALE',
+            )
+          }
         }
 
         const gateId = new mongoose.Types.ObjectId()
@@ -637,6 +695,17 @@ export async function confirmJobScreeningGate(
                 note: exception.note,
                 at: exception.at,
               })),
+              ...(resolved.audit
+                ? {
+                    selectionHandoff: {
+                      selectionSnapshotId: objectIdFromPreview(resolved.audit.selectionSnapshotId),
+                      actorMemberId: objectIdFromPreview(resolved.audit.actorMemberId),
+                      actorName: resolved.audit.actorName,
+                      note: resolved.audit.note,
+                      at: confirmedAt,
+                    },
+                  }
+                : {}),
               confirmedByMemberId: ctx.membership._id,
               confirmedByName: actorName(ctx),
               confirmedAt,
@@ -664,9 +733,9 @@ export async function confirmJobScreeningGate(
           ],
           { session },
         )
-        if (itemPlan.length > 0) {
+        for (let offset = 0; offset < itemPlan.length; offset += 250) {
           await HireInvitationBatchItem.create(
-            itemPlan.map((item, index) => ({
+            itemPlan.slice(offset, offset + 250).map((item, chunkIndex) => ({
               workspaceId: ctx.workspace._id,
               jobId: normalizedJobId,
               screeningGateId: gateId,
@@ -678,7 +747,7 @@ export async function confirmJobScreeningGate(
               scoreState: item.scoreState,
               selectionReason: item.selectionReason,
               sendAfter: new Date(
-                sendAfter.getTime() + index * SCREENING_INVITATION_STAGGER_MS,
+                sendAfter.getTime() + (offset + chunkIndex) * SCREENING_INVITATION_STAGGER_MS,
               ),
               status: 'pending',
               attempts: 0,
@@ -725,8 +794,12 @@ export async function confirmJobScreeningGate(
 export async function listJobScreeningGates(
   ctx: MembershipContext,
   jobId: string,
-): Promise<ScreeningGateListItem[]> {
+  input: { limit: number; cursor?: ScreeningGateListCursor },
+): Promise<ScreeningGateListPage> {
   await connectHireControlDB()
+  if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 25) {
+    throw new AppError('Screening history limit must be 1-25', 400, 'INVALID_LIMIT')
+  }
   const normalizedJobId = requireObjectId(jobId, 'job id')
   const job = await HireJob.findOne({
     _id: normalizedJobId,
@@ -734,27 +807,49 @@ export async function listJobScreeningGates(
   }).select('_id')
   if (!job) throw new NotFoundError('Job')
 
-  const gates = await HireScreeningGate.find({
+  const cursorId = input.cursor
+    ? requireObjectId(input.cursor.id, 'screening history cursor')
+    : undefined
+  const gatesPage = await HireScreeningGate.find({
     workspaceId: ctx.workspace._id,
     jobId: normalizedJobId,
-  }).sort({ confirmedAt: -1, _id: -1 })
-  const gateIds = gates.map((gate) => gate._id)
-  const batches = gateIds.length
-    ? await HireInvitationBatch.find({
+    ...(input.cursor && cursorId
+      ? {
+          $or: [
+            { confirmedAt: { $lt: input.cursor.confirmedAt } },
+            { confirmedAt: input.cursor.confirmedAt, _id: { $lt: cursorId } },
+          ],
+        }
+      : {}),
+  })
+    .sort({ confirmedAt: -1, _id: -1 })
+    .limit(input.limit + 1)
+    .select('-rankedApplications')
+  const hasNextPage = gatesPage.length > input.limit
+  const gates = gatesPage.slice(0, input.limit)
+  const batchPages = await Promise.all(
+    gates.map((gate) =>
+      HireInvitationBatch.find({
         workspaceId: ctx.workspace._id,
         jobId: normalizedJobId,
-        screeningGateId: { $in: gateIds },
-      }).sort({ wave: 1, createdAt: 1, _id: 1 })
-    : []
-  const batchesByGate = new Map<string, IHireInvitationBatch[]>()
-  for (const batch of batches) {
-    const key = batch.screeningGateId.toString()
-    const current = batchesByGate.get(key) ?? []
-    current.push(batch)
-    batchesByGate.set(key, current)
-  }
-  return gates.map((gate) => ({
+        screeningGateId: gate._id,
+      })
+        // Wave is unique within a gate, so this order uses the existing exact
+        // {workspaceId, screeningGateId, wave} index without a blocking sort.
+        .sort({ wave: -1 })
+        .limit(11),
+    ),
+  )
+  const items = gates.map((gate, index) => ({
     gate,
-    batches: batchesByGate.get(gate._id.toString()) ?? [],
+    batches: batchPages[index].slice(0, 10),
+    hasMoreBatches: batchPages[index].length > 10,
   }))
+  const last = gates[gates.length - 1]
+  return {
+    items,
+    nextCursor: hasNextPage && last
+      ? { confirmedAt: last.confirmedAt, id: last._id.toString() }
+      : null,
+  }
 }

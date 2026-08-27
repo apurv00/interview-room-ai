@@ -25,6 +25,8 @@ const {
   hireRuntimeMultimodalAnalysisPublisherJob,
   hireMultimodalAnalysisJob,
   hireMultimodalAnalysisRecoveryJob,
+  hireCandidateBulkOperationRequestedJob,
+  hireCandidateBulkOperationRecoveryJob,
 } = vi.hoisted(() => ({
   mockServe: vi.fn(() => ({ GET: vi.fn(), POST: vi.fn(), PUT: vi.fn() })),
   paymentRecoveryJob: { id: "payment-recovery-sentinel" },
@@ -69,6 +71,12 @@ const {
   hireMultimodalAnalysisJob: { id: "hire-multimodal-analysis" },
   hireMultimodalAnalysisRecoveryJob: {
     id: "hire-multimodal-analysis-recovery",
+  },
+  hireCandidateBulkOperationRequestedJob: {
+    id: "hire-candidate-bulk-operation-requested-sentinel",
+  },
+  hireCandidateBulkOperationRecoveryJob: {
+    id: "hire-candidate-bulk-operation-recovery-sentinel",
   },
 }));
 
@@ -180,6 +188,10 @@ vi.mock("@modules/hire-runtime/jobs/multimodalAnalysisPublisherJob", () => ({
 vi.mock("@modules/hire-multimodal/jobs/hireMultimodalAnalysisJob", () => ({
   hireMultimodalAnalysisJob,
   hireMultimodalAnalysisRecoveryJob,
+}));
+vi.mock("@/modules/hire-candidate-actions/jobs/bulkOperationJob", () => ({
+  hireCandidateBulkOperationRequestedJob,
+  hireCandidateBulkOperationRecoveryJob,
 }));
 
 import "../route";
@@ -394,7 +406,17 @@ describe("Inngest route registration", () => {
           (fn) => fn === hireMultimodalAnalysisRecoveryJob,
         ),
       ).toHaveLength(1);
-      expect(options.functions).toHaveLength(21);
+      expect(
+        options.functions.filter(
+          (fn) => fn === hireCandidateBulkOperationRequestedJob,
+        ),
+      ).toHaveLength(1);
+      expect(
+        options.functions.filter(
+          (fn) => fn === hireCandidateBulkOperationRecoveryJob,
+        ),
+      ).toHaveLength(1);
+      expect(options.functions).toHaveLength(23);
       expect(options.functions).not.toContain(retentionJob);
     });
   });

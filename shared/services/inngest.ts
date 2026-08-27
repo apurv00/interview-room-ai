@@ -39,6 +39,15 @@ export const inngest = new Inngest({
  * Strongly-typed event names. Keep in sync with function event triggers.
  */
 export type InngestEvents = {
+  // Hire candidate bulk actions: the worker reloads the durable operation,
+  // per-row expected stages, and actor authority from Hire control storage.
+  // Candidate identity and the selected id list never enter the event.
+  "hire/candidate-bulk-operation.requested": {
+    data: {
+      workspaceId: string;
+      operationId: string;
+    };
+  };
   // Hire recorded-interview analysis. This event intentionally transports
   // opaque control-plane coordinates only; raw facial data and transcript
   // remain in private Hire storage and are reloaded by the worker.

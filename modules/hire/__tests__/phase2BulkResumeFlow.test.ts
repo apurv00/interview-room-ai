@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   taskUpdateMany: vi.fn(),
   taskExists: vi.fn(),
   workspaceFindOne: vi.fn(),
+  workspaceUpdateOne: vi.fn(),
   workspaceExists: vi.fn(),
   memberFindOne: vi.fn(),
   memberExists: vi.fn(),
@@ -144,6 +145,7 @@ vi.mock('../models', () => ({
   },
   HireWorkspace: {
     findOne: (...args: unknown[]) => mocks.workspaceFindOne(...args),
+    updateOne: (...args: unknown[]) => mocks.workspaceUpdateOne(...args),
     exists: (...args: unknown[]) => mocks.workspaceExists(...args),
   },
   HireWorkspaceMember: {
@@ -420,6 +422,13 @@ beforeEach(() => {
   )
 
   mocks.workspaceFindOne.mockResolvedValue(workspace)
+  mocks.workspaceUpdateOne.mockImplementation(
+    async (filter: Record<string, unknown>, update: Record<string, unknown>) => {
+      if (!matches(workspace, filter)) return { matchedCount: 0 }
+      applyUpdate(workspace, update)
+      return { matchedCount: 1 }
+    },
+  )
   mocks.workspaceExists.mockResolvedValue(workspace)
   mocks.memberFindOne.mockResolvedValue(member)
   mocks.memberExists.mockResolvedValue(member)
@@ -488,6 +497,7 @@ describe('Phase 2 50-resume automated intake flow', () => {
 
     expect(outcomes).toHaveLength(50)
     expect(outcomes.every((outcome) => outcome.outcome === 'completed')).toBe(true)
+    expect(workspace.privacyAggregateFenceVersion).toBe(1)
     expect(mocks.parseDocument).toHaveBeenCalledTimes(50)
     expect(mocks.analyzeResume).toHaveBeenCalledTimes(50)
     expect(tasks.every((task) => task.status === 'completed')).toBe(true)

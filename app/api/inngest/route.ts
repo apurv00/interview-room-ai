@@ -70,6 +70,10 @@ import {
   hireMultimodalAnalysisJob,
   hireMultimodalAnalysisRecoveryJob,
 } from "@modules/hire-multimodal/jobs/hireMultimodalAnalysisJob";
+import {
+  hireCandidateBulkOperationRecoveryJob,
+  hireCandidateBulkOperationRequestedJob,
+} from "@/modules/hire-candidate-actions/jobs/bulkOperationJob";
 
 /**
  * Inngest handler route — entry point for all background jobs.
@@ -155,6 +159,8 @@ const functions = deploymentSurface.surface === "hire-engine"
           hireOnboardingTestDriveCleanupRecoveryJob,
           hireMultimodalAnalysisJob,
           hireMultimodalAnalysisRecoveryJob,
+          hireCandidateBulkOperationRequestedJob,
+          hireCandidateBulkOperationRecoveryJob,
         ]
       : b2cFunctions;
 

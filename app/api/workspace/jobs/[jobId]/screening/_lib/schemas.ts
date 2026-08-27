@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { HIRE_SCREENING_GATE_MAX_EXCEPTIONS } from '@hire'
 
 const objectId = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id')
 
@@ -56,23 +57,78 @@ export const screeningExceptionSchema = z
   })
   .strict()
 
+const screeningExceptionsSchema = z
+  .array(screeningExceptionSchema)
+  .max(HIRE_SCREENING_GATE_MAX_EXCEPTIONS)
+  .superRefine((exceptions, ctx) => {
+    const seen = new Set<string>()
+    exceptions.forEach((exception, index) => {
+      if (seen.has(exception.applicationId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, 'applicationId'],
+          message: 'Only one explicit exception is allowed per application',
+        })
+      }
+      seen.add(exception.applicationId)
+    })
+  })
+
 export const screeningPreviewRequestSchema = z
   .object({
     rule: screeningRuleSchema,
-    exceptions: z.array(screeningExceptionSchema).max(5000).optional(),
+    exceptions: screeningExceptionsSchema.optional(),
+    selectionSnapshotId: objectId.optional(),
+    selectionNote: z.string().trim().min(1).max(4000).optional(),
+    page: z
+      .object({
+        scope: z.enum(['selected', 'evaluated', 'attention', 'knockouts']),
+        cursor: z.string().min(1).max(2048).optional(),
+        expectedFingerprint: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/i, 'Invalid screening preview proof'),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (Boolean(value.selectionSnapshotId) !== Boolean(value.selectionNote)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: value.selectionSnapshotId
+          ? ['selectionNote']
+          : ['selectionSnapshotId'],
+        message:
+          'A selection snapshot and its documented inclusion rationale are required together',
+      })
+    }
+  })
 
 export const screeningConfirmRequestSchema = z
   .object({
     rule: screeningRuleSchema,
-    exceptions: z.array(screeningExceptionSchema).max(5000).optional(),
+    exceptions: screeningExceptionsSchema.optional(),
+    selectionSnapshotId: objectId.optional(),
+    selectionNote: z.string().trim().min(1).max(4000).optional(),
     previewFingerprint: z
       .string()
       .regex(/^[a-f0-9]{64}$/i, 'Invalid screening preview proof'),
     sendAfter: z.string().datetime({ offset: true }).optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (Boolean(value.selectionSnapshotId) !== Boolean(value.selectionNote)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: value.selectionSnapshotId
+          ? ['selectionNote']
+          : ['selectionSnapshotId'],
+        message:
+          'A selection snapshot and its documented inclusion rationale are required together',
+      })
+    }
+  })
 
 /** Explicit, bounded HR command; the server chooses only eligible remainder. */
 export const screeningWaterfallRequestSchema = z

@@ -183,6 +183,40 @@ describe('Phase-3 human round model contracts', () => {
       ([spec]) => spec.expiresAt === 1,
     )
     expect(ttl?.[1].expireAfterSeconds).toBe(0)
+
+    // Candidate-scale inbox indexes are rollout-preparer owned. Existing
+    // model initialization must not build them before preflight succeeds.
+    expect(indexes(HireHumanRound as unknown as Model<never>)).not.toEqual(
+      expect.arrayContaining([
+        [
+          {
+            workspaceId: 1,
+            jobId: 1,
+            status: 1,
+            createdAt: -1,
+            applicationId: 1,
+            _id: 1,
+          },
+          expect.any(Object),
+        ],
+      ]),
+    )
+    expect(indexes(HireHumanKitDelivery as unknown as Model<never>)).not.toEqual(
+      expect.arrayContaining([
+        [
+          {
+            workspaceId: 1,
+            jobId: 1,
+            status: 1,
+            updatedAt: -1,
+            applicationId: 1,
+            _id: 1,
+            attempts: 1,
+          },
+          expect.any(Object),
+        ],
+      ]),
+    )
   })
 
   it('retains explicit privacy-redaction hooks without adding B2C identity fields', () => {

@@ -4,10 +4,15 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   roundFindOne: vi.fn(),
+  roundUpdateOne: vi.fn(),
+  jobUpdateOne: vi.fn(),
   workspaceUpdateOne: vi.fn(),
   applicationExists: vi.fn(),
   attemptFindOne: vi.fn(),
+  attemptCount: vi.fn(),
+  attemptCreate: vi.fn(),
   consentExists: vi.fn(),
+  consentCreate: vi.fn(),
   consentFindOne: vi.fn(),
   mediaExists: vi.fn(),
   guestUpdateMany: vi.fn(),
@@ -20,7 +25,10 @@ vi.mock('../services/hireControlBoundary', () => ({
   connectHireControlDB: mocks.connect,
 }))
 vi.mock('../models/HireRound', () => ({
-  HireRound: { findOne: mocks.roundFindOne },
+  HireRound: { findOne: mocks.roundFindOne, updateOne: mocks.roundUpdateOne },
+}))
+vi.mock('../models/HireJob', () => ({
+  HireJob: { updateOne: mocks.jobUpdateOne },
 }))
 vi.mock('../models/HireWorkspace', () => ({
   HireWorkspace: { updateOne: mocks.workspaceUpdateOne },
@@ -29,10 +37,10 @@ vi.mock('../models/HireApplication', () => ({
   HireApplication: { exists: mocks.applicationExists },
 }))
 vi.mock('../models/HireInterviewAttempt', () => ({
-  HireInterviewAttempt: { findOne: mocks.attemptFindOne },
+  HireInterviewAttempt: { findOne: mocks.attemptFindOne, countDocuments: mocks.attemptCount, create: mocks.attemptCreate },
 }))
 vi.mock('../models/HireConsentReceipt', () => ({
-  HireConsentReceipt: { exists: mocks.consentExists, findOne: mocks.consentFindOne },
+  HireConsentReceipt: { exists: mocks.consentExists, findOne: mocks.consentFindOne, create: mocks.consentCreate },
 }))
 vi.mock('../models/HireMediaAsset', () => ({
   HireMediaAsset: { exists: mocks.mediaExists },
@@ -97,6 +105,8 @@ beforeEach(() => {
     }),
   })
   mocks.workspaceUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.jobUpdateOne.mockResolvedValue({ matchedCount: 1 })
+  mocks.roundUpdateOne.mockResolvedValue({ matchedCount: 1 })
   mocks.applicationExists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
   mocks.attemptFindOne.mockReturnValue({
     session: vi.fn().mockResolvedValue({
@@ -120,9 +130,23 @@ beforeEach(() => {
   mocks.mediaExists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
   mocks.guestUpdateMany.mockResolvedValue({ modifiedCount: 0 })
   mocks.guestCreate.mockResolvedValue([{}])
+  mocks.attemptCount.mockReturnValue({ session: vi.fn().mockResolvedValue(0) })
+  mocks.consentCreate.mockResolvedValue([{}])
 })
 
 describe('candidate authority versus workspace deletion', () => {
+  it('revisions candidate pages when first consent starts the AI interview', async () => {
+    mocks.attemptFindOne.mockReturnValueOnce({ session: vi.fn().mockResolvedValue(null) })
+    mocks.attemptCreate.mockImplementationOnce(async (rows: unknown[]) => rows)
+    await acceptHireConsentAndIssueGuestSession({
+      roundId: IDS.roundId, inviteCapability: `${IDS.workspaceId}.${'a'.repeat(64)}`, accepted, now,
+    })
+    expect(mocks.jobUpdateOne).toHaveBeenCalledWith(
+      { _id: IDS.jobId, workspaceId: IDS.workspaceId, status: 'open' },
+      { $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 } }, { session: expect.anything() },
+    )
+  })
+
   it('claims the active workspace in the same transaction before minting a guest session', async () => {
     const result = await acceptHireConsentAndIssueGuestSession({
       roundId: IDS.roundId,
@@ -164,6 +188,7 @@ describe('candidate authority versus workspace deletion', () => {
       { $inc: { writeFenceVersion: 1 } },
       { session: expect.anything() },
     )
+    expect(mocks.jobUpdateOne).not.toHaveBeenCalled()
     expect(mocks.guestCreate).toHaveBeenCalledOnce()
   })
 

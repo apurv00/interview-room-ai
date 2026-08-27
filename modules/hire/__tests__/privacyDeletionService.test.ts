@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   candidateFence: vi.fn(),
   revokeStatusLinks: vi.fn(),
   invalidateDigestSnapshots: vi.fn(),
+  redactCandidateActions: vi.fn(),
 }))
 
 vi.mock('../services/hireControlBoundary', () => ({
@@ -153,6 +154,10 @@ vi.mock('../../hire-reports/services/hireReportLifecycleService', () => ({
 }))
 vi.mock('../../hire-digest/services/hireDigestService', () => ({
   invalidateHireDigestAggregateSnapshotsForPrivacy: (...args: unknown[]) => mocks.invalidateDigestSnapshots(...args),
+}))
+vi.mock('../../hire-candidate-actions/subject-lifecycle-boundary', () => ({
+  redactHireCandidateActionSubjectData: (...args: unknown[]) =>
+    mocks.redactCandidateActions(...args),
 }))
 
 import { applyVerifiedHirePrivacyRequest } from '../services/privacyService'
@@ -352,11 +357,19 @@ describe('verified Hire candidate deletion', () => {
       { $set: { media: [] } },
       { session: dbSession },
     )
+    expect(mocks.redactCandidateActions).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      applicationIds: [APPLICATION_A, APPLICATION_B],
+      at: NOW,
+      session: dbSession,
+    })
     expect(mocks.applicationUpdateMany).toHaveBeenCalledWith(
       { workspaceId: WORKSPACE_ID, candidateId: CANDIDATE_ID },
       {
         $unset: {
           applicantSubmissions: 1,
+          decisionNote: 1,
+          'offerDecision.note': 1,
           'events.$[sensitiveEvent].note': 1,
         },
       },
@@ -372,6 +385,7 @@ describe('verified Hire candidate deletion', () => {
               'human_kit_reminded',
               'human_kit_revoked',
               'human_scorecard_submitted',
+              'stage_move',
             ],
           },
         }],
@@ -507,6 +521,7 @@ describe('verified Hire candidate deletion', () => {
           },
           exceptions: { applicationId: { $in: [APPLICATION_A, APPLICATION_B] } },
         },
+        $unset: { selectionHandoff: 1 },
       },
       { session: dbSession, overwriteImmutable: true },
     )

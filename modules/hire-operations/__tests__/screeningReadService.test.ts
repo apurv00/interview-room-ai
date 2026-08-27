@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(),
   job: { findOne: vi.fn() },
-  batch: { findOne: vi.fn() },
+  gate: { findOne: vi.fn() },
+  batch: { findOne: vi.fn(), find: vi.fn() },
   application: { find: vi.fn() },
   candidate: { find: vi.fn() },
   item: { find: vi.fn() },
@@ -19,6 +20,7 @@ vi.mock('@hire-operations-boundary', async () => {
     ...actual,
     connectHireControlDB: mocks.connect,
     HireJob: mocks.job,
+    HireScreeningGate: mocks.gate,
     HireInvitationBatch: mocks.batch,
     HireApplication: mocks.application,
     HireCandidate: mocks.candidate,
@@ -31,11 +33,13 @@ import {
   getJobScreeningMemberReadProjection,
   HIRE_SCREENING_RECIPIENT_MAX_LIMIT,
   readJobScreeningBatchRecipients,
+  readJobScreeningGateBatches,
 } from '../services/screeningReadService'
 
 const WORKSPACE_ID = new mongoose.Types.ObjectId('111111111111111111111111')
 const OTHER_WORKSPACE_ID = new mongoose.Types.ObjectId('121212121212121212121212')
 const JOB_ID = new mongoose.Types.ObjectId('222222222222222222222222')
+const GATE_ID = new mongoose.Types.ObjectId('232323232323232323232323')
 const APPLICATION_ID = new mongoose.Types.ObjectId('333333333333333333333333')
 const SECOND_APPLICATION_ID = new mongoose.Types.ObjectId('343434343434343434343434')
 const CANDIDATE_ID = new mongoose.Types.ObjectId('444444444444444444444444')
@@ -76,6 +80,12 @@ function pagedLeanMany<T>(value: T) {
   return { query: { select }, select, sort, limit, lean }
 }
 
+function batchPage<T>(value: T) {
+  const limit = vi.fn().mockResolvedValue(value)
+  const sort = vi.fn().mockReturnValue({ limit })
+  return { query: { sort }, sort, limit }
+}
+
 function item(overrides: Record<string, unknown> = {}) {
   return {
     _id: ITEM_ID,
@@ -98,11 +108,71 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.connect.mockResolvedValue(undefined)
   mocks.job.findOne.mockReturnValue(leanOne({ _id: JOB_ID }))
+  mocks.gate.findOne.mockReturnValue(leanOne({ _id: GATE_ID }))
   mocks.batch.findOne.mockReturnValue(leanOne({ _id: BATCH_ID }))
+  mocks.batch.find.mockReturnValue(batchPage([]).query)
   mocks.item.find.mockReturnValue(pagedLeanMany([]).query)
   mocks.application.find.mockReturnValue(leanMany([]))
   mocks.candidate.find.mockReturnValue(leanMany([]))
   mocks.privacy.find.mockReturnValue(leanMany([]))
+})
+
+describe('screening gate batch pages', () => {
+  it('uses a bounded descending keyset within the exact workspace, job, and gate', async () => {
+    const cursorId = new mongoose.Types.ObjectId('898989898989898989898989')
+    const firstId = new mongoose.Types.ObjectId('888888888888888888888888')
+    const secondId = new mongoose.Types.ObjectId('878787878787878787878787')
+    const overflowId = new mongoose.Types.ObjectId('868686868686868686868686')
+    const query = batchPage([
+      { _id: firstId, wave: 9 },
+      { _id: secondId, wave: 8 },
+      { _id: overflowId, wave: 7 },
+    ])
+    mocks.batch.find.mockReturnValueOnce(query.query)
+
+    const result = await readJobScreeningGateBatches(
+      ctx,
+      JOB_ID.toString(),
+      GATE_ID.toString(),
+      { limit: 2, cursor: { wave: 10, id: cursorId.toString() } },
+    )
+
+    expect(mocks.gate.findOne).toHaveBeenCalledWith({
+      _id: GATE_ID,
+      workspaceId: WORKSPACE_ID,
+      jobId: JOB_ID,
+    })
+    expect(mocks.batch.find).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
+      jobId: JOB_ID,
+      screeningGateId: GATE_ID,
+      wave: { $lt: 10 },
+    })
+    expect(query.sort).toHaveBeenCalledWith({ wave: -1 })
+    expect(query.limit).toHaveBeenCalledWith(3)
+    expect(result).toEqual({
+      batches: [{ _id: firstId, wave: 9 }, { _id: secondId, wave: 8 }],
+      hasMore: true,
+      nextCursor: { wave: 8, id: secondId.toString() },
+    })
+  })
+
+  it('rejects an unbounded batch page before database access', async () => {
+    await expect(
+      readJobScreeningGateBatches(
+        ctx,
+        JOB_ID.toString(),
+        GATE_ID.toString(),
+        { limit: 26 },
+      ),
+    ).rejects.toMatchObject({
+      code: 'INVALID_SCREENING_BATCH_PAGE',
+      statusCode: 400,
+    })
+    expect(mocks.connect).not.toHaveBeenCalled()
+    expect(mocks.gate.findOne).not.toHaveBeenCalled()
+    expect(mocks.batch.find).not.toHaveBeenCalled()
+  })
 })
 
 describe('screening member read projection', () => {
@@ -176,6 +246,20 @@ describe('screening member read projection', () => {
         },
       ),
     ).rejects.toMatchObject({ statusCode: 404 })
+
+    expect(mocks.application.find).not.toHaveBeenCalled()
+    expect(mocks.candidate.find).not.toHaveBeenCalled()
+  })
+
+  it('rejects identity projections above the 50-row transport boundary', async () => {
+    await expect(
+      getJobScreeningMemberReadProjection(ctx, JOB_ID.toString(), {
+        candidateCoordinates: Array.from({ length: 51 }, (_, index) => ({
+          applicationId: (index + 1).toString(16).padStart(24, '0'),
+          candidateId: (index + 101).toString(16).padStart(24, '0'),
+        })),
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_LIMIT', statusCode: 400 })
 
     expect(mocks.application.find).not.toHaveBeenCalled()
     expect(mocks.candidate.find).not.toHaveBeenCalled()

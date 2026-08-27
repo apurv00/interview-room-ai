@@ -415,10 +415,8 @@ async function settleDelivery(input: {
 }
 
 /**
- * A final initial-delivery failure needs an HR-visible receipt. The detailed
- * provider failure remains on the protected delivery row; the application
- * audit records only the actionable fact that a replacement kit is needed.
- *
+ * A final failure records one actionable HR receipt; provider detail remains
+ * only on the protected delivery row.
  * This is deliberately best-effort after the durable failure settlement. A
  * failure to append an audit event must not resurrect a spent delivery lease;
  * the member projection still exposes `terminalFailure` from that row.
@@ -449,6 +447,7 @@ async function recordTerminalInitialDeliveryFailure(input: {
           },
         },
       },
+      { timestamps: false },
     )
   } catch {
     logger.warn(
@@ -598,6 +597,7 @@ export async function deliverHumanInterviewKit(
             },
           },
         },
+        { timestamps: false },
       )
     }
   }

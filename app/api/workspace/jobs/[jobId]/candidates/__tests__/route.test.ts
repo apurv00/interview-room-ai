@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   addOrMergeJobCandidate: vi.fn(),
   serializeCandidate: vi.fn(),
   serializeApplication: vi.fn(),
+  parseParams: vi.fn(),
+  parseQuery: vi.fn(),
+  readCandidates: vi.fn(),
 }))
 
 vi.mock('../../../../_lib/composeHireApiRoute', () => ({
@@ -34,7 +37,13 @@ vi.mock('../../../../_lib/serialize', () => ({
   serializeApplication: mocks.serializeApplication,
 }))
 
-import { POST } from '../route'
+vi.mock('@hire-operations', () => ({
+  HireOperationsJobParamsSchema: { parse: mocks.parseParams },
+  HireJobCandidatesQuerySchema: { parse: mocks.parseQuery },
+  readHireJobCandidates: mocks.readCandidates,
+}))
+
+import { GET, POST } from '../route'
 
 const JOB_ID = '222222222222222222222222'
 const OPERATION_ID = '11111111-1111-4111-8111-111111111111'
@@ -121,5 +130,79 @@ describe('POST /api/workspace/jobs/[jobId]/candidates', () => {
       status: 'already_considered',
       createdApplication: false,
     })
+  })
+})
+
+describe('GET /api/workspace/jobs/[jobId]/candidates', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.parseParams.mockReturnValue({ jobId: JOB_ID })
+    mocks.parseQuery.mockReturnValue({
+      view: 'all',
+      stage: [],
+      source: [],
+      scoreState: [],
+      humanReview: [],
+      aiInterview: [],
+      sort: 'attention',
+      direction: 'desc',
+      limit: 50,
+    })
+    mocks.requireMembership.mockResolvedValue(ctx)
+    mocks.readCandidates.mockResolvedValue({ rows: [], pageInfo: { nextCursor: null } })
+  })
+
+  it('validates the complete URL query and derives workspace scope from membership', async () => {
+    const response = await GET(
+      new Request(
+        `https://hire.interviewprep.guru/api/workspace/jobs/${JOB_ID}/candidates?view=decision_ready&stage=shortlist&limit=50`,
+      ) as never,
+      { params: { jobId: JOB_ID } },
+    )
+
+    expect(mocks.parseParams).toHaveBeenCalledWith({ jobId: JOB_ID })
+    expect(mocks.parseQuery).toHaveBeenCalledWith({
+      view: 'decision_ready',
+      stage: 'shortlist',
+      limit: '50',
+    })
+    expect(mocks.requireMembership).toHaveBeenCalledWith({
+      userId: 'hire-member:workspace.member',
+      email: 'admin@acme.com',
+    })
+    expect(mocks.readCandidates).toHaveBeenCalledWith({
+      workspaceId: '111111111111111111111111',
+      jobId: JOB_ID,
+      query: expect.objectContaining({ limit: 50 }),
+    })
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+  })
+
+  it('fails closed on an invalid or repeated query before membership access', async () => {
+    mocks.parseQuery.mockImplementation(() => {
+      throw new Error('invalid candidate query')
+    })
+    await expect(
+      GET(
+        new Request(
+          `https://hire.interviewprep.guru/api/workspace/jobs/${JOB_ID}/candidates?limit=50&limit=100`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      ),
+    ).rejects.toThrow('invalid candidate query')
+    expect(mocks.parseQuery).toHaveBeenCalledWith({ limit: ['50', '100'] })
+    expect(mocks.requireMembership).not.toHaveBeenCalled()
+    expect(mocks.readCandidates).not.toHaveBeenCalled()
+  })
+
+  it('preserves the controlled stale-cursor code and 409 status from the read service', async () => {
+    mocks.readCandidates.mockRejectedValue(Object.assign(
+      new Error('Candidate results changed; refresh the list'),
+      { code: 'JOB_CANDIDATES_CURSOR_STALE', statusCode: 409 },
+    ))
+    await expect(GET(
+      new Request(`https://hire.interviewprep.guru/api/workspace/jobs/${JOB_ID}/candidates?cursor=opaque`) as never,
+      { params: { jobId: JOB_ID } },
+    )).rejects.toMatchObject({ code: 'JOB_CANDIDATES_CURSOR_STALE', statusCode: 409 })
   })
 })

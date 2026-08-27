@@ -45,6 +45,20 @@ function scoreBadgeVariant(score: number): "success" | "caution" | "danger" {
   return band === "strong" ? "success" : band === "ok" ? "caution" : "danger";
 }
 
+function safeJobReturnHref(value: string | null, jobId: string): string {
+  const base = `/workspace/jobs/${encodeURIComponent(jobId)}`;
+  const fallback = `${base}/candidates`;
+  if (!value || value.length > 4096 || value.includes("#")) return fallback;
+  const path = value.split("?", 1)[0];
+  return new Set([
+    base,
+    `${base}/candidates`,
+    `${base}/screening`,
+    `${base}/decision`,
+    `${base}/performance`,
+  ]).has(path) ? value : fallback;
+}
+
 interface PerQuestion {
   questionIndex: number;
   question: string;
@@ -158,6 +172,20 @@ type Stage =
   | "withdrawn";
 type StageAction =
   "advance" | "reject" | "withdraw" | "offer_accepted" | "offer_declined";
+type StageReasonCode =
+  | "requirements_mismatch"
+  | "position_closed"
+  | "duplicate_application"
+  | "candidate_withdrew"
+  | "role_filled";
+
+const REJECT_REASONS: Array<{ value: StageReasonCode; label: string }> = [
+  { value: "requirements_mismatch", label: "Requirements mismatch" },
+  { value: "position_closed", label: "Position closed" },
+  { value: "duplicate_application", label: "Duplicate application" },
+  { value: "role_filled", label: "Role filled" },
+];
+const WITHDRAWAL_REASON = [{ value: "candidate_withdrew" as const, label: "Candidate withdrew" }];
 
 interface CardData {
   application: {
@@ -215,8 +243,10 @@ const ACTIVE_INTERVIEW_REFRESH_MS = 15_000;
 
 export default function ApplicationCardPage({
   params,
+  searchParams,
 }: {
   params: { appId: string };
+  searchParams?: { returnTo?: string | string[] };
 }) {
   const [data, setData] = useState<CardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -235,6 +265,11 @@ export default function ApplicationCardPage({
     action: "offer_accepted";
   } | null>(null);
   const [note, setNote] = useState("");
+  const [needReason, setNeedReason] = useState<{
+    expectedFrom: Stage;
+    action: "reject" | "withdraw" | "offer_declined";
+  } | null>(null);
+  const [reasonCode, setReasonCode] = useState<StageReasonCode | "">("");
   const [stageCommand, setStageCommand] = useState<{
     expectedFrom: Stage;
     action: StageAction;
@@ -422,9 +457,17 @@ export default function ApplicationCardPage({
     expectedFrom: Stage,
     action: StageAction,
     moveNote?: string,
+    moveReason?: StageReasonCode,
   ) {
     if (action === "offer_accepted" && !moveNote) {
+      setNeedReason(null);
       setNeedNote({ expectedFrom, action });
+      return;
+    }
+    if ((action === "reject" || action === "withdraw" || action === "offer_declined") && !moveReason) {
+      setNeedNote(null);
+      setNeedReason({ expectedFrom, action });
+      setReasonCode(action === "reject" ? "requirements_mismatch" : "candidate_withdrew");
       return;
     }
     setBusy(true);
@@ -446,6 +489,7 @@ export default function ApplicationCardPage({
             expectedFrom,
             operationId,
             ...(moveNote ? { note: moveNote } : {}),
+            ...(moveReason ? { reasonCode: moveReason } : {}),
           }),
         },
       );
@@ -459,7 +503,9 @@ export default function ApplicationCardPage({
         return;
       }
       setNeedNote(null);
+      setNeedReason(null);
       setNote("");
+      setReasonCode("");
       setStageCommand(null);
       await load();
     } catch {
@@ -480,6 +526,11 @@ export default function ApplicationCardPage({
     activity,
     humanRounds = [],
   } = data;
+  const requestedReturnTo = typeof searchParams?.returnTo === "string"
+    ? searchParams.returnTo
+    : null;
+  const returnHref = safeJobReturnHref(requestedReturnTo, job.id);
+  const returnsToCandidates = returnHref.split("?", 1)[0].endsWith("/candidates");
   const latest = rounds[0] ?? null;
   const results = latest?.results ?? null;
   const inProgress = activity.some((a) => a.inProgress);
@@ -518,10 +569,10 @@ export default function ApplicationCardPage({
       {/* Decision-first header */}
       <div className="bg-white border border-[#e1e8ed] rounded-2xl p-6">
         <Link
-          href={`/workspace/jobs/${job.id}`}
+          href={returnHref}
           className="text-xs text-[#71767b] hover:text-indigo-600"
         >
-          ← {job.title}
+          ← Back to {job.title}{returnsToCandidates ? " candidates" : " workspace"}
         </Link>
         <div className="mt-1 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0 w-full xl:flex-1">
@@ -651,6 +702,39 @@ export default function ApplicationCardPage({
         )}
         {actionError && (
           <p className="mt-3 text-sm text-[#f4212e]">{actionError}</p>
+        )}
+        {needReason && (
+          <section aria-labelledby="stage-decision-heading" className="mt-3 space-y-3 rounded-xl border border-[#e1e8ed] p-3">
+            <div>
+              <h2 id="stage-decision-heading" className="text-sm font-semibold">Confirm candidate decision</h2>
+              <p className="mt-1 text-xs text-[#536471]">
+                {needReason.action === "withdraw"
+                  ? "The candidate will move to Withdrawn."
+                  : "The candidate will move to Rejected."}
+              </p>
+            </div>
+            <label htmlFor="stage-decision-reason" className="block text-xs text-[#536471]">Structured reason</label>
+            <select
+              id="stage-decision-reason"
+              autoFocus
+              value={reasonCode}
+              onChange={(event) => setReasonCode(event.target.value as StageReasonCode)}
+              className="w-full rounded-xl border border-[#e1e8ed] bg-[#f8fafc] px-3 py-2 text-sm"
+            >
+              {(needReason.action === "reject" ? REJECT_REASONS : WITHDRAWAL_REASON).map((reason) => (
+                <option key={reason.value} value={reason.value}>{reason.label}</option>
+              ))}
+            </select>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="danger" disabled={busy || !reasonCode}
+                onClick={() => void moveStage(needReason.expectedFrom, needReason.action, undefined, reasonCode || undefined)}>
+                Confirm decision
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => { setNeedReason(null); setReasonCode(""); }}>
+                Cancel
+              </Button>
+            </div>
+          </section>
         )}
         {needNote && (
           <div className="mt-3 space-y-2">

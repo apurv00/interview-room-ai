@@ -15,13 +15,21 @@ vi.mock("next/link", () => ({
 }));
 
 describe("JobSubnav", () => {
-  it("links the three job views and marks only the current one", () => {
+  it("links the five task-based job views and marks only the current one", () => {
     render(<JobSubnav jobId="job/with spaces" active="decisions" />);
 
     expect(screen.getByRole("navigation", { name: "Job workspace" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Pipeline" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute(
       "href",
       "/workspace/jobs/job%2Fwith%20spaces",
+    );
+    expect(screen.getByRole("link", { name: "Candidates" })).toHaveAttribute(
+      "href",
+      "/workspace/jobs/job%2Fwith%20spaces/candidates",
+    );
+    expect(screen.getByRole("link", { name: "Screening" })).toHaveAttribute(
+      "href",
+      "/workspace/jobs/job%2Fwith%20spaces/screening",
     );
     expect(screen.getByRole("link", { name: "Decisions" })).toHaveAttribute(
       "href",
@@ -35,7 +43,7 @@ describe("JobSubnav", () => {
       "href",
       "/workspace/jobs/job%2Fwith%20spaces/performance",
     );
-    expect(screen.getByRole("link", { name: "Pipeline" })).not.toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute(
       "aria-current",
     );
   });

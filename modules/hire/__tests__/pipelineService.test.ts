@@ -9,8 +9,10 @@ vi.mock('@shared/db/connection', () => ({
 const {
   session,
   mockWorkspaceWriteFence,
+  mockWorkspace,
   mockJob,
   mockCandidate,
+  mockPrivacyRequest,
   mockApplication,
   mockRound,
   mockHumanRound,
@@ -45,6 +47,7 @@ const {
   return {
     session: transactionSession,
     mockWorkspaceWriteFence: vi.fn(),
+    mockWorkspace: { updateOne: vi.fn() },
     mockJob: {
       create: vi.fn(),
       find: vi.fn(),
@@ -55,6 +58,7 @@ const {
       db: { startSession: vi.fn().mockResolvedValue(transactionSession) },
     },
     mockCandidate: { create: vi.fn(), find: vi.fn(), findOne: vi.fn(), updateOne: vi.fn() },
+    mockPrivacyRequest: { exists: vi.fn() },
     mockApplication: {
       create: vi.fn(),
       find: vi.fn(),
@@ -119,12 +123,17 @@ vi.mock('../models', () => {
       exists: (...args: unknown[]) => mockJob.exists(...args),
       db: mockJob.db,
     },
+    HireWorkspace: { updateOne: (...args: unknown[]) => mockWorkspace.updateOne(...args) },
     HireCandidate: {
       create: (...args: unknown[]) => mockCandidate.create(...args),
       find: (...args: unknown[]) => mockCandidate.find(...args),
       findOne: (...args: unknown[]) => mockCandidate.findOne(...args),
       updateOne: (...args: unknown[]) => mockCandidate.updateOne(...args),
     },
+    HirePrivacyRequest: {
+      exists: (...args: unknown[]) => mockPrivacyRequest.exists(...args),
+    },
+    activeHirePrivacyRequestFilter: () => ({ status: { $in: ['requested', 'verified'] } }),
     HireApplication: {
       create: (...args: unknown[]) => mockApplication.create(...args),
       find: (...args: unknown[]) => mockApplication.find(...args),
@@ -286,6 +295,7 @@ beforeEach(() => {
   session.withTransaction.mockImplementation(async (work: () => Promise<void>) => work())
   session.endSession.mockResolvedValue(undefined)
   mockJob.db.startSession.mockResolvedValue(session)
+  mockWorkspace.updateOne.mockResolvedValue({ matchedCount: 1 })
   mockJob.exists.mockReturnValue({ session: vi.fn().mockResolvedValue(true) })
   mockRound.find.mockResolvedValue([])
   mockRound.updateMany.mockResolvedValue({ modifiedCount: 0 })
@@ -306,6 +316,7 @@ beforeEach(() => {
   mockCancelMediaPurge.mockResolvedValue(0)
   mockDeliverRuntimeRevocation.mockResolvedValue(true)
   mockCandidatePiiFence.mockResolvedValue(undefined)
+  mockPrivacyRequest.exists.mockReturnValue({ session: vi.fn().mockResolvedValue(null) })
   mockCancelAssessmentExports.mockResolvedValue([])
   mockDeleteAssessmentExports.mockResolvedValue(undefined)
   mockCancelPipelineReports.mockResolvedValue(0)
@@ -782,6 +793,10 @@ describe('updateJobStatus', () => {
       actorName: 'HR One',
       operationId: OP_A,
     })
+    expect(statusUpdate.$inc).toEqual({
+      intakeWriteVersion: 1,
+      candidateReadVersion: 1,
+    })
     expect(mockApplication.find).toHaveBeenCalledWith(
       {
         workspaceId: 'ws-A',
@@ -1257,6 +1272,9 @@ describe('createApplication', () => {
       candidateId: 'c1',
       session,
     })
+    expect(mockWorkspace.updateOne).toHaveBeenCalledWith(
+      { _id: 'ws-A' }, { $inc: { privacyAggregateFenceVersion: 1 } }, { session },
+    )
   })
 
   it('rejects a synthetic practice coordinate before creating an ordinary application', async () => {
@@ -1646,6 +1664,10 @@ describe('addOrMergeJobCandidate', () => {
       source: 'manual',
       sourceHistory: ['manual'],
     })
+    expect(mockJob.updateOne.mock.calls[0][1]).toEqual({
+      $inc: { intakeWriteVersion: 1 },
+    })
+    expect(mockJob.updateOne).toHaveBeenCalledTimes(1)
   })
 
   it('merges a same-workspace manual email into the same active card with provenance and actor snapshots', async () => {
@@ -1695,10 +1717,18 @@ describe('addOrMergeJobCandidate', () => {
       { $addToSet: { sourceHistory: { $each: ['manual'] } } },
       { session, runValidators: true },
     )
+    expect(mockWorkspace.updateOne).toHaveBeenCalledWith(
+      { _id: 'ws-A' },
+      { $inc: { privacyAggregateFenceVersion: 1 } },
+      { session },
+    )
     expect(mockCandidatePiiFence).toHaveBeenCalledWith({
       workspaceId: 'ws-A',
       candidateId: 'c1',
       session,
+    })
+    expect(mockJob.updateOne.mock.calls[0][1]).toEqual({
+      $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 },
     })
     expect(mockApplication.create).not.toHaveBeenCalled()
     const [filter, update, options] = mockApplication.findOneAndUpdate.mock.calls[0]
@@ -1750,6 +1780,7 @@ describe('addOrMergeJobCandidate', () => {
     })
     expect(mockJob.updateOne).not.toHaveBeenCalled()
     expect(mockCandidate.updateOne).not.toHaveBeenCalled()
+    expect(mockWorkspace.updateOne).not.toHaveBeenCalled()
     expect(mockApplication.findOneAndUpdate).not.toHaveBeenCalled()
     expect(mockApplication.create).not.toHaveBeenCalled()
   })
@@ -1816,6 +1847,11 @@ describe('addOrMergeJobCandidate', () => {
         }),
       ],
     })
+    expect(mockWorkspace.updateOne).toHaveBeenCalledWith(
+      { _id: 'ws-A' },
+      { $inc: { privacyAggregateFenceVersion: 1 } },
+      { session },
+    )
   })
 
   it('fails closed for a rejected candidate and never automatically revives the card', async () => {
@@ -1834,6 +1870,7 @@ describe('addOrMergeJobCandidate', () => {
     })
     expect(mockJob.updateOne).not.toHaveBeenCalled()
     expect(mockCandidate.updateOne).not.toHaveBeenCalled()
+    expect(mockWorkspace.updateOne).not.toHaveBeenCalled()
     expect(mockApplication.create).not.toHaveBeenCalled()
     expect(mockApplication.findOneAndUpdate).not.toHaveBeenCalled()
   })
@@ -1856,6 +1893,9 @@ describe('moveStage', () => {
       workspaceId: 'ws-A',
       status: 'open',
     })
+    expect(mockJob.updateOne.mock.calls[0][1]).toEqual({
+      $inc: { intakeWriteVersion: 1, candidateReadVersion: 1 },
+    })
     const [filter, update, options] = mockApplication.findOneAndUpdate.mock.calls[0]
     expect(filter).toEqual({
       _id: 'a1',
@@ -1873,6 +1913,77 @@ describe('moveStage', () => {
       actorName: 'HR One',
       operationId: OP_A,
     })
+  })
+
+  it('orders durable bulk moves behind the candidate privacy fence in the stage transaction', async () => {
+    armApp('new')
+    mockApplication.findOneAndUpdate.mockResolvedValue({ _id: 'a1', stage: 'screened' })
+
+    await moveStage(CTX, 'a1', {
+      action: 'advance',
+      expectedFrom: 'new',
+      operationId: OP_A,
+      requirePrivacyAvailable: true,
+    })
+
+    expect(mockCandidatePiiFence).toHaveBeenCalledWith({ workspaceId: 'ws-A', candidateId: 'c1', session })
+    expect(mockPrivacyRequest.exists).toHaveBeenCalledWith({
+      workspaceId: 'ws-A', candidateId: 'c1', status: { $in: ['requested', 'verified'] },
+    })
+    expect(mockCandidatePiiFence.mock.invocationCallOrder[0]).toBeLessThan(
+      mockJob.updateOne.mock.invocationCallOrder[0],
+    )
+    expect(mockPrivacyRequest.exists.mock.invocationCallOrder[0]).toBeLessThan(
+      mockJob.updateOne.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('blocks a durable bulk move when a privacy request becomes active', async () => {
+    armApp('new')
+    mockPrivacyRequest.exists.mockReturnValueOnce({
+      session: vi.fn().mockResolvedValue({ _id: 'privacy-request-1' }),
+    })
+
+    await expect(
+      moveStage(CTX, 'a1', {
+        action: 'advance',
+        expectedFrom: 'new',
+        operationId: OP_A,
+        requirePrivacyAvailable: true,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_PRIVACY_UNAVAILABLE', statusCode: 409 })
+
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
+    expect(mockApplication.findOneAndUpdate).not.toHaveBeenCalled()
+  })
+
+  it('rechecks privacy before returning an idempotent stage retry', async () => {
+    const event = { type: 'stage_move', from: 'new', to: 'screened', operationId: OP_A }
+    const current = { _id: 'a1', jobId: 'j1', candidateId: 'c1', stage: 'screened', events: [event] }
+    mockApplication.findOne.mockResolvedValue(current)
+
+    await expect(
+      moveStage(CTX, 'a1', {
+        action: 'advance',
+        expectedFrom: 'new',
+        operationId: OP_A,
+        requirePrivacyAvailable: true,
+      }),
+    ).resolves.toBe(current)
+    expect(mockCandidatePiiFence).toHaveBeenCalledWith({ workspaceId: 'ws-A', candidateId: 'c1', session })
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
+
+    mockPrivacyRequest.exists.mockReturnValueOnce({
+      session: vi.fn().mockResolvedValue({ _id: 'privacy-request-1' }),
+    })
+    await expect(
+      moveStage(CTX, 'a1', {
+        action: 'advance',
+        expectedFrom: 'new',
+        operationId: OP_A,
+        requirePrivacyAvailable: true,
+      }),
+    ).rejects.toMatchObject({ code: 'CANDIDATE_PRIVACY_UNAVAILABLE' })
   })
 
   it('records accepted and declined offer outcomes explicitly', async () => {
@@ -2102,5 +2213,23 @@ describe('moveStage', () => {
     await expect(
       moveStage(CTX, 'a1', { action: 'advance', expectedFrom: 'new', operationId: OP_A }),
     ).rejects.toMatchObject({ code: 'OPERATION_ID_REUSED' })
+  })
+
+  it('binds an idempotent stage operation to its normalized rationale', async () => {
+    const event = {
+      type: 'stage_move', from: 'new', to: 'rejected', operationId: OP_A,
+      note: 'Decision reason: Requirements mismatch',
+    }
+    armApp('rejected', [event])
+    const command = {
+      action: 'reject' as const, expectedFrom: 'new' as const, operationId: OP_A,
+    }
+    await expect(moveStage(CTX, 'a1', {
+      ...command, note: '  Decision reason: Requirements mismatch  ',
+    })).resolves.toMatchObject({ stage: 'rejected' })
+    await expect(moveStage(CTX, 'a1', {
+      ...command, note: 'Decision reason: Role filled',
+    })).rejects.toMatchObject({ code: 'OPERATION_ID_REUSED' })
+    expect(mockJob.updateOne).not.toHaveBeenCalled()
   })
 })

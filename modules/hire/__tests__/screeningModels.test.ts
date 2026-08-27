@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { HireInvitationBatch } from '../models/HireInvitationBatch'
 import { HireInvitationBatchItem } from '../models/HireInvitationBatchItem'
 import {
+  HIRE_SCREENING_GATE_MAX_EXCEPTIONS,
   HIRE_SCREENING_GATE_SNAPSHOT_CAP,
   HireScreeningGate,
 } from '../models/HireScreeningGate'
@@ -113,6 +114,89 @@ describe('Phase-2 screening model contracts', () => {
       }),
     ).validateSync()
     expect(snapshotTooLarge?.errors.rankedApplications).toBeDefined()
+
+    const exceptionsTooLarge = new HireScreeningGate(
+      gateInput({
+        exceptions: Array.from(
+          { length: HIRE_SCREENING_GATE_MAX_EXCEPTIONS + 1 },
+          () => ({
+            applicationId: APPLICATION_ID,
+            action: 'include',
+            actorMemberId: MEMBER_ID,
+            actorName: 'Ava Recruiter',
+            note: 'Reviewed exception',
+            at: new Date('2026-08-12T01:00:00.000Z'),
+          }),
+        ),
+      }),
+    ).validateSync()
+    expect(exceptionsTooLarge?.errors.exceptions).toBeDefined()
+  })
+
+  it('keeps the maximum cohort and maximum-note payload below Mongo BSON limits', () => {
+    const rankedApplications = Array.from(
+      { length: HIRE_SCREENING_GATE_SNAPSHOT_CAP },
+      (_, index) => ({
+        applicationId: new mongoose.Types.ObjectId(
+          index.toString(16).padStart(24, '0'),
+        ),
+        candidateId: new mongoose.Types.ObjectId(
+          (index + HIRE_SCREENING_GATE_SNAPSHOT_CAP)
+            .toString(16)
+            .padStart(24, '0'),
+        ),
+        applicationCreatedAt: new Date('2026-08-12T00:00:00.000Z'),
+        rank: index + 1,
+        score: 88,
+        scoreState: 'scored',
+        knockoutReasons: [],
+        automaticallySelected: true,
+        selected: true,
+        selectionReason: 'manual_include',
+      }),
+    )
+    const gate = new HireScreeningGate(
+      gateInput({
+        topN: HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+        cutLine: {
+          mode: 'top_n',
+          requestedTopN: HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+          applicationId:
+            rankedApplications[HIRE_SCREENING_GATE_SNAPSHOT_CAP - 1]
+              .applicationId,
+          rank: HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+          score: 88,
+        },
+        evaluatedCount: HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+        eligibleCount: HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+        automaticallySelectedCount: HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+        selectedCount: HIRE_SCREENING_GATE_SNAPSHOT_CAP,
+        rankedApplications,
+        exceptions: rankedApplications
+          .slice(0, HIRE_SCREENING_GATE_MAX_EXCEPTIONS)
+          .map((entry) => ({
+            applicationId: entry.applicationId,
+            action: 'include',
+            actorMemberId: MEMBER_ID,
+            actorName: 'Ava Recruiter',
+            note: 'e'.repeat(4000),
+            at: new Date('2026-08-12T01:00:00.000Z'),
+          })),
+        selectionHandoff: {
+          selectionSnapshotId: GATE_ID,
+          actorMemberId: MEMBER_ID,
+          actorName: 'Ava Recruiter',
+          note: 'r'.repeat(4000),
+          at: new Date('2026-08-12T01:00:00.000Z'),
+        },
+      }),
+    )
+
+    expect(gate.validateSync()).toBeUndefined()
+    expect(
+      mongoose.mongo.BSON.calculateObjectSize(gate.toObject()),
+    ).toBeLessThan(16 * 1024 * 1024)
+    expect(JSON.stringify(gate.toObject()).match(/r{4000}/g)).toHaveLength(1)
   })
 
   it('has no B2C actor pointer and uses workspace-leading indexes across all screening records', () => {
@@ -129,6 +213,8 @@ describe('Phase-2 screening model contracts', () => {
     expect(HireScreeningGate.schema.path('confirmedByMemberId')).toBeDefined()
     expect(HireScreeningGate.schema.path('exceptions.actorMemberId')).toBeDefined()
     expect(HireScreeningGate.schema.path('exceptions.note')).toBeDefined()
+    expect(HireScreeningGate.schema.path('selectionHandoff.actorMemberId')).toBeDefined()
+    expect(HireScreeningGate.schema.path('selectionHandoff.note')).toBeDefined()
 
     const batchIndex = indexes(HireInvitationBatch as unknown as Model<never>).find(
       ([spec]) => spec.workspaceId === 1 && spec.screeningGateId === 1 && spec.wave === 1,

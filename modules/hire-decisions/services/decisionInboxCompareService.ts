@@ -31,6 +31,20 @@ export interface ReadHireDecisionActionInboxInput {
   /** A caller-provided last-seen watermark for only newly submitted verdicts. */
   externalVerdictsSince?: Date
   limit?: number
+  /** Internal keyset coordinate decoded and scope-checked by the member API. */
+  cursor?: HireDecisionActionInboxCursor
+}
+
+export interface HireDecisionActionInboxCursor {
+  occurredAt: Date
+  kind: HireDecisionActionInboxItem['kind']
+  applicationId: string
+  sourceId: string
+}
+
+export interface HireDecisionActionInboxPage extends HireDecisionActionInbox {
+  limit: number
+  nextCursor: HireDecisionActionInboxCursor | null
 }
 
 export interface CompareHireDecisionApplicationsInput {
@@ -49,6 +63,14 @@ type InboxRecord = {
   applicationId: mongoose.Types.ObjectId | string
   jobId: mongoose.Types.ObjectId | string
   candidateId: mongoose.Types.ObjectId | string
+}
+
+type InboxCoordinate = {
+  record: InboxRecord
+  sourceId: string
+  occurredAt: Date
+  kind: HireDecisionActionInboxItem['kind']
+  item(context: HireDecisionActionContext): HireDecisionActionInboxItem
 }
 
 function objectId(value: string, label: string): mongoose.Types.ObjectId {
@@ -76,6 +98,72 @@ function boundedLimit(value: number | undefined): number {
     )
   }
   return value
+}
+
+function normalizedCursor(
+  value: HireDecisionActionInboxCursor | undefined,
+): HireDecisionActionInboxCursor | null {
+  if (value === undefined) return null
+  const occurredAt = new Date(value.occurredAt)
+  if (
+    Number.isNaN(occurredAt.getTime()) ||
+    ![
+      'pending_human_scorecard',
+      'terminal_human_kit_delivery_failure',
+      'external_verdict_submitted',
+    ].includes(value.kind) ||
+    !mongoose.Types.ObjectId.isValid(value.applicationId) ||
+    !mongoose.Types.ObjectId.isValid(value.sourceId)
+  ) {
+    throw new HireDecisionError(
+      'Inbox cursor is invalid',
+      'DECISION_INVALID_SCOPE',
+      400,
+    )
+  }
+  return {
+    occurredAt,
+    kind: value.kind,
+    applicationId: value.applicationId.toLowerCase(),
+    sourceId: value.sourceId.toLowerCase(),
+  }
+}
+
+function beforeCursorFilter(
+  dateField: 'createdAt' | 'updatedAt' | 'submittedAt',
+  kind: HireDecisionActionInboxItem['kind'],
+  cursor: HireDecisionActionInboxCursor | null,
+): Record<string, unknown> {
+  if (!cursor) return {}
+
+  const sameTimeKindOrder = kind.localeCompare(cursor.kind)
+  return {
+    $or: [
+      { [dateField]: { $lt: cursor.occurredAt } },
+      ...(sameTimeKindOrder > 0
+        ? [{ [dateField]: cursor.occurredAt }]
+        : sameTimeKindOrder === 0
+          ? [
+              {
+                [dateField]: cursor.occurredAt,
+                $or: [
+                  {
+                    applicationId: {
+                      $gt: new mongoose.Types.ObjectId(cursor.applicationId),
+                    },
+                  },
+                  {
+                    applicationId: new mongoose.Types.ObjectId(
+                      cursor.applicationId,
+                    ),
+                    _id: { $gt: new mongoose.Types.ObjectId(cursor.sourceId) },
+                  },
+                ],
+              },
+            ]
+          : []),
+    ],
+  }
 }
 
 function stringId(value: mongoose.Types.ObjectId | string): string {
@@ -188,9 +276,11 @@ function inScopeFilter(scope: ScopedCoordinates): Record<string, unknown> {
  */
 export async function readHireDecisionActionInbox(
   input: ReadHireDecisionActionInboxInput,
-): Promise<HireDecisionActionInbox> {
+): Promise<HireDecisionActionInboxPage> {
   const scope = readScope(input)
   const limit = boundedLimit(input.limit)
+  const cursor = normalizedCursor(input.cursor)
+  const sourceLimit = limit + 1
   await connectHireDecisionDB()
   const base = inScopeFilter(scope)
 
@@ -200,75 +290,175 @@ export async function readHireDecisionActionInbox(
       status: 'pending_scorecard',
       revokedAt: { $exists: false },
       privacyRedactedAt: { $exists: false },
+      ...beforeCursorFilter('createdAt', 'pending_human_scorecard', cursor),
     })
-      .sort({ openedAt: 1, createdAt: 1 })
-      .limit(limit),
+      .sort({ createdAt: -1, applicationId: 1, _id: 1 })
+      .limit(sourceLimit),
     HireHumanKitDelivery.find({
       ...base,
       status: 'failed',
+      privacyRedactedAt: { $exists: false },
       // `failed` is retryable until the durable delivery row reaches its
       // bounded attempt cap. The inbox must not present an automatically
       // recoverable provider blip as a recruiter action.
       attempts: { $gte: HIRE_HUMAN_KIT_MAX_ATTEMPTS },
+      ...beforeCursorFilter(
+        'updatedAt',
+        'terminal_human_kit_delivery_failure',
+        cursor,
+      ),
     })
-      .sort({ updatedAt: -1 })
-      .limit(limit),
+      .sort({ updatedAt: -1, applicationId: 1, _id: 1 })
+      .limit(sourceLimit),
     HireExternalVerdict.find({
       ...base,
       privacyRedactedAt: { $exists: false },
-      ...(input.externalVerdictsSince ? { submittedAt: { $gt: input.externalVerdictsSince } } : {}),
+      ...(input.externalVerdictsSince && cursor
+        ? {
+            $and: [
+              { submittedAt: { $gt: input.externalVerdictsSince } },
+              beforeCursorFilter(
+                'submittedAt',
+                'external_verdict_submitted',
+                cursor,
+              ),
+            ],
+          }
+        : {
+            ...(input.externalVerdictsSince
+              ? { submittedAt: { $gt: input.externalVerdictsSince } }
+              : {}),
+            ...beforeCursorFilter(
+              'submittedAt',
+              'external_verdict_submitted',
+              cursor,
+            ),
+          }),
     })
-      .sort({ submittedAt: -1 })
-      .limit(limit),
+      .sort({ submittedAt: -1, applicationId: 1, _id: 1 })
+      .limit(sourceLimit),
   ])
 
-  const contexts = await loadActionContexts(input.workspaceId, [
-    ...pendingRounds,
-    ...failedDeliveries,
-    ...externalVerdicts,
-  ])
-  const items: HireDecisionActionInboxItem[] = []
-
-  for (const round of pendingRounds) {
-    const context = contexts.get(coordinateKey(round))
-    if (!context) continue
-    items.push({
+  const coordinates: InboxCoordinate[] = pendingRounds.map((round) => ({
+    record: round,
+    sourceId: round._id?.toString() ?? round.applicationId.toString(),
+    occurredAt: safeDate(round.createdAt),
+    kind: 'pending_human_scorecard',
+    item: (context) => ({
       kind: 'pending_human_scorecard',
-      occurredAt: safeDate(round.openedAt ?? round.createdAt),
+      occurredAt: safeDate(round.createdAt),
       humanRoundMode: round.mode,
       decision: context,
-    })
-  }
-  for (const delivery of failedDeliveries) {
-    const context = contexts.get(coordinateKey(delivery))
-    if (!context) continue
-    items.push({
-      kind: 'terminal_human_kit_delivery_failure',
+    }),
+  }))
+  const visibleFailedDeliveries = failedDeliveries.filter(
+    (delivery) =>
+      !(delivery as typeof delivery & { privacyRedactedAt?: Date })
+        .privacyRedactedAt,
+  )
+  coordinates.push(...visibleFailedDeliveries.map((delivery) => ({
+    record: delivery,
+    sourceId: delivery._id?.toString() ?? delivery.applicationId.toString(),
+    occurredAt: safeDate(delivery.updatedAt),
+    kind: 'terminal_human_kit_delivery_failure' as const,
+    item: (context: HireDecisionActionContext) => ({
+      kind: 'terminal_human_kit_delivery_failure' as const,
       occurredAt: safeDate(delivery.updatedAt),
       deliveryPurpose: delivery.purpose,
       attempts: safeAttempts(delivery.attempts),
       decision: context,
-    })
-  }
-  for (const verdict of externalVerdicts) {
-    const context = contexts.get(coordinateKey(verdict))
-    if (!context || !isExternalRecommendation(verdict.recommendation)) continue
-    items.push({
-      kind: 'external_verdict_submitted',
+    }),
+  })))
+  coordinates.push(...externalVerdicts.flatMap((verdict): InboxCoordinate[] => {
+    if (!isExternalRecommendation(verdict.recommendation)) return []
+    return [{
+      record: verdict,
+      sourceId: verdict._id?.toString() ?? verdict.applicationId.toString(),
       occurredAt: safeDate(verdict.submittedAt),
-      recommendation: verdict.recommendation,
-      decision: context,
-    })
-  }
+      kind: 'external_verdict_submitted',
+      item: (context) => ({
+        kind: 'external_verdict_submitted',
+        occurredAt: safeDate(verdict.submittedAt),
+        recommendation: verdict.recommendation as HireExternalVerdictRecommendation,
+        decision: context,
+      }),
+    }]
+  }))
 
-  // Deterministic newest-first delivery with no implicit candidate ranking.
-  items.sort((left, right) => {
+  // Sort lightweight source coordinates before loading any evidence. In the
+  // ordinary case only the visible page plus one look-ahead coordinate is
+  // hydrated, even though each of the three source queries is independently
+  // bounded for correct global keyset merging.
+  coordinates.sort((left, right) => {
     const delta = right.occurredAt.getTime() - left.occurredAt.getTime()
     if (delta !== 0) return delta
     return left.kind.localeCompare(right.kind) ||
-      left.decision.coordinates.applicationId.localeCompare(right.decision.coordinates.applicationId)
+      stringId(left.record.applicationId).localeCompare(
+        stringId(right.record.applicationId),
+      ) || left.sourceId.localeCompare(right.sourceId)
   })
-  return { items: items.slice(0, limit) }
+
+  const contexts = new Map<string, HireDecisionActionContext>()
+  const attemptedContextKeys = new Set<string>()
+  const hydrated: Array<{
+    coordinate: InboxCoordinate
+    item: HireDecisionActionInboxItem
+  }> = []
+  let coordinateOffset = 0
+  let lastExamined: InboxCoordinate | null = null
+
+  // A concurrent privacy deletion can invalidate a coordinate after its
+  // source query. Backfill from the next globally sorted coordinate until a
+  // full page plus look-ahead is available or this bounded source window is
+  // exhausted. Each unique candidate context is attempted at most once.
+  while (hydrated.length < limit + 1 && coordinateOffset < coordinates.length) {
+    const take = limit + 1 - hydrated.length
+    const chunk = coordinates.slice(coordinateOffset, coordinateOffset + take)
+    coordinateOffset += chunk.length
+    lastExamined = chunk.at(-1) ?? lastExamined
+    const missingRecords = chunk
+      .map((coordinate) => coordinate.record)
+      .filter((record) => !attemptedContextKeys.has(coordinateKey(record)))
+    for (const record of missingRecords) {
+      attemptedContextKeys.add(coordinateKey(record))
+    }
+    const loaded = await loadActionContexts(input.workspaceId, missingRecords)
+    loaded.forEach((context, key) => contexts.set(key, context))
+    for (const coordinate of chunk) {
+      const context = contexts.get(coordinateKey(coordinate.record))
+      if (!context) continue
+      hydrated.push({
+        coordinate,
+        item: coordinate.item(context),
+      })
+    }
+  }
+
+  const pageItems = hydrated.slice(0, limit)
+  const lastVisible = pageItems.at(-1)?.coordinate ?? null
+  const sourceWindowMayContinue = [
+    pendingRounds,
+    failedDeliveries,
+    externalVerdicts,
+  ].some((records) => records.length === sourceLimit)
+  const cursorCoordinate = hydrated.length > limit
+    ? lastVisible
+    : sourceWindowMayContinue
+      ? lastExamined
+      : null
+
+  return {
+    items: pageItems.map(({ item }) => item),
+    limit,
+    nextCursor: cursorCoordinate
+      ? {
+          occurredAt: safeDate(cursorCoordinate.occurredAt),
+          kind: cursorCoordinate.kind,
+          applicationId: stringId(cursorCoordinate.record.applicationId),
+          sourceId: cursorCoordinate.sourceId,
+        }
+      : null,
+  }
 }
 
 /**

@@ -296,4 +296,34 @@ describe('previewScreeningGate', () => {
       }),
     ).toThrow(/exception note is required/)
   })
+
+  it('fails closed on duplicate or oversized explicit exception sets', () => {
+    const candidate = application('app-1', { score: 90 })
+    const exception = {
+      applicationId: 'app-1',
+      action: 'exclude' as const,
+      actorMemberId: ACTOR,
+      actorName: 'Ava Recruiter',
+      note: 'Reviewed exception',
+    }
+    expect(() =>
+      previewScreeningGate({
+        workspaceId: WORKSPACE_A,
+        jobId: JOB_A,
+        rule: { mode: 'top_n', topN: 1 },
+        applications: [candidate],
+        exceptions: [exception, exception],
+      }),
+    ).toThrow(/Only one explicit exception is allowed per application/)
+
+    expect(() =>
+      previewScreeningGate({
+        workspaceId: WORKSPACE_A,
+        jobId: JOB_A,
+        rule: { mode: 'top_n', topN: 1 },
+        applications: [candidate],
+        exceptions: Array.from({ length: 101 }, () => exception),
+      }),
+    ).toThrow(/at most 100 explicit exceptions/)
+  })
 })

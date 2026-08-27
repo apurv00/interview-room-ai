@@ -96,7 +96,7 @@ function selectionCandidate(applicationId: string, candidateName: string) {
   return {
     applicationId,
     candidateName,
-    email: "PRIVATE_PIPELINE_EMAIL@example.com",
+    candidateEmail: `${candidateName.toLowerCase().replaceAll(" ", ".")}@example.com`,
     phone: "+91-PRIVATE_PHONE",
     resumeText: "PRIVATE_PIPELINE_RESUME",
     decisionNote: "PRIVATE_PIPELINE_DECISION_NOTE",
@@ -110,25 +110,84 @@ afterEach(() => {
 });
 
 describe("DecisionWorkspace", () => {
-  it("uses the narrow candidate endpoint, preserves click order, and renders only safe comparison evidence", async () => {
+  it("rehydrates a URL handoff through the scoped compare API and preserves its order", async () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url === `/api/workspace/jobs/${JOB_ID}/decision`) {
+        if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
+          return json({ items: [], limit: 20, nextCursor: null });
+        }
+        expect(url).toBe(`/api/workspace/jobs/${JOB_ID}/decision/compare`);
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          applicationIds: [APP_KATHERINE, APP_ADA],
+        });
+        return json({
+          workspaceId: WORKSPACE_ID,
+          jobId: JOB_ID,
+          applications: [
+            decision(APP_KATHERINE, "Katherine Johnson"),
+            decision(APP_ADA, "Ada Lovelace"),
+          ],
+        });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DecisionWorkspace
+        jobId={JOB_ID}
+        initialApplicationIds={[APP_KATHERINE, APP_ADA]}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("list", { name: "Selected comparison order" }),
+    ).toHaveTextContent("1.Katherine Johnson");
+    expect(
+      screen.getByRole("list", { name: "Selected comparison order" }),
+    ).toHaveTextContent("2.Ada Lovelace");
+    expect(
+      await screen.findByRole("heading", { name: "Evidence comparison" }),
+    ).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes("/decision/candidates?"),
+      ),
+    ).toBe(false);
+  });
+
+  it("uses bounded async candidate search, preserves click order, and renders only safe comparison evidence", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
           return json({
             items: [
               inboxItem(APP_ADA, "Ada Lovelace"),
               inboxItem(APP_GRACE, "Grace Hopper"),
             ],
+            limit: 20,
+            nextCursor: null,
           });
         }
-        if (url === `/api/workspace/jobs/${JOB_ID}/decision/candidates`) {
+        if (url.startsWith(`/api/workspace/jobs/${JOB_ID}/decision/candidates?`)) {
+          const search = new URL(url, "https://hire.example").searchParams;
+          expect(search.get("q")).toBe("candidate");
+          expect(search.get("limit")).toBe("20");
+          if (search.get("cursor")) {
+            expect(search.get("cursor")).toBe("next-candidate-page");
+            return json({
+              candidates: [selectionCandidate(APP_ADA, "Ada Lovelace")],
+              pageInfo: { nextCursor: null },
+            });
+          }
           return json({
             candidates: [
               selectionCandidate(APP_GRACE, "Grace Hopper"),
               selectionCandidate(APP_KATHERINE, "Katherine Johnson"),
-              selectionCandidate(APP_ADA, "Ada Lovelace"),
             ],
+            pageInfo: { nextCursor: "next-candidate-page" },
           });
         }
         expect(url).toBe(`/api/workspace/jobs/${JOB_ID}/decision/compare`);
@@ -152,7 +211,7 @@ describe("DecisionWorkspace", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        `/api/workspace/jobs/${JOB_ID}/decision/candidates`,
+        `/api/workspace/jobs/${JOB_ID}/decision?limit=20`,
         { cache: "no-store" },
       );
     });
@@ -165,6 +224,20 @@ describe("DecisionWorkspace", () => {
     expect(
       await screen.findByRole("heading", { name: "Ada Lovelace" }),
     ).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes(`/api/workspace/jobs/${JOB_ID}/decision/candidates?`),
+      ),
+    ).toBe(false);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Find a candidate" }), {
+      target: { value: "candidate" },
+    });
+    expect(
+      await screen.findByRole("button", {
+        name: "Add Katherine Johnson to comparison",
+      }),
+    ).toBeTruthy();
     const compareButton = screen.getByRole("button", {
       name: "Compare selected candidates",
     });
@@ -176,6 +249,20 @@ describe("DecisionWorkspace", () => {
       }),
     );
     expect(compareButton).toBeDisabled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show next candidate results" }),
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Add Ada Lovelace to comparison",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Remove Katherine Johnson from comparison",
+      }),
+    ).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", {
         name: "Add Ada Lovelace to comparison",
@@ -260,9 +347,7 @@ describe("DecisionWorkspace", () => {
       "PRIVATE_MEDIA_ASSET",
       "PRIVATE_DECISION_NOTE",
       "PRIVATE_CLOSE_NOTE",
-      "ada.lovelace@example.com",
       "PRIVATE_PIPELINE_DECISION_NOTE",
-      "PRIVATE_PIPELINE_EMAIL@example.com",
       "PRIVATE_PIPELINE_RESUME",
       "+91-PRIVATE_PHONE",
       "PRIVATE_PIPELINE_RAW_AI_OUTPUT",
@@ -271,12 +356,52 @@ describe("DecisionWorkspace", () => {
     }
   });
 
+  it("makes inbox bounds visible and loads the next opaque page", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
+        return Promise.resolve(
+          json({
+            items: [inboxItem(APP_ADA, "Ada Lovelace")],
+            limit: 20,
+            nextCursor: "opaque-next-page",
+          }),
+        );
+      }
+      expect(url).toBe(
+        `/api/workspace/jobs/${JOB_ID}/decision?limit=20&cursor=opaque-next-page`,
+      );
+      return Promise.resolve(
+        json({
+          items: [inboxItem(APP_GRACE, "Grace Hopper")],
+          limit: 20,
+          nextCursor: null,
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DecisionWorkspace jobId={JOB_ID} />);
+
+    expect(await screen.findByText(/Showing 1 action · up to 20 per page/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Load more actions" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Grace Hopper" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/Showing 2 actions · up to 20 per page/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Load more actions" })).toBeNull();
+    expect(
+      screen.getByText("All currently matching decision actions are loaded."),
+    ).toBeTruthy();
+  });
+
   it("keeps an invalid inbox response out of the presentation", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === `/api/workspace/jobs/${JOB_ID}/decision`) {
+        if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
           return Promise.resolve(
             json({
               items: [
@@ -289,10 +414,12 @@ describe("DecisionWorkspace", () => {
                   },
                 },
               ],
+              limit: 20,
+              nextCursor: null,
             }),
           );
         }
-        return Promise.resolve(json({ candidates: [] }));
+        return Promise.resolve(json({ candidates: [], pageInfo: { nextCursor: null } }));
       }),
     );
 

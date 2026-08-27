@@ -2,29 +2,30 @@
 
 Status: **production deployments run on Oracle Cloud through Coolify; Vercel is not a deployment target.**
 
-Current release procedure updated: 2026-08-21.
+Current release procedure updated: 2026-08-27.
 
 This is the operational source of truth for releases to the existing Oracle
 Cloud Mumbai A1 VM managed by Coolify. Cloudflare DNS/R2, Inngest Cloud,
 Razorpay, OAuth, Resend, and the AI providers remain external services.
 
-The current Hire-native multimodal release procedure is below. The remaining
-Vercel-to-Oracle cutover record is retained for audit history only and is
-explicitly superseded as live deployment guidance.
+The current Hire-native multimodal and job-candidate workspace release
+procedure is below. The remaining Vercel-to-Oracle cutover record is retained
+for audit history only and is explicitly superseded as live deployment
+guidance.
 
 The first release of Hire media object protocol
 `v2-opaque-nonce-if-none-match-zero-seal` must use the dedicated
 [`Hire media v2 cold-cutover runbook`](./hire-media-v2-cold-cutover.md). Its
 pause/drain/no-overlap procedure overrides the rolling deployment step below.
 
-## Current Hire-native multimodal release procedure
+## Current Hire release procedure
 
 Use this procedure only from an approved, merged `main` commit. Record the
 exact 40-character source commit and deployment timestamps for both services.
 All release actions are manual Coolify actions; do not use Vercel or infer a
 release from a source push.
 
-### 1. Scope the release and configure the Hire engine
+### 1. Scope the release and configure both Hire surfaces
 
 - Deploy the Hire runtime/engine service first, then the Hire control service.
   Both must use the same approved source commit. The old control cannot issue a
@@ -74,6 +75,16 @@ environment injected securely for the target surface, run `--check`, then
 `--apply` only if needed, then `--check` again:
 
 ```sh
+# Candidate-workspace indexes exist only in the Hire control database. Retain
+# the read-only plan and initial check output before any apply.
+IPG_SURFACE=hire-control npm run prepare:hire-candidate-workspace-indexes
+IPG_SURFACE=hire-control npm run check:hire-candidate-workspace-indexes
+
+# Run only when the initial check reports missing exact indexes, then retain
+# the final successful check output.
+IPG_SURFACE=hire-control npm run prepare:hire-candidate-workspace-indexes -- --apply
+IPG_SURFACE=hire-control npm run check:hire-candidate-workspace-indexes
+
 IPG_SURFACE=hire-control npm run check:hire-multimodal-observation-indexes
 IPG_SURFACE=hire-control npm run prepare:hire-multimodal-observation-indexes -- --apply
 IPG_SURFACE=hire-control npm run check:hire-multimodal-observation-indexes
@@ -86,7 +97,11 @@ IPG_SURFACE=hire-engine npm run check:hire-multimodal-observation-indexes
 Run the control commands against the control database and the engine commands
 against the isolated runtime database. `--apply` creates only missing exact
 indexes; it must not be substituted with `syncIndexes`, `dropIndex`, or a bulk
-schema migration.
+schema migration. Retain the approved source commit, redacted target database
+identity, candidate-workspace plan, initial check, any conditional apply, and
+the final successful check as one release record. The CI MongoDB gate proves
+the scripts against an empty ephemeral database; it does not replace this
+target-control-database evidence.
 
 ### 3. Manually deploy the Hire engine first, then control
 
@@ -191,10 +206,28 @@ control jobs:
 
 - `hire-multimodal-analysis`
 - `hire-multimodal-analysis-recovery`
+- `hire-candidate-bulk-operation`
+- `hire-candidate-bulk-operation-recovery`
 
 Registration alone is not delivery proof. Retain evidence of successful
 runtime analysis publishing and control analysis/recovery execution in Inngest
-before treating the release as live.
+before treating the release as live. Before allowing real recruiter bulk
+actions, use a dedicated non-production job and candidates to prove both new
+control jobs without retaining candidate PII:
+
+1. Create an 11-candidate, same-stage selection and an `advance` operation
+   with communication explicitly disabled. Retain only the opaque operation
+   ID, timestamps, counts, and controlled outcome codes.
+2. Prove one `hire-candidate-bulk-operation` run processes no more than its
+   ten-row page, emits the continuation, and a later run settles the remaining
+   row. The terminal operation total must equal succeeded + conflict + failed.
+3. For a separate small smoke operation, pause only the requested-operation
+   function before submission. Because the durable operation is immediately
+   recovery-due, prove the next
+   `hire-candidate-bulk-operation-recovery` cron finds and dispatches it; then
+   resume the requested-operation function and prove terminal settlement.
+4. Unpause both functions, confirm no smoke operation remains queued or
+   processing, and retain the redacted Inngest run links plus terminal counts.
 
 Never sync an unhealthy Hire `/api/inngest` endpoint. Static readiness
 failures return 503 without invoking the Inngest serving adapter, preventing a
@@ -213,6 +246,45 @@ missing or mismatched app ID from replacing another deployment's registration.
 - Run an authenticated Hire TTS turn and verify the response header
   `X-TTS-Provider: sarvam`. A Deepgram fallback, a missing header, or an
   unauthenticated health result is a release failure until corrected.
+- In the Hire control browser, open a dedicated job and prove Overview,
+  Candidates, Screening, Decisions, and Performance are distinct routes.
+  On Candidates, prove the server never returns more than 50 rows, next/back
+  cursor navigation preserves filters/sort/view in the URL, a candidate detail
+  opens and returns to the exact list state, and the table/mobile presentations
+  expose rank, human recommendation/scorecard state, stage, and selection
+  state. Repeat the critical flow at desktop, mobile, keyboard-only, and 200%
+  zoom with no console errors.
+- On Screening, use a job large enough to cross the 50-row preview boundary.
+  Prove Selected, All evaluated, Score attention, and Known knockouts navigate
+  through replace-in-place server pages; an out-of-page cut line still names
+  the correct candidate; and rapid rule/page changes never show an older
+  response. Search for an exception candidate without loading the cohort.
+  Confirm that gate history, older invitation waves, and each delivery ledger
+  have independent next/back navigation and never mount more than their page
+  limits (50 preview rows, 25 history/waves, 50 recipients).
+
+### 6. Candidate-workspace failure and rollback
+
+The candidate-workspace indexes are additive and its operation ledgers are
+durable. There is no database rollback switch, and dropping indexes or deleting
+operation rows during an incident is forbidden.
+
+- If no candidate bulk operation has ever been created, the Hire control image
+  may be rolled back to the prior approved commit and re-synced in Inngest.
+  Leave the additive indexes in place; they are inert for the older image.
+- If any operation is queued, processing, or partially settled, pause both new
+  Inngest functions and prevent recruiter access to the candidate-workspace
+  mutation routes. If a route-scoped ingress rule is unavailable, put the Hire
+  control service into maintenance rather than allowing new operations.
+- Retain each affected opaque operation ID and terminal counters. Never replay
+  individual stage writes manually or change ledger rows. Reconcile partial
+  results through the operation status API, then fix forward with the same
+  commit or a compatible newer control image and let the recovery job resume
+  idempotently.
+- A control-only candidate-workspace incident does not justify rolling back the
+  Hire engine. After recovery, repeat the exact index check, sync both function
+  IDs, prove requested-page and recovery delivery, re-run the authenticated
+  browser smoke, and only then restore recruiter access.
 
 ## Historical Vercel-to-Oracle cutover record (superseded)
 

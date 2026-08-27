@@ -9,6 +9,16 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:8.2.6
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
       - uses: actions/checkout@v4
@@ -33,10 +43,50 @@ jobs:
       - name: Test
         run: npm run test:run
 
-      - name: Build
+      - name: Candidate scale on MongoDB 8.2.6
+        run: npm run test:hire-candidate-scale-mongo
+        env:
+          HIRE_CANDIDATE_SCALE_MONGO_TEST_URI: mongodb://localhost:27017/ipg_candidate_scale_ci_test
+
+      - name: Apply and check candidate-workspace indexes
+        run: |
+          npm run prepare:hire-candidate-workspace-indexes -- --apply
+          npm run check:hire-candidate-workspace-indexes
+        env:
+          IPG_SURFACE: hire-control
+          MONGODB_URI: mongodb://localhost:27017/ipg_candidate_indexes_ci_test
+          HIRE_CONTROL_DATABASE_NAME: ipg_candidate_indexes_ci_test
+
+      - name: Build B2C surface
         run: npm run build
         env:
+          IPG_SURFACE: b2c
+          NEXT_PUBLIC_FEATURE_MULTIMODAL: 'false'
           NEXTAUTH_SECRET: ci-placeholder
           MONGODB_URI: mongodb://localhost:27017/ci
+          REDIS_URL: redis://localhost:6379
+          ANTHROPIC_API_KEY: sk-ant-placeholder
+
+      - name: Build Hire control surface
+        run: npm run build
+        env:
+          IPG_SURFACE: hire-control
+          NEXT_PUBLIC_FEATURE_MULTIMODAL: 'false'
+          NEXTAUTH_SECRET: ci-placeholder
+          MONGODB_URI: mongodb://localhost:27017/hire_control_ci
+          HIRE_CONTROL_DATABASE_NAME: hire_control_ci
+          REDIS_URL: redis://localhost:6379
+          ANTHROPIC_API_KEY: sk-ant-placeholder
+
+      - name: Build and verify Hire engine surface
+        run: |
+          npm run build
+          npm run check:hire-browser-build
+        env:
+          IPG_SURFACE: hire-engine
+          NEXT_PUBLIC_FEATURE_MULTIMODAL: 'true'
+          NEXTAUTH_SECRET: ci-placeholder
+          MONGODB_URI: mongodb://localhost:27017/hire_engine_ci
+          HIRE_RUNTIME_DATABASE_NAME: hire_engine_ci
           REDIS_URL: redis://localhost:6379
           ANTHROPIC_API_KEY: sk-ant-placeholder

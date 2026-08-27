@@ -68,6 +68,8 @@ import {
   HireMultimodalObservationPurgeObligation,
 } from '../../hire-multimodal/models'
 import { deleteHireCommercialWorkspaceData } from '@hire-commercial/purge-boundary'
+import { deleteHireCandidateSelectionWorkspaceData } from '@hire-operations/purge-boundary'
+import { deleteHireCandidateActionWorkspaceData } from '../../hire-candidate-actions/purge-boundary'
 
 const MEDIA_DELETE_BATCH_SIZE = 100
 const RUNTIME_PURGE_DELIVERY_BATCH_SIZE = 25
@@ -111,6 +113,9 @@ export const HIRE_WORKSPACE_PURGE_COLLECTIONS = [
   'HireInvitationBatchItem',
   'HireInvitationBatch',
   'HireScreeningGate',
+  'HireCandidateBulkOperationItem',
+  'HireCandidateBulkOperation',
+  'HireCandidateSelectionSnapshot',
   'HireAssessmentExport',
   'HireReportExport',
   'HireExternalVerdict',
@@ -513,6 +518,8 @@ async function deleteWorkspaceGraphChildren(
   await HireInvitationBatchItem.deleteMany({ workspaceId }, { session })
   await HireInvitationBatch.deleteMany({ workspaceId }, { session })
   await HireScreeningGate.deleteMany({ workspaceId }, { session })
+  await deleteHireCandidateActionWorkspaceData({ workspaceId, session })
+  await deleteHireCandidateSelectionWorkspaceData({ workspaceId, session })
   const assessmentExportCleanupTargets = await cancelHireAssessmentExports({
     scope: { workspaceId },
     cancelledAt: now,

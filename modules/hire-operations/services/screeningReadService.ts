@@ -9,6 +9,8 @@ import {
   HireInvitationBatchItem,
   HireJob,
   HirePrivacyRequest,
+  HireScreeningGate,
+  type IHireInvitationBatch,
   type HireInvitationBatchItemDeliveryStatus,
   type HireInvitationBatchItemSelectionReason,
   type HireInvitationBatchItemStatus,
@@ -76,6 +78,13 @@ export interface ScreeningRecipientPage {
   recipients: ScreeningRecipientDeliveryView[]
   hasMore: boolean
   nextCursor: string | null
+}
+
+export interface ScreeningBatchCursor { wave: number; id: string }
+export interface ScreeningBatchPage {
+  batches: IHireInvitationBatch[]
+  hasMore: boolean
+  nextCursor: ScreeningBatchCursor | null
 }
 
 interface ApplicationRow {
@@ -221,6 +230,8 @@ async function loadCandidateViews(
   candidateCoordinates: ScreeningCandidateCoordinate[],
   now: Date,
 ): Promise<ScreeningMemberCandidateView[]> {
+  if (candidateCoordinates.length > 50)
+    throw new AppError('Screening identity reads are limited to 50 candidates', 400, 'INVALID_LIMIT')
   const coordinatesByApplicationId = new Map<string, ScreeningCandidateCoordinate>()
   for (const coordinate of candidateCoordinates) {
     if (!validObjectId(coordinate.applicationId) || !validObjectId(coordinate.candidateId)) continue
@@ -325,6 +336,38 @@ export async function getJobScreeningMemberReadProjection(
   )
 
   return { candidates: candidateViews }
+}
+
+export async function readJobScreeningGateBatches(
+  ctx: MembershipContext,
+  jobId: string,
+  gateId: string,
+  input: { limit: number; cursor?: ScreeningBatchCursor },
+): Promise<ScreeningBatchPage> {
+  if (!validObjectId(jobId) || !validObjectId(gateId) || !Number.isInteger(input.limit) ||
+    input.limit < 1 || input.limit > 25 || (input.cursor && (!validObjectId(input.cursor.id) ||
+    !Number.isInteger(input.cursor.wave) || input.cursor.wave < 1)))
+    throw new AppError('Invalid screening batch page', 400, 'INVALID_SCREENING_BATCH_PAGE')
+  await connectHireControlDB()
+  const normalizedJobId = new mongoose.Types.ObjectId(jobId)
+  const normalizedGateId = new mongoose.Types.ObjectId(gateId)
+  const gate = await HireScreeningGate.findOne({
+    _id: normalizedGateId, workspaceId: ctx.workspace._id, jobId: normalizedJobId,
+  }).select('_id').lean()
+  if (!gate) throw new NotFoundError('Screening gate')
+  const batches = await HireInvitationBatch.find({
+    workspaceId: ctx.workspace._id, jobId: normalizedJobId, screeningGateId: normalizedGateId,
+    // Wave is unique within a gate; no ObjectId tie-break or blocking sort is
+    // needed to traverse the existing gate/wave index deterministically.
+    ...(input.cursor ? { wave: { $lt: input.cursor.wave } } : {}),
+  }).sort({ wave: -1 }).limit(input.limit + 1)
+  const page = batches.slice(0, input.limit)
+  const last = page[page.length - 1]
+  return {
+    batches: page, hasMore: batches.length > input.limit,
+    nextCursor: batches.length > input.limit && last
+      ? { wave: last.wave, id: last._id.toString() } : null,
+  }
 }
 
 /**

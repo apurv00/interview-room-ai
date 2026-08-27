@@ -1,6 +1,11 @@
 import Link from "next/link";
 
-export type JobWorkspaceSection = "pipeline" | "decisions" | "performance";
+export type JobWorkspaceSection =
+  | "overview"
+  | "candidates"
+  | "screening"
+  | "decisions"
+  | "performance";
 
 interface JobSubnavProps {
   jobId: string;
@@ -12,7 +17,9 @@ const SECTIONS: Array<{
   label: string;
   suffix: string;
 }> = [
-  { id: "pipeline", label: "Pipeline", suffix: "" },
+  { id: "overview", label: "Overview", suffix: "" },
+  { id: "candidates", label: "Candidates", suffix: "/candidates" },
+  { id: "screening", label: "Screening", suffix: "/screening" },
   { id: "decisions", label: "Decisions", suffix: "/decision" },
   { id: "performance", label: "Performance", suffix: "/performance" },
 ];
