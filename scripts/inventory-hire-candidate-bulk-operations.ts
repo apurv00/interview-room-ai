@@ -205,6 +205,7 @@ export function assertExactHireCandidateBulkOperationInventoryIndexes(
     if (
       matching.length !== 1 ||
       !actual ||
+      actual.name !== expected.name ||
       !exactKey(actual.key, expected.key) ||
       Boolean(actual.unique) !== Boolean('unique' in expected && expected.unique) ||
       actual.expireAfterSeconds !== expireAfterSeconds ||

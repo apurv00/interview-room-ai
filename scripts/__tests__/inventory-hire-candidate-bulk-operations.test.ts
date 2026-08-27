@@ -70,6 +70,15 @@ describe('Hire candidate bulk-operation inventory', () => {
     expect(() =>
       assertExactHireCandidateBulkOperationInventoryIndexes(
         exactIndexes.map((index) =>
+          index.name === HIRE_CANDIDATE_BULK_OPERATION_IDEMPOTENCY_INDEX
+            ? { ...index, name: 'wrong-idempotency-name' }
+            : index,
+        ),
+      ),
+    ).toThrow(HIRE_CANDIDATE_BULK_OPERATION_IDEMPOTENCY_INDEX)
+    expect(() =>
+      assertExactHireCandidateBulkOperationInventoryIndexes(
+        exactIndexes.map((index) =>
           index.name === HIRE_CANDIDATE_BULK_OPERATION_TTL_INDEX
             ? { ...index, expireAfterSeconds: 1 }
             : index,
