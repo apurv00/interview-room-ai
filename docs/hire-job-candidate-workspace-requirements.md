@@ -184,7 +184,9 @@ view, filters, sort, and page position.
 - A real MongoDB 8.2 replica-set gate covers atomic bulk-operation/item/privacy-
   fence creation and rollback, client replay, post-commit lease recovery with
   stable row-operation IDs, bounded retries, and duplicate-stage-event
-  prevention. Its evidence is bound to the exact approved `main` commit.
+  prevention. Its evidence is bound to the exact approved `main` commit. The
+  gate runs automatically for every `main` push; manual dispatch remains
+  available only for an explicit exact-SHA rerun reachable from `main`.
 - Component tests cover URL restoration, keyboard selection, table/card
   parity, screen-reader names, column controls, refresh notices, handoffs, and
   replacement paging for bulk-operation issues.
