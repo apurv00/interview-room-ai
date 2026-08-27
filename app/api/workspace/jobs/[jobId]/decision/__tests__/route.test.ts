@@ -43,6 +43,7 @@ describe("member decision routes", () => {
     vi.clearAllMocks();
     mocks.requireMembership.mockResolvedValue({
       workspace: { _id: { toString: () => "workspace-1" } },
+      membership: { _id: { toString: () => "membership-1" } },
     });
     mocks.readInbox.mockResolvedValue({ items: [], limit: 20, nextCursor: null });
     mocks.compare.mockResolvedValue({ applications: [] });
@@ -143,6 +144,110 @@ describe("member decision routes", () => {
         { params: { jobId: "9".repeat(24) } },
       ),
     ).rejects.toMatchObject({ code: "INVALID_DECISION_CURSOR" });
+
+    const callsBeforeScopeReplay = mocks.readInbox.mock.calls.length;
+    mocks.requireMembership.mockResolvedValueOnce({
+      workspace: { _id: { toString: () => "workspace-1" } },
+      membership: { _id: { toString: () => "membership-2" } },
+    });
+    await expect(
+      GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=2&cursor=${encodeURIComponent(page.nextCursor)}`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_DECISION_CURSOR" });
+    expect(mocks.readInbox).toHaveBeenCalledTimes(callsBeforeScopeReplay);
+
+    await expect(
+      GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=3&cursor=${encodeURIComponent(page.nextCursor)}`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_DECISION_CURSOR" });
+    expect(mocks.readInbox).toHaveBeenCalledTimes(callsBeforeScopeReplay);
+
+    mocks.requireMembership.mockResolvedValueOnce({
+      workspace: { _id: { toString: () => "workspace-2" } },
+      membership: { _id: { toString: () => "membership-1" } },
+    });
+    await expect(
+      GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=2&cursor=${encodeURIComponent(page.nextCursor)}`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_DECISION_CURSOR" });
+    expect(mocks.readInbox).toHaveBeenCalledTimes(callsBeforeScopeReplay);
+
+    await expect(
+      GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=2&externalVerdictsSince=2026-08-14T00%3A00%3A00.000Z&cursor=${encodeURIComponent(page.nextCursor)}`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_DECISION_CURSOR" });
+    expect(mocks.readInbox).toHaveBeenCalledTimes(callsBeforeScopeReplay);
+  });
+
+  it.each([
+    `limit=2&limit=2`,
+    `cursor=one&cursor=two`,
+    `externalVerdictsSince=2026-08-14T00%3A00%3A00.000Z&externalVerdictsSince=2026-08-14T00%3A00%3A00.000Z`,
+    `page=2`,
+  ])("rejects an unknown or repeated inbox query before membership: %s", async (query) => {
+    await expect(
+      GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?${query}`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_DECISION_QUERY" });
+    expect(mocks.requireMembership).not.toHaveBeenCalled();
+    expect(mocks.readInbox).not.toHaveBeenCalled();
+  });
+
+  it("expires a decision inbox cursor after seven days", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-14T08:00:00.000Z"));
+      mocks.readInbox.mockResolvedValueOnce({
+        items: [],
+        limit: 2,
+        nextCursor: {
+          occurredAt: new Date("2026-08-14T07:00:00.000Z"),
+          kind: "external_verdict_submitted",
+          applicationId: APP_A,
+          sourceId: APP_A,
+        },
+      });
+      const first = await GET(
+        new NextRequest(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=2`,
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      );
+      const cursor = (await first.json()).nextCursor as string;
+
+      vi.setSystemTime(new Date("2026-08-21T08:00:00.001Z"));
+      await expect(
+        GET(
+          new NextRequest(
+            `https://hire.example/api/workspace/jobs/${JOB_ID}/decision?limit=2&cursor=${encodeURIComponent(cursor)}`,
+          ) as never,
+          { params: { jobId: JOB_ID } },
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_DECISION_CURSOR" });
+      expect(mocks.readInbox).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects an invalid verdict cursor before reading any decision data", async () => {
@@ -222,6 +327,8 @@ describe("member decision routes", () => {
     expect(mocks.searchCandidates).toHaveBeenCalledWith({
       workspaceId: "workspace-1",
       jobId: JOB_ID,
+      memberId: "membership-1",
+      resource: "decision_candidate_search",
       query: {
         q: "ada",
         limit: 20,
@@ -250,6 +357,30 @@ describe("member decision routes", () => {
     ]) {
       expect(encoded).not.toContain(forbidden);
     }
+  });
+
+  it("rejects unknown or repeated comparison-search query parameters before membership", async () => {
+    for (const query of [
+      "q=ada&unknown=1",
+      "q=ada&q=grace",
+      "q=ada&limit=20&limit=10",
+      "q=ada&cursor=one&cursor=two",
+      "q=ada&limit=1e1",
+      "q=ada&limit=0x10",
+      "q=ada&limit=%2B10",
+      "q=ada&limit=01",
+    ]) {
+      await expect(
+        candidatesGET(
+          new NextRequest(
+            `https://hire.example/api/workspace/jobs/${JOB_ID}/decision/candidates?${query}`,
+          ) as never,
+          { params: { jobId: JOB_ID } },
+        ),
+      ).rejects.toThrow();
+    }
+    expect(mocks.requireMembership).not.toHaveBeenCalled();
+    expect(mocks.searchCandidates).not.toHaveBeenCalled();
   });
 
   it("rejects duplicate or over-limit comparison inputs at the route boundary", async () => {

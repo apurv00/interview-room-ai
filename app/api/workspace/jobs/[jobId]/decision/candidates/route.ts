@@ -25,7 +25,7 @@ const querySchema = z
       .max(120)
       .refine((value) => !/[\u0000-\u001f\u007f]/.test(value), 'Invalid search'),
     cursor: z.string().trim().min(1).max(2048).optional(),
-    limit: z.coerce.number().int().min(1).max(20).default(20),
+    limit: z.string().regex(/^(?:[1-9]|1\d|20)$/).transform(Number).optional(),
   })
   .strict()
 
@@ -53,13 +53,16 @@ export const GET = composeHireApiRoute({
       throw new AppError('Invalid job id', 400, 'INVALID_ID')
     }
     const query = querySchema.parse(rawSearchParams(new URL(request.url)))
+    const limit = query.limit ?? 20
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const page = await readHireJobCandidateIdentities({
       workspaceId: ctx.workspace._id.toString(),
       jobId: params.jobId,
+      memberId: ctx.membership._id.toString(),
+      resource: 'decision_candidate_search',
       query: {
         q: query.q,
-        limit: query.limit,
+        limit,
         ...(query.cursor ? { cursor: query.cursor } : {}),
       },
     })

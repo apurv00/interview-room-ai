@@ -123,7 +123,9 @@ view, filters, sort, and page position.
 - Secondary member pages (Screening history/waves/recipients, Decisions, and
   bulk-operation issues) use authenticated opaque cursors bound to member,
   workspace, job, resource, limit, and age. Their routes reject unknown or
-  repeated query parameters.
+  repeated query parameters. Every browser pager replaces the visible page;
+  bulk-operation issues are capped at 50 mounted rows and never use append-only
+  accumulation.
 - Database indexes are derived from the supported query matrix, explicitly
   prepared and checked, and never delegated to runtime `autoIndex`.
 - A new arrival never silently reorders the page under review; the UI polls the
@@ -179,8 +181,13 @@ view, filters, sort, and page position.
 - Route tests cover validation, private caching, membership, bounded Screening
   preview/history/wave/recipient/search pagination, selection snapshots,
   idempotent partial results, and stale-state conflicts.
+- A real MongoDB 8.2 replica-set gate covers atomic bulk-operation/item/privacy-
+  fence creation and rollback, client replay, post-commit lease recovery with
+  stable row-operation IDs, bounded retries, and duplicate-stage-event
+  prevention. Its evidence is bound to the exact approved `main` commit.
 - Component tests cover URL restoration, keyboard selection, table/card
-  parity, screen-reader names, column controls, refresh notices, and handoffs.
+  parity, screen-reader names, column controls, refresh notices, handoffs, and
+  replacement paging for bulk-operation issues.
 - A fixture with at least 1,000 applications proves bounded query/page output,
   correct counts/ranks, and bounded rendered rows.
 - Authenticated browser verification covers desktop, mobile, keyboard-only,

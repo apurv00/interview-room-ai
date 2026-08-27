@@ -1083,7 +1083,7 @@ describe('ScreeningPanel', () => {
     await screen.findByText(/Confirmed by HR One/)
     expect(screen.getByText('2 documented exceptions')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'View older waves' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Load more confirmed batches' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next page of confirmed batches' }))
 
     await screen.findByText(/Confirmed by HR Two/)
     expect(screen.queryByText(/Confirmed by HR One/)).not.toBeInTheDocument()
@@ -1150,8 +1150,8 @@ describe('ScreeningPanel', () => {
 
     render(<ScreeningPanel jobId={JOB_ID} jobStatus="open" />)
     await screen.findByRole('button', { name: 'Requeue 1 failed invitation' })
-    fireEvent.click(screen.getByRole('button', { name: 'Load more confirmed batches' }))
-    await screen.findByRole('button', { name: 'Loading more batches…' })
+    fireEvent.click(screen.getByRole('button', { name: 'Next page of confirmed batches' }))
+    await screen.findByRole('button', { name: 'Loading next batch page…' })
     fireEvent.click(screen.getByRole('button', { name: 'Requeue 1 failed invitation' }))
 
     await screen.findByText('Wave 9 · 2 planned · 0 sent')

@@ -28,6 +28,7 @@ export default async function DecisionWorkspacePage({
     <div className="space-y-6">
       <JobSubnav jobId={jobId} active="decisions" />
       <DecisionWorkspace
+        key={jobId}
         jobId={jobId}
         initialApplicationIds={handoff.applicationIds}
         initialSelectionError={handoff.error}

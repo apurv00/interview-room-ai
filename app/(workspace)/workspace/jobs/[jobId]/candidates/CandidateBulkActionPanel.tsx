@@ -13,6 +13,16 @@ type OperationLoadResult =
   | { kind: 'aborted' }
   | { kind: 'error'; message: string }
 
+interface OperationLoadOptions {
+  cursor?: string | null
+  updateIssuePage?: boolean
+  focusIssuePage?: boolean
+  issuePageIndex?: number
+  issueNavigationGeneration?: number
+}
+
+const BULK_ISSUE_PAGE_LIMIT = 50
+
 const BULK_REASON_OPTIONS: Array<{ value: HireCandidateBulkReasonCode; label: string }> = [
   { value: 'requirements_mismatch', label: 'Requirements mismatch' },
   { value: 'position_closed', label: 'Position closed' },
@@ -37,6 +47,11 @@ interface BulkIssue {
   applicationId: string
   outcome: string
   message: string
+}
+
+interface BulkIssuePage {
+  items: BulkIssue[]
+  nextCursor: string | null
 }
 
 interface CandidateBulkActionPanelProps {
@@ -85,12 +100,11 @@ function readOperation(value: unknown): BulkOperationView | null {
   }
 }
 
-function readIssues(value: unknown): BulkIssue[] {
+function readIssuePage(value: unknown): BulkIssuePage {
   const envelope = objectValue(value)
   const issues = objectValue(envelope?.issues)
-  if (!issues) return []
-  if (!Array.isArray(issues?.items)) return []
-  return issues.items.flatMap((item) => {
+  if (!issues || !Array.isArray(issues.items)) return { items: [], nextCursor: null }
+  const items = issues.items.slice(0, BULK_ISSUE_PAGE_LIMIT).flatMap((item) => {
     const issue = objectValue(item)
     if (!issue) return []
     const applicationId = typeof issue.applicationId === 'string' ? issue.applicationId : null
@@ -103,6 +117,10 @@ function readIssues(value: unknown): BulkIssue[] {
       message: typeof issue.code === 'string' ? issue.code.replaceAll('_', ' ').toLowerCase() : 'This candidate could not be updated.',
     }]
   })
+  return {
+    items,
+    nextCursor: typeof issues.nextCursor === 'string' ? issues.nextCursor : null,
+  }
 }
 
 function operationId(): string {
@@ -129,6 +147,11 @@ export default function CandidateBulkActionPanel({
   const [operation, setOperation] = useState<BulkOperationView | null>(null)
   const [issues, setIssues] = useState<BulkIssue[]>([])
   const [issueNextCursor, setIssueNextCursor] = useState<string | null>(null)
+  const [issueCursorHistory, setIssueCursorHistory] = useState<Array<string | null>>([null])
+  const [issuePageIndex, setIssuePageIndex] = useState(0)
+  const [issuePageLoading, setIssuePageLoading] = useState(false)
+  const [issuePageError, setIssuePageError] = useState<string | null>(null)
+  const [issuePageAnnouncement, setIssuePageAnnouncement] = useState('')
   const [recovering, setRecovering] = useState(Boolean(initialOperationId))
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
   const [copyStatus, setCopyStatus] = useState<string | null>(null)
@@ -136,23 +159,50 @@ export default function CandidateBulkActionPanel({
   const settledOperationRef = useRef<string | null>(null)
   const actionTriggerRef = useRef<HTMLButtonElement | null>(null)
   const confirmationHeadingRef = useRef<HTMLHeadingElement | null>(null)
+  const issuePageHeadingRef = useRef<HTMLHeadingElement | null>(null)
+  const issueCursorHistoryRef = useRef<Array<string | null>>([null])
+  const issuePageIndexRef = useRef(0)
+  const issueNavigationInFlightRef = useRef(false)
+  const issueNavigationGenerationRef = useRef(0)
+  const operationRequestGenerationRef = useRef(0)
   const onSettledRef = useRef(onSettled)
   onSettledRef.current = onSettled
+
+  const resetIssuePaging = useCallback(() => {
+    operationRequestGenerationRef.current += 1
+    issueNavigationGenerationRef.current += 1
+    issueCursorHistoryRef.current = [null]
+    issuePageIndexRef.current = 0
+    issueNavigationInFlightRef.current = false
+    setIssues([])
+    setIssueNextCursor(null)
+    setIssueCursorHistory([null])
+    setIssuePageIndex(0)
+    setIssuePageLoading(false)
+    setIssuePageError(null)
+    setIssuePageAnnouncement('')
+  }, [])
 
   const loadOperation = useCallback(async (
     operationIdValue: string,
     signal?: AbortSignal,
-    cursor?: string | null,
-    appendIssues = false,
+    options: OperationLoadOptions = {},
   ): Promise<OperationLoadResult> => {
+    const requestGeneration = ++operationRequestGenerationRef.current
+    const cursor = options.cursor === undefined
+      ? issueCursorHistoryRef.current[issuePageIndexRef.current] ?? null
+      : options.cursor
     try {
-      const query = new URLSearchParams({ limit: '50' })
+      const query = new URLSearchParams({ limit: String(BULK_ISSUE_PAGE_LIMIT) })
       if (cursor) query.set('cursor', cursor)
       const response = await fetch(
         `/api/workspace/jobs/${encodeURIComponent(jobId)}/candidate-bulk-operations/${encodeURIComponent(operationIdValue)}?${query}`,
         { cache: 'no-store', signal },
       )
       const raw = await response.json().catch(() => null)
+      if (signal?.aborted || requestGeneration !== operationRequestGenerationRef.current) {
+        return { kind: 'aborted' }
+      }
       if (!response.ok) {
         const detail = objectValue(raw)?.error
         return {
@@ -163,16 +213,28 @@ export default function CandidateBulkActionPanel({
         }
       }
       const parsed = readOperation(raw)
-      if (signal?.aborted) return { kind: 'aborted' }
       if (!parsed || parsed.operationId !== operationIdValue) {
         return { kind: 'error', message: 'The operation status response was incomplete or did not match this operation ID.' }
       }
       setOperation(parsed)
-      const nextIssues = readIssues(raw)
-      setIssues((current) => appendIssues ? [...current, ...nextIssues] : nextIssues)
-      setIssueNextCursor(typeof objectValue(objectValue(raw)?.issues)?.nextCursor === 'string'
-        ? String(objectValue(objectValue(raw)?.issues)?.nextCursor)
-        : null)
+      if (options.updateIssuePage !== false) {
+        const issuePage = readIssuePage(raw)
+        setIssues(issuePage.items)
+        setIssueNextCursor(issuePage.nextCursor)
+        if (options.focusIssuePage) {
+          const pageNumber = (options.issuePageIndex ?? issuePageIndexRef.current) + 1
+          setIssuePageAnnouncement(
+            `Loaded bulk-operation issue page ${pageNumber} with ${issuePage.items.length} item${issuePage.items.length === 1 ? '' : 's'}.`,
+          )
+          const navigationGeneration = options.issueNavigationGeneration
+          window.requestAnimationFrame(() => {
+            if (
+              navigationGeneration === undefined ||
+              navigationGeneration === issueNavigationGenerationRef.current
+            ) issuePageHeadingRef.current?.focus()
+          })
+        }
+      }
       if (
         (parsed.status === 'completed' || parsed.status === 'partial' || parsed.status === 'failed') &&
         settledOperationRef.current !== parsed.operationId
@@ -182,7 +244,9 @@ export default function CandidateBulkActionPanel({
       }
       return { kind: 'loaded' }
     } catch {
-      if (signal?.aborted) return { kind: 'aborted' }
+      if (signal?.aborted || requestGeneration !== operationRequestGenerationRef.current) {
+        return { kind: 'aborted' }
+      }
       return { kind: 'error', message: 'A network error prevented recovery of the durable operation status.' }
     }
   }, [jobId])
@@ -208,24 +272,33 @@ export default function CandidateBulkActionPanel({
       setRecoveryError(null)
       return
     }
+    resetIssuePaging()
     const controller = new AbortController()
     void recoverInitialOperation(initialOperationId, controller.signal)
     return () => controller.abort()
-  }, [initialOperationId, operation?.operationId, recoverInitialOperation])
+  }, [initialOperationId, operation?.operationId, recoverInitialOperation, resetIssuePaging])
 
   const operationIdValue = operation?.operationId ?? null
   const operationStatus = operation?.status ?? null
 
   useEffect(() => {
-    if (!operationIdValue || (operationStatus !== 'queued' && operationStatus !== 'processing')) return
+    if (
+      !operationIdValue ||
+      (initialOperationId && operationIdValue !== initialOperationId) ||
+      (operationStatus !== 'queued' && operationStatus !== 'processing')
+    ) return
     const controller = new AbortController()
-    const interval = window.setInterval(() => void loadOperation(operationIdValue, controller.signal), 2_500)
-    void loadOperation(operationIdValue, controller.signal)
+    const refresh = () => {
+      if (issueNavigationInFlightRef.current) return
+      void loadOperation(operationIdValue, controller.signal)
+    }
+    const interval = window.setInterval(refresh, 2_500)
+    refresh()
     return () => {
       controller.abort()
       window.clearInterval(interval)
     }
-  }, [loadOperation, operationIdValue, operationStatus])
+  }, [initialOperationId, loadOperation, operationIdValue, operationStatus])
 
   function chooseAction(nextAction: BulkAction, trigger: HTMLButtonElement) {
     actionTriggerRef.current = trigger
@@ -234,8 +307,7 @@ export default function CandidateBulkActionPanel({
     setAcknowledged(false)
     setError(null)
     setOperation(null)
-    setIssues([])
-    setIssueNextCursor(null)
+    resetIssuePaging()
     commandRef.current = null
     window.requestAnimationFrame(() => confirmationHeadingRef.current?.focus())
   }
@@ -295,6 +367,7 @@ export default function CandidateBulkActionPanel({
         return
       }
       commandRef.current = null
+      resetIssuePaging()
       setOperation(parsed)
       onOperationAccepted?.(parsed.operationId)
       void loadOperation(parsed.operationId)
@@ -314,6 +387,35 @@ export default function CandidateBulkActionPanel({
     } catch {
       setCopyStatus('Copy was unavailable. Select the operation ID and copy it manually.')
     }
+  }
+
+  async function navigateIssuePage(cursor: string | null, nextPageIndex: number) {
+    if (!operation || issuePageLoading || nextPageIndex < 0) return
+    const navigationGeneration = ++issueNavigationGenerationRef.current
+    issueNavigationInFlightRef.current = true
+    setIssuePageLoading(true)
+    setIssuePageError(null)
+    const result = await loadOperation(operation.operationId, undefined, {
+      cursor,
+      focusIssuePage: true,
+      issuePageIndex: nextPageIndex,
+      issueNavigationGeneration: navigationGeneration,
+    })
+    if (navigationGeneration !== issueNavigationGenerationRef.current) return
+    if (result.kind === 'loaded') {
+      const nextHistory = nextPageIndex > issuePageIndexRef.current
+        ? [...issueCursorHistoryRef.current.slice(0, issuePageIndexRef.current + 1), cursor]
+        : issueCursorHistoryRef.current
+      issueCursorHistoryRef.current = nextHistory
+      issuePageIndexRef.current = nextPageIndex
+      setIssueCursorHistory(nextHistory)
+      setIssuePageIndex(nextPageIndex)
+    } else if (result.kind === 'error') {
+      setIssuePageError(result.message)
+    }
+    if (navigationGeneration !== issueNavigationGenerationRef.current) return
+    issueNavigationInFlightRef.current = false
+    setIssuePageLoading(false)
   }
 
   const unresolvedInitialOperation = Boolean(
@@ -411,33 +513,66 @@ export default function CandidateBulkActionPanel({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-semibold text-[#0f1419]">Bulk {operation.action.replace('_', ' ')} · {operation.status}</h3>
             {(operation.status === 'queued' || operation.status === 'processing') ? (
-              <Button type="button" variant="ghost" size="sm" onClick={() => void loadOperation(operation.operationId)}>Refresh status</Button>
+              <Button type="button" variant="ghost" size="sm" disabled={issuePageLoading} onClick={() => void loadOperation(operation.operationId)}>Refresh status</Button>
             ) : (
               <Button type="button" variant="secondary" size="sm" onClick={onFinish}>Finish and choose candidates again</Button>
             )}
           </div>
           <p className="mt-2 text-sm text-[#536471]">{operation.processed} processed · {operation.succeeded} succeeded · {operation.conflicts} conflicts · {operation.failed} controlled failures</p>
-          {issues.length > 0 ? (
+          {operation.conflicts + operation.failed > 0 || issues.length > 0 ? (
             <details className="mt-3">
-              <summary className="cursor-pointer text-sm font-medium text-[#2563eb]">Review first {issues.length} conflicts and failures</summary>
-              <ul className="mt-2 space-y-2 text-sm text-[#536471]">
-                {issues.map((issue) => (
-                  <li key={issue.itemId}>
-                    <Link
-                      href={`/workspace/applications/${encodeURIComponent(issue.applicationId)}?${new URLSearchParams({ returnTo })}`}
-                      aria-label={`Review bulk issue for application ${issue.applicationId}`}
-                      className="font-medium text-[#2563eb] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                    >
-                      Application {issue.applicationId}
-                    </Link>
-                    {' · '}
-                    <span className="font-medium text-[#0f1419]">{issue.outcome.replaceAll('_', ' ')}</span> · {issue.message}
-                  </li>
-                ))}
-              </ul>
-              {issueNextCursor ? <Button type="button" variant="secondary" size="sm" className="mt-3" onClick={() => void loadOperation(operation.operationId, undefined, issueNextCursor, true)}>Load more issues</Button> : null}
+              <summary className="cursor-pointer text-sm font-medium text-[#2563eb]">Review conflicts and failures</summary>
+              <h4
+                ref={issuePageHeadingRef}
+                tabIndex={-1}
+                className="mt-3 text-sm font-semibold text-[#0f1419] focus:outline-none"
+              >
+                Issue page {issuePageIndex + 1}
+              </h4>
+              <p className="mt-1 text-xs text-[#536471]">
+                {issues.length} shown on this page · at most {BULK_ISSUE_PAGE_LIMIT} issues are mounted at once
+              </p>
+              {issuePageError ? <p className="mt-2 text-sm text-red-700" role="alert">{issuePageError}</p> : null}
+              {issues.length > 0 ? (
+                <ul className="mt-2 space-y-2 text-sm text-[#536471]">
+                  {issues.map((issue) => (
+                    <li key={issue.itemId}>
+                      <Link
+                        href={`/workspace/applications/${encodeURIComponent(issue.applicationId)}?${new URLSearchParams({ returnTo })}`}
+                        aria-label={`Review bulk issue for application ${issue.applicationId}`}
+                        className="font-medium text-[#2563eb] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                      >
+                        Application {issue.applicationId}
+                      </Link>
+                      {' · '}
+                      <span className="font-medium text-[#0f1419]">{issue.outcome.replaceAll('_', ' ')}</span> · {issue.message}
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="mt-2 text-sm text-[#536471]">No issues were returned for this page.</p>}
+              <div className="mt-3 flex flex-wrap gap-2" aria-label="Bulk-operation issue pages">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={issuePageLoading || issuePageIndex === 0}
+                  onClick={() => void navigateIssuePage(issueCursorHistory[issuePageIndex - 1] ?? null, issuePageIndex - 1)}
+                >
+                  Previous issues
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={issuePageLoading || !issueNextCursor}
+                  onClick={() => void navigateIssuePage(issueNextCursor, issuePageIndex + 1)}
+                >
+                  Next issues
+                </Button>
+              </div>
             </details>
           ) : null}
+          <p className="sr-only" aria-live="polite">{issuePageAnnouncement}</p>
         </div>
       ) : null}
     </div>

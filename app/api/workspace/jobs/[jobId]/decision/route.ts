@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic'
 
 const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 50
-const CURSOR_VERSION = 1
+const CURSOR_VERSION = 2
 const CURSOR_IV_BYTES = 12
 const CURSOR_AUTH_TAG_BYTES = 16
 const CURSOR_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000
@@ -32,10 +32,13 @@ const ACTION_KINDS = [
 ] as const
 
 interface DecisionInboxCursorPayload {
-  v: 1
+  v: 2
+  resource: 'decision_action_inbox'
   issuedAt: number
   workspaceId: string
   jobId: string
+  memberId: string
+  limit: number
   externalVerdictsSince: string | null
   occurredAt: string
   kind: HireDecisionActionInboxCursor['kind']
@@ -43,31 +46,61 @@ interface DecisionInboxCursorPayload {
   sourceId: string
 }
 
-function externalVerdictsSince(req: NextRequest): Date | undefined {
-  const raw = req.nextUrl.searchParams.get('externalVerdictsSince')
-  if (!raw) return undefined
-  const value = new Date(raw)
-  if (Number.isNaN(value.getTime())) {
-    throw new AppError('Invalid external verdict cursor', 400, 'INVALID_VERDICT_CURSOR')
-  }
-  return value
+interface DecisionInboxCursorScope {
+  workspaceId: string
+  jobId: string
+  memberId: string
+  limit: number
+  externalVerdictsSince?: Date
 }
 
-function pageLimit(req: NextRequest): number {
-  const raw = req.nextUrl.searchParams.get('limit')
-  if (raw === null) return DEFAULT_LIMIT
-  if (!/^\d+$/.test(raw)) {
+interface DecisionInboxQuery {
+  cursor: string | null
+  externalVerdictsSince?: Date
+  limit: number
+}
+
+function decisionInboxQuery(req: NextRequest): DecisionInboxQuery {
+  const allowed = new Set(['cursor', 'externalVerdictsSince', 'limit'])
+  const raw: Record<string, string> = {}
+  for (const key of Array.from(req.nextUrl.searchParams.keys())) {
+    const values = req.nextUrl.searchParams.getAll(key)
+    if (!allowed.has(key) || values.length !== 1) {
+      throw new AppError(
+        'Invalid decision inbox query',
+        400,
+        'INVALID_DECISION_QUERY',
+      )
+    }
+    raw[key] = values[0]
+  }
+
+  const rawLimit = raw.limit
+  if (rawLimit !== undefined && !/^(?:[1-9]\d*)$/.test(rawLimit)) {
     throw new AppError('Invalid decision inbox limit', 400, 'INVALID_DECISION_LIMIT')
   }
-  const value = Number(raw)
-  if (!Number.isInteger(value) || value < 1 || value > MAX_LIMIT) {
+  const limit = rawLimit === undefined ? DEFAULT_LIMIT : Number(rawLimit)
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
     throw new AppError(
       `Decision inbox limit must be 1-${MAX_LIMIT}`,
       400,
       'INVALID_DECISION_LIMIT',
     )
   }
-  return value
+
+  let verdictsSince: Date | undefined
+  if (raw.externalVerdictsSince !== undefined) {
+    verdictsSince = new Date(raw.externalVerdictsSince)
+    if (Number.isNaN(verdictsSince.getTime())) {
+      throw new AppError('Invalid external verdict cursor', 400, 'INVALID_VERDICT_CURSOR')
+    }
+  }
+
+  return {
+    cursor: raw.cursor ?? null,
+    externalVerdictsSince: verdictsSince,
+    limit,
+  }
 }
 
 function invalidCursor(): AppError {
@@ -99,18 +132,15 @@ function cursorKey(): Buffer {
 
 function decodeCursorPart(value: string): Buffer {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw invalidCursor()
-  return Buffer.from(value, 'base64url')
+  const decoded = Buffer.from(value, 'base64url')
+  if (decoded.toString('base64url') !== value) throw invalidCursor()
+  return decoded
 }
 
 function decisionInboxCursor(
-  req: NextRequest,
-  scope: {
-    workspaceId: string
-    jobId: string
-    externalVerdictsSince?: Date
-  },
+  raw: string | null,
+  scope: DecisionInboxCursorScope,
 ): HireDecisionActionInboxCursor | undefined {
-  const raw = req.nextUrl.searchParams.get('cursor')
   if (raw === null) return undefined
   try {
     if (!raw || raw.length > 1_024) throw invalidCursor()
@@ -142,14 +172,17 @@ function decisionInboxCursor(
     const now = Date.now()
     if (
       Object.keys(payload).sort().join(',') !==
-        'applicationId,externalVerdictsSince,issuedAt,jobId,kind,occurredAt,sourceId,v,workspaceId' ||
+        'applicationId,externalVerdictsSince,issuedAt,jobId,kind,limit,memberId,occurredAt,resource,sourceId,v,workspaceId' ||
       payload.v !== CURSOR_VERSION ||
+      payload.resource !== 'decision_action_inbox' ||
       typeof payload.issuedAt !== 'number' ||
       !Number.isFinite(payload.issuedAt) ||
       payload.issuedAt > now + CURSOR_FUTURE_SKEW_MS ||
       payload.issuedAt < now - CURSOR_MAX_AGE_MS ||
       payload.workspaceId !== scope.workspaceId ||
       payload.jobId !== scope.jobId ||
+      payload.memberId !== scope.memberId ||
+      payload.limit !== scope.limit ||
       payload.externalVerdictsSince !==
         (scope.externalVerdictsSince?.toISOString() ?? null) ||
       Number.isNaN(occurredAt.getTime()) ||
@@ -177,17 +210,16 @@ function decisionInboxCursor(
 
 function encodeDecisionInboxCursor(
   cursor: HireDecisionActionInboxCursor,
-  scope: {
-    workspaceId: string
-    jobId: string
-    externalVerdictsSince?: Date
-  },
+  scope: DecisionInboxCursorScope,
 ): string {
   const payload: DecisionInboxCursorPayload = {
     v: CURSOR_VERSION,
+    resource: 'decision_action_inbox',
     issuedAt: Date.now(),
     workspaceId: scope.workspaceId,
     jobId: scope.jobId,
+    memberId: scope.memberId,
+    limit: scope.limit,
     externalVerdictsSince: scope.externalVerdictsSince?.toISOString() ?? null,
     occurredAt: cursor.occurredAt.toISOString(),
     kind: cursor.kind,
@@ -213,16 +245,21 @@ function encodeDecisionInboxCursor(
 export const GET = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-decision-inbox' },
   async handler(req, { user, params }) {
+    const query = decisionInboxQuery(req)
     const ctx = await requireMembership({ userId: user.id, email: user.email })
     const scope = {
       workspaceId: ctx.workspace._id.toString(),
       jobId: params.jobId,
-      externalVerdictsSince: externalVerdictsSince(req),
+      memberId: ctx.membership._id.toString(),
+      externalVerdictsSince: query.externalVerdictsSince,
+      limit: query.limit,
     }
     const inbox = await readHireDecisionActionInbox({
-      ...scope,
-      limit: pageLimit(req),
-      cursor: decisionInboxCursor(req, scope),
+      workspaceId: scope.workspaceId,
+      jobId: scope.jobId,
+      externalVerdictsSince: scope.externalVerdictsSince,
+      limit: scope.limit,
+      cursor: decisionInboxCursor(query.cursor, scope),
     })
     return NextResponse.json(
       {

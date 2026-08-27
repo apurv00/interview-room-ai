@@ -46,6 +46,7 @@ interface ComparisonCandidate {
 }
 
 const RECOMMENDATIONS = ["strong_yes", "yes", "no", "strong_no"] as const;
+const COMPARISON_CANDIDATE_PAGE_LIMIT = 20;
 const DIMENSIONS = [
   "role_capability",
   "problem_solving",
@@ -371,7 +372,10 @@ function comparisonCandidatesFrom(
   const source = record(value);
   if (!source || !Array.isArray(source.candidates)) return null;
   const unique = new Map<string, ComparisonCandidate>();
-  for (const rawCandidate of source.candidates) {
+  for (const rawCandidate of source.candidates.slice(
+    0,
+    COMPARISON_CANDIDATE_PAGE_LIMIT,
+  )) {
     const candidate = record(rawCandidate);
     const applicationId = stringValue(candidate?.applicationId);
     const candidateName = stringValue(candidate?.candidateName);
@@ -591,13 +595,69 @@ export default function DecisionWorkspace({
   const [inboxError, setInboxError] = useState<string | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
-  const [initialInboxSettled, setInitialInboxSettled] = useState(false);
-  const activeCandidateQuery = useRef("");
-  const initialHandoffStarted = useRef(false);
+  const [initialInboxSettled, setInitialInboxSettled] = useState<string | null>(
+    null,
+  );
+  const initialHandoffStarted = useRef<string | null>(null);
   const inboxPageStatusRef = useRef<HTMLParagraphElement>(null);
   const inboxRequestGeneration = useRef(0);
+  const candidateRequestGeneration = useRef(0);
+  const candidateRequestController = useRef<AbortController | null>(null);
+  const comparisonRequestGeneration = useRef(0);
+  const comparisonRequestController = useRef<AbortController | null>(null);
+  const activeJobId = useRef(jobId);
+  const previousJobId = useRef(jobId);
+  activeJobId.current = jobId;
+  const candidateRequestScope = useRef("");
+  candidateRequestScope.current = `${jobId}\0${candidateQuery.trim()}`;
+
+  useEffect(() => {
+    if (previousJobId.current === jobId) return;
+    previousJobId.current = jobId;
+    inboxRequestGeneration.current += 1;
+    candidateRequestGeneration.current += 1;
+    comparisonRequestGeneration.current += 1;
+    candidateRequestController.current?.abort();
+    comparisonRequestController.current?.abort();
+    candidateRequestController.current = null;
+    comparisonRequestController.current = null;
+    initialHandoffStarted.current = null;
+    setItems(null);
+    setInboxNextCursor(null);
+    setInboxCurrentCursor(null);
+    setInboxCursorHistory([]);
+    setInboxLimit(20);
+    setCandidateQuery("");
+    setComparisonCandidates([]);
+    setCandidateNextCursor(null);
+    setSelectedCandidates([]);
+    setComparison(null);
+    setLoading(false);
+    setLoadingInboxPage(false);
+    setCandidateLoading(false);
+    setLoadingMoreCandidates(false);
+    setComparing(false);
+    setInboxError(null);
+    setCandidateError(null);
+    setComparisonError(null);
+    setInitialInboxSettled(null);
+  }, [jobId]);
+
+  useEffect(
+    () => () => {
+      inboxRequestGeneration.current += 1;
+      candidateRequestGeneration.current += 1;
+      comparisonRequestGeneration.current += 1;
+      candidateRequestController.current?.abort();
+      comparisonRequestController.current?.abort();
+      candidateRequestController.current = null;
+      comparisonRequestController.current = null;
+    },
+    [],
+  );
 
   const loadDecisionData = useCallback(async () => {
+    const requestJobId = jobId;
     const generation = ++inboxRequestGeneration.current;
     setLoading(true);
     setLoadingInboxPage(false);
@@ -609,7 +669,10 @@ export default function DecisionWorkspace({
         { cache: "no-store" },
       );
       const inbox = response.ok ? inboxFrom(await response.json()) : null;
-      if (generation !== inboxRequestGeneration.current) return;
+      if (
+        generation !== inboxRequestGeneration.current ||
+        activeJobId.current !== requestJobId
+      ) return;
       if (inbox === null) {
         setItems(null);
         setInboxError("Could not load decision actions. Please try again.");
@@ -624,13 +687,19 @@ export default function DecisionWorkspace({
         setComparison(null);
       }
     } catch {
-      if (generation !== inboxRequestGeneration.current) return;
+      if (
+        generation !== inboxRequestGeneration.current ||
+        activeJobId.current !== requestJobId
+      ) return;
       setItems(null);
       setInboxError("Could not load decision actions. Please try again.");
     } finally {
-      if (generation === inboxRequestGeneration.current) {
+      if (
+        generation === inboxRequestGeneration.current &&
+        activeJobId.current === requestJobId
+      ) {
         setLoading(false);
-        setInitialInboxSettled(true);
+        setInitialInboxSettled(requestJobId);
       }
     }
   }, [jobId]);
@@ -642,6 +711,7 @@ export default function DecisionWorkspace({
   const loadInboxPage = useCallback(
     async (cursor: string | null, history: Array<string | null>) => {
       if (loading || loadingInboxPage) return;
+      const requestJobId = jobId;
       const generation = ++inboxRequestGeneration.current;
       setLoadingInboxPage(true);
       setInboxError(null);
@@ -653,7 +723,10 @@ export default function DecisionWorkspace({
           { cache: "no-store" },
         );
         const page = response.ok ? inboxFrom(await response.json()) : null;
-        if (generation !== inboxRequestGeneration.current) return;
+        if (
+          generation !== inboxRequestGeneration.current ||
+          activeJobId.current !== requestJobId
+        ) return;
         if (!page) {
           setInboxError(
             "Could not load that decision action page. Please try again.",
@@ -668,14 +741,25 @@ export default function DecisionWorkspace({
         setInboxNextCursor(page.nextCursor);
         setInboxCurrentCursor(cursor);
         setInboxCursorHistory(history);
-        window.requestAnimationFrame(() => inboxPageStatusRef.current?.focus());
+        window.requestAnimationFrame(() => {
+          if (
+            generation === inboxRequestGeneration.current &&
+            activeJobId.current === requestJobId
+          ) inboxPageStatusRef.current?.focus();
+        });
       } catch {
-        if (generation !== inboxRequestGeneration.current) return;
+        if (
+          generation !== inboxRequestGeneration.current ||
+          activeJobId.current !== requestJobId
+        ) return;
         setInboxError(
           "Could not load that decision action page. Please try again.",
         );
       } finally {
-        if (generation === inboxRequestGeneration.current) {
+        if (
+          generation === inboxRequestGeneration.current &&
+          activeJobId.current === requestJobId
+        ) {
           setLoadingInboxPage(false);
         }
       }
@@ -710,11 +794,15 @@ export default function DecisionWorkspace({
       options: {
         cursor?: string;
         nextPage?: boolean;
-        signal?: AbortSignal;
       } = {},
     ) => {
       const normalizedQuery = query.trim();
       if (normalizedQuery.length < 2) return;
+      const scope = `${jobId}\0${normalizedQuery}`;
+      const generation = ++candidateRequestGeneration.current;
+      candidateRequestController.current?.abort();
+      const controller = new AbortController();
+      candidateRequestController.current = controller;
       options.nextPage
         ? setLoadingMoreCandidates(true)
         : setCandidateLoading(true);
@@ -727,12 +815,21 @@ export default function DecisionWorkspace({
         if (options.cursor) search.set("cursor", options.cursor);
         const response = await fetch(
           `/api/workspace/jobs/${encodeURIComponent(jobId)}/decision/candidates?${search.toString()}`,
-          { cache: "no-store", signal: options.signal },
+          { cache: "no-store", signal: controller.signal },
         );
-        if (activeCandidateQuery.current !== normalizedQuery) return;
+        if (
+          controller.signal.aborted ||
+          generation !== candidateRequestGeneration.current ||
+          candidateRequestScope.current !== scope
+        ) return;
         const page = response.ok
           ? comparisonCandidatesFrom(await response.json())
           : null;
+        if (
+          controller.signal.aborted ||
+          generation !== candidateRequestGeneration.current ||
+          candidateRequestScope.current !== scope
+        ) return;
         if (!page) {
           setCandidateError("Could not search job candidates. Please try again.");
           return;
@@ -744,13 +841,23 @@ export default function DecisionWorkspace({
         setCandidateNextCursor(page.nextCursor);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        if (activeCandidateQuery.current !== normalizedQuery) return;
+        if (
+          generation !== candidateRequestGeneration.current ||
+          candidateRequestScope.current !== scope
+        ) return;
         setCandidateError("Could not search job candidates. Please try again.");
       } finally {
-        if (!options.signal?.aborted) {
+        if (
+          !controller.signal.aborted &&
+          generation === candidateRequestGeneration.current &&
+          candidateRequestScope.current === scope
+        ) {
           options.nextPage
             ? setLoadingMoreCandidates(false)
             : setCandidateLoading(false);
+          if (candidateRequestController.current === controller) {
+            candidateRequestController.current = null;
+          }
         }
       }
     },
@@ -759,22 +866,26 @@ export default function DecisionWorkspace({
 
   useEffect(() => {
     const normalizedQuery = candidateQuery.trim();
-    activeCandidateQuery.current = normalizedQuery;
+    candidateRequestGeneration.current += 1;
+    candidateRequestController.current?.abort();
+    candidateRequestController.current = null;
     setComparisonCandidates([]);
     setCandidateNextCursor(null);
     setCandidateError(null);
+    setLoadingMoreCandidates(false);
     if (normalizedQuery.length < 2) {
       setCandidateLoading(false);
       return;
     }
 
-    const controller = new AbortController();
     const timeout = window.setTimeout(() => {
-      void loadCandidateResults(normalizedQuery, { signal: controller.signal });
+      void loadCandidateResults(normalizedQuery);
     }, 250);
     return () => {
       window.clearTimeout(timeout);
-      controller.abort();
+      candidateRequestGeneration.current += 1;
+      candidateRequestController.current?.abort();
+      candidateRequestController.current = null;
     };
   }, [candidateQuery, loadCandidateResults]);
 
@@ -826,6 +937,11 @@ export default function DecisionWorkspace({
     hydrateSelection = false,
   ) => {
     if (applicationIds.length < 2 || applicationIds.length > 3) return;
+    const requestJobId = jobId;
+    const generation = ++comparisonRequestGeneration.current;
+    comparisonRequestController.current?.abort();
+    const controller = new AbortController();
+    comparisonRequestController.current = controller;
     setComparing(true);
     setComparisonError(null);
     setComparison(null);
@@ -837,8 +953,14 @@ export default function DecisionWorkspace({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ applicationIds }),
           cache: "no-store",
+          signal: controller.signal,
         },
       );
+      if (
+        controller.signal.aborted ||
+        generation !== comparisonRequestGeneration.current ||
+        activeJobId.current !== requestJobId
+      ) return;
       if (!response.ok) {
         setComparisonError(
           "Could not compare the selected candidates. Please try again.",
@@ -846,6 +968,11 @@ export default function DecisionWorkspace({
         return;
       }
       const applications = comparisonFrom(await response.json());
+      if (
+        controller.signal.aborted ||
+        generation !== comparisonRequestGeneration.current ||
+        activeJobId.current !== requestJobId
+      ) return;
       if (
         !applications ||
         applications.length !== applicationIds.length ||
@@ -868,12 +995,26 @@ export default function DecisionWorkspace({
         );
       }
       setComparison(applications);
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (
+        generation !== comparisonRequestGeneration.current ||
+        activeJobId.current !== requestJobId
+      ) return;
       setComparisonError(
         "Could not compare the selected candidates. Please try again.",
       );
     } finally {
-      setComparing(false);
+      if (
+        !controller.signal.aborted &&
+        generation === comparisonRequestGeneration.current &&
+        activeJobId.current === requestJobId
+      ) {
+        setComparing(false);
+        if (comparisonRequestController.current === controller) {
+          comparisonRequestController.current = null;
+        }
+      }
     }
   }, [jobId]);
 
@@ -882,22 +1023,38 @@ export default function DecisionWorkspace({
   }, [compareApplications, selected]);
 
   const initialApplicationKey = initialApplicationIds.join(",");
+  const initialHandoffKey = `${jobId}\0${initialApplicationKey}`;
   useEffect(() => {
     if (
-      !initialInboxSettled ||
-      initialHandoffStarted.current ||
+      initialInboxSettled !== jobId ||
+      initialHandoffStarted.current === initialHandoffKey ||
       initialApplicationIds.length === 0
     ) {
       return;
     }
-    initialHandoffStarted.current = true;
+    initialHandoffStarted.current = initialHandoffKey;
     void compareApplications(initialApplicationIds, true);
   }, [
     compareApplications,
     initialApplicationIds,
     initialApplicationKey,
+    initialHandoffKey,
     initialInboxSettled,
+    jobId,
   ]);
+
+  const comparisonReturnParams = new URLSearchParams();
+  for (const decision of comparison ?? []) {
+    comparisonReturnParams.append(
+      "applicationId",
+      decision.coordinates.applicationId,
+    );
+  }
+  const comparisonReturnTo =
+    `/workspace/jobs/${encodeURIComponent(jobId)}/decision` +
+    (comparisonReturnParams.size > 0
+      ? `?${comparisonReturnParams.toString()}`
+      : "");
 
   return (
     <div className="space-y-6">
@@ -1241,7 +1398,10 @@ export default function DecisionWorkspace({
                     Selection {index + 1}
                   </p>
                   <Link
-                    href={`/workspace/applications/${encodeURIComponent(decision.coordinates.applicationId)}`}
+                    href={
+                      `/workspace/applications/${encodeURIComponent(decision.coordinates.applicationId)}` +
+                      `?${new URLSearchParams({ returnTo: comparisonReturnTo }).toString()}`
+                    }
                     aria-label={`Open decision detail for ${decision.candidateBrief.candidateName}`}
                     className="text-xs font-semibold text-indigo-600 hover:underline"
                   >

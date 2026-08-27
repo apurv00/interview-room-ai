@@ -2939,7 +2939,7 @@ export default function ScreeningPanel({
                   true,
                 )}
               >
-                {gatesLoading ? 'Loading more batches…' : 'Load more confirmed batches'}
+                {gatesLoading ? 'Loading next batch page…' : 'Next page of confirmed batches'}
               </Button>
             ) : null}
           </div>

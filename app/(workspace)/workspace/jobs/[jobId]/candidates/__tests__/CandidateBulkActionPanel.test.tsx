@@ -73,14 +73,22 @@ describe('CandidateBulkActionPanel', () => {
     })
     expect(JSON.parse(String(post?.[1]?.body))).not.toHaveProperty('note')
     expect(await screen.findByText('Bulk reject · partial')).toBeTruthy()
-    fireEvent.click(await screen.findByRole('button', { name: 'Load more issues' }))
+    fireEvent.click(screen.getByText('Review conflicts and failures'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Next issues' }))
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('cursor=next-issue'))).toBe(true))
     expect(await screen.findByText(/candidate unavailable/)).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Review bulk issue for application 444444444444444444444444' })).toHaveAttribute(
+    expect(screen.queryByRole('link', { name: 'Review bulk issue for application 444444444444444444444444' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Review bulk issue for application 555555555555555555555555' })).toBeTruthy()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Issue page 2' })).toHaveFocus())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous issues' }))
+    const firstIssue = await screen.findByRole('link', { name: 'Review bulk issue for application 444444444444444444444444' })
+    expect(firstIssue).toHaveAttribute(
       'href',
       expect.stringContaining(`returnTo=%2Fworkspace%2Fjobs%2F${JOB_ID}%2Fcandidates%3Fview%3Dall`),
     )
-    expect(screen.getByRole('link', { name: 'Review bulk issue for application 555555555555555555555555' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Review bulk issue for application 555555555555555555555555' })).toBeNull()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Issue page 1' })).toHaveFocus())
     expect(settled).toHaveBeenCalledTimes(1)
     expect(screen.getByText('75 of 75 processed; 70 succeeded; 4 conflicts; 1 failures.')).toHaveClass('sr-only')
     fireEvent.click(screen.getByRole('button', { name: 'Finish and choose candidates again' }))
@@ -212,5 +220,198 @@ describe('CandidateBulkActionPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reject selected…' }))
     expect(screen.getByRole('option', { name: 'Requirements mismatch' })).toBeTruthy()
     expect(screen.queryByRole('option', { name: 'Candidate withdrew' })).toBeNull()
+  })
+
+  it('defensively mounts at most 50 issues when an endpoint over-delivers 1,000 rows', async () => {
+    const oversizedIssues = Array.from({ length: 1_000 }, (_, index) => ({
+      itemId: `issue-${index}`,
+      applicationId: (index + 1).toString(16).padStart(24, '0'),
+      status: 'conflict',
+      code: 'STAGE_CHANGED',
+    }))
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json({
+      operation: {
+        ...operation,
+        status: 'completed',
+        totalCount: 1_000,
+        succeededCount: 0,
+        conflictCount: 1_000,
+        failedCount: 0,
+      },
+      issues: { items: oversizedIssues, nextCursor: null },
+    }))))
+
+    render(
+      <CandidateBulkActionPanel
+        jobId={JOB_ID}
+        selection={null}
+        expectedStage={null}
+        initialOperationId={OPERATION_ID}
+        onFinish={vi.fn()}
+        onSettled={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('50 shown on this page · at most 50 issues are mounted at once')).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: /Review bulk issue for application/ })).toHaveLength(50)
+    expect(screen.queryByRole('link', { name: 'Review bulk issue for application 000000000000000000000033' })).toBeNull()
+  })
+
+  it('ignores a superseded operation response when the durable coordinate changes', async () => {
+    const replacementOperationId = '666666666666666666666666'
+    let resolveOld!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes(OPERATION_ID)) {
+        return new Promise<Response>((resolve) => { resolveOld = resolve })
+      }
+      return Promise.resolve(json({
+        operation: { ...operation, operationId: replacementOperationId, status: 'completed' },
+        issues: {
+          items: [{ itemId: 'replacement', applicationId: '777777777777777777777777', status: 'conflict', code: 'STAGE_CHANGED' }],
+          nextCursor: null,
+        },
+      }))
+    }))
+
+    const props = {
+      jobId: JOB_ID,
+      selection: null,
+      expectedStage: null,
+      onFinish: vi.fn(),
+      onSettled: vi.fn(),
+    }
+    const { rerender } = render(<CandidateBulkActionPanel {...props} initialOperationId={OPERATION_ID} />)
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1))
+    rerender(<CandidateBulkActionPanel {...props} initialOperationId={replacementOperationId} />)
+
+    expect(await screen.findByRole('link', { name: 'Review bulk issue for application 777777777777777777777777' })).toBeTruthy()
+    resolveOld(json({ error: 'A stale operation failed to load.' }, 503))
+    await Promise.resolve()
+
+    expect(screen.queryByText('A stale operation failed to load.')).toBeNull()
+    expect(screen.getByText(`Bulk reject · completed`)).toBeTruthy()
+  })
+
+  it('cannot restore an old queued operation after a replacement recovery takes ownership', async () => {
+    const replacementOperationId = '666666666666666666666666'
+    let oldOperationCalls = 0
+    let resolveOldPoll!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes(OPERATION_ID)) {
+        oldOperationCalls += 1
+        if (oldOperationCalls === 1) {
+          return Promise.resolve(json({
+            operation: { ...operation, status: 'queued' },
+            issues: { items: [], nextCursor: null },
+          }))
+        }
+        return new Promise<Response>((resolve) => { resolveOldPoll = resolve })
+      }
+      return Promise.resolve(json({
+        operation: { ...operation, operationId: replacementOperationId, status: 'completed' },
+        issues: {
+          items: [{ itemId: 'replacement', applicationId: '777777777777777777777777', status: 'conflict', code: 'STAGE_CHANGED' }],
+          nextCursor: null,
+        },
+      }))
+    }))
+
+    const props = {
+      jobId: JOB_ID,
+      selection: null,
+      expectedStage: null,
+      onFinish: vi.fn(),
+      onSettled: vi.fn(),
+    }
+    const view = render(<CandidateBulkActionPanel {...props} initialOperationId={OPERATION_ID} />)
+    expect(await screen.findByText('Bulk reject · queued')).toBeTruthy()
+    await waitFor(() => expect(oldOperationCalls).toBe(2))
+
+    view.rerender(<CandidateBulkActionPanel {...props} initialOperationId={replacementOperationId} />)
+    expect(await screen.findByText('Bulk reject · completed')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Review bulk issue for application 777777777777777777777777' })).toBeTruthy()
+
+    resolveOldPoll(json({
+      operation: { ...operation, status: 'processing' },
+      issues: {
+        items: [{ itemId: 'old', applicationId: '999999999999999999999999', status: 'failed', code: 'CANDIDATE_UNAVAILABLE' }],
+        nextCursor: null,
+      },
+    }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(screen.getByText('Bulk reject · completed')).toBeTruthy()
+    expect(screen.queryByText('Bulk reject · processing')).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Review bulk issue for application 999999999999999999999999' })).toBeNull()
+  })
+
+  it('keeps a newer issue navigation locked when an older navigation settles', async () => {
+    const replacementOperationId = '666666666666666666666666'
+    let resolveOldPage!: (response: Response) => void
+    let resolveNewPage!: (response: Response) => void
+    const oldPage = new Promise<Response>((resolve) => { resolveOldPage = resolve })
+    const newPage = new Promise<Response>((resolve) => { resolveNewPage = resolve })
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes(OPERATION_ID)) {
+        if (url.includes('cursor=old-next')) return oldPage
+        return Promise.resolve(json({
+          operation: { ...operation, status: 'completed' },
+          issues: {
+            items: [{ itemId: 'old-one', applicationId: '777777777777777777777777', status: 'conflict', code: 'STAGE_CHANGED' }],
+            nextCursor: 'old-next',
+          },
+        }))
+      }
+      if (url.includes('cursor=new-next')) return newPage
+      return Promise.resolve(json({
+        operation: { ...operation, operationId: replacementOperationId, status: 'completed' },
+        issues: {
+          items: [{ itemId: 'new-one', applicationId: '888888888888888888888888', status: 'conflict', code: 'STAGE_CHANGED' }],
+          nextCursor: 'new-next',
+        },
+      }))
+    }))
+
+    const props = {
+      jobId: JOB_ID,
+      selection: null,
+      expectedStage: null,
+      onFinish: vi.fn(),
+      onSettled: vi.fn(),
+    }
+    const view = render(<CandidateBulkActionPanel {...props} initialOperationId={OPERATION_ID} />)
+    expect(await screen.findByRole('link', { name: 'Review bulk issue for application 777777777777777777777777' })).toBeTruthy()
+    fireEvent.click(screen.getByText('Review conflicts and failures'))
+    fireEvent.click(screen.getByRole('button', { name: 'Next issues' }))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes('cursor=old-next'))).toBe(true))
+
+    view.rerender(<CandidateBulkActionPanel {...props} initialOperationId={replacementOperationId} />)
+    expect(await screen.findByRole('link', { name: 'Review bulk issue for application 888888888888888888888888' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Next issues' }))
+    const nextButton = screen.getByRole('button', { name: 'Next issues' })
+    expect(nextButton).toBeDisabled()
+
+    resolveOldPage(json({
+      operation: { ...operation, status: 'completed' },
+      issues: {
+        items: [{ itemId: 'old-two', applicationId: '999999999999999999999999', status: 'failed', code: 'CANDIDATE_UNAVAILABLE' }],
+        nextCursor: null,
+      },
+    }))
+    await Promise.resolve()
+    expect(nextButton).toBeDisabled()
+    expect(screen.queryByRole('link', { name: 'Review bulk issue for application 999999999999999999999999' })).toBeNull()
+
+    resolveNewPage(json({
+      operation: { ...operation, operationId: replacementOperationId, status: 'completed' },
+      issues: {
+        items: [{ itemId: 'new-two', applicationId: 'aaaaaaaaaaaaaaaaaaaaaaaa', status: 'failed', code: 'CANDIDATE_UNAVAILABLE' }],
+        nextCursor: null,
+      },
+    }))
+    expect(await screen.findByRole('link', { name: 'Review bulk issue for application aaaaaaaaaaaaaaaaaaaaaaaa' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Review bulk issue for application 888888888888888888888888' })).toBeNull()
   })
 })

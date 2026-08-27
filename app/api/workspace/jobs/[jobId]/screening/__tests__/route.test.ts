@@ -555,6 +555,8 @@ describe('workspace job screening routes', () => {
     expect(mocks.readHireJobCandidateIdentities).toHaveBeenCalledWith({
       workspaceId: ctx.workspace._id.toString(),
       jobId: JOB_ID,
+      memberId: ctx.membership._id.toString(),
+      resource: 'screening_candidate_search',
       query: { q: 'ada', limit: 20 },
       nonTerminalOnly: true,
     })
@@ -568,15 +570,41 @@ describe('workspace job screening routes', () => {
     })
   })
 
-  it('rejects repeated or oversized screening-history query parameters', async () => {
-    await expect(
-      GET(
-        new Request(
-          `https://hire.example/api/workspace/jobs/${JOB_ID}/screening?limit=10&limit=20`,
-        ) as never,
-        { params: { jobId: JOB_ID } },
-      ),
-    ).rejects.toMatchObject({ code: 'INVALID_QUERY', statusCode: 400 })
+  it('rejects unknown or repeated exception-search query parameters before membership', async () => {
+    for (const query of [
+      'q=ada&unknown=1',
+      'q=ada&q=grace',
+      'q=ada&limit=20&limit=10',
+      'q=ada&cursor=one&cursor=two',
+      'q=ada&limit=1e1',
+      'q=ada&limit=0x10',
+      'q=ada&limit=%2B10',
+      'q=ada&limit=01',
+    ]) {
+      await expect(
+        candidatesGET(
+          new Request(
+            `https://hire.example/api/workspace/jobs/${JOB_ID}/screening/candidates?${query}`,
+          ) as never,
+          { params: { jobId: JOB_ID } },
+        ),
+      ).rejects.toThrow()
+    }
+    expect(mocks.requireMembership).not.toHaveBeenCalled()
+    expect(mocks.readHireJobCandidateIdentities).not.toHaveBeenCalled()
+  })
+
+  it('rejects unknown, repeated, or oversized screening-history query parameters before membership', async () => {
+    for (const query of ['limit=10&limit=20', 'page=2']) {
+      await expect(
+        GET(
+          new Request(
+            `https://hire.example/api/workspace/jobs/${JOB_ID}/screening?${query}`,
+          ) as never,
+          { params: { jobId: JOB_ID } },
+        ),
+      ).rejects.toMatchObject({ code: 'INVALID_QUERY', statusCode: 400 })
+    }
     await expect(
       GET(
         new Request(
@@ -585,7 +613,23 @@ describe('workspace job screening routes', () => {
         { params: { jobId: JOB_ID } },
       ),
     ).rejects.toMatchObject({ code: 'INVALID_LIMIT', statusCode: 400 })
+    expect(mocks.requireMembership).not.toHaveBeenCalled()
     expect(mocks.listJobScreeningGates).not.toHaveBeenCalled()
+  })
+
+  it('rejects unknown or repeated batch-page query parameters before membership', async () => {
+    for (const query of ['limit=10&limit=20', 'page=2', 'cursor=one&cursor=two']) {
+      await expect(
+        batchesGET(
+          new Request(
+            `https://hire.example/api/workspace/jobs/${JOB_ID}/screening/gates/aaaaaaaaaaaaaaaaaaaaaaaa/batches?${query}`,
+          ) as never,
+          { params: { jobId: JOB_ID, gateId: 'aaaaaaaaaaaaaaaaaaaaaaaa' } },
+        ),
+      ).rejects.toMatchObject({ code: 'INVALID_QUERY', statusCode: 400 })
+    }
+    expect(mocks.requireMembership).not.toHaveBeenCalled()
+    expect(mocks.readJobScreeningGateBatches).not.toHaveBeenCalled()
   })
 
   it('loads one authenticated, member-bound recipient page', async () => {

@@ -1,0 +1,112 @@
+name: Hire Candidate Bulk Replica-Set Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full 40-character commit SHA to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hire-candidate-bulk-replica-test
+  cancel-in-progress: false
+
+jobs:
+  replica-set-integration:
+    name: Candidate bulk transaction and recovery gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Validate exact release request
+        shell: bash
+        env:
+          REQUESTED_RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          if [[ ! "$REQUESTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_sha must be a full lowercase 40-character commit SHA" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "Candidate bulk replica evidence must be dispatched from main" >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Bind gate evidence to the exact release commit
+        shell: bash
+        env:
+          REQUESTED_RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [ "$checked_out_sha" != "$REQUESTED_RELEASE_SHA" ]; then
+            echo "checked out $checked_out_sha, expected $REQUESTED_RELEASE_SHA" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$REQUESTED_RELEASE_SHA" origin/main; then
+            echo "release_sha must be an approved commit reachable from origin/main" >&2
+            exit 1
+          fi
+          echo "Candidate bulk replica gate release SHA: \`$checked_out_sha\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start disposable MongoDB replica set
+        shell: bash
+        run: |
+          docker run --detach \
+            --name hire-candidate-bulk-replica \
+            --publish 27017:27017 \
+            mongo:8.2.6 \
+            mongod --replSet rs0 --bind_ip_all
+
+          for attempt in {1..30}; do
+            if docker exec hire-candidate-bulk-replica mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs hire-candidate-bulk-replica
+              exit 1
+            fi
+            sleep 2
+          done
+
+          docker exec hire-candidate-bulk-replica mongosh --quiet --eval \
+            'rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] })'
+
+          for attempt in {1..30}; do
+            if docker exec hire-candidate-bulk-replica mongosh --quiet --eval \
+              'quit(db.hello().isWritablePrimary ? 0 : 1)' >/dev/null 2>&1; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs hire-candidate-bulk-replica
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Run fail-closed candidate bulk replica-set gate
+        run: npm run test:hire-candidate-bulk-replica
+        env:
+          HIRE_CANDIDATE_BULK_REPLICA_SET_TEST_URI: mongodb://127.0.0.1:27017/hire_candidate_bulk_ci_test?replicaSet=rs0&directConnection=true
+          HIRE_CANDIDATE_BULK_REPLICA_SET_TEST_DATABASE: hire_candidate_bulk_ci_test
+
+      - name: Stop disposable MongoDB replica set
+        if: always()
+        run: docker rm --force hire-candidate-bulk-replica || true

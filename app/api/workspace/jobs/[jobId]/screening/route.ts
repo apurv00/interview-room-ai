@@ -35,8 +35,8 @@ function historyQuery(request: Request): { limit: number; cursor: string | null 
 export const GET = composeHireApiRoute({
   rateLimit: { windowMs: 60_000, maxRequests: 60, keyPrefix: 'rl:hire-screening-list' },
   async handler(request, { user, params }) {
-    const ctx = await requireMembership({ userId: user.id, email: user.email })
     const query = historyQuery(request)
+    const ctx = await requireMembership({ userId: user.id, email: user.email })
     const scope = {
       workspaceId: ctx.workspace._id.toString(),
       jobId: params.jobId,

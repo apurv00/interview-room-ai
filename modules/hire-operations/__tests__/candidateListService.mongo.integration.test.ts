@@ -5,7 +5,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   HireApplication,
   HireCandidate,
+  HireHumanRound,
+  HireHumanScorecard,
   HireJob,
+  HireRound,
   HireWorkspace,
 } from "@hire-operations-boundary";
 import type {
@@ -49,6 +52,7 @@ const CREATED_AT = new Date("2026-08-01T00:00:00.000Z");
 const APPLICATION_COUNT = 1_000;
 const FRESH_SCORE_COUNT = 700;
 const PAGE_LIMIT = 50;
+const TECHNICAL_WRITE_AT = new Date("2026-09-25T12:00:00.000Z");
 
 function query(cursor?: string): HireJobCandidateQuery {
   return {
@@ -78,6 +82,31 @@ function summaryQuery(): HireJobCandidateNormalizedQuery {
   };
 }
 
+function activityQuery(): HireJobCandidateQuery {
+  return {
+    view: "all",
+    stage: [],
+    source: [],
+    scoreState: [],
+    humanReview: [],
+    aiInterview: [],
+    sort: "last_activity",
+    direction: "desc",
+    limit: 20,
+  };
+}
+
+function enrichedQuery(
+  overrides: Partial<HireJobCandidateQuery>,
+): HireJobCandidateQuery {
+  return {
+    ...activityQuery(),
+    sort: "name",
+    direction: "asc",
+    ...overrides,
+  };
+}
+
 type AggregateProfile = {
   millis?: number;
   docsExamined?: number;
@@ -104,6 +133,104 @@ function indexNames(value: unknown, found = new Set<string>()): Set<string> {
   return found;
 }
 
+describe("Hire candidate scale fixture schemas", () => {
+  it("keeps representative enriched documents schema-valid without Mongo", () => {
+    const workspaceId = new mongoose.Types.ObjectId();
+    const jobId = new mongoose.Types.ObjectId();
+    const applicationId = new mongoose.Types.ObjectId();
+    const candidateId = new mongoose.Types.ObjectId();
+    const memberId = new mongoose.Types.ObjectId();
+    const humanRoundId = new mongoose.Types.ObjectId();
+    const submittedAt = new Date(CREATED_AT.getTime() + 60 * 60 * 1_000);
+
+    const documents = [
+      new HireApplication({
+        workspaceId,
+        jobId,
+        candidateId,
+        stage: "new",
+        offerDecision: {
+          outcome: "accepted",
+          actorName: "Scale reviewer",
+          at: submittedAt,
+        },
+        applicantSubmissions: [{
+          resumeText: "Schema-valid scale acceptance resume.",
+          submittedAt,
+        }],
+        events: [{ type: "created", actorName: "System", at: CREATED_AT }],
+      }),
+      new HireHumanRound({
+        _id: humanRoundId,
+        workspaceId,
+        jobId,
+        applicationId,
+        candidateId,
+        mode: "member_room",
+        status: "completed",
+        creationOperationId: "candidate-scale-human-representative",
+        briefSnapshot: {
+          candidateName: "Candidate representative",
+          jobTitle: "Platform engineer",
+        },
+        createdByMemberId: memberId,
+        createdByName: "Scale reviewer",
+        scorecardSubmittedAt: submittedAt,
+      }),
+      new HireHumanScorecard({
+        workspaceId,
+        jobId,
+        applicationId,
+        candidateId,
+        humanRoundId,
+        reviewerKind: "member",
+        reviewerKey: `member:${memberId.toString()}`,
+        memberId,
+        reviewerName: "Scale reviewer",
+        status: "submitted",
+        dimensions: [
+          { key: "role_capability", rating: 4, evidence: "Relevant role evidence" },
+          { key: "problem_solving", rating: 4, evidence: "Relevant problem evidence" },
+          { key: "communication", rating: 4, evidence: "Relevant communication evidence" },
+          { key: "collaboration", rating: 4, evidence: "Relevant collaboration evidence" },
+        ],
+        recommendation: "yes",
+        overallComment: "Proceed based on the structured evidence.",
+        submittedAt,
+      }),
+      new HireRound({
+        workspaceId,
+        jobId,
+        applicationId,
+        candidateId,
+        candidateEmail: "candidate-representative@scale.example",
+        candidateName: "Candidate representative",
+        kind: "ai",
+        status: "completed",
+        authMode: "magic_link",
+        inviteTokenHash: "b".repeat(64),
+        inviteTokenExpiry: new Date(NOW.getTime() + 24 * 60 * 60 * 1_000),
+        invitedAt: CREATED_AT,
+        config: {
+          role: "Platform engineer",
+          interviewType: "technical",
+          experience: "5",
+          duration: 30,
+        },
+        jdHash: "a".repeat(64),
+        jdSnapshot: "Build reliable multi-tenant hiring systems.",
+        createdByMemberId: memberId,
+        createdByName: "Scale reviewer",
+        results: { overallScore: 80, sessionCompletedAt: submittedAt },
+      }),
+    ];
+
+    for (const document of documents) {
+      expect(document.validateSync()).toBeUndefined();
+    }
+  });
+});
+
 mongoSuite("Hire candidate list on real Mongo", () => {
   const ids = {
     workspaceId: new mongoose.Types.ObjectId(),
@@ -113,6 +240,7 @@ mongoSuite("Hire candidate list on real Mongo", () => {
   };
   const jdText = "Build reliable multi-tenant hiring systems.";
   const jdHash = createHash("sha256").update(jdText).digest("hex");
+  const applicationIds: mongoose.Types.ObjectId[] = [];
 
   beforeAll(async () => {
     vi.stubEnv("NODE_ENV", "test");
@@ -141,6 +269,18 @@ mongoSuite("Hire candidate list on real Mongo", () => {
       HireCandidate.collection.createIndex(
         { workspaceId: 1, email: 1 },
         { name: "workspaceId_1_email_1", unique: true },
+      ),
+      HireHumanRound.collection.createIndex(
+        { workspaceId: 1, applicationId: 1, createdAt: -1 },
+        { name: "workspaceId_1_applicationId_1_createdAt_-1" },
+      ),
+      HireHumanScorecard.collection.createIndex(
+        { workspaceId: 1, applicationId: 1, status: 1, createdAt: -1 },
+        { name: "workspaceId_1_applicationId_1_status_1_createdAt_-1" },
+      ),
+      HireRound.collection.createIndex(
+        { workspaceId: 1, applicationId: 1, createdAt: -1 },
+        { name: "workspaceId_1_applicationId_1_createdAt_-1" },
       ),
     ]);
 
@@ -174,10 +314,15 @@ mongoSuite("Hire candidate list on real Mongo", () => {
 
     const candidates = [];
     const applications = [];
+    const humanRounds = [];
+    const scorecards = [];
+    const aiRounds = [];
+    const pastApplications = [];
     for (let index = 0; index < APPLICATION_COUNT; index += 1) {
       const candidateId = new mongoose.Types.ObjectId();
       const applicationId = new mongoose.Types.ObjectId();
       const createdAt = new Date(CREATED_AT.getTime() + index * 1_000);
+      applicationIds.push(applicationId);
       candidates.push({
         _id: candidateId,
         workspaceId: ids.workspaceId,
@@ -212,9 +357,178 @@ mongoSuite("Hire candidate list on real Mongo", () => {
         createdAt,
         updatedAt: createdAt,
       });
+      let humanRoundId: mongoose.Types.ObjectId | undefined;
+      if (index % 4 === 0 || index % 5 === 0) {
+        humanRoundId = new mongoose.Types.ObjectId();
+        humanRounds.push({
+          _id: humanRoundId,
+          workspaceId: ids.workspaceId,
+          jobId: ids.jobId,
+          applicationId,
+          candidateId,
+          mode: "member_room",
+          status: "completed",
+          creationOperationId: `candidate-scale-human-${index}`,
+          briefSnapshot: {
+            candidateName: `Candidate ${String(index).padStart(4, "0")}`,
+            jobTitle: "Platform engineer",
+          },
+          createdByMemberId: ids.creatorId,
+          createdByName: "Scale reviewer",
+          scorecardSubmittedAt: new Date(createdAt.getTime() + 60 * 60 * 1_000),
+          createdAt,
+          updatedAt: TECHNICAL_WRITE_AT,
+        });
+      }
+      if (index % 5 === 0) {
+        scorecards.push({
+          _id: new mongoose.Types.ObjectId(),
+          workspaceId: ids.workspaceId,
+          jobId: ids.jobId,
+          applicationId,
+          candidateId,
+          humanRoundId: humanRoundId!,
+          reviewerKind: "member",
+          reviewerKey: `member:${ids.creatorId.toString()}`,
+          memberId: ids.creatorId,
+          reviewerName: "Scale reviewer",
+          status: "submitted",
+          dimensions: [
+            { key: "role_capability", rating: 4, evidence: "Relevant role evidence" },
+            { key: "problem_solving", rating: 4, evidence: "Relevant problem evidence" },
+            { key: "communication", rating: 4, evidence: "Relevant communication evidence" },
+            { key: "collaboration", rating: 4, evidence: "Relevant collaboration evidence" },
+          ],
+          recommendation: "yes",
+          overallComment: "Proceed based on the structured evidence.",
+          submittedAt: new Date(createdAt.getTime() + 45 * 60 * 1_000),
+          createdAt,
+          updatedAt: TECHNICAL_WRITE_AT,
+        });
+      }
+      if (index % 3 === 0) {
+        aiRounds.push({
+          _id: new mongoose.Types.ObjectId(),
+          workspaceId: ids.workspaceId,
+          jobId: ids.jobId,
+          applicationId,
+          candidateId,
+          candidateEmail: `candidate-${index}@scale.example`,
+          candidateName: `Candidate ${String(index).padStart(4, "0")}`,
+          kind: "ai",
+          status: "completed",
+          authMode: "magic_link",
+          inviteTokenHash: "b".repeat(64),
+          inviteTokenExpiry: new Date(NOW.getTime() + 24 * 60 * 60 * 1_000),
+          consentAt: new Date(createdAt.getTime() + 5 * 60 * 1_000),
+          preparedAt: new Date(createdAt.getTime() + 10 * 60 * 1_000),
+          linkedAt: new Date(createdAt.getTime() + 20 * 60 * 1_000),
+          results: {
+            overallScore: 80,
+            sessionCompletedAt: new Date(createdAt.getTime() + 30 * 60 * 1_000),
+          },
+          invitedAt: createdAt,
+          config: {
+            role: "Platform engineer",
+            interviewType: "technical",
+            experience: "5",
+            duration: 30,
+          },
+          jdHash,
+          jdSnapshot: jdText,
+          createdByMemberId: ids.creatorId,
+          createdByName: "Scale reviewer",
+          createdAt,
+          updatedAt: TECHNICAL_WRITE_AT,
+        });
+      }
+      if (index % 10 === 0) {
+        pastApplications.push({
+          _id: new mongoose.Types.ObjectId(),
+          workspaceId: ids.workspaceId,
+          jobId: new mongoose.Types.ObjectId("999999999999999999999999"),
+          candidateId,
+          stage: "withdrawn",
+          events: [],
+          createdAt: new Date(createdAt.getTime() - 24 * 60 * 60 * 1_000),
+          updatedAt: createdAt,
+        });
+      }
     }
     await HireCandidate.collection.insertMany(candidates, { ordered: true });
-    await HireApplication.collection.insertMany(applications, { ordered: true });
+    await HireApplication.insertMany([...applications, ...pastApplications], { ordered: true });
+    await Promise.all([
+      HireHumanRound.insertMany(humanRounds, { ordered: true }),
+      HireHumanScorecard.insertMany(scorecards, { ordered: true }),
+      HireRound.insertMany(aiRounds, { ordered: true }),
+    ]);
+
+    const semanticActivity = Array.from({ length: 7 }, (_, index) =>
+      new Date(NOW.getTime() - (index + 1) * 60_000));
+    await Promise.all([
+      HireApplication.collection.updateOne(
+        { _id: applicationIds[0] },
+        { $set: { updatedAt: TECHNICAL_WRITE_AT } },
+      ),
+      HireApplication.updateOne(
+        { _id: applicationIds[1] },
+        {
+          $set: {
+            offerDecision: {
+              outcome: "accepted",
+              actorName: "Scale reviewer",
+              at: semanticActivity[0],
+            },
+          },
+        },
+        { runValidators: true },
+      ),
+      HireApplication.updateOne(
+        { _id: applicationIds[2] },
+        {
+          $set: {
+            events: [{
+              type: "created",
+              actorName: "System",
+              at: semanticActivity[1],
+            }],
+          },
+        },
+        { runValidators: true },
+      ),
+      HireApplication.updateOne(
+        { _id: applicationIds[3] },
+        {
+          $set: {
+            applicantSubmissions: [{
+              resumeText: "Schema-valid scale acceptance résumé.",
+              submittedAt: semanticActivity[2],
+            }],
+          },
+        },
+        { runValidators: true },
+      ),
+      HireHumanRound.updateOne(
+        { applicationId: applicationIds[4] },
+        { $set: { scorecardSubmittedAt: semanticActivity[3], updatedAt: TECHNICAL_WRITE_AT } },
+        { runValidators: true, timestamps: false },
+      ),
+      HireHumanScorecard.updateOne(
+        { applicationId: applicationIds[5] },
+        { $set: { submittedAt: semanticActivity[4], updatedAt: TECHNICAL_WRITE_AT } },
+        { runValidators: true, timestamps: false },
+      ),
+      HireRound.updateOne(
+        { applicationId: applicationIds[6] },
+        { $set: { "results.sessionCompletedAt": semanticActivity[5], updatedAt: TECHNICAL_WRITE_AT } },
+        { runValidators: true, timestamps: false },
+      ),
+      HireApplication.updateOne(
+        { _id: applicationIds[7] },
+        { $set: { "resumeMatch.scoredAt": semanticActivity[6] } },
+        { runValidators: true },
+      ),
+    ]);
     await mongoose.connection.db?.command({ profile: 2, slowms: 0 });
   }, 60_000);
 
@@ -386,4 +700,67 @@ mongoSuite("Hire candidate list on real Mongo", () => {
     },
     120_000,
   );
+
+  it("orders by semantic activity while ignoring newer technical writes", async () => {
+    const page = await readHireJobCandidates({
+      workspaceId: ids.workspaceId.toString(),
+      jobId: ids.jobId.toString(),
+      query: activityQuery(),
+      now: NOW,
+    });
+
+    expect(page.rows.slice(0, 7).map(({ candidate }) => candidate.name)).toEqual([
+      "Candidate 0001",
+      "Candidate 0002",
+      "Candidate 0003",
+      "Candidate 0004",
+      "Candidate 0005",
+      "Candidate 0006",
+      "Candidate 0007",
+    ]);
+    expect(page.rows.slice(0, 7).map(({ lastActivityAt }) => lastActivityAt)).toEqual(
+      Array.from({ length: 7 }, (_, index) =>
+        new Date(NOW.getTime() - (index + 1) * 60_000).toISOString()),
+    );
+    expect(page.rows.slice(0, 7).map(({ candidate }) => candidate.name)).not.toContain(
+      "Candidate 0000",
+    );
+  });
+
+  it("executes enriched human, AI, and returning-candidate filters with bounded pages", async () => {
+    const [human, ai, returning] = await Promise.all([
+      readHireJobCandidates({
+        workspaceId: ids.workspaceId.toString(),
+        jobId: ids.jobId.toString(),
+        query: enrichedQuery({ humanReview: ["complete"] }),
+        now: NOW,
+      }),
+      readHireJobCandidates({
+        workspaceId: ids.workspaceId.toString(),
+        jobId: ids.jobId.toString(),
+        query: enrichedQuery({ aiInterview: ["completed"] }),
+        now: NOW,
+      }),
+      readHireJobCandidates({
+        workspaceId: ids.workspaceId.toString(),
+        jobId: ids.jobId.toString(),
+        query: enrichedQuery({ history: "returning" }),
+        now: NOW,
+      }),
+    ]);
+
+    expect(human.rows).toHaveLength(20);
+    expect(human.rows.every(({ humanReview }) =>
+      humanReview.state === "complete" && humanReview.submitted === 1)).toBe(true);
+    expect(ai.rows).toHaveLength(20);
+    expect(ai.rows.every(({ aiInterview }) =>
+      aiInterview.state === "completed" && aiInterview.overallScore === 80)).toBe(true);
+    expect(returning.rows).toHaveLength(20);
+    expect(returning.rows.map(({ candidate }) => candidate.name)).toEqual(
+      Array.from({ length: 20 }, (_, index) =>
+        `Candidate ${String(index * 10).padStart(4, "0")}`),
+    );
+    expect(returning.rows.every(({ workspaceHistory }) =>
+      workspaceHistory.previousApplications === 1)).toBe(true);
+  });
 });

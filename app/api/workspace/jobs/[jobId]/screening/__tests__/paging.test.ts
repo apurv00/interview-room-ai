@@ -41,6 +41,20 @@ describe('screening page cursors', () => {
       expectedFingerprint: fingerprint,
       currentFingerprint: fingerprint,
     })).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    for (const changed of [
+      { workspaceId: '555555555555555555555555' },
+      { jobId: '666666666666666666666666' },
+      { scope: 'selected' as const },
+    ]) {
+      expect(() => screeningPreviewPageOffset({
+        ...scope,
+        ...changed,
+        cursor,
+        scope: changed.scope ?? 'evaluated',
+        expectedFingerprint: fingerprint,
+        currentFingerprint: fingerprint,
+      })).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    }
     expect(() => screeningPreviewPageOffset({
       ...scope,
       scope: 'evaluated',
@@ -48,6 +62,14 @@ describe('screening page cursors', () => {
       expectedFingerprint: fingerprint,
       currentFingerprint: 'b'.repeat(64),
     })).toThrow(expect.objectContaining({ code: 'SCREENING_PREVIEW_STALE' }))
+    const tampered = `${cursor.slice(0, -1)}${cursor.endsWith('a') ? 'b' : 'a'}`
+    expect(() => screeningPreviewPageOffset({
+      ...scope,
+      scope: 'evaluated',
+      cursor: tampered,
+      expectedFingerprint: fingerprint,
+      currentFingerprint: fingerprint,
+    })).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
   })
 
   it('binds history cursors to the exact page size and tenant scope', () => {
@@ -66,6 +88,20 @@ describe('screening page cursors', () => {
       { ...scope, jobId: '666666666666666666666666' },
       10,
     )).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    for (const changed of [
+      { workspaceId: '777777777777777777777777' },
+      { memberId: '888888888888888888888888' },
+    ]) {
+      expect(() => decodeScreeningHistoryCursor(
+        cursor,
+        { ...scope, ...changed },
+        10,
+      )).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    }
+    const tampered = `${cursor.slice(0, -1)}${cursor.endsWith('a') ? 'b' : 'a'}`
+    expect(() => decodeScreeningHistoryCursor(tampered, scope, 10)).toThrow(
+      expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }),
+    )
   })
 
   it('binds batch cursors to gate, page size, member, and job', () => {
@@ -80,6 +116,21 @@ describe('screening page cursors', () => {
       10,
     )).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
     expect(() => decodeScreeningBatchCursor(cursor, batchScope, 25)).toThrow(
+      expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }),
+    )
+    for (const changed of [
+      { workspaceId: '999999999999999999999999' },
+      { jobId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { memberId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
+    ]) {
+      expect(() => decodeScreeningBatchCursor(
+        cursor,
+        { ...batchScope, ...changed },
+        10,
+      )).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    }
+    const tampered = `${cursor.slice(0, -1)}${cursor.endsWith('a') ? 'b' : 'a'}`
+    expect(() => decodeScreeningBatchCursor(tampered, batchScope, 10)).toThrow(
       expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }),
     )
   })
@@ -117,16 +168,42 @@ describe('screening page cursors', () => {
     expect(() =>
       decodeScreeningRecipientCursor(cursor, recipientScope, 50),
     ).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    for (const changed of [
+      { workspaceId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { jobId: 'bbbbbbbbbbbbbbbbbbbbbbbb' },
+    ]) {
+      expect(() => decodeScreeningRecipientCursor(
+        cursor,
+        { ...recipientScope, ...changed },
+        25,
+      )).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+    }
     const tampered = `${cursor.slice(0, -1)}${cursor.endsWith('a') ? 'b' : 'a'}`
     expect(() =>
       decodeScreeningRecipientCursor(tampered, recipientScope, 25),
     ).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
   })
 
-  it('rejects a recipient cursor after the seven-day lifetime', () => {
+  it('rejects every screening cursor family after the seven-day lifetime', () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date('2026-08-20T08:00:00.000Z'))
+      const previewCursor = encodeScreeningPreviewPageCursor({
+        ...scope,
+        fingerprint,
+        scope: 'evaluated',
+        offset: 50,
+      })
+      const historyCursor = encodeScreeningHistoryCursor({
+        confirmedAt: new Date('2026-08-20T07:00:00.000Z'),
+        id: '555555555555555555555555',
+      }, scope, 10)
+      const batchScope = { ...scope, gateId: '777777777777777777777777' }
+      const batchCursor = encodeScreeningBatchCursor(
+        { wave: 9, id: '555555555555555555555555' },
+        batchScope,
+        10,
+      )
       const recipientScope = {
         ...scope,
         batchId: '777777777777777777777777',
@@ -138,6 +215,19 @@ describe('screening page cursors', () => {
       )
       vi.setSystemTime(new Date('2026-08-27T08:00:00.001Z'))
 
+      expect(() => screeningPreviewPageOffset({
+        ...scope,
+        scope: 'evaluated',
+        cursor: previewCursor,
+        expectedFingerprint: fingerprint,
+        currentFingerprint: fingerprint,
+      })).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))
+      expect(() => decodeScreeningHistoryCursor(historyCursor, scope, 10)).toThrow(
+        expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }),
+      )
+      expect(() => decodeScreeningBatchCursor(batchCursor, batchScope, 10)).toThrow(
+        expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }),
+      )
       expect(() =>
         decodeScreeningRecipientCursor(cursor, recipientScope, 25),
       ).toThrow(expect.objectContaining({ code: 'INVALID_SCREENING_CURSOR' }))

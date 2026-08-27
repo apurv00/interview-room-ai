@@ -28,6 +28,7 @@
     "pretest:pdf": "node scripts/build-resume-css.js",
     "test:pdf": "RESUME_PDF_E2E=1 vitest run --no-file-parallelism modules/resume/services/__tests__/pdfRender.e2e.test.ts modules/resume/services/__tests__/academicHeaderGap.e2e.test.ts modules/resume/services/__tests__/continuationHeaderGap.e2e.test.ts modules/resume/services/__tests__/paginationLineSnap.e2e.test.ts modules/resume/components/__tests__/previewBuilderGap.e2e.test.ts",
     "test:hire-ingestion-replica": "HIRE_INGESTION_REPLICA_SET_TEST=1 vitest run modules/hire/__tests__/ingestionRevisionReservation.replica.integration.test.ts",
+    "test:hire-candidate-bulk-replica": "HIRE_CANDIDATE_BULK_REPLICA_SET_TEST=1 vitest run --no-file-parallelism modules/hire-candidate-actions/__tests__/bulkOperationService.replica.integration.test.ts",
     "test:hire-candidate-scale-mongo": "HIRE_CANDIDATE_SCALE_MONGO_TEST=1 vitest run --no-file-parallelism modules/hire-operations/__tests__/candidateListService.mongo.integration.test.ts",
     "eval:harness": "npx tsx scripts/runEvalHarness.ts",
     "eval:load-fixtures": "npx tsx scripts/loadBenchmarkFixtures.ts",

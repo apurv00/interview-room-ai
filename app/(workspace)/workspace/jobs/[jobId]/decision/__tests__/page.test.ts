@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import DecisionWorkspacePage from '../page'
 import { decisionHandoff } from '../decisionHandoff'
 
 const APP_A = '111111111111111111111111'
@@ -6,6 +7,15 @@ const APP_B = '222222222222222222222222'
 const APP_C = '333333333333333333333333'
 
 describe('decision page candidate handoff', () => {
+  it('keys the client workspace to the job boundary', async () => {
+    const jobId = 'aaaaaaaaaaaaaaaaaaaaaaaa'
+    const page = await DecisionWorkspacePage({
+      params: Promise.resolve({ jobId }),
+    })
+
+    expect(page.props.children[1].key).toBe(jobId)
+  })
+
   it('preserves exactly two or three unique valid application coordinates', () => {
     expect(decisionHandoff([APP_C, APP_A, APP_B])).toEqual({
       applicationIds: [APP_C, APP_A, APP_B],

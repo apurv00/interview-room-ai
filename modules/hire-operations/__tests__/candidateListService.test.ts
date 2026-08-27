@@ -82,6 +82,7 @@ import type { HireJobCandidateQuery } from "../candidateTypes";
 
 const WORKSPACE_ID = "111111111111111111111111";
 const JOB_ID = "222222222222222222222222";
+const MEMBER_ID = "333333333333333333333333";
 const APPLICATION_ID = "444444444444444444444444";
 const NOW = new Date("2026-08-25T12:00:00.000Z");
 
@@ -248,6 +249,16 @@ describe("readHireJobCandidates", () => {
     );
     expect(pipeline[1].$project).not.toHaveProperty("events");
     expect(pipeline[1].$project).not.toHaveProperty("applicantSubmissions");
+    expect(pipeline[1].$project).not.toHaveProperty("updatedAt");
+    expect(pipeline[1].$project._applicationActivityAt).toEqual({
+      $max: [
+        "$createdAt",
+        "$resumeMatch.scoredAt",
+        "$offerDecision.at",
+        { $max: "$events.at" },
+        { $max: "$applicantSubmissions.submittedAt" },
+      ],
+    });
     const serializedPipeline = JSON.stringify(pipeline);
     expect(serializedPipeline).toContain("$setWindowFields");
     expect(serializedPipeline).toContain('"sortBy":{"_jdScore":-1}');
@@ -258,6 +269,12 @@ describe("readHireJobCandidates", () => {
     expect(serializedPipeline).toContain("results.sessionCompletedAt");
     expect(serializedPipeline).toContain("_aiRound.activityAt");
     expect(serializedPipeline).not.toContain("_aiRound.updatedAt");
+    expect(serializedPipeline).toContain("_humanRound.activityAt");
+    expect(serializedPipeline).toContain("_scorecard.activityAt");
+    expect(serializedPipeline).toContain('"$openedAt"');
+    expect(serializedPipeline).toContain('"$scorecardSubmittedAt"');
+    expect(serializedPipeline).toContain('"$submittedAt"');
+    expect(serializedPipeline).not.toContain('"$updatedAt"');
     expect(pipeline).toContainEqual({ $limit: 51 });
     expect(pipeline).toContainEqual({
       $sort: { _sortPrimary: -1, _id: -1 },
@@ -278,7 +295,7 @@ describe("readHireJobCandidates", () => {
     }
   });
 
-  it("provides a bounded identity-only decision search without scoring or assessment joins", async () => {
+  it("provides a bounded identity-only member search without scoring or assessment joins", async () => {
     mocks.aggregate.mockReturnValue(
       aggregateResult([
         {
@@ -301,6 +318,8 @@ describe("readHireJobCandidates", () => {
     const page = await readHireJobCandidateIdentities({
       workspaceId: WORKSPACE_ID,
       jobId: JOB_ID,
+      memberId: MEMBER_ID,
+      resource: "screening_candidate_search",
       query: { q: "ad", limit: 1 },
       nonTerminalOnly: true,
       now: NOW,
@@ -337,6 +356,8 @@ describe("readHireJobCandidates", () => {
       readHireJobCandidateIdentities({
         workspaceId: WORKSPACE_ID,
         jobId: JOB_ID,
+        memberId: MEMBER_ID,
+        resource: "decision_candidate_search",
         query: { q: "", limit: 21 },
         now: NOW,
       }),
@@ -344,7 +365,7 @@ describe("readHireJobCandidates", () => {
     expect(mocks.aggregate).not.toHaveBeenCalled();
   });
 
-  it("binds identity cursors to the non-terminal screening scope", async () => {
+  it("binds identity cursors to member, resource, and terminal scope", async () => {
     mocks.aggregate.mockReturnValue(
       aggregateResult([
         {
@@ -366,6 +387,8 @@ describe("readHireJobCandidates", () => {
     const first = await readHireJobCandidateIdentities({
       workspaceId: WORKSPACE_ID,
       jobId: JOB_ID,
+      memberId: MEMBER_ID,
+      resource: "screening_candidate_search",
       query: { q: "ad", limit: 1 },
       nonTerminalOnly: true,
       now: NOW,
@@ -375,10 +398,56 @@ describe("readHireJobCandidates", () => {
       readHireJobCandidateIdentities({
         workspaceId: WORKSPACE_ID,
         jobId: JOB_ID,
+        memberId: MEMBER_ID,
+        resource: "screening_candidate_search",
         query: { q: "ad", limit: 1, cursor: first.pageInfo.nextCursor! },
         now: NOW,
       }),
     ).rejects.toMatchObject({ code: "JOB_CANDIDATES_INVALID_CURSOR" });
+    await expect(
+      readHireJobCandidateIdentities({
+        workspaceId: WORKSPACE_ID,
+        jobId: JOB_ID,
+        memberId: "555555555555555555555555",
+        resource: "screening_candidate_search",
+        query: { q: "ad", limit: 1, cursor: first.pageInfo.nextCursor! },
+        nonTerminalOnly: true,
+        now: NOW,
+      }),
+    ).rejects.toMatchObject({ code: "JOB_CANDIDATES_INVALID_CURSOR" });
+    await expect(
+      readHireJobCandidateIdentities({
+        workspaceId: WORKSPACE_ID,
+        jobId: JOB_ID,
+        memberId: MEMBER_ID,
+        resource: "decision_candidate_search",
+        query: { q: "ad", limit: 1, cursor: first.pageInfo.nextCursor! },
+        nonTerminalOnly: true,
+        now: NOW,
+      }),
+    ).rejects.toMatchObject({ code: "JOB_CANDIDATES_INVALID_CURSOR" });
+    for (const replay of [
+      { workspaceId: "666666666666666666666666" },
+      { jobId: "777777777777777777777777" },
+      { q: "alan" },
+      { limit: 2 },
+    ]) {
+      await expect(
+        readHireJobCandidateIdentities({
+          workspaceId: replay.workspaceId ?? WORKSPACE_ID,
+          jobId: replay.jobId ?? JOB_ID,
+          memberId: MEMBER_ID,
+          resource: "screening_candidate_search",
+          query: {
+            q: replay.q ?? "ad",
+            limit: replay.limit ?? 1,
+            cursor: first.pageInfo.nextCursor!,
+          },
+          nonTerminalOnly: true,
+          now: NOW,
+        }),
+      ).rejects.toMatchObject({ code: "JOB_CANDIDATES_INVALID_CURSOR" });
+    }
   });
 
   it("binds the opaque cursor to workspace, job, filters, sort, and limit", async () => {

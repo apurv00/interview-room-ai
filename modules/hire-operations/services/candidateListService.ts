@@ -456,7 +456,15 @@ function baseCandidatePipeline(input: {
         "resumeMatch.jdHash": 1,
         "resumeMatch.scoredAt": 1,
         createdAt: 1,
-        updatedAt: 1,
+        _applicationActivityAt: {
+          $max: [
+            "$createdAt",
+            "$resumeMatch.scoredAt",
+            "$offerDecision.at",
+            { $max: "$events.at" },
+            { $max: "$applicantSubmissions.submittedAt" },
+          ],
+        },
       },
     },
     ...excludeHireOnboardingTestDrives(),
@@ -598,7 +606,16 @@ function baseCandidatePipeline(input: {
                   $cond: [{ $eq: ["$status", "pending_scorecard"] }, 1, 0],
                 },
               },
-              updatedAt: { $max: "$updatedAt" },
+              activityAt: {
+                $max: {
+                  $max: [
+                    "$createdAt",
+                    "$openedAt",
+                    "$scorecardSubmittedAt",
+                    "$revokedAt",
+                  ],
+                },
+              },
             },
           },
         ],
@@ -647,7 +664,7 @@ function baseCandidatePipeline(input: {
                   $cond: [{ $eq: ["$recommendation", "strong_no"] }, 1, 0],
                 },
               },
-              updatedAt: { $max: "$updatedAt" },
+              activityAt: { $max: "$submittedAt" },
             },
           },
         ],
@@ -886,9 +903,9 @@ function baseCandidatePipeline(input: {
         },
         _lastActivityAt: {
           $max: [
-            "$updatedAt",
-            "$_humanRound.updatedAt",
-            "$_scorecard.updatedAt",
+            "$_applicationActivityAt",
+            "$_humanRound.activityAt",
+            "$_scorecard.activityAt",
             "$_aiRound.activityAt",
           ],
         },
@@ -1421,10 +1438,12 @@ export async function readHireJobCandidates(input: {
   };
 }
 
-/** Purpose-limited decision picker: identity only, with no score/detail joins. */
+/** Purpose-limited member picker for Decisions/Screening: identity only. */
 export async function readHireJobCandidateIdentities(input: {
   workspaceId: string;
   jobId: string;
+  memberId: string;
+  resource: "decision_candidate_search" | "screening_candidate_search";
   query: HireJobCandidateIdentityQuery;
   /** Screening exception pickers must not offer already-decided applications. */
   nonTerminalOnly?: boolean;
@@ -1457,6 +1476,7 @@ export async function readHireJobCandidateIdentities(input: {
   const fingerprint = createHash("sha256")
     .update("hire-job-candidate-identity\0")
     .update(canonicalQuery(input.workspaceId, input.jobId, normalized, input.query.limit))
+    .update(`\0${input.resource}\0${input.memberId}`)
     .update(input.nonTerminalOnly ? "\0non-terminal" : "\0all-stages")
     .digest("hex");
   await connectHireOperationsDB();

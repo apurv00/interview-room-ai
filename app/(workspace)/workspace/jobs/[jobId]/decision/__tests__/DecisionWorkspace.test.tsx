@@ -20,6 +20,7 @@ const APP_GRACE = "3".repeat(24);
 const WORKSPACE_ID = "4".repeat(24);
 const APP_KATHERINE = "5".repeat(24);
 const NEXT_JOB_ID = "6".repeat(24);
+const APP_TURING = "7".repeat(24);
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -187,6 +188,12 @@ describe("DecisionWorkspace", () => {
             candidates: [
               selectionCandidate(APP_GRACE, "Grace Hopper"),
               selectionCandidate(APP_KATHERINE, "Katherine Johnson"),
+              ...Array.from({ length: 998 }, (_, index) =>
+                selectionCandidate(
+                  (index + 10).toString(16).padStart(24, "0"),
+                  `Candidate ${index + 3}`,
+                ),
+              ),
             ],
             pageInfo: { nextCursor: "next-candidate-page" },
           });
@@ -239,6 +246,15 @@ describe("DecisionWorkspace", () => {
         name: "Add Katherine Johnson to comparison",
       }),
     ).toBeTruthy();
+    expect(
+      screen.getAllByRole("button", { name: /Add .+ to comparison/ }),
+    ).toHaveLength(20);
+    expect(
+      screen.getByRole("button", { name: "Add Candidate 20 to comparison" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Add Candidate 21 to comparison" }),
+    ).toBeNull();
     const compareButton = screen.getByRole("button", {
       name: "Compare selected candidates",
     });
@@ -322,13 +338,20 @@ describe("DecisionWorkspace", () => {
       }),
     ).toHaveAttribute(
       "href",
-      `/workspace/applications/${APP_KATHERINE}`,
+      `/workspace/applications/${APP_KATHERINE}?${new URLSearchParams({
+        returnTo: `/workspace/jobs/${JOB_ID}/decision?applicationId=${APP_KATHERINE}&applicationId=${APP_ADA}`,
+      }).toString()}`,
     );
     expect(
       screen.getByRole("link", {
         name: "Open decision detail for Ada Lovelace",
       }),
-    ).toHaveAttribute("href", `/workspace/applications/${APP_ADA}`);
+    ).toHaveAttribute(
+      "href",
+      `/workspace/applications/${APP_ADA}?${new URLSearchParams({
+        returnTo: `/workspace/jobs/${JOB_ID}/decision?applicationId=${APP_KATHERINE}&applicationId=${APP_ADA}`,
+      }).toString()}`,
+    );
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         `/api/workspace/jobs/${JOB_ID}/decision/compare`,
@@ -355,6 +378,418 @@ describe("DecisionWorkspace", () => {
     ]) {
       expect(rendered).not.toContain(forbidden);
     }
+  });
+
+  it("does not let an older candidate page overwrite the same search in a new job", async () => {
+    let resolveOldPage: ((response: Response) => void) | undefined;
+    const oldPage = new Promise<Response>((resolve) => {
+      resolveOldPage = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20` ||
+        url === `/api/workspace/jobs/${NEXT_JOB_ID}/decision?limit=20`
+      ) {
+        return Promise.resolve(json({ items: [], limit: 20, nextCursor: null }));
+      }
+      if (url.startsWith(`/api/workspace/jobs/${JOB_ID}/decision/candidates?`)) {
+        const search = new URL(url, "https://hire.example").searchParams;
+        if (search.get("cursor")) return oldPage;
+        return Promise.resolve(
+          json({
+            candidates: [selectionCandidate(APP_GRACE, "Grace Hopper")],
+            pageInfo: { nextCursor: "old-job-page-two" },
+          }),
+        );
+      }
+      expect(url).toContain(
+        `/api/workspace/jobs/${NEXT_JOB_ID}/decision/candidates?`,
+      );
+      return Promise.resolve(
+        json({
+          candidates: [selectionCandidate(APP_KATHERINE, "Katherine Johnson")],
+          pageInfo: { nextCursor: null },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(<DecisionWorkspace jobId={JOB_ID} />);
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Find a candidate" }),
+      { target: { value: "candidate" } },
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Add Grace Hopper to comparison",
+      }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show next candidate results" }),
+    );
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("cursor=old-job-page-two"),
+        ),
+      ).toBe(true),
+    );
+
+    view.rerender(<DecisionWorkspace jobId={NEXT_JOB_ID} />);
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Find a candidate" }),
+      { target: { value: "candidate" } },
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Add Katherine Johnson to comparison",
+      }),
+    ).toBeTruthy();
+    resolveOldPage?.(
+      json({
+        candidates: [selectionCandidate(APP_ADA, "Ada Lovelace")],
+        pageInfo: { nextCursor: null },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", {
+          name: "Add Ada Lovelace to comparison",
+        }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Add Katherine Johnson to comparison",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("ignores candidate JSON that finishes after the job scope changes", async () => {
+    let resolveCandidateBody!: (value: unknown) => void;
+    let markCandidateBodyStarted!: () => void;
+    const candidateBody = new Promise<unknown>((resolve) => {
+      resolveCandidateBody = resolve;
+    });
+    const candidateBodyStarted = new Promise<void>((resolve) => {
+      markCandidateBodyStarted = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20` ||
+        url === `/api/workspace/jobs/${NEXT_JOB_ID}/decision?limit=20`
+      ) {
+        return Promise.resolve(json({ items: [], limit: 20, nextCursor: null }));
+      }
+      if (url.startsWith(`/api/workspace/jobs/${JOB_ID}/decision/candidates?`)) {
+        const search = new URL(url, "https://hire.example").searchParams;
+        if (search.get("cursor")) {
+          return Promise.resolve({
+            ok: true,
+            json: () => {
+              markCandidateBodyStarted();
+              return candidateBody;
+            },
+          } as unknown as Response);
+        }
+        return Promise.resolve(
+          json({
+            candidates: [selectionCandidate(APP_GRACE, "Grace Hopper")],
+            pageInfo: { nextCursor: "delayed-json-page" },
+          }),
+        );
+      }
+      if (url.startsWith(`/api/workspace/jobs/${NEXT_JOB_ID}/decision/candidates?`)) {
+        return Promise.resolve(
+          json({
+            candidates: [selectionCandidate(APP_KATHERINE, "Katherine Johnson")],
+            pageInfo: { nextCursor: null },
+          }),
+        );
+      }
+      throw new Error(`Unexpected Decision request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(<DecisionWorkspace jobId={JOB_ID} />);
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Find a candidate" }),
+      { target: { value: "candidate" } },
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Add Grace Hopper to comparison",
+      }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show next candidate results" }),
+    );
+    await candidateBodyStarted;
+
+    view.rerender(<DecisionWorkspace jobId={NEXT_JOB_ID} />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("searchbox", { name: "Find a candidate" }),
+      ).toHaveValue("");
+      expect(
+        screen.queryByRole("button", {
+          name: "Add Grace Hopper to comparison",
+        }),
+      ).toBeNull();
+    });
+
+    resolveCandidateBody({
+      candidates: [selectionCandidate(APP_ADA, "Ada Lovelace")],
+      pageInfo: { nextCursor: null },
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", {
+          name: "Add Ada Lovelace to comparison",
+        }),
+      ).toBeNull(),
+    );
+  });
+
+  it("clears job-scoped inbox, selection, comparison, and search state before the next job settles", async () => {
+    let resolveNextInbox!: (response: Response) => void;
+    const nextInbox = new Promise<Response>((resolve) => {
+      resolveNextInbox = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
+        return Promise.resolve(
+          json({
+            items: [inboxItem(APP_ADA, "Ada Lovelace")],
+            limit: 20,
+            nextCursor: null,
+          }),
+        );
+      }
+      if (url === `/api/workspace/jobs/${JOB_ID}/decision/compare`) {
+        return Promise.resolve(
+          json({
+            workspaceId: WORKSPACE_ID,
+            jobId: JOB_ID,
+            applications: [
+              decision(APP_KATHERINE, "Katherine Johnson"),
+              decision(APP_ADA, "Ada Lovelace"),
+            ],
+          }),
+        );
+      }
+      if (url === `/api/workspace/jobs/${NEXT_JOB_ID}/decision?limit=20`) {
+        return nextInbox;
+      }
+      throw new Error(`Unexpected Decision request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(
+      <DecisionWorkspace
+        jobId={JOB_ID}
+        initialApplicationIds={[APP_KATHERINE, APP_ADA]}
+      />,
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Evidence comparison" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("list", { name: "Selected comparison order" }),
+    ).toHaveTextContent("Katherine Johnson");
+
+    view.rerender(<DecisionWorkspace jobId={NEXT_JOB_ID} />);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("list", { name: "Selected comparison order" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("heading", { name: "Evidence comparison" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("heading", { name: "Ada Lovelace" }),
+      ).toBeNull();
+      expect(
+        screen.getByRole("searchbox", { name: "Find a candidate" }),
+      ).toHaveValue("");
+    });
+
+    resolveNextInbox(json({ items: [], limit: 20, nextCursor: null }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/workspace/jobs/${NEXT_JOB_ID}/decision?limit=20`,
+        { cache: "no-store" },
+      ),
+    );
+  });
+
+  it("does not let an old comparison response populate the next job", async () => {
+    let resolveOldComparisonBody!: (value: unknown) => void;
+    let markOldComparisonBodyStarted!: () => void;
+    let oldComparisonBodyConsumed = false;
+    const oldComparisonBody = new Promise<unknown>((resolve) => {
+      resolveOldComparisonBody = resolve;
+    });
+    const oldComparisonBodyStarted = new Promise<void>((resolve) => {
+      markOldComparisonBodyStarted = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
+        return Promise.resolve(json({ items: [], limit: 20, nextCursor: null }));
+      }
+      if (url === `/api/workspace/jobs/${JOB_ID}/decision/compare`) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => {
+            markOldComparisonBodyStarted();
+            const value = await oldComparisonBody;
+            oldComparisonBodyConsumed = true;
+            return value;
+          },
+        } as unknown as Response);
+      }
+      if (url === `/api/workspace/jobs/${NEXT_JOB_ID}/decision?limit=20`) {
+        return Promise.resolve(
+          json({
+            items: [inboxItem(APP_GRACE, "Grace Hopper")],
+            limit: 20,
+            nextCursor: null,
+          }),
+        );
+      }
+      throw new Error(`Unexpected Decision request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(
+      <DecisionWorkspace
+        jobId={JOB_ID}
+        initialApplicationIds={[APP_KATHERINE, APP_ADA]}
+      />,
+    );
+    await oldComparisonBodyStarted;
+
+    view.rerender(<DecisionWorkspace jobId={NEXT_JOB_ID} />);
+    expect(
+      await screen.findByRole("heading", { name: "Grace Hopper" }),
+    ).toBeTruthy();
+
+    resolveOldComparisonBody({
+      workspaceId: WORKSPACE_ID,
+      jobId: JOB_ID,
+      applications: [
+        decision(APP_KATHERINE, "Katherine Johnson"),
+        decision(APP_ADA, "Ada Lovelace"),
+      ],
+    });
+    await waitFor(() => expect(oldComparisonBodyConsumed).toBe(true));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("list", { name: "Selected comparison order" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("heading", { name: "Evidence comparison" }),
+      ).toBeNull();
+      expect(
+        screen.getByRole("heading", { name: "Grace Hopper" }),
+      ).toBeTruthy();
+    });
+  });
+
+  it("runs a second job's initial handoff only after that job's inbox settles", async () => {
+    let resolveNextInbox!: (response: Response) => void;
+    const nextInbox = new Promise<Response>((resolve) => {
+      resolveNextInbox = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/workspace/jobs/${JOB_ID}/decision?limit=20`) {
+        return Promise.resolve(json({ items: [], limit: 20, nextCursor: null }));
+      }
+      if (url === `/api/workspace/jobs/${JOB_ID}/decision/compare`) {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          applicationIds: [APP_KATHERINE, APP_ADA],
+        });
+        return Promise.resolve(
+          json({
+            workspaceId: WORKSPACE_ID,
+            jobId: JOB_ID,
+            applications: [
+              decision(APP_KATHERINE, "Katherine Johnson"),
+              decision(APP_ADA, "Ada Lovelace"),
+            ],
+          }),
+        );
+      }
+      if (url === `/api/workspace/jobs/${NEXT_JOB_ID}/decision?limit=20`) {
+        return nextInbox;
+      }
+      if (url === `/api/workspace/jobs/${NEXT_JOB_ID}/decision/compare`) {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          applicationIds: [APP_GRACE, APP_TURING],
+        });
+        return Promise.resolve(
+          json({
+            workspaceId: WORKSPACE_ID,
+            jobId: NEXT_JOB_ID,
+            applications: [
+              decision(APP_GRACE, "Grace Hopper"),
+              decision(APP_TURING, "Alan Turing"),
+            ],
+          }),
+        );
+      }
+      throw new Error(`Unexpected Decision request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(
+      <DecisionWorkspace
+        jobId={JOB_ID}
+        initialApplicationIds={[APP_KATHERINE, APP_ADA]}
+      />,
+    );
+    expect(
+      await screen.findByRole("list", { name: "Selected comparison order" }),
+    ).toHaveTextContent("Katherine Johnson");
+
+    view.rerender(
+      <DecisionWorkspace
+        jobId={NEXT_JOB_ID}
+        initialApplicationIds={[APP_GRACE, APP_TURING]}
+      />,
+    );
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/workspace/jobs/${NEXT_JOB_ID}/decision?limit=20`,
+        { cache: "no-store" },
+      ),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) =>
+          String(input) ===
+          `/api/workspace/jobs/${NEXT_JOB_ID}/decision/compare`,
+      ),
+    ).toBe(false);
+
+    resolveNextInbox(json({ items: [], limit: 20, nextCursor: null }));
+    await waitFor(() => {
+      const selection = screen.getByRole("list", {
+        name: "Selected comparison order",
+      });
+      expect(selection).toHaveTextContent("1.Grace Hopper");
+      expect(selection).toHaveTextContent("2.Alan Turing");
+      expect(selection).not.toHaveTextContent("Katherine Johnson");
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Evidence comparison" }),
+    ).toBeTruthy();
   });
 
   it("keeps one inbox page mounted and navigates opaque cursors in both directions", async () => {
