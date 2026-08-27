@@ -762,5 +762,5 @@ mongoSuite("Hire candidate list on real Mongo", () => {
     );
     expect(returning.rows.every(({ workspaceHistory }) =>
       workspaceHistory.previousApplications === 1)).toBe(true);
-  });
+  }, 30_000);
 });
