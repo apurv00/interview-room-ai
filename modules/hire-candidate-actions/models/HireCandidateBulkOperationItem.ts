@@ -107,7 +107,7 @@ HireCandidateBulkOperationItemSchema.index(
   {
     name: HIRE_CANDIDATE_BULK_ITEM_APPLICATION_INDEX,
     unique: true,
-    partialFilterExpression: { privacyRedactedAt: { $exists: false } },
+    partialFilterExpression: { applicationId: { $exists: true } },
   },
 )
 HireCandidateBulkOperationItemSchema.index(

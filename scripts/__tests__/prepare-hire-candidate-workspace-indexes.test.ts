@@ -182,7 +182,7 @@ describe("Hire candidate-workspace index preparation", () => {
     await prepareHireCandidateWorkspaceIndexes(["--apply"], fixture.dependencies);
 
     expect(collection.aggregate).toHaveBeenCalledWith([
-      { $match: { privacyRedactedAt: { $exists: false } } },
+      { $match: { applicationId: { $exists: true } } },
       expect.objectContaining({ $group: expect.any(Object) }),
       { $match: { count: { $gt: 1 } } },
       { $limit: 1 },
@@ -191,7 +191,7 @@ describe("Hire candidate-workspace index preparation", () => {
       { workspaceId: 1, bulkOperationId: 1, applicationId: 1 },
       expect.objectContaining({
         name: "hire_candidate_bulk_item_application_unique",
-        partialFilterExpression: { privacyRedactedAt: { $exists: false } },
+        partialFilterExpression: { applicationId: { $exists: true } },
         unique: true,
       }),
     );
@@ -293,7 +293,7 @@ describe("Hire candidate-workspace index preparation", () => {
       hire_candidate_bulk_item_application_unique: {
         key: { workspaceId: 1, bulkOperationId: 1, applicationId: 1 },
         unique: true,
-        partialFilterExpression: { privacyRedactedAt: { $exists: false } },
+        partialFilterExpression: { applicationId: { $exists: true } },
       },
       hire_candidate_bulk_item_claim: {
         key: {

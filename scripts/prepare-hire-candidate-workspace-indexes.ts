@@ -176,7 +176,7 @@ export const HIRE_CANDIDATE_WORKSPACE_INDEX_DEFINITIONS: readonly HireCandidateW
     name: "hire_candidate_bulk_item_application_unique",
     key: { workspaceId: 1, bulkOperationId: 1, applicationId: 1 },
     unique: true,
-    partialFilterExpression: { privacyRedactedAt: { $exists: false } },
+    partialFilterExpression: { applicationId: { $exists: true } },
     purpose: "one live work item per selected application while allowing privacy unlinking",
   },
   {
@@ -449,7 +449,7 @@ const UNIQUE_CHECKS: readonly {
     target: "candidate-bulk-operation-items",
     label: "workspace/operation/application bulk items",
     pipeline: [
-      { $match: { privacyRedactedAt: { $exists: false } } },
+      { $match: { applicationId: { $exists: true } } },
       {
         $group: {
           _id: {
