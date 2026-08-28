@@ -45,30 +45,37 @@ function RecommendationTally({ tally }: { tally: HireRecommendationTally }) {
 
 function DimensionTable({ dimensions }: { dimensions: HireDecisionDimensionAggregate[] }) {
   return (
-    <table className="hire-assessment-dimensions">
-      <thead>
-        <tr>
-          <th scope="col">Dimension</th>
-          <th scope="col">Reviews</th>
-          <th scope="col">Average</th>
-          <th scope="col">Range</th>
-        </tr>
-      </thead>
-      <tbody>
-        {dimensions.map((dimension) => (
-          <tr key={dimension.key}>
-            <th scope="row">{dimension.key.replace(/_/g, ' ')}</th>
-            <td>{dimension.count}</td>
-            <td>{displayMean(dimension.mean)}</td>
-            <td>
-              {dimension.min === null || dimension.max === null
-                ? '—'
-                : `${dimension.min}–${dimension.max}`}
-            </td>
+    <div
+      className="max-w-full overflow-x-auto"
+      role="region"
+      aria-label="Human scorecard dimensions"
+      tabIndex={0}
+    >
+      <table className="hire-assessment-dimensions min-w-[32rem]">
+        <thead>
+          <tr>
+            <th scope="col">Dimension</th>
+            <th scope="col">Reviews</th>
+            <th scope="col">Average</th>
+            <th scope="col">Range</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {dimensions.map((dimension) => (
+            <tr key={dimension.key}>
+              <th scope="row">{dimension.key.replace(/_/g, ' ')}</th>
+              <td>{dimension.count}</td>
+              <td>{displayMean(dimension.mean)}</td>
+              <td>
+                {dimension.min === null || dimension.max === null
+                  ? '—'
+                  : `${dimension.min}–${dimension.max}`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 

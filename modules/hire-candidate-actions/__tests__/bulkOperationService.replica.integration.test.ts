@@ -34,6 +34,7 @@ import {
   HireCandidateBulkOperationItem,
 } from '../models'
 import {
+  HIRE_CANDIDATE_BULK_MAX_ATTEMPTS,
   createHireCandidateBulkOperation,
   processHireCandidateBulkOperation,
   type ReadCandidateSelectionSnapshot,
@@ -564,6 +565,120 @@ replicaSuite('Hire candidate bulk operations on a real replica set', () => {
       expect(stageEventCountAfterTerminalReplay).toEqual([
         { count: VALID_APPLICATION_COUNT },
       ])
+    },
+    30_000,
+  )
+
+  it(
+    'fails an exhausted expired lease without applying another stage mutation',
+    async () => {
+      const ctx = await membershipContext()
+      const created = await createHireCandidateBulkOperation(
+        ctx,
+        { ...successInput, clientOperationId: randomUUID() },
+        validSelection(),
+      )
+      const exhaustedItem = await HireCandidateBulkOperationItem.findOne({
+        workspaceId: ids.workspaceId,
+        bulkOperationId: created.operationId,
+      })
+        .sort({ _id: 1 })
+        .lean()
+      if (!exhaustedItem?.applicationId || !exhaustedItem.rowOperationId) {
+        throw new Error('candidate-bulk exhausted item coordinate is missing')
+      }
+
+      // The stage mutation committed, but its worker died before settlement.
+      // At the retry ceiling this durable claim must become terminal without
+      // invoking the row operation again.
+      await moveStage(ctx, exhaustedItem.applicationId.toString(), {
+        action: 'advance',
+        expectedFrom: 'new',
+        operationId: exhaustedItem.rowOperationId,
+        requirePrivacyAvailable: true,
+      })
+      const processAt = new Date(Date.now() + 60_000)
+      await HireCandidateBulkOperationItem.updateOne(
+        { _id: exhaustedItem._id },
+        {
+          $set: {
+            status: 'processing',
+            attempts: HIRE_CANDIDATE_BULK_MAX_ATTEMPTS,
+            claimToken: 'exhausted-worker-claim',
+            leaseExpiresAt: new Date(processAt.getTime() - 1),
+          },
+        },
+      )
+
+      await expect(
+        processHireCandidateBulkOperation({
+          workspaceId: ids.workspaceId.toString(),
+          operationId: created.operationId,
+          now: processAt,
+          batchSize: 25,
+        }),
+      ).resolves.toEqual({
+        outcome: 'partial',
+        processed: VALID_APPLICATION_COUNT - 1,
+        hasRemainingWork: false,
+      })
+
+      const persistedItem = await HireCandidateBulkOperationItem.findById(
+        exhaustedItem._id,
+      ).lean()
+      expect(persistedItem).toMatchObject({
+        status: 'failed',
+        attempts: HIRE_CANDIDATE_BULK_MAX_ATTEMPTS,
+        outcomeCode: 'WORKER_CRASH_RETRY_EXHAUSTED',
+        processedAt: processAt,
+      })
+      expect(persistedItem).not.toHaveProperty('claimToken')
+      expect(persistedItem).not.toHaveProperty('leaseExpiresAt')
+
+      const operation = await HireCandidateBulkOperation.findById(
+        created.operationId,
+      ).lean()
+      expect(operation).toMatchObject({
+        status: 'partial',
+        queuedCount: 0,
+        processingCount: 0,
+        succeededCount: VALID_APPLICATION_COUNT - 1,
+        conflictCount: 0,
+        failedCount: 1,
+      })
+      const application = await HireApplication.findById(
+        exhaustedItem.applicationId,
+      ).lean()
+      expect(application?.stage).toBe('screened')
+      const stageEvents =
+        application?.events.filter((event) => event.type === 'stage_move') ?? []
+      expect(stageEvents).toHaveLength(1)
+      expect(stageEvents[0]).toMatchObject({
+        from: 'new',
+        to: 'screened',
+        operationId: exhaustedItem.rowOperationId,
+      })
+
+      await expect(
+        processHireCandidateBulkOperation({
+          workspaceId: ids.workspaceId.toString(),
+          operationId: created.operationId,
+          now: new Date(processAt.getTime() + 1),
+          batchSize: 25,
+        }),
+      ).resolves.toEqual({
+        outcome: 'skipped',
+        processed: 0,
+        hasRemainingWork: false,
+      })
+      const replayedApplication = await HireApplication.findById(
+        exhaustedItem.applicationId,
+      ).lean()
+      expect(
+        replayedApplication?.events.filter(
+          (event) => event.type === 'stage_move',
+        ),
+      ).toHaveLength(1)
     },
     30_000,
   )

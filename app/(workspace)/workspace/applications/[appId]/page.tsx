@@ -10,7 +10,7 @@
  * the moment the member looks.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Badge from "@shared/ui/Badge";
 import Button from "@shared/ui/Button";
@@ -275,6 +275,8 @@ export default function ApplicationCardPage({
     action: StageAction;
     operationId: string;
   } | null>(null);
+  const stageConfirmationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const stageConfirmationFallbackRef = useRef<HTMLHeadingElement | null>(null);
   const [recordingReview, setRecordingReview] = useState<{
     roundId: string;
     kind: HireObservationRecordingRequest["kind"];
@@ -508,11 +510,35 @@ export default function ApplicationCardPage({
       setReasonCode("");
       setStageCommand(null);
       await load();
+      restoreStageConfirmationFocus();
     } catch {
       setActionError("Something went wrong.");
     } finally {
       setBusy(false);
     }
+  }
+
+  function restoreStageConfirmationFocus() {
+    const trigger = stageConfirmationTriggerRef.current;
+    stageConfirmationTriggerRef.current = null;
+    window.requestAnimationFrame(() => {
+      const target = trigger?.isConnected
+        ? trigger
+        : stageConfirmationFallbackRef.current;
+      target?.focus();
+    });
+  }
+
+  function cancelStageReasonConfirmation() {
+    setNeedReason(null);
+    setReasonCode("");
+    restoreStageConfirmationFocus();
+  }
+
+  function cancelOfferConfirmation() {
+    setNeedNote(null);
+    setNote("");
+    restoreStageConfirmationFocus();
   }
 
   if (error) return <StateView state="error" error={error} onRetry={load} />;
@@ -576,10 +602,14 @@ export default function ApplicationCardPage({
         </Link>
         <div className="mt-1 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0 w-full xl:flex-1">
-            <h1 className="text-xl font-bold text-[#0f1419]">
+            <h1
+              ref={stageConfirmationFallbackRef}
+              tabIndex={-1}
+              className="break-words text-xl font-bold text-[#0f1419]"
+            >
               {candidate.name}
             </h1>
-            <p className="text-sm text-[#536471]">
+            <p className="break-words text-sm text-[#536471]">
               {candidate.email}
               {candidate.phone ? ` · ${candidate.phone}` : ""}
             </p>
@@ -641,21 +671,23 @@ export default function ApplicationCardPage({
                   <Button
                     variant="secondary"
                     disabled={busy}
-                    onClick={() =>
+                    onClick={(event) => {
+                      stageConfirmationTriggerRef.current = event.currentTarget;
                       setNeedNote({
                         expectedFrom: application.stage,
                         action: "offer_accepted",
-                      })
-                    }
+                      });
+                    }}
                   >
                     Offer accepted
                   </Button>
                   <Button
                     variant="secondary"
                     disabled={busy}
-                    onClick={() =>
-                      void moveStage(application.stage, "offer_declined")
-                    }
+                    onClick={(event) => {
+                      stageConfirmationTriggerRef.current = event.currentTarget;
+                      void moveStage(application.stage, "offer_declined");
+                    }}
                   >
                     Offer declined
                   </Button>
@@ -673,7 +705,10 @@ export default function ApplicationCardPage({
                 <Button
                   variant="secondary"
                   disabled={busy}
-                  onClick={() => void moveStage(application.stage, "reject")}
+                  onClick={(event) => {
+                    stageConfirmationTriggerRef.current = event.currentTarget;
+                    void moveStage(application.stage, "reject");
+                  }}
                 >
                   Reject
                 </Button>
@@ -681,7 +716,10 @@ export default function ApplicationCardPage({
               <Button
                 variant="secondary"
                 disabled={busy}
-                onClick={() => void moveStage(application.stage, "withdraw")}
+                onClick={(event) => {
+                  stageConfirmationTriggerRef.current = event.currentTarget;
+                  void moveStage(application.stage, "withdraw");
+                }}
               >
                 Withdraw
               </Button>
@@ -730,7 +768,7 @@ export default function ApplicationCardPage({
                 onClick={() => void moveStage(needReason.expectedFrom, needReason.action, undefined, reasonCode || undefined)}>
                 Confirm decision
               </Button>
-              <Button size="sm" variant="secondary" onClick={() => { setNeedReason(null); setReasonCode(""); }}>
+              <Button size="sm" variant="secondary" onClick={cancelStageReasonConfirmation}>
                 Cancel
               </Button>
             </div>
@@ -746,6 +784,7 @@ export default function ApplicationCardPage({
             </label>
             <textarea
               id="offer-decision-note"
+              autoFocus
               value={note}
               onChange={(e) => setNote(e.target.value)}
               rows={2}
@@ -770,7 +809,7 @@ export default function ApplicationCardPage({
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => setNeedNote(null)}
+                onClick={cancelOfferConfirmation}
               >
                 Cancel
               </Button>

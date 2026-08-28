@@ -435,7 +435,7 @@ function actionKindLabel(kind: InboxItemKind): string {
 
 function AssessmentPresentation({ decision }: { decision: HireDecisionView }) {
   return (
-    <div className="rounded-2xl border border-[#e1e8ed] bg-white p-5 text-sm text-[#0f1419] shadow-sm [&_article]:space-y-5 [&_header]:border-b [&_header]:border-[#e1e8ed] [&_header]:pb-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_section]:space-y-3 [&_header>p]:mt-1 [&_header>p]:text-[#536471] [&_dl]:grid [&_dl]:grid-cols-2 [&_dl]:gap-2 [&_dl>div]:rounded-lg [&_dl>div]:border [&_dl>div]:border-[#e1e8ed] [&_dl>div]:bg-[#f8fafc] [&_dl>div]:px-3 [&_dl>div]:py-2 [&_dt]:text-xs [&_dt]:text-[#71767b] [&_dd]:mt-0.5 [&_dd]:font-semibold [&_table]:w-full [&_table]:border-collapse [&_table]:text-left [&_th]:border-b [&_th]:border-[#e1e8ed] [&_th]:px-2 [&_th]:py-2 [&_th]:text-xs [&_th]:font-medium [&_th]:text-[#536471] [&_td]:border-b [&_td]:border-[#f1f5f9] [&_td]:px-2 [&_td]:py-2 [&_ol]:space-y-3 [&_ol>li]:rounded-xl [&_ol>li]:border [&_ol>li]:border-[#e1e8ed] [&_ol>li]:bg-[#f8fafc] [&_ol>li]:p-3 [&_ol>li>div]:flex [&_ol>li>div]:items-center [&_ol>li>div]:justify-between [&_ol>li>div]:gap-2 [&_ol>li>div]:text-xs [&_ol>li>div]:text-[#536471] [&_ol>li>p]:mt-2 [&_ol>li>ul]:mt-2 [&_ol>li>ul]:list-disc [&_ol>li>ul]:space-y-1 [&_ol>li>ul]:pl-5 [&_footer]:border-t [&_footer]:border-[#e1e8ed] [&_footer]:pt-4 [&_footer]:text-xs [&_footer]:text-[#536471]">
+    <div className="min-w-0 rounded-2xl border border-[#e1e8ed] bg-white p-5 text-sm text-[#0f1419] shadow-sm [&_article]:min-w-0 [&_article]:space-y-5 [&_header]:min-w-0 [&_header]:border-b [&_header]:border-[#e1e8ed] [&_header]:pb-4 [&_h1]:break-words [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:break-words [&_section]:min-w-0 [&_section]:space-y-3 [&_header>p]:mt-1 [&_header>p]:break-words [&_header>p]:text-[#536471] [&_dl]:grid [&_dl]:grid-cols-2 [&_dl]:gap-2 [&_dl>div]:min-w-0 [&_dl>div]:rounded-lg [&_dl>div]:border [&_dl>div]:border-[#e1e8ed] [&_dl>div]:bg-[#f8fafc] [&_dl>div]:px-3 [&_dl>div]:py-2 [&_dt]:text-xs [&_dt]:text-[#71767b] [&_dd]:mt-0.5 [&_dd]:break-words [&_dd]:font-semibold [&_table]:w-full [&_table]:border-collapse [&_table]:text-left [&_th]:border-b [&_th]:border-[#e1e8ed] [&_th]:px-2 [&_th]:py-2 [&_th]:text-xs [&_th]:font-medium [&_th]:text-[#536471] [&_td]:border-b [&_td]:border-[#f1f5f9] [&_td]:px-2 [&_td]:py-2 [&_ol]:space-y-3 [&_ol>li]:rounded-xl [&_ol>li]:border [&_ol>li]:border-[#e1e8ed] [&_ol>li]:bg-[#f8fafc] [&_ol>li]:p-3 [&_ol>li>div]:flex [&_ol>li>div]:items-center [&_ol>li>div]:justify-between [&_ol>li>div]:gap-2 [&_ol>li>div]:text-xs [&_ol>li>div]:text-[#536471] [&_ol>li>p]:mt-2 [&_ol>li>p]:break-words [&_ol>li>ul]:mt-2 [&_ol>li>ul]:list-disc [&_ol>li>ul]:space-y-1 [&_ol>li>ul]:pl-5 [&_footer]:border-t [&_footer]:border-[#e1e8ed] [&_footer]:pt-4 [&_footer]:text-xs [&_footer]:text-[#536471]">
       <HireAssessmentReport decision={decision} compact />
     </div>
   );
@@ -446,10 +446,10 @@ function ActionInboxCard({ entry }: { entry: CandidateInboxEntry }) {
   return (
     <article className="rounded-2xl border border-[#e1e8ed] bg-white p-5 shadow-sm">
       <div className="min-w-0">
-        <p className="text-xs font-medium text-[#71767b]">
+        <p className="break-words text-xs font-medium text-[#71767b]">
           {candidateBrief.jobTitle}
         </p>
-        <h2 className="mt-1 text-lg font-semibold text-[#0f1419]">
+        <h2 className="mt-1 break-words text-lg font-semibold text-[#0f1419]">
           {candidateBrief.candidateName}
         </h2>
         {(candidateBrief.location ||

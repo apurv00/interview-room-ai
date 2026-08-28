@@ -1051,6 +1051,24 @@ describe('ScreeningPanel', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('fails closed when screening history exceeds the server page contract', async () => {
+    const gates = Array.from({ length: 26 }, (_, index) => ({
+      ...confirmedGate(),
+      id: `gate-${index + 1}`,
+    }))
+    vi.stubGlobal('fetch', vi.fn(async () => json(historyResponse(
+      gates,
+      { limit: 25, hasNextPage: false, nextCursor: null },
+    ))))
+
+    render(<ScreeningPanel jobId={JOB_ID} jobStatus="open" />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not load screening batches.',
+    )
+    expect(screen.queryByText(/Confirmed by HR One/)).not.toBeInTheDocument()
+  })
+
   it('uses history pageInfo to replace the current bounded gate-summary page', async () => {
     const firstGate = {
       ...confirmedGate(),
@@ -1221,6 +1239,42 @@ describe('ScreeningPanel', () => {
     expect(screen.queryByText('Wave 2 · 2 planned · 0 sent · 1 failed')).not.toBeInTheDocument()
     expect(screen.getByText('Invitation wave page 1 · up to 10 waves shown')).toHaveFocus()
     expect(batchReads).toBe(2)
+  })
+
+  it('fails closed when an invitation-wave response exceeds the server page contract', async () => {
+    const gate = {
+      ...confirmedGate(),
+      batchPageInfo: { limit: 10, hasNextPage: true, nextCursor: 'waves-2' },
+    }
+    const batches = Array.from({ length: 26 }, (_, index) => ({
+      ...gate.batches[0],
+      id: `batch-${index + 1}`,
+      wave: index + 1,
+    }))
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/workspace/jobs/${JOB_ID}/screening`) {
+        return json(historyResponse([gate]))
+      }
+      if (url === `/api/workspace/jobs/${JOB_ID}/screening/gates/gate-1/batches?cursor=waves-2`) {
+        return json({
+          batches,
+          pageInfo: { limit: 25, hasNextPage: false, nextCursor: null },
+        })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<ScreeningPanel jobId={JOB_ID} jobStatus="open" />)
+    await screen.findByText('Wave 1 · 2 planned · 0 sent')
+    fireEvent.click(screen.getByRole('button', { name: 'View older waves' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not load invitation wave history.',
+    )
+    expect(screen.getByText('Wave 1 · 2 planned · 0 sent')).toBeInTheDocument()
+    expect(screen.queryByText('Wave 26 · 2 planned · 0 sent')).not.toBeInTheDocument()
   })
 
   it('ignores a slow older-wave response after the parent history is refreshed', async () => {

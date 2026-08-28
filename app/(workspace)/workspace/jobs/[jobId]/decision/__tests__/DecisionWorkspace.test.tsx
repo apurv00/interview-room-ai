@@ -365,6 +365,14 @@ describe("DecisionWorkspace", () => {
         "AI recommendations shown above are supporting evidence only. A human owns every pipeline-stage decision and change.",
       ),
     ).toHaveLength(2);
+    const dimensionRegions = screen.getAllByRole("region", {
+      name: "Human scorecard dimensions",
+    });
+    expect(dimensionRegions).toHaveLength(2);
+    for (const region of dimensionRegions) {
+      expect(region).toHaveClass("max-w-full", "overflow-x-auto");
+      expect(within(region).getByRole("table")).toHaveClass("min-w-[32rem]");
+    }
     expect(
       screen.getByRole("link", {
         name: "Open decision detail for Katherine Johnson",

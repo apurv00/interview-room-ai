@@ -83,6 +83,60 @@ describe('POST candidate bulk operation', () => {
     })
   })
 
+  it('preserves the client replay coordinate and serializes the same partial result', async () => {
+    const body = {
+      selectionId: SELECTION_ID,
+      clientOperationId: CLIENT_OPERATION_ID,
+      action: 'advance',
+      expectedStage: 'screened',
+      communication: 'none',
+      confirmed: true,
+      confirmedCount: 1000,
+    }
+    const partialOperation = {
+      operationId: '555555555555555555555555',
+      status: 'partial',
+      totalCount: 1000,
+      queuedCount: 0,
+      processingCount: 0,
+      succeededCount: 994,
+      conflictCount: 5,
+      failedCount: 1,
+    }
+    mocks.createOperation.mockResolvedValue(partialOperation)
+
+    const invoke = () =>
+      POST(
+        new Request(
+          `https://hire.example/api/workspace/jobs/${JOB_ID}/candidate-bulk-operations`,
+          { method: 'POST', body: JSON.stringify(body) },
+        ) as never,
+        { params: { jobId: JOB_ID } },
+      )
+    const first = await invoke()
+    const replay = await invoke()
+
+    expect(first.status).toBe(202)
+    expect(replay.status).toBe(202)
+    expect(first.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(replay.headers.get('Cache-Control')).toBe('private, no-store')
+    await expect(first.json()).resolves.toEqual({ operation: partialOperation })
+    await expect(replay.json()).resolves.toEqual({ operation: partialOperation })
+    expect(mocks.createOperation).toHaveBeenCalledTimes(2)
+    expect(mocks.createOperation).toHaveBeenNthCalledWith(
+      1,
+      ctx,
+      { ...body, jobId: JOB_ID },
+      mocks.readSelection,
+    )
+    expect(mocks.createOperation).toHaveBeenNthCalledWith(
+      2,
+      ctx,
+      { ...body, jobId: JOB_ID },
+      mocks.readSelection,
+    )
+  })
+
   it('rejects bulk offer outcomes before invoking mutation authority', async () => {
     await expect(
       POST(
