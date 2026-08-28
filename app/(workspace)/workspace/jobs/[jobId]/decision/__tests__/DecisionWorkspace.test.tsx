@@ -112,6 +112,24 @@ afterEach(() => {
 });
 
 describe("DecisionWorkspace", () => {
+  it("wraps a valid long candidate location inside the decision inbox card", async () => {
+    const longLocation = "L".repeat(160);
+    const entry = inboxItem(APP_ADA, "Ada Lovelace");
+    entry.decision.candidateBrief.location = longLocation;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({ items: [entry], limit: 20, nextCursor: null }),
+      ),
+    );
+
+    render(<DecisionWorkspace jobId={JOB_ID} />);
+
+    expect(
+      await screen.findByText((content) => content.startsWith(longLocation)),
+    ).toHaveClass("break-words");
+  });
+
   it("rehydrates a URL handoff through the scoped compare API and preserves its order", async () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -365,6 +383,16 @@ describe("DecisionWorkspace", () => {
         "AI recommendations shown above are supporting evidence only. A human owns every pipeline-stage decision and change.",
       ),
     ).toHaveLength(2);
+    const dimensionRegions = ["Katherine Johnson", "Ada Lovelace"].map(
+      (candidateName) =>
+        screen.getByRole("region", {
+          name: `Human scorecard dimensions for ${candidateName}`,
+        }),
+    );
+    for (const region of dimensionRegions) {
+      expect(region).toHaveClass("max-w-full", "overflow-x-auto");
+      expect(within(region).getByRole("table")).toHaveClass("min-w-[32rem]");
+    }
     expect(
       screen.getByRole("link", {
         name: "Open decision detail for Katherine Johnson",

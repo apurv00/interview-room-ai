@@ -46,6 +46,7 @@ export default async function JobScreeningPage({
         </div>
       </header>
       <ScreeningPanel
+        key={jobId}
         jobId={jobId}
         selectionSnapshotId={selectionSnapshotId}
       />

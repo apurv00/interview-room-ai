@@ -450,7 +450,72 @@ describe("readHireJobCandidates", () => {
     }
   });
 
-  it("binds the opaque cursor to workspace, job, filters, sort, and limit", async () => {
+  it.each(
+    [
+      {
+        boundary: "workspace",
+        workspaceId: "666666666666666666666666",
+        jobId: JOB_ID,
+        replay: { sort: "rank", direction: "asc", limit: 1 },
+      },
+      {
+        boundary: "job",
+        workspaceId: WORKSPACE_ID,
+        jobId: "777777777777777777777777",
+        replay: { sort: "rank", direction: "asc", limit: 1 },
+      },
+      {
+        boundary: "sort",
+        workspaceId: WORKSPACE_ID,
+        jobId: JOB_ID,
+        replay: { sort: "attention", direction: "asc", limit: 1 },
+      },
+      {
+        boundary: "direction",
+        workspaceId: WORKSPACE_ID,
+        jobId: JOB_ID,
+        replay: { sort: "rank", direction: "desc", limit: 1 },
+      },
+      {
+        boundary: "limit",
+        workspaceId: WORKSPACE_ID,
+        jobId: JOB_ID,
+        replay: { sort: "rank", direction: "asc", limit: 2 },
+      },
+    ] as Array<{
+      boundary: string;
+      workspaceId: string;
+      jobId: string;
+      replay: Partial<HireJobCandidateQuery>;
+    }>,
+  )("binds the opaque candidate cursor to $boundary", async ({
+    workspaceId,
+    jobId,
+    replay,
+  }) => {
+    mocks.aggregate.mockReturnValue(aggregateResult([rawRow(0), rawRow(1)]));
+    const first = await readHireJobCandidates({
+      workspaceId: WORKSPACE_ID,
+      jobId: JOB_ID,
+      query: query({ sort: "rank", direction: "asc", limit: 1 }),
+      now: NOW,
+    });
+    const aggregateCalls = mocks.aggregate.mock.calls.length;
+
+    await expect(
+      readHireJobCandidates({
+        workspaceId,
+        jobId,
+        query: query({ ...replay, cursor: first.pageInfo.nextCursor! }),
+        now: new Date(NOW.getTime() + 1_000),
+      }),
+    ).rejects.toMatchObject<HireJobCandidateReadError>({
+      code: "JOB_CANDIDATES_INVALID_CURSOR",
+    });
+    expect(mocks.aggregate).toHaveBeenCalledTimes(aggregateCalls);
+  });
+
+  it("rejects a candidate cursor when filters change or its signature is tampered", async () => {
     mocks.aggregate.mockReturnValue(aggregateResult([rawRow(0), rawRow(1)]));
     const first = await readHireJobCandidates({
       workspaceId: WORKSPACE_ID,

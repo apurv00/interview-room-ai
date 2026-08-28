@@ -356,8 +356,8 @@ export function CandidateTable(props: CandidatePresentationProps) {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <Link href={candidateHref(row, returnTo)} className="font-semibold text-[#0f1419] hover:text-[#2563eb] hover:underline">{row.name}</Link>
-                    {row.email ? <p className="truncate text-xs text-[#71767b]">{row.email}</p> : null}
+                    <Link href={candidateHref(row, returnTo)} className="block max-w-full break-words font-semibold text-[#0f1419] hover:text-[#2563eb] hover:underline">{row.name}</Link>
+                    {row.email ? <p className="break-words text-xs text-[#71767b]">{row.email}</p> : null}
                   </div>
                 </div>
                 <div className="mt-3 rounded-xl border border-[#dbe4ea] bg-[#f8fafc] px-3 py-2">

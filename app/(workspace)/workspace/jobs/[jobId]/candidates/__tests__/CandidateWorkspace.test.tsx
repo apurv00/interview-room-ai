@@ -778,6 +778,30 @@ describe('CandidateWorkspace', () => {
     expect(heading).not.toHaveClass('truncate')
   })
 
+  it('wraps valid maximum-length candidate identity text in the mobile card', async () => {
+    const longName = 'N'.repeat(120)
+    const longEmail = `${'e'.repeat(242)}@example.com`
+    const longRows = [{
+      ...rows[0],
+      candidate: { ...rows[0].candidate, name: longName, email: longEmail },
+    }]
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/candidates/freshness')) return Promise.resolve(json({ hasNewerResults: false, checkedAt: '2026-08-25T08:01:00.000Z' }))
+      if (url.includes('/candidates/summary')) return Promise.resolve(json(candidateSummary()))
+      if (url.includes('/candidates?')) return Promise.resolve(json(candidatePage({ rows: longRows })))
+      return Promise.resolve(json({ error: 'Unexpected request' }, 500))
+    })
+    render(<CandidateWorkspace jobId={JOB_ID} />)
+
+    const mobileList = await screen.findByRole('list', { name: 'Candidates for this job' })
+    const candidateLink = within(mobileList).getByRole('link', { name: longName })
+    expect(candidateLink).toHaveClass('block', 'max-w-full', 'break-words')
+    const email = within(mobileList).getByText(longEmail)
+    expect(email).toHaveClass('break-words')
+    expect(email).not.toHaveClass('truncate')
+  })
+
   it('polls lightweight freshness on a cursor page and clears the notice on user refresh', async () => {
     navigation.search = 'cursor=opaque-page-two&stage=screened'
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {

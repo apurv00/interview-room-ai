@@ -287,6 +287,7 @@ const INITIAL_RULE: ScreeningRuleDraft = {
 }
 
 const PREVIEW_ROW_PAGE_SIZE = 50
+const SCREENING_HISTORY_PAGE_SIZE = 25
 const EMPTY_PREVIEW_ROWS: PreviewEntry[] = []
 const OBJECT_ID = /^[a-f0-9]{24}$/i
 
@@ -307,6 +308,82 @@ function responseError(data: unknown, fallback: string): string {
     return (data as { error: string }).error
   }
   return fallback
+}
+
+function readScreeningPageInfo(value: unknown): ScreeningGatePageInfo | null {
+  if (!value || typeof value !== 'object') return null
+  const pageInfo = value as Partial<ScreeningGatePageInfo>
+  if (
+    typeof pageInfo.limit !== 'number' ||
+    !Number.isInteger(pageInfo.limit) ||
+    pageInfo.limit < 1 ||
+    pageInfo.limit > SCREENING_HISTORY_PAGE_SIZE ||
+    typeof pageInfo.hasNextPage !== 'boolean' ||
+    !(
+      pageInfo.nextCursor === null ||
+      (
+        typeof pageInfo.nextCursor === 'string' &&
+        pageInfo.nextCursor.length > 0
+      )
+    ) ||
+    pageInfo.hasNextPage !== (typeof pageInfo.nextCursor === 'string')
+  ) {
+    return null
+  }
+  return pageInfo as ScreeningGatePageInfo
+}
+
+function readScreeningGatePage(
+  value: unknown,
+): { gates: ScreeningGate[]; pageInfo: ScreeningGatePageInfo } | null {
+  if (!value || typeof value !== 'object') return null
+  const response = value as { gates?: unknown; pageInfo?: unknown }
+  const pageInfo = readScreeningPageInfo(response.pageInfo)
+  if (
+    !pageInfo ||
+    !Array.isArray(response.gates) ||
+    response.gates.length > pageInfo.limit ||
+    response.gates.length > SCREENING_HISTORY_PAGE_SIZE
+  ) {
+    return null
+  }
+  for (const value of response.gates) {
+    if (!value || typeof value !== 'object') return null
+    const gate = value as Partial<ScreeningGate>
+    const batchPageInfo = readScreeningPageInfo(gate.batchPageInfo)
+    if (
+      !batchPageInfo ||
+      !Array.isArray(gate.batches) ||
+      gate.batches.length > batchPageInfo.limit ||
+      gate.batches.length > SCREENING_HISTORY_PAGE_SIZE
+    ) {
+      return null
+    }
+  }
+  return {
+    gates: response.gates as ScreeningGate[],
+    pageInfo,
+  }
+}
+
+function readInvitationBatchPage(
+  value: unknown,
+): { batches: InvitationBatch[]; pageInfo: ScreeningGatePageInfo } | null {
+  if (!value || typeof value !== 'object') return null
+  const response = value as { batches?: unknown; pageInfo?: unknown }
+  const pageInfo = readScreeningPageInfo(response.pageInfo)
+  if (
+    !pageInfo ||
+    !Array.isArray(response.batches) ||
+    response.batches.length > pageInfo.limit ||
+    response.batches.length > SCREENING_HISTORY_PAGE_SIZE
+  ) {
+    return null
+  }
+  return {
+    batches: response.batches as InvitationBatch[],
+    pageInfo,
+  }
 }
 
 function displayDate(value: string | null | undefined): string {
@@ -1131,24 +1208,11 @@ export default function ScreeningPanel({
         gatesRequestControllerRef.current !== controller ||
         gatesGenerationRef.current !== generation
       ) return
-      const pageInfo = data && typeof data === 'object'
-        ? (data as { pageInfo?: unknown }).pageInfo
-        : null
-      if (
-        !response.ok ||
-        !Array.isArray((data as { gates?: unknown } | null)?.gates) ||
-        !pageInfo ||
-        typeof pageInfo !== 'object' ||
-        typeof (pageInfo as { limit?: unknown }).limit !== 'number' ||
-        typeof (pageInfo as { hasNextPage?: unknown }).hasNextPage !== 'boolean' ||
-        !(
-          (pageInfo as { nextCursor?: unknown }).nextCursor === null ||
-          typeof (pageInfo as { nextCursor?: unknown }).nextCursor === 'string'
-        )
-      ) {
+      const page = readScreeningGatePage(data)
+      if (!response.ok || !page) {
         throw new Error(responseError(data, 'Could not load screening batches.'))
       }
-      const nextGates = (data as { gates: ScreeningGate[] }).gates
+      const nextGates = page.gates
       focusGatePageStatusRef.current = focusAfterLoad
       setGates(nextGates)
       setBatchPageNumbers(
@@ -1157,7 +1221,7 @@ export default function ScreeningPanel({
       setBatchPageCursors(
         Object.fromEntries(nextGates.map((gate) => [gate.id, [undefined]])),
       )
-      setGatePageInfo(pageInfo as ScreeningGatePageInfo)
+      setGatePageInfo(page.pageInfo)
       setGatePageNumber(targetPage)
       setGatePageCursors((previous) => {
         const next = previous.slice(0, targetPage)
@@ -1214,21 +1278,8 @@ export default function ScreeningPanel({
         batchPageGenerationsRef.current[gate.id] !== generation ||
         gatesGenerationRef.current !== historyGeneration
       ) return
-      const pageInfo = data && typeof data === 'object'
-        ? (data as { pageInfo?: unknown }).pageInfo
-        : null
-      if (
-        !response.ok ||
-        !Array.isArray((data as { batches?: unknown } | null)?.batches) ||
-        !pageInfo ||
-        typeof pageInfo !== 'object' ||
-        typeof (pageInfo as { limit?: unknown }).limit !== 'number' ||
-        typeof (pageInfo as { hasNextPage?: unknown }).hasNextPage !== 'boolean' ||
-        !(
-          (pageInfo as { nextCursor?: unknown }).nextCursor === null ||
-          typeof (pageInfo as { nextCursor?: unknown }).nextCursor === 'string'
-        )
-      ) {
+      const page = readInvitationBatchPage(data)
+      if (!response.ok || !page) {
         throw new Error(responseError(data, 'Could not load invitation wave history.'))
       }
       focusBatchPageStatusRef.current = gate.id
@@ -1236,8 +1287,8 @@ export default function ScreeningPanel({
         item.id === gate.id
           ? {
               ...item,
-              batches: (data as { batches: InvitationBatch[] }).batches,
-              batchPageInfo: pageInfo as ScreeningGate['batchPageInfo'],
+              batches: page.batches,
+              batchPageInfo: page.pageInfo,
             }
           : item,
       ) ?? null)
