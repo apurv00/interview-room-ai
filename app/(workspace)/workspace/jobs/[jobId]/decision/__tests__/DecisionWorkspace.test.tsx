@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import DecisionWorkspace from "../DecisionWorkspace";
 
 vi.mock("next/link", () => ({
@@ -266,6 +266,39 @@ describe("DecisionWorkspace", () => {
       }),
     );
     expect(compareButton).toBeDisabled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show next candidate results" }),
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Add Ada Lovelace to comparison",
+      }),
+    ).toBeTruthy();
+    const pageTwoStatus = screen.getByText(
+      /Page 2 · Showing 21–21 of matching candidates · up to 20 per page/i,
+    );
+    await waitFor(() => expect(pageTwoStatus).toHaveFocus());
+    expect(
+      screen.getByRole("button", { name: "First candidate result page" }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Previous candidate result page" }),
+    );
+    const pageOneStatus = await screen.findByText(
+      /Page 1 · Showing 1–20 of matching candidates · up to 20 per page/i,
+    );
+    await waitFor(() => expect(pageOneStatus).toHaveFocus());
+    const pageOneResults = screen.getByRole("list", {
+      name: "Candidate search results",
+    });
+    expect(within(pageOneResults).queryByRole("button", {
+      name: "Add Ada Lovelace to comparison",
+    })).toBeNull();
+    expect(
+      screen.getByRole("list", { name: "Selected comparison order" }),
+    ).toHaveTextContent("1.Katherine Johnson");
+    expect(within(pageOneResults).getAllByRole("button")).toHaveLength(20);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Show next candidate results" }),

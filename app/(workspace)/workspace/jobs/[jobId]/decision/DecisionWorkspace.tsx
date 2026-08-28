@@ -47,6 +47,7 @@ interface ComparisonCandidate {
 
 const RECOMMENDATIONS = ["strong_yes", "yes", "no", "strong_no"] as const;
 const COMPARISON_CANDIDATE_PAGE_LIMIT = 20;
+const COMPARISON_CANDIDATE_HISTORY_MAX_DEPTH = 64;
 const DIMENSIONS = [
   "role_capability",
   "problem_solving",
@@ -583,6 +584,12 @@ export default function DecisionWorkspace({
   const [candidateNextCursor, setCandidateNextCursor] = useState<string | null>(
     null,
   );
+  const [candidateCurrentCursor, setCandidateCurrentCursor] = useState<
+    string | null
+  >(null);
+  const [candidateCursorHistory, setCandidateCursorHistory] = useState<
+    Array<string | null>
+  >([]);
   const [selectedCandidates, setSelectedCandidates] = useState<
     ComparisonCandidate[]
   >([]);
@@ -600,6 +607,7 @@ export default function DecisionWorkspace({
   );
   const initialHandoffStarted = useRef<string | null>(null);
   const inboxPageStatusRef = useRef<HTMLParagraphElement>(null);
+  const candidatePageStatusRef = useRef<HTMLParagraphElement>(null);
   const inboxRequestGeneration = useRef(0);
   const candidateRequestGeneration = useRef(0);
   const candidateRequestController = useRef<AbortController | null>(null);
@@ -630,6 +638,8 @@ export default function DecisionWorkspace({
     setCandidateQuery("");
     setComparisonCandidates([]);
     setCandidateNextCursor(null);
+    setCandidateCurrentCursor(null);
+    setCandidateCursorHistory([]);
     setSelectedCandidates([]);
     setComparison(null);
     setLoading(false);
@@ -792,8 +802,9 @@ export default function DecisionWorkspace({
     async (
       query: string,
       options: {
-        cursor?: string;
-        nextPage?: boolean;
+        cursor?: string | null;
+        history?: Array<string | null>;
+        pageNavigation?: boolean;
       } = {},
     ) => {
       const normalizedQuery = query.trim();
@@ -803,7 +814,7 @@ export default function DecisionWorkspace({
       candidateRequestController.current?.abort();
       const controller = new AbortController();
       candidateRequestController.current = controller;
-      options.nextPage
+      options.pageNavigation
         ? setLoadingMoreCandidates(true)
         : setCandidateLoading(true);
       setCandidateError(null);
@@ -839,6 +850,16 @@ export default function DecisionWorkspace({
         // a selected chip or accumulates the whole applicant pool in the DOM.
         setComparisonCandidates(page.candidates);
         setCandidateNextCursor(page.nextCursor);
+        setCandidateCurrentCursor(options.cursor ?? null);
+        setCandidateCursorHistory(options.history ?? []);
+        if (options.pageNavigation) {
+          window.requestAnimationFrame(() => {
+            if (
+              generation === candidateRequestGeneration.current &&
+              candidateRequestScope.current === scope
+            ) candidatePageStatusRef.current?.focus();
+          });
+        }
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         if (
@@ -852,7 +873,7 @@ export default function DecisionWorkspace({
           generation === candidateRequestGeneration.current &&
           candidateRequestScope.current === scope
         ) {
-          options.nextPage
+          options.pageNavigation
             ? setLoadingMoreCandidates(false)
             : setCandidateLoading(false);
           if (candidateRequestController.current === controller) {
@@ -871,6 +892,8 @@ export default function DecisionWorkspace({
     candidateRequestController.current = null;
     setComparisonCandidates([]);
     setCandidateNextCursor(null);
+    setCandidateCurrentCursor(null);
+    setCandidateCursorHistory([]);
     setCandidateError(null);
     setLoadingMoreCandidates(false);
     if (normalizedQuery.length < 2) {
@@ -888,6 +911,55 @@ export default function DecisionWorkspace({
       candidateRequestController.current = null;
     };
   }, [candidateQuery, loadCandidateResults]);
+
+  const loadNextCandidatePage = useCallback(() => {
+    if (!candidateNextCursor || candidateLoading || loadingMoreCandidates) return;
+    void loadCandidateResults(candidateQuery, {
+      cursor: candidateNextCursor,
+      history: [...candidateCursorHistory, candidateCurrentCursor].slice(
+        -COMPARISON_CANDIDATE_HISTORY_MAX_DEPTH,
+      ),
+      pageNavigation: true,
+    });
+  }, [
+    candidateCurrentCursor,
+    candidateCursorHistory,
+    candidateLoading,
+    candidateNextCursor,
+    candidateQuery,
+    loadCandidateResults,
+    loadingMoreCandidates,
+  ]);
+
+  const loadPreviousCandidatePage = useCallback(() => {
+    if (candidateCursorHistory.length === 0 || candidateLoading || loadingMoreCandidates) return;
+    void loadCandidateResults(candidateQuery, {
+      cursor: candidateCursorHistory[candidateCursorHistory.length - 1] ?? null,
+      history: candidateCursorHistory.slice(0, -1),
+      pageNavigation: true,
+    });
+  }, [
+    candidateCursorHistory,
+    candidateLoading,
+    candidateQuery,
+    loadCandidateResults,
+    loadingMoreCandidates,
+  ]);
+
+  const loadFirstCandidatePage = useCallback(() => {
+    if (candidateCursorHistory.length === 0 || candidateLoading || loadingMoreCandidates) return;
+    void loadCandidateResults(candidateQuery, {
+      cursor: null,
+      history: [],
+      pageNavigation: true,
+    });
+  }, [
+    candidateCursorHistory.length,
+    candidateLoading,
+    candidateQuery,
+    loadCandidateResults,
+    loadingMoreCandidates,
+  ]);
 
   const inboxCandidates = useMemo(() => {
     const byApplication = new Map<string, CandidateInboxEntry>();
@@ -1055,6 +1127,13 @@ export default function DecisionWorkspace({
     (comparisonReturnParams.size > 0
       ? `?${comparisonReturnParams.toString()}`
       : "");
+  const candidatePageNumber = candidateCursorHistory.length + 1;
+  const candidateRangeStart = comparisonCandidates.length > 0
+    ? (candidatePageNumber - 1) * COMPARISON_CANDIDATE_PAGE_LIMIT + 1
+    : 0;
+  const candidateRangeEnd = comparisonCandidates.length > 0
+    ? candidateRangeStart + comparisonCandidates.length - 1
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -1241,15 +1320,21 @@ export default function DecisionWorkspace({
         </label>
 
         <p
+          ref={candidatePageStatusRef}
           id="decision-candidate-search-status"
           className="text-sm text-[#536471]"
-          aria-live="polite"
+          role="status"
+          tabIndex={-1}
         >
           {candidateQuery.trim().length < 2
             ? "Enter at least two characters to search."
             : candidateLoading
               ? "Searching current job candidates…"
-              : `Showing ${comparisonCandidates.length} candidate${comparisonCandidates.length === 1 ? "" : "s"} on this result page.`}
+              : loadingMoreCandidates
+                ? "Loading candidate result page…"
+                : comparisonCandidates.length === 0
+                  ? `Page ${candidatePageNumber} · No candidates on this result page · up to ${COMPARISON_CANDIDATE_PAGE_LIMIT} per page.`
+                  : `Page ${candidatePageNumber} · Showing ${candidateRangeStart}–${candidateRangeEnd} of matching candidates · up to ${COMPARISON_CANDIDATE_PAGE_LIMIT} per page.`}
         </p>
 
         {candidateError ? (
@@ -1290,23 +1375,50 @@ export default function DecisionWorkspace({
           </ul>
         ) : null}
 
-        {candidateNextCursor ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={loadingMoreCandidates}
-            onClick={() =>
-              void loadCandidateResults(candidateQuery, {
-                cursor: candidateNextCursor,
-                nextPage: true,
-              })
-            }
+        {candidateCursorHistory.length > 0 || candidateNextCursor ? (
+          <nav
+            className="flex flex-wrap items-center gap-2"
+            aria-label="Candidate search result pages"
+            aria-busy={candidateLoading || loadingMoreCandidates}
           >
-            {loadingMoreCandidates
-              ? "Loading the next candidate page…"
-              : "Show next candidate results"}
-          </Button>
+            {candidateCursorHistory.length > 0 ? (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={candidateLoading || loadingMoreCandidates}
+                  aria-label="First candidate result page"
+                  onClick={loadFirstCandidatePage}
+                >
+                  First page
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={candidateLoading || loadingMoreCandidates}
+                  aria-label="Previous candidate result page"
+                  onClick={loadPreviousCandidatePage}
+                >
+                  Previous page
+                </Button>
+              </>
+            ) : null}
+            {candidateNextCursor ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={candidateLoading || loadingMoreCandidates}
+                onClick={loadNextCandidatePage}
+              >
+                {loadingMoreCandidates
+                  ? "Loading candidate page…"
+                  : "Show next candidate results"}
+              </Button>
+            ) : null}
+          </nav>
         ) : null}
       </section>
 
