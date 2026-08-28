@@ -131,4 +131,47 @@ describe('PoolSuggestionPanel', () => {
     expect(screen.queryByRole('status')).toBeNull()
     expect(screen.getByRole('alertdialog')).toBeTruthy()
   })
+
+  it('wraps valid long suggestion content and exposes fallback heading focus after addition', async () => {
+    const longName = 'N'.repeat(120)
+    const longEmail = `${'e'.repeat(242)}@example.com`
+    const longRequirement = 'R'.repeat(200)
+    const longJobTitle = 'J'.repeat(200)
+    const longSuggestion = {
+      ...SUGGESTION,
+      candidate: { ...SUGGESTION.candidate, name: longName, email: longEmail },
+      matchedRequirements: [longRequirement],
+      previouslySeenIn: [{ ...SUGGESTION.previouslySeenIn[0], jobTitle: longJobTitle }],
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/workspace/jobs/job-1/pool-suggestions') return json({ suggestions: [longSuggestion] })
+      if (url === '/api/workspace/jobs/job-1/candidates') {
+        return json({ status: 'created', candidateId: longSuggestion.candidate.id, applicationId: 'cccccccccccccccccccccccc' }, 201)
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<PoolSuggestionPanel jobId="job-1" jobStatus="open" />)
+
+    const candidateHeading = await screen.findByRole('heading', { name: longName })
+    const suggestion = candidateHeading.closest('li')
+    expect(suggestion).toHaveClass('min-w-0', 'max-w-full')
+    expect(candidateHeading).toHaveClass('min-w-0', 'max-w-full', 'break-words')
+    expect(screen.getByText(longEmail)).toHaveClass('max-w-full', 'break-words')
+    expect(screen.getByText(`Matches: ${longRequirement}`)).toHaveClass('max-w-full', 'break-words')
+    expect(screen.getByText(`Previously seen in: ${longJobTitle} (rejected)`)).toHaveClass('max-w-full', 'break-words')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add to job' }))
+    const dialog = screen.getByRole('alertdialog')
+    expect(dialog.querySelector('#pool-confirm-heading')).toHaveClass('break-words')
+    expect(dialog.querySelector('#pool-confirm-description')).toHaveClass('break-words')
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm add to job' }))
+
+    const poolHeading = screen.getByRole('heading', { name: 'Past candidates who match this job' })
+    await waitFor(() => expect(poolHeading).toHaveFocus())
+    expect(poolHeading).toHaveAttribute('tabindex', '-1')
+    expect(poolHeading).not.toHaveClass('focus:outline-none')
+  })
 })

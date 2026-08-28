@@ -106,7 +106,7 @@ describe("JobPerformancePanel", () => {
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Ada Lovelace" })).toHaveAttribute(
       "href",
-      `/workspace/applications/${"a".repeat(24)}`,
+      `/workspace/applications/${"a".repeat(24)}?returnTo=${encodeURIComponent(`/workspace/jobs/${JOB_ID}/performance`)}`,
     );
     expect(screen.getByText("#1")).toBeTruthy();
     expect(screen.getByText("Score 91")).toBeTruthy();
@@ -190,5 +190,58 @@ describe("JobPerformancePanel", () => {
       await screen.findByText("The operations response was not valid."),
     ).toBeTruthy();
     expect(screen.queryByText("Ada Lovelace")).toBeNull();
+  });
+
+  it("preserves and wraps long job, department, and fallback-candidate content", async () => {
+    const title = "PrincipalPlatformAndDistributedSystemsRecruitingLead".repeat(4);
+    const departmentName = "D".repeat(120);
+    const candidateName = "N".repeat(120);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          performance({
+            job: {
+              jobId: JOB_ID,
+              title,
+              department: { id: "d".repeat(24), name: departmentName },
+              status: "open",
+              daysOpen: 11,
+            },
+            scoreDistribution: {
+              sampleSize: 1,
+              chartEligible: false,
+              buckets: [],
+              fallbackCandidates: [
+                {
+                  applicationId: "a".repeat(24),
+                  candidateName,
+                  score: 91,
+                  rank: 1,
+                },
+              ],
+            },
+          }),
+        ),
+      ),
+    );
+
+    render(<JobPerformancePanel jobId={JOB_ID} />);
+
+    const heading = await screen.findByRole("heading", { name: title });
+    expect(heading).toHaveClass("max-w-full", "break-words");
+    expect(heading).not.toHaveClass("truncate");
+
+    const department = screen.getByText(`Department: ${departmentName}`);
+    expect(department).toHaveClass(
+      "max-w-full",
+      "whitespace-normal",
+      "break-words",
+    );
+    expect(department).not.toHaveClass("truncate");
+
+    const candidate = screen.getByRole("link", { name: candidateName });
+    expect(candidate).toHaveClass("max-w-full", "break-words");
+    expect(candidate).not.toHaveClass("truncate");
   });
 });

@@ -414,4 +414,60 @@ describe('CandidateBulkActionPanel', () => {
     expect(await screen.findByRole('link', { name: 'Review bulk issue for application aaaaaaaaaaaaaaaaaaaaaaaa' })).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'Review bulk issue for application 888888888888888888888888' })).toBeNull()
   })
+
+  it('keeps the bulk confirmation heading visibly focused and restores its trigger on cancel', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    render(
+      <CandidateBulkActionPanel
+        jobId={JOB_ID}
+        selection={{ selectionId: SELECTION_ID, count: 2, expiresAt: '2026-08-25T09:00:00.000Z', description: 'Two candidates', homogeneousStage: 'new' }}
+        expectedStage="new"
+        onFinish={vi.fn()}
+        onSettled={vi.fn()}
+      />,
+    )
+
+    const trigger = screen.getByRole('button', { name: 'Reject selected…' })
+    fireEvent.click(trigger)
+    const heading = screen.getByRole('heading', { name: 'Confirm reject for 2 candidates' })
+    await waitFor(() => expect(heading).toHaveFocus())
+    expect(heading).toHaveAttribute('tabindex', '-1')
+    expect(heading).not.toHaveClass('focus:outline-none')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('keeps the paged-issue heading visibly focused after bounded navigation', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('cursor=next-issue')) {
+        return Promise.resolve(json({
+          operation,
+          issues: { items: [{ itemId: 'issue-two', applicationId: '555555555555555555555555', status: 'failed', code: 'CANDIDATE_UNAVAILABLE' }], nextCursor: null },
+        }))
+      }
+      return Promise.resolve(json({
+        operation,
+        issues: { items: [{ itemId: 'issue-one', applicationId: '444444444444444444444444', status: 'conflict', code: 'STAGE_CHANGED' }], nextCursor: 'next-issue' },
+      }))
+    }))
+    render(
+      <CandidateBulkActionPanel
+        jobId={JOB_ID}
+        selection={null}
+        expectedStage={null}
+        initialOperationId={OPERATION_ID}
+        onFinish={vi.fn()}
+        onSettled={vi.fn()}
+      />,
+    )
+
+    await screen.findByText('Bulk reject · partial')
+    fireEvent.click(screen.getByText('Review conflicts and failures'))
+    fireEvent.click(screen.getByRole('button', { name: 'Next issues' }))
+    const heading = await screen.findByRole('heading', { name: 'Issue page 2' })
+    await waitFor(() => expect(heading).toHaveFocus())
+    expect(heading).toHaveAttribute('tabindex', '-1')
+    expect(heading).not.toHaveClass('focus:outline-none')
+  })
 })

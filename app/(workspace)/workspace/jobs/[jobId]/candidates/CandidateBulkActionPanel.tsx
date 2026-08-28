@@ -470,7 +470,7 @@ export default function CandidateBulkActionPanel({
 
       {selection && canStartActions && action && !operation && !unresolvedInitialOperation ? (
         <div className="mt-4 rounded-xl border border-indigo-200 bg-white p-4">
-          <h3 ref={confirmationHeadingRef} tabIndex={-1} className="font-semibold text-[#0f1419] focus:outline-none">
+          <h3 ref={confirmationHeadingRef} tabIndex={-1} className="font-semibold text-[#0f1419]">
             Confirm {action.replace('_', ' ')} for {selection.count.toLocaleString()} candidate{selection.count === 1 ? '' : 's'}
           </h3>
           <p className="mt-1 text-sm text-[#536471]">
@@ -525,7 +525,7 @@ export default function CandidateBulkActionPanel({
               <h4
                 ref={issuePageHeadingRef}
                 tabIndex={-1}
-                className="mt-3 text-sm font-semibold text-[#0f1419] focus:outline-none"
+                className="mt-3 text-sm font-semibold text-[#0f1419]"
               >
                 Issue page {issuePageIndex + 1}
               </h4>

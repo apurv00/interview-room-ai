@@ -1256,7 +1256,7 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
 
       {selection.mode === 'snapshot' ? (
         <section aria-labelledby="stable-selection-bulk-actions" className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
-          <h3 ref={bulkActionsHeadingRef} id="stable-selection-bulk-actions" tabIndex={-1} className="font-semibold text-indigo-950 focus:outline-none">Bulk actions for stable selection</h3>
+          <h3 ref={bulkActionsHeadingRef} id="stable-selection-bulk-actions" tabIndex={-1} className="font-semibold text-indigo-950">Bulk actions for stable selection</h3>
           <CandidateBulkActionPanel
             jobId={jobId}
             selection={selection}
@@ -1294,7 +1294,7 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
         <section aria-labelledby="candidate-results-title" aria-busy={loading} className="space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 ref={candidateResultsHeadingRef} id="candidate-results-title" tabIndex={-1} className="text-base font-semibold text-[#0f1419] focus:outline-none">
+              <h2 ref={candidateResultsHeadingRef} id="candidate-results-title" tabIndex={-1} className="text-base font-semibold text-[#0f1419]">
                 {summary
                   ? `${summary.counts.matching.toLocaleString()} matching candidate${summary.counts.matching === 1 ? '' : 's'}`
                   : `${data.rows.length.toLocaleString()} candidate${data.rows.length === 1 ? '' : 's'} on this page`}
@@ -1360,7 +1360,7 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
       {pendingStageAction ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4" role="presentation">
           <section ref={stageDialogRef} role="dialog" aria-modal="true" aria-labelledby="stage-action-title" aria-describedby="stage-action-description" className="w-full max-w-lg rounded-2xl border border-[#dbe4ea] bg-white p-6 shadow-xl">
-            <h2 id="stage-action-title" className="text-lg font-semibold text-[#0f1419]">
+            <h2 id="stage-action-title" className="break-words text-lg font-semibold text-[#0f1419]">
               {pendingStageAction.action === 'reject'
                 ? `Reject ${pendingStageAction.row.name}?`
                 : pendingStageAction.action === 'offer_declined'

@@ -236,8 +236,8 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
   return (
     <section className="rounded-2xl border border-[#e6ecf0] bg-white p-5" aria-labelledby="pool-suggestions-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 ref={headingRef} id="pool-suggestions-heading" tabIndex={-1} className="text-base font-semibold text-[#0f1419] focus:outline-none">Past candidates who match this job</h2>
+        <div className="min-w-0 max-w-full">
+          <h2 ref={headingRef} id="pool-suggestions-heading" tabIndex={-1} className="text-base font-semibold text-[#0f1419]">Past candidates who match this job</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-[#536471]">
             These are read-only, deterministic requirement-overlap suggestions from this workspace’s past candidates. Reviewing them does not add anyone or contact a candidate.
           </p>
@@ -261,14 +261,14 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
       {suggestions && suggestions.length > 0 ? (
         <ul className="mt-4 space-y-3" aria-label="Past candidate suggestions">
           {suggestions.map((suggestion) => (
-            <li key={suggestion.candidate.id} className="rounded-xl border border-[#e6ecf0] p-4">
+            <li key={suggestion.candidate.id} className="min-w-0 max-w-full rounded-xl border border-[#e6ecf0] p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="font-medium text-[#0f1419]">{suggestion.candidate.name}</h3>
+                <div className="min-w-0 max-w-full">
+                  <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+                    <h3 className="min-w-0 max-w-full break-words font-medium text-[#0f1419]">{suggestion.candidate.name}</h3>
                     <Badge variant="success">{suggestion.matchScore}% requirement overlap</Badge>
                   </div>
-                  <p className="mt-1 text-sm text-[#536471]">{suggestion.candidate.email}</p>
+                  <p className="mt-1 max-w-full break-words text-sm text-[#536471]">{suggestion.candidate.email}</p>
                 </div>
                 <Button
                   type="button"
@@ -284,12 +284,12 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
                 </Button>
               </div>
               {suggestion.matchedRequirements.length > 0 ? (
-                <p className="mt-3 text-sm text-[#536471]">
+                <p className="mt-3 max-w-full break-words text-sm text-[#536471]">
                   Matches: {suggestion.matchedRequirements.join(' · ')}
                 </p>
               ) : null}
               {suggestion.previouslySeenIn.length > 0 ? (
-                <p className="mt-2 text-sm text-[#536471]">
+                <p className="mt-2 max-w-full break-words text-sm text-[#536471]">
                   Previously seen in: {suggestion.previouslySeenIn.map((item) => `${item.jobTitle} (${item.stage})`).join(' · ')}
                 </p>
               ) : null}
@@ -300,8 +300,8 @@ export default function PoolSuggestionPanel({ jobId, jobStatus }: PoolSuggestion
 
       {confirmation ? (
         <div ref={confirmationRef} className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-4" role="alertdialog" aria-modal="false" aria-labelledby="pool-confirm-heading" aria-describedby="pool-confirm-description">
-          <h3 id="pool-confirm-heading" className="font-semibold text-[#0f1419]">Confirm candidate addition</h3>
-          <p id="pool-confirm-description" className="mt-2 text-sm leading-6 text-[#334155]">
+          <h3 id="pool-confirm-heading" className="break-words font-semibold text-[#0f1419]">Confirm candidate addition</h3>
+          <p id="pool-confirm-description" className="mt-2 break-words text-sm leading-6 text-[#334155]">
             Add {confirmation.suggestion.candidate.name} to this job? This is an HR action; it does not happen until you confirm and does not contact the candidate.
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
