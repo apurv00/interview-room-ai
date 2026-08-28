@@ -505,9 +505,11 @@ function pageRange(page: PreviewPage): string {
 function CandidateIdentityLine({
   candidate,
   identityState,
+  returnTo,
 }: {
   candidate?: CandidateIdentityView | null
   identityState?: CandidateIdentityState | 'privacy_redacted'
+  returnTo: string
 }) {
   if (
     candidate?.identityState === 'available' &&
@@ -518,12 +520,12 @@ function CandidateIdentityLine({
     return (
       <div className="min-w-0">
         <Link
-          href={candidate.applicationUrl}
-          className="block truncate font-medium text-indigo-700 hover:underline"
+          href={`${candidate.applicationUrl}${candidate.applicationUrl.includes('?') ? '&' : '?'}returnTo=${encodeURIComponent(returnTo)}`}
+          className="block max-w-full break-words font-medium text-indigo-700 hover:underline"
         >
           {candidate.displayName}
         </Link>
-        <p className="truncate text-xs text-[#536471]">{candidate.email}</p>
+        <p className="max-w-full break-words text-xs text-[#536471]">{candidate.email}</p>
       </div>
     )
   }
@@ -577,10 +579,12 @@ function RecipientDeliveryLedger({
   jobId,
   batchId,
   historyRevision,
+  returnTo,
 }: {
   jobId: string
   batchId: string
   historyRevision: number
+  returnTo: string
 }) {
   const [recipients, setRecipients] = useState<RecipientDelivery[]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -728,23 +732,24 @@ function RecipientDeliveryLedger({
       {recipients.length ? (
         <ul className="mt-3 divide-y divide-[#e1e8ed]" aria-label="Recipient delivery status">
           {recipients.map((recipient) => (
-            <li key={recipient.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
-              <div className="flex items-start justify-between gap-3">
+            <li key={recipient.id} className="min-w-0 max-w-full space-y-2 py-3 first:pt-0 last:pb-0">
+              <div className="flex min-w-0 max-w-full items-start justify-between gap-3">
                 <CandidateIdentityLine
                   candidate={recipient.candidate}
                   identityState={recipient.identityState}
+                  returnTo={returnTo}
                 />
                 <Badge variant={recipientVariant(recipient)}>
                   {recipientStatusLabel(recipient)}
                 </Badge>
               </div>
-              <p className="text-xs text-[#71767b]">
+              <p className="max-w-full break-words text-xs text-[#71767b]">
                 Planned {displayDate(recipient.sendAfter)} · {recipient.attempts}{' '}
                 {recipient.attempts === 1 ? 'attempt' : 'attempts'}
                 {recipient.sentAt ? ` · sent ${displayDate(recipient.sentAt)}` : ''}
               </p>
               {recipient.issue ? (
-                <p className="text-xs text-[#a16207]">{recipient.issue.message}</p>
+                <p className="max-w-full break-words text-xs text-[#a16207]">{recipient.issue.message}</p>
               ) : null}
             </li>
           ))}
@@ -907,6 +912,7 @@ function PreviewCandidatePageDisclosure({
   onToggle,
   onSearch,
   onLoad,
+  returnTo,
 }: {
   summary: string
   pageName: string
@@ -921,6 +927,7 @@ function PreviewCandidatePageDisclosure({
   onToggle: (open: boolean) => void
   onSearch: (value: string) => void
   onLoad: (cursor?: string) => void
+  returnTo: string
 }) {
   const matchingEntries = filterPreviewEntries(page?.rows ?? EMPTY_PREVIEW_ROWS, deferredSearch)
   return (
@@ -974,6 +981,7 @@ function PreviewCandidatePageDisclosure({
                     <CandidateIdentityLine
                       candidate={entry.candidate}
                       identityState={entry.candidate?.identityState}
+                      returnTo={returnTo}
                     />
                     <p className="mt-1 text-xs text-[#71767b]">
                       {entry.rank ? `Rank ${entry.rank}` : 'Not ranked'} · {scoreStateLabel(entry.scoreState)}
@@ -1156,6 +1164,11 @@ export default function ScreeningPanel({
   // Missing/loading context is deliberately closed. The split route must
   // never regain the old root page's write authority by assuming "open".
   const jobOpen = resolvedJobStatus === 'open'
+  const screeningReturnTo = `/workspace/jobs/${encodeURIComponent(jobId)}/screening${
+    selectionSnapshotId
+      ? `?selectionSnapshotId=${encodeURIComponent(selectionSnapshotId)}`
+      : ''
+  }`
   const ruleResult = useMemo(() => ruleFromDraft(ruleDraft), [ruleDraft])
   const currentRequest = useMemo(() => {
     if (!ruleResult.rule) return null
@@ -1943,10 +1956,10 @@ export default function ScreeningPanel({
   )
 
   return (
-    <section aria-labelledby="screening-title" className="rounded-2xl border border-[#e1e8ed] bg-white p-5 space-y-5">
+    <section aria-labelledby="screening-title" className="max-w-full space-y-5 rounded-2xl border border-[#e1e8ed] bg-white p-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h2 id="screening-title" className="text-base font-semibold text-[#0f1419]">
+        <div className="min-w-0 max-w-full">
+          <h2 id="screening-title" className="max-w-full break-words text-base font-semibold text-[#0f1419]">
             {jobTitle ? `${jobTitle} screening gate` : 'Screening gate'}
           </h2>
           <p className="mt-1 max-w-3xl text-sm text-[#536471]">
@@ -2207,6 +2220,7 @@ export default function ScreeningPanel({
                 <CandidateIdentityLine
                   candidate={preview.cutLine.candidate}
                   identityState={preview.cutLine.candidate.identityState}
+                  returnTo={screeningReturnTo}
                 />
               </div>
             ) : null}
@@ -2389,17 +2403,17 @@ export default function ScreeningPanel({
                 {exceptions.map((exception) => {
                   const entry = entriesByApplicationId.get(exception.applicationId)
                   return (
-                    <li key={exception.applicationId} className="flex items-center gap-2 rounded-lg border border-[#e1e8ed] p-2 text-sm flex-wrap">
+                    <li key={exception.applicationId} className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-[#e1e8ed] p-2 text-sm flex-wrap">
                       <Badge variant={exception.action === 'include' ? 'success' : 'danger'}>
                         {exception.action}
                       </Badge>
-                      <span className="min-w-0 text-xs font-medium text-[#536471]">
+                      <span className="min-w-0 max-w-full break-words text-xs font-medium text-[#536471]">
                         {entry
                           ? entryLabel(entry)
                           : exceptionCandidateLabels[exception.applicationId] ??
                             `Application ${shortId(exception.applicationId)}`}
                       </span>
-                      <span className="min-w-0 flex-1 text-[#0f1419]">{exception.note}</span>
+                      <span className="min-w-0 max-w-full flex-1 break-words text-[#0f1419]">{exception.note}</span>
                       <Button type="button" variant="ghost" size="sm" onClick={() => removeException(exception.applicationId)} disabled={confirmBusy}>
                         Remove
                       </Button>
@@ -2454,6 +2468,7 @@ export default function ScreeningPanel({
                           <CandidateIdentityLine
                             candidate={entry.candidate}
                             identityState={entry.candidate?.identityState}
+                            returnTo={screeningReturnTo}
                           />
                           <p className="mt-1 text-xs text-[#71767b]">
                             {entry.rank ? `Rank ${entry.rank}` : 'Not ranked'} · {scoreStateLabel(entry.scoreState)}
@@ -2542,6 +2557,7 @@ export default function ScreeningPanel({
               }}
               onSearch={setEvaluatedSearch}
               onLoad={(cursor) => void loadPreviewPage('evaluated', cursor)}
+              returnTo={screeningReturnTo}
             />
             <PreviewCandidatePageDisclosure
               summary={`Review ${preview.scoreStateCounts.stale + preview.scoreStateCounts.unscored} stale or unscored applications`}
@@ -2574,6 +2590,7 @@ export default function ScreeningPanel({
               }}
               onSearch={setAttentionSearch}
               onLoad={(cursor) => void loadPreviewPage('attention', cursor)}
+              returnTo={screeningReturnTo}
             />
             <PreviewCandidatePageDisclosure
               summary={`Review ${preview.knownKnockoutCount} known knockout applications`}
@@ -2602,6 +2619,7 @@ export default function ScreeningPanel({
               }}
               onSearch={setKnockoutSearch}
               onLoad={(cursor) => void loadPreviewPage('knockouts', cursor)}
+              returnTo={screeningReturnTo}
             />
           </section>
 
@@ -2757,47 +2775,48 @@ export default function ScreeningPanel({
           </p>
         ) : null}
         {gates?.map((gate) => (
-          <article key={gate.id} className="rounded-xl border border-[#e1e8ed] p-4 space-y-3">
+          <article key={gate.id} className="min-w-0 max-w-full space-y-3 rounded-xl border border-[#e1e8ed] p-4">
             <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div>
-                <p className="text-sm font-semibold text-[#0f1419]">
+              <div className="min-w-0 max-w-full">
+                <p className="max-w-full break-words text-sm font-semibold text-[#0f1419]">
                   {gate.rule.mode === 'top_n' ? `Top ${gate.rule.topN}` : `Score ≥ ${gate.rule.scoreThreshold}`}
                   {' · '}requirement v{gate.requirementVersion.version}
                 </p>
-                <p className="mt-1 text-xs text-[#71767b]">
+                <p className="mt-1 max-w-full break-words text-xs text-[#71767b]">
                   Confirmed by {gate.confirmedByName} · {displayDate(gate.confirmedAt)} · {gate.counts.selected} selected
                 </p>
               </div>
               <Badge variant={gate.status === 'cancelled' ? 'danger' : 'success'}>{gate.status}</Badge>
             </div>
             {gate.exceptionCount ? (
-              <p className="text-xs text-[#536471]">
+              <p className="max-w-full break-words text-xs text-[#536471]">
                 {gate.exceptionCount} documented {gate.exceptionCount === 1 ? 'exception' : 'exceptions'}
               </p>
             ) : null}
             {gate.selectionHandoff ? (
-              <p className="text-xs text-[#536471]">
+              <p className="max-w-full break-words text-xs text-[#536471]">
                 Candidate-selection handoff by {gate.selectionHandoff.actorName}: {gate.selectionHandoff.note}
               </p>
             ) : null}
-            {gate.cancelNote ? <p className="text-xs text-red-800">Cancellation note: {gate.cancelNote}</p> : null}
+            {gate.cancelNote ? <p className="max-w-full break-words text-xs text-red-800">Cancellation note: {gate.cancelNote}</p> : null}
             {gate.batches.length ? (
               <ul className="space-y-2">
                 {gate.batches.map((batch) => (
-                  <li key={batch.id} className="rounded-lg bg-[#f8fafc] p-3">
+                  <li key={batch.id} className="min-w-0 max-w-full rounded-lg bg-[#f8fafc] p-3">
                     <div className="flex items-center justify-between gap-3 flex-wrap">
-                      <p className="text-sm font-medium text-[#0f1419]">
+                      <p className="max-w-full break-words text-sm font-medium text-[#0f1419]">
                         Wave {batch.wave} · {batch.plannedCount} planned · {batch.sentCount} sent
                         {batch.failedCount ? ` · ${batch.failedCount} failed` : ''}
                       </p>
                       <Badge variant={batchVariant(batch.status)}>{batch.status}</Badge>
                     </div>
-                    <p className="mt-1 text-xs text-[#71767b]">Planned for {displayDate(batch.sendAfter)}</p>
-                    {batch.lastError ? <p className="mt-1 text-xs text-red-800">Latest delivery issue: {batch.lastError}</p> : null}
+                    <p className="mt-1 max-w-full break-words text-xs text-[#71767b]">Planned for {displayDate(batch.sendAfter)}</p>
+                    {batch.lastError ? <p className="mt-1 max-w-full break-words text-xs text-red-800">Latest delivery issue: {batch.lastError}</p> : null}
                     <RecipientDeliveryLedger
                       jobId={jobId}
                       batchId={batch.id}
                       historyRevision={historyRevision}
+                      returnTo={screeningReturnTo}
                     />
                     {batch.status === 'failed' && batch.failedCount > 0 ? (
                       <Button

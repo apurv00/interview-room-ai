@@ -197,4 +197,43 @@ describe('Job overview', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm replacement' }))
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true))
   })
+
+  it('keeps every programmatically focused management heading visibly focusable', async () => {
+    const emptyOverview = {
+      ...overview,
+      counts: {
+        ...overview.counts,
+        total: 0,
+        stages: Object.fromEntries(Object.keys(overview.counts.stages).map((stage) => [stage, 0])),
+      },
+    }
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/summary')) return Promise.resolve(json(emptyOverview))
+      if (url.endsWith('/departments')) return Promise.resolve(json({ departments: [] }))
+      if (url.endsWith('/api/workspace')) return Promise.resolve(json({ membership: { role: 'admin' } }))
+      return Promise.resolve(json({ error: 'Unexpected request' }, 500))
+    })
+
+    render(<JobOverview jobId={overview.job.jobId} />)
+    await screen.findByRole('heading', { name: overview.job.title })
+    const manageTrigger = screen.getByText('Manage job')
+    const destinations = [
+      ['Change department', 'Change department'],
+      ['Duplicate job', 'Duplicate job'],
+      ['Close job…', 'Close this job'],
+      ['Delete empty job…', 'Delete this empty job'],
+    ] as const
+
+    for (const [actionName, headingName] of destinations) {
+      fireEvent.click(manageTrigger)
+      fireEvent.click(await screen.findByRole('button', { name: actionName }))
+      const heading = await screen.findByRole('heading', { name: headingName })
+      await waitFor(() => expect(heading).toHaveFocus())
+      expect(heading).toHaveAttribute('tabindex', '-1')
+      expect(heading).not.toHaveClass('focus:outline-none')
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await waitFor(() => expect(manageTrigger).toHaveFocus())
+    }
+  })
 })

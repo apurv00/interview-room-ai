@@ -951,4 +951,96 @@ describe('CandidateWorkspace', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '823 matching candidates' })).toHaveFocus())
     expect(screen.getByText(/Ada Lovelace left the current filtered view/)).toHaveClass('sr-only')
   })
+
+  it('keeps each table row non-interactive while exposing textual stage and button-based moves', async () => {
+    render(<CandidateWorkspace jobId={JOB_ID} />)
+
+    const table = await screen.findByRole('table', { name: 'Candidates for this job' })
+    const candidateLink = within(table).getByRole('link', { name: 'Ada Lovelace' })
+    const candidateRow = candidateLink.closest('tr')
+    expect(candidateRow).not.toBeNull()
+    expect(candidateRow?.tagName).toBe('TR')
+    expect(within(table).getAllByRole('row')).toContain(candidateRow)
+    expect(candidateRow).not.toHaveAttribute('tabindex')
+    expect(candidateRow).not.toHaveAttribute('draggable')
+    expect(candidateRow?.onclick).toBeNull()
+
+    expect(within(candidateRow!).getByText('New')).toBeVisible()
+    fireEvent.click(within(candidateRow!).getByText('Actions'))
+    const advance = within(candidateRow!).getByRole('button', { name: 'Advance one stage' })
+    expect(advance).toHaveAttribute('type', 'button')
+    expect(advance).not.toHaveAttribute('draggable')
+    expect(within(candidateRow!).getByRole('button', { name: 'Reject…' })).toHaveAttribute('type', 'button')
+
+    fireEvent.click(candidateRow!)
+    expect(navigation.push).not.toHaveBeenCalled()
+  })
+
+  it('keeps the bounded candidate row trees outside scalar live regions', async () => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/candidates/freshness')) return Promise.resolve(json({ hasNewerResults: false, checkedAt: '2026-08-25T08:01:00.000Z' }))
+      if (url.includes('/candidates/summary')) return Promise.resolve(json(candidateSummary()))
+      if (url.includes('/candidates?')) return Promise.resolve(json(candidatePage({ rows: generatedRows(1_000) })))
+      return Promise.resolve(json({ error: 'Unexpected request' }, 500))
+    })
+
+    render(<CandidateWorkspace jobId={JOB_ID} />)
+
+    const table = await screen.findByRole('table', { name: 'Candidates for this job' })
+    const cards = screen.getByRole('list', { name: 'Candidates for this job' })
+    const liveRegions = Array.from(document.querySelectorAll<HTMLElement>('[aria-live]'))
+
+    expect(liveRegions).toHaveLength(2)
+    expect(table.closest('[aria-live]')).toBeNull()
+    expect(cards.closest('[aria-live]')).toBeNull()
+    for (const liveRegion of liveRegions) {
+      expect(liveRegion.tagName).toBe('P')
+      expect(liveRegion.querySelector('table, tbody, tr, ul, li')).toBeNull()
+      expect(liveRegion.textContent?.length ?? 0).toBeLessThan(200)
+    }
+  })
+
+  it('keeps results and stable-selection headings visibly focused after navigation', async () => {
+    render(<CandidateWorkspace jobId={JOB_ID} />)
+
+    const initialTable = await screen.findByRole('table', { name: 'Candidates for this job' })
+    const resultsHeading = await screen.findByRole('heading', { name: '823 matching candidates' })
+    fireEvent.click(within(initialTable).getByRole('checkbox', { name: 'Select Ada Lovelace' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
+    await waitFor(() => expect(resultsHeading).toHaveFocus())
+    expect(resultsHeading).toHaveAttribute('tabindex', '-1')
+    expect(resultsHeading).not.toHaveClass('focus:outline-none')
+
+    const table = screen.getByRole('table', { name: 'Candidates for this job' })
+    fireEvent.click(within(table).getByRole('checkbox', { name: 'Select Ada Lovelace' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare bulk actions' }))
+    const bulkHeading = await screen.findByRole('heading', { name: 'Bulk actions for stable selection' })
+    await waitFor(() => expect(bulkHeading).toHaveFocus())
+    expect(bulkHeading).toHaveAttribute('tabindex', '-1')
+    expect(bulkHeading).not.toHaveClass('focus:outline-none')
+  })
+
+  it('wraps a valid maximum-length candidate name in a stage confirmation title', async () => {
+    const longName = 'N'.repeat(120)
+    const longRows = [{
+      ...rows[0],
+      candidate: { ...rows[0].candidate, name: longName },
+    }]
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/candidates/freshness')) return Promise.resolve(json({ hasNewerResults: false, checkedAt: '2026-08-25T08:01:00.000Z' }))
+      if (url.includes('/candidates/summary')) return Promise.resolve(json(candidateSummary()))
+      if (url.includes('/candidates?')) return Promise.resolve(json(candidatePage({ rows: longRows })))
+      return Promise.resolve(json({ error: 'Unexpected request' }, 500))
+    })
+    render(<CandidateWorkspace jobId={JOB_ID} />)
+
+    const table = await screen.findByRole('table', { name: 'Candidates for this job' })
+    fireEvent.click(within(table).getByText(`Actions for ${longName}`).closest('summary')!)
+    fireEvent.click(within(table).getByRole('button', { name: 'Reject…' }))
+    const heading = screen.getByRole('heading', { name: `Reject ${longName}?` })
+    expect(heading).toHaveClass('break-words')
+    expect(heading).not.toHaveClass('truncate')
+  })
 })

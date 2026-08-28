@@ -59,22 +59,26 @@ export default function JobPerformancePanel({ jobId }: { jobId: string }) {
     1,
     ...performance.scoreDistribution.buckets.map((bucket) => bucket.count),
   );
+  const performanceReturnTo = `/workspace/jobs/${encodeURIComponent(jobId)}/performance`;
 
   return (
     <div className="space-y-7">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
+        <div className="min-w-0 max-w-full">
           <p className="text-sm font-medium text-indigo-700">
             Per-job performance
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight text-[#0f1419]">
+          <div className="mt-1 flex min-w-0 max-w-full flex-wrap items-center gap-2">
+            <h1 className="min-w-0 max-w-full break-words text-2xl font-bold tracking-tight text-[#0f1419]">
               {performance.job.title}
             </h1>
             <Badge variant={STATUS_VARIANT[performance.job.status]}>
               {performance.job.status.replace("_", " ")}
             </Badge>
-            <Badge variant="primary">
+            <Badge
+              variant="primary"
+              className="h-auto max-w-full whitespace-normal break-words py-0.5 text-left"
+            >
               Department: {performance.job.department.name}
             </Badge>
           </div>
@@ -229,14 +233,14 @@ export default function JobPerformancePanel({ jobId }: { jobId: string }) {
                     (candidate) => (
                       <li
                         key={candidate.applicationId}
-                        className="grid grid-cols-[2rem_1fr_auto] items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                        className="grid min-w-0 max-w-full grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
                       >
                         <span className="font-semibold text-indigo-700">
                           #{candidate.rank}
                         </span>
                         <Link
-                          href={`/workspace/applications/${encodeURIComponent(candidate.applicationId)}`}
-                          className="min-w-0 truncate font-medium text-[#0f1419] hover:text-indigo-700 hover:underline"
+                          href={`/workspace/applications/${encodeURIComponent(candidate.applicationId)}?returnTo=${encodeURIComponent(performanceReturnTo)}`}
+                          className="min-w-0 max-w-full break-words font-medium text-[#0f1419] hover:text-indigo-700 hover:underline"
                         >
                           {candidate.candidateName}
                         </Link>

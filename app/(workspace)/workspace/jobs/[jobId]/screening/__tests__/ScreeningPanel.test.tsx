@@ -452,7 +452,7 @@ describe('ScreeningPanel', () => {
     expect(screen.getByText('Cut line: rank 2 · 81/100')).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: 'Ada Lovelace' })[0]).toHaveAttribute(
       'href',
-      `/workspace/applications/${APPLICATION_ONE}`,
+      `/workspace/applications/${APPLICATION_ONE}?returnTo=%2Fworkspace%2Fjobs%2Fjob-1%2Fscreening`,
     )
     expect(screen.getAllByText('ada@example.com').length).toBeGreaterThan(0)
     expect(screen.getByText(/Times use your browser timezone:/)).toBeInTheDocument()
@@ -474,6 +474,13 @@ describe('ScreeningPanel', () => {
     await screen.findByText('Wave 1 · 2 planned · 0 sent')
     expect(screen.getByText('planned')).toBeInTheDocument()
     expect(screen.getByText('Recipient delivery details')).toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        /\/api\/workspace\/applications\/[^/]+\/stage(?:[/?]|$)/.test(
+          String(input),
+        ),
+      ),
+    ).toBe(false)
   })
 
   it('revokes confirmation authority immediately when a same-request preview refresh fails', async () => {
@@ -708,6 +715,79 @@ describe('ScreeningPanel', () => {
     expect(
       screen.getByText(/never changes a pipeline stage/i),
     ).toBeInTheDocument()
+
+    const candidateDetail = screen.getAllByRole('link', {
+      name: 'Ada Lovelace',
+    })[0]
+    expect(candidateDetail).toHaveAttribute(
+      'href',
+      `/workspace/applications/${APPLICATION_ONE}?returnTo=%2Fworkspace%2Fjobs%2Fjob-1%2Fscreening%3FselectionSnapshotId%3D${SELECTION_ID}`,
+    )
+    const candidateDetailUrl = new URL(
+      candidateDetail.getAttribute('href')!,
+      'http://screening.test',
+    )
+    const returnTo = candidateDetailUrl.searchParams.get('returnTo')
+    expect(returnTo).toBe(
+      `/workspace/jobs/${JOB_ID}/screening?selectionSnapshotId=${SELECTION_ID}`,
+    )
+    expect(
+      new URL(returnTo!, 'http://screening.test').searchParams.get(
+        'selectionSnapshotId',
+      ),
+    ).toBe(SELECTION_ID)
+  })
+
+  it('keeps long screening identities and headings inside wrapping containers', async () => {
+    const longName = `Candidate-${'LongUnbrokenIdentity'.repeat(8)}`
+    const longEmail = `${'long-local-part'.repeat(10)}@example.com`
+    const response = previewResponse()
+    response.preview.cutLine.candidate = candidate(
+      APPLICATION_ONE,
+      CANDIDATE_ONE,
+      longName,
+      longEmail,
+    )
+    response.preview.page.rows[0].candidate = candidate(
+      APPLICATION_ONE,
+      CANDIDATE_ONE,
+      longName,
+      longEmail,
+    )
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === `/api/workspace/jobs/${JOB_ID}/screening`) {
+        return json(historyResponse())
+      }
+      if (url === `/api/workspace/jobs/${JOB_ID}/screening/preview`) {
+        return json(response)
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <ScreeningPanel
+        jobId={JOB_ID}
+        jobStatus="open"
+      />,
+    )
+    await screen.findByText('No screening gate has been confirmed yet.')
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Preview screening selection' }),
+    )
+
+    const heading = await screen.findByRole('heading', { name: 'Screening gate' })
+    expect(heading).toHaveClass('max-w-full', 'break-words')
+    expect(screen.getByRole('region', { name: 'Screening gate' })).toHaveClass(
+      'max-w-full',
+    )
+    for (const link of screen.getAllByRole('link', { name: longName })) {
+      expect(link).toHaveClass('max-w-full', 'break-words')
+    }
+    for (const email of screen.getAllByText(longEmail)) {
+      expect(email).toHaveClass('max-w-full', 'break-words')
+    }
   })
 
   it('keeps a 5,000-candidate preview server-bounded, replaces pages, and loads evaluated rows lazily', async () => {
@@ -1504,7 +1584,7 @@ describe('ScreeningPanel', () => {
     expect(screen.getByText(/3 attempts/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Ada Lovelace' })).toHaveAttribute(
       'href',
-      `/workspace/applications/${APPLICATION_ONE}`,
+      `/workspace/applications/${APPLICATION_ONE}?returnTo=%2Fworkspace%2Fjobs%2Fjob-1%2Fscreening`,
     )
     fireEvent.click(screen.getByRole('button', { name: 'Next recipient page' }))
 

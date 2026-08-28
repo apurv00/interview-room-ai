@@ -39,7 +39,7 @@ export default function JobWorkspaceHeader({
             {STATUS_LABEL[status]}
           </Badge>
         </div>
-        <p className="mt-1 text-sm text-[#536471]">
+        <p className="mt-1 min-w-0 max-w-full break-words text-sm text-[#536471]">
           {departmentName ? <span>{departmentName}</span> : null}
           {departmentName && typeof candidateCount === 'number' ? <span aria-hidden="true"> · </span> : null}
           {typeof candidateCount === 'number' ? (
