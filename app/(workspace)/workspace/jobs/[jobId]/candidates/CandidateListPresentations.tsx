@@ -33,6 +33,15 @@ interface CandidatePresentationProps {
   ) => void
 }
 
+const HUMAN_RECOMMENDATION_LABELS: Record<string, string> = {
+  strongYes: 'strong yes',
+  strong_yes: 'strong yes',
+  yes: 'yes',
+  no: 'no',
+  strongNo: 'strong no',
+  strong_no: 'strong no',
+}
+
 function candidateHref(row: CandidateListRow, returnTo: string): string {
   const query = new URLSearchParams({ returnTo })
   return `/workspace/applications/${encodeURIComponent(row.applicationId)}?${query}`
@@ -78,7 +87,7 @@ function HumanReview({ row }: { row: CandidateListRow }) {
   if (review.state === 'none') return <span className="text-sm text-[#71767b]">Not requested</span>
   const recommendationSummary = Object.entries(review.recommendations)
     .filter(([, count]) => count > 0)
-    .map(([recommendation, count]) => `${count} ${recommendation.replaceAll('_', ' ')}`)
+    .map(([recommendation, count]) => `${count} ${HUMAN_RECOMMENDATION_LABELS[recommendation] ?? recommendation.replaceAll('_', ' ')}`)
     .join(' · ')
   return (
     <div>
@@ -400,7 +409,7 @@ export function CandidateBoard(props: CandidatePresentationProps) {
                 {rows.map((row) => (
                   <li key={row.applicationId} className="rounded-xl border border-[#dbe4ea] bg-white p-3 shadow-sm">
                     <label className="flex items-start gap-2">
-                      <input type="checkbox" className="mt-1" checked={props.selectedIds.has(row.applicationId)} onChange={(event) => props.onSelect(row.applicationId, event.target.checked)} />
+                      <input type="checkbox" className="mt-1" aria-label={`Select ${row.name}`} checked={props.selectedIds.has(row.applicationId)} onChange={(event) => props.onSelect(row.applicationId, event.target.checked)} />
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-semibold text-[#0f1419]">{row.name}</span>
                       </span>

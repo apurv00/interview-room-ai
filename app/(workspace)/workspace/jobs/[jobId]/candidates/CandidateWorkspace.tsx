@@ -41,6 +41,22 @@ const SAVED_VIEW_IDS = new Set(SAVED_VIEWS.map((view) => view.id))
 const SORT_IDS = new Set(CANDIDATE_SORTS.map((sort) => sort.id))
 const COLUMN_IDS = new Set(OPTIONAL_COLUMNS.map((column) => column.id))
 const ASCENDING_SORTS = new Set<CandidateSort>(['oldest', 'name', 'stage', 'rank'])
+const CANDIDATE_NAVIGATION_STORAGE_KEY = 'hire:candidate-navigation:v1'
+const CANDIDATE_NAVIGATION_VERSION = 1
+const CANDIDATE_NAVIGATION_TTL_MS = 30 * 60 * 1_000
+const CANDIDATE_NAVIGATION_MAX_RECORDS = 8
+const CANDIDATE_NAVIGATION_MAX_DEPTH = 24
+const CANDIDATE_NAVIGATION_MAX_CURSOR_LENGTH = 4_096
+
+interface CandidateNavigationRecord {
+  version: typeof CANDIDATE_NAVIGATION_VERSION
+  jobId: string
+  scope: string
+  cursor: string | null
+  previous: Array<string | null>
+  updatedAt: number
+  expiresAt: number
+}
 
 interface ExplicitSelection {
   mode: 'explicit'
@@ -314,6 +330,113 @@ function apiQuery(searchParams: URLSearchParams): URLSearchParams {
   return result
 }
 
+/**
+ * Produces a stable non-PII coordinate for the server-bound list query. Search
+ * text may contain a name or email, so even the hash input redacts its value;
+ * the session record stores only this coordinate and opaque server cursors.
+ */
+function candidateNavigationScope(jobId: string, searchParams: URLSearchParams): string {
+  const query = apiQuery(searchParams)
+  query.delete('cursor')
+  if (query.has('q')) query.set('q', 'search-applied')
+  query.sort()
+  const value = `${jobId}\0${query.toString()}`
+  let first = 0xdeadbeef ^ value.length
+  let second = 0x41c6ce57 ^ value.length
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    first = Math.imul(first ^ code, 2_654_435_761)
+    second = Math.imul(second ^ code, 1_597_334_677)
+  }
+  first = Math.imul(first ^ (first >>> 16), 2_246_822_507) ^ Math.imul(second ^ (second >>> 13), 3_266_489_909)
+  second = Math.imul(second ^ (second >>> 16), 2_246_822_507) ^ Math.imul(first ^ (first >>> 13), 3_266_489_909)
+  return `${(second >>> 0).toString(16).padStart(8, '0')}${(first >>> 0).toString(16).padStart(8, '0')}`
+}
+
+function cursorValue(value: unknown): string | null | undefined {
+  if (value === null) return null
+  return typeof value === 'string' && value.length > 0 && value.length <= CANDIDATE_NAVIGATION_MAX_CURSOR_LENGTH
+    ? value
+    : undefined
+}
+
+function readCandidateNavigationRecords(): CandidateNavigationRecord[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.sessionStorage.getItem(CANDIDATE_NAVIGATION_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = objectValue(JSON.parse(raw))
+    if (parsed?.version !== CANDIDATE_NAVIGATION_VERSION || !Array.isArray(parsed.records)) return []
+    const now = Date.now()
+    const records: CandidateNavigationRecord[] = []
+    for (const value of parsed.records.slice(0, CANDIDATE_NAVIGATION_MAX_RECORDS)) {
+      const source = objectValue(value)
+      if (!source || source.version !== CANDIDATE_NAVIGATION_VERSION) continue
+      const cursor = cursorValue(source.cursor)
+      const previous = Array.isArray(source.previous)
+        ? source.previous.slice(-CANDIDATE_NAVIGATION_MAX_DEPTH).map(cursorValue)
+        : []
+      if (
+        typeof source.jobId !== 'string' || source.jobId.length === 0 || source.jobId.length > 128 ||
+        typeof source.scope !== 'string' || !/^[0-9a-f]{16}$/.test(source.scope) ||
+        cursor === undefined || previous.some((entry) => entry === undefined) ||
+        typeof source.updatedAt !== 'number' || !Number.isFinite(source.updatedAt) ||
+        typeof source.expiresAt !== 'number' || !Number.isFinite(source.expiresAt) || source.expiresAt <= now
+      ) continue
+      records.push({
+        version: CANDIDATE_NAVIGATION_VERSION,
+        jobId: source.jobId,
+        scope: source.scope,
+        cursor,
+        previous: previous as Array<string | null>,
+        updatedAt: source.updatedAt,
+        expiresAt: source.expiresAt,
+      })
+    }
+    return records
+  } catch {
+    // Storage can be disabled or unavailable in private browsing. Paging still
+    // works from the in-memory record for the lifetime of this mounted view.
+    return []
+  }
+}
+
+function writeCandidateNavigationRecords(records: CandidateNavigationRecord[]) {
+  if (typeof window === 'undefined') return
+  try {
+    if (records.length === 0) {
+      window.sessionStorage.removeItem(CANDIDATE_NAVIGATION_STORAGE_KEY)
+      return
+    }
+    window.sessionStorage.setItem(CANDIDATE_NAVIGATION_STORAGE_KEY, JSON.stringify({
+      version: CANDIDATE_NAVIGATION_VERSION,
+      records: records.slice(0, CANDIDATE_NAVIGATION_MAX_RECORDS),
+    }))
+  } catch {
+    // Quota, policy, and privacy-mode failures must never block navigation.
+  }
+}
+
+function saveCandidateNavigation(record: CandidateNavigationRecord) {
+  const now = Date.now()
+  const records = readCandidateNavigationRecords()
+    .filter((entry) => entry.expiresAt > now && !(
+      entry.jobId === record.jobId &&
+      entry.scope === record.scope &&
+      entry.cursor === record.cursor
+    ))
+  writeCandidateNavigationRecords([record, ...records].slice(0, CANDIDATE_NAVIGATION_MAX_RECORDS))
+}
+
+function removeCandidateNavigation(jobId: string, scope: string) {
+  const now = Date.now()
+  writeCandidateNavigationRecords(
+    readCandidateNavigationRecords().filter(
+      (entry) => entry.expiresAt > now && !(entry.jobId === jobId && entry.scope === scope),
+    ),
+  )
+}
+
 function summaryApiQuery(searchParams: URLSearchParams): URLSearchParams {
   const result = new URLSearchParams()
   for (const key of API_QUERY_KEYS) {
@@ -402,7 +525,7 @@ function restoreStageActionFocus(
 }
 
 export default function CandidateWorkspace({ jobId }: { jobId: string }) {
-  const { replace: routerReplace, push: routerPush, back: routerBack } = useRouter()
+  const { replace: routerReplace, push: routerPush } = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const serializedParams = searchParams.toString()
@@ -424,6 +547,11 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
     () => JSON.stringify(selectionQuery(new URLSearchParams(serializedParams))),
     [serializedParams],
   )
+  const navigationScope = useMemo(
+    () => candidateNavigationScope(jobId, new URLSearchParams(serializedParams)),
+    [jobId, serializedParams],
+  )
+  const currentCursor = searchParams.get('cursor')
   const panel = CLIENT_PANEL_VALUES.has(searchParams.get('panel') ?? '') ? searchParams.get('panel') : null
   const layout = searchParams.get('layout') === 'board' ? 'board' : 'table'
   const selectionIdParam = searchParams.get('selectionId')
@@ -440,7 +568,7 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
   const [pageAnnouncement, setPageAnnouncement] = useState('')
   const [cursorResetNotice, setCursorResetNotice] = useState<string | null>(null)
   const [freshnessAvailable, setFreshnessAvailable] = useState(false)
-  const [navigationDepth, setNavigationDepth] = useState(0)
+  const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([])
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [selection, setSelection] = useState<CandidateSelection>({ mode: 'explicit', ids: new Set() })
   const [selectionBusy, setSelectionBusy] = useState(false)
@@ -456,6 +584,7 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
   const pendingBulkFocusRef = useRef(false)
   const pendingPageFocusRef = useRef<'next' | 'previous' | 'first' | 'reset' | null>(null)
   const pendingRowActionRef = useRef<{ applicationId: string; name: string } | null>(null)
+  const candidateNavigationRef = useRef<CandidateNavigationRecord | null>(null)
   const currentParamsRef = useRef(serializedParams)
   currentParamsRef.current = serializedParams
 
@@ -469,9 +598,12 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
       next.delete('cursor')
       next.delete('snapshotAt')
       next.delete('cursorTrail')
+      candidateNavigationRef.current = null
+      setCursorHistory([])
+      removeCandidateNavigation(jobId, navigationScope)
     }
     routerReplace(`${pathname}${next.size > 0 ? `?${next}` : ''}`, { scroll: false })
-  }, [pathname, routerReplace, serializedParams])
+  }, [jobId, navigationScope, pathname, routerReplace, serializedParams])
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
@@ -502,7 +634,9 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
           next.delete('cursor')
           next.delete('snapshotAt')
           next.delete('cursorTrail')
-          setNavigationDepth(0)
+          candidateNavigationRef.current = null
+          setCursorHistory([])
+          removeCandidateNavigation(jobId, navigationScope)
           routerReplace(`${pathname}${next.size > 0 ? `?${next}` : ''}`, { scroll: false })
           return
         }
@@ -539,7 +673,7 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
     } finally {
       if (!signal?.aborted) setLoading(false)
     }
-  }, [apiQueryString, jobId, pathname, routerReplace])
+  }, [apiQueryString, jobId, navigationScope, pathname, routerReplace])
 
   const loadSummary = useCallback(async (signal?: AbortSignal) => {
     setSummaryLoading(true)
@@ -587,6 +721,25 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
       replaceParams({ direction: canonicalDirection })
     }
   }, [replaceParams, serializedParams])
+
+  useEffect(() => {
+    const now = Date.now()
+    const inMemory = candidateNavigationRef.current
+    const restored = inMemory &&
+      inMemory.jobId === jobId &&
+      inMemory.scope === navigationScope &&
+      inMemory.cursor === currentCursor &&
+      inMemory.expiresAt > now
+      ? inMemory
+      : readCandidateNavigationRecords().find(
+        (record) => record.jobId === jobId &&
+          record.scope === navigationScope &&
+          record.cursor === currentCursor &&
+          record.expiresAt > now,
+      ) ?? null
+    candidateNavigationRef.current = restored
+    setCursorHistory(restored?.previous ?? [])
+  }, [currentCursor, jobId, navigationScope])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -888,18 +1041,50 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
     setPageAnnouncement('Loading the next candidate page…')
     const next = new URLSearchParams(serializedParams)
     next.set('cursor', cursor)
+    next.delete('snapshotAt')
     next.delete('cursorTrail')
-    setNavigationDepth((current) => current + 1)
+    const previous = [...cursorHistory, currentCursor].slice(-CANDIDATE_NAVIGATION_MAX_DEPTH)
+    const record: CandidateNavigationRecord = {
+      version: CANDIDATE_NAVIGATION_VERSION,
+      jobId,
+      scope: navigationScope,
+      cursor,
+      previous,
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + CANDIDATE_NAVIGATION_TTL_MS,
+    }
+    candidateNavigationRef.current = record
+    setCursorHistory(previous)
+    saveCandidateNavigation(record)
     routerPush(`${pathname}?${next}`, { scroll: true })
   }
 
   function goToPreviousCursor() {
     setCursorResetNotice(null)
-    if (navigationDepth > 0) {
-      pendingPageFocusRef.current = navigationDepth === 1 ? 'first' : 'previous'
-      setPageAnnouncement(`Loading the ${navigationDepth === 1 ? 'first' : 'previous'} candidate page…`)
-      setNavigationDepth((current) => Math.max(0, current - 1))
-      routerBack()
+    if (cursorHistory.length > 0) {
+      const previousCursor = cursorHistory[cursorHistory.length - 1] ?? null
+      const previous = cursorHistory.slice(0, -1)
+      const pageName = previousCursor === null ? 'first' : 'previous'
+      pendingPageFocusRef.current = pageName
+      setPageAnnouncement(`Loading the ${pageName} candidate page…`)
+      const next = new URLSearchParams(serializedParams)
+      if (previousCursor) next.set('cursor', previousCursor)
+      else next.delete('cursor')
+      next.delete('snapshotAt')
+      next.delete('cursorTrail')
+      const record: CandidateNavigationRecord = {
+        version: CANDIDATE_NAVIGATION_VERSION,
+        jobId,
+        scope: navigationScope,
+        cursor: previousCursor,
+        previous,
+        updatedAt: Date.now(),
+        expiresAt: Date.now() + CANDIDATE_NAVIGATION_TTL_MS,
+      }
+      candidateNavigationRef.current = record
+      setCursorHistory(previous)
+      saveCandidateNavigation(record)
+      routerPush(`${pathname}${next.size > 0 ? `?${next}` : ''}`, { scroll: true })
       return
     }
     const next = new URLSearchParams(serializedParams)
@@ -908,6 +1093,9 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
     next.delete('cursor')
     next.delete('snapshotAt')
     next.delete('cursorTrail')
+    candidateNavigationRef.current = null
+    setCursorHistory([])
+    removeCandidateNavigation(jobId, navigationScope)
     routerPush(`${pathname}${next.size > 0 ? `?${next}` : ''}`, { scroll: true })
   }
 
@@ -915,7 +1103,11 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
     setCursorResetNotice(null)
     const next = new URLSearchParams(serializedParams)
     next.delete('cursor')
+    next.delete('snapshotAt')
     next.delete('cursorTrail')
+    candidateNavigationRef.current = null
+    setCursorHistory([])
+    removeCandidateNavigation(jobId, navigationScope)
     routerReplace(`${pathname}${next.size > 0 ? `?${next}` : ''}`, { scroll: false })
     setFreshnessAvailable(false)
     setRefreshNonce((current) => current + 1)
@@ -936,6 +1128,9 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
     next.delete('cursor')
     next.delete('cursorTrail')
     next.delete('snapshotAt')
+    candidateNavigationRef.current = null
+    setCursorHistory([])
+    removeCandidateNavigation(jobId, navigationScope)
     routerReplace(`${pathname}${next.size > 0 ? `?${next}` : ''}`, { scroll: false })
     setRefreshNonce((current) => current + 1)
     window.requestAnimationFrame(() => candidateResultsHeadingRef.current?.focus())
@@ -1152,11 +1347,11 @@ export default function CandidateWorkspace({ jobId }: { jobId: string }) {
             <CandidateTable rows={data.rows} stageCounts={summary?.counts.stages ?? null} selectedIds={selectedIds} visibleColumns={visibleColumns} currentSort={filters.sort} currentDirection={filters.direction} returnTo={returnTo} jobOpen={data.job.status === 'open'} busyApplicationId={busyApplicationId} onSelect={selectOne} onSelectPage={selectPage} onSort={sortResults} onStageAction={requestStageAction} />
           )}
 
-          <nav aria-label="Candidate result pages" className="flex items-center justify-between gap-3 border-t border-[#dbe4ea] pt-4">
+          <nav aria-label="Candidate result pages" className="grid grid-cols-1 gap-3 border-t border-[#dbe4ea] pt-4 sm:grid-cols-[auto_1fr_auto] sm:items-center">
             <Button type="button" variant="secondary" disabled={!searchParams.get('cursor') || loading} onClick={goToPreviousCursor}>
-              {navigationDepth > 0 ? 'Previous page' : 'First page'}
+              {cursorHistory.length > 0 ? 'Previous page' : 'First page'}
             </Button>
-            <span className="text-xs text-[#536471]">Up to {data.pageInfo.limit} candidates per page</span>
+            <span className="text-center text-xs text-[#536471]">Up to {data.pageInfo.limit} candidates per page</span>
             <Button type="button" variant="secondary" disabled={!data.pageInfo.hasNextPage || !data.pageInfo.nextCursor || loading} onClick={() => goToCursor(data.pageInfo.nextCursor)}>Next page</Button>
           </nav>
         </section>

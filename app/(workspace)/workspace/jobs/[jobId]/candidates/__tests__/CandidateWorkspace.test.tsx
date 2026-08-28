@@ -105,6 +105,7 @@ describe('CandidateWorkspace', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     navigation.search = ''
+    window.sessionStorage.clear()
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes(`/api/workspace/jobs/${JOB_ID}/candidates?`) && (!init?.method || init.method === 'GET')) return Promise.resolve(json(candidatePage()))
@@ -324,10 +325,11 @@ describe('CandidateWorkspace', () => {
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeEnabled()
   })
 
-  it('offers a truthful bounded board and URL-addressable next/browser-back pagination', async () => {
+  it('offers a truthful bounded board and URL-addressable next/previous pagination', async () => {
     navigation.search = 'layout=board'
     const view = render(<CandidateWorkspace jobId={JOB_ID} />)
-    await screen.findByLabelText('Candidate stage board')
+    const board = await screen.findByLabelText('Candidate stage board')
+    expect(within(board).getByRole('checkbox', { name: 'Select Ada Lovelace' })).toBeTruthy()
     expect(screen.getByText(/Stage totals describe all candidates in this job/)).toBeTruthy()
     expect(screen.getByText('1 shown · 600 job total')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
@@ -339,12 +341,162 @@ describe('CandidateWorkspace', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '823 matching candidates' })).toHaveFocus())
     expect(screen.getByText(/Loaded 2 candidates on the next page/)).toHaveClass('sr-only')
     fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
-    expect(navigation.back).toHaveBeenCalledTimes(1)
+    expect(navigation.push).toHaveBeenLastCalledWith(`/workspace/jobs/${JOB_ID}/candidates?layout=board`, { scroll: true })
 
     navigation.search = 'layout=board'
     view.rerender(<CandidateWorkspace jobId={JOB_ID} />)
     await waitFor(() => expect(screen.getByRole('heading', { name: '823 matching candidates' })).toHaveFocus())
     expect(screen.getByText(/Loaded 2 candidates on the first page/)).toHaveClass('sr-only')
+  })
+
+  it('restores an expiring cursor trail after detail remount and returns from page three to page two', async () => {
+    const baseParams = new URLSearchParams({
+      q: 'ada@example.com',
+      stage: 'screened',
+      sort: 'rank',
+      direction: 'asc',
+      layout: 'board',
+      columns: 'jdMatch,history',
+    })
+    navigation.search = baseParams.toString()
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/candidates/freshness')) return Promise.resolve(json({ hasNewerResults: false, checkedAt: '2026-08-25T08:01:00.000Z' }))
+      if (url.includes('/candidates/summary')) return Promise.resolve(json(candidateSummary()))
+      if (url.includes('/candidates?')) {
+        const cursor = new URL(url, 'https://hire.example').searchParams.get('cursor')
+        const nextCursor = cursor === 'cursor-page-two'
+          ? 'cursor-page-three'
+          : cursor === 'cursor-page-three' ? null : 'cursor-page-two'
+        return Promise.resolve(json(candidatePage({
+          pageInfo: {
+            limit: 50,
+            hasNextPage: nextCursor !== null,
+            nextCursor,
+            snapshotAt: '2026-08-25T08:00:00.000Z',
+          },
+        })))
+      }
+      return Promise.resolve(json({ error: `Unexpected ${url}` }, 500))
+    })
+
+    const firstVisit = render(<CandidateWorkspace jobId={JOB_ID} />)
+    await screen.findByRole('button', { name: 'Next page' })
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    const pageTwoParams = new URLSearchParams(baseParams)
+    pageTwoParams.set('cursor', 'cursor-page-two')
+    navigation.search = pageTwoParams.toString()
+    firstVisit.rerender(<CandidateWorkspace jobId={JOB_ID} />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: '823 matching candidates' })).toHaveFocus())
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    const pageThreeParams = new URLSearchParams(baseParams)
+    pageThreeParams.set('cursor', 'cursor-page-three')
+    navigation.search = pageThreeParams.toString()
+    firstVisit.rerender(<CandidateWorkspace jobId={JOB_ID} />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: '823 matching candidates' })).toHaveFocus())
+
+    const detailLink = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))
+      .find((link) => link.getAttribute('href')?.startsWith(`/workspace/applications/${APPLICATION_ONE}?`))
+    expect(detailLink).toBeTruthy()
+    expect(new URL(detailLink!.href).searchParams.get('returnTo')).toBe(
+      `/workspace/jobs/${JOB_ID}/candidates?${pageThreeParams.toString()}`,
+    )
+    const storedNavigation = window.sessionStorage.getItem('hire:candidate-navigation:v1') ?? ''
+    expect(storedNavigation).not.toContain('ada@example.com')
+    expect(storedNavigation).not.toContain('Ada Lovelace')
+    expect(storedNavigation).toContain('cursor-page-two')
+    expect(storedNavigation).toContain('cursor-page-three')
+
+    firstVisit.unmount()
+    navigation.push.mockClear()
+    const returnedVisit = render(<CandidateWorkspace jobId={JOB_ID} />)
+    await screen.findByRole('heading', { name: '823 matching candidates' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Previous page' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+
+    const previousUrl = String(navigation.push.mock.calls.at(-1)?.[0])
+    expect(previousUrl).toContain('cursor=cursor-page-two')
+    expect(previousUrl).toContain('q=ada%40example.com')
+    expect(previousUrl).toContain('stage=screened')
+    expect(previousUrl).toContain('sort=rank')
+    expect(previousUrl).toContain('direction=asc')
+    expect(previousUrl).toContain('layout=board')
+    expect(previousUrl).toContain('columns=jdMatch%2Chistory')
+    expect(previousUrl).not.toContain('cursorTrail')
+
+    navigation.search = previousUrl.split('?', 2)[1]
+    returnedVisit.rerender(<CandidateWorkspace jobId={JOB_ID} />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: '823 matching candidates' })).toHaveFocus())
+    expect(screen.getByText(/Loaded 2 candidates on the previous page/)).toHaveClass('sr-only')
+  })
+
+  it('keeps same-mount cursor navigation usable when session storage writes fail', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage disabled', 'SecurityError')
+    })
+    try {
+      const view = render(<CandidateWorkspace jobId={JOB_ID} />)
+      await screen.findByRole('button', { name: 'Next page' })
+      fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+      navigation.search = 'cursor=next-opaque-cursor'
+      view.rerender(<CandidateWorkspace jobId={JOB_ID} />)
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Previous page' })).toBeEnabled())
+      fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+      expect(navigation.push).toHaveBeenLastCalledWith(`/workspace/jobs/${JOB_ID}/candidates`, { scroll: true })
+    } finally {
+      setItem.mockRestore()
+    }
+  })
+
+  it('clears persisted cursor history when the server rejects a stale page', async () => {
+    let staleCursor = false
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/candidates/freshness')) return Promise.resolve(json({ hasNewerResults: false, checkedAt: '2026-08-25T08:01:00.000Z' }))
+      if (url.includes('/candidates/summary')) return Promise.resolve(json(candidateSummary()))
+      if (url.includes('/candidates?') && url.includes('cursor=') && staleCursor) {
+        return Promise.resolve(json({ error: 'Candidate results changed', code: 'JOB_CANDIDATES_CURSOR_STALE' }, 409))
+      }
+      if (url.includes('/candidates?')) return Promise.resolve(json(candidatePage()))
+      return Promise.resolve(json({ error: `Unexpected ${url}` }, 500))
+    })
+
+    const view = render(<CandidateWorkspace jobId={JOB_ID} />)
+    await screen.findByRole('button', { name: 'Next page' })
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(window.sessionStorage.getItem('hire:candidate-navigation:v1')).not.toBeNull()
+
+    staleCursor = true
+    navigation.search = 'cursor=next-opaque-cursor'
+    view.rerender(<CandidateWorkspace jobId={JOB_ID} />)
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith(
+      `/workspace/jobs/${JOB_ID}/candidates`,
+      { scroll: false },
+    ))
+    expect(window.sessionStorage.getItem('hire:candidate-navigation:v1')).toBeNull()
+  })
+
+  it('renders explicit strong human recommendation labels', async () => {
+    const recommendationRows = [{
+      ...rows[0],
+      humanReview: {
+        ...rows[0].humanReview,
+        recommendations: { strongYes: 1, yes: 0, no: 0, strongNo: 1 },
+      },
+    }]
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/candidates/freshness')) return Promise.resolve(json({ hasNewerResults: false, checkedAt: '2026-08-25T08:01:00.000Z' }))
+      if (url.includes('/candidates/summary')) return Promise.resolve(json(candidateSummary()))
+      if (url.includes('/candidates?')) return Promise.resolve(json(candidatePage({ rows: recommendationRows })))
+      return Promise.resolve(json({ error: `Unexpected ${url}` }, 500))
+    })
+
+    render(<CandidateWorkspace jobId={JOB_ID} />)
+    expect((await screen.findAllByText('1 strong yes · 1 strong no')).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/strongYes|strongNo/)).toBeNull()
   })
 
   it('labels board-stage facets as job totals when the candidate list is filtered', async () => {
