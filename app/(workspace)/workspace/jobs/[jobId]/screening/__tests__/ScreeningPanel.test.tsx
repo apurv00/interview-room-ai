@@ -1069,6 +1069,19 @@ describe('ScreeningPanel', () => {
     expect(screen.queryByText(/Confirmed by HR One/)).not.toBeInTheDocument()
   })
 
+  it('fails closed when screening history claims a next page without an opaque cursor', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(historyResponse(
+      [],
+      { limit: 25, hasNextPage: true, nextCursor: '' },
+    ))))
+
+    render(<ScreeningPanel jobId={JOB_ID} jobStatus="open" />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not load screening batches.',
+    )
+  })
+
   it('uses history pageInfo to replace the current bounded gate-summary page', async () => {
     const firstGate = {
       ...confirmedGate(),

@@ -321,7 +321,10 @@ function readScreeningPageInfo(value: unknown): ScreeningGatePageInfo | null {
     typeof pageInfo.hasNextPage !== 'boolean' ||
     !(
       pageInfo.nextCursor === null ||
-      typeof pageInfo.nextCursor === 'string'
+      (
+        typeof pageInfo.nextCursor === 'string' &&
+        pageInfo.nextCursor.length > 0
+      )
     ) ||
     pageInfo.hasNextPage !== (typeof pageInfo.nextCursor === 'string')
   ) {

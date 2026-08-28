@@ -43,12 +43,18 @@ function RecommendationTally({ tally }: { tally: HireRecommendationTally }) {
   )
 }
 
-function DimensionTable({ dimensions }: { dimensions: HireDecisionDimensionAggregate[] }) {
+function DimensionTable({
+  candidateName,
+  dimensions,
+}: {
+  candidateName: string
+  dimensions: HireDecisionDimensionAggregate[]
+}) {
   return (
     <div
       className="max-w-full overflow-x-auto"
       role="region"
-      aria-label="Human scorecard dimensions"
+      aria-label={`Human scorecard dimensions for ${candidateName}`}
       tabIndex={0}
     >
       <table className="hire-assessment-dimensions min-w-[32rem]">
@@ -112,7 +118,10 @@ export function HireAssessmentReport({ decision, compact = false }: HireAssessme
           {humanScorecards.total.count} submitted · {humanScorecards.member.count} member · {humanScorecards.kit.count} guest-kit
         </p>
         <RecommendationTally tally={humanScorecards.total.recommendations} />
-        <DimensionTable dimensions={humanScorecards.total.dimensions} />
+        <DimensionTable
+          candidateName={candidateBrief.candidateName}
+          dimensions={humanScorecards.total.dimensions}
+        />
       </section>
 
       <section aria-labelledby={`${reportId}-external-evidence-heading`}>

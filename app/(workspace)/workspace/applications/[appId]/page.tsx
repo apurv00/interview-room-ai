@@ -297,14 +297,22 @@ export default function ApplicationCardPage({
     [],
   );
 
-  const load = useCallback(async () => {
-    setError(null);
+  const load = useCallback(async (
+    options: { preserveExistingOnError?: boolean } = {},
+  ) => {
+    if (!options.preserveExistingOnError) setError(null);
     try {
       const res = await fetch(`/api/workspace/applications/${params.appId}`);
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
       setData(body);
     } catch {
+      if (options.preserveExistingOnError) {
+        setActionError(
+          "The decision was saved, but the latest candidate details could not be refreshed. Reload this page before another action.",
+        );
+        return;
+      }
       setError("Could not load this candidate.");
     }
   }, [params.appId]);
@@ -509,8 +517,11 @@ export default function ApplicationCardPage({
       setNote("");
       setReasonCode("");
       setStageCommand(null);
-      await load();
-      restoreStageConfirmationFocus();
+      const trigger = stageConfirmationTriggerRef.current;
+      stageConfirmationTriggerRef.current = null;
+      focusStageConfirmationTarget(trigger);
+      await load({ preserveExistingOnError: true });
+      focusStageConfirmationTarget(trigger);
     } catch {
       setActionError("Something went wrong.");
     } finally {
@@ -518,15 +529,19 @@ export default function ApplicationCardPage({
     }
   }
 
-  function restoreStageConfirmationFocus() {
-    const trigger = stageConfirmationTriggerRef.current;
-    stageConfirmationTriggerRef.current = null;
+  function focusStageConfirmationTarget(trigger: HTMLButtonElement | null) {
     window.requestAnimationFrame(() => {
       const target = trigger?.isConnected
         ? trigger
         : stageConfirmationFallbackRef.current;
       target?.focus();
     });
+  }
+
+  function restoreStageConfirmationFocus() {
+    const trigger = stageConfirmationTriggerRef.current;
+    stageConfirmationTriggerRef.current = null;
+    focusStageConfirmationTarget(trigger);
   }
 
   function cancelStageReasonConfirmation() {
@@ -541,7 +556,15 @@ export default function ApplicationCardPage({
     restoreStageConfirmationFocus();
   }
 
-  if (error) return <StateView state="error" error={error} onRetry={load} />;
+  if (error) {
+    return (
+      <StateView
+        state="error"
+        error={error}
+        onRetry={() => void load()}
+      />
+    );
+  }
   if (!data) return <StateView state="loading" skeletonLayout="card" />;
 
   const {
@@ -696,7 +719,10 @@ export default function ApplicationCardPage({
                 <Button
                   variant="secondary"
                   disabled={busy}
-                  onClick={() => void moveStage(application.stage, "advance")}
+                  onClick={(event) => {
+                    stageConfirmationTriggerRef.current = event.currentTarget;
+                    void moveStage(application.stage, "advance");
+                  }}
                 >
                   Advance
                 </Button>

@@ -68,7 +68,7 @@ function card(deliveryStatus: 'failed' | 'sent', interviewInProgress = false) {
   }
 }
 
-type CardStage = 'new' | 'offer' | 'hired' | 'rejected' | 'withdrawn'
+type CardStage = 'new' | 'screened' | 'offer' | 'hired' | 'rejected' | 'withdrawn'
 
 function cardAtStage(stage: CardStage) {
   const value = card('sent')
@@ -214,6 +214,53 @@ describe('AI invitation delivery recovery UI', () => {
       expect(heading).toHaveAttribute('tabindex', '-1')
     },
   )
+
+  it('keeps focus on Advance after a successful non-terminal stage move', async () => {
+    let currentStage: CardStage = 'new'
+    const fetchMock = vi.fn().mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        currentStage = 'screened'
+        return json({ application: { id: 'app-1', stage: currentStage } })
+      }
+      return json(cardAtStage(currentStage))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ApplicationCardPage params={{ appId: 'app-1' }} />)
+
+    const advance = await screen.findByRole('button', { name: 'Advance' })
+    advance.focus()
+    fireEvent.click(advance)
+
+    await waitFor(() => expect(screen.getByText('screened')).toBeInTheDocument())
+    await waitFor(() => expect(advance).toHaveFocus())
+    expect(screen.getByRole('button', { name: 'Advance' })).toBe(advance)
+  })
+
+  it('keeps the existing card and action focus when post-decision refresh fails', async () => {
+    let detailReads = 0
+    const fetchMock = vi.fn().mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return json({ application: { id: 'app-1', stage: 'rejected' } })
+      }
+      detailReads += 1
+      if (detailReads === 1) return json(cardAtStage('new'))
+      return json({ error: 'readback unavailable' }, 503)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ApplicationCardPage params={{ appId: 'app-1' }} />)
+
+    const reject = await screen.findByRole('button', { name: 'Reject' })
+    reject.focus()
+    fireEvent.click(reject)
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm decision' }))
+
+    expect(await screen.findByText(
+      'The decision was saved, but the latest candidate details could not be refreshed. Reload this page before another action.',
+    )).toBeInTheDocument()
+    await waitFor(() => expect(reject).toHaveFocus())
+    expect(screen.getByRole('heading', { level: 1, name: 'Candidate One' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Confirm decision' })).not.toBeInTheDocument()
+  })
 
   it('wraps valid maximum-length candidate identity text on narrow detail views', async () => {
     const longName = 'N'.repeat(120)

@@ -454,7 +454,7 @@ function ActionInboxCard({ entry }: { entry: CandidateInboxEntry }) {
         </h2>
         {(candidateBrief.location ||
           candidateBrief.experienceYears !== undefined) && (
-          <p className="mt-1 text-sm text-[#536471]">
+          <p className="mt-1 break-words text-sm text-[#536471]">
             {[
               candidateBrief.location,
               candidateBrief.experienceYears !== undefined
