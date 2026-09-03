@@ -482,8 +482,9 @@ Copy and verify from the provider/source of truth:
   write-only deployment value; recover the approved source value or rotate it
   as a coordinated session-invalidating change.
 - AI/speech: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
-  `GROQ_API_KEY`, `GOOGLE_AI_API_KEY`, `DEEPGRAM_API_KEY`,
-  `DEEPGRAM_GRANT_API_KEY` (server-only; mints 30-second browser STT grants),
+  `GROQ_API_KEY`, `GOOGLE_AI_API_KEY`, `DEEPGRAM_API_KEY` (server-only,
+  Member-or-higher; handles Deepgram TTS and mints 30-second browser STT
+  grants—verify the exact `/v1/auth/grant` capability, not only TTS),
   `DEEPGRAM_TTS_MODEL`, and `SARVAM_API_KEY` (Indian interviewer voice —
   replaced the retired `AZURE_SPEECH_*` trio on 2026-08-09, see
   INTERVIEW_FLOW.md §8; optional overrides `SARVAM_TTS_SPEAKER`,

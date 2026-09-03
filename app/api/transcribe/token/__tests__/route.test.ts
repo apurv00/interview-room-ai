@@ -22,8 +22,7 @@ vi.mock("@shared/logger", () => ({
 
 import { POST } from "../route";
 
-const originalGrantApiKey = process.env.DEEPGRAM_GRANT_API_KEY;
-const originalInferenceApiKey = process.env.DEEPGRAM_API_KEY;
+const originalApiKey = process.env.DEEPGRAM_API_KEY;
 
 function request(): NextRequest {
   return new NextRequest("https://app.test/api/transcribe/token", {
@@ -33,19 +32,15 @@ function request(): NextRequest {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  process.env.DEEPGRAM_GRANT_API_KEY = "server-only-grant-key";
-  process.env.DEEPGRAM_API_KEY = "must-never-be-returned";
+  process.env.DEEPGRAM_API_KEY = "server-only-deepgram-key";
   vi.stubGlobal("fetch", mocks.fetch);
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (originalGrantApiKey === undefined)
-    delete process.env.DEEPGRAM_GRANT_API_KEY;
-  else process.env.DEEPGRAM_GRANT_API_KEY = originalGrantApiKey;
-  if (originalInferenceApiKey === undefined)
+  if (originalApiKey === undefined)
     delete process.env.DEEPGRAM_API_KEY;
-  else process.env.DEEPGRAM_API_KEY = originalInferenceApiKey;
+  else process.env.DEEPGRAM_API_KEY = originalApiKey;
 });
 
 describe("POST /api/transcribe/token", () => {
@@ -65,17 +60,19 @@ describe("POST /api/transcribe/token", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("pragma")).toBe("no-cache");
-    await expect(response.json()).resolves.toEqual({
+    const payload = await response.json();
+    expect(payload).toEqual({
       token: "short-lived.deepgram.jwt",
       tokenType: "bearer",
       expiresIn: 30,
     });
+    expect(payload.token).not.toBe(process.env.DEEPGRAM_API_KEY);
     expect(mocks.fetch).toHaveBeenCalledWith(
       "https://api.deepgram.com/v1/auth/grant",
       expect.objectContaining({
         method: "POST",
         headers: {
-          Authorization: "Token server-only-grant-key",
+          Authorization: "Token server-only-deepgram-key",
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ ttl_seconds: 30 }),
@@ -84,8 +81,8 @@ describe("POST /api/transcribe/token", () => {
     );
   });
 
-  it("fails closed when the grant credential is absent, even if an inference key exists", async () => {
-    delete process.env.DEEPGRAM_GRANT_API_KEY;
+  it("fails closed when the Deepgram credential is absent", async () => {
+    delete process.env.DEEPGRAM_API_KEY;
 
     const response = await POST(request());
 
