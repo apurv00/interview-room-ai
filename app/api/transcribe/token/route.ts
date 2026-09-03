@@ -7,6 +7,9 @@ export const dynamic = 'force-dynamic'
 /**
  * Mints a short-lived Deepgram grant for browser WebSocket STT.
  *
+ * The server uses the existing DEEPGRAM_API_KEY for the grant request; STT
+ * and TTS do not require a second Deepgram credential.
+ *
  * The browser must never receive a long-lived provider credential. Deepgram
  * accepts the returned grant as a bearer WebSocket subprotocol during the
  * handshake; the grant is deliberately short-lived and is not cacheable.
@@ -40,9 +43,9 @@ export const POST = composeApiRoute({
     keyPrefix: 'rl:transcribe-token',
   },
   handler: async () => {
-    const grantApiKey = process.env.DEEPGRAM_GRANT_API_KEY
-    if (!grantApiKey) {
-      aiLogger.error('DEEPGRAM_GRANT_API_KEY env var is not set')
+    const apiKey = process.env.DEEPGRAM_API_KEY
+    if (!apiKey) {
+      aiLogger.error('DEEPGRAM_API_KEY env var is not set')
       return NextResponse.json(
         { error: 'Deepgram not configured' },
         { status: 503, headers: NO_STORE_HEADERS },
@@ -54,7 +57,7 @@ export const POST = composeApiRoute({
       grantResponse = await fetch('https://api.deepgram.com/v1/auth/grant', {
         method: 'POST',
         headers: {
-          Authorization: `Token ${grantApiKey}`,
+          Authorization: `Token ${apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ ttl_seconds: DEEPGRAM_GRANT_TTL_SECONDS }),

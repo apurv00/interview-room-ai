@@ -91,12 +91,30 @@ async function testAnthropic(key) {
 
 async function testDeepgram(key) {
   if (isPlaceholder(key)) throw new Error('not configured')
-  const res = await fetch('https://api.deepgram.com/v1/projects', {
-    headers: { Authorization: `Token ${key}` },
+  const res = await fetch('https://api.deepgram.com/v1/auth/grant', {
+    method: 'POST',
+    headers: {
+      Authorization: `Token ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ttl_seconds: 30 }),
     signal: AbortSignal.timeout(10000),
   })
-  if (res.status === 401 || res.status === 403) throw new Error('invalid API key')
+  if (res.status === 401 || res.status === 403) {
+    throw new Error('invalid API key or missing grant permission')
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const grant = await res.json().catch(() => null)
+  if (
+    !grant ||
+    typeof grant.access_token !== 'string' ||
+    !grant.access_token ||
+    typeof grant.expires_in !== 'number' ||
+    grant.expires_in <= 0 ||
+    grant.expires_in > 30
+  ) {
+    throw new Error('invalid temporary grant response')
+  }
 }
 
 async function testPostHog(key, host) {
@@ -171,9 +189,9 @@ try {
 
 try {
   await testDeepgram(env.DEEPGRAM_API_KEY)
-  record('Deepgram API', true)
+  record('Deepgram API + browser STT grants', true)
 } catch (e) {
-  record('Deepgram API', false, e.message)
+  record('Deepgram API + browser STT grants', false, e.message)
 }
 
 try {
