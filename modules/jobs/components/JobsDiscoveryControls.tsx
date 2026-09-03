@@ -42,7 +42,7 @@ function cleaned(value: string): string | undefined {
 function chipEntries(value: PublicFeedQuery): Array<{ key: RemovableFilter; label: string }> {
   const entries: Array<{ key: RemovableFilter; label: string }> = []
   if (value.search) entries.push({ key: 'search', label: `Search: ${value.search}` })
-  if (value.experience) entries.push({ key: 'experience', label: `Experience preference: ${EXPERIENCE_LABELS[value.experience]}` })
+  if (value.experience) entries.push({ key: 'experience', label: `Experience level: ${EXPERIENCE_LABELS[value.experience]}` })
   if (value.domain) entries.push({ key: 'domain', label: `Domain: ${value.domain}` })
   if (value.sort === 'newest') entries.push({ key: 'sort', label: 'Sort: Newest' })
   return entries
@@ -114,7 +114,7 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
           className={`${showFilters ? 'grid' : 'hidden'} mt-4 gap-3 sm:grid-cols-2 md:grid md:max-w-2xl md:grid-cols-2`}
         >
           <label className="text-xs font-medium text-slate-600" htmlFor="jobs-experience">
-            Experience preference
+            Experience level
             <select
               id="jobs-experience"
               value={draft.experience}
@@ -141,7 +141,7 @@ export function JobsDiscoveryControls({ value, disabled = false, onApply }: Jobs
           </label>
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          Experience improves Best match ordering without hiding roles whose level is unclear.
+          Choose a level to show only jobs whose title clearly states that level. Use Any to include jobs with no stated level.
         </p>
       </form>
 

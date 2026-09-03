@@ -24,8 +24,8 @@ import type { PublicFeedQuery } from '../config/feedDiscovery'
  *   already `status:'closed'` and excluded by the status filter.
  * - Demotion flags DEMOTE, never hide (ruling #15) — a staffing/short-JD
  *   row sinks, it does not disappear.
- * - Normalized location and deterministic title-based experience are soft
- *   preferences only. They may improve order and can never empty the feed.
+ * - Normalized location remains a compatibility-only soft preference.
+ *   Deterministic title-based experience is a hard eligibility filter.
  * - Apply-path badges use the canonical safe-option authority. DB ranking
  *   deliberately does not duplicate that URL and governance logic.
  *

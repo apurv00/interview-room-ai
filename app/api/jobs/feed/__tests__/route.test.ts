@@ -145,6 +145,7 @@ describe('/api/jobs/feed transport privacy', () => {
   it('accepts personalized signals only in a bounded POST body and deduplicates skills', async () => {
     const response = await post({
       page: 1,
+      experience: 'entry',
       targetRole: '  Backend Engineer  ',
       skills: [' TypeScript ', 'typescript', '', 'React', ' REACT '],
     })
@@ -157,7 +158,7 @@ describe('/api/jobs/feed transport privacy', () => {
       search: undefined,
       location: undefined,
       remote: undefined,
-      experience: undefined,
+      experience: 'entry',
       company: undefined,
       freshness: undefined,
       sort: undefined,

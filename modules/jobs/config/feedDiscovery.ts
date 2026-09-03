@@ -28,7 +28,7 @@ export interface PublicFeedQuery {
   location?: string
   /** Compatibility-only API filter; the current `/jobs` client omits it. */
   remote?: FeedRemote
-  /** Deterministic title-based preference: it changes rank, never inclusion. */
+  /** Hard deterministic title-level filter; unstated levels remain under Any. */
   experience?: FeedExperience
   /** Compatibility-only API filter; the current `/jobs` client omits it. */
   company?: string
